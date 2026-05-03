@@ -37,9 +37,16 @@ settings_overrides = {model = "opus[1m]", fastMode = true}
 # sync with CLAUDE_CODE_VERSION in the Dockerfile.
 version = "2.1.116"
 
-# The "main" agent type -- inherits everything from claude
+# The "main" agent type -- inherits everything from claude, then disables every
+# path that pulls user-local content into the workspace. The repo at the
+# requested git ref is the canonical workspace definition; nothing from the
+# invoking user's ~/.claude/ or ~/.mngr/ should leak in.
 [agent_types.main]
 parent_type = "claude"
+sync_home_settings = false
+sync_claude_json = false
+sync_claude_credentials = false
+sync_credentials_on_login = false
 
 # the "worker" agent type -- the default for delegated tasks
 [agent_types.worker]
