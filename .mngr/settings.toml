@@ -124,7 +124,16 @@ extra_provision_command = [
 [create_templates.vultr]
 provider = "vultr"
 target_path = "/code/"
-build_arg = ["--file=Dockerfile", "--vps-plan=vc2-2c-4gb", "."]
+# ``--vps-region=sjc`` (Silicon Valley) instead of the mngr_vultr default
+# ``ewr`` (Newark) -- imbue's operators run the bake from west-coast
+# machines, and the New Jersey region routinely produced ~1s SSH RTTs
+# and ~1.6 MB/s effective rsync throughput, which combined with the
+# ~1500-file build context made the cold upload time out at 10 minutes.
+# Keeping the default change at the template level so every minds /
+# imbue_cloud-pool create lands in the same place; CLI users who want
+# a different region can still override per-invocation with
+# ``-b --vps-region=<other>``.
+build_arg = ["--file=Dockerfile", "--vps-plan=vc2-2c-4gb", "--vps-region=sjc", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
 idle_mode = "disabled"
