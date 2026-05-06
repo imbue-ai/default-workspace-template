@@ -94,9 +94,6 @@ starts listening (otherwise the app-watcher races with the backend
 coming up). The example `[services.web]` and `[services.system_interface]`
 both follow this order.
 
-If you do not want a Cloudflare tunnel for this service, append
-`--no-global` to the `forward_port.py` call.
-
 ## Step 3: Add the entry to `services.toml`
 
 Use the `edit-services` skill for schema details. Copy the
