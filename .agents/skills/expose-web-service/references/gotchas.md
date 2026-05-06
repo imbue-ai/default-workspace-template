@@ -32,8 +32,7 @@ Backends often return absolute paths in `Location` (e.g.
 `https://workspace-host/login` -- which is the workspace_server's
 top-level path, not your service.
 
-The workspace_server now rewrites `Location` headers on 3xx responses
-(see `vendor/mngr/changelog/mngr-forwarder-redirect-fix.md`):
+The workspace_server rewrites `Location` headers on 3xx responses:
 
 - Absolute paths get prefixed: `/login` -> `/service/<name>/login`.
 - Same-origin absolute URLs targeting the backend's own host:port get
