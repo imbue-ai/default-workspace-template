@@ -25,6 +25,16 @@ license-files = [
 dev = [
     "playwright>=1.40",
     "pytest-playwright>=0.4",
+    # Test infrastructure used by imbue.imbue_common.conftest_hooks
+    # (previously provided transitively by vendor/mngr's uv workspace dev group)
+    "pytest>=9.0",
+    "pytest-cov>=7.0.0",
+    "pytest-timeout>=2.3.0",
+    "coverage",
+    "inline-snapshot>=0.13",
+    "resource-guards",
+    "import-linter>=2.0",
+    "ruff~=0.12.8",
 ]
 
 [project.scripts]
@@ -37,6 +47,7 @@ build-backend = "hatchling.build"
 [tool.uv.sources]
 imbue-common = { path = "../../vendor/mngr/libs/imbue_common", editable = true }
 imbue-mngr = { path = "../../vendor/mngr/libs/mngr", editable = true }
+resource-guards = { path = "../../vendor/mngr/libs/resource_guards", editable = true }
 
 [tool.hatch.build]
 artifacts = [
@@ -87,6 +98,37 @@ venvPath = "../.."
 venv = ".venv"
 pythonVersion = "3.11"
 strict = ["**/*.py"]
+
+# Ruff config mirrors vendor/mngr/pyproject.toml so that lint/isort behavior
+# matches what this code was previously checked under (it was a workspace
+# member of vendor/mngr before being promoted into apps/system_interface).
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "B",
+    "I",
+    "UP006",
+    "UP007",
+]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+case-sensitive = true
+order-by-type = false
+known-first-party = [
+    "imbue",
+    "imbue_common",
+    "mngr",
+]
 
 [tool.coverage.report]
 fail_under = 75
