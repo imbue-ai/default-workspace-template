@@ -210,8 +210,8 @@ The upstream is defined in `parent.toml`.
 
 # Memory
 
-Use Claude's built-in memory system. Your memory directory is `memory/` (configured via autoMemoryDirectory).
-Memory is gitignored -- it persists on the filesystem but is not version controlled.
+Use Claude's built-in memory system. Your memory directory is `runtime/memory/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
+Memory is gitignored from the main branch but is backed up automatically by the runtime-backup service onto the `mindsbackup/$MNGR_AGENT_ID` branch when `GH_TOKEN` is set, so it survives container loss.
 
 # Services
 
@@ -221,9 +221,14 @@ See the `edit-services` skill for details.
 
 # Git
 
-Commit your changes locally. 
-`runtime/` and `memory/` are gitignored.
-Do not push to remote.
+Commit your changes locally.
+`runtime/` is gitignored from the main branch (it includes `runtime/memory/` for Claude memory and other transient state).
+
+A `post-commit` hook installed via `core.hooksPath = /code/scripts/git_hooks` auto-pushes the active branch to `origin` in the background, but only when `GH_TOKEN` is set in the environment. You do not need to push manually. The hook never blocks the commit; output is captured at `/tmp/post-commit-push.log`.
+
+`runtime/` is backed up automatically by the `runtime-backup` service onto a separate orphan branch (`mindsbackup/$MNGR_AGENT_ID`) on the same `origin`, also gated on `GH_TOKEN`. See `libs/runtime_backup/README.md`.
+
+If `GH_TOKEN` is unset, both auto-pushes silently no-op; commits stay local.
 
 # Silly error workarounds
 
