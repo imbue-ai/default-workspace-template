@@ -44,8 +44,10 @@ cat << 'BODY_EOF'
 When you reach a terminal state (success or stuck) or have a
 mid-flight question that blocks progress, write a single
 `report.md` to the directory given by the `lead_report_dir`
-frontmatter field above (resolved relative to your worktree, since
-the lead pushes that directory in below). Frontmatter shape:
+frontmatter field above (resolved relative to your worktree --
+the lead has already pushed that directory into your worktree
+before sending this task; create the directory yourself with
+`mkdir -p` if it does not yet exist). Frontmatter shape:
 
     ---
     type: status   # or `gate` for a mid-flight question
