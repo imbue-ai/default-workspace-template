@@ -65,8 +65,12 @@ the decision is already made by the committed change.
 
 ## Conventions
 
-Use `$TARGET` for the skill you are updating (e.g. `migrate-config`).
-Then:
+Use `$TARGET` as a short kebab-case identifier for the artifact you are
+updating. For a skill, this is the skill name (e.g. `migrate-config`).
+For a non-skill artifact -- a shared script, template config, hook
+script, or `CLAUDE.md` policy section -- pick a short kebab-case name
+that identifies the artifact (e.g. `services-toml`, `claude-md-memory`,
+`extract-turn`). Then:
 
 - Worker agent name: `update-$TARGET`
 - Worker branch: `mngr/update-$TARGET`
@@ -129,8 +133,10 @@ tk close "$TICKET_ID"
 
 ## Gotchas
 
-- If the target is a built-in skill from the upstream template (e.g.
-  `launch-task`, `update-self`), updating it causes local drift from
+- If the target is a built-in artifact from the upstream template (e.g.
+  the `launch-task` or `update-self` skills, shared scripts/references
+  under `.agents/shared/`, hook scripts, or template-provided
+  `CLAUDE.md` policy text), updating it causes local drift from
   upstream. Reconcile later via `update-self` (pull) or
   `submit-upstream-changes` (push).
 - Update is non-blocking -- the user's original request is already
