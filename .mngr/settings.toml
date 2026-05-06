@@ -95,6 +95,10 @@ idle_mode = "disabled"
 [create_templates.lima]
 provider = "lima"
 target_path = "/code/"
+# The default `/worktree/` (set in [commands.create]) is created by the
+# Dockerfile but does not exist on a fresh lima VM. Mirror the dev template's
+# override so worktree creation does not require pre-creating /worktree/.
+worktree_base_folder = "/tmp/mngr-worktrees/"
 idle_mode = "disabled"
 start_arg = ["--cpus=2", "--memory=4", "--disk=20"]
 extra_provision_command = [
