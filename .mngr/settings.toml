@@ -139,7 +139,7 @@ env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CON
 agent_args = [
     "--dangerously-skip-permissions",
     "--append-system-prompt",
-    "You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made.",
+    "You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made. Your task file may include a `## Reporting back` section describing how to write a `report.md` and push it back to the lead -- if it does, follow that contract exactly. The lead does not poll your process state; the report file is how it learns you are done, stuck, or have a question.",
 ]
 
 # Crystallize-worker template: sub-agent for the crystallize-task / heal-skill /
