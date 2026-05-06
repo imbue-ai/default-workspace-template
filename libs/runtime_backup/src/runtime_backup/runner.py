@@ -11,27 +11,20 @@ service can assume runtime/ is already a git worktree on that branch.
 
 import os
 import subprocess
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from loguru import logger
 
 RUNTIME_DIR = Path("runtime")
 TICK_INTERVAL_SECONDS = 60
 LOG_FILE = Path("/tmp/runtime-backup.log")
 
-
-def _log(message: str) -> None:
-    """Write a line to stderr and append it to the debug log file."""
-    line = f"[runtime-backup] {message}"
-    sys.stderr.write(line + "\n")
-    sys.stderr.flush()
-    try:
-        with LOG_FILE.open("a") as handle:
-            handle.write(line + "\n")
-    except OSError:
-        # Log file is best-effort; never let logging fail the loop.
-        pass
+# Tee stderr-bound logs into LOG_FILE so operators can `tail` the file across
+# restarts of just this service window. /tmp wipes on container restart, which
+# is the intended scope for the debug log.
+logger.add(LOG_FILE, level="INFO")
 
 
 def _git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -48,7 +41,9 @@ def _has_uncommitted_changes() -> bool:
     """Return True if runtime/ has anything to commit."""
     result = _git("status", "--porcelain")
     if result.returncode != 0:
-        _log(f"git status failed (rc={result.returncode}): {result.stderr.strip()}")
+        logger.warning(
+            "git status failed (rc={}): {}", result.returncode, result.stderr.strip()
+        )
         return False
     return bool(result.stdout.strip())
 
@@ -64,17 +59,20 @@ def _do_tick(should_push: bool) -> None:
     """Run one backup tick: add, commit-if-dirty, push-if-token."""
     add_result = _git("add", "-A")
     if add_result.returncode != 0:
-        _log(
-            f"git add failed (rc={add_result.returncode}): {add_result.stderr.strip()}"
+        logger.warning(
+            "git add failed (rc={}): {}",
+            add_result.returncode,
+            add_result.stderr.strip(),
         )
         return
 
     if _has_uncommitted_changes():
         commit_result = _git("commit", "-m", f"runtime backup: {_now_iso_utc()}")
         if commit_result.returncode != 0:
-            _log(
-                f"git commit failed (rc={commit_result.returncode}): "
-                f"{commit_result.stderr.strip()}"
+            logger.warning(
+                "git commit failed (rc={}): {}",
+                commit_result.returncode,
+                commit_result.stderr.strip(),
             )
             return
 
@@ -83,22 +81,25 @@ def _do_tick(should_push: bool) -> None:
         # failed to push, so the next tick still ships the unpushed commit.
         push_result = _git("push")
         if push_result.returncode != 0:
-            _log(
-                f"git push failed (rc={push_result.returncode}): "
-                f"{push_result.stderr.strip()}"
+            logger.warning(
+                "git push failed (rc={}): {}",
+                push_result.returncode,
+                push_result.stderr.strip(),
             )
 
 
 def main() -> None:
     """Main loop: poll runtime/ on a fixed interval and back up changes."""
-    _log(f"starting (interval={TICK_INTERVAL_SECONDS}s)")
+    logger.info("Starting runtime-backup (interval={}s)", TICK_INTERVAL_SECONDS)
 
     if not (RUNTIME_DIR / ".git").exists():
-        _log("runtime/ is not a git worktree; bootstrap should have created it")
+        logger.warning(
+            "runtime/ is not a git worktree; bootstrap should have created it"
+        )
 
     has_token = bool(os.environ.get("GH_TOKEN"))
     if not has_token:
-        _log("no GH_TOKEN; will commit locally but skip push")
+        logger.info("No GH_TOKEN; will commit locally but skip push")
 
     while True:
         _do_tick(should_push=has_token)

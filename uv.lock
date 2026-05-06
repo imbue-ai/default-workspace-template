@@ -827,6 +827,12 @@ wheels = [
 name = "runtime-backup"
 version = "0.1.0"
 source = { editable = "libs/runtime_backup" }
+dependencies = [
+    { name = "loguru" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "loguru", specifier = ">=0.7.0" }]
 
 [[package]]
 name = "starlette"

@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Service that periodically commits + pushes runtime/ to a per-agent orphan branch (mindsbackup/$MNGR_AGENT_ID)"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "loguru>=0.7.0",
+]
 
 [project.scripts]
 runtime-backup = "runtime_backup.runner:main"
