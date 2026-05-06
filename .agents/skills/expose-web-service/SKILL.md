@@ -43,10 +43,10 @@ Before editing anything:
 
 - **Bind your app to `127.0.0.1` (or `localhost`), not `0.0.0.0`.**
   The forwarder reaches it from inside the same container; binding
-  to all interfaces is unnecessary and noisy. Most frameworks
-  default sensibly here, but `uvicorn` defaults to `127.0.0.1` only
-  when run via `python -m uvicorn`; pass `--host 127.0.0.1`
-  explicitly to be safe.
+  to all interfaces is unnecessary and noisy. Some servers default
+  to `0.0.0.0` (e.g. `flask run`, many Node frameworks); pass an
+  explicit host flag (`--host 127.0.0.1`, `HOST=127.0.0.1`, etc.)
+  if your server's default is not loopback.
 - **Pick a free port** the app will listen on. `ss -tln` lists what's
   bound. Avoid the well-known service ports already used in this
   template:
