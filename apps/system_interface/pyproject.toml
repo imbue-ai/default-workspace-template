@@ -94,7 +94,7 @@ default-flags-ide=["report"]
 format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
 
 [tool.pyright]
-venvPath = "../.."
+venvPath = "."
 venv = ".venv"
 pythonVersion = "3.11"
 strict = ["**/*.py"]
