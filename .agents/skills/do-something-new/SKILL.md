@@ -24,13 +24,7 @@ Pick a short kebab-case slug `$SLUG` for the task (e.g. `fetch-emails`,
 
 - Runtime path: `runtime/do-something-new/$SLUG/`
 - Sample data path: `runtime/do-something-new/$SLUG/sample.json`
-- Slug passed to `crystallize-task` at the end
-
-If you expect this task to be crystallized via `crystallize-task` (the
-typical end of the flow), the slug you pick here will also be used as
-the `crystallize-task` slug (`$NAME`). Pick something that makes sense
-for both -- the worker's `source_artifacts_dir` handoff assumes the
-paths match.
+- Slug passed to `crystallize-task` at the end (reused as its `$NAME`)
 
 ## Step 0: Existing-skill scan
 
@@ -118,16 +112,8 @@ and re-propose. Re-run Step 2 only if the new ask requires fresh research.
 
 ## Step 6: Crystallize in the background and hand off to interface design
 
-The user's sample-approval at Step 5 IS the explicit go-ahead to
-crystallize -- `crystallize-task`'s Step 1 pre-gate question is
-suppressed in this case (it names `do-something-new` as a skip
-trigger). Do not re-ask.
-
 1. **Kick off `crystallize-task`** with `source_artifacts_dir:
-   runtime/do-something-new/$SLUG/`. Its Step 3 includes that
-   directory in the task frontmatter and its Step 4 pushes it to the
-   worker, so the worker has the scripts and sample data you
-   produced.
+   runtime/do-something-new/$SLUG/`.
 2. **Launch the lead-proxy poll** (`run_in_background: true`) for
    worker reports, per `crystallize-task` Step 5 /
    `.agents/shared/references/lead-proxy.md`. Do this *before*
