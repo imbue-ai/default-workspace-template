@@ -24,29 +24,6 @@ Do **not** push agent-specific content:
 - Runtime state (`runtime/`)
 - Agent-specific services, settings, or CLAUDE.md sections
 
-## Pre-flight: GraphQL rate limit
-
-`gh pr create` and `gh repo view` go through the GraphQL API, which has a per-user 5000/hour quota shared across the org. Mid-session it can already be exhausted, and `gh pr create` then fails with an opaque "API rate limit already exceeded". Check first:
-
-```bash
-gh api rate_limit --jq '.resources.graphql | "remaining=\(.remaining) reset=\(.reset)"'
-```
-
-If `remaining` is 0 (or single-digit and you have several PRs to open), stop. Format the reset epoch for the user and wait. The recipe uses Python rather than `date -d "@..."` because the latter is GNU-only and fails on macOS:
-
-```bash
-RESET=$(gh api rate_limit --jq '.resources.graphql.reset')
-python3 -c "
-import datetime, sys
-ts = int(sys.argv[1])
-print('GraphQL quota resets at',
-      datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
-              .strftime('%Y-%m-%dT%H:%M:%SZ'))
-" "$RESET"
-```
-
-Do not retry-loop; surface the reset time and hand back to the user.
-
 ## PR conventions
 
 - **Branch name:** `submit/<short-feature-name>` (kebab-case, ~3-5 words). Same name on the upstream remote.
@@ -110,5 +87,5 @@ The upstream URL and base branch are in `parent.toml`.
 - Always commit your local changes before pushing.
 - Double-check the diff: `git show <sha>` -- make sure no agent-specific content is in the commit.
 - One upstream PR per logical fix. Don't bundle.
-- We do **not** push directly to upstream `main`. If you genuinely need to (e.g. a one-off `parent.toml`-driven sync, with explicit user instruction), the existing `parent.toml` lookup still gives you the URL and branch -- but treat it as the rare exception, not the default.
+- Never push directly to upstream `main`.
 - To pull updates from upstream, use the `update-self` skill.
