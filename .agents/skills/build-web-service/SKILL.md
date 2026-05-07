@@ -90,7 +90,7 @@ What gets generated:
   `FastAPI(...)` so the app emits prefix-aware URLs when reached
   through the proxy.
 - `libs/<package>/test_<package>_ratchets.py` -- standard ratchets at
-  zero (see "Bumping ratchets" below).
+  zero.
 - `libs/<package>/README.md` -- one-line description.
 
 What gets updated:
