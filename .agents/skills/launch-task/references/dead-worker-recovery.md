@@ -12,7 +12,7 @@ When a worker (sub-agent created via `launch-task`) dies mid-iteration -- claude
    git diff
    ```
 
-2. Discard auto-generated lockfile churn (per the "Auto-generated lockfile churn" clause in CLAUDE.md), so it doesn't ship alongside the substantive fix:
+2. Discard auto-generated lockfile churn so it doesn't ship alongside the substantive fix:
 
    ```bash
    git checkout HEAD -- vendor/mngr/uv.lock      # or whichever lockfile was touched
@@ -34,7 +34,3 @@ When a worker (sub-agent created via `launch-task`) dies mid-iteration -- claude
    `--no-allow-worktree-removal` is what keeps the branch alive once the agent is gone.
 
 5. The branch lives on. Finalize it like any other worker branch: cherry-pick onto your working branch, address ratchet/test fixups in follow-up commits, then push to `submit/<name>` per the `submit-upstream-changes` skill.
-
-## Incident
-
-Worker `forwarder-redirect-fix`'s claude session was killed while iterating on the forwarder Location-header rewrite. The mngr agent showed `STOPPED` and the claude tmux window was gone, but ~195 lines of substantive uncommitted work remained in the worktree. Following this recipe -- inspect, discard `uv.lock` churn, `git add` substantive files, `WIP:` commit, then `mngr destroy --force --no-allow-worktree-removal` -- recovered the work and let the branch be cherry-picked and finalized normally.

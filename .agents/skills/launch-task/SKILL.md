@@ -118,4 +118,5 @@ not need to push those.
 - Use `mngr wait` in the background -- don't block yourself waiting for a task
 - Check the transcript when a task finishes to see if the agent had questions or concerns
 - If a task fails, see `references/worker-failure.md` for how to capture context and report to the user (do not retry silently).
+- If a worker's claude session dies mid-iteration with uncommitted work in its worktree, see `references/dead-worker-recovery.md` -- recover the work *before* destroying the agent.
 - If the task references gitignored files, push them with `mngr push` right after `mngr create` (see above)

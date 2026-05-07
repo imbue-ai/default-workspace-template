@@ -62,5 +62,6 @@ If you need to push to a different branch on the template (e.g., a feature branc
 ## Important
 
 - Always commit your local changes before pushing
+- When finalizing a worker's branch, review and cherry-pick only the substantive commits -- skip scaffolding or auto-generated commits that don't belong upstream
 - Double-check the diff — make sure you're not about to push agent-specific content
 - To pull updates from upstream, use the `update-self` skill
