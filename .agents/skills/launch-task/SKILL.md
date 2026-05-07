@@ -14,9 +14,7 @@ its branch (`mngr/$NAME`), and the local runtime path
 
 Write a clear task file with YAML frontmatter (so the worker can address
 reports back to you) followed by the human-readable task description.
-The frontmatter mirrors the lifecycle skills' convention -- `lead_agent`
-and `lead_report_dir`. There is no transcript artifact for this flow, so
-`transcript_path` is omitted.
+The frontmatter contains `lead_agent` and `lead_report_dir`.
 
 ```bash
 mkdir -p runtime/launch-task/$NAME
@@ -76,23 +74,21 @@ BODY_EOF
 
 ```bash
 mngr create $NAME -t worker \
-    --label workspace=$MINDS_WORKSPACE_NAME \
-    --message-file runtime/launch-task/$NAME/task.md
+    --label workspace=$MINDS_WORKSPACE_NAME
 ```
 
-The `worker` template configures the agent with
-`--dangerously-skip-permissions`, code-review (imbue-code-guardian)
-settings, and a system-prompt addendum that tells the worker to honor
-the report contract embedded in the task file body.
+Omit `--message-file` here. Sending the task message at create time
+races with the runtime-dir push in Step 3 -- the worker could read the
+message and try to find `runtime/launch-task/$NAME/` before it has been
+pushed into its worktree. Send the task as a follow-up in Step 4
+instead.
 
 ## 3. Push the runtime dir to the worker
 
 The worker's worktree is a fresh checkout that does not see your
 gitignored `runtime/`. Push the runtime dir so the worker has the task
 file (and a writable home for its `report.md`) at the path the
-frontmatter names. See `.agents/shared/references/lead-proxy.md` §
-"`mngr push` rationale" for why the directory form and
-`--uncommitted-changes=merge` are required.
+frontmatter names.
 
 ```bash
 mngr push $NAME:runtime/launch-task/$NAME/ \
@@ -100,14 +96,19 @@ mngr push $NAME:runtime/launch-task/$NAME/ \
     --uncommitted-changes=merge
 ```
 
-Do this immediately after `mngr create` -- worker startup
-(provisioning + skill loading) typically gives you a window before the
-task message is acted on, but don't dawdle.
-
 If the task references other gitignored files (datasets, credentials,
 extra transcripts), push them now too with the same pattern.
 
-## 4. Background-poll for the worker's report
+## 4. Send the task message
+
+Now that the runtime dir is in place, send the task file as the
+worker's first message:
+
+```bash
+mngr message $NAME --message-file runtime/launch-task/$NAME/task.md
+```
+
+## 5. Background-poll for the worker's report
 
 Launch the poll as a background task (`run_in_background: true`) and
 continue with whatever else you were doing. The report file appears at
@@ -127,7 +128,7 @@ reports never reach the user and the worker deadlocks waiting for a
 reply. Reports surface as task notifications when the background job
 completes; handle them at that point, not by blocking on the poll.
 
-## 5. Handle the report
+## 6. Handle the report
 
 Follow `.agents/shared/references/lead-proxy.md` for parsing the
 report's frontmatter (`type` + `name`), deciding whether to answer a
@@ -159,4 +160,4 @@ Flow-specific substitutions when reading `lead-proxy.md`:
   the worker is dead), see `references/worker-failure.md` -- do not
   silently retry.
 - If the task references gitignored files beyond the runtime dir, push
-  them with `mngr push` right after `mngr create` (see Step 3).
+  them with `mngr push` before sending the task message (see Step 3).
