@@ -35,6 +35,11 @@ dev = [
     "resource-guards",
     "import-linter>=2.0",
     "ruff~=0.12.8",
+    # Used by check_no_type_errors in test_ratchets.py. Pinned to 0.0.24 because
+    # that is the version the source was last verified clean against in
+    # vendor/mngr's uv.lock; newer versions surface stricter checks that don't
+    # match what this code was reviewed under.
+    "ty==0.0.24",
 ]
 
 [project.scripts]
