@@ -49,7 +49,7 @@ RESERVED_NAMES = frozenset(
 )
 LOWEST_AUTO_PORT = 8081
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
-LOCALHOST_PORT_RE = re.compile(r"http://localhost:(\d+)")
+LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 
 
 def _kebab_to_snake(name: str) -> str:
