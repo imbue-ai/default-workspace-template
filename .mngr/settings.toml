@@ -95,13 +95,12 @@ idle_mode = "disabled"
 [create_templates.lima]
 provider = "lima"
 target_path = "/code/"
-# The default `/worktree/` (set in [commands.create]) is created by the
-# Dockerfile but does not exist on a fresh lima VM. Mirror the dev template's
-# override so worktree creation does not require pre-creating /worktree/.
-worktree_base_folder = "/tmp/mngr-worktrees/"
 idle_mode = "disabled"
 start_arg = ["--cpus=2", "--memory=4", "--disk=20"]
 extra_provision_command = [
+    # Create /worktree/ on the fresh lima VM so it matches the Dockerfile's
+    # `RUN mkdir -p /worktree` and the default worktree_base_folder works.
+    "sudo mkdir -p /worktree && sudo chown $(whoami) /worktree",
     "sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential fd-find git-lfs ripgrep sqlite3 unison",
     "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash - && sudo apt-get install -y nodejs",
     # Install latchkey CLI globally; pinned to the same version as Dockerfile's
