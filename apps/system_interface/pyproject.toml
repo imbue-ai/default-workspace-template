@@ -44,11 +44,6 @@ minds-workspace-server = "imbue.minds_workspace_server.main:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.uv.sources]
-imbue-common = { path = "../../vendor/mngr/libs/imbue_common", editable = true }
-imbue-mngr = { path = "../../vendor/mngr/libs/mngr", editable = true }
-resource-guards = { path = "../../vendor/mngr/libs/resource_guards", editable = true }
-
 [tool.hatch.build]
 artifacts = [
     "imbue/minds_workspace_server/static/**",
