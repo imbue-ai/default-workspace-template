@@ -261,9 +261,7 @@ def test_prevent_assert_isinstance() -> None:
 
 
 def test_prevent_code_in_init_files() -> None:
-    # Scope to imbue/ rather than _DIR (project root) because find_code_in_init_files
-    # uses rglob without gitignore filtering and would otherwise descend into .venv/.
-    rc.check_code_in_init_files(_DIR / "imbue", snapshot(0))
+    rc.check_code_in_init_files(_DIR, snapshot(0))
 
 
 def test_no_type_errors() -> None:
