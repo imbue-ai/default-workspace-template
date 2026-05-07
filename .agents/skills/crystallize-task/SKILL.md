@@ -72,9 +72,7 @@ Triggers that count as explicit invocation:
 - The user typed `/crystallize-task`, said "crystallize this / yes
   crystallize / make a skill out of this" in the immediately-prior
   turn, or otherwise named the skill by hand.
-- The calling skill is `do-something-new`, in which case the user's
-  sample-approval at `do-something-new` Step 5 is the explicit
-  go-ahead. Skip the pre-gate question.
+- The calling skill is `do-something-new` (sample-approval at its Step 5 is the go-ahead).
 
 In any of those cases go straight to the ticket -- asking again is
 redundant and annoying.
