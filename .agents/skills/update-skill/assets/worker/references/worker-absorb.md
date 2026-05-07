@@ -60,12 +60,7 @@ user's reply (delivered via `mngr message`) before coding.
 
 After the localized edit, sweep the rest of the SKILL.md (and any
 sibling `references/*.md`) and update every cross-reference point that
-names or summarizes the changed material. The goal is for `/autofix`
-in Stage 7 to find nothing on consistency -- only real correctness
-issues. SKILL.md files are densely cross-referenced single-file
-documents: a localized edit to one section leaves the other reference
-points subtly out of sync, and autofix as a *discovery* pass costs a
-full extra iteration per drift point.
+names or summarizes the changed material.
 
 Sweep checklist (skip anything not present in the file):
 
@@ -83,8 +78,7 @@ Sweep checklist (skip anything not present in the file):
   describes its body; if the body's framing changes, the heading must
   too.
 - **Subsection examples and analogies** -- callouts inside a section
-  that illustrate the section's framing. Drift here is the most common
-  autofix finding.
+  that illustrate the section's framing.
 - **Cross-references between sections** -- "see Step 5", "as
   established in Step 4", etc. become wrong if section numbers or
   framings shift.
@@ -93,9 +87,6 @@ Sweep checklist (skip anything not present in the file):
   sections move.
 
 Treat the sweep as part of the substantive edit, not a follow-up.
-Squash all of it into a single commit (or, if the change is genuinely
-two logically distinct edits, one commit per logical unit -- but never
-one commit per cross-reference fixup).
 
 ### Create-new-skill
 
@@ -116,16 +107,9 @@ Per `../SKILL.md`. At least one scenario must mimic the original incident (to
 prove the manual work is no longer needed). Others should exercise
 neighbouring or edge paths.
 
-## Stage 7: Code review (sanity check)
+## Stage 7: Code review
 
-Run `/autofix` on your commits. With the Stage 4 alignment sweep done,
-autofix should find nothing on cross-reference drift -- any findings
-here are real correctness issues, not consistency drift. Fix what it
-flags; that becomes a follow-up commit.
-
-If autofix finds *only* cross-section consistency drift, treat that as
-a signal that the Stage 4 sweep was incomplete, and include those
-fixes in a single follow-up commit (not one commit per drift point).
+Run `/autofix` on your commits. Fix anything the reviewer flags.
 
 ## Stage 8: Gate 2 -- final artifact
 

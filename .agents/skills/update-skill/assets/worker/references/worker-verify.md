@@ -30,15 +30,9 @@ task file. You are looking for:
   contain, and any major change in the diff that the rationale does not
   explain.
 - **Consistency:** does the edited SKILL.md stay coherent? References to
-  removed content, orphaned sections, or broken links are verification
-  findings, not judgement calls about the design. SKILL.md files are
-  densely cross-referenced -- a localized live edit may have left
-  frontmatter `description`, H1 / opening prose, `## Principles`
-  bullets, section headings, subsection examples, or
-  `## Conventions` / `## Gotchas` callouts subtly out of sync. If
-  consistency findings are real (not subjective stylistic
-  preferences), fix them as a single follow-up commit on the branch
-  -- do not split into one commit per drift point.
+  removed content, orphaned sections, broken links, or cross-reference
+  drift from the localized edit are verification findings, not judgement
+  calls about the design.
 - **Backward compatibility:** if the rationale claims backward
   compatibility, do existing callers still work? (E.g. old task-file shapes
   still route correctly.)
@@ -62,17 +56,10 @@ Scenarios are walk-throughs against the post-change skill files on disk.
 Record each in your transcript using the template from
 `.agents/shared/references/spec-summary.md`.
 
-## Stage 5: Code review (sanity check)
+## Stage 5: Code review
 
-Run `/autofix` on the branch. With the Stage 2 consistency check
-already addressed, autofix should find nothing on cross-reference
-drift -- any findings here are real correctness issues. Fix what it
-flags; those fixes become follow-up commits on
-`mngr/update-<target>`.
-
-If autofix finds *only* cross-section consistency drift, that is a
-signal Stage 2's consistency check was incomplete; batch the fixes
-into a single follow-up commit (not one commit per drift point).
+Run `/autofix` on the branch. Fix anything the reviewer flags; those fixes
+become follow-up commits on `mngr/update-<target>`.
 
 ## Stage 6: Gate 2 -- final artifact
 
