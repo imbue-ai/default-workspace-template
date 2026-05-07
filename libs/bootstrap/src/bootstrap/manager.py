@@ -156,8 +156,7 @@ def _compute_actions(
     """Compute (stops, starts) needed to make `current` match `desired`.
 
     A service whose command changed appears in both lists -- it must be stopped
-    and then started again. Pure function so it can be unit-tested without
-    invoking tmux.
+    and then started again.
     """
     stops: list[str] = []
     starts: list[tuple[str, str]] = []
