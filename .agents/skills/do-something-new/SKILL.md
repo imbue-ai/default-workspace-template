@@ -24,7 +24,7 @@ Pick a short kebab-case slug `$SLUG` for the task (e.g. `fetch-emails`,
 
 - Runtime path: `runtime/do-something-new/$SLUG/`
 - Sample data path: `runtime/do-something-new/$SLUG/sample.json`
-- Slug passed to `crystallize-task` at the end
+- Slug passed to `crystallize-task` at the end (reused as its `$NAME`)
 
 ## Step 0: Existing-skill scan
 
@@ -112,28 +112,22 @@ and re-propose. Re-run Step 2 only if the new ask requires fresh research.
 
 ## Step 6: Crystallize in the background and hand off to interface design
 
-When the user approves the sample, kick off `crystallize-task` in the
-background. Tell `crystallize-task` that the source artifacts directory is
-`runtime/do-something-new/$SLUG/`; its Step 3 includes the directory in the
-task frontmatter as `source_artifacts_dir` and its Step 4 pushes the directory
-to the worker, so the worker has the scripts and sample data you produced.
+1. **Kick off `crystallize-task`** with `source_artifacts_dir:
+   runtime/do-something-new/$SLUG/`.
+2. **Launch the lead-proxy poll** (`run_in_background: true`) for
+   worker reports, per `crystallize-task` Step 5 /
+   `.agents/shared/references/lead-proxy.md`. Do this *before*
+   returning to the user. The poll does not block subsequent steps.
+   Without it, Gate 1 / Gate 2 reports never reach the user and the
+   worker deadlocks waiting for approval.
+3. **Hand off to interface design.** Acknowledge that the worker is
+   now formalizing the capability, then either follow up on the
+   interface the user named in their original prompt (if they did) or
+   ask how they'd like to interact with the thing.
 
-**You are still on the hook for the lead-proxy poll.** Kicking off
-`crystallize-task` is *not* fire-and-forget -- you must launch the
-background poll for worker reports (per `crystallize-task` Step 5 /
-`.agents/shared/references/lead-proxy.md`) *concurrently with* the
-interface-design conversation. The poll is a `run_in_background: true` bash
-invocation; it does not block subsequent steps. Without it, Gate 1 / Gate 2
-reports never reach the user and the worker deadlocks waiting for approval.
-
-Once crystallize is launched and the lead-proxy poll is running in the
-background, transition the conversation toward interface design.
-Acknowledge that the worker is now formalizing the capability, then
-either follow up on the interface the user named in their original
-prompt (if they did) or ask how they'd like to interact with the thing.
-
-The skill's responsibility ends here. Interface design happens in
-subsequent turns.
+The skill's *flow* responsibility ends here; lead-proxy ownership for
+the dispatched worker continues until that worker reports terminal
+status. Interface design happens in subsequent turns.
 
 ## Re-fetch while crystallize is running
 
