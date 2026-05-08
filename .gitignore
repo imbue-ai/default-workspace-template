@@ -242,6 +242,9 @@ apps/system_interface/frontend/src/assets/*.png
 # Local Claude settings backup files
 .claude/*.bak
 
+# ScheduleWakeup lockfile written by Claude Code at runtime
+.claude/scheduled_tasks.lock
+
 # Local mngr settings (not committed)
 .mngr/settings.local.toml
 
