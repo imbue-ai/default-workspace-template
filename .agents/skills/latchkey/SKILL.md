@@ -1,6 +1,6 @@
 ---
 name: latchkey
-description: Interact with third-party or self-hosted services (Slack, Google Workspace, Dropbox, GitHub, Linear, Coolify...) using their HTTP APIs on the user's behalf.
+description: Use whenever you need to call a third-party or self-hosted HTTP API on the user's behalf (Slack, Google Workspace / Gmail / Calendar / Drive / Docs / Sheets, Dropbox, GitHub, GitLab, Linear, Notion, Discord, Coolify, AWS, Stripe, Sentry, Zoom, ...). This is the default path for any auth-required external HTTP request -- prefer it over hand-rolling auth, manually setting bearer tokens, or asking the user for credentials. Also use this skill any time a `latchkey curl` request comes back with "Request not permitted by the user" -- you MUST send a permission request before retrying.
 compatibility: Requires node.js, curl and latchkey (npm install -g latchkey). A desktop/GUI environment is required for the browser functionality.
 ---
 
@@ -10,15 +10,15 @@ compatibility: Requires node.js, curl and latchkey (npm install -g latchkey). A 
 
 Latchkey is a CLI tool that automatically injects credentials into curl commands. Credentials (mostly API tokens) can be either manually managed or, for some services, Latchkey can open a browser login pop-up window and extract API credentials from the session.
 
-Use this skill when the user asks you to work on their behalf with services that have HTTP APIs, like AWS, GitLab, Google Drive, Discord or others.
+**Use this skill any time you need to interact with a third-party HTTP API.** That includes the obvious cases (the user explicitly asks to do something on Slack / Gmail / GitHub / etc.) and the non-obvious ones (you need to fetch from a service to complete some other task). Reach for `latchkey curl` *before* trying raw `curl`, *before* trying to set `Authorization` headers yourself, and *before* asking the user for tokens. Latchkey is the canonical path; only fall back to other approaches if `latchkey services list` confirms the service is unsupported.
 
 Usage:
 
-1. **Use `latchkey curl`** instead of regular `curl` for supported services.
+1. **Use `latchkey curl`** instead of regular `curl` for supported services. Pass the **full URL** as a single argument (e.g. `latchkey curl 'https://gmail.googleapis.com/gmail/v1/users/me/profile'`). Do NOT use a `<service> <method> <path>` command-style form -- there is no such form, and it will produce a confusing "Could not extract URL from curl arguments" error.
 2. **Pass through all regular curl arguments** - latchkey is a transparent wrapper.
-3. **Check for `latchkey services list`** to get a list of supported services. Use `--viable` to only show the currently configured ones.
+3. **Check `latchkey services list`** to get a list of supported services. Use `--viable` to only show the currently configured ones.
 4. **Use `latchkey services info <service_name>`** to get information about a specific service (auth options, credentials status, API docs links, special requirements, etc.).
-5. **Submit a permission request to the user if necessary** by calling `curl -XPOST http://localhost:8000/api/permissions/request` when either there are no credentials for the given service or the curl requests come back with the "request not permitted by the user" message.
+5. **Permission requests are MANDATORY when a call is blocked.** Any time `latchkey curl` returns `{"error":"Error: Request not permitted by the user."}` (HTTP 403 from the gateway), you MUST send a permission request via `POST http://localhost:8000/api/permissions/request` and wait for the user's approval BEFORE retrying. This is also the right step when `latchkey services info <name>` shows `credentialStatus: missing` and you need access for an action. Do not silently fail, do not skip the call, do not assume it is a bug; the workspace is gating you on user consent. See the "Ask for user permission" example below.
 6. **Look for the newest documentation of the desired public API online.** Avoid bot-only endpoints.
 
 
@@ -43,17 +43,19 @@ latchkey curl -X POST 'https://slack.com/api/conversations.create' \
 latchkey curl 'https://discord.com/api/v10/users/@me'
 ```
 
-### Ask for user permission
+### Ask for user permission (REQUIRED whenever a request is blocked)
 
-When either there are no credentials for the given service yet or our
-requests come back with the "request not permitted by the user
-message", ask the user for permission first:
+If `latchkey curl` returns `{"error":"Error: Request not permitted by the user."}` (HTTP 403 from the gateway), or `latchkey services info <name>` shows `credentialStatus: missing` for a service you need to call, you MUST send a permission request first. Do not retry the curl without doing this -- the gateway will keep blocking until the user approves:
 
 ```bash
-curl -XPOST http://localhost:8000/api/permissions/request -d '{"request_type": "LATCHKEY_PERMISSION", "service_name": "discord", "rationale": "I'd like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
+curl -XPOST http://localhost:8000/api/permissions/request \
+  -H 'Content-Type: application/json' \
+  -d '{"request_type": "LATCHKEY_PERMISSION", "service_name": "discord", "rationale": "I would like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
 ```
 
-After that, wait for a system message to see if the user approved or denied the permission request.
+A successful submission returns `{"ok":true,"event_id":"evt-..."}`. After that, surface a brief "permission request sent -- please approve in the desktop client" message to the user and wait for the system message confirming approval before retrying the original `latchkey curl` call.
+
+The `service_name` value should be the latchkey service name (`google-gmail`, `slack`, `github`, `discord`, etc. -- match the names in `latchkey services list`). The `rationale` is a one-paragraph human-readable explanation of why you need access; write it for the user.
 
 ### Detect expired credentials and force a new login to Discord
 ```bash
