@@ -586,6 +586,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "imbue-mngr" },
     { name = "import-linter" },
     { name = "inline-snapshot" },
     { name = "pyright" },
@@ -611,6 +612,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "imbue-mngr", editable = "vendor/mngr/libs/mngr" },
     { name = "import-linter", specifier = ">=2.0" },
     { name = "inline-snapshot", specifier = ">=0.31" },
     { name = "pyright", specifier = ">=1.1" },

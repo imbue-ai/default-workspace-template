@@ -25,6 +25,9 @@ dev = [
     "import-linter>=2.0",
     "tomlkit>=0.12",
     "pyyaml>=6",
+    # used by test_mngr_template_stacking.py to verify .mngr/settings.toml
+    # composes correctly with vendor/mngr's apply_create_template logic
+    "imbue-mngr",
 ]
 
 [tool.uv]

@@ -86,6 +86,13 @@ extra_window = [
     "reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'",
     "git_auth_setup='git config --global --replace-all url.\"https://github.com/\".insteadOf \"git@github.com:\" && git config --global --add url.\"https://github.com/\".insteadOf \"ssh://git@github.com/\" && git config --global core.hooksPath /code/scripts/git_hooks && gh auth setup-git'"
 ]
+# Write a sane default tmux config on every minds host. tuple-typed
+# `extra_provision_command` stacks across templates (see
+# `apply_create_template` in vendor/mngr/.../common_opts.py), so the
+# mode-specific templates (dev/docker/lima/...) keep their own commands.
+extra_provision_command = [
+    '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' > "$HOME/.tmux.conf"''',
+]
 
 # template for dev mode (runs in-place on local provider)
 [create_templates.dev]
@@ -115,6 +122,10 @@ provider = "docker"
 target_path = "/code/"
 setting = ["providers.docker.is_enabled=true"]
 build_arg = ["--file=Dockerfile", "."]
+# `--cap-add=SYS_PTRACE` is a `docker run` flag (not `docker build`), so it
+# rides on `start_arg` rather than `build_arg`. Lets us attach gdb / strace
+# inside the container for debugging without rebuilding the image.
+start_arg = ["--cap-add=SYS_PTRACE"]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
 idle_mode = "disabled"
