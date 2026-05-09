@@ -89,31 +89,9 @@ extra_window = [
 # Write a sane default tmux config on every minds host. tuple-typed
 # `extra_provision_command` stacks across templates (see
 # `apply_create_template` in vendor/mngr/.../common_opts.py), so the
-# mode-specific templates (dev/docker/lima/...) keep their own commands.
+# mode-specific templates (docker/lima/...) keep their own commands.
 extra_provision_command = [
     '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' > "$HOME/.tmux.conf"''',
-]
-
-# template for dev mode (runs in-place on local provider)
-[create_templates.dev]
-provider = "local"
-worktree_base_folder = "/tmp/mngr-worktrees/"
-extra_provision_command = [
-    "uv tool install -e vendor/mngr/libs/mngr && uv tool install -e apps/system_interface && PATH=\"$UV_TOOL_BIN_DIR:$PATH\" mngr plugin add --path vendor/mngr/libs/mngr_modal/ --path vendor/mngr/libs/mngr_claude",
-]
-# DEV runs the agent on the bare host (no new host is created), so the
-# Anthropic creds need to land in the *agent* env -- ``pass_env``, not
-# ``pass_host_env``. ``GH_TOKEN`` is already in
-# ``[commands.create].pass_env`` so it's covered for every mode.
-pass_env = [
-    "MINDS_WORKSPACE_NAME",
-    "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_USER_NAME",
-    "UV_TOOL_BIN_DIR",
-    "UV_TOOL_DIR",
-    "LATCHKEY_GATEWAY",
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_BASE_URL",
 ]
 
 # template for docker provider
