@@ -147,10 +147,6 @@ Use your judgment on when to do work directly vs delegating. Delegation is usefu
 - Multi-file changes that benefit from verification before merging
 - Long-running operations you don't want to block on
 
-# Responding to events
-
-You can create a persistent background watcher using the `create-event-processor` skill if you would like to automatically respond to certain events (e.g. new messages, tickets, or specific times of day).
-
 # Self-modification
 
 You can (and should) modify your own configuration to improve yourself:
