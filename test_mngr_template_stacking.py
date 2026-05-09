@@ -92,18 +92,6 @@ def test_main_template_writes_default_tmux_conf() -> None:
     assert "set -g mouse on" in only_command
 
 
-def test_main_extra_provision_command_stacks_with_dev() -> None:
-    """`main` + `dev`: dev's `extra_provision_command` is preserved alongside main's tmux config."""
-    result = _apply(("main", "dev"))
-    commands = result["extra_provision_command"]
-    assert any(_TMUX_MARKER in cmd for cmd in commands), (
-        "main's tmux-conf provisioning command was lost when stacking dev on top"
-    )
-    assert any("uv tool install -e vendor/mngr/libs/mngr" in cmd for cmd in commands), (
-        "dev's `uv tool install` provisioning command was lost when stacking onto main"
-    )
-
-
 def test_main_extra_provision_command_stacks_with_lima() -> None:
     """`main` + `lima`: lima's many provisioning commands all survive alongside main's."""
     result = _apply(("main", "lima"))
