@@ -7,6 +7,10 @@ runtime/
 # tk tickets (tracker is vendored at vendor/tk; the tickets themselves are local state)
 .tickets/
 
+# External repos we're actively working on (e.g. mngr) live here as standalone
+# clones, separate from the read-only vendor/ subtrees. See CLAUDE.md.
+.external_worktrees/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
