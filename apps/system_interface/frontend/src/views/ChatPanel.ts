@@ -423,15 +423,16 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
             break;
           }
         }
-        // Note: ProgressBlock is rendered unkeyed so that messageNodes
-        // stays a homogeneous fragment (Mithril 2 throws if siblings mix
-        // keyed and unkeyed vnodes, and renderUserMessage /
-        // renderAssistantMessage already produce unkeyed nodes). Per-turn
-        // expand state lives in the component's own closure and is
-        // preserved across redraws by positional component reuse, which
-        // matches how the rest of the message list works today.
+        // ProgressBlock must carry a key: messageNodes is a homogeneous
+        // keyed fragment (renderUserMessage and renderAssistantMessage both
+        // attach `key: event.event_id` to their root vnodes), and Mithril 2
+        // throws if a fragment mixes keyed and unkeyed children. Deriving
+        // the key from the turn's user_event.event_id keeps it stable
+        // across redraws -- which also preserves the per-turn expand state
+        // that lives in ProgressBlock's component closure.
         messageNodes.push(
           m(ProgressBlock, {
+            key: `progress-${turn.user_event.event_id}`,
             tasks: turn.tasks,
             body_events: turn.body_events,
             final_message: finalMessage,
