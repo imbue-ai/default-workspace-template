@@ -1,26 +1,34 @@
 /**
- * Smart activity strip that sits just above the message input.
+ * Activity strip that sits just above the message input.
  *
- * Replaces the generic "Running tool…" indicator with a label derived
- * from the most recent assistant tool call without a matching tool_result.
- * Vocabulary:
- *   - "Reading <basename>"  for Read
- *   - "Editing <basename>"  for Edit / MultiEdit
- *   - "Writing <basename>"  for Write
- *   - "Running <command>"   for Bash (truncated)
- *   - "Searching <pattern>" for Grep / Glob
- *   - "Delegating to sub-agent"  for Agent / Task
- *   - "Running tool…"       for any other unmapped tool
- *   - "Thinking…"           when the latest event is a user_message or a
- *                           tool_result with no follow-up assistant_message
- *   - hidden                when the latest assistant_message has no
- *                           pending tool calls (agent is idle / done)
+ * The backend (workspace server) is the source of truth for *which* state
+ * the agent is in -- IDLE / THINKING / TOOL_RUNNING / WAITING_ON_PERMISSION
+ * -- because the WAITING_ON_PERMISSION case relies on a marker file that
+ * the transcript alone cannot detect. The state is delivered on each
+ * agent's ``activity_state`` field via the ``agents_updated`` WS payload.
  *
- * Pure derivation from the transcript -- no agent or server state needed.
+ * The frontend's only job is to pick a label for the current state. For
+ * TOOL_RUNNING we enrich the generic "Running tool…" label by walking the
+ * transcript to find the most recent unmatched assistant tool call and
+ * naming it specifically:
+ *   - "Reading <basename>"        for Read
+ *   - "Editing <basename>"        for Edit / MultiEdit
+ *   - "Writing <basename>"        for Write
+ *   - "Running <command>"         for Bash (truncated)
+ *   - "Searching <pattern>"       for Grep / Glob
+ *   - "Delegating to sub-agent…"  for Agent / Task
+ *   - "Running tool…"             for any other unmapped tool, or if the
+ *                                 transcript hasn't surfaced the tool
+ *                                 call yet (timing race).
+ *
+ * A null ``activity_state`` means the server has no per-agent activity
+ * tracking for this agent (proto-agents, non-Claude agent types, remote
+ * agents whose state dir is not on this host) -- the indicator collapses.
  */
 
 import m from "mithril";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
+import { getAgentById } from "../models/AgentManager";
 
 // Note: Agent / Task are intentionally NOT in this map. labelForToolCall
 // short-circuits with the "Delegating to sub-agent…" label for those tools
@@ -104,45 +112,39 @@ function pendingToolCall(events: TranscriptEvent[]): ToolCall | null {
   return null;
 }
 
-/** The activity label given the current event list. null = hidden. */
-export function deriveActivityLabel(events: TranscriptEvent[]): string | null {
-  if (events.length === 0) return null;
-
-  const pending = pendingToolCall(events);
-  if (pending !== null) return labelForToolCall(pending);
-
-  // No pending tools. Decide between "thinking" and idle by looking at
-  // the latest CONVERSATION event -- task_event entries from the tickets
-  // watcher can land after the agent's final assistant_message in the
-  // timestamp-sorted merged stream, and they don't reflect agent
-  // activity, so they must not flip an idle agent into "Thinking…".
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i];
-    if (e.type === "assistant_message") {
-      // Most recent message from the agent has no pending tools -- idle.
-      return null;
-    }
-    if (e.type === "user_message" || e.type === "tool_result") {
-      // Latest conversation event is a user_message or tool_result with
-      // no follow-up assistant_message -> agent is processing.
-      return "Thinking…";
-    }
+/**
+ * Pick the user-facing label for a given server-derived activity state.
+ *
+ * For TOOL_RUNNING we consult the transcript to enrich the label. For
+ * every other state the label is fixed (or null = hide).
+ */
+export function labelForActivityState(state: string | null | undefined, events: TranscriptEvent[]): string | null {
+  if (state === null || state === undefined) return null;
+  if (state === "IDLE") return null;
+  if (state === "WAITING_ON_PERMISSION") return "Waiting for permission";
+  if (state === "THINKING") return "Thinking…";
+  if (state === "TOOL_RUNNING") {
+    const pending = pendingToolCall(events);
+    if (pending !== null) return labelForToolCall(pending);
+    return "Running tool…";
   }
-  // No conversation events at all (e.g. a stream consisting only of
-  // task_events): nothing actionable to show.
+  // Unknown / future enum value -- leave the slot collapsed.
   return null;
 }
 
 interface ActivityIndicatorAttrs {
+  agentId: string;
   events: TranscriptEvent[];
 }
 
 export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
   return {
     view(vnode) {
-      const label = deriveActivityLabel(vnode.attrs.events);
+      const agent = getAgentById(vnode.attrs.agentId);
+      const state = agent?.activity_state ?? null;
+      const label = labelForActivityState(state, vnode.attrs.events);
       if (label === null) return null;
-      return m("div.agent-activity-indicator", { role: "status", "aria-live": "polite" }, [
+      return m("div.agent-activity-indicator", { "data-state": state, role: "status", "aria-live": "polite" }, [
         m("span.agent-activity-indicator__dot"),
         m("span.agent-activity-indicator__label", label),
       ]);
