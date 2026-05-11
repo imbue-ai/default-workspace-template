@@ -137,20 +137,28 @@ mngr push <WORKER>:<DEST_DIR> \
 - There is no `mngr file put` subcommand -- `mngr push` is the correct
   mechanism.
 
-## `extract_turn.py`
+## Capturing a turn
 
-Capture a turn from the current session transcript:
+Capture the previous completed turn from the current agent's transcript:
 
 ```bash
-uv run .agents/shared/scripts/extract_turn.py \
-    --nth 1 \
-    --output <RUNTIME_DIR>/turn.jsonl
+mkdir -p <RUNTIME_DIR>
+mngr transcript --last-completed-turn --format jsonl \
+    > <RUNTIME_DIR>/turn.jsonl
 ```
 
-`--nth 1` selects the *previous* human turn -- the one you typically want to
-capture. `--nth 0` (the default) would capture the current invocation turn,
-which is rarely what you want.
+`mngr transcript` runs against the current agent automatically (it reads
+`$MNGR_AGENT_ID` from the agent's shell environment). `--last-completed-turn`
+is shorthand for `--turn -2`: the most recent turn that has another
+`user_message` after it, which is the one you typically want to capture
+from inside a lead skill -- the *previous* user turn, not the one you are
+currently running in.
 
-For marker-based slicing when turn counts do not line up cleanly (e.g.
-sub-agent interleaving) and the transcript path resolution chain, run
-`uv run .agents/shared/scripts/extract_turn.py --help`.
+The output is a JSONL stream of `common_transcript` events
+(`type: user_message | assistant_message | tool_result | ...`), one per
+line. Stop-hook injections and other framework-meta events are already
+reclassified upstream as `tool_result` with `tool_name: meta`, so they do
+not open new turn boundaries.
+
+For other slicing options (`--turn N`, `--list-turns`, `--count-turns`),
+run `mngr transcript --help`.
