@@ -96,20 +96,20 @@ for how it failed; here, describe only what success looks like.>
 Use the \`heal-skill-worker\` sub-skill to replicate the problem, find
 the root cause, apply a fix to the relevant part of
 \`.agents/skills/$TARGET/\` (SKILL.md prose, scripts, or both), re-run
-fresh 2-3 scenarios against the fixed skill, and push through Gate 2
-(user approval of the final artifact). There is no outline gate for a
-heal.
+fresh 2-3 scenarios against the fixed skill, and push through the
+final-artifact gate (user approval of the fix). A heal has only that
+single gate -- no outline gate.
 
-When you reach Gate 2 or a terminal status, write a report file and
-push it to the lead per the sub-skill's reporting protocol; the
-destination is given by \`lead_agent\` / \`lead_report_dir\` in
-frontmatter.
+When you reach the final-artifact gate or a terminal status, write a
+report file and push it to the lead per the sub-skill's reporting
+protocol; the destination is given by \`lead_agent\` /
+\`lead_report_dir\` in frontmatter.
 
 ## Success criteria
 - The incident reproduces against the current skill before the fix.
 - The fix addresses the root cause (not a symptom workaround).
 - The fresh scenarios pass after the fix.
-- The user approves the final artifact (Gate 2, via a pushed report).
+- The user approves the final artifact (via a pushed \`final-artifact\` gate report).
 - Work is committed to your branch.
 BODY_EOF
 } > runtime/heal/$TARGET/task.md
@@ -137,7 +137,7 @@ mngr push heal-$TARGET:runtime/heal/$TARGET/ \
     --uncommitted-changes=merge
 ```
 
-## Step 5: Proxy Gate 2, then merge
+## Step 5: Proxy the final-artifact gate, then merge
 
 Follow `.agents/shared/references/lead-proxy.md` for polling, gate
 decisions, the "do not interrupt more recent user work" rule, and
@@ -149,8 +149,8 @@ Flow-specific substitutions:
 - Branch: `mngr/heal-$TARGET`
 - Poll path: `runtime/heal/$TARGET/reports/report.md`
 - Consumed path: `runtime/heal/$TARGET/reports/consumed/`
-- The only user-approval gate is `type: gate, name: final-artifact`
-  (Gate 2). There is no outline gate for a heal.
+- The only user-approval gate is `type: gate, name: final-artifact`.
+  A heal has no outline gate.
 - Terminal statuses: `type: status, name: done` (merge);
   `type: status, name: stuck` (failure-handling flow).
 
