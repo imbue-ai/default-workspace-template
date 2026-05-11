@@ -160,6 +160,48 @@ Some **bold prose** here that is not a note.
     assert result.summary is None
 
 
+def test_parse_captures_agent_field_when_present() -> None:
+    """The patched `tk create` stamps the creating mngr agent's name into
+    the frontmatter as `agent:`. The parser must surface it so the watcher
+    can filter tickets that belong to a different agent."""
+    text = """---
+id: tt-stamp
+status: open
+deps: []
+links: []
+created: 2026-04-28T01:17:08Z
+type: task
+priority: 2
+agent: crystallize-email-digest
+---
+# Stamped task
+"""
+    result = parse_ticket_text(text)
+    assert result is not None
+    assert result.agent == "crystallize-email-digest"
+
+
+def test_parse_agent_field_defaults_to_empty_when_missing() -> None:
+    """Tickets created before the stamping patch -- or by any tk invocation
+    outside an mngr context -- have no `agent:` line. The parser returns
+    an empty string for the field so the watcher's "absent = include for
+    any agent" backwards-compat path works."""
+    text = """---
+id: tt-bare
+status: open
+deps: []
+links: []
+created: 2026-04-28T01:17:08Z
+type: task
+priority: 2
+---
+# Pre-stamping task
+"""
+    result = parse_ticket_text(text)
+    assert result is not None
+    assert result.agent == ""
+
+
 def test_inline_notes_substring_does_not_anchor_notes_section() -> None:
     """A `## Notes` substring appearing mid-line (or mid-paragraph) must
     NOT be treated as the start of the Notes section. The real Notes

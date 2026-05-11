@@ -64,10 +64,18 @@ class AgentTicketsWatcher:
     def __init__(
         self,
         agent_id: str,
+        agent_name: str,
         tickets_dir: Path,
         on_events: Callable[[str, list[dict[str, Any]]], None],
     ) -> None:
         self._agent_id = agent_id
+        # Used to filter tickets to only those created by THIS agent.
+        # tk's patched `cmd_create` stamps `$MNGR_AGENT_NAME` into each
+        # ticket's `agent` frontmatter field; we drop any ticket whose
+        # `agent` field is set and doesn't match. Tickets with no `agent`
+        # field (pre-existing files or any external tk write) are kept --
+        # see _scan for the rationale.
+        self._agent_name = agent_name
         self._tickets_dir = tickets_dir
         self._on_events = on_events
 
@@ -213,6 +221,20 @@ class AgentTicketsWatcher:
 
                 state = parse_ticket_file(md_file)
                 if state is None:
+                    continue
+
+                # Filter out tickets created by a DIFFERENT mngr agent.
+                # When workers share a TICKETS_DIR with their lead (the
+                # default minds setup: `TICKETS_DIR=/code/runtime/tickets`
+                # is set as a host_env at create time and inherited by
+                # every tmux-spawned sub-agent), each agent's view should
+                # still only show its own tickets. A ticket with an empty
+                # `agent` field is kept regardless: it was either created
+                # by an older tk that didn't stamp the field, or by a
+                # non-mngr tk invocation -- attributing such tickets to
+                # this agent is the least-surprising behaviour and keeps
+                # us backwards-compatible with pre-existing ticket files.
+                if state.agent and state.agent != self._agent_name:
                     continue
 
                 previous_status = self._last_status_per_ticket.get(state.ticket_id)
