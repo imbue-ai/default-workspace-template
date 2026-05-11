@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TranscriptEvent } from "../models/Response";
-import { deriveActivityLabel } from "./ActivityIndicator";
+import { labelForActivityState } from "./ActivityIndicator";
 
 function userMsg(ts: string): TranscriptEvent {
   return { timestamp: ts, type: "user_message", event_id: `u-${ts}`, source: "test", content: "hi" };
@@ -28,37 +28,39 @@ function toolResult(ts: string, callId: string): TranscriptEvent {
   };
 }
 
-function assistantText(ts: string, text: string): TranscriptEvent {
-  return {
-    timestamp: ts,
-    type: "assistant_message",
-    event_id: `a-${ts}`,
-    source: "test",
-    text,
-    tool_calls: [],
-  };
-}
-
-describe("deriveActivityLabel", () => {
-  it("returns null on an empty event list", () => {
-    expect(deriveActivityLabel([])).toBe(null);
+describe("labelForActivityState — fixed-label states", () => {
+  it("hides the indicator for null state (server has no activity tracking for this agent)", () => {
+    expect(labelForActivityState(null, [])).toBe(null);
   });
 
-  it("returns 'Thinking…' when the latest event is a user_message", () => {
-    expect(deriveActivityLabel([userMsg("2026-04-28T01:00:00Z")])).toBe("Thinking…");
+  it("hides the indicator for undefined state (pre-WS-connect)", () => {
+    expect(labelForActivityState(undefined, [])).toBe(null);
   });
 
-  it("returns null when the latest event is an assistant_message with no pending tools", () => {
-    const events = [userMsg("2026-04-28T01:00:00Z"), assistantText("2026-04-28T01:00:01Z", "All done.")];
-    expect(deriveActivityLabel(events)).toBe(null);
+  it("hides the indicator for IDLE", () => {
+    expect(labelForActivityState("IDLE", [userMsg("2026-04-28T01:00:00Z")])).toBe(null);
   });
 
+  it("hides the indicator for an unknown / future state value", () => {
+    expect(labelForActivityState("SOMETHING_NEW", [])).toBe(null);
+  });
+
+  it("returns 'Waiting for permission' for WAITING_ON_PERMISSION", () => {
+    expect(labelForActivityState("WAITING_ON_PERMISSION", [])).toBe("Waiting for permission");
+  });
+
+  it("returns 'Thinking…' for THINKING", () => {
+    expect(labelForActivityState("THINKING", [userMsg("2026-04-28T01:00:00Z")])).toBe("Thinking…");
+  });
+});
+
+describe("labelForActivityState — TOOL_RUNNING transcript enrichment", () => {
   it("labels Read with the file basename", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
       toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"src/themes/midnight.ts"}'),
     ];
-    expect(deriveActivityLabel(events)).toBe("Reading midnight.ts");
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Reading midnight.ts");
   });
 
   it("labels Edit / MultiEdit with file basename", () => {
@@ -66,7 +68,7 @@ describe("deriveActivityLabel", () => {
       userMsg("2026-04-28T01:00:00Z"),
       toolUse("2026-04-28T01:00:01Z", "Edit", "tc1", '{"file_path":"server/routes/reports.ts"}'),
     ];
-    expect(deriveActivityLabel(events)).toBe("Editing reports.ts");
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Editing reports.ts");
   });
 
   it("labels Bash with the (truncated) command", () => {
@@ -74,7 +76,7 @@ describe("deriveActivityLabel", () => {
       userMsg("2026-04-28T01:00:00Z"),
       toolUse("2026-04-28T01:00:01Z", "Bash", "tc1", '{"command":"npm test"}'),
     ];
-    expect(deriveActivityLabel(events)).toBe("Running npm test");
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running npm test");
   });
 
   it("labels Grep with the pattern in quotes", () => {
@@ -82,12 +84,12 @@ describe("deriveActivityLabel", () => {
       userMsg("2026-04-28T01:00:00Z"),
       toolUse("2026-04-28T01:00:01Z", "Grep", "tc1", '{"pattern":"registerTheme"}'),
     ];
-    expect(deriveActivityLabel(events)).toBe('Searching "registerTheme"');
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe('Searching "registerTheme"');
   });
 
   it("falls back to 'Running tool…' for unknown tools", () => {
     const events = [userMsg("2026-04-28T01:00:00Z"), toolUse("2026-04-28T01:00:01Z", "SomeNewTool", "tc1", "{}")];
-    expect(deriveActivityLabel(events)).toBe("Running tool…");
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running tool…");
   });
 
   it("returns 'Delegating to sub-agent…' for Agent / Task tools", () => {
@@ -95,50 +97,24 @@ describe("deriveActivityLabel", () => {
       userMsg("2026-04-28T01:00:00Z"),
       toolUse("2026-04-28T01:00:01Z", "Agent", "tc1", '{"description":"do it"}'),
     ];
-    expect(deriveActivityLabel(events)).toBe("Delegating to sub-agent…");
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Delegating to sub-agent…");
   });
 
-  it("ignores tool calls that already have a matching tool_result", () => {
-    // Latest assistant message had a tool call, but the result has already
-    // come back. The agent is now idle (no more pending tools); label = null.
+  it("ignores tool calls that already have a matching tool_result when picking the pending one", () => {
+    // First tool already resolved, second tool is the active one.
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"x.ts"}'),
+      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"old.ts"}'),
       toolResult("2026-04-28T01:00:02Z", "tc1"),
-      assistantText("2026-04-28T01:00:03Z", "OK done."),
+      toolUse("2026-04-28T01:00:03Z", "Read", "tc2", '{"file_path":"new.ts"}'),
     ];
-    expect(deriveActivityLabel(events)).toBe(null);
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Reading new.ts");
   });
 
-  it("returns 'Thinking…' between a tool result and the next assistant message", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"x.ts"}'),
-      toolResult("2026-04-28T01:00:02Z", "tc1"),
-    ];
-    expect(deriveActivityLabel(events)).toBe("Thinking…");
-  });
-
-  it("ignores trailing task_event entries when deciding idle vs thinking", () => {
-    // The merged event stream sorts by timestamp, so a task_event whose
-    // mtime lands after the agent's final assistant_message can be the
-    // last event in the list. The indicator must not flip to
-    // "Thinking…" because of that -- the agent is idle.
-    const events: TranscriptEvent[] = [
-      userMsg("2026-04-28T01:00:00Z"),
-      assistantText("2026-04-28T01:00:01Z", "All done."),
-      {
-        timestamp: "2026-04-28T01:00:02Z",
-        type: "task_event",
-        event_id: "t1-closed",
-        source: "tk",
-        ticket_id: "t1",
-        title: "Some task",
-        status: "closed",
-        created_at: "2026-04-28T01:00:00Z",
-        summary: "wrapped up",
-      },
-    ];
-    expect(deriveActivityLabel(events)).toBe(null);
+  it("falls back to 'Running tool…' when state is TOOL_RUNNING but no pending tool call is visible yet (timing race)", () => {
+    // Backend already detected a tool_use, but the frontend's transcript
+    // stream hasn't surfaced it yet, or every visible tool_use has been
+    // matched by a tool_result on the frontend's side.
+    expect(labelForActivityState("TOOL_RUNNING", [userMsg("2026-04-28T01:00:00Z")])).toBe("Running tool…");
   });
 });

@@ -488,7 +488,9 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
           ? null
           : m("footer", { class: "app-footer" }, [
               m(EmptySlot, { name: "conversation-before-input" }),
-              m(ActivityIndicator, { events: getEventsForAgent(agentId) }),
+              isConversationNotFound(agentId)
+                ? null
+                : m(ActivityIndicator, { agentId, events: getEventsForAgent(agentId) }),
               m(MessageInput, { agentId }),
               m("div", { class: "chat-agent-terminal-link" }, [
                 m(
