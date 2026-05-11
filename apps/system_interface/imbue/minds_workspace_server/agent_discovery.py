@@ -78,14 +78,19 @@ def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
 
 
 def read_tickets_dir_from_env_file(agent_state_dir: Path, work_dir: Path) -> Path:
-    """Read TICKETS_DIR from the agent's env file, falling back to
-    <work_dir>/.tickets when unset.
+    """Resolve the TICKETS_DIR for an agent.
 
-    The repo's `.mngr/settings.toml` sets TICKETS_DIR (e.g. to
-    /code/runtime/tickets) so tk's tickets live inside the backed-up
-    runtime/ tree rather than at the repo's `.tickets/` default. The
-    workspace server needs the same resolution to know which directory
-    to watch for ticket changes.
+    Priority:
+      1. ``TICKETS_DIR`` in the agent's env file at ``<agent_state_dir>/env``.
+      2. ``TICKETS_DIR`` in the workspace server's own process environment.
+      3. ``<work_dir>/.tickets`` (tk's default).
+
+    Minds sets ``TICKETS_DIR=/code/runtime/tickets`` via ``host_env`` in
+    ``.mngr/settings.toml`` so tickets ride the runtime-backup branch.
+    ``host_env`` entries are forwarded to the container's process
+    environment but are *not* written into the per-agent env file, so the
+    env-file lookup alone misses them; the os.environ fallback catches
+    that case for the co-located workspace server.
     """
     env_file = agent_state_dir / "env"
     if env_file.exists():
@@ -96,6 +101,9 @@ def read_tickets_dir_from_env_file(agent_state_dir: Path, work_dir: Path) -> Pat
                 return Path(tickets_dir)
         except OSError:
             logger.debug("Failed to read env file: {}", env_file)
+    process_env_value = os.environ.get("TICKETS_DIR", "").strip()
+    if process_env_value:
+        return Path(process_env_value)
     return work_dir / ".tickets"
 
 
