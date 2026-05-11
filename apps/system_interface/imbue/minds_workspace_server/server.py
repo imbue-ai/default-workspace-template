@@ -219,6 +219,7 @@ def _get_or_create_tickets_watcher(request: Request, agent_info: AgentInfo) -> A
 
     watcher = AgentTicketsWatcher(
         agent_id=agent_info.id,
+        agent_name=agent_info.name,
         tickets_dir=read_tickets_dir_from_env_file(agent_info.agent_state_dir, Path(agent_info.work_dir)),
         on_events=on_events,
     )

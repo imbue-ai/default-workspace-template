@@ -64,6 +64,12 @@ class TicketState(FrozenModel):
     created_at: str = Field(description="frontmatter `created` field, ISO-8601")
     summary: str | None = Field(description="Most recent note text, or None")
     summary_at: str | None = Field(description="Timestamp of the most recent note, or None")
+    # The mngr agent that created the ticket, captured from $MNGR_AGENT_NAME
+    # by the patched `tk create` (see vendor/tk/ticket). Empty string when
+    # the ticket was created outside an mngr context or by an older tk that
+    # did not stamp the field; the watcher treats absent/empty as "include
+    # for any agent" to stay backwards-compatible with pre-existing tickets.
+    agent: str = Field(description="frontmatter `agent` field, or empty string")
 
 
 def parse_ticket_text(text: str) -> TicketState | None:
@@ -87,6 +93,7 @@ def parse_ticket_text(text: str) -> TicketState | None:
     ticket_id = fields.get("id", "")
     status = fields.get("status", "")
     created_at = fields.get("created", "")
+    agent = fields.get("agent", "")
 
     if not ticket_id or status not in _VALID_STATUSES:
         return None
@@ -108,6 +115,7 @@ def parse_ticket_text(text: str) -> TicketState | None:
         created_at=created_at,
         summary=summary,
         summary_at=summary_at,
+        agent=agent,
     )
 
 

@@ -31,10 +31,12 @@ def _ticket_text(
     title: str = "Sample task",
     created: str = "2026-04-28T01:00:00Z",
     notes: str | None = None,
+    agent: str | None = None,
 ) -> str:
     """Build a tk-shaped ticket body. Centralizes the boilerplate frontmatter
     so individual tests only describe the parts that actually vary
-    (id / status / notes / title)."""
+    (id / status / notes / title / agent)."""
+    agent_line = f"agent: {agent}\n" if agent is not None else ""
     body = f"""---
 id: {ticket_id}
 status: {status}
@@ -43,7 +45,7 @@ links: []
 created: {created}
 type: task
 priority: 2
----
+{agent_line}---
 # {title}
 """
     if notes is not None:
@@ -58,16 +60,17 @@ def _write_ticket_with_status(
     *,
     title: str = "Sample task",
     notes: str | None = None,
+    agent: str | None = None,
 ) -> Path:
     tickets_dir.mkdir(parents=True, exist_ok=True)
     path = tickets_dir / f"{ticket_id}.md"
-    path.write_text(_ticket_text(ticket_id, status, title=title, notes=notes))
+    path.write_text(_ticket_text(ticket_id, status, title=title, notes=notes, agent=agent))
     return path
 
 
 def test_silent_when_tickets_dir_missing(tmp_path: Path) -> None:
     _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", tmp_path / ".tickets", cb)
+    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tmp_path / ".tickets", cb)
     assert watcher.get_all_events() == []
 
 
@@ -82,7 +85,7 @@ def test_scan_skips_files_with_invalid_utf8(tmp_path: Path) -> None:
     bad_file.write_bytes(b"---\nid: tt-bad\nstatus: open\n---\n# \xff\xfe\xfd not utf-8\n")
 
     _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", tickets_dir, cb)
+    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
     events = watcher.get_all_events()
     # The valid ticket comes through; the malformed one is silently skipped.
     assert [e["ticket_id"] for e in events] == ["tt-good"]
@@ -94,7 +97,7 @@ def test_open_ticket_emits_one_event_with_created_at_timestamp(tmp_path: Path) -
     tickets_dir = tmp_path / ".tickets"
     _write_ticket_with_status(tickets_dir, "tt-aaaa", "open", title="Hello world")
     _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", tickets_dir, cb)
+    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
     events = watcher.get_all_events()
     assert len(events) == 1
     assert events[0]["event_id"] == "tt-aaaa-open"
@@ -110,7 +113,7 @@ def test_replayed_in_progress_ticket_emits_only_current_status(tmp_path: Path) -
     tickets_dir = tmp_path / ".tickets"
     _write_ticket_with_status(tickets_dir, "tt-bbbb", "in_progress", title="In progress task")
     _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", tickets_dir, cb)
+    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
     events = watcher.get_all_events()
     assert len(events) == 1
     assert events[0]["event_id"] == "tt-bbbb-in_progress"
@@ -133,7 +136,7 @@ def test_replayed_closed_ticket_emits_only_closed_event_with_summary(tmp_path: P
         notes="**2026-04-28T01:05:00Z**\n\nFinal summary text for this task.",
     )
     _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", tickets_dir, cb)
+    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
     events = watcher.get_all_events()
     assert len(events) == 1
     assert events[0]["event_id"] == "tt-cccc-closed"
@@ -154,7 +157,7 @@ def test_summary_only_on_closed_event(tmp_path: Path) -> None:
         notes="**2026-04-28T01:02:00Z**\n\nInterim note that should not appear as a summary yet.",
     )
     _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", tickets_dir, cb)
+    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
     events = watcher.get_all_events()
     assert len(events) == 1
     assert events[0]["summary"] is None
@@ -169,7 +172,7 @@ def test_repeated_get_all_events_is_idempotent(tmp_path: Path) -> None:
     tickets_dir = tmp_path / ".tickets"
     _write_ticket_with_status(tickets_dir, "tt-eeee", "open", title="Stable")
     _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", tickets_dir, cb)
+    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
     first = watcher.get_all_events()
     assert [e["event_id"] for e in first] == ["tt-eeee-open"]
     second = watcher.get_all_events()
@@ -188,7 +191,7 @@ def test_lifecycle_accumulates_one_event_per_observed_transition(tmp_path: Path)
     path.write_text(_ticket_text("tt-ffff", "open", title="Lifecycle test"))
 
     _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", tickets_dir, cb)
+    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
 
     events1 = watcher.get_all_events()
     assert [e["event_id"] for e in events1] == ["tt-ffff-open"]
@@ -210,6 +213,42 @@ def test_lifecycle_accumulates_one_event_per_observed_transition(tmp_path: Path)
     assert events3[-1]["summary"] == "All done."
 
 
+def test_filters_out_tickets_stamped_with_a_different_agent(tmp_path: Path) -> None:
+    """When workers share a TICKETS_DIR with their lead (the default minds
+    setup), each agent's watcher must only surface tickets stamped with
+    its own MNGR_AGENT_NAME. Tickets stamped with a sibling agent's name
+    are silently skipped so they don't pollute the lead's progress view.
+    """
+    tickets_dir = tmp_path / ".tickets"
+    _write_ticket_with_status(tickets_dir, "td-own", "open", title="Lead task", agent="lead-agent")
+    _write_ticket_with_status(
+        tickets_dir,
+        "tw-sibling",
+        "open",
+        title="Worker task",
+        agent="worker-agent",
+    )
+
+    _calls, cb = _capture()
+    watcher = AgentTicketsWatcher("lead-id", "lead-agent", tickets_dir, cb)
+    events = watcher.get_all_events()
+    assert [e["ticket_id"] for e in events] == ["td-own"]
+
+
+def test_includes_unstamped_tickets_for_backwards_compatibility(tmp_path: Path) -> None:
+    """Ticket files written before the stamping patch (and ticket files
+    written by any tk invocation outside an mngr context) have no `agent:`
+    line. They are kept for every agent's watcher -- attributing them to
+    whoever is looking is the least-surprising behaviour and keeps the
+    rollout from making historical tickets disappear from the chat."""
+    tickets_dir = tmp_path / ".tickets"
+    _write_ticket_with_status(tickets_dir, "tu-bare", "open", title="Legacy task")
+    _calls, cb = _capture()
+    watcher = AgentTicketsWatcher("lead-id", "lead-agent", tickets_dir, cb)
+    events = watcher.get_all_events()
+    assert [e["ticket_id"] for e in events] == ["tu-bare"]
+
+
 def test_get_all_events_forwards_newly_emitted_events_through_callback(tmp_path: Path) -> None:
     """`get_all_events()` documents that any transitions discovered by its
     catch-up scan are forwarded through `on_events`, so other connected
@@ -220,7 +259,7 @@ def test_get_all_events_forwards_newly_emitted_events_through_callback(tmp_path:
     tickets_dir = tmp_path / ".tickets"
     path = _write_ticket_with_status(tickets_dir, "tt-cb-1", "open", title="First")
     calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", tickets_dir, cb)
+    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
 
     # First call discovers tt-cb-1 -> one callback invocation with one event.
     watcher.get_all_events()
