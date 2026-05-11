@@ -83,6 +83,46 @@ describe("buildToolResultsWithSkillExpansions", () => {
     expect(results.get("tc-2")?.output).not.toContain("# alpha");
   });
 
+  it("matches two Skill calls inside one assistant_message to expansions in order", () => {
+    // Claude may emit multiple parallel tool_use blocks in a single
+    // assistant_message. Each Skill call must get its own expansion.
+    const events: TranscriptEvent[] = [
+      {
+        timestamp: "2026-04-28T01:00:00Z",
+        type: "assistant_message",
+        event_id: "a-multi",
+        source: "test",
+        text: "",
+        tool_calls: [
+          { tool_call_id: "tc-a", tool_name: "Skill", input_preview: "{}" },
+          { tool_call_id: "tc-b", tool_name: "Skill", input_preview: "{}" },
+        ],
+      },
+      skillExpansion("2026-04-28T01:00:01Z", "alpha", "u-a"),
+      skillExpansion("2026-04-28T01:00:02Z", "beta", "u-b"),
+    ];
+    const results = buildToolResultsWithSkillExpansions(events);
+    expect(results.get("tc-a")?.output).toContain("# alpha");
+    expect(results.get("tc-a")?.output).not.toContain("# beta");
+    expect(results.get("tc-b")?.output).toContain("# beta");
+    expect(results.get("tc-b")?.output).not.toContain("# alpha");
+  });
+
+  it("keeps earlier Skill calls queued when a later Skill call appears before any expansion", () => {
+    // Two assistant_messages each issue one Skill call, then two
+    // expansions arrive. The first expansion must match the first Skill
+    // call, not the most recent one.
+    const events: TranscriptEvent[] = [
+      skillToolCall("2026-04-28T01:00:00Z", "tc-first"),
+      skillToolCall("2026-04-28T01:00:01Z", "tc-second"),
+      skillExpansion("2026-04-28T01:00:02Z", "first-skill", "u-1"),
+      skillExpansion("2026-04-28T01:00:03Z", "second-skill", "u-2"),
+    ];
+    const results = buildToolResultsWithSkillExpansions(events);
+    expect(results.get("tc-first")?.output).toContain("# first-skill");
+    expect(results.get("tc-second")?.output).toContain("# second-skill");
+  });
+
   it("leaves non-Skill tool_results alone", () => {
     const events = [
       {

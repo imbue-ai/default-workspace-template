@@ -75,37 +75,41 @@ export function buildToolResultsWithSkillExpansions(events: TranscriptEvent[]): 
       toolResults.set(e.tool_call_id, e);
     }
   }
-  // Walk chronologically; each skill-expansion user_message belongs to
-  // the most recent unclaimed Skill tool call. Two Skill calls back-to-back
-  // each get their own expansion in order of arrival.
-  let pendingSkillCallId: string | null = null;
+  // Walk chronologically. Skill tool_call_ids are queued in FIFO order as
+  // they appear and matched to skill-expansion user_messages in the same
+  // order. A single assistant_message may carry multiple Skill calls; a
+  // second assistant_message may queue another Skill call before any
+  // expansion for the previous one has arrived. In both cases each
+  // expansion must land on the right call, hence a queue rather than a
+  // single "most recent" slot.
+  const pendingSkillCallIds: string[] = [];
   for (const e of sorted) {
     if (e.type === "assistant_message" && e.tool_calls) {
       for (const tc of e.tool_calls) {
         if (tc.tool_name === "Skill") {
-          pendingSkillCallId = tc.tool_call_id;
+          pendingSkillCallIds.push(tc.tool_call_id);
         }
       }
       continue;
     }
-    if (e.type === "user_message" && isSkillExpansionUserMessage(e.content ?? "") && pendingSkillCallId !== null) {
-      const existing = toolResults.get(pendingSkillCallId);
+    if (e.type === "user_message" && isSkillExpansionUserMessage(e.content ?? "") && pendingSkillCallIds.length > 0) {
+      const targetCallId = pendingSkillCallIds.shift() as string;
+      const existing = toolResults.get(targetCallId);
       const expansion = e.content ?? "";
       const baseOutput = existing?.output ?? "";
       const mergedOutput = baseOutput ? `${baseOutput}\n\n${expansion}` : expansion;
       if (existing) {
-        toolResults.set(pendingSkillCallId, { ...existing, output: mergedOutput });
+        toolResults.set(targetCallId, { ...existing, output: mergedOutput });
       } else {
-        toolResults.set(pendingSkillCallId, {
+        toolResults.set(targetCallId, {
           timestamp: e.timestamp,
           type: "tool_result",
-          event_id: `skill-expansion-${pendingSkillCallId}`,
+          event_id: `skill-expansion-${targetCallId}`,
           source: e.source,
-          tool_call_id: pendingSkillCallId,
+          tool_call_id: targetCallId,
           output: mergedOutput,
         });
       }
-      pendingSkillCallId = null;
     }
   }
   return toolResults;
