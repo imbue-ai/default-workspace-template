@@ -159,6 +159,3 @@ The output is a JSONL stream of `common_transcript` events
 line. Stop-hook injections and other framework-meta events are already
 reclassified upstream as `tool_result` with `tool_name: meta`, so they do
 not open new turn boundaries.
-
-For other slicing options (`--turn N`, `--list-turns`, `--count-turns`),
-run `mngr transcript --help`.
