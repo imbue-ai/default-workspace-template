@@ -14,7 +14,9 @@
  *   - "Reading <basename>"        for Read
  *   - "Editing <basename>"        for Edit / MultiEdit
  *   - "Writing <basename>"        for Write
- *   - "Running <command>"         for Bash (truncated)
+ *   - "Running <description>"     for Bash (the agent-supplied one-line
+ *                                 description of the command; falls back
+ *                                 to the raw command if absent)
  *   - "Searching <pattern>"       for Grep / Glob
  *   - "Delegating to sub-agent…"  for Agent / Task
  *   - "Running tool…"             for any other unmapped tool, or if the
@@ -63,6 +65,17 @@ function targetForToolCall(tc: ToolCall): string | null {
     return null;
   }
   if (parsed === null || typeof parsed !== "object") return null;
+
+  // Bash specifically: prefer the agent-supplied `description` (a short
+  // human-readable phrase like "Check git status") over the raw command,
+  // which is often noisy / truncated mid-flag.
+  if (tc.tool_name === "Bash") {
+    const description = typeof parsed.description === "string" ? parsed.description : null;
+    if (description !== null && description.trim() !== "") return shorten(description, MAX_TARGET_LEN);
+    const command = typeof parsed.command === "string" ? parsed.command : null;
+    if (command !== null) return shorten(command, MAX_TARGET_LEN);
+    return null;
+  }
 
   const filePath = typeof parsed.file_path === "string" ? parsed.file_path : null;
   if (filePath !== null) return basename(filePath);

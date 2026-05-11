@@ -71,10 +71,31 @@ describe("labelForActivityState — TOOL_RUNNING transcript enrichment", () => {
     expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Editing reports.ts");
   });
 
-  it("labels Bash with the (truncated) command", () => {
+  it("labels Bash with the agent-supplied description, not the raw command", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z"),
+      toolUse(
+        "2026-04-28T01:00:01Z",
+        "Bash",
+        "tc1",
+        '{"command":"git status -uno --porcelain","description":"Check working tree status"}',
+      ),
+    ];
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running Check working tree status");
+  });
+
+  it("falls back to the raw command when Bash has no description", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
       toolUse("2026-04-28T01:00:01Z", "Bash", "tc1", '{"command":"npm test"}'),
+    ];
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running npm test");
+  });
+
+  it("falls back to the raw command when Bash description is empty/whitespace", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z"),
+      toolUse("2026-04-28T01:00:01Z", "Bash", "tc1", '{"command":"npm test","description":"   "}'),
     ];
     expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running npm test");
   });
