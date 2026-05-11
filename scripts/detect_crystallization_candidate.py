@@ -40,11 +40,9 @@ from typing import Any
 def _load_transcript_parsing() -> Any:
     """Load the shared transcript_parsing module from .agents/shared/scripts/.
 
-    The module lives under ``.agents/shared/scripts/`` so any worker script
-    (e.g. ``extract_turn.py``) can import it as a sibling and any top-level
-    hook can locate it at a fixed shared path. From this top-level hook we
-    load it via importlib because the directory is not on the default import
-    path.
+    The module lives under ``.agents/shared/scripts/`` so this top-level
+    hook can locate it at a fixed shared path. We load it via importlib
+    because the directory is not on the default import path.
     """
     workdir = os.environ.get("MNGR_AGENT_WORK_DIR")
     base = Path(workdir) if workdir else Path(__file__).resolve().parent.parent

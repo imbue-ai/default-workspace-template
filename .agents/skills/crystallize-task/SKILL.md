@@ -94,13 +94,13 @@ tk start "$TICKET_ID"
 
 ## Step 2: Extract the just-finished turn
 
-See `.agents/shared/references/lead-proxy.md` for the `extract_turn.py`
+See `.agents/shared/references/lead-proxy.md` for the `mngr transcript`
 invocation contract.
 
 ```bash
-uv run .agents/shared/scripts/extract_turn.py \
-    --nth 1 \
-    --output runtime/crystallize/$NAME/turn.jsonl
+mkdir -p runtime/crystallize/$NAME
+mngr transcript --last-completed-turn --format jsonl \
+    > runtime/crystallize/$NAME/turn.jsonl
 ```
 
 ## Step 3: Write the task file

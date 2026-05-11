@@ -10,15 +10,13 @@ gates, merge) afterwards.
 
 ## 2a: Capture the incident transcript
 
-Call `extract_turn.py` with the runtime path below; see
-`.agents/shared/references/lead-proxy.md` for the full invocation contract
-(what `--nth 1` does and how to use marker-based slicing if counting turns
-does not line up).
+Capture the previous completed turn with `mngr transcript`; see
+`.agents/shared/references/lead-proxy.md` for the full invocation contract.
 
 ```bash
-uv run .agents/shared/scripts/extract_turn.py \
-    --nth 1 \
-    --output runtime/update/$TARGET/turn.jsonl
+mkdir -p runtime/update/$TARGET
+mngr transcript --last-completed-turn --format jsonl \
+    > runtime/update/$TARGET/turn.jsonl
 ```
 
 ## 2b: Write the absorb-flow task file
