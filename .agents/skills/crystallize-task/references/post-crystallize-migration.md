@@ -57,8 +57,8 @@ Skip the delete if any of the following:
 - The directory contains user-supplied state (auth tokens, captured
   inputs you'd lose) -- read it first to be sure.
 
-`runtime/crystallize/<slug>/` itself (the dir holding `turn.jsonl`,
-`task.md`, `reports/`, and `ticket_id.txt`) is also stale post-merge,
+`runtime/crystallize/<slug>/` itself (the dir holding `task.md`,
+`reports/`, and `ticket_id.txt`) is also stale post-merge,
 but **do not delete it yet** -- section 5 below still needs to read
 `ticket_id.txt`. Section 6's commit cleanup removes it after the
 ticket is closed.

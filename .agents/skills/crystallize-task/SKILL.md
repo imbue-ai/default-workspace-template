@@ -54,8 +54,8 @@ Pick a short kebab-case slug `$NAME` for this crystallization (e.g.
 - Worker agent name: `crystallize-$NAME`
 - Worker branch: `mngr/crystallize-$NAME` (created by `mngr create`)
 - Local artifact paths under `runtime/crystallize/$NAME/`
-- Task file path: `runtime/crystallize/$NAME/task.md` (sits alongside
-  `turn.jsonl` so the Step 4 push syncs it to the worker for free)
+- Task file path: `runtime/crystallize/$NAME/task.md` (the Step 4 push
+  syncs it to the worker)
 - `tk` ticket title
 
 Use that same slug everywhere below.
@@ -82,34 +82,36 @@ Otherwise send a one-line pre-gate question via the `send-user-message` skill:
 
 Wait for the user's reply. If no, stop here.
 
-## Step 2: Open a tracking ticket and extract the just-finished turn
+## Step 2: Open a tracking ticket
 
 The ticket survives until the post-merge migration in Step 6, so the ID
-goes to disk under the runtime dir for that step to read back. See
-`.agents/shared/references/lead-proxy.md` for the `extract_turn.py`
-invocation contract.
+goes to disk under the runtime dir for that step to read back.
 
 ```bash
 mkdir -p runtime/crystallize/$NAME
 TICKET_ID=$(tk create "crystallize $NAME" -t task \
-    --acceptance "transcript extracted; task file written; worker launched; worker DONE; branch merged")
+    --acceptance "task file written; worker launched; worker DONE; branch merged")
 tk start "$TICKET_ID"
 echo "$TICKET_ID" > runtime/crystallize/$NAME/ticket_id.txt
-
-uv run .agents/shared/scripts/extract_turn.py \
-    --nth 1 \
-    --output runtime/crystallize/$NAME/turn.jsonl
 ```
 
 ## Step 3: Write the task file
 
-Describe invariants and state constraints — what must be true about the
-skill's inputs and outputs. Do not enumerate subcommands, flow steps, or
-argparse surfaces; surface decisions belong to the worker.
+The worker will explore your transcript via `mngr transcript` to find
+the work being crystallized. Your job here is to write a task body that
+*describes* the work and anchors the worker's search with verbatim
+quotes from the conversation (the user's original ask, key decisions,
+tool calls or outputs that defined the recipe). Without anchors the
+worker will scan the wrong region of your transcript.
+
+Also describe invariants and state constraints — what must be true
+about the skill's inputs and outputs. Do not enumerate subcommands,
+flow steps, or argparse surfaces; surface decisions belong to the
+worker.
 
 The task file's YAML frontmatter follows the schema in
-`.agents/shared/references/worker-reporting.md` -- `lead_agent`,
-`lead_report_dir`, and `transcript_path`.
+`.agents/shared/references/worker-reporting.md` -- `lead_agent` and
+`lead_report_dir`.
 
 ```bash
 {
@@ -117,18 +119,32 @@ cat << FRONTMATTER_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
 lead_report_dir: runtime/crystallize/$NAME/reports/
-transcript_path: runtime/crystallize/$NAME/turn.jsonl
 ---
 FRONTMATTER_EOF
 cat << 'BODY_EOF'
 
 # Task: crystallize the just-finished work into a reusable skill
 
-## Transcript
-The turn you need to crystallize is at the path given by the
-`transcript_path` frontmatter field (JSONL of tool calls and results).
-Replay it mentally to understand what was done; you do not need to
-re-execute destructive operations.
+## What was done
+<2-5 sentences describing the work to crystallize: what the user asked
+for, what you did, the recipe that emerged. This is the worker's
+primary guide -- it should make sense even to someone who has not seen
+the transcript.>
+
+## Anchors (verbatim quotes)
+The worker will use these to locate the relevant turns in your
+transcript via `mngr transcript`. Include:
+- The user's original request (verbatim).
+- 1-3 short quotes that mark distinctive moments (a key decision, a
+  tool output that drove a step, a clarification the user gave).
+<paste quotes here, one per bullet, in original wording.>
+
+## How to read the transcript
+Use `mngr transcript <lead_agent>` (with `--role user --role assistant`
+to strip tool noise, or `--tail N` to scope in) to find the turns above.
+The crystallize-task invocation is the *most recent* turn in your
+lead's transcript; the work to crystallize is *prior* to that
+invocation. Do not crystallize the lead's task-handoff turn itself.
 
 ## Source artifacts (optional)
 If your frontmatter has a `source_artifacts_dir` field, the calling
@@ -174,6 +190,9 @@ The `crystallize-task-worker`, `heal-skill-worker`, and
 BODY_EOF
 } > runtime/crystallize/$NAME/task.md
 ```
+
+Fill in the `## What was done` and `## Anchors` sections with real
+content drawn from your conversation -- do not leave the placeholders.
 
 **Optional: source artifacts handoff.** If a calling skill (e.g.
 `/do-something-new`) handed you a directory of pre-existing artifacts

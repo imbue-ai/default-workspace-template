@@ -33,9 +33,9 @@ required by ``mngr push`` (see ``.agents/shared/references/lead-proxy.md``).
 
 Why ``mngr message`` *after* the pushes (instead of using ``mngr create
 --message-file``): if the worker reads its first message before the runtime
-dir push lands in its worktree, the task file's ``transcript_path`` and
-``lead_report_dir`` will resolve to nothing. Sending the task as a
-follow-up message guarantees the worker sees the runtime dir first.
+dir push lands in its worktree, the task file's ``lead_report_dir`` will
+resolve to nothing. Sending the task as a follow-up message guarantees the
+worker sees the runtime dir first.
 """
 
 from __future__ import annotations
