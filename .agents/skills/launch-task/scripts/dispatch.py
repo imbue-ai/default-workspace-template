@@ -149,7 +149,8 @@ def dispatch(
     return 0
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int:
+    """CLI entry point. Tests inject ``runner`` to capture the argv lifecycle."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--name", required=True, help="Worker name; becomes the mngr/<name> branch."
@@ -190,6 +191,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         task_file=args.task_file,
         extra_pushes=tuple(args.extra_push),
         workspace=workspace,
+        runner=runner,
     )
 
 

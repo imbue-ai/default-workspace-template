@@ -195,10 +195,7 @@ def test_extra_push_must_exist(
     assert "extra-push" in capsys.readouterr().err
 
 
-def test_mngr_failure_is_fatal(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
     runtime, task, _ = _make_layout(tmp_path)
     runner = _RecordingRunner()
     runner.respond(
@@ -217,36 +214,32 @@ def test_mngr_failure_is_fatal(
         )
 
 
+def _main_argv(runtime: Path, task: Path) -> list[str]:
+    return [
+        "--name",
+        "x",
+        "--template",
+        "worker",
+        "--runtime-dir",
+        str(runtime),
+        "--task-file",
+        str(task),
+    ]
+
+
 def test_main_uses_workspace_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, task, _ = _make_layout(tmp_path)
-    captured: list[list[str]] = []
-
-    class _Capture(dispatch_mod.Runner):  # type: ignore[name-defined]
-        def run(self, argv, **kwargs):
-            captured.append(list(argv))
-            return _StubResult()
-
-    monkeypatch.setattr(dispatch_mod, "Runner", _Capture)
+    runner = _RecordingRunner()
     monkeypatch.setenv("MINDS_WORKSPACE_NAME", "alpha")
 
-    rc = dispatch_mod.main(
-        [
-            "--name",
-            "x",
-            "--template",
-            "worker",
-            "--runtime-dir",
-            str(runtime),
-            "--task-file",
-            str(task),
-        ]
-    )
+    rc = dispatch_mod.main(_main_argv(runtime, task), runner=runner)
+
     assert rc == 0
-    create_calls = [c for c in captured if c[:2] == ["mngr", "create"]]
-    assert create_calls, captured
+    create_calls = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
+    assert create_calls, runner.calls
     assert "workspace=alpha" in create_calls[0]
 
 
@@ -255,28 +248,11 @@ def test_main_workspace_defaults_when_env_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, task, _ = _make_layout(tmp_path)
-    captured: list[list[str]] = []
-
-    class _Capture(dispatch_mod.Runner):  # type: ignore[name-defined]
-        def run(self, argv, **kwargs):
-            captured.append(list(argv))
-            return _StubResult()
-
-    monkeypatch.setattr(dispatch_mod, "Runner", _Capture)
+    runner = _RecordingRunner()
     monkeypatch.delenv("MINDS_WORKSPACE_NAME", raising=False)
 
-    rc = dispatch_mod.main(
-        [
-            "--name",
-            "x",
-            "--template",
-            "worker",
-            "--runtime-dir",
-            str(runtime),
-            "--task-file",
-            str(task),
-        ]
-    )
+    rc = dispatch_mod.main(_main_argv(runtime, task), runner=runner)
+
     assert rc == 0
-    create_calls = [c for c in captured if c[:2] == ["mngr", "create"]]
+    create_calls = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
     assert "workspace=default" in create_calls[0]
