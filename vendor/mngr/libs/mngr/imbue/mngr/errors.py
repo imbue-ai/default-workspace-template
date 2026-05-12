@@ -196,6 +196,22 @@ class ProviderUnavailableError(ProviderError):
         )
 
 
+class ProviderDiscoveryError(ProviderError):
+    """Wraps an exception raised inside a single provider's discovery so
+    callers can attribute the failure to the offending provider instance.
+
+    The wrapped exception is preserved in ``__cause__``; ``provider_name``
+    carries the ``ProviderInstanceName`` of the failing instance so error
+    handlers (e.g. minds' auto-disable on auth failure) don't have to
+    pattern-match the message string.
+    """
+
+    def __init__(self, provider_name: ProviderInstanceName, cause: BaseException) -> None:
+        self.provider_name = provider_name
+        self.cause = cause
+        super().__init__(f"Discovery failed for provider '{provider_name}': {cause}")
+
+
 class ProviderInstanceNotFoundError(ProviderError):
     """No provider instance with this name exists."""
 
@@ -248,6 +264,19 @@ class ImageNotFoundError(HostCreationError):
 
 class ResourceAllocationError(HostCreationError):
     """Failed to allocate resources for the host."""
+
+
+class DockerBuildTimeoutError(HostCreationError):
+    """Raised when `docker build` exceeds the configured build timeout."""
+
+    def __init__(self, provider_name: ProviderInstanceName, timeout_seconds: int) -> None:
+        self.provider_name = provider_name
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"docker build timed out after {timeout_seconds} seconds for provider '{provider_name}'.")
+        self.user_help_text = (
+            f"Increase build_timeout_seconds for this provider, e.g.:\n"
+            f"  mngr config set --scope user providers.{provider_name}.build_timeout_seconds 1800"
+        )
 
 
 class HostNameConflictError(ProviderError):

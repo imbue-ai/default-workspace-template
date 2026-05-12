@@ -1022,7 +1022,7 @@ def test_create_headless_allows_no_forms_of_boolean_pair_flags(
     Matches the --no-connect treatment: headless already does not
     connect/reconnect/reuse/update/start-on-boot, so the --no-* form is a
     redundant-but-compatible assertion, not a conflict. Pairs each
-    allowed flag with --attach-command (still rejected) so the validator
+    allowed flag with --session-command (still rejected) so the validator
     runs and we can confirm the allowed flag is not in the error listing.
     """
     result = cli_runner.invoke(
@@ -1032,14 +1032,14 @@ def test_create_headless_allows_no_forms_of_boolean_pair_flags(
             "headless_command",
             "--foreground",
             no_form_flag,
-            "--attach-command",
+            "--session-command",
             "tmux attach",
         ],
         obj=plugin_manager,
     )
 
     assert result.exit_code != 0
-    assert "--attach-command" in result.output
+    assert "--session-command" in result.output
     assert no_form_flag not in result.output
 
 
@@ -1246,6 +1246,7 @@ def test_parse_agent_opts_includes_labels(
     result, _ = _parse_agent_opts(
         opts=opts,
         address=AgentAddress(),
+        target_host=None,
         initial_message=None,
         source_location=source_location,
         mngr_ctx=temp_mngr_ctx,
@@ -1271,6 +1272,7 @@ def test_parse_agent_opts_label_invalid_format_raises(
         _parse_agent_opts(
             opts=opts,
             address=AgentAddress(),
+            target_host=None,
             initial_message=None,
             source_location=source_location,
             mngr_ctx=temp_mngr_ctx,
@@ -1290,6 +1292,7 @@ def test_parse_agent_opts_empty_labels_by_default(
     result, _ = _parse_agent_opts(
         opts=default_create_cli_opts,
         address=AgentAddress(),
+        target_host=None,
         initial_message=None,
         source_location=source_location,
         mngr_ctx=temp_mngr_ctx,
@@ -1315,6 +1318,7 @@ def test_parse_agent_opts_with_agent_id(
     result, _ = _parse_agent_opts(
         opts=opts,
         address=AgentAddress(),
+        target_host=None,
         initial_message=None,
         source_location=source_location,
         mngr_ctx=temp_mngr_ctx,
@@ -1336,6 +1340,7 @@ def test_parse_agent_opts_agent_id_none_by_default(
     result, _ = _parse_agent_opts(
         opts=default_create_cli_opts,
         address=AgentAddress(),
+        target_host=None,
         initial_message=None,
         source_location=source_location,
         mngr_ctx=temp_mngr_ctx,
@@ -1361,6 +1366,7 @@ def test_parse_agent_opts_matching_type_and_positional_ok(
     result, _ = _parse_agent_opts(
         opts=opts,
         address=AgentAddress(),
+        target_host=None,
         initial_message=None,
         source_location=source_location,
         mngr_ctx=temp_mngr_ctx,
