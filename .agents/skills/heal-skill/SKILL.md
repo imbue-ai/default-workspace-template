@@ -43,7 +43,7 @@ Use `$TARGET` for the skill you are healing (e.g. `migrate-config`). Then:
 - Worker branch: `mngr/heal-$TARGET`
 - Runtime path: `runtime/heal/$TARGET/`
 - Task file: `runtime/heal/$TARGET/task.md` (sits alongside `turn.jsonl`
-  so the existing Step 4 `mngr push` syncs it to the worker for free)
+  so the Step 4 push syncs it to the worker for free)
 
 ## Step 1: Open a tracking ticket
 
