@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TranscriptEvent } from "../models/Response";
-import { buildToolResultsWithSkillExpansions, isSkillExpansionUserMessage } from "./message-renderers";
+import { buildToolResultsWithSkillExpansions } from "./message-renderers";
+import { isSkillExpansionUserMessage } from "./user-message-classification";
 
 function skillToolCall(ts: string, callId: string): TranscriptEvent {
   return {

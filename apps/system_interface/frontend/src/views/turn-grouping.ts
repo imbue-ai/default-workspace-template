@@ -26,7 +26,7 @@
  */
 
 import type { TranscriptEvent, TaskEventStatus } from "../models/Response";
-import { isNonBoundaryUserMessage } from "./message-renderers";
+import { isNonBoundaryUserMessage } from "./user-message-classification";
 
 export type TaskUiStatus = "pending" | "active" | "done";
 
