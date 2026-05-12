@@ -50,7 +50,7 @@ def _read_application_names(path: Path) -> list[str]:
     apps = doc.get("applications", [])
     names: list[str] = []
     for app in apps:
-        name = app.get("name") if isinstance(app, dict) or hasattr(app, "get") else None
+        name = app.get("name") if hasattr(app, "get") else None
         if isinstance(name, str) and name:
             names.append(name)
     return names
