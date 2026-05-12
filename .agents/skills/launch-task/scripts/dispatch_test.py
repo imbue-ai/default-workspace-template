@@ -41,7 +41,7 @@ class _StubResult:
 
 
 @dataclass
-class _RecordingRunner(dispatch_mod.Runner):  # type: ignore[name-defined]
+class _RecordingRunner(dispatch_mod.Runner):
     """Records every ``run`` call; returns canned results keyed by argv prefix."""
 
     calls: list[_RecordedCall] = field(default_factory=list)
@@ -50,7 +50,7 @@ class _RecordingRunner(dispatch_mod.Runner):  # type: ignore[name-defined]
     def respond(self, prefix: tuple[str, ...], result: Any) -> None:
         self._responses[prefix] = result
 
-    def run(self, argv: Sequence[str], **kwargs):  # type: ignore[override]
+    def run(self, argv: Sequence[str], **kwargs):
         argv_list = list(argv)
         self.calls.append(_RecordedCall(argv=argv_list, kwargs=kwargs))
         key = tuple(argv_list[:2])
