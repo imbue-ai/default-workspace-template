@@ -57,6 +57,12 @@ Skip the delete if any of the following:
 - The directory contains user-supplied state (auth tokens, captured
   inputs you'd lose) -- read it first to be sure.
 
+`runtime/crystallize/<slug>/` itself (the dir holding `turn.jsonl`,
+`task.md`, `reports/`, and `ticket_id.txt`) is also stale post-merge,
+but **do not delete it yet** -- section 5 below still needs to read
+`ticket_id.txt`. Section 6's commit cleanup removes it after the
+ticket is closed.
+
 ## 3. Note breaking changes the worker introduced
 
 Skim the worker's commits (`git log <merge-base>..HEAD`) for renames
@@ -110,9 +116,12 @@ have a list command in this build -- look for the ticket in
 
 The migration touches consumer code and removes runtime artifacts;
 those should be a separate commit from the merge so the migration is
-reviewable on its own.
+reviewable on its own. Now that section 5 has read `ticket_id.txt`,
+also delete `runtime/crystallize/<slug>/` (unless the user asked to
+keep the scratch around).
 
 ```bash
+rm -rf runtime/crystallize/<slug>/
 git add <consumer-files-you-changed>
 git commit -m "post-crystallize migration for <slug>: switch consumers to skill path"
 ```
