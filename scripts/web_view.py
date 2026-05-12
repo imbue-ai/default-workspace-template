@@ -14,6 +14,7 @@ that picks up newly-registered services.
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -38,8 +39,6 @@ _HIDDEN_SERVICES = frozenset({"system_interface"})
 
 
 def _workspace_base_url() -> str:
-    import os
-
     return os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL).rstrip("/")
 
 
