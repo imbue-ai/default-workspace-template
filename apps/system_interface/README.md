@@ -1,4 +1,4 @@
-# Minds Workspace Server
+# System Interface
 
 Web chat interface for viewing and interacting with mngr-managed Claude agents.
 
@@ -53,4 +53,4 @@ cd apps/system_interface/frontend
 npm run build
 ```
 
-This compiles the frontend into `imbue/minds_workspace_server/static/`.
+This compiles the frontend into `imbue/system_interface/static/`.

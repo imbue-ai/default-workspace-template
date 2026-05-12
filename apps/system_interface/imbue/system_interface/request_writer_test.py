@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from imbue.minds_workspace_server.request_writer import UnknownRequestTypeError
-from imbue.minds_workspace_server.request_writer import write_refresh_request
-from imbue.minds_workspace_server.request_writer import write_request_event
+from imbue.system_interface.request_writer import UnknownRequestTypeError
+from imbue.system_interface.request_writer import write_refresh_request
+from imbue.system_interface.request_writer import write_request_event
 
 
 def test_write_refresh_request_writes_jsonl_to_correct_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

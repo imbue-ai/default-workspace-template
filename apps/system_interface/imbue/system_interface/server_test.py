@@ -10,10 +10,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from imbue.minds_workspace_server.agent_discovery import AgentInfo
-from imbue.minds_workspace_server.agent_manager import AgentManager
-from imbue.minds_workspace_server.config import Config
-from imbue.minds_workspace_server.server import create_application
+from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.config import Config
+from imbue.system_interface.server import create_application
 
 # Placeholder client-side port used by the refresh-service broadcast tests.
 # Only the host portion of the TestClient ``client`` tuple is inspected by the
@@ -43,7 +43,7 @@ def test_index_returns_html_when_static_exists(client: TestClient, tmp_path: Pat
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><body>test</body></html>")
 
-    with patch("imbue.minds_workspace_server.server.STATIC_DIRECTORY", static_dir):
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
         test_app = create_application()
         test_client = TestClient(test_app)
         response = test_client.get("/")
@@ -56,7 +56,7 @@ def test_index_returns_not_built_when_no_static(client: TestClient, tmp_path: Pa
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.minds_workspace_server.server.STATIC_DIRECTORY", empty_dir):
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
         test_app = create_application()
         test_client = TestClient(test_app)
         response = test_client.get("/")
@@ -66,7 +66,7 @@ def test_index_returns_not_built_when_no_static(client: TestClient, tmp_path: Pa
 
 def test_list_agents_endpoint(client: TestClient) -> None:
     """The agents endpoint returns agent data."""
-    with patch("imbue.minds_workspace_server.server.discover_agents") as mock_discover:
+    with patch("imbue.system_interface.server.discover_agents") as mock_discover:
         mock_discover.return_value = [
             AgentInfo(
                 id="agent-123",
@@ -87,14 +87,14 @@ def test_list_agents_endpoint(client: TestClient) -> None:
 
 def test_get_events_for_unknown_agent(client: TestClient) -> None:
     """Getting events for a nonexistent agent returns 404."""
-    with patch("imbue.minds_workspace_server.server.discover_agents", return_value=[]):
+    with patch("imbue.system_interface.server.discover_agents", return_value=[]):
         response = client.get("/api/agents/nonexistent/events")
     assert response.status_code == 404
 
 
 def test_send_message_for_unknown_agent(client: TestClient) -> None:
     """Sending a message to a nonexistent agent returns 404."""
-    with patch("imbue.minds_workspace_server.server.discover_agents", return_value=[]):
+    with patch("imbue.system_interface.server.discover_agents", return_value=[]):
         response = client.post("/api/agents/nonexistent/message", json={"message": "hello"})
     assert response.status_code == 404
 
@@ -149,7 +149,7 @@ def test_get_events_with_session_files(client: TestClient, tmp_path: Path) -> No
         agent_state_dir=agent_state_dir,
         claude_config_dir=claude_config_dir,
     )
-    with patch("imbue.minds_workspace_server.server._find_agent", return_value=agent_info):
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.get("/api/agents/agent-123/events")
 
     assert response.status_code == 200
@@ -171,8 +171,8 @@ def test_send_message_success(client: TestClient) -> None:
         claude_config_dir=Path("/tmp/.claude"),
     )
     with (
-        patch("imbue.minds_workspace_server.server._find_agent", return_value=agent_info),
-        patch("imbue.minds_workspace_server.server.send_message", return_value=True) as mock_send,
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.server.send_message", return_value=True) as mock_send,
     ):
         response = client.post("/api/agents/agent-123/message", json={"message": "hello"})
 
@@ -237,7 +237,7 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
 
-    with patch("imbue.minds_workspace_server.server.STATIC_DIRECTORY", static_dir):
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
         test_app = create_application()
         test_client = TestClient(test_app)
         response = test_client.get("/")

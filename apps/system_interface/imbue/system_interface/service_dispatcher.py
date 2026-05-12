@@ -33,13 +33,13 @@ from starlette.websockets import WebSocket
 from starlette.websockets import WebSocketDisconnect
 from websockets import ClientConnection
 
-from imbue.minds_workspace_server.agent_manager import AgentManager
-from imbue.minds_workspace_server.primitives import ServiceName
-from imbue.minds_workspace_server.proxy import generate_backend_loading_html
-from imbue.minds_workspace_server.proxy import generate_bootstrap_html
-from imbue.minds_workspace_server.proxy import generate_service_worker_js
-from imbue.minds_workspace_server.proxy import rewrite_cookie_path
-from imbue.minds_workspace_server.proxy import rewrite_proxied_html
+from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.primitives import ServiceName
+from imbue.system_interface.proxy import generate_backend_loading_html
+from imbue.system_interface.proxy import generate_bootstrap_html
+from imbue.system_interface.proxy import generate_service_worker_js
+from imbue.system_interface.proxy import rewrite_cookie_path
+from imbue.system_interface.proxy import rewrite_proxied_html
 
 _PROXY_TIMEOUT_SECONDS: Final[float] = 30.0
 

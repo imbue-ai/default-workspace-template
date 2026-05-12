@@ -15,8 +15,8 @@ from playwright.sync_api import BrowserType
 from playwright.sync_api import Playwright
 from playwright.sync_api import sync_playwright
 
-from imbue.minds_workspace_server.agent_manager import AgentManager
-from imbue.minds_workspace_server.ws_broadcaster import WebSocketBroadcaster
+from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # --- pytest-playwright fixture-scope overrides -------------------------------
 #

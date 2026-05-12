@@ -23,11 +23,11 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from imbue.minds_workspace_server.agent_manager import AgentManager
-from imbue.minds_workspace_server.config import Config
-from imbue.minds_workspace_server.models import ApplicationEntry
-from imbue.minds_workspace_server.server import create_application
-from imbue.minds_workspace_server.ws_broadcaster import WebSocketBroadcaster
+from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.config import Config
+from imbue.system_interface.models import ApplicationEntry
+from imbue.system_interface.server import create_application
+from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 
 def _find_free_port() -> int:

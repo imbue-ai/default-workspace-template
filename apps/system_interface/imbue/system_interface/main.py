@@ -2,8 +2,8 @@ import argparse
 
 import uvicorn
 
-from imbue.minds_workspace_server.config import load_config
-from imbue.minds_workspace_server.server import create_application
+from imbue.system_interface.config import load_config
+from imbue.system_interface.server import create_application
 
 
 def main() -> None:

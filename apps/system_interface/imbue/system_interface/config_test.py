@@ -2,9 +2,9 @@
 
 import pytest
 
-from imbue.minds_workspace_server.config import Config
-from imbue.minds_workspace_server.config import DuplicateStaticBasenameError
-from imbue.minds_workspace_server.config import load_config
+from imbue.system_interface.config import Config
+from imbue.system_interface.config import DuplicateStaticBasenameError
+from imbue.system_interface.config import load_config
 
 
 def test_default_config() -> None:
