@@ -141,6 +141,10 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 - If a task fails (stuck report, or 30m poll timeout with no report and
   the worker is dead), see `references/worker-failure.md` -- do not
   silently retry.
+- If a worker is `STOPPED` with uncommitted work, default to `mngr start
+  <worker>` and message it to continue -- the worktree is preserved
+  across restart. See `references/dead-worker-recovery.md` for the
+  manual salvage fallback when restart isn't viable.
 - If the task references gitignored files beyond the runtime dir, pass
   them as `--extra-push <dir>/` (repeatable) to `dispatch.py` so they
   land in the worker's worktree before it reads the task message.
