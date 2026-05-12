@@ -33,7 +33,8 @@ to either open a tab for one of its services or reload any already-open
 tab. Both flows go through the agent-facing `scripts/web_view.py` helper:
 
 ```bash
-# Print every registered service name (one per line).
+# Print every user-facing registered service name (one per line; the
+# workspace chrome's own `system_interface` entry is hidden).
 python3 scripts/web_view.py list
 
 # Open the given service in a tab split alongside the primary chat

@@ -199,8 +199,9 @@ service) without prompting the user to click Refresh:
 python3 scripts/web_view.py refresh <name>
 ```
 
-`web_view.py list` prints every registered service name (one per
-line), which is useful when the user is asking about what tabs are
+`web_view.py list` prints every user-facing registered service name
+(one per line; the workspace chrome's own `system_interface` entry is
+hidden), which is useful when the user is asking about what tabs are
 available.
 
 ## Escape hatch: wrap an existing server
