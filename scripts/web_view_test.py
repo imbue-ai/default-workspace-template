@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
-from typing import Any
 
 import pytest
 import tomlkit
@@ -124,5 +123,5 @@ def test_http_error_returns_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
         return 500, '{"detail": "boom"}'
 
     monkeypatch.setattr(web_view, "_post", err_post)
-    rc: Any = web_view.main(["refresh", "web"])
+    rc = web_view.main(["refresh", "web"])
     assert rc == 4
