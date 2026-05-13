@@ -805,7 +805,7 @@ async def _layout_broadcast_endpoint(request: Request) -> JSONResponse:
         return JSONResponse(content=error.model_dump(), status_code=400)
 
     op = body.get("op")
-    args_raw = body.get("args", {}) or {}
+    args_raw = body.get("args", {})
     agent_id = body.get("agent_id") or request.headers.get("X-Mngr-Agent-Id") or ""
     if not isinstance(op, str) or not is_known_op(op):
         error = ErrorResponse(detail=f"Unknown layout op: {op!r}")

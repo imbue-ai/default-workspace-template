@@ -353,6 +353,21 @@ def test_layout_broadcast_rejects_non_dict_args(app: FastAPI) -> None:
     assert response.status_code == 400
 
 
+def test_layout_broadcast_rejects_null_args(app: FastAPI) -> None:
+    """``args: null`` must be a 400, not silently coerced into ``{}``.
+
+    A previous implementation collapsed every falsy non-dict via ``or {}``,
+    which let mutating ops broadcast empty payloads that the frontend
+    handlers silently dropped.
+    """
+    with TestClient(app, client=("127.0.0.1", _TEST_CLIENT_PORT)) as loopback_client:
+        response = loopback_client.post(
+            "/api/layout/broadcast",
+            json={"op": "close", "args": None, "agent_id": "agent-42"},
+        )
+    assert response.status_code == 400
+
+
 def test_layout_broadcast_mutex_returns_409_with_holder_metadata(app: FastAPI) -> None:
     """While agent A holds the mutex, agent B's mutating op is rejected with 409."""
     from imbue.minds_workspace_server.layout_ops import LayoutMutex
