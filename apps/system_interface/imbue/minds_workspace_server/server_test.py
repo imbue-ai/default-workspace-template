@@ -15,8 +15,8 @@ from imbue.minds_workspace_server.agent_manager import AgentManager
 from imbue.minds_workspace_server.config import Config
 from imbue.minds_workspace_server.server import create_application
 
-# Placeholder client-side port used by the refresh-service broadcast tests.
-# Only the host portion of the TestClient ``client`` tuple is inspected by the
+# Placeholder client-side port used by the layout broadcast tests. Only the
+# host portion of the TestClient ``client`` tuple is inspected by the
 # endpoint (it enforces loopback), so any fixed value works here.
 _TEST_CLIENT_PORT = 12345
 
