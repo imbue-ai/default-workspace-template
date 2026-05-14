@@ -71,14 +71,14 @@ def test_prevent_builtin_exception_raises() -> None:
 
 
 def test_prevent_silent_decode_error_catches() -> None:
-    rc.check_silent_decode_error_catches(_DIR, snapshot(6))
+    rc.check_silent_decode_error_catches(_DIR, snapshot(5))
 
 
 # --- Import style ---
 
 
 def test_prevent_inline_imports() -> None:
-    rc.check_inline_imports(_DIR, snapshot(7))
+    rc.check_inline_imports(_DIR, snapshot(5))
 
 
 def test_prevent_relative_imports() -> None:
@@ -166,7 +166,7 @@ def test_prevent_args_in_docstrings() -> None:
 
 @pytest.mark.timeout(10)
 def test_prevent_returns_in_docstrings() -> None:
-    rc.check_returns_in_docstrings(_DIR, snapshot(1))
+    rc.check_returns_in_docstrings(_DIR, snapshot(0))
 
 
 # --- Type safety ---
