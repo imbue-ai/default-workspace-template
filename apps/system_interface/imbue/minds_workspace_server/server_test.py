@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from imbue.minds_workspace_server.agent_discovery import AgentInfo
 from imbue.minds_workspace_server.agent_manager import AgentManager
 from imbue.minds_workspace_server.config import Config
+from imbue.minds_workspace_server.models import AgentStateItem
 from imbue.minds_workspace_server.server import create_application
 
 # Placeholder client-side port used by the refresh-service broadcast tests.
@@ -365,3 +366,26 @@ def test_proto_agent_logs_endpoint_streams_messages_until_sentinel(app: FastAPI)
     assert second == {"line": "still going"}
 
 
+def test_destroy_rejects_is_primary_agent(client: TestClient, app: FastAPI) -> None:
+    """POST /api/agents/<id>/destroy returns 400 for the services agent.
+
+    The frontend already hides agents carrying ``is_primary=true``; this
+    server-side guard prevents direct callers (curl, scripted use, etc.)
+    from accidentally tearing down the workspace.
+    """
+    agent_manager: AgentManager = app.state.agent_manager
+    services_agent = AgentStateItem(
+        id="services-1",
+        name="system-services",
+        state="RUNNING",
+        labels={"is_primary": "true", "workspace": "my-ws"},
+        work_dir="/code",
+    )
+    agent_manager._agents[services_agent.id] = services_agent
+
+    response = client.post(f"/api/agents/{services_agent.id}/destroy")
+    assert response.status_code == 400
+    assert "is_primary" in response.json()["detail"]
+    # The guard runs *before* the destroy subprocess, so the agent is still
+    # present in the agent manager's state.
+    assert services_agent.id in agent_manager._agents
