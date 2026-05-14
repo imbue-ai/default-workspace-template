@@ -91,7 +91,7 @@ def _isolate_system_interface_tests(
 # Session-scope means teardown runs at pytest session end -- AFTER mngr's
 # autouse `session_cleanup` fixture (libs/mngr/imbue/mngr/conftest.py) has
 # already checked for leaked child processes. In offload release batches
-# that mix workspace-server e2e tests with other mngr tests, both the
+# that mix system_interface e2e tests with other mngr tests, both the
 # playwright node driver and chrome-headless-shell are still alive when
 # session_cleanup runs, so it asserts "leftover child processes" and
 # cascades a teardown error into every sibling test in the batch
