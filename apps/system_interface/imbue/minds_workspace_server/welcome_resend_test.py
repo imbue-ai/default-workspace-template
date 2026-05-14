@@ -1,29 +1,17 @@
 """Tests for the welcome_resend helper.
 
-`welcome_resend.capture_pane` and `welcome_resend.send_message_fn` are
-exposed as module-level callables so tests rebind them with fakes rather
-than reaching for `unittest.mock`.
+Uses `monkeypatch.setattr` to swap the injectable module-level callables
+(`capture_pane`, `send_message_fn`). The ratchet count is bumped in
+test_ratchets.py with rationale rather than dodged.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from imbue.minds_workspace_server import welcome_resend
-
-
-@pytest.fixture
-def restore_module_callables() -> Iterator[None]:
-    original_capture = welcome_resend.capture_pane
-    original_send = welcome_resend.send_message_fn
-    try:
-        yield
-    finally:
-        welcome_resend.capture_pane = original_capture
-        welcome_resend.send_message_fn = original_send
 
 
 def _write_welcome_skill(skill: Path) -> Path:
@@ -79,20 +67,17 @@ def test_pane_contains_welcome_false_when_missing() -> None:
 
 
 def test_check_and_resend_welcome_resends_when_pane_missing(
-    tmp_path: Path, restore_module_callables: None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     skill = _write_welcome_skill(tmp_path / "SKILL.md")
     send_calls: list[tuple[str, str]] = []
 
-    def _fake_capture(_name: str) -> str | None:
-        return "empty pane"
-
-    def _fake_send(name: str, message: str) -> bool:
-        send_calls.append((name, message))
-        return True
-
-    welcome_resend.capture_pane = _fake_capture
-    welcome_resend.send_message_fn = _fake_send
+    monkeypatch.setattr(welcome_resend, "capture_pane", lambda _name: "empty pane")
+    monkeypatch.setattr(
+        welcome_resend,
+        "send_message_fn",
+        lambda name, message: (send_calls.append((name, message)), True)[1],
+    )
 
     resent = welcome_resend.check_and_resend_welcome("my-agent", skill_path=skill)
     assert resent is True
@@ -100,20 +85,19 @@ def test_check_and_resend_welcome_resends_when_pane_missing(
 
 
 def test_check_and_resend_welcome_skips_when_pane_has_welcome(
-    tmp_path: Path, restore_module_callables: None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     skill = _write_welcome_skill(tmp_path / "SKILL.md")
     send_calls: list[tuple[str, str]] = []
 
-    def _fake_capture(_name: str) -> str | None:
-        return "### Welcome to Minds appears here"
-
-    def _fake_send(name: str, message: str) -> bool:
-        send_calls.append((name, message))
-        return True
-
-    welcome_resend.capture_pane = _fake_capture
-    welcome_resend.send_message_fn = _fake_send
+    monkeypatch.setattr(
+        welcome_resend, "capture_pane", lambda _name: "### Welcome to Minds appears here"
+    )
+    monkeypatch.setattr(
+        welcome_resend,
+        "send_message_fn",
+        lambda name, message: (send_calls.append((name, message)), True)[1],
+    )
 
     resent = welcome_resend.check_and_resend_welcome("my-agent", skill_path=skill)
     assert resent is False

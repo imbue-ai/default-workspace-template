@@ -1,10 +1,10 @@
 """Integration tests for the /api/claude-auth/* endpoints.
 
-Tests inject deterministic fakes for the `command_runner`,
-`pexpect_spawner`, `capture_pane`, and `send_message_fn` module-level
-callables rather than using `unittest.mock`, so the auth-success
-chokepoint is exercised end-to-end through the FastAPI test client
-without touching real Claude binaries or tmux sessions.
+Tests use `monkeypatch.setattr` to swap the injectable module-level
+callables (`command_runner`, `pexpect_spawner`, `capture_pane`,
+`send_message_fn`) so the auth-success chokepoint is exercised end-to-end
+through the FastAPI test client without touching real Claude binaries
+or tmux sessions.
 """
 
 from __future__ import annotations
@@ -75,37 +75,16 @@ def reset_oauth_session() -> Iterator[None]:
     claude_auth.abort_oauth_login()
 
 
-@pytest.fixture
-def restore_module_callables() -> Iterator[None]:
-    original_runner = claude_auth.command_runner
-    original_spawner = claude_auth.pexpect_spawner
-    original_capture = welcome_resend.capture_pane
-    original_send = welcome_resend.send_message_fn
-    original_default_skill_path = welcome_resend._DEFAULT_SKILL_PATH
-    try:
-        yield
-    finally:
-        claude_auth.command_runner = original_runner
-        claude_auth.pexpect_spawner = original_spawner
-        welcome_resend.capture_pane = original_capture
-        welcome_resend.send_message_fn = original_send
-        welcome_resend._DEFAULT_SKILL_PATH = original_default_skill_path
-
-
 def _logged_in_runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
     return _FakeFinishedProcess(
         stdout='{"loggedIn": true, "email": "u@example.com", "subscriptionType": "Max"}'
     )
 
 
-def _logged_out_runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
-    return _FakeFinishedProcess(stdout='{"loggedIn": false}')
-
-
 def test_status_endpoint_returns_parsed_payload(
-    client: TestClient, restore_module_callables: None
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    claude_auth.command_runner = _logged_in_runner
+    monkeypatch.setattr(claude_auth, "command_runner", _logged_in_runner)
     response = client.get("/api/claude-auth/status")
     assert response.status_code == 200
     payload = response.json()
@@ -115,14 +94,14 @@ def test_status_endpoint_returns_parsed_payload(
 
 
 def test_status_endpoint_logged_out_when_claude_missing(
-    client: TestClient, restore_module_callables: None
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def _missing_runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
         raise claude_auth.ProcessSetupError(
             command=("claude",), stdout="", stderr="not found", is_output_already_logged=False
         )
 
-    claude_auth.command_runner = _missing_runner
+    monkeypatch.setattr(claude_auth, "command_runner", _missing_runner)
     response = client.get("/api/claude-auth/status")
     assert response.status_code == 200
     assert response.json()["logged_in"] is False
@@ -134,7 +113,7 @@ def test_start_oauth_rejects_unknown_provider(client: TestClient) -> None:
 
 
 def test_full_oauth_flow_drives_subprocess_and_runs_welcome_resend(
-    client: TestClient, tmp_path: Path, restore_module_callables: None
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_url = "https://claude.ai/oauth/authorize?abc=1"
     fake_process = _FakePexpectProcess(url=fake_url)
@@ -145,18 +124,17 @@ def test_full_oauth_flow_drives_subprocess_and_runs_welcome_resend(
         "---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nbody\n\n---\n"
     )
 
-    def _fake_capture(_name: str) -> str | None:
-        return "empty pane"
-
-    def _fake_send(name: str, _message: str) -> bool:
-        welcome_resend_calls.append(name)
-        return True
-
-    claude_auth.pexpect_spawner = lambda *_args, **_kwargs: fake_process
-    claude_auth.command_runner = _logged_in_runner
-    welcome_resend.capture_pane = _fake_capture
-    welcome_resend.send_message_fn = _fake_send
-    welcome_resend._DEFAULT_SKILL_PATH = skill_path
+    monkeypatch.setattr(
+        claude_auth, "pexpect_spawner", lambda *_args, **_kwargs: fake_process
+    )
+    monkeypatch.setattr(claude_auth, "command_runner", _logged_in_runner)
+    monkeypatch.setattr(welcome_resend, "capture_pane", lambda _name: "empty pane")
+    monkeypatch.setattr(
+        welcome_resend,
+        "send_message_fn",
+        lambda name, _message: (welcome_resend_calls.append(name), True)[1],
+    )
+    monkeypatch.setattr(welcome_resend, "_DEFAULT_SKILL_PATH", skill_path)
 
     start = client.post("/api/claude-auth/start", json={"provider": "claudeai"})
     assert start.status_code == 200
@@ -187,14 +165,13 @@ def test_submit_api_key_writes_host_env_and_runs_welcome_resend(
     client: TestClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    restore_module_callables: None,
 ) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     skill_path = tmp_path / "SKILL.md"
     skill_path.write_text(
         "---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nbody\n\n---\n"
     )
-    welcome_resend._DEFAULT_SKILL_PATH = skill_path
+    monkeypatch.setattr(welcome_resend, "_DEFAULT_SKILL_PATH", skill_path)
 
     welcome_calls: list[str] = []
     restart_calls: list[str] = []
@@ -205,16 +182,13 @@ def test_submit_api_key_writes_host_env_and_runs_welcome_resend(
             return _FakeFinishedProcess(returncode=0)
         return _logged_in_runner(cmd, _timeout)
 
-    def _fake_capture(_name: str) -> str | None:
-        return "empty"
-
-    def _fake_send(name: str, _message: str) -> bool:
-        welcome_calls.append(name)
-        return True
-
-    claude_auth.command_runner = _runner
-    welcome_resend.capture_pane = _fake_capture
-    welcome_resend.send_message_fn = _fake_send
+    monkeypatch.setattr(claude_auth, "command_runner", _runner)
+    monkeypatch.setattr(welcome_resend, "capture_pane", lambda _name: "empty")
+    monkeypatch.setattr(
+        welcome_resend,
+        "send_message_fn",
+        lambda name, _message: (welcome_calls.append(name), True)[1],
+    )
 
     response = client.post(
         "/api/claude-auth/submit-api-key",
@@ -238,11 +212,13 @@ def test_submit_api_key_rejects_empty_key(client: TestClient) -> None:
 
 
 def test_abort_endpoint_clears_in_flight_session(
-    client: TestClient, restore_module_callables: None
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_url = "https://claude.ai/oauth/authorize?x=1"
     fake_process = _FakePexpectProcess(url=fake_url)
-    claude_auth.pexpect_spawner = lambda *_args, **_kwargs: fake_process
+    monkeypatch.setattr(
+        claude_auth, "pexpect_spawner", lambda *_args, **_kwargs: fake_process
+    )
 
     start = client.post("/api/claude-auth/start", json={"provider": "claudeai"})
     assert start.status_code == 200
