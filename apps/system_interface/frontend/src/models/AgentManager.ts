@@ -45,11 +45,13 @@ type WsEvent =
   | { type: "refresh_service"; service_name: string };
 
 export type RefreshServiceListener = (serviceName: string) => void;
+export type AgentsUpdatedListener = (agents: AgentState[]) => void;
 
 let agents: AgentState[] = [];
 let applications: ApplicationEntry[] = [];
 let protoAgents: ProtoAgent[] = [];
 let refreshListeners: RefreshServiceListener[] = [];
+let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
@@ -111,6 +113,9 @@ function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "agents_updated":
       agents = event.agents;
+      for (const listener of agentsUpdatedListeners) {
+        listener(getAgents());
+      }
       break;
 
     case "applications_updated":
@@ -147,8 +152,22 @@ export function isConnected(): boolean {
   return connected;
 }
 
+/**
+ * Returns true when the agent is the workspace's services-only "primary"
+ * agent (window 0 is sleep-infinity; bootstrap + services run in extra
+ * tmux windows). These agents are hidden from the user-facing agent list
+ * because destroying them would tear down the whole workspace.
+ */
+export function isPrimaryAgent(agent: AgentState): boolean {
+  return agent.labels?.is_primary === "true";
+}
+
 export function getAgents(): AgentState[] {
-  return agents;
+  // Filter at the data layer so every consumer (Dockview list, chat panel,
+  // create-agent modal, etc.) sees the same set without duplicating the
+  // filter logic. The raw list is still kept internally for callsites that
+  // need it (none today, but kept symmetric with getAgentById).
+  return agents.filter((a) => !isPrimaryAgent(a));
 }
 
 export function getAgentById(id: string): AgentState | undefined {
@@ -173,4 +192,12 @@ export function addRefreshServiceListener(listener: RefreshServiceListener): voi
 
 export function removeRefreshServiceListener(listener: RefreshServiceListener): void {
   refreshListeners = refreshListeners.filter((l) => l !== listener);
+}
+
+export function addAgentsUpdatedListener(listener: AgentsUpdatedListener): void {
+  agentsUpdatedListeners.push(listener);
+}
+
+export function removeAgentsUpdatedListener(listener: AgentsUpdatedListener): void {
+  agentsUpdatedListeners = agentsUpdatedListeners.filter((l) => l !== listener);
 }

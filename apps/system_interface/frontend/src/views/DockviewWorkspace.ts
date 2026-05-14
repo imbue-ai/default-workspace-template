@@ -19,12 +19,14 @@ import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { ShareModal } from "./ShareModal";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
 import {
+  addAgentsUpdatedListener,
   addRefreshServiceListener,
   getAgentById,
   getAgents,
   getApplications,
   getProtoAgents,
   removeAgentLocally,
+  type AgentsUpdatedListener,
   type RefreshServiceListener,
 } from "../models/AgentManager";
 
@@ -456,13 +458,33 @@ function addChatPanel(chatAgentId: string, chatAgentName: string): void {
   });
 }
 
-function openPrimaryAgentChat(): void {
-  const primaryId = getPrimaryAgentId();
-  if (!primaryId) return;
-  const agent = getAgentById(primaryId);
-  const agentName = agent?.name ?? "Chat";
-  addChatPanel(primaryId, agentName);
+/**
+ * Open the workspace's initial (bootstrap-created) chat agent as the first
+ * tab. "Initial" = the earliest non-is_primary agent we know about. In a
+ * freshly-booted workspace the bootstrap creates exactly one chat agent
+ * named after the host, and that's what we want here. The services agent
+ * (is_primary=true) is filtered out by getAgents().
+ *
+ * If no non-is_primary agent exists yet (e.g. the workspace just started
+ * and the bootstrap's `mngr create` is still running), returns false so
+ * the caller can show a "waiting" state. We re-try when an agents_updated
+ * event arrives.
+ */
+function openInitialChatTab(): boolean {
+  const candidates = getAgents();
+  if (candidates.length === 0) return false;
+  const initial = candidates[0];
+  addChatPanel(initial.id, initial.name);
+  return true;
 }
+
+// `awaitingInitialChat` flips on when init runs against an empty agent
+// list, and back off as soon as we successfully open the initial tab.
+// While true, an agents_updated listener keeps retrying. The empty-state
+// overlay uses this flag to decide whether to show "Waiting for initial
+// chat agent..." vs the default "+ Open new tab" message.
+let awaitingInitialChat = false;
+let agentsUpdatedListener: AgentsUpdatedListener | null = null;
 
 function openIframeTab(url: string, title: string, panelType: PanelType = "iframe", serviceName?: string): void {
   if (!dockview) return;
@@ -614,6 +636,134 @@ async function loadLayout(): Promise<SavedLayout | null> {
   }
 }
 
+// The empty-state overlay sits inside the dockview container as a sibling
+// to dockview's own DOM. Shown when panels.length === 0; hidden otherwise.
+// Its "+" button opens the SAME dropdown buildDropdownItems() backs in the
+// header's add-tab button, so the user has the same set of actions even
+// when no tabs are visible.
+let emptyStateOverlay: HTMLElement | null = null;
+let emptyStateStatus: HTMLElement | null = null;
+let emptyStateAction: HTMLButtonElement | null = null;
+let emptyStateDropdown: HTMLElement | null = null;
+
+function createEmptyStateOverlay(): HTMLElement {
+  const overlay = document.createElement("div");
+  overlay.className = "dockview-empty-state";
+  overlay.style.position = "absolute";
+  overlay.style.inset = "0";
+  overlay.style.display = "none";
+  overlay.style.alignItems = "center";
+  overlay.style.justifyContent = "center";
+  overlay.style.pointerEvents = "auto";
+  overlay.style.zIndex = "1";
+
+  const card = document.createElement("div");
+  card.className = "dockview-empty-state-card";
+  card.style.display = "flex";
+  card.style.flexDirection = "column";
+  card.style.alignItems = "center";
+  card.style.padding = "32px 40px";
+  card.style.background = "#fff";
+  card.style.border = "1px solid #e5e7eb";
+  card.style.borderRadius = "12px";
+  card.style.boxShadow = "0 4px 12px rgba(0,0,0,0.06)";
+  card.style.position = "relative";
+
+  const status = document.createElement("div");
+  status.className = "dockview-empty-state-status";
+  status.style.marginBottom = "16px";
+  status.style.color = "#374151";
+  status.style.fontSize = "14px";
+  status.textContent = "No tabs open";
+  card.appendChild(status);
+
+  const action = document.createElement("button");
+  action.className = "dockview-empty-state-action";
+  action.style.padding = "10px 20px";
+  action.style.fontSize = "16px";
+  action.style.fontWeight = "500";
+  action.style.background = "#3b82f6";
+  action.style.color = "#fff";
+  action.style.border = "none";
+  action.style.borderRadius = "8px";
+  action.style.cursor = "pointer";
+  action.textContent = "+ Open new tab";
+  card.appendChild(action);
+
+  const dropdown = document.createElement("div");
+  dropdown.className = "dockview-empty-state-dropdown";
+  dropdown.style.position = "absolute";
+  dropdown.style.top = "calc(100% + 8px)";
+  dropdown.style.left = "50%";
+  dropdown.style.transform = "translateX(-50%)";
+  dropdown.style.minWidth = "240px";
+  dropdown.style.background = "#fff";
+  dropdown.style.border = "1px solid #e5e7eb";
+  dropdown.style.borderRadius = "8px";
+  dropdown.style.boxShadow = "0 4px 12px rgba(0,0,0,0.08)";
+  dropdown.style.padding = "4px 0";
+  dropdown.style.display = "none";
+  dropdown.style.zIndex = "2";
+  card.appendChild(dropdown);
+
+  action.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isOpen = dropdown.style.display !== "none";
+    if (isOpen) {
+      dropdown.style.display = "none";
+      return;
+    }
+    dropdown.innerHTML = "";
+    const items = buildDropdownItems();
+    for (const item of items) {
+      const menuItem = document.createElement("div");
+      menuItem.className = "dockview-add-tab-dropdown-item";
+      menuItem.textContent = item.label;
+      menuItem.addEventListener("click", (clickEvent) => {
+        clickEvent.stopPropagation();
+        dropdown.style.display = "none";
+        item.action();
+      });
+      dropdown.appendChild(menuItem);
+      if (item.dividerAfter) {
+        const divider = document.createElement("div");
+        divider.style.borderTop = "1px solid #e5e7eb";
+        divider.style.margin = "4px 0";
+        dropdown.appendChild(divider);
+      }
+    }
+    dropdown.style.display = "block";
+  });
+
+  // Close the dropdown when clicking elsewhere.
+  document.addEventListener("click", () => {
+    dropdown.style.display = "none";
+  });
+
+  overlay.appendChild(card);
+  emptyStateStatus = status;
+  emptyStateAction = action;
+  emptyStateDropdown = dropdown;
+  return overlay;
+}
+
+function updateEmptyState(): void {
+  if (!emptyStateOverlay || !dockview) return;
+  const isEmpty = dockview.panels.length === 0;
+  emptyStateOverlay.style.display = isEmpty ? "flex" : "none";
+  if (!isEmpty) {
+    if (emptyStateDropdown) emptyStateDropdown.style.display = "none";
+    return;
+  }
+  if (awaitingInitialChat) {
+    if (emptyStateStatus) emptyStateStatus.textContent = "Waiting for initial chat agent...";
+    if (emptyStateAction) emptyStateAction.style.display = "none";
+  } else {
+    if (emptyStateStatus) emptyStateStatus.textContent = "No tabs open";
+    if (emptyStateAction) emptyStateAction.style.display = "";
+  }
+}
+
 function initializeDockview(parentElement: HTMLElement): void {
   if (initialized) return;
   initialized = true;
@@ -622,7 +772,11 @@ function initializeDockview(parentElement: HTMLElement): void {
   dockviewContainer.className = "dockview-agent-container dockview-theme-light";
   dockviewContainer.style.width = "100%";
   dockviewContainer.style.height = "100%";
+  dockviewContainer.style.position = "relative";
   parentElement.appendChild(dockviewContainer);
+
+  emptyStateOverlay = createEmptyStateOverlay();
+  dockviewContainer.appendChild(emptyStateOverlay);
 
   // dockview-core's Scrollbar only reads event.deltaY, so mice with a dedicated
   // horizontal scroll wheel (e.g. Logitech MX Master) emit deltaX events that
@@ -689,26 +843,28 @@ function initializeDockview(parentElement: HTMLElement): void {
     scheduleSave();
   });
 
-  // Listen for panel removal to clean up params. If the user closes the
-  // last remaining tab the dockview would otherwise be a blank screen with
-  // no recovery path, so reopen the primary agent's chat tab.
-  //
-  // The re-add is deferred to a microtask: when the user closes the primary
-  // chat itself, adding a panel with the same id synchronously inside the
-  // remove listener races with dockview's own teardown of the just-removed
-  // panel and produces a tab that appears to "stay open" but with a blank
-  // (white) content area. Deferring lets dockview finish disposing before we
-  // add the replacement.
+  // Clean up params on panel removal. We DON'T reopen anything when
+  // panels.length hits zero -- instead the empty-state overlay (see
+  // below) appears, giving the user the same "+" dropdown actions the
+  // dockview header normally hosts. This is the user-visible escape from
+  // the previous "system-services keeps coming back" behavior.
   dv.api.onDidRemovePanel((panel) => {
     panelParams.delete(panel.id);
-    if (dv.panels.length === 0) {
-      queueMicrotask(() => {
-        if (dv.panels.length === 0) {
-          openPrimaryAgentChat();
-        }
-      });
-    }
+    updateEmptyState();
   });
+  dv.api.onDidAddPanel(() => {
+    updateEmptyState();
+  });
+
+  // While awaitingInitialChat is true, every agents_updated event is
+  // another chance for the bootstrap-created chat agent to show up.
+  agentsUpdatedListener = () => {
+    if (awaitingInitialChat && openInitialChatTab()) {
+      awaitingInitialChat = false;
+      updateEmptyState();
+    }
+  };
+  addAgentsUpdatedListener(agentsUpdatedListener);
 
   // Agent-triggered refresh: reload every open iframe tab whose
   // data-service-name attribute matches the service_name the agent named.
@@ -721,6 +877,7 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   // Load saved layout or create default
   loadLayout().then((saved) => {
+    let savedHadAnyPanels = false;
     if (saved) {
       for (const [id, params] of Object.entries(saved.panelParams)) {
         panelParams.set(id, params);
@@ -730,13 +887,38 @@ function initializeDockview(parentElement: HTMLElement): void {
       } catch {
         panelParams.clear();
       }
+      savedHadAnyPanels = dv.panels.length > 0;
+      // Strip any panels that point at the is_primary services agent.
+      // Older saved layouts (or layouts saved by the previous code path
+      // that auto-opened the primary agent's chat) may carry a chat-
+      // <services-agent-id> panel; we don't want to surface that ever.
+      const primaryId = getPrimaryAgentId();
+      if (primaryId) {
+        for (const panel of dv.panels.slice()) {
+          const params = panelParams.get(panel.id);
+          const targetId = params?.chatAgentId ?? params?.agentId;
+          if (targetId === primaryId) {
+            dv.removePanel(panel);
+          }
+        }
+      }
     }
 
-    // Open primary agent's chat tab if no panels were restored (no saved
-    // layout, restore failed, or the saved layout was empty).
-    if (dv.panels.length === 0) {
-      openPrimaryAgentChat();
+    // Auto-open the initial chat tab when:
+    //   - no saved layout exists (first ever load), OR
+    //   - the saved layout existed but all its panels were services-agent
+    //     panels we just stripped above.
+    // If the saved layout was a non-empty layout that the user
+    // intentionally emptied (savedHadAnyPanels=false because saved
+    // existed but had zero panels), we respect that and leave the
+    // empty state visible.
+    const shouldAutoOpen = saved === null || (savedHadAnyPanels && dv.panels.length === 0);
+    if (shouldAutoOpen) {
+      if (!openInitialChatTab()) {
+        awaitingInitialChat = true;
+      }
     }
+    updateEmptyState();
   });
 }
 

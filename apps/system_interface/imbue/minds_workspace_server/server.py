@@ -48,10 +48,7 @@ from imbue.minds_workspace_server.models import RandomNameResponse
 from imbue.minds_workspace_server.models import SendMessageRequest
 from imbue.minds_workspace_server.models import SendMessageResponse
 from imbue.minds_workspace_server.plugins import get_plugin_manager
-from imbue.minds_workspace_server.request_writer import KNOWN_REQUEST_TYPES
-from imbue.minds_workspace_server.request_writer import UnknownRequestTypeError
 from imbue.minds_workspace_server.request_writer import write_refresh_request
-from imbue.minds_workspace_server.request_writer import write_request_event
 from imbue.minds_workspace_server.service_dispatcher import register_service_routes
 from imbue.minds_workspace_server.session_watcher import AgentSessionWatcher
 from imbue.minds_workspace_server.tickets_watcher import AgentTicketsWatcher
@@ -750,12 +747,29 @@ async def _run_proto_agent_logs_loop(
 
 
 async def _destroy_agent(agent_id: str, request: Request) -> JSONResponse:
-    """Destroy an agent by running mngr destroy --force."""
+    """Destroy an agent by running mngr destroy --force.
+
+    Refuses to destroy agents carrying the ``is_primary=true`` label: that's
+    the services agent for the workspace, and destroying it would tear down
+    the bootstrap, telegram, web, cloudflared, and runtime-backup services
+    along with it. The frontend already hides ``is_primary=true`` agents
+    from the visible agent list; this is defense-in-depth for callers that
+    hit the endpoint directly (curl, scripted use, etc.).
+    """
     agent_manager: AgentManager = request.app.state.agent_manager
     agent_state = agent_manager.get_agent_by_id(agent_id)
     if agent_state is None:
         error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
         return JSONResponse(content=error.model_dump(), status_code=404)
+
+    if agent_state.labels.get("is_primary") == "true":
+        error = ErrorResponse(
+            detail=(
+                f"Refusing to destroy agent '{agent_state.name}': it carries "
+                "the is_primary=true label (services agent for this workspace)"
+            )
+        )
+        return JSONResponse(content=error.model_dump(), status_code=400)
 
     agent_name = agent_state.name
 
@@ -780,62 +794,6 @@ async def _destroy_agent(agent_id: str, request: Request) -> JSONResponse:
     agent_manager.remove_agent(agent_id)
 
     return JSONResponse(content=DestroyAgentResponse(status="ok").model_dump())
-
-
-async def _request_event_endpoint(request: Request) -> JSONResponse:
-    """Append a generic ``RequestEvent`` to ``events/requests/events.jsonl``.
-
-    The body must be a JSON object containing at least ``request_type`` (e.g.
-    ``"LATCHKEY_PERMISSION"``) plus whatever request-type-specific fields the
-    desktop client expects (e.g. ``service_name``, ``rationale``). Server-
-    controlled metadata fields (``timestamp``, ``type``, ``event_id``,
-    ``source``, ``agent_id``) are filled in by the workspace server and
-    silently override any caller-provided values for those keys.
-    """
-    try:
-        body: object = await request.json()
-    except json.JSONDecodeError as e:
-        error = ErrorResponse(detail=f"Invalid JSON body: {e}")
-        return JSONResponse(content=error.model_dump(), status_code=400)
-
-    if not isinstance(body, dict):
-        error = ErrorResponse(detail="Request body must be a JSON object")
-        return JSONResponse(content=error.model_dump(), status_code=400)
-
-    request_type_raw = body.get("request_type")
-    if not isinstance(request_type_raw, str) or not request_type_raw:
-        error = ErrorResponse(detail="Field 'request_type' is required and must be a non-empty string")
-        return JSONResponse(content=error.model_dump(), status_code=400)
-
-    if request_type_raw not in KNOWN_REQUEST_TYPES:
-        known = ", ".join(sorted(KNOWN_REQUEST_TYPES))
-        error = ErrorResponse(detail=f"Unknown request_type {request_type_raw!r}; expected one of: {known}")
-        return JSONResponse(content=error.model_dump(), status_code=400)
-
-    is_user_requested_raw = body.get("is_user_requested", True)
-    if not isinstance(is_user_requested_raw, bool):
-        error = ErrorResponse(detail="Field 'is_user_requested' must be a boolean")
-        return JSONResponse(content=error.model_dump(), status_code=400)
-
-    payload: dict[str, object] = {
-        key: value for key, value in body.items() if key not in {"request_type", "is_user_requested"}
-    }
-
-    try:
-        event = await run_in_threadpool(
-            write_request_event,
-            request_type_raw,
-            payload,
-            is_user_requested_raw,
-        )
-    except UnknownRequestTypeError as e:
-        error = ErrorResponse(detail=str(e))
-        return JSONResponse(content=error.model_dump(), status_code=400)
-    except (RuntimeError, OSError) as e:
-        error = ErrorResponse(detail=str(e))
-        return JSONResponse(content=error.model_dump(), status_code=500)
-
-    return JSONResponse(content={"ok": True, "event_id": event["event_id"]})
 
 
 async def _refresh_service_request_endpoint(service_name: str) -> JSONResponse:
@@ -919,7 +877,6 @@ def create_application(
     application.add_api_route("/api/layout", _save_layout, methods=["POST"])
     application.add_api_route("/api/agents/{agent_id}/screen", _get_screen_capture, methods=["GET"])
     application.add_api_route("/api/agents/{agent_id}/destroy", _destroy_agent, methods=["POST"])
-    application.add_api_route("/api/permissions/request", _request_event_endpoint, methods=["POST"])
     application.add_api_route(
         "/api/refresh-service/{service_name}", _refresh_service_request_endpoint, methods=["POST"]
     )
