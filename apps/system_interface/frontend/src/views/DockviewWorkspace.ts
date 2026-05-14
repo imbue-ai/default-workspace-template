@@ -892,6 +892,16 @@ async function handleSplit(args: Record<string, unknown>): Promise<void> {
 
   if (ref.startsWith("service:")) {
     const serviceName = ref.substring("service:".length);
+    // ``service:<name>`` uniquely identifies a panel via panelParams, so
+    // splitting a service that's already open would leave a duplicate
+    // addressable only by short-hash. Focus the existing panel instead,
+    // matching the chat-ref branch below and the dedup ``open`` does.
+    const existingServicePanelId = findIframePanelIdForService(serviceName);
+    if (existingServicePanelId !== null) {
+      const existing = dockview.panels.find((p) => p.id === existingServicePanelId);
+      if (existing) dockview.setActivePanel(existing);
+      return;
+    }
     const primaryId = getPrimaryAgentId();
     const panelId = `iframe-${primaryId}-${Date.now()}`;
     const params: PanelParams = {
