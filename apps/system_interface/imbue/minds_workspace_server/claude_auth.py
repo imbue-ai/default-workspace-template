@@ -16,6 +16,10 @@ Three sign-in paths:
    env file the bootstrap already manages and then restarts the named
    chat agent via `mngr stop`/`mngr start` so the new env is in effect
    the next time claude is launched.
+
+Dependencies that touch the outside world (subprocess invocation and
+pexpect-driven PTY spawning) are exposed as named callables on the module
+so tests can substitute deterministic fakes without `unittest.mock`.
 """
 
 from __future__ import annotations
@@ -23,11 +27,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import threading
 import uuid as _uuid
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 import pexpect
@@ -35,6 +40,8 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import SecretStr
 
+from imbue.concurrency_group.subprocess_utils import ProcessSetupError
+from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.utils.env_utils import parse_env_file
 
@@ -53,6 +60,31 @@ class ClaudeAuthError(RuntimeError):
     """Raised when an auth flow operation cannot complete."""
 
 
+# Public type aliases for dependency injection. Tests pass deterministic
+# fakes; production code uses the module defaults.
+CommandRunner = Callable[..., Any]
+PexpectSpawner = Callable[..., Any]
+
+
+def _default_command_runner(command: list[str], timeout: float) -> Any:
+    return run_local_command_modern_version(
+        command=command, is_checked=False, timeout=timeout, cwd=None
+    )
+
+
+def _default_pexpect_spawner(executable: str, args: list[str], timeout: float) -> Any:
+    return pexpect.spawn(executable, args, timeout=timeout, encoding="utf-8")
+
+
+# Module-level injectable dependencies. Production callers use the
+# defaults; tests rebind these (claude_auth.command_runner = fake_runner)
+# rather than passing fakes through layered call sites or using
+# `unittest.mock`. Looking the values up at call time is intentional so
+# that rebinding after import takes effect immediately.
+command_runner: CommandRunner = _default_command_runner
+pexpect_spawner: PexpectSpawner = _default_pexpect_spawner
+
+
 class AuthStatus(FrozenModel):
     """Parsed output of `claude auth status --json`.
 
@@ -66,7 +98,9 @@ class AuthStatus(FrozenModel):
     email: str | None = Field(default=None)
     org_id: str | None = Field(default=None)
     org_name: str | None = Field(default=None)
-    subscription_type: str | None = Field(default=None, description="e.g. 'Max'; absent for Console accounts")
+    subscription_type: str | None = Field(
+        default=None, description="e.g. 'Max'; absent for Console accounts"
+    )
 
 
 class OAuthProvider(str, Enum):
@@ -77,6 +111,18 @@ class OAuthProvider(str, Enum):
 class OAuthStartResult(FrozenModel):
     session_id: str = Field(description="Opaque token for the in-flight OAuth session")
     oauth_url: str = Field(description="URL the user opens to authorize the login")
+
+
+class _OAuthSessionRecord(FrozenModel):
+    """Immutable handle for an in-flight OAuth subprocess.
+
+    Pairs with a parallel non-frozen slot that holds the live pexpect
+    process object, since that object is not Pydantic-serializable.
+    """
+
+    session_id: str
+    provider: OAuthProvider
+    oauth_url: str
 
 
 def _coerce_str_or_none(value: object) -> str | None:
@@ -102,26 +148,19 @@ def _parse_status_payload(payload: dict[str, object]) -> AuthStatus:
 def get_auth_status() -> AuthStatus:
     """Invoke `claude auth status --json` and parse the result.
 
-    A `claude` binary that isn't on PATH, times out, or returns no output
-    is reported as `logged_in=False` rather than raising, since the whole
-    point of the modal is to recover from broken auth state.
+    Returns `logged_in=False` if the `claude` binary is missing or doesn't
+    produce output, rather than raising, since the whole point of the
+    modal is to recover from broken auth state.
     """
     try:
-        result = subprocess.run(
-            ["claude", "auth", "status", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=_CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS,
-            check=False,
+        result = command_runner(
+            ["claude", "auth", "status", "--json"], _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS
         )
-    except subprocess.TimeoutExpired:
-        logger.warning("claude auth status timed out; treating as logged out")
-        return AuthStatus(logged_in=False)
-    except FileNotFoundError:
-        logger.warning("claude binary not found on PATH; treating as logged out")
+    except ProcessSetupError as e:
+        logger.warning("claude auth status failed to launch: {}", e)
         return AuthStatus(logged_in=False)
 
-    stdout = result.stdout.strip()
+    stdout = result.stdout.strip() if isinstance(result.stdout, str) else ""
     if not stdout:
         return AuthStatus(logged_in=False)
     try:
@@ -175,24 +214,12 @@ def restart_agent(agent_name: str) -> None:
     env (so newly-written `ANTHROPIC_API_KEY` is in effect).
     """
     logger.info("Restarting agent {} via mngr stop+start", agent_name)
-    stop_result = subprocess.run(
-        ["mngr", "stop", agent_name],
-        capture_output=True,
-        text=True,
-        timeout=_MNGR_COMMAND_TIMEOUT_SECONDS,
-        check=False,
-    )
+    stop_result = command_runner(["mngr", "stop", agent_name], _MNGR_COMMAND_TIMEOUT_SECONDS)
     if stop_result.returncode != 0:
         raise ClaudeAuthError(
             f"mngr stop {agent_name} failed (exit {stop_result.returncode}): {stop_result.stderr.strip()}"
         )
-    start_result = subprocess.run(
-        ["mngr", "start", agent_name],
-        capture_output=True,
-        text=True,
-        timeout=_MNGR_COMMAND_TIMEOUT_SECONDS,
-        check=False,
-    )
+    start_result = command_runner(["mngr", "start", agent_name], _MNGR_COMMAND_TIMEOUT_SECONDS)
     if start_result.returncode != 0:
         raise ClaudeAuthError(
             f"mngr start {agent_name} failed (exit {start_result.returncode}): {start_result.stderr.strip()}"
@@ -210,48 +237,37 @@ def submit_api_key(api_key: SecretStr, chat_agent_name: str | None) -> AuthStatu
 # ---- OAuth PTY flow ----
 
 
-class _OAuthSession:
-    """Holds a live `claude auth login` PTY subprocess between `/start` and `/submit-code`."""
-
-    def __init__(self, provider: OAuthProvider) -> None:
-        self.session_id = _uuid.uuid4().hex
-        self.provider = provider
-        self.process: pexpect.spawn = pexpect.spawn(
-            "claude",
-            ["auth", "login", f"--{provider.value}"],
-            timeout=_OAUTH_URL_WAIT_SECONDS,
-            encoding="utf-8",
-        )
-        match_index = self.process.expect([_OAUTH_URL_REGEX, pexpect.EOF, pexpect.TIMEOUT])
-        if match_index != 0:
-            self.terminate()
-            if match_index == 1:
-                raise ClaudeAuthError("claude auth login exited before printing OAuth URL")
-            raise ClaudeAuthError("Timed out waiting for OAuth URL from claude auth login")
-        match = self.process.match
-        if match is None:
-            self.terminate()
-            raise ClaudeAuthError("OAuth URL regex matched but pexpect.match is None (unexpected)")
-        self.oauth_url = match.group(0)
-
-    def submit_code(self, code: str) -> None:
-        self.process.timeout = _OAUTH_COMPLETE_WAIT_SECONDS
-        self.process.sendline(code)
-        result = self.process.expect([pexpect.EOF, pexpect.TIMEOUT])
-        if result != 0:
-            raise ClaudeAuthError("Timed out waiting for claude auth login to complete after code submit")
-
-    def terminate(self) -> None:
-        if not self.process.isalive():
-            return
-        try:
-            self.process.terminate(force=True)
-        except OSError as e:
-            logger.warning("OAuth subprocess terminate raised: {}", e)
-
-
 _oauth_lock = threading.Lock()
-_current_oauth: _OAuthSession | None = None
+_current_oauth_record: _OAuthSessionRecord | None = None
+_current_oauth_process: Any = None
+
+
+def _safe_terminate(process: Any) -> None:
+    if not process.isalive():
+        return
+    try:
+        process.terminate(force=True)
+    except OSError as e:
+        logger.warning("OAuth subprocess terminate raised: {}", e)
+
+
+def _spawn_oauth_and_parse_url(provider: OAuthProvider) -> tuple[Any, str]:
+    process = pexpect_spawner(
+        "claude",
+        ["auth", "login", f"--{provider.value}"],
+        _OAUTH_URL_WAIT_SECONDS,
+    )
+    match_index = process.expect([_OAUTH_URL_REGEX, pexpect.EOF, pexpect.TIMEOUT])
+    if match_index != 0:
+        _safe_terminate(process)
+        if match_index == 1:
+            raise ClaudeAuthError("claude auth login exited before printing OAuth URL")
+        raise ClaudeAuthError("Timed out waiting for OAuth URL from claude auth login")
+    match = process.match
+    if match is None:
+        _safe_terminate(process)
+        raise ClaudeAuthError("OAuth URL regex matched but pexpect.match is None (unexpected)")
+    return process, match.group(0)
 
 
 def start_oauth_login(provider: OAuthProvider) -> OAuthStartResult:
@@ -261,34 +277,50 @@ def start_oauth_login(provider: OAuthProvider) -> OAuthStartResult:
     at a time per process, which matches the single-mind / single-user
     deployment model.
     """
-    global _current_oauth
+    global _current_oauth_record, _current_oauth_process
     with _oauth_lock:
-        if _current_oauth is not None:
-            _current_oauth.terminate()
-            _current_oauth = None
-        session = _OAuthSession(provider)
-        _current_oauth = session
-    return OAuthStartResult(session_id=session.session_id, oauth_url=session.oauth_url)
+        if _current_oauth_process is not None:
+            _safe_terminate(_current_oauth_process)
+            _current_oauth_record = None
+            _current_oauth_process = None
+        process, oauth_url = _spawn_oauth_and_parse_url(provider)
+        record = _OAuthSessionRecord(
+            session_id=_uuid.uuid4().hex, provider=provider, oauth_url=oauth_url
+        )
+        _current_oauth_record = record
+        _current_oauth_process = process
+    return OAuthStartResult(session_id=record.session_id, oauth_url=record.oauth_url)
+
+
+def _drive_oauth_code(process: Any, code: str) -> None:
+    process.timeout = _OAUTH_COMPLETE_WAIT_SECONDS
+    process.sendline(code)
+    result = process.expect([pexpect.EOF, pexpect.TIMEOUT])
+    if result != 0:
+        raise ClaudeAuthError("Timed out waiting for claude auth login to complete after code submit")
 
 
 def submit_oauth_code(session_id: str, code: str) -> AuthStatus:
     """Send the user's pasted `CODE#STATE` to the live OAuth subprocess."""
-    global _current_oauth
+    global _current_oauth_record, _current_oauth_process
     with _oauth_lock:
-        session = _current_oauth
-        if session is None or session.session_id != session_id:
+        record = _current_oauth_record
+        process = _current_oauth_process
+        if record is None or process is None or record.session_id != session_id:
             raise ClaudeAuthError("No active OAuth session matches the provided session_id")
         try:
-            session.submit_code(code)
+            _drive_oauth_code(process, code)
         finally:
-            _current_oauth = None
+            _current_oauth_record = None
+            _current_oauth_process = None
     return get_auth_status()
 
 
 def abort_oauth_login() -> None:
     """Drop any in-flight OAuth session (e.g. user closed the modal)."""
-    global _current_oauth
+    global _current_oauth_record, _current_oauth_process
     with _oauth_lock:
-        if _current_oauth is not None:
-            _current_oauth.terminate()
-            _current_oauth = None
+        if _current_oauth_process is not None:
+            _safe_terminate(_current_oauth_process)
+        _current_oauth_record = None
+        _current_oauth_process = None

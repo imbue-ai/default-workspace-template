@@ -18,13 +18,15 @@ import {
   isBackfillComplete,
   type TranscriptEvent,
 } from "../models/Response";
-import { connectToStream, disconnectFromStream } from "../models/StreamingMessage";
+import { connectToStream, disconnectFromStream, subscribeToAuthErrors } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { MessageInput } from "./MessageInput";
 import { renderUserMessage, renderAssistantMessage } from "./message-renderers";
 import { getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
+import { ClaudeLoginModal, type ClaudeAuthStatus } from "./ClaudeLoginModal";
+import { ClaudeLoginBanner } from "./ClaudeLoginBanner";
 
 function getAgentTerminalUrl(agentId: string): string {
   const baseUrl = getTerminalUrl();
@@ -69,6 +71,58 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   let userScrolledUp = false;
   let previousScrollTop = 0;
   let backfillStarted = false;
+
+  // Claude login modal/banner state. The blocking modal pops on every fresh
+  // page load while unauthenticated; if the user dismisses, a non-blocking
+  // banner replaces it. The banner re-opens the modal on click.
+  let loginModalOpen = false;
+  let loginBannerVisible = false;
+  let authCheckAgentId: string | null = null;
+  let unsubscribeAuthError: (() => void) | null = null;
+
+  async function runInitialAuthCheck(agentId: string): Promise<void> {
+    if (authCheckAgentId === agentId) return;
+    authCheckAgentId = agentId;
+    try {
+      const status = await m.request<ClaudeAuthStatus>({
+        method: "GET",
+        url: apiUrl("/api/claude-auth/status"),
+      });
+      if (!status.logged_in) {
+        loginModalOpen = true;
+        loginBannerVisible = false;
+        m.redraw();
+      }
+    } catch {
+      // Backend not responding to auth check is a soft failure; surface only
+      // the existing chat-panel errors and leave the modal closed.
+    }
+  }
+
+  function handleAuthErrorEvent(eventAgentId: string): void {
+    if (eventAgentId !== currentAgentId) return;
+    if (loginModalOpen) return;
+    loginModalOpen = true;
+    loginBannerVisible = false;
+    m.redraw();
+  }
+
+  function dismissModalToBanner(): void {
+    loginModalOpen = false;
+    loginBannerVisible = true;
+    m.redraw();
+  }
+
+  function dismissModalOnSuccess(): void {
+    loginModalOpen = false;
+    loginBannerVisible = false;
+    m.redraw();
+  }
+
+  function reopenModalFromBanner(): void {
+    loginModalOpen = true;
+    m.redraw();
+  }
 
   // Screen capture state (shown when agent has no conversation)
   let screenContent: string | null = null;
@@ -393,17 +447,36 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   }
 
   return {
+    oncreate() {
+      unsubscribeAuthError = subscribeToAuthErrors((eventAgentId: string) => {
+        handleAuthErrorEvent(eventAgentId);
+      });
+    },
+
     onremove() {
       disconnectLogWs();
       if (currentAgentId !== null) {
         disconnectFromStream(currentAgentId);
+      }
+      if (unsubscribeAuthError !== null) {
+        unsubscribeAuthError();
+        unsubscribeAuthError = null;
       }
     },
 
     view(vnode) {
       const agentId = vnode.attrs.agentId;
 
-      return m("div", { class: "chat-panel flex flex-col h-full" }, [
+      if (!isProtoAgent(agentId)) {
+        void runInitialAuthCheck(agentId);
+      }
+
+      const chatAgentName = getAgentById(agentId)?.name ?? null;
+
+      return m("div", { class: "chat-panel flex flex-col h-full relative" }, [
+        loginBannerVisible && !loginModalOpen
+          ? m(ClaudeLoginBanner, { onClick: reopenModalFromBanner })
+          : null,
         m(
           "main",
           {
@@ -435,6 +508,31 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
                 ),
               ]),
             ]),
+        loginModalOpen
+          ? m(ClaudeLoginModal, {
+              chatAgentName,
+              onDismiss: () => {
+                // If we transitioned through success, both flags should drop;
+                // otherwise treat dismiss as "go to banner". Modal lifts the
+                // success transition itself, so any onDismiss call after the
+                // modal saw a successful auth status counts as success-path.
+                dismissModalOnSuccess();
+              },
+            })
+          : null,
+        loginModalOpen
+          ? m(
+              "button",
+              {
+                type: "button",
+                class: "claude-login-dismiss",
+                onclick: dismissModalToBanner,
+                style: "position: absolute; top: 8px; right: 16px; z-index: 60; background: transparent; border: none; cursor: pointer; color: white; font-size: 1.2em;",
+                "aria-label": "Dismiss",
+              },
+              "×",
+            )
+          : null,
       ]);
     },
   };

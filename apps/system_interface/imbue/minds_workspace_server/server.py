@@ -26,11 +26,11 @@ from starlette.websockets import WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.minds_workspace_server import claude_auth_endpoints
 from imbue.minds_workspace_server.agent_discovery import AgentInfo
 from imbue.minds_workspace_server.agent_discovery import discover_agents
 from imbue.minds_workspace_server.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.minds_workspace_server.agent_discovery import send_message
-from imbue.minds_workspace_server import claude_auth_endpoints
 from imbue.minds_workspace_server.agent_manager import AgentManager
 from imbue.minds_workspace_server.config import Config
 from imbue.minds_workspace_server.event_queues import AgentEventQueues

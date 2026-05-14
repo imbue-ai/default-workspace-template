@@ -44,15 +44,14 @@ def _error_response(detail: str, status_code: int = 400) -> JSONResponse:
 async def _on_auth_success(status: claude_auth.AuthStatus, chat_agent_name: str | None) -> None:
     """Chokepoint for every auth-success path: run welcome-resend check.
 
-    Failures are logged but never propagate, since auth success is the
-    valuable outcome — the welcome resend is a best-effort follow-up.
+    `welcome_resend.check_and_resend_welcome` is itself failure-tolerant
+    (logs and returns False on internal errors), so we deliberately do
+    not wrap it in a broad try/except here. Anything it raises is a
+    structural bug that should propagate.
     """
     if not status.logged_in or not chat_agent_name:
         return
-    try:
-        await welcome_resend.check_and_resend_welcome(chat_agent_name)
-    except Exception as e:
-        logger.warning("Welcome-resend check failed for agent {}: {}", chat_agent_name, e)
+    await run_in_threadpool(welcome_resend.check_and_resend_welcome, chat_agent_name)
 
 
 async def get_status(request: Request) -> JSONResponse:

@@ -1,0 +1,255 @@
+"""Integration tests for the /api/claude-auth/* endpoints.
+
+Tests inject deterministic fakes for the `command_runner`,
+`pexpect_spawner`, `capture_pane`, and `send_message_fn` module-level
+callables rather than using `unittest.mock`, so the auth-success
+chokepoint is exercised end-to-end through the FastAPI test client
+without touching real Claude binaries or tmux sessions.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from imbue.minds_workspace_server import claude_auth
+from imbue.minds_workspace_server import welcome_resend
+from imbue.minds_workspace_server.server import create_application
+
+
+class _FakeFinishedProcess:
+    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0) -> None:
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+class _FakePexpectProcess:
+    def __init__(self, url: str | None) -> None:
+        self._url = url
+        self._call_count = 0
+        self.sendline_calls: list[str] = []
+        self.timeout: float | None = None
+        self.match: Any = None
+        if url is not None:
+            self.match = re.compile(r".*").match(url)
+            assert self.match is not None
+
+    def expect(self, _patterns: object) -> int:
+        self._call_count += 1
+        if self._call_count == 1:
+            return 0 if self._url is not None else 1
+        return 0
+
+    def sendline(self, s: str) -> None:
+        self.sendline_calls.append(s)
+
+    def isalive(self) -> bool:
+        return True
+
+    def terminate(self, force: bool = False) -> None:
+        pass
+
+
+@pytest.fixture
+def app() -> FastAPI:
+    return create_application()
+
+
+@pytest.fixture
+def client(app: FastAPI) -> Iterator[TestClient]:
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture(autouse=True)
+def reset_oauth_session() -> Iterator[None]:
+    claude_auth.abort_oauth_login()
+    yield
+    claude_auth.abort_oauth_login()
+
+
+@pytest.fixture
+def restore_module_callables() -> Iterator[None]:
+    original_runner = claude_auth.command_runner
+    original_spawner = claude_auth.pexpect_spawner
+    original_capture = welcome_resend.capture_pane
+    original_send = welcome_resend.send_message_fn
+    original_default_skill_path = welcome_resend._DEFAULT_SKILL_PATH
+    try:
+        yield
+    finally:
+        claude_auth.command_runner = original_runner
+        claude_auth.pexpect_spawner = original_spawner
+        welcome_resend.capture_pane = original_capture
+        welcome_resend.send_message_fn = original_send
+        welcome_resend._DEFAULT_SKILL_PATH = original_default_skill_path
+
+
+def _logged_in_runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+    return _FakeFinishedProcess(
+        stdout='{"loggedIn": true, "email": "u@example.com", "subscriptionType": "Max"}'
+    )
+
+
+def _logged_out_runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+    return _FakeFinishedProcess(stdout='{"loggedIn": false}')
+
+
+def test_status_endpoint_returns_parsed_payload(
+    client: TestClient, restore_module_callables: None
+) -> None:
+    claude_auth.command_runner = _logged_in_runner
+    response = client.get("/api/claude-auth/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["logged_in"] is True
+    assert payload["email"] == "u@example.com"
+    assert payload["subscription_type"] == "Max"
+
+
+def test_status_endpoint_logged_out_when_claude_missing(
+    client: TestClient, restore_module_callables: None
+) -> None:
+    def _missing_runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+        raise claude_auth.ProcessSetupError(
+            command=("claude",), stdout="", stderr="not found", is_output_already_logged=False
+        )
+
+    claude_auth.command_runner = _missing_runner
+    response = client.get("/api/claude-auth/status")
+    assert response.status_code == 200
+    assert response.json()["logged_in"] is False
+
+
+def test_start_oauth_rejects_unknown_provider(client: TestClient) -> None:
+    response = client.post("/api/claude-auth/start", json={"provider": "bogus"})
+    assert response.status_code == 400
+
+
+def test_full_oauth_flow_drives_subprocess_and_runs_welcome_resend(
+    client: TestClient, tmp_path: Path, restore_module_callables: None
+) -> None:
+    fake_url = "https://claude.ai/oauth/authorize?abc=1"
+    fake_process = _FakePexpectProcess(url=fake_url)
+    welcome_resend_calls: list[str] = []
+
+    skill_path = tmp_path / "SKILL.md"
+    skill_path.write_text(
+        "---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nbody\n\n---\n"
+    )
+
+    def _fake_capture(_name: str) -> str | None:
+        return "empty pane"
+
+    def _fake_send(name: str, _message: str) -> bool:
+        welcome_resend_calls.append(name)
+        return True
+
+    claude_auth.pexpect_spawner = lambda *_args, **_kwargs: fake_process
+    claude_auth.command_runner = _logged_in_runner
+    welcome_resend.capture_pane = _fake_capture
+    welcome_resend.send_message_fn = _fake_send
+    welcome_resend._DEFAULT_SKILL_PATH = skill_path
+
+    start = client.post("/api/claude-auth/start", json={"provider": "claudeai"})
+    assert start.status_code == 200
+    start_payload = start.json()
+    assert start_payload["oauth_url"] == fake_url
+    session_id = start_payload["session_id"]
+
+    submit = client.post(
+        "/api/claude-auth/submit-code",
+        json={"session_id": session_id, "code": "FAKE#CODE", "chat_agent_name": "chat-1"},
+    )
+    assert submit.status_code == 200
+    body = submit.json()
+    assert body["logged_in"] is True
+    assert body["email"] == "u@example.com"
+    assert fake_process.sendline_calls == ["FAKE#CODE"]
+    assert welcome_resend_calls == ["chat-1"]
+
+
+def test_submit_code_rejects_unknown_session(client: TestClient) -> None:
+    response = client.post(
+        "/api/claude-auth/submit-code", json={"session_id": "nope", "code": "x"}
+    )
+    assert response.status_code == 400
+
+
+def test_submit_api_key_writes_host_env_and_runs_welcome_resend(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    restore_module_callables: None,
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    skill_path = tmp_path / "SKILL.md"
+    skill_path.write_text(
+        "---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nbody\n\n---\n"
+    )
+    welcome_resend._DEFAULT_SKILL_PATH = skill_path
+
+    welcome_calls: list[str] = []
+    restart_calls: list[str] = []
+
+    def _runner(cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+        if len(cmd) >= 2 and cmd[0] == "mngr" and cmd[1] in {"stop", "start"}:
+            restart_calls.append(f"{cmd[1]} {cmd[2]}")
+            return _FakeFinishedProcess(returncode=0)
+        return _logged_in_runner(cmd, _timeout)
+
+    def _fake_capture(_name: str) -> str | None:
+        return "empty"
+
+    def _fake_send(name: str, _message: str) -> bool:
+        welcome_calls.append(name)
+        return True
+
+    claude_auth.command_runner = _runner
+    welcome_resend.capture_pane = _fake_capture
+    welcome_resend.send_message_fn = _fake_send
+
+    response = client.post(
+        "/api/claude-auth/submit-api-key",
+        json={"api_key": "sk-ant-test-key", "chat_agent_name": "chat-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["logged_in"] is True
+    env_text = (tmp_path / "env").read_text()
+    assert "ANTHROPIC_API_KEY=sk-ant-test-key" in env_text
+    assert restart_calls == ["stop chat-1", "start chat-1"]
+    assert welcome_calls == ["chat-1"]
+
+
+def test_submit_api_key_rejects_empty_key(client: TestClient) -> None:
+    response = client.post(
+        "/api/claude-auth/submit-api-key",
+        json={"api_key": "   ", "chat_agent_name": "chat-1"},
+    )
+    assert response.status_code == 400
+
+
+def test_abort_endpoint_clears_in_flight_session(
+    client: TestClient, restore_module_callables: None
+) -> None:
+    fake_url = "https://claude.ai/oauth/authorize?x=1"
+    fake_process = _FakePexpectProcess(url=fake_url)
+    claude_auth.pexpect_spawner = lambda *_args, **_kwargs: fake_process
+
+    start = client.post("/api/claude-auth/start", json={"provider": "claudeai"})
+    assert start.status_code == 200
+    abort = client.post("/api/claude-auth/abort")
+    assert abort.status_code == 200
+    followup = client.post(
+        "/api/claude-auth/submit-code",
+        json={"session_id": start.json()["session_id"], "code": "x"},
+    )
+    assert followup.status_code == 400

@@ -1,11 +1,16 @@
-"""Tests for the claude_auth backend module."""
+"""Tests for the claude_auth backend module.
+
+The module exposes `command_runner` and `pexpect_spawner` as injectable
+module-level callables; tests rebind them with deterministic fakes
+rather than reaching for `unittest.mock`.
+"""
 
 from __future__ import annotations
 
-import subprocess
+import re
+from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import MagicMock
-from unittest.mock import patch
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -13,8 +18,72 @@ from pydantic import SecretStr
 from imbue.minds_workspace_server import claude_auth
 
 
+class _FakeFinishedProcess:
+    """Minimal stand-in for `FinishedProcess` produced by the command runner."""
+
+    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0) -> None:
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+class _FakePexpectProcess:
+    """Records the inputs the OAuth flow sends to a `pexpect.spawn`."""
+
+    def __init__(
+        self,
+        url_match: str | None,
+        expect_return_index: int = 0,
+        eof_return_index: int = 0,
+    ) -> None:
+        self._url_match = url_match
+        self._expect_return_index = expect_return_index
+        self._eof_return_index = eof_return_index
+        self._expect_call_count = 0
+        self.sendline_calls: list[str] = []
+        self.terminate_calls = 0
+        self.timeout: float | None = None
+        self.match: Any = None
+        if url_match is not None:
+            self.match = re.compile(r".*").match(url_match)
+            assert self.match is not None
+
+    def expect(self, _patterns: object) -> int:
+        self._expect_call_count += 1
+        if self._expect_call_count == 1:
+            return self._expect_return_index
+        return self._eof_return_index
+
+    def sendline(self, s: str) -> None:
+        self.sendline_calls.append(s)
+
+    def isalive(self) -> bool:
+        return True
+
+    def terminate(self, force: bool = False) -> None:
+        self.terminate_calls += 1
+
+
+@pytest.fixture(autouse=True)
+def reset_oauth_session() -> Iterator[None]:
+    claude_auth.abort_oauth_login()
+    yield
+    claude_auth.abort_oauth_login()
+
+
+@pytest.fixture
+def restore_module_callables() -> Iterator[None]:
+    original_runner = claude_auth.command_runner
+    original_spawner = claude_auth.pexpect_spawner
+    try:
+        yield
+    finally:
+        claude_auth.command_runner = original_runner
+        claude_auth.pexpect_spawner = original_spawner
+
+
 def test_parse_status_payload_full() -> None:
-    payload = {
+    payload: dict[str, object] = {
         "loggedIn": True,
         "authMethod": "oauth",
         "apiProvider": "claudeai",
@@ -37,48 +106,53 @@ def test_parse_status_payload_minimal() -> None:
 
 
 def test_parse_status_payload_empty_strings_coerced_to_none() -> None:
-    status = claude_auth._parse_status_payload(
-        {"loggedIn": True, "email": "", "subscriptionType": ""}
-    )
+    payload: dict[str, object] = {"loggedIn": True, "email": "", "subscriptionType": ""}
+    status = claude_auth._parse_status_payload(payload)
     assert status.email is None
     assert status.subscription_type is None
 
 
-def test_get_auth_status_handles_missing_claude_binary() -> None:
-    with patch("subprocess.run", side_effect=FileNotFoundError()):
-        status = claude_auth.get_auth_status()
+def test_get_auth_status_returns_logged_out_when_runner_raises(
+    restore_module_callables: None,
+) -> None:
+    def _runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+        raise claude_auth.ProcessSetupError(
+            command=("claude",), stdout="", stderr="not found", is_output_already_logged=False
+        )
+
+    claude_auth.command_runner = _runner
+    status = claude_auth.get_auth_status()
     assert status.logged_in is False
 
 
-def test_get_auth_status_handles_timeout() -> None:
-    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=10)):
-        status = claude_auth.get_auth_status()
-    assert status.logged_in is False
+def test_get_auth_status_parses_logged_in_json(restore_module_callables: None) -> None:
+    def _runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+        return _FakeFinishedProcess(
+            stdout='{"loggedIn": true, "email": "x@y.com", "subscriptionType": "Pro"}'
+        )
 
-
-def test_get_auth_status_parses_logged_in_json() -> None:
-    fake_result = MagicMock()
-    fake_result.stdout = '{"loggedIn": true, "email": "x@y.com", "subscriptionType": "Pro"}'
-    with patch("subprocess.run", return_value=fake_result):
-        status = claude_auth.get_auth_status()
+    claude_auth.command_runner = _runner
+    status = claude_auth.get_auth_status()
     assert status.logged_in is True
     assert status.email == "x@y.com"
     assert status.subscription_type == "Pro"
 
 
-def test_get_auth_status_rejects_non_json_output() -> None:
-    fake_result = MagicMock()
-    fake_result.stdout = "not json at all"
-    with patch("subprocess.run", return_value=fake_result):
-        with pytest.raises(claude_auth.ClaudeAuthError, match="non-JSON"):
-            claude_auth.get_auth_status()
+def test_get_auth_status_rejects_non_json_output(restore_module_callables: None) -> None:
+    def _runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+        return _FakeFinishedProcess(stdout="not json at all")
+
+    claude_auth.command_runner = _runner
+    with pytest.raises(claude_auth.ClaudeAuthError, match="non-JSON"):
+        claude_auth.get_auth_status()
 
 
-def test_get_auth_status_treats_empty_output_as_logged_out() -> None:
-    fake_result = MagicMock()
-    fake_result.stdout = ""
-    with patch("subprocess.run", return_value=fake_result):
-        status = claude_auth.get_auth_status()
+def test_get_auth_status_treats_empty_output_as_logged_out(restore_module_callables: None) -> None:
+    def _runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+        return _FakeFinishedProcess(stdout="")
+
+    claude_auth.command_runner = _runner
+    status = claude_auth.get_auth_status()
     assert status.logged_in is False
 
 
@@ -109,67 +183,44 @@ def test_write_api_key_updates_existing_file(tmp_path: Path) -> None:
 
 
 def test_submit_oauth_code_rejects_unknown_session() -> None:
-    claude_auth.abort_oauth_login()
     with pytest.raises(claude_auth.ClaudeAuthError, match="No active OAuth session"):
         claude_auth.submit_oauth_code("bogus", "fake#code")
 
 
-def test_oauth_session_extracts_url_from_pty_stdout() -> None:
-    """Mock pexpect.spawn so we can exercise the URL-parse path without invoking claude."""
+def test_oauth_session_extracts_url_from_spawner_stdout(restore_module_callables: None) -> None:
     fake_url = "https://claude.ai/oauth/authorize?code=abc&state=def"
-    fake_process = MagicMock()
-    fake_process.expect = MagicMock(return_value=0)
-    fake_process.match = MagicMock()
-    fake_process.match.group = MagicMock(return_value=fake_url)
-    fake_process.isalive = MagicMock(return_value=True)
-    fake_process.sendline = MagicMock()
-    fake_process.terminate = MagicMock()
-    with patch("pexpect.spawn", return_value=fake_process):
-        claude_auth.abort_oauth_login()
-        result = claude_auth.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
+    fake_process = _FakePexpectProcess(url_match=fake_url, expect_return_index=0)
+    claude_auth.pexpect_spawner = lambda *_args, **_kwargs: fake_process
+    result = claude_auth.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
     assert result.oauth_url == fake_url
     assert result.session_id
-    claude_auth.abort_oauth_login()
 
 
-def test_oauth_session_raises_on_eof_before_url() -> None:
-    fake_process = MagicMock()
-    fake_process.expect = MagicMock(return_value=1)
-    fake_process.isalive = MagicMock(return_value=True)
-    fake_process.terminate = MagicMock()
-    with patch("pexpect.spawn", return_value=fake_process):
-        claude_auth.abort_oauth_login()
-        with pytest.raises(claude_auth.ClaudeAuthError, match="before printing OAuth URL"):
-            claude_auth.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
+def test_oauth_session_raises_on_eof_before_url(restore_module_callables: None) -> None:
+    fake_process = _FakePexpectProcess(url_match=None, expect_return_index=1)
+    claude_auth.pexpect_spawner = lambda *_args, **_kwargs: fake_process
+    with pytest.raises(claude_auth.ClaudeAuthError, match="before printing OAuth URL"):
+        claude_auth.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
 
 
-def test_oauth_session_raises_on_timeout_waiting_for_url() -> None:
-    fake_process = MagicMock()
-    fake_process.expect = MagicMock(return_value=2)
-    fake_process.isalive = MagicMock(return_value=True)
-    fake_process.terminate = MagicMock()
-    with patch("pexpect.spawn", return_value=fake_process):
-        claude_auth.abort_oauth_login()
-        with pytest.raises(claude_auth.ClaudeAuthError, match="Timed out"):
-            claude_auth.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
+def test_oauth_session_raises_on_timeout_waiting_for_url(restore_module_callables: None) -> None:
+    fake_process = _FakePexpectProcess(url_match=None, expect_return_index=2)
+    claude_auth.pexpect_spawner = lambda *_args, **_kwargs: fake_process
+    with pytest.raises(claude_auth.ClaudeAuthError, match="Timed out"):
+        claude_auth.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
 
 
-def test_submit_oauth_code_drives_subprocess_and_returns_status() -> None:
+def test_submit_oauth_code_drives_subprocess_and_returns_status(
+    restore_module_callables: None,
+) -> None:
     fake_url = "https://claude.ai/oauth/authorize?x=1"
-    fake_process = MagicMock()
-    fake_process.expect = MagicMock(return_value=0)
-    fake_process.match = MagicMock()
-    fake_process.match.group = MagicMock(return_value=fake_url)
-    fake_process.isalive = MagicMock(return_value=True)
-    fake_process.sendline = MagicMock()
-    fake_process.terminate = MagicMock()
-    fake_status_result = MagicMock()
-    fake_status_result.stdout = '{"loggedIn": true, "email": "x@y.com"}'
-    with patch("pexpect.spawn", return_value=fake_process):
-        claude_auth.abort_oauth_login()
-        start = claude_auth.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
-        with patch("subprocess.run", return_value=fake_status_result):
-            status = claude_auth.submit_oauth_code(start.session_id, "CODE#STATE")
+    fake_process = _FakePexpectProcess(url_match=fake_url, expect_return_index=0)
+    claude_auth.pexpect_spawner = lambda *_args, **_kwargs: fake_process
+    claude_auth.command_runner = lambda _cmd, _timeout: _FakeFinishedProcess(
+        stdout='{"loggedIn": true, "email": "x@y.com"}'
+    )
+    start = claude_auth.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
+    status = claude_auth.submit_oauth_code(start.session_id, "CODE#STATE")
     assert status.logged_in is True
     assert status.email == "x@y.com"
-    fake_process.sendline.assert_called_once_with("CODE#STATE")
+    assert fake_process.sendline_calls == ["CODE#STATE"]
