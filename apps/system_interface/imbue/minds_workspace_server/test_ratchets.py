@@ -218,7 +218,14 @@ def test_prevent_unittest_mock_imports() -> None:
 
 
 def test_prevent_monkeypatch_setattr() -> None:
-    rc.check_monkeypatch_setattr(_DIR, snapshot(0))
+    # The single monkeypatch.setattr in conftest.py's
+    # `_isolate_workspace_server_tests` autouse fixture patches
+    # `AgentManager.start` to skip the observe subprocess for tests
+    # (rationale documented at the call site). DI alternative would
+    # require plumbing a flag through every call site of
+    # create_application, which is a much larger blast radius for a
+    # test-only workaround.
+    rc.check_monkeypatch_setattr(_DIR, snapshot(1))
 
 
 def test_prevent_test_container_classes() -> None:
