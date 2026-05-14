@@ -474,9 +474,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       const chatAgentName = getAgentById(agentId)?.name ?? null;
 
       return m("div", { class: "chat-panel flex flex-col h-full relative" }, [
-        loginBannerVisible && !loginModalOpen
-          ? m(ClaudeLoginBanner, { onClick: reopenModalFromBanner })
-          : null,
+        loginBannerVisible && !loginModalOpen ? m(ClaudeLoginBanner, { onClick: reopenModalFromBanner }) : null,
         m(
           "main",
           {
@@ -511,27 +509,13 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
         loginModalOpen
           ? m(ClaudeLoginModal, {
               chatAgentName,
-              onDismiss: () => {
-                // If we transitioned through success, both flags should drop;
-                // otherwise treat dismiss as "go to banner". Modal lifts the
-                // success transition itself, so any onDismiss call after the
-                // modal saw a successful auth status counts as success-path.
-                dismissModalOnSuccess();
-              },
+              // Signed-in: drop both modal and not-signed-in banner.
+              onDismiss: dismissModalOnSuccess,
+              // Closed without success: collapse to the recovery banner
+              // so the user can re-open the flow without losing the
+              // visual cue that auth still needs attention.
+              onMinimize: dismissModalToBanner,
             })
-          : null,
-        loginModalOpen
-          ? m(
-              "button",
-              {
-                type: "button",
-                class: "claude-login-dismiss",
-                onclick: dismissModalToBanner,
-                style: "position: absolute; top: 8px; right: 16px; z-index: 60; background: transparent; border: none; cursor: pointer; color: white; font-size: 1.2em;",
-                "aria-label": "Dismiss",
-              },
-              "×",
-            )
           : null,
       ]);
     },

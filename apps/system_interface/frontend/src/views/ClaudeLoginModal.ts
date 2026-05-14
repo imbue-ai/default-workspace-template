@@ -39,7 +39,14 @@ const POLL_INTERVAL_MS = 3000;
 
 export interface ClaudeLoginModalAttrs {
   chatAgentName: string | null;
+  // Called when the user accepts the success state (clicks "Done", or
+  // clicks the close affordance while the modal is in the success mode).
+  // Parent should drop both the modal and any not-signed-in banner.
   onDismiss: () => void;
+  // Called when the user closes the modal without reaching success.
+  // Parent should drop the modal and show the not-signed-in banner so
+  // the user can re-open the flow later.
+  onMinimize: () => void;
 }
 
 export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
@@ -178,7 +185,11 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       m("p.text-text-secondary", "How would you like to sign in?"),
       m("div.flex.flex-col.gap-2.mt-3", [
         renderProviderButton("claudeai", "Claude subscription", "Sign in with your Claude.ai account (recommended)."),
-        renderProviderButton("console", "Anthropic Console", "Sign in with API-usage billing via console.anthropic.com."),
+        renderProviderButton(
+          "console",
+          "Anthropic Console",
+          "Sign in with API-usage billing via console.anthropic.com.",
+        ),
         renderProviderButton("api_key", "Use an API key", "Paste a raw sk-ant-... key."),
       ]),
     ]);
@@ -202,20 +213,13 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           }
         },
       },
-      [
-        m("div.font-semibold", label),
-        m("div.text-sm.text-text-secondary", description),
-      ],
+      [m("div.font-semibold", label), m("div.text-sm.text-text-secondary", description)],
     );
   }
 
   function renderApiKeyForm(): m.Vnode {
     return m("div.claude-login-api-key", [
-      m(
-        "label.block.font-semibold.mb-1",
-        { for: "claude-login-api-key-input" },
-        "Anthropic API key",
-      ),
+      m("label.block.font-semibold.mb-1", { for: "claude-login-api-key-input" }, "Anthropic API key"),
       m("input", {
         id: "claude-login-api-key-input",
         type: "password",
@@ -258,10 +262,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
 
   function renderOAuthCodeEntry(): m.Vnode {
     return m("div.claude-login-oauth", [
-      m(
-        "p",
-        "Open this URL in your browser, complete the sign-in, then paste the code back here.",
-      ),
+      m("p", "Open this URL in your browser, complete the sign-in, then paste the code back here."),
       m(
         "a.block.mt-2.break-all.text-link",
         { href: oauthUrl ?? "#", target: "_blank", rel: "noopener noreferrer" },
@@ -388,17 +389,42 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     },
 
     view() {
+      // Close-affordance routing: in `success` mode the user is signed
+      // in, so close is treated as confirmation (drop the banner too).
+      // In every other mode the user is still unauthenticated, so close
+      // collapses to the recovery banner.
+      const onClose = (): void => {
+        if (mode === "success") {
+          attrsRef?.onDismiss();
+        } else {
+          attrsRef?.onMinimize();
+        }
+      };
       return m(
         "div.claude-login-overlay",
         {
-          style: "position: absolute; inset: 0; background: rgba(0,0,0,0.4); z-index: 50; display: flex; align-items: center; justify-content: center;",
+          style:
+            "position: absolute; inset: 0; background: rgba(0,0,0,0.4); z-index: 50; display: flex; align-items: center; justify-content: center;",
         },
         m(
           "div.claude-login-modal",
           {
-            style: "background: var(--color-surface, white); padding: 24px; border-radius: 8px; max-width: 480px; width: 90%; box-shadow: 0 8px 24px rgba(0,0,0,0.2);",
+            style:
+              "position: relative; background: var(--color-surface, white); padding: 24px; border-radius: 8px; max-width: 480px; width: 90%; box-shadow: 0 8px 24px rgba(0,0,0,0.2);",
           },
           [
+            m(
+              "button",
+              {
+                type: "button",
+                class: "claude-login-dismiss",
+                onclick: onClose,
+                style:
+                  "position: absolute; top: 8px; right: 12px; background: transparent; border: none; cursor: pointer; font-size: 1.2em; color: inherit;",
+                "aria-label": "Close",
+              },
+              "\u00d7",
+            ),
             m("h2.text-xl.font-bold.mb-3", "Sign in to Claude"),
             renderBody(),
           ],
