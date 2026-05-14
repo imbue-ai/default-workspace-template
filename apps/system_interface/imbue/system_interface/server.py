@@ -415,7 +415,7 @@ _LAYOUT_FILENAME = "layout.json"
 def _primary_agent_layout_dir() -> Path | None:
     """Return the workspace layout directory for this workspace's primary agent.
 
-    The workspace_server always serves a single workspace (its own primary
+    The system_interface always serves a single workspace (its own primary
     agent); the layout lives at $MNGR_HOST_DIR/agents/<MNGR_AGENT_ID>/workspace_layout/.
     Returns None if either env var is missing, which should only happen in
     dev/test setups that don't care about persistence.
@@ -710,7 +710,7 @@ async def _destroy_agent(agent_id: str, request: Request) -> JSONResponse:
         error = ErrorResponse(detail=f"Failed to destroy agent '{agent_name}': {output}")
         return JSONResponse(content=error.model_dump(), status_code=500)
 
-    # Remove the agent from the workspace server's tracked state immediately
+    # Remove the agent from the system_interface's tracked state immediately
     # so the frontend reflects the destruction without waiting for mngr observe.
     agent_manager.remove_agent(agent_id)
 
@@ -738,7 +738,7 @@ async def _refresh_service_broadcast_endpoint(service_name: str, request: Reques
 
     Called by the desktop client after it observes a refresh event on the
     mngr event stream. Locked to loopback clients since no authentication
-    exists between the desktop client and the workspace server inside the
+    exists between the desktop client and the system_interface inside the
     container.
     """
     client_host = request.client.host if request.client is not None else ""
