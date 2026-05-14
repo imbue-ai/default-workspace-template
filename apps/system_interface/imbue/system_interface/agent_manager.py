@@ -228,7 +228,7 @@ class AgentManager:
     def broadcaster(self) -> WebSocketBroadcaster:
         """The WebSocketBroadcaster this manager owns. Primarily useful to
         callers that need to reuse the same broadcaster across related
-        application state (e.g. the workspace_server lifespan when an
+        application state (e.g. the system_interface lifespan when an
         externally-constructed AgentManager is injected for tests)."""
         return self._broadcaster
 
@@ -612,8 +612,8 @@ class AgentManager:
         """
         agent_state_dir = os.environ.get("MNGR_AGENT_STATE_DIR", "")
         if agent_state_dir:
-            return Path(agent_state_dir) / "workspace_server" / "observe"
-        return Path.home() / ".mngr" / "workspace_server" / "observe"
+            return Path(agent_state_dir) / "system_interface" / "observe"
+        return Path.home() / ".mngr" / "system_interface" / "observe"
 
     def _resolve_observe_cwd(self) -> Path:
         """Return the cwd for the mngr observe subprocess.
@@ -662,7 +662,7 @@ class AgentManager:
             # agent typically has providers enabled (e.g. modal) that are not
             # authenticated. Provider errors make `list_agents` error out,
             # which in turn prevents periodic DISCOVERY_FULL snapshots from
-            # being written, so the workspace server's agent list drifts out
+            # being written, so the system_interface's agent list drifts out
             # of sync with reality whenever an individual event is missed.
             process = self._observe_cg.run_process_in_background(
                 command=cmd,
