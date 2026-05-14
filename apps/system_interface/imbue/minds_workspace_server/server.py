@@ -30,6 +30,7 @@ from imbue.minds_workspace_server.agent_discovery import AgentInfo
 from imbue.minds_workspace_server.agent_discovery import discover_agents
 from imbue.minds_workspace_server.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.minds_workspace_server.agent_discovery import send_message
+from imbue.minds_workspace_server import claude_auth_endpoints
 from imbue.minds_workspace_server.agent_manager import AgentManager
 from imbue.minds_workspace_server.config import Config
 from imbue.minds_workspace_server.event_queues import AgentEventQueues
@@ -798,6 +799,7 @@ def create_application(
     application.add_api_route("/api/layout", _save_layout, methods=["POST"])
     application.add_api_route("/api/agents/{agent_id}/screen", _get_screen_capture, methods=["GET"])
     application.add_api_route("/api/agents/{agent_id}/destroy", _destroy_agent, methods=["POST"])
+    claude_auth_endpoints.register_routes(application)
     application.add_api_route(
         "/api/refresh-service/{service_name}", _refresh_service_request_endpoint, methods=["POST"]
     )
