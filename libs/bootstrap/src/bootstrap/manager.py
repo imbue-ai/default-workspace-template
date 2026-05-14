@@ -222,6 +222,18 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
         "mngr",
         "create",
         host_name,
+        # `--transfer none` matches what `AgentManager.create_chat_agent`
+        # uses for the "New Chat" button (apps/system_interface/.../
+        # agent_manager.py). Without it, mngr defaults to creating a
+        # per-agent git worktree on branch `mngr/<agent_name>` -- which
+        # collides with the services agent's own worktree branch (set up
+        # by the desktop client's `--branch :mngr/<host_name>` at host
+        # create) and aborts with "fatal: a branch named 'mngr/<host>'
+        # already exists". With --transfer none the chat agent reuses
+        # the services agent's /code/ as its work_dir, which is what we
+        # want (one workspace == one work_dir, shared across all chats).
+        "--transfer",
+        "none",
         "--template",
         "chat",
         "--message",
@@ -260,8 +272,96 @@ def _touch_signal() -> None:
     INITIAL_CHAT_SIGNAL.write_text("")
 
 
+def _initialize_workspace_main_branch() -> None:
+    """Commit any rsync-staged content and rename the work_dir branch to `main`.
+
+    On first boot the work_dir (the services agent's $MNGR_AGENT_WORK_DIR,
+    which the chat agent will share via `--transfer none`) is on whatever
+    branch the desktop client's create flow assigned (typically
+    `mngr/<host_name>` from agent_creator's `--branch :mngr/{host_name}`),
+    with the desktop client's `_rsync_worktree_over_clone` content sitting
+    as uncommitted changes on top of the shallow clone's tip.
+
+    We want every new minds workspace to start out on a single clean
+    `main` branch the user can git-log / push from without having to
+    reason about the per-host mngr/* branch. So before the chat agent
+    is created, we:
+      1. set a minds-bootstrap committer identity if none is configured
+      2. `git add -A` + `git commit` everything currently uncommitted
+      3. `git branch -D main` (drop the stale shallow-clone main, if any)
+      4. `git checkout -b main` (rename the working tree's branch to main)
+
+    Each step is best-effort: a failure here should not prevent the
+    chat-agent create from running. We log a warning and continue. Hooks
+    are skipped with `--no-verify` because the user hasn't seen the
+    workspace yet and a misbehaving pre-commit hook on the rsynced
+    template shouldn't gate boot.
+    """
+    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
+    if not work_dir:
+        logger.warning(
+            "MNGR_AGENT_WORK_DIR is unset; skipping initial commit / main rename"
+        )
+        return
+
+    def _git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    # Set a committer identity scoped to this repo so the commit doesn't
+    # fail on a container with no global git identity. We don't overwrite
+    # an existing config -- only set if unset.
+    if _git("config", "user.email").returncode != 0:
+        _git("config", "user.email", "bootstrap@minds.local")
+    if _git("config", "user.name").returncode != 0:
+        _git("config", "user.name", "minds-bootstrap")
+
+    _git("add", "-A")
+    # --allow-empty so we end up with a commit even when the work_dir is
+    # already clean (e.g. on second boot after a re-Create-from-snapshot,
+    # though that path isn't wired up today). --no-verify skips any
+    # pre-commit hooks the template repo may have configured.
+    commit = _git(
+        "commit", "--allow-empty", "--no-verify", "-m", "Initial workspace commit"
+    )
+    if commit.returncode != 0:
+        logger.warning(
+            "Initial workspace commit failed (rc={}): {}",
+            commit.returncode,
+            commit.stderr.strip() or commit.stdout.strip(),
+        )
+
+    # Drop any local `main` (the shallow clone's tip) so the rename
+    # below has somewhere to land. `-D` is force-delete; harmless when
+    # `main` doesn't exist.
+    _git("branch", "-D", "main")
+    # Rename / move the current branch to `main`. -M is force-rename
+    # (move-over). On the very first boot the current branch is
+    # `mngr/<host_name>`; on subsequent boots we may already be on `main`,
+    # in which case `-M main` is a no-op.
+    rename = _git("branch", "-M", "main")
+    if rename.returncode != 0:
+        logger.warning(
+            "git branch -M main failed (rc={}): {}",
+            rename.returncode,
+            rename.stderr.strip() or rename.stdout.strip(),
+        )
+    else:
+        logger.info("work_dir {} is now on branch main", work_dir)
+
+
 def _maybe_create_initial_chat() -> None:
     """Create the initial chat agent on first boot, gated by a signal file.
+
+    Also runs `_initialize_workspace_main_branch` immediately before the
+    chat-agent create so the chat agent inherits a clean `main` branch.
+    Both steps are gated by the same signal file, so they run exactly
+    once per workspace.
 
     Touches the signal file only on a successful create -- a failed create
     leaves the signal file absent so the next bootstrap run retries. The
@@ -279,6 +379,7 @@ def _maybe_create_initial_chat() -> None:
             "Could not resolve host_name; skipping initial chat agent create"
         )
         return
+    _initialize_workspace_main_branch()
     labels = _read_main_agent_labels()
     if not _create_initial_chat_agent(host_name, labels):
         return
