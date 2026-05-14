@@ -13,6 +13,7 @@ from bootstrap.manager import (
     _compute_actions,
     _ensure_host_claude_config_dir,
     _format_env_file,
+    _initialize_workspace_main_branch,
     _maybe_create_initial_chat,
     _parse_env_file,
     _read_host_name,
@@ -258,6 +259,15 @@ def test_build_create_chat_command_includes_welcome_and_template() -> None:
     assert "--no-connect" in cmd
 
 
+def test_build_create_chat_command_includes_transfer_none() -> None:
+    """`--transfer none` makes mngr skip the per-agent worktree, so the chat
+    agent reuses the services agent's work_dir. Without it, mngr collides
+    with the services agent's existing `mngr/<host>` branch."""
+    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    assert "--transfer" in cmd
+    assert cmd[cmd.index("--transfer") + 1] == "none"
+
+
 def test_build_create_chat_command_passes_workspace_label() -> None:
     cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
     # The workspace label should be present exactly once.
@@ -307,10 +317,15 @@ class _StubSubprocess:
 def _bootstrap_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Common setup: MNGR_HOST_DIR rooted in tmp_path, a workspace in data.json,
     a chdir into tmp_path so the signal file lands somewhere ephemeral.
+
+    Explicitly unsets MNGR_AGENT_WORK_DIR so `_initialize_workspace_main_branch`
+    short-circuits in tests that don't care about the git initialization path;
+    tests that DO want that path can monkeypatch MNGR_AGENT_WORK_DIR back in.
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-1")
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
     (tmp_path / "data.json").write_text(json.dumps({"host_name": "my-workspace"}))
     agent_dir = tmp_path / "agents" / "agent-1"
     agent_dir.mkdir(parents=True)
@@ -358,9 +373,80 @@ def test_maybe_create_initial_chat_skips_when_host_name_missing(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-1")
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
     # No data.json at all -> host_name resolution fails.
     stub = _StubSubprocess(returncode=0)
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
     _maybe_create_initial_chat()
     assert stub.calls == []
     assert not (tmp_path / "runtime" / "initial_chat_created").exists()
+
+
+# --- _initialize_workspace_main_branch ---
+
+
+def _git_in(work_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Helper for tests: run a real git command inside `work_dir`."""
+    return subprocess.run(
+        ["git", *args], cwd=work_dir, capture_output=True, text=True, check=False
+    )
+
+
+def test_initialize_workspace_main_branch_commits_and_renames(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """End-to-end: a real git repo on `mngr/foo` with uncommitted changes ends
+    up on `main` with the working tree committed."""
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _git_in(work_dir, "init", "--initial-branch=main", "-q")
+    _git_in(work_dir, "config", "user.email", "seed@test.local")
+    _git_in(work_dir, "config", "user.name", "seed")
+    (work_dir / "README.md").write_text("seed\n")
+    _git_in(work_dir, "add", "-A")
+    _git_in(work_dir, "commit", "-qm", "seed")
+    # Branch the way agent_creator.py:447 does: `:mngr/<host_name>` makes a
+    # new branch off current. Then add some uncommitted content (simulating
+    # the desktop client's _rsync_worktree_over_clone).
+    _git_in(work_dir, "checkout", "-q", "-b", "mngr/foo")
+    (work_dir / "rsynced.txt").write_text("uncommitted from rsync\n")
+
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
+    _initialize_workspace_main_branch()
+
+    branch = _git_in(work_dir, "branch", "--show-current").stdout.strip()
+    status = _git_in(work_dir, "status", "--porcelain").stdout.strip()
+    head_msg = _git_in(work_dir, "log", "-1", "--format=%s").stdout.strip()
+    assert branch == "main"
+    assert status == ""  # all the uncommitted rsync content was captured
+    assert head_msg == "Initial workspace commit"
+
+
+def test_initialize_workspace_main_branch_skips_when_work_dir_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If MNGR_AGENT_WORK_DIR isn't set, no git invocations happen."""
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
+    stub = _StubSubprocess(returncode=0)
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    _initialize_workspace_main_branch()
+    assert stub.calls == []
+
+
+def test_initialize_workspace_main_branch_is_idempotent_on_clean_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Second invocation on an already-clean `main` branch is a no-op for
+    the user (we make an empty allow-empty commit, but it's harmless)."""
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    _git_in(work_dir, "init", "--initial-branch=main", "-q")
+    _git_in(work_dir, "config", "user.email", "seed@test.local")
+    _git_in(work_dir, "config", "user.name", "seed")
+    (work_dir / "README.md").write_text("seed\n")
+    _git_in(work_dir, "add", "-A")
+    _git_in(work_dir, "commit", "-qm", "seed")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
+    _initialize_workspace_main_branch()
+    branch = _git_in(work_dir, "branch", "--show-current").stdout.strip()
+    assert branch == "main"
