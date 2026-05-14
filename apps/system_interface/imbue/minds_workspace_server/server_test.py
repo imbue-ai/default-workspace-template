@@ -472,3 +472,30 @@ def test_request_event_endpoint_returns_500_when_agent_id_unset(
     )
     assert response.status_code == 500
     assert "MNGR_AGENT_ID" in response.json()["detail"]
+
+
+def test_destroy_rejects_is_primary_agent(client: TestClient, app: FastAPI) -> None:
+    """POST /api/agents/<id>/destroy returns 400 for the services agent.
+
+    The frontend already hides agents carrying ``is_primary=true``; this
+    server-side guard prevents direct callers (curl, scripted use, etc.)
+    from accidentally tearing down the workspace.
+    """
+    from imbue.minds_workspace_server.models import AgentStateItem
+
+    agent_manager: AgentManager = app.state.agent_manager
+    services_agent = AgentStateItem(
+        id="services-1",
+        name="system-services",
+        state="RUNNING",
+        labels={"is_primary": "true", "workspace": "my-ws"},
+        work_dir="/code",
+    )
+    agent_manager._agents[services_agent.id] = services_agent
+
+    response = client.post(f"/api/agents/{services_agent.id}/destroy")
+    assert response.status_code == 400
+    assert "is_primary" in response.json()["detail"]
+    # The guard runs *before* the destroy subprocess, so the agent is still
+    # present in the agent manager's state.
+    assert services_agent.id in agent_manager._agents

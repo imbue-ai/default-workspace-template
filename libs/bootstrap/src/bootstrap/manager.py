@@ -16,6 +16,7 @@ Environment:
     Expects to run inside a tmux session (uses the current session name).
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -42,6 +43,261 @@ RUNTIME_DIR = Path("runtime")
 RUNTIME_PREEXISTING_DIR = Path("runtime.preexisting")
 RUNTIME_BACKUP_USER_NAME = "runtime-backup"
 RUNTIME_BACKUP_USER_EMAIL = "runtime-backup@mindsbackup.local"
+
+# Signal file gating exactly-once creation of the initial chat agent. Lives
+# under runtime/ so the runtime-backup service replicates it to the
+# mindsbackup/$MNGR_AGENT_ID branch (survives container loss).
+INITIAL_CHAT_SIGNAL = RUNTIME_DIR / "initial_chat_created"
+
+# Env var names used by the bootstrap's new responsibilities.
+_AGENT_ID_ENV_VAR = "MNGR_AGENT_ID"
+_AGENT_STATE_DIR_ENV_VAR = "MNGR_AGENT_STATE_DIR"
+_HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
+_CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
+
+
+def _parse_env_file(content: str) -> dict[str, str]:
+    """Parse a host env file (as produced by mngr's _format_env_file).
+
+    Format spec mirrored from libs/mngr/.../hosts/host.py:_format_env_file:
+    one `KEY=value` per line; values containing space, quote, or newline are
+    double-quoted with `\\"` escaping. We accept blank lines and ignore them.
+
+    Kept minimal (no shell-style expansion) so bootstrap doesn't need a
+    python-dotenv dependency.
+    """
+    result: dict[str, str] = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            value = value[1:-1].replace('\\"', '"')
+        result[key] = value
+    return result
+
+
+def _format_env_value(value: str) -> str:
+    """Quote a value the same way mngr's _format_env_file does."""
+    if any(c in value for c in (" ", '"', "'", "\n")):
+        return '"' + value.replace('"', '\\"') + '"'
+    return value
+
+
+def _format_env_file(env: dict[str, str]) -> str:
+    """Render an env dict back into the host env file format."""
+    return "\n".join(f"{k}={_format_env_value(v)}" for k, v in env.items()) + "\n"
+
+
+def _resolve_services_claude_config_dir() -> Path | None:
+    """Return the services agent's per-agent Claude config dir.
+
+    Mirrors mngr_claude's per-agent layout: $MNGR_AGENT_STATE_DIR/plugin/
+    claude/anthropic. Returns None if the state-dir env var is not set,
+    which only happens in tests or a broken container.
+    """
+    state_dir = os.environ.get(_AGENT_STATE_DIR_ENV_VAR, "")
+    if not state_dir:
+        logger.warning(
+            "{} is unset; cannot resolve services agent Claude config dir",
+            _AGENT_STATE_DIR_ENV_VAR,
+        )
+        return None
+    return Path(state_dir) / "plugin" / "claude" / "anthropic"
+
+
+def _ensure_host_claude_config_dir(target: Path) -> None:
+    """Make sure $MNGR_HOST_DIR/env exports CLAUDE_CONFIG_DIR=<target>.
+
+    Idempotent: only rewrites the env file when the key is missing or its
+    current value differs from `target`. Future agents created on this host
+    source this file at start-up (see build_source_env_shell_commands in
+    mngr/.../hosts/host.py) and therefore inherit the right config dir
+    without any per-agent intervention.
+    """
+    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
+    if not host_dir:
+        logger.warning(
+            "{} is unset; skipping CLAUDE_CONFIG_DIR write to host env",
+            _HOST_DIR_ENV_VAR,
+        )
+        return
+    env_path = Path(host_dir) / "env"
+    target_str = str(target)
+    existing: dict[str, str] = {}
+    if env_path.exists():
+        try:
+            existing = _parse_env_file(env_path.read_text())
+        except OSError as e:
+            logger.warning("Failed to read host env file at {}: {}", env_path, e)
+            return
+    if existing.get(_CLAUDE_CONFIG_DIR_ENV_VAR) == target_str:
+        logger.debug(
+            "Host env already has {}={}", _CLAUDE_CONFIG_DIR_ENV_VAR, target_str
+        )
+        return
+    existing[_CLAUDE_CONFIG_DIR_ENV_VAR] = target_str
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(_format_env_file(existing))
+    logger.info("Wrote {}={} to {}", _CLAUDE_CONFIG_DIR_ENV_VAR, target_str, env_path)
+
+
+def _read_host_name() -> str | None:
+    """Read host_name from $MNGR_HOST_DIR/data.json.
+
+    Same source as workspace_server._read_host_name. Returns None if any
+    step fails so callers can decide whether to fall back.
+    """
+    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
+    if not host_dir:
+        return None
+    data_path = Path(host_dir) / "data.json"
+    if not data_path.exists():
+        return None
+    try:
+        data = json.loads(data_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Failed to read {}: {}", data_path, e)
+        return None
+    name = data.get("host_name")
+    if not isinstance(name, str) or not name:
+        return None
+    return name
+
+
+def _read_main_agent_labels() -> dict[str, str]:
+    """Read this agent's labels dict from $MNGR_HOST_DIR/agents/$MNGR_AGENT_ID/data.json.
+
+    Returns an empty dict on any failure -- callers should treat missing
+    labels as "skip --label flags rather than fail the create call".
+    """
+    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
+    agent_id = os.environ.get(_AGENT_ID_ENV_VAR, "")
+    if not host_dir or not agent_id:
+        return {}
+    data_path = Path(host_dir) / "agents" / agent_id / "data.json"
+    if not data_path.exists():
+        return {}
+    try:
+        data = json.loads(data_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Failed to read {}: {}", data_path, e)
+        return {}
+    labels = data.get("labels")
+    if not isinstance(labels, dict):
+        return {}
+    # Pydantic-serialized dicts can carry non-string values; coerce defensively.
+    return {str(k): str(v) for k, v in labels.items()}
+
+
+def _resolve_initial_chat_workspace_label(labels: dict[str, str]) -> str | None:
+    """Pick the workspace label value for the initial chat agent.
+
+    Prefers the services agent's existing `workspace` label; falls back to
+    `$MNGR_HOST_DIR/data.json`'s host_name so the chat agent still inherits
+    a sensible workspace tag when the main-agent data.json is malformed.
+    """
+    workspace = labels.get("workspace")
+    if workspace:
+        return workspace
+    return _read_host_name()
+
+
+def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[str]:
+    """Build the `mngr create` argv for the initial chat agent.
+
+    Mirrors the New Agent button's create path (see
+    apps/system_interface/.../agent_manager.py:create_chat_agent): the
+    `chat` template, no-connect, and inherited workspace/project labels
+    when present on the services agent. Adds `--message /welcome`, which
+    used to live on `create_templates.main`.
+    """
+    cmd: list[str] = [
+        "mngr",
+        "create",
+        host_name,
+        "--template",
+        "chat",
+        "--message",
+        "/welcome",
+        "--no-connect",
+    ]
+    workspace = _resolve_initial_chat_workspace_label(labels)
+    if workspace:
+        cmd.extend(["--label", f"workspace={workspace}"])
+    project = labels.get("project")
+    if project:
+        cmd.extend(["--label", f"project={project}"])
+    return cmd
+
+
+def _create_initial_chat_agent(host_name: str, labels: dict[str, str]) -> bool:
+    """Invoke `mngr create` for the initial chat agent. Returns success."""
+    cmd = _build_create_chat_command(host_name, labels)
+    logger.info("Creating initial chat agent: {}", " ".join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        logger.error(
+            "Initial chat-agent create failed (rc={}): stdout={!r} stderr={!r}",
+            result.returncode,
+            result.stdout.strip(),
+            result.stderr.strip(),
+        )
+        return False
+    logger.info("Initial chat agent created")
+    return True
+
+
+def _touch_signal() -> None:
+    """Write the runtime/initial_chat_created signal file."""
+    INITIAL_CHAT_SIGNAL.parent.mkdir(parents=True, exist_ok=True)
+    INITIAL_CHAT_SIGNAL.write_text("")
+
+
+def _maybe_create_initial_chat() -> None:
+    """Create the initial chat agent on first boot, gated by a signal file.
+
+    Touches the signal file only on a successful create -- a failed create
+    leaves the signal file absent so the next bootstrap run retries. The
+    user's manually-destroyed initial chat agent is *not* recreated,
+    because the signal file persists in the runtime-backup branch.
+    """
+    if INITIAL_CHAT_SIGNAL.exists():
+        logger.debug(
+            "Signal file {} present; skipping initial chat create", INITIAL_CHAT_SIGNAL
+        )
+        return
+    host_name = _read_host_name()
+    if not host_name:
+        logger.warning(
+            "Could not resolve host_name; skipping initial chat agent create"
+        )
+        return
+    labels = _read_main_agent_labels()
+    if not _create_initial_chat_agent(host_name, labels):
+        return
+    _touch_signal()
+    logger.info("Wrote signal file {}", INITIAL_CHAT_SIGNAL)
+
+
+def _bootstrap_init_chat_dir() -> None:
+    """Write CLAUDE_CONFIG_DIR to host env, then create initial chat if needed.
+
+    Ordering matters: the env write must precede the chat-agent create so
+    the new agent's claude binary sees CLAUDE_CONFIG_DIR via the host env
+    file mngr sources at agent startup. Failures in either step are
+    non-fatal so services still come up and the user has a working UI.
+    """
+    config_dir = _resolve_services_claude_config_dir()
+    if config_dir is not None:
+        _ensure_host_claude_config_dir(config_dir)
+    _maybe_create_initial_chat()
 
 
 def _get_session_name() -> str:
@@ -189,7 +445,9 @@ def _compute_actions(
     return stops, starts
 
 
-def _reconcile(session: str, desired: dict[str, dict], current: dict[str, dict[str, str]]) -> None:
+def _reconcile(
+    session: str, desired: dict[str, dict], current: dict[str, dict[str, str]]
+) -> None:
     """Reconcile the desired services with the currently running windows."""
     stops, starts = _compute_actions(desired, current)
     for name in stops:
@@ -360,6 +618,12 @@ def main() -> None:
         sys.exit(1)
 
     logger.info("Bootstrap service manager started (session: {})", session)
+
+    # Run BEFORE _init_runtime_worktree so the chat agent created here picks
+    # up the host-env CLAUDE_CONFIG_DIR write on first boot. The signal file
+    # lives under runtime/ and ends up inside the worktree once the next
+    # step rotates it via _stage_preexisting_aside / _restore_preexisting_into_worktree.
+    _bootstrap_init_chat_dir()
 
     _init_runtime_worktree()
 
