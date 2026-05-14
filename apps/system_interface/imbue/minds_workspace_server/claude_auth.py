@@ -251,6 +251,23 @@ def _safe_terminate(process: Any) -> None:
         logger.warning("OAuth subprocess terminate raised: {}", e)
 
 
+def _safe_close(process: Any) -> None:
+    """Release the pexpect spawn's PTY file descriptor.
+
+    `pexpect.spawn.close()` can raise `OSError` (e.g. on an already-closed
+    descriptor) and `pexpect.ExceptionPexpect` in some teardown paths.
+    Swallow + log both since the only thing we can do at this point is
+    drop the reference anyway.
+    """
+    close = getattr(process, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except (OSError, pexpect.ExceptionPexpect) as e:
+        logger.warning("OAuth subprocess close raised: {}", e)
+
+
 def _spawn_oauth_and_parse_url(provider: OAuthProvider) -> tuple[Any, str]:
     process = pexpect_spawner(
         "claude",
@@ -260,12 +277,14 @@ def _spawn_oauth_and_parse_url(provider: OAuthProvider) -> tuple[Any, str]:
     match_index = process.expect([_OAUTH_URL_REGEX, pexpect.EOF, pexpect.TIMEOUT])
     if match_index != 0:
         _safe_terminate(process)
+        _safe_close(process)
         if match_index == 1:
             raise ClaudeAuthError("claude auth login exited before printing OAuth URL")
         raise ClaudeAuthError("Timed out waiting for OAuth URL from claude auth login")
     match = process.match
     if match is None:
         _safe_terminate(process)
+        _safe_close(process)
         raise ClaudeAuthError("OAuth URL regex matched but pexpect.match is None (unexpected)")
     return process, match.group(0)
 
@@ -281,6 +300,7 @@ def start_oauth_login(provider: OAuthProvider) -> OAuthStartResult:
     with _oauth_lock:
         if _current_oauth_process is not None:
             _safe_terminate(_current_oauth_process)
+            _safe_close(_current_oauth_process)
             _current_oauth_record = None
             _current_oauth_process = None
         process, oauth_url = _spawn_oauth_and_parse_url(provider)
@@ -311,6 +331,13 @@ def submit_oauth_code(session_id: str, code: str) -> AuthStatus:
         try:
             _drive_oauth_code(process, code)
         finally:
+            # Terminate-then-close runs unconditionally so a timed-out
+            # `claude auth login` subprocess doesn't outlive the cleared
+            # module-state slot. _safe_terminate is a no-op when the
+            # process already reached EOF (the success path), so this is
+            # safe on both success and failure branches.
+            _safe_terminate(process)
+            _safe_close(process)
             _current_oauth_record = None
             _current_oauth_process = None
     return get_auth_status()
@@ -322,5 +349,6 @@ def abort_oauth_login() -> None:
     with _oauth_lock:
         if _current_oauth_process is not None:
             _safe_terminate(_current_oauth_process)
+            _safe_close(_current_oauth_process)
         _current_oauth_record = None
         _current_oauth_process = None
