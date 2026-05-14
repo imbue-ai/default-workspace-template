@@ -3,7 +3,7 @@
 Mirrors the pattern used by the desktop client's ``/forwarding/...`` routes
 but strictly local (all target services run on 127.0.0.1 inside the same
 workspace, so no SSH tunnel logic is needed) and without agent-id in the
-path (one workspace per workspace_server process).
+path (one workspace per system_interface process).
 
 Responsibilities:
 - First-navigation HTML requests serve a bootstrap page that registers a
