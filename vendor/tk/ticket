@@ -416,7 +416,7 @@ cmd_close() {
         # so the parser's existing "latest note = summary" logic picks it up.
         local timestamp
         timestamp=$(_iso_date)
-        if ! grep -q '^## Notes' "$file"; then
+        if ! _grep -q '^## Notes' "$file"; then
             printf '\n## Notes\n' >> "$file"
         fi
         printf '\n**%s**\n\n%s\n' "$timestamp" "$summary" >> "$file"
