@@ -677,12 +677,29 @@ async def _run_proto_agent_logs_loop(
 
 
 async def _destroy_agent(agent_id: str, request: Request) -> JSONResponse:
-    """Destroy an agent by running mngr destroy --force."""
+    """Destroy an agent by running mngr destroy --force.
+
+    Refuses to destroy agents carrying the ``is_primary=true`` label: that's
+    the services agent for the workspace, and destroying it would tear down
+    the bootstrap, telegram, web, cloudflared, and runtime-backup services
+    along with it. The frontend already hides ``is_primary=true`` agents
+    from the visible agent list; this is defense-in-depth for callers that
+    hit the endpoint directly (curl, scripted use, etc.).
+    """
     agent_manager: AgentManager = request.app.state.agent_manager
     agent_state = agent_manager.get_agent_by_id(agent_id)
     if agent_state is None:
         error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
         return JSONResponse(content=error.model_dump(), status_code=404)
+
+    if agent_state.labels.get("is_primary") == "true":
+        error = ErrorResponse(
+            detail=(
+                f"Refusing to destroy agent '{agent_state.name}': it carries "
+                "the is_primary=true label (services agent for this workspace)"
+            )
+        )
+        return JSONResponse(content=error.model_dump(), status_code=400)
 
     agent_name = agent_state.name
 
