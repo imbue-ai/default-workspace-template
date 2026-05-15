@@ -24,7 +24,7 @@
 import m from "mithril";
 import { apiUrl } from "../base-path";
 
-export interface ClaudeAuthStatus {
+interface ClaudeAuthStatus {
   logged_in: boolean;
   auth_method?: string | null;
   api_provider?: string | null;
