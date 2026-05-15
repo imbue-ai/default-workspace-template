@@ -10,65 +10,15 @@ in test_ratchets.py, not dodged via hand-rolled try/finally).
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 from pydantic import SecretStr
 
 from imbue.minds_workspace_server import claude_auth
-
-
-class _FakeFinishedProcess:
-    """Minimal stand-in for `FinishedProcess` produced by the command runner."""
-
-    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0) -> None:
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
-
-
-class _FakePexpectProcess:
-    """Records the inputs the OAuth flow sends to a `pexpect.spawn`."""
-
-    def __init__(
-        self,
-        url_match: str | None,
-        expect_return_index: int = 0,
-        eof_return_index: int = 0,
-    ) -> None:
-        self._url_match = url_match
-        self._expect_return_index = expect_return_index
-        self._eof_return_index = eof_return_index
-        self._expect_call_count = 0
-        self.sendline_calls: list[str] = []
-        self.terminate_calls = 0
-        self.close_calls = 0
-        self.timeout: float | None = None
-        self.match: Any = None
-        if url_match is not None:
-            self.match = re.compile(r".*").match(url_match)
-            assert self.match is not None
-
-    def expect(self, _patterns: object) -> int:
-        self._expect_call_count += 1
-        if self._expect_call_count == 1:
-            return self._expect_return_index
-        return self._eof_return_index
-
-    def sendline(self, s: str) -> None:
-        self.sendline_calls.append(s)
-
-    def isalive(self) -> bool:
-        return True
-
-    def terminate(self, force: bool = False) -> None:
-        self.terminate_calls += 1
-
-    def close(self) -> None:
-        self.close_calls += 1
+from imbue.minds_workspace_server.testing import FakeFinishedProcess
+from imbue.minds_workspace_server.testing import FakePexpectProcess
 
 
 @pytest.fixture(autouse=True)
@@ -111,7 +61,7 @@ def test_parse_status_payload_empty_strings_coerced_to_none() -> None:
 def test_get_auth_status_returns_logged_out_when_runner_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+    def _runner(_cmd: list[str], _timeout: float) -> FakeFinishedProcess:
         raise claude_auth.ProcessSetupError(
             command=("claude",), stdout="", stderr="not found", is_output_already_logged=False
         )
@@ -122,8 +72,8 @@ def test_get_auth_status_returns_logged_out_when_runner_raises(
 
 
 def test_get_auth_status_parses_logged_in_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
-        return _FakeFinishedProcess(
+    def _runner(_cmd: list[str], _timeout: float) -> FakeFinishedProcess:
+        return FakeFinishedProcess(
             stdout='{"loggedIn": true, "email": "x@y.com", "subscriptionType": "Pro"}'
         )
 
@@ -135,8 +85,8 @@ def test_get_auth_status_parses_logged_in_json(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_get_auth_status_rejects_non_json_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
-        return _FakeFinishedProcess(stdout="not json at all")
+    def _runner(_cmd: list[str], _timeout: float) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stdout="not json at all")
 
     monkeypatch.setattr(claude_auth, "command_runner", _runner)
     with pytest.raises(claude_auth.ClaudeAuthError, match="non-JSON"):
@@ -146,8 +96,8 @@ def test_get_auth_status_rejects_non_json_output(monkeypatch: pytest.MonkeyPatch
 def test_get_auth_status_treats_empty_output_as_logged_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
-        return _FakeFinishedProcess(stdout="")
+    def _runner(_cmd: list[str], _timeout: float) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stdout="")
 
     monkeypatch.setattr(claude_auth, "command_runner", _runner)
     status = claude_auth.get_auth_status()
@@ -187,7 +137,7 @@ def test_submit_oauth_code_rejects_unknown_session() -> None:
 
 def test_oauth_session_extracts_url_from_spawner_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_url = "https://claude.ai/oauth/authorize?code=abc&state=def"
-    fake_process = _FakePexpectProcess(url_match=fake_url, expect_return_index=0)
+    fake_process = FakePexpectProcess(url_match=fake_url, expect_return_index=0)
     monkeypatch.setattr(
         claude_auth, "pexpect_spawner", lambda *_args, **_kwargs: fake_process
     )
@@ -222,7 +172,7 @@ def test_oauth_url_regex_accepts_known_host_forms(url: str) -> None:
 
 
 def test_oauth_session_raises_on_eof_before_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_process = _FakePexpectProcess(url_match=None, expect_return_index=1)
+    fake_process = FakePexpectProcess(url_match=None, expect_return_index=1)
     monkeypatch.setattr(
         claude_auth, "pexpect_spawner", lambda *_args, **_kwargs: fake_process
     )
@@ -231,7 +181,7 @@ def test_oauth_session_raises_on_eof_before_url(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_oauth_session_raises_on_timeout_waiting_for_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_process = _FakePexpectProcess(url_match=None, expect_return_index=2)
+    fake_process = FakePexpectProcess(url_match=None, expect_return_index=2)
     monkeypatch.setattr(
         claude_auth, "pexpect_spawner", lambda *_args, **_kwargs: fake_process
     )
@@ -255,9 +205,9 @@ def test_list_claude_agent_names_filters_to_claude_type(
         "]}"
     )
 
-    def _runner(cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+    def _runner(cmd: list[str], _timeout: float) -> FakeFinishedProcess:
         assert cmd[:3] == ["mngr", "list", "--format"]
-        return _FakeFinishedProcess(stdout=payload)
+        return FakeFinishedProcess(stdout=payload)
 
     monkeypatch.setattr(claude_auth, "command_runner", _runner)
     names = claude_auth.list_claude_agent_names()
@@ -267,8 +217,8 @@ def test_list_claude_agent_names_filters_to_claude_type(
 def test_list_claude_agent_names_raises_on_mngr_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
-        return _FakeFinishedProcess(stderr="boom", returncode=1)
+    def _runner(_cmd: list[str], _timeout: float) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stderr="boom", returncode=1)
 
     monkeypatch.setattr(claude_auth, "command_runner", _runner)
     with pytest.raises(claude_auth.ClaudeAuthError, match="mngr list failed"):
@@ -281,12 +231,12 @@ def test_restart_all_claude_agents_stops_then_starts_each(
     payload = '{"agents": [{"name": "a", "type": "claude"}, {"name": "b", "type": "claude"}]}'
     calls: list[str] = []
 
-    def _runner(cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+    def _runner(cmd: list[str], _timeout: float) -> FakeFinishedProcess:
         if cmd[:3] == ["mngr", "list", "--format"]:
-            return _FakeFinishedProcess(stdout=payload)
+            return FakeFinishedProcess(stdout=payload)
         if cmd[0] == "mngr" and cmd[1] in {"stop", "start"}:
             calls.append(f"{cmd[1]} {cmd[2]}")
-            return _FakeFinishedProcess(returncode=0)
+            return FakeFinishedProcess(returncode=0)
         raise AssertionError(f"unexpected cmd: {cmd!r}")
 
     monkeypatch.setattr(claude_auth, "command_runner", _runner)
@@ -299,14 +249,14 @@ def test_submit_oauth_code_drives_subprocess_and_returns_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_url = "https://claude.ai/oauth/authorize?x=1"
-    fake_process = _FakePexpectProcess(url_match=fake_url, expect_return_index=0)
+    fake_process = FakePexpectProcess(url_match=fake_url, expect_return_index=0)
     monkeypatch.setattr(
         claude_auth, "pexpect_spawner", lambda *_args, **_kwargs: fake_process
     )
     monkeypatch.setattr(
         claude_auth,
         "command_runner",
-        lambda _cmd, _timeout: _FakeFinishedProcess(
+        lambda _cmd, _timeout: FakeFinishedProcess(
             stdout='{"loggedIn": true, "email": "x@y.com"}'
         ),
     )
