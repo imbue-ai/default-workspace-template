@@ -89,7 +89,7 @@ def _split_frontmatter(text: str) -> dict[str, Any]:
 
 
 def parse(task_file: Path) -> dict[str, str]:
-    """Return the three required fields as a typed dict.
+    """Return the two required fields as a typed dict.
 
     Raises ``ValueError`` with a precise message on any schema violation.
     """
