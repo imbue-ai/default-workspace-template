@@ -115,9 +115,10 @@ RUN mkdir -p /worktree
 
 # Expose the vendored ticket tracker (vendor/tk/ticket) on PATH as `tk` /
 # `ticket`. This is the agent's task primitive (see CLAUDE.md > Task
-# management); the chat UI renders progress from the .tickets/ files it
-# writes. The runtime hook scripts/ensure_tk_on_path.sh covers older built
-# images; this RUN bakes it in for new ones.
+# management); the chat UI renders progress from tk step records (tickets
+# with `step: true`) in the agent's .tickets/ directory. The runtime hook
+# scripts/ensure_tk_on_path.sh covers older built images; this RUN bakes
+# it in for new ones.
 RUN ln -sf /code/vendor/tk/ticket /usr/local/bin/tk && \
     ln -sf /code/vendor/tk/ticket /usr/local/bin/ticket
 

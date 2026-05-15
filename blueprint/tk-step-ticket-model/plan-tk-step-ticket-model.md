@@ -131,7 +131,7 @@
   - The auto-nest rule and the multiple-in-progress-tickets convention (allowed but discouraged; require explicit `--parent` when ambiguous).
   - The end-of-turn lifecycle: close every started step with `tk close <id> "summary"` (positional summary required). Tickets can be left in_progress across turns; carryover surfaces them in the next turn.
   - How to file vs. pick up real tickets (`tk create` to file, `tk start` to pick up; auto-self-assignment).
-  - Hook reminders show only step records now — tickets are managed through `tk ls`, `tk mine`, `tk ready`, etc. that the agent invokes itself.
+  - Hook reminders show only step records now -- tickets are managed through `tk ls`, `tk ready`, `tk show`, etc. that the agent invokes itself.
 
 ### Documentation hygiene
 

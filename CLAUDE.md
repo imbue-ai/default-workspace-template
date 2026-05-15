@@ -16,13 +16,13 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 
 # Task management (CRITICAL — read this before doing real work)
 
-You manage your work using `tk`, the vendored ticket tracker at `vendor/tk/`. This is the **only** task tracking tool available to you. Claude Code's built-in `TodoWrite` is disabled — attempts to call it will be denied.
+You manage your work using `tk`, the vendored ticket tracker at `vendor/tk/`. This is the **only** task tracking tool available to you. Claude Code's built-in `TodoWrite` is disabled — attempts to call it will be denied. **`tk create --step` is the replacement for `TodoWrite`**: use it everywhere you would have used `TodoWrite` to declare plan steps and track completion. The difference is that `tk` step records render directly in the user-facing chat progress view rather than being hidden in a side panel.
 
 ## Two kinds of records: steps and tickets
 
 `tk` stores two distinct kinds of records, distinguished by the `step:` frontmatter field:
 
-- **Step records** (`tk create --step "..."`) are *turn-bound progress markers*. They populate the chat progress view directly: each step becomes a node on the timeline with a status icon and (on close) a one-line summary. Steps are **creator-private** — only the agent that created them sees them. They are sequential within a turn, ephemeral by intent, and exist purely to communicate progress to the user.
+- **Step records** (`tk create --step "..."`) are *turn-bound progress markers* — the direct replacement for Claude Code's `TodoWrite`. They populate the chat progress view: each step becomes a node on the timeline with a status icon and (on close) a one-line summary. Steps are **creator-private** — only the agent that created them sees them. They are sequential within a turn, ephemeral by intent, and exist purely to communicate progress to the user.
 - **Regular tickets** (`tk create "..."`, no `--step`) are *substantive work units worth tracking cross-agent*. Other agents can see them, pick them up, and own them. A ticket is "current" to whichever agent has it `in_progress` and assigned to themselves; that agent's progress view shows the ticket as a top-level node, with any step records they file *during* the work nested under it.
 
 Most turns use only step records. Tickets enter the picture when a piece of work is large enough to span turns or to be handed between agents.
