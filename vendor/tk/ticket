@@ -188,7 +188,7 @@ cmd_create() {
 
     local title="" description="" design="" acceptance=""
     local priority=2 issue_type="task" assignee="" external_ref="" parent="" tags=""
-    local is_step=0 no_parent=0 assignee_set=0
+    local is_step=0 no_parent=0
 
     # Default assignee to git user.name if available, BUT only when
     # running outside an mngr-managed agent. Inside an mngr context the
@@ -208,7 +208,7 @@ cmd_create() {
             --acceptance) acceptance="$2"; shift 2 ;;
             -p|--priority) priority="$2"; shift 2 ;;
             -t|--type) issue_type="$2"; shift 2 ;;
-            -a|--assignee) assignee="$2"; assignee_set=1; shift 2 ;;
+            -a|--assignee) assignee="$2"; shift 2 ;;
             --external-ref) external_ref="$2"; shift 2 ;;
             --parent) parent="$2"; shift 2 ;;
             --parent=*) parent="${1#--parent=}"; shift ;;
@@ -317,10 +317,6 @@ cmd_create() {
             echo ""
         fi
     } > "$file"
-
-    # Suppress unused-variable warning under set -u when assignee_set is
-    # not consulted by callers; future args may use it.
-    : "$assignee_set"
 
     echo "$id"
 }
