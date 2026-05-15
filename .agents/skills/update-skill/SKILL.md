@@ -58,7 +58,7 @@ Shared across flows.
 
 ```bash
 TICKET_ID=$(tk create "update $TARGET" -t task \
-    --acceptance "incident captured; task file written; worker launched; worker DONE; branch merged")
+    --acceptance "task file written; worker launched; worker DONE; branch merged")
 tk start "$TICKET_ID"
 ```
 
