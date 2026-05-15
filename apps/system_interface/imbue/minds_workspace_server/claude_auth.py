@@ -7,14 +7,15 @@ dropping into the ttyd terminal.
 Two sign-in paths:
 
 1. Subscription OAuth (`claude auth login --claudeai`) and Console OAuth
-   (`claude auth login --console`) are driven via pexpect: the CLI prints a
-   `claude.ai/oauth/authorize` URL and waits for a `CODE#STATE` paste on
-   stdin. The PTY subprocess is held in module state between the
-   `start_oauth_login` and `submit_oauth_code` calls so the UI can collect
-   the code from the user in between. The completed flow writes the
-   shared `$CLAUDE_CONFIG_DIR/.credentials.json` file, which every running
-   claude in the mind auto-detects on its next API call -- no restart
-   required.
+   (`claude auth login --console`) are driven via pexpect: the CLI prints
+   an `oauth/authorize` URL (`https://claude.com/cai/oauth/authorize?...`
+   for `--claudeai` and `https://platform.claude.com/oauth/authorize?...`
+   for `--console`) and waits for a `CODE#STATE` paste on stdin. The PTY
+   subprocess is held in module state between the `start_oauth_login` and
+   `submit_oauth_code` calls so the UI can collect the code from the user
+   in between. The completed flow writes the shared
+   `$CLAUDE_CONFIG_DIR/.credentials.json` file, which every running claude
+   in the mind auto-detects on its next API call -- no restart required.
 2. Raw API key: `submit_api_key` writes `ANTHROPIC_API_KEY` into the host
    env file the bootstrap already manages and then restarts every
    `type: claude` agent in the mind via `mngr stop`/`mngr start`. The
