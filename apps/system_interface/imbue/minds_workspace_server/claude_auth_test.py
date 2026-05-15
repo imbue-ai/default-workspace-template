@@ -196,6 +196,31 @@ def test_oauth_session_extracts_url_from_spawner_stdout(monkeypatch: pytest.Monk
     assert result.session_id
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param(
+            "https://claude.com/cai/oauth/authorize?code=abc&state=def", id="claudeai-host"
+        ),
+        pytest.param(
+            "https://platform.claude.com/oauth/authorize?code=abc&state=def", id="console-host"
+        ),
+        pytest.param(
+            "https://claude.ai/oauth/authorize?code=abc&state=def", id="legacy-claudeai-host"
+        ),
+    ],
+)
+def test_oauth_url_regex_accepts_known_host_forms(url: str) -> None:
+    """The regex was loosened to match any host with an oauth/authorize path.
+
+    Guards against an accidental re-tightening that would break the Console
+    (`platform.claude.com`) and current `claude.com/cai/...` paths.
+    """
+    match = claude_auth._OAUTH_URL_REGEX.search(f"prefix\n{url}\nsuffix")
+    assert match is not None
+    assert match.group(0) == url
+
+
 def test_oauth_session_raises_on_eof_before_url(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_process = _FakePexpectProcess(url_match=None, expect_return_index=1)
     monkeypatch.setattr(
