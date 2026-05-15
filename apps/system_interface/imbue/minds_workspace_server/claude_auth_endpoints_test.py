@@ -9,10 +9,8 @@ or tmux sessions.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -21,43 +19,8 @@ from fastapi.testclient import TestClient
 from imbue.minds_workspace_server import claude_auth
 from imbue.minds_workspace_server import welcome_resend
 from imbue.minds_workspace_server.server import create_application
-
-
-class _FakeFinishedProcess:
-    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0) -> None:
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
-
-
-class _FakePexpectProcess:
-    def __init__(self, url: str | None) -> None:
-        self._url = url
-        self._call_count = 0
-        self.sendline_calls: list[str] = []
-        self.timeout: float | None = None
-        self.match: Any = None
-        if url is not None:
-            self.match = re.compile(r".*").match(url)
-            assert self.match is not None
-
-    def expect(self, _patterns: object) -> int:
-        self._call_count += 1
-        if self._call_count == 1:
-            return 0 if self._url is not None else 1
-        return 0
-
-    def sendline(self, s: str) -> None:
-        self.sendline_calls.append(s)
-
-    def isalive(self) -> bool:
-        return True
-
-    def terminate(self, force: bool = False) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
+from imbue.minds_workspace_server.testing import FakeFinishedProcess
+from imbue.minds_workspace_server.testing import FakePexpectProcess
 
 
 @pytest.fixture
@@ -78,8 +41,8 @@ def reset_oauth_session() -> Iterator[None]:
     claude_auth.abort_oauth_login()
 
 
-def _logged_in_runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
-    return _FakeFinishedProcess(
+def _logged_in_runner(_cmd: list[str], _timeout: float) -> FakeFinishedProcess:
+    return FakeFinishedProcess(
         stdout='{"loggedIn": true, "email": "u@example.com", "subscriptionType": "Max"}'
     )
 
@@ -99,7 +62,7 @@ def test_status_endpoint_returns_parsed_payload(
 def test_status_endpoint_logged_out_when_claude_missing(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def _missing_runner(_cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+    def _missing_runner(_cmd: list[str], _timeout: float) -> FakeFinishedProcess:
         raise claude_auth.ProcessSetupError(
             command=("claude",), stdout="", stderr="not found", is_output_already_logged=False
         )
@@ -126,7 +89,7 @@ def test_full_oauth_flow_drives_subprocess_runs_welcome_resend_and_skips_restart
     churn for no auth benefit.
     """
     fake_url = "https://claude.ai/oauth/authorize?abc=1"
-    fake_process = _FakePexpectProcess(url=fake_url)
+    fake_process = FakePexpectProcess(url_match=fake_url)
     welcome_resend_calls: list[str] = []
     command_log: list[tuple[str, ...]] = []
 
@@ -135,7 +98,7 @@ def test_full_oauth_flow_drives_subprocess_runs_welcome_resend_and_skips_restart
         "---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nbody\n\n---\n"
     )
 
-    def _recording_runner(cmd: list[str], timeout: float) -> _FakeFinishedProcess:
+    def _recording_runner(cmd: list[str], timeout: float) -> FakeFinishedProcess:
         command_log.append(tuple(cmd))
         return _logged_in_runner(cmd, timeout)
 
@@ -207,12 +170,12 @@ def test_submit_api_key_restarts_all_claude_agents_and_runs_welcome_resend(
         "]}"
     )
 
-    def _runner(cmd: list[str], _timeout: float) -> _FakeFinishedProcess:
+    def _runner(cmd: list[str], _timeout: float) -> FakeFinishedProcess:
         if cmd[:3] == ["mngr", "list", "--format"]:
-            return _FakeFinishedProcess(stdout=list_payload)
+            return FakeFinishedProcess(stdout=list_payload)
         if len(cmd) >= 3 and cmd[0] == "mngr" and cmd[1] in {"stop", "start"}:
             restart_calls.append(f"{cmd[1]} {cmd[2]}")
-            return _FakeFinishedProcess(returncode=0)
+            return FakeFinishedProcess(returncode=0)
         return _logged_in_runner(cmd, _timeout)
 
     monkeypatch.setattr(claude_auth, "command_runner", _runner)
@@ -253,7 +216,7 @@ def test_abort_endpoint_clears_in_flight_session(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_url = "https://claude.ai/oauth/authorize?x=1"
-    fake_process = _FakePexpectProcess(url=fake_url)
+    fake_process = FakePexpectProcess(url_match=fake_url)
     monkeypatch.setattr(
         claude_auth, "pexpect_spawner", lambda *_args, **_kwargs: fake_process
     )
