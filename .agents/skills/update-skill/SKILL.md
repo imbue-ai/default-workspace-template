@@ -11,9 +11,11 @@ needs a change. Two flows cover the two ways this happens.
 
 - **absorb flow.** A skill ran successfully but you had to do additional
   *repeatable* work to fully satisfy the user's request. The user was not
-  part of a design conversation about the change. You hand the worker the
-  incident transcript and the new contract; the worker replicates, proposes
-  a design at Gate 1, implements, runs scenarios, presents Gate 2.
+  part of a design conversation about the change. You hand the worker an
+  incident description with verbatim quote anchors plus the new contract;
+  the worker locates the incident in your transcript via `mngr transcript`,
+  replicates, proposes a design at Gate 1, implements, runs scenarios,
+  presents Gate 2.
 - **verify flow.** You and the user discussed a change to a skill during
   the turn, agreed on a design, and you committed the change live. You
   hand the worker the committed diff and the design rationale. The worker
