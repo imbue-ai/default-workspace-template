@@ -91,6 +91,26 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     m.redraw();
   }
 
+  // Snapshot-load path: SSE only carries events emitted after subscription,
+  // so an auth-error that happened before the user opened the panel (e.g.
+  // the auto-`/welcome` failing during fresh mind creation) wouldn't pop
+  // the modal otherwise. Walking back to the last assistant_message means
+  // an already-recovered agent (whose history contains old auth errors
+  // but has since produced healthy replies) does not pop on reload --
+  // only an agent whose current state is broken does.
+  function checkLatestAssistantForAuthError(agentId: string): void {
+    const events = getEventsForAgent(agentId);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i];
+      if (event.type === "assistant_message") {
+        if (event.is_auth_error === true) {
+          handleAuthErrorEvent(agentId);
+        }
+        return;
+      }
+    }
+  }
+
   // Screen capture state (shown when agent has no conversation)
   let screenContent: string | null = null;
   let screenError: string | null = null;
@@ -219,6 +239,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       if (agentId === currentAgentId) {
         loading = false;
         loadingError = null;
+        checkLatestAssistantForAuthError(agentId);
       }
     } catch (error) {
       if (agentId === currentAgentId) {
