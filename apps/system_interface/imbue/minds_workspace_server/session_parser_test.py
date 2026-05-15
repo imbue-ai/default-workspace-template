@@ -3,6 +3,8 @@
 import json
 from typing import Any
 
+import pytest
+
 from imbue.minds_workspace_server.session_parser import parse_session_lines
 
 
@@ -194,136 +196,53 @@ def test_tool_output_truncation() -> None:
     assert len(events[0]["output"]) <= 2003
 
 
-def test_assistant_message_not_flagged_as_auth_error_by_default() -> None:
-    lines = [_make_assistant_line("uuid-1", "2026-01-01T00:00:00Z", "Here is the file contents.")]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is False
-
-
-def test_assistant_message_empty_text_not_flagged() -> None:
-    lines = [_make_assistant_line("uuid-1", "2026-01-01T00:00:00Z", "")]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is False
-
-
-def test_assistant_auth_error_not_logged_in() -> None:
-    lines = [
-        _make_assistant_line(
-            "uuid-1",
-            "2026-01-01T00:00:00Z",
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("Here is the file contents.", False, id="plain-assistant-text"),
+        pytest.param("", False, id="empty-text"),
+        pytest.param(
             "Not logged in \u00b7 Please run /login to authenticate.",
-        )
-    ]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is True
-
-
-def test_assistant_auth_error_invalid_api_key() -> None:
-    lines = [
-        _make_assistant_line(
-            "uuid-1",
-            "2026-01-01T00:00:00Z",
+            True,
+            id="not-logged-in",
+        ),
+        pytest.param(
             "I received an error: Invalid API key. Please update your credentials.",
-        )
-    ]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is True
-
-
-def test_assistant_auth_error_oauth_revoked() -> None:
-    lines = [
-        _make_assistant_line(
-            "uuid-1",
-            "2026-01-01T00:00:00Z",
+            True,
+            id="invalid-api-key",
+        ),
+        pytest.param(
             "OAuth token has been revoked; re-authentication required.",
-        )
-    ]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is True
-
-
-def test_assistant_auth_error_oauth_expired() -> None:
-    lines = [
-        _make_assistant_line(
-            "uuid-1",
-            "2026-01-01T00:00:00Z",
-            "Error: OAuth token has expired.",
-        )
-    ]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is True
-
-
-def test_assistant_auth_error_oauth_scope() -> None:
-    lines = [
-        _make_assistant_line(
-            "uuid-1",
-            "2026-01-01T00:00:00Z",
+            True,
+            id="oauth-revoked",
+        ),
+        pytest.param("Error: OAuth token has expired.", True, id="oauth-expired"),
+        pytest.param(
             "OAuth token does not meet scope requirements for this operation.",
-        )
-    ]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is True
-
-
-def test_assistant_auth_error_authentication_error_type() -> None:
-    lines = [
-        _make_assistant_line(
-            "uuid-1",
-            "2026-01-01T00:00:00Z",
+            True,
+            id="oauth-scope",
+        ),
+        pytest.param(
             'API returned: {"type": "authentication_error", "message": "..."}',
-        )
-    ]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is True
-
-
-def test_assistant_auth_error_api_401() -> None:
-    lines = [
-        _make_assistant_line(
-            "uuid-1",
-            "2026-01-01T00:00:00Z",
-            "API Error: 401 Unauthorized",
-        )
-    ]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is True
-
-
-def test_assistant_auth_error_invalid_credentials() -> None:
-    lines = [
-        _make_assistant_line(
-            "uuid-1",
-            "2026-01-01T00:00:00Z",
-            "Invalid authentication credentials provided.",
-        )
-    ]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is True
-
-
-def test_assistant_auth_error_credit_balance() -> None:
-    lines = [
-        _make_assistant_line(
-            "uuid-1",
-            "2026-01-01T00:00:00Z",
+            True,
+            id="authentication-error-type",
+        ),
+        pytest.param("API Error: 401 Unauthorized", True, id="api-401"),
+        pytest.param(
+            "Invalid authentication credentials provided.", True, id="invalid-credentials"
+        ),
+        pytest.param(
             "Your credit balance is too low to make this request.",
-        )
-    ]
+            True,
+            id="credit-balance-too-low",
+        ),
+        pytest.param("This organization has been disabled.", True, id="org-disabled"),
+    ],
+)
+def test_assistant_message_auth_error_flag(text: str, expected: bool) -> None:
+    lines = [_make_assistant_line("uuid-1", "2026-01-01T00:00:00Z", text)]
     events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is True
-
-
-def test_assistant_auth_error_org_disabled() -> None:
-    lines = [
-        _make_assistant_line(
-            "uuid-1",
-            "2026-01-01T00:00:00Z",
-            "This organization has been disabled.",
-        )
-    ]
-    events = parse_session_lines(lines)
-    assert events[0]["is_auth_error"] is True
+    assert events[0]["is_auth_error"] is expected
 
 
 def test_user_message_with_array_content() -> None:
