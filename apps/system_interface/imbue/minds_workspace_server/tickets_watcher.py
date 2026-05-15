@@ -69,12 +69,14 @@ class AgentTicketsWatcher:
         on_events: Callable[[str, list[dict[str, Any]]], None],
     ) -> None:
         self._agent_id = agent_id
-        # Used to filter tickets to only those created by THIS agent.
-        # tk's patched `cmd_create` stamps `$MNGR_AGENT_NAME` into each
-        # ticket's `agent` frontmatter field; we drop any ticket whose
-        # `agent` field is set and doesn't match. Tickets with no `agent`
-        # field (pre-existing files or any external tk write) are kept --
-        # see _scan for the rationale.
+        # Used to filter tickets into this agent's progress stream. The
+        # filter is two-rule (see _scan): step records surface to their
+        # CREATOR (the `agent:` frontmatter field stamped by `tk create`
+        # from $MNGR_AGENT_NAME), and regular tickets surface to their
+        # CURRENT ASSIGNEE (the `assignee:` field, set by `tk start`
+        # auto-self-assignment or `tk assign`). Pre-stamping tickets with
+        # neither field set fall back to "show to anyone" for backwards
+        # compatibility.
         self._agent_name = agent_name
         self._tickets_dir = tickets_dir
         self._on_events = on_events
@@ -223,18 +225,18 @@ class AgentTicketsWatcher:
                 if state is None:
                     continue
 
-                # Filter out tickets created by a DIFFERENT mngr agent.
-                # When workers share a TICKETS_DIR with their lead (the
-                # default minds setup: `TICKETS_DIR=/code/runtime/tickets`
-                # is set as a host_env at create time and inherited by
-                # every tmux-spawned sub-agent), each agent's view should
-                # still only show its own tickets. A ticket with an empty
-                # `agent` field is kept regardless: it was either created
-                # by an older tk that didn't stamp the field, or by a
-                # non-mngr tk invocation -- attributing such tickets to
-                # this agent is the least-surprising behaviour and keeps
-                # us backwards-compatible with pre-existing ticket files.
-                if state.agent and state.agent != self._agent_name:
+                # Per-agent surfacing rule. Step records (turn-bound
+                # progress markers) are creator-private -- they only
+                # surface to the agent that created them. Regular
+                # tickets surface to their CURRENT assignee, so a ticket
+                # one agent picks up via `tk start <id>` (auto-self-assign)
+                # appears in the picker's progress view rather than the
+                # originator's. Backwards-compat: when both `step` and
+                # `assignee` are absent (pre-existing pre-stamping
+                # tickets), we keep the legacy "any agent sees it"
+                # behaviour so the rollout doesn't make historical
+                # tickets vanish from the chat.
+                if self._should_skip_for_agent(state):
                     continue
 
                 previous_status = self._last_status_per_ticket.get(state.ticket_id)
@@ -266,6 +268,32 @@ class AgentTicketsWatcher:
             self._emitted_events.extend(new_events)
             return new_events
 
+    def _should_skip_for_agent(self, state: TicketState) -> bool:
+        """Per-agent surfacing rule, factored out so the if/elif chain
+        reads as a series of independent early-return cases rather than
+        a single conditional cascade. Returns True iff this watcher
+        instance (for `self._agent_name`) should drop the given ticket.
+
+        - Step records (creator-private): surface only to the agent
+          stamped as `agent:` (`MNGR_AGENT_NAME` at create time). Skip
+          when the stamp is set to a different agent.
+        - Regular tickets WITH an assignee: surface to the assignee.
+          Skip when the assignee is someone else.
+        - Regular tickets WITHOUT an assignee but WITH a creator stamp:
+          surface to the creator (pre-pickup state -- filed but not yet
+          picked up by anyone).
+        - Everything else (no step, no assignee, no agent stamp -- the
+          pre-stamping legacy shape): surface to every agent. Keeps
+          rollout from making historical tickets vanish.
+        """
+        if state.step:
+            return bool(state.agent) and state.agent != self._agent_name
+        if state.assignee:
+            return state.assignee != self._agent_name
+        if state.agent:
+            return state.agent != self._agent_name
+        return False
+
     def _make_event(self, state: TicketState, ts: str) -> dict[str, Any]:
         return {
             "type": "task_event",
@@ -278,4 +306,11 @@ class AgentTicketsWatcher:
             "created_at": state.created_at,
             "summary": state.summary if state.status == "closed" else None,
             "summary_at": state.summary_at if state.status == "closed" else None,
+            # Step / parent_id / assignee thread through to the frontend
+            # so turn-grouping can a) group step children under their
+            # parent ticket and b) attribute regular tickets to the turn
+            # in which their current assignee first acted on them.
+            "step": state.step,
+            "parent_id": state.parent_id,
+            "assignee": state.assignee,
         }

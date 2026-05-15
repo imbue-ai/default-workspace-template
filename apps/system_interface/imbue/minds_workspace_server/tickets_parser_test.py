@@ -202,6 +202,102 @@ priority: 2
     assert result.agent == ""
 
 
+def test_parse_captures_step_field() -> None:
+    """`tk create --step` stamps `step: true` into the frontmatter to
+    distinguish a turn-bound progress record from a regular ticket. The
+    parser must surface this so the watcher's per-agent filter and the
+    frontend's nesting logic can act on it."""
+    text = """---
+id: ts-step
+status: open
+deps: []
+links: []
+created: 2026-04-28T01:17:08Z
+type: task
+priority: 2
+agent: agent-A
+step: true
+parent: tt-parent
+---
+# A step record
+"""
+    result = parse_ticket_text(text)
+    assert result is not None
+    assert result.step is True
+    assert result.parent_id == "tt-parent"
+
+
+def test_parse_step_defaults_to_false_when_absent() -> None:
+    """Tickets without a `step:` line are regular tickets. The parser
+    must default the field to False so the watcher's surfacing rule
+    routes them via the assignee path rather than the creator path."""
+    text = """---
+id: tt-regular
+status: open
+created: 2026-04-28T01:17:08Z
+---
+# Regular ticket
+"""
+    result = parse_ticket_text(text)
+    assert result is not None
+    assert result.step is False
+    assert result.parent_id == ""
+
+
+def test_parse_step_accepts_case_variations() -> None:
+    """The `step: True` / `step: TRUE` casing variants must all parse
+    as boolean true. YAML allows arbitrary casing for booleans and
+    different tooling (e.g. a hand-edited file) may emit either form."""
+    for value in ("true", "True", "TRUE"):
+        text = f"""---
+id: tt-{value}
+status: open
+created: 2026-04-28T01:17:08Z
+step: {value}
+---
+# Mixed case step
+"""
+        result = parse_ticket_text(text)
+        assert result is not None, f"failed to parse for value {value!r}"
+        assert result.step is True
+
+
+def test_parse_captures_assignee_field() -> None:
+    """`tk start` auto-self-assigns the running mngr agent; the
+    `assignee:` value drives the watcher's per-agent surfacing rule for
+    regular tickets, so the parser must surface it."""
+    text = """---
+id: tt-asg
+status: in_progress
+created: 2026-04-28T01:17:08Z
+agent: agent-creator
+assignee: agent-picker
+---
+# A picked-up ticket
+"""
+    result = parse_ticket_text(text)
+    assert result is not None
+    assert result.assignee == "agent-picker"
+    assert result.agent == "agent-creator"
+
+
+def test_parse_assignee_defaults_to_empty_string_when_absent() -> None:
+    """Unassigned regular tickets (post-patch tk leaves the field unset
+    in an mngr context until `tk start` runs) must parse with an empty
+    assignee so the watcher's fallthrough branch can take over."""
+    text = """---
+id: tt-unasg
+status: open
+created: 2026-04-28T01:17:08Z
+agent: agent-creator
+---
+# Filed but not picked up yet
+"""
+    result = parse_ticket_text(text)
+    assert result is not None
+    assert result.assignee == ""
+
+
 def test_inline_notes_substring_does_not_anchor_notes_section() -> None:
     """A `## Notes` substring appearing mid-line (or mid-paragraph) must
     NOT be treated as the start of the Notes section. The real Notes

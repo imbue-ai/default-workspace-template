@@ -32,11 +32,16 @@ def _ticket_text(
     created: str = "2026-04-28T01:00:00Z",
     notes: str | None = None,
     agent: str | None = None,
+    step: bool = False,
+    parent: str | None = None,
+    assignee: str | None = None,
 ) -> str:
     """Build a tk-shaped ticket body. Centralizes the boilerplate frontmatter
-    so individual tests only describe the parts that actually vary
-    (id / status / notes / title / agent)."""
+    so individual tests only describe the parts that actually vary."""
     agent_line = f"agent: {agent}\n" if agent is not None else ""
+    step_line = "step: true\n" if step else ""
+    parent_line = f"parent: {parent}\n" if parent is not None else ""
+    assignee_line = f"assignee: {assignee}\n" if assignee is not None else ""
     body = f"""---
 id: {ticket_id}
 status: {status}
@@ -45,7 +50,7 @@ links: []
 created: {created}
 type: task
 priority: 2
-{agent_line}---
+{assignee_line}{agent_line}{step_line}{parent_line}---
 # {title}
 """
     if notes is not None:
@@ -61,10 +66,24 @@ def _write_ticket_with_status(
     title: str = "Sample task",
     notes: str | None = None,
     agent: str | None = None,
+    step: bool = False,
+    parent: str | None = None,
+    assignee: str | None = None,
 ) -> Path:
     tickets_dir.mkdir(parents=True, exist_ok=True)
     path = tickets_dir / f"{ticket_id}.md"
-    path.write_text(_ticket_text(ticket_id, status, title=title, notes=notes, agent=agent))
+    path.write_text(
+        _ticket_text(
+            ticket_id,
+            status,
+            title=title,
+            notes=notes,
+            agent=agent,
+            step=step,
+            parent=parent,
+            assignee=assignee,
+        )
+    )
     return path
 
 
@@ -276,3 +295,92 @@ def test_get_all_events_forwards_newly_emitted_events_through_callback(tmp_path:
     watcher.get_all_events()
     assert len(calls) == 2
     assert [e["event_id"] for e in calls[1][1]] == ["tt-cb-1-in_progress"]
+
+
+def test_step_record_surfaces_only_to_its_creator(tmp_path: Path) -> None:
+    """Step records (`step: true`) are turn-bound progress markers and
+    must NEVER leak across agents -- two agents sharing TICKETS_DIR are
+    the precise bug this rule fixes. Even if the step's assignee field
+    happens to match a sibling agent, it stays creator-scoped."""
+    tickets_dir = tmp_path / ".tickets"
+    _write_ticket_with_status(
+        tickets_dir, "ts-mine", "open", title="My step", agent="agent-A", step=True
+    )
+    _write_ticket_with_status(
+        tickets_dir, "ts-theirs", "open", title="Their step", agent="agent-B", step=True
+    )
+
+    _calls, cb = _capture()
+    watcher = AgentTicketsWatcher("agent-A-id", "agent-A", tickets_dir, cb)
+    events = watcher.get_all_events()
+    assert [e["ticket_id"] for e in events] == ["ts-mine"]
+    assert events[0]["step"] is True
+
+
+def test_regular_ticket_surfaces_to_assignee_not_creator(tmp_path: Path) -> None:
+    """Regular tickets (no `step`) surface to their CURRENT assignee.
+    A ticket created by A and picked up by B (assignee=B) shows in B's
+    progress view, not A's. This is what makes ticket pickup work."""
+    tickets_dir = tmp_path / ".tickets"
+    _write_ticket_with_status(
+        tickets_dir,
+        "tt-picked",
+        "in_progress",
+        title="A's idea, B's work",
+        agent="agent-A",
+        assignee="agent-B",
+    )
+
+    _calls_a, cb_a = _capture()
+    watcher_a = AgentTicketsWatcher("agent-A-id", "agent-A", tickets_dir, cb_a)
+    assert watcher_a.get_all_events() == []
+
+    _calls_b, cb_b = _capture()
+    watcher_b = AgentTicketsWatcher("agent-B-id", "agent-B", tickets_dir, cb_b)
+    events = watcher_b.get_all_events()
+    assert [e["ticket_id"] for e in events] == ["tt-picked"]
+    assert events[0]["assignee"] == "agent-B"
+
+
+def test_unassigned_ticket_still_surfaces_to_creator_until_picked_up(tmp_path: Path) -> None:
+    """A filed-but-not-yet-picked-up ticket has `agent:` set (creator)
+    and `assignee:` empty/unset. It should surface to the creator's
+    progress view while it waits -- once another agent runs `tk start`
+    on it (setting assignee), it stops surfacing to the creator and
+    starts surfacing to the picker. This is the routing handoff."""
+    tickets_dir = tmp_path / ".tickets"
+    _write_ticket_with_status(
+        tickets_dir, "tt-filed", "open", title="Filed", agent="agent-A"
+    )
+
+    _calls, cb = _capture()
+    watcher = AgentTicketsWatcher("agent-A-id", "agent-A", tickets_dir, cb)
+    events = watcher.get_all_events()
+    assert [e["ticket_id"] for e in events] == ["tt-filed"]
+
+
+def test_event_carries_step_parent_id_and_assignee_fields(tmp_path: Path) -> None:
+    """The frontend's turn-grouping needs step / parent_id / assignee on
+    every task_event to decide nesting and attribution. Verify the
+    watcher actually stamps them into _make_event's payload."""
+    tickets_dir = tmp_path / ".tickets"
+    _write_ticket_with_status(
+        tickets_dir,
+        "ts-child",
+        "open",
+        title="Child step",
+        agent="agent-A",
+        step=True,
+        parent="tt-parent",
+    )
+
+    _calls, cb = _capture()
+    watcher = AgentTicketsWatcher("agent-A-id", "agent-A", tickets_dir, cb)
+    events = watcher.get_all_events()
+    assert len(events) == 1
+    e = events[0]
+    assert e["step"] is True
+    assert e["parent_id"] == "tt-parent"
+    # assignee may be empty for steps -- they aren't part of the
+    # pickup-handoff flow -- but the field must still be present.
+    assert e["assignee"] == ""

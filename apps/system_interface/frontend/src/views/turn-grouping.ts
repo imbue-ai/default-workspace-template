@@ -46,6 +46,23 @@ export interface TaskRecord {
   summary: string | null;
   /** Final status seen so far across all events. */
   final_status: TaskEventStatus;
+  /** True iff the underlying tk file has `step: true` (turn-bound
+   *  progress marker). Step records nest under their parent ticket in
+   *  the progress view; standalone steps render flat. */
+  step: boolean;
+  /** Id of the parent ticket this record is nested under, or "". */
+  parent_id: string;
+  /** Current assignee from the latest event (used for diagnostics; the
+   *  watcher already filters which agent sees the ticket, so the
+   *  frontend doesn't re-check this for routing). */
+  assignee: string;
+  /** The earliest task_event timestamp observed for this ticket in the
+   *  current agent's stream. Used for turn attribution instead of
+   *  `created_at` so a ticket picked up by THIS agent lands in the
+   *  picker's first-action turn rather than the originator's creation
+   *  turn (whose timestamp could be in any prior turn -- or any prior
+   *  agent's runtime -- when a ticket is handed off). */
+  first_observed_at: string;
 }
 
 /** A task as it should be rendered inside a specific turn. */
@@ -80,6 +97,23 @@ export interface TaskInTurn {
   /** Inclusive upper bound of the active window. null = still active at
    *  end of turn. */
   active_window_end: string | null;
+  /** True iff this node represents a step record (turn-bound progress
+   *  marker) rather than a regular ticket. Drives ProgressBlock chrome:
+   *  steps render slimmer and (when nested) indented under their
+   *  parent; regular tickets render with a parent badge / heavier
+   *  border. */
+  is_step: boolean;
+  /** Id of the parent ticket this node is nested under, or "" if
+   *  standalone. Used during the nesting pass in buildTurns to fold a
+   *  step into its parent's `children` when both live in the same
+   *  turn. */
+  parent_id: string;
+  /** Step children grouped under this node (regular ticket or
+   *  standalone step). Empty when this node has no children in the
+   *  current turn. The renderer walks this recursively but in practice
+   *  the model is two levels: ticket -> steps, with steps having no
+   *  children of their own. */
+  children: TaskInTurn[];
 }
 
 export interface Turn {
@@ -124,6 +158,10 @@ export function buildTaskRecords(events: TranscriptEvent[]): Map<string, TaskRec
         closed_at: e.status === "closed" ? e.timestamp : null,
         summary: e.status === "closed" ? (e.summary ?? null) : null,
         final_status: e.status,
+        step: e.step ?? false,
+        parent_id: e.parent_id ?? "",
+        assignee: e.assignee ?? "",
+        first_observed_at: e.timestamp,
       });
       continue;
     }
@@ -144,6 +182,27 @@ export function buildTaskRecords(events: TranscriptEvent[]): Map<string, TaskRec
     }
     if (STATUS_RANK[e.status] >= STATUS_RANK[existing.final_status]) {
       existing.final_status = e.status;
+    }
+    // Track the earliest event timestamp seen in THIS agent's stream.
+    // For a regular ticket picked up from another agent, the first
+    // event in our stream is an in_progress one (the watcher only
+    // started surfacing it once we became assignee) -- earlier than
+    // any subsequent close, so the min is the picker's first action.
+    if (e.timestamp < existing.first_observed_at) {
+      existing.first_observed_at = e.timestamp;
+    }
+    // assignee changes over the ticket's life; the latest observed
+    // value wins. step / parent_id are immutable post-create in
+    // practice (tk doesn't expose a re-parent or convert-to-step
+    // operation), but we still update for symmetry / future-proofing.
+    if (e.assignee !== undefined && e.assignee !== "") {
+      existing.assignee = e.assignee;
+    }
+    if (e.parent_id !== undefined && e.parent_id !== "") {
+      existing.parent_id = e.parent_id;
+    }
+    if (e.step !== undefined) {
+      existing.step = e.step;
     }
   }
   return records;
@@ -193,12 +252,19 @@ export function buildTurns(events: TranscriptEvent[]): Turn[] {
     });
   }
 
-  // Attribute each task record to its owning turn (created during) and
-  // any carryover turn (next turn after the owning one if not closed).
+  // Attribute each task record to its owning turn (the first turn whose
+  // window contains the earliest task_event we observed for this ticket
+  // in the current agent's stream) and any carryover turn. Using
+  // `first_observed_at` instead of `created_at` is what makes a ticket
+  // PICKED UP by this agent land in the picker's turn rather than the
+  // originator's creation turn -- the watcher only starts surfacing
+  // events for the ticket once we become its assignee, so its earliest
+  // event in our stream IS the picker's first action.
   for (const record of taskRecords.values()) {
+    const attribution_ts = record.first_observed_at || record.created_at;
     for (let i = 0; i < turns.length; i++) {
       const turn = turns[i];
-      const inWindow = record.created_at >= turn.start_ts && (turn.end_ts === "" || record.created_at < turn.end_ts);
+      const inWindow = attribution_ts >= turn.start_ts && (turn.end_ts === "" || attribution_ts < turn.end_ts);
       if (!inWindow) continue;
       // Owning turn entry.
       turn.tasks.push(makeTaskInTurn(record, turn, /* is_carryover */ false, turns.length, /* turn_index */ i));
@@ -236,6 +302,37 @@ export function buildTurns(events: TranscriptEvent[]): Turn[] {
     const carry = turn.tasks.filter((t) => t.is_carryover).sort(byStart);
     const own = turn.tasks.filter((t) => !t.is_carryover).sort(byStart);
     turn.tasks = [...carry, ...own];
+  }
+
+  // Nest step children under their parent ticket where both live in the
+  // same turn. Steps whose parent is NOT in this turn (orphan steps --
+  // typically means the parent already closed in an earlier turn) fall
+  // back to rendering flat as standalone nodes; in practice this is
+  // rare because a closed parent's child step is usually closed in the
+  // same turn too.
+  for (const turn of turns) {
+    const byId = new Map<string, TaskInTurn>();
+    for (const t of turn.tasks) byId.set(t.ticket_id, t);
+    const kept: TaskInTurn[] = [];
+    for (const t of turn.tasks) {
+      if (t.is_step && t.parent_id) {
+        const parentNode = byId.get(t.parent_id);
+        if (parentNode !== undefined) {
+          parentNode.children.push(t);
+          continue;
+        }
+      }
+      kept.push(t);
+    }
+    // Sort children within each parent by the same byStart rule so the
+    // nested step list reads in the order the agent actually worked
+    // through them.
+    for (const node of kept) {
+      if (node.children.length > 1) {
+        node.children.sort(byStart);
+      }
+    }
+    turn.tasks = kept;
   }
 
   return turns;
@@ -287,6 +384,9 @@ function makeTaskInTurn(
     // up the in-progress task's tool calls when the user expanded it.)
     active_window_start: status === "pending" ? null : (record.started_at ?? record.created_at),
     active_window_end: status === "done" ? record.closed_at : null,
+    is_step: record.step,
+    parent_id: record.parent_id,
+    children: [],
   };
 }
 
