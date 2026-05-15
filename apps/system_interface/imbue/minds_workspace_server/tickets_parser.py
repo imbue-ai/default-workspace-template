@@ -67,9 +67,26 @@ class TicketState(FrozenModel):
     # The mngr agent that created the ticket, captured from $MNGR_AGENT_NAME
     # by the patched `tk create` (see vendor/tk/ticket). Empty string when
     # the ticket was created outside an mngr context or by an older tk that
-    # did not stamp the field; the watcher treats absent/empty as "include
-    # for any agent" to stay backwards-compatible with pre-existing tickets.
+    # did not stamp the field; the watcher uses this together with `step`
+    # and `assignee` to decide whether to surface a ticket to a given
+    # agent's progress view.
     agent: str = Field(description="frontmatter `agent` field, or empty string")
+    # True when the ticket is a turn-bound progress record ("step"), False
+    # for regular tickets. `tk create --step` stamps `step: true` into the
+    # frontmatter; absent/empty parses as False (legacy + non-step
+    # tickets). Drives the watcher's per-agent surfacing rule: steps go
+    # only to their creator, regular tickets go to their assignee.
+    step: bool = Field(description="True when this ticket is a turn-bound progress record")
+    # The id of the parent ticket, if any. Used by the chat progress view
+    # to nest step children under the regular ticket their agent picked
+    # up. Empty string when there is no parent.
+    parent_id: str = Field(description="frontmatter `parent` field, or empty string")
+    # The agent (or human) currently assigned to the ticket. For regular
+    # tickets this is the load-bearing "this is now my work" signal --
+    # the watcher surfaces a ticket to whichever agent is the assignee
+    # (so picked-up tickets show in the picker's chat, not the
+    # originator's). Empty for unassigned tickets.
+    assignee: str = Field(description="frontmatter `assignee` field, or empty string")
 
 
 def parse_ticket_text(text: str) -> TicketState | None:
@@ -94,6 +111,9 @@ def parse_ticket_text(text: str) -> TicketState | None:
     status = fields.get("status", "")
     created_at = fields.get("created", "")
     agent = fields.get("agent", "")
+    step = fields.get("step", "").lower() == "true"
+    parent_id = fields.get("parent", "")
+    assignee = fields.get("assignee", "")
 
     if not ticket_id or status not in _VALID_STATUSES:
         return None
@@ -116,6 +136,9 @@ def parse_ticket_text(text: str) -> TicketState | None:
         summary=summary,
         summary_at=summary_at,
         agent=agent,
+        step=step,
+        parent_id=parent_id,
+        assignee=assignee,
     )
 
 

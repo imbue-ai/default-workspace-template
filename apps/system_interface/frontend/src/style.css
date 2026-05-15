@@ -1598,6 +1598,56 @@ body {
   line-height: 1.55;
 }
 
+/* Id badge in front of regular-ticket titles. Visually subtle -- the
+   title is the primary thing the user reads; the badge is the secondary
+   "which tk ticket is this" handle for users / agents who care. */
+.pv-tl-id-badge {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 6px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--pv-fg-muted);
+  background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+/* Distinct chrome for step records vs. regular tickets. Steps are
+   creator-private progress markers -- they read like sub-items, so we
+   keep the title weight lighter and the typography slightly de-emphasized.
+   Regular tickets carry a heavier title weight (the existing default). */
+.pv-tl-node--step .pv-tl-title {
+  font-weight: 400;
+  font-size: 13.5px;
+  color: var(--pv-fg-soft);
+}
+.pv-tl-node--ticket .pv-tl-title {
+  font-weight: 600;
+}
+.pv-tl-node--ticket.pv-tl-node--done .pv-tl-title {
+  font-weight: 500;
+}
+
+/* Nested step children under their parent ticket. Indent + a thin
+   continuation rail so the hierarchy reads at a glance. Last child
+   drops the rail tail to match the surrounding timeline-thread. */
+.pv-tl-children {
+  margin-top: 8px;
+  margin-left: 4px;
+  padding-left: 18px;
+  border-left: 1px solid var(--pv-line-faint, rgba(127, 127, 127, 0.18));
+  position: relative;
+}
+.pv-tl-node--child {
+  padding-bottom: 10px;
+}
+.pv-tl-node--child.pv-tl-node--last {
+  padding-bottom: 0;
+}
+
 .pv-tl-expanded {
   margin-top: 6px;
 }

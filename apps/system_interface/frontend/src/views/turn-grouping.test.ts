@@ -51,6 +51,9 @@ function taskEvent(
     created_at: extras.created_at ?? ts,
     summary: extras.summary ?? null,
     summary_at: extras.summary_at ?? null,
+    step: extras.step,
+    parent_id: extras.parent_id,
+    assignee: extras.assignee,
   };
 }
 
@@ -365,6 +368,9 @@ describe("eventsInTaskWindow", () => {
       started_at: "2026-04-28T01:00:20Z",
       active_window_start: "2026-04-28T01:00:20Z",
       active_window_end: "2026-04-28T01:00:50Z",
+      is_step: false,
+      parent_id: "",
+      children: [],
     };
     const body = [
       assistantMsg("2026-04-28T01:00:15Z", "before start"),
@@ -388,6 +394,9 @@ describe("eventsInTaskWindow", () => {
       started_at: "2026-04-28T01:00:20Z",
       active_window_start: "2026-04-28T01:00:20Z",
       active_window_end: null,
+      is_step: false,
+      parent_id: "",
+      children: [],
     };
     const body = [toolUse("2026-04-28T01:00:25Z", "Read", "tc1"), toolUse("2026-04-28T01:00:45Z", "Edit", "tc2")];
     expect(eventsInTaskWindow(task, body)).toHaveLength(2);
@@ -408,6 +417,9 @@ describe("eventsInTaskWindow", () => {
       started_at: "2026-04-28T01:00:20Z",
       active_window_start: "2026-04-28T01:00:20Z",
       active_window_end: "2026-04-28T01:00:50Z",
+      is_step: false,
+      parent_id: "",
+      children: [],
     };
     function toolResult(ts: string, callId: string): TranscriptEvent {
       return {
@@ -473,5 +485,158 @@ describe("selectFinalMessages", () => {
       assistantMsg("2026-04-28T01:00:02Z", "hi back", "a-hi"),
     ];
     expect(selectFinalMessages(events).map((e) => e.event_id)).toEqual(["a-hi"]);
+  });
+});
+
+describe("step + ticket nesting", () => {
+  it("nests step children under their parent ticket in the same turn", () => {
+    // Agent picks up a ticket and files two step records under it within
+    // the same turn. The progress block should show the ticket as a
+    // top-level node with both steps in its `children`.
+    const events: TranscriptEvent[] = [
+      userMsg("2026-04-28T01:00:00Z", "do the auth refactor"),
+      taskEvent("auth-1", "in_progress", "2026-04-28T01:00:05Z", {
+        title: "Refactor auth middleware",
+        assignee: "agent-A",
+      }),
+      taskEvent("step-1", "open", "2026-04-28T01:00:10Z", {
+        title: "Read the middleware",
+        step: true,
+        parent_id: "auth-1",
+      }),
+      taskEvent("step-2", "open", "2026-04-28T01:00:20Z", {
+        title: "Edit it",
+        step: true,
+        parent_id: "auth-1",
+      }),
+    ];
+    const turns = buildTurns(events);
+    expect(turns).toHaveLength(1);
+    const tasks = turns[0].tasks;
+    // After nesting only the parent ticket survives as a top-level task.
+    expect(tasks.map((t) => t.ticket_id)).toEqual(["auth-1"]);
+    expect(tasks[0].is_step).toBe(false);
+    expect(tasks[0].children.map((c) => c.ticket_id)).toEqual(["step-1", "step-2"]);
+    expect(tasks[0].children.every((c) => c.is_step)).toBe(true);
+  });
+
+  it("leaves a standalone step (no parent) at the top level", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("2026-04-28T01:00:00Z", "quick lookup"),
+      taskEvent("step-x", "open", "2026-04-28T01:00:05Z", {
+        title: "Read the README",
+        step: true,
+        parent_id: "",
+      }),
+    ];
+    const turns = buildTurns(events);
+    expect(turns[0].tasks).toHaveLength(1);
+    expect(turns[0].tasks[0].is_step).toBe(true);
+    expect(turns[0].tasks[0].children).toEqual([]);
+  });
+
+  it("orphan step (parent absent from turn) renders flat at the top level", () => {
+    // The step's parent_id points at a ticket that isn't in this turn's
+    // task list (e.g. it closed in an earlier turn). The renderer falls
+    // back to flat placement rather than dropping the step.
+    const events: TranscriptEvent[] = [
+      userMsg("2026-04-28T01:00:00Z", "follow up"),
+      taskEvent("step-orphan", "open", "2026-04-28T01:00:05Z", {
+        title: "Stray follow-up",
+        step: true,
+        parent_id: "ghost-parent",
+      }),
+    ];
+    const turns = buildTurns(events);
+    expect(turns[0].tasks.map((t) => t.ticket_id)).toEqual(["step-orphan"]);
+    expect(turns[0].tasks[0].children).toEqual([]);
+  });
+});
+
+describe("picked-up-ticket attribution", () => {
+  it("attributes a ticket to the turn containing its earliest observed event, not its created_at", () => {
+    // The ticket was originally created long before the current agent
+    // saw it (e.g. by agent-A). Agent-B's watcher only starts emitting
+    // events once B becomes the assignee, so the earliest event in B's
+    // stream is the in_progress one. That timestamp -- not created_at --
+    // is what should attribute the ticket to a turn.
+    const events: TranscriptEvent[] = [
+      userMsg("2026-04-28T02:00:00Z", "turn 1 prompt"),
+      userMsg("2026-04-28T03:00:00Z", "pick up the auth ticket"),
+      // The ticket frontmatter says it was created on day 1, well before
+      // either turn began. But B's watcher only saw it transition to
+      // in_progress (with assignee=B) at 03:00:30, inside turn 2.
+      taskEvent("auth-1", "in_progress", "2026-04-28T03:00:30Z", {
+        title: "Auth refactor",
+        assignee: "agent-B",
+        created_at: "2026-04-27T10:00:00Z",
+      }),
+    ];
+    const turns = buildTurns(events);
+    expect(turns).toHaveLength(2);
+    // The ticket lands in the picker's turn (turn 2), not the originator's.
+    expect(turns[0].tasks).toEqual([]);
+    expect(turns[1].tasks.map((t) => t.ticket_id)).toEqual(["auth-1"]);
+  });
+
+  it("falls back to created_at when the record has no first_observed_at signal", () => {
+    // Sanity: regular own-ticket flow still works. The agent created the
+    // ticket in this turn, so first_observed_at == created_at and the
+    // attribution behaves identically to the legacy rule.
+    const events: TranscriptEvent[] = [
+      userMsg("2026-04-28T01:00:00Z", "plan it"),
+      taskEvent("own-1", "open", "2026-04-28T01:00:05Z", {
+        title: "Plan step",
+        step: true,
+        created_at: "2026-04-28T01:00:05Z",
+      }),
+    ];
+    const turns = buildTurns(events);
+    expect(turns[0].tasks.map((t) => t.ticket_id)).toEqual(["own-1"]);
+  });
+});
+
+describe("parent + children carryover", () => {
+  it("carries the parent ticket forward and nests new T2 child steps under it", () => {
+    // Plan scenario: B picks up auth-1 in T1, files step-1, closes it.
+    // In T2 B files step-2 under the same (still-in_progress) ticket.
+    // T2's progress block re-renders the parent + the newly added step.
+    // The closed step from T1 does NOT re-render in T2 -- standard
+    // carryover only propagates tasks that are still unfinished.
+    const events: TranscriptEvent[] = [
+      userMsg("2026-04-28T01:00:00Z", "do the refactor"),
+      taskEvent("auth-1", "in_progress", "2026-04-28T01:00:05Z", {
+        title: "Auth refactor",
+        assignee: "agent-A",
+      }),
+      taskEvent("step-1", "open", "2026-04-28T01:00:10Z", {
+        title: "Read it",
+        step: true,
+        parent_id: "auth-1",
+      }),
+      taskEvent("step-1", "closed", "2026-04-28T01:00:30Z", {
+        title: "Read it",
+        step: true,
+        parent_id: "auth-1",
+        summary: "Read the middleware end-to-end.",
+        summary_at: "2026-04-28T01:00:30Z",
+      }),
+      userMsg("2026-04-28T02:00:00Z", "continue"),
+      taskEvent("step-2", "open", "2026-04-28T02:00:05Z", {
+        title: "Patch it",
+        step: true,
+        parent_id: "auth-1",
+      }),
+    ];
+    const turns = buildTurns(events);
+    expect(turns).toHaveLength(2);
+    // Turn 1: parent with step-1 nested.
+    expect(turns[0].tasks.map((t) => t.ticket_id)).toEqual(["auth-1"]);
+    expect(turns[0].tasks[0].children.map((c) => c.ticket_id)).toEqual(["step-1"]);
+    expect(turns[0].tasks[0].continues_forward).toBe(true);
+    // Turn 2: parent carries over, step-2 nests under it. step-1 is
+    // already closed and does NOT re-render.
+    expect(turns[1].tasks.map((t) => t.ticket_id)).toEqual(["auth-1"]);
+    expect(turns[1].tasks[0].children.map((c) => c.ticket_id)).toEqual(["step-2"]);
   });
 });
