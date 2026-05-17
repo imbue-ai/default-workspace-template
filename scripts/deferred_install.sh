@@ -38,9 +38,9 @@ _install_playwright() {
     _log "playwright: installing chromium + apt system libs (this may take a few minutes)"
     # `--with-deps` apt-installs the system libraries chromium needs.
     # `uv run` uses the workspace venv (the playwright Python wheel is
-    # already installed via the root pyproject.toml's pin).
-    cd "$REPO_ROOT"
-    if uv run playwright install --with-deps chromium; then
+    # already installed via the root pyproject.toml's pin). Subshell so
+    # the cwd change does not leak to other `_install_<name>` functions.
+    if (cd "$REPO_ROOT" && uv run playwright install --with-deps chromium); then
         touch "$marker"
         _log "playwright: install complete, marker written to $marker"
     else
