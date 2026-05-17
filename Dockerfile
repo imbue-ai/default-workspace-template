@@ -163,13 +163,15 @@ RUN git config --global --add safe.directory /code/
 RUN cd /code/apps/system_interface/frontend && npm run build
 
 # add mngr and minds-workspace-server as tools (both need the plugin packages
-# so they can parse plugin-specific config fields like auto_dismiss_dialogs)
+# so they can parse plugin-specific config fields like auto_dismiss_dialogs).
+# mngr_modal is intentionally NOT installed/registered here because the FCT
+# .mngr/settings.toml sets providers.modal.is_enabled = false; without it,
+# `mngr plugin add` no longer has to inject a third plugin into the mngr
+# tool venv, which is the dominant cost of this RUN.
 RUN uv tool install -e /code/vendor/mngr/libs/mngr && \
     uv tool install -e /code/apps/system_interface \
-        --with-editable /code/vendor/mngr/libs/mngr_claude \
-        --with-editable /code/vendor/mngr/libs/mngr_modal && \
+        --with-editable /code/vendor/mngr/libs/mngr_claude && \
     mngr plugin add \
-    --path vendor/mngr/libs/mngr_modal/ \
     --path vendor/mngr/libs/mngr_claude \
     --path vendor/mngr/libs/mngr_wait
 
