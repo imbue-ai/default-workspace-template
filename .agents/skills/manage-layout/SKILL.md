@@ -41,7 +41,7 @@ Subcommands that take a "service or ref" argument (`open`, `split`,
 panel; it is accepted as a ref anywhere (most usefully as
 `--relative-to=self` for `split` / `move`).
 
-Run `uv run python scripts/layout.py inspect` to see refs for the
+Run `python3 scripts/layout.py inspect` to see refs for the
 currently-open panels.
 
 ## Common operations
