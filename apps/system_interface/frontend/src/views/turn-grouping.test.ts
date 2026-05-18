@@ -491,10 +491,11 @@ describe("selectFinalMessages", () => {
     expect(selectFinalMessages(events, []).map((e) => e.event_id)).toEqual(["a-hi"]);
   });
 
-  it("drops a text-only message that falls inside a closed task's window", () => {
-    // Mid-task prose belongs to the closed task's narration slot (which
-    // the close summary then overrides). Surfacing it at top level
-    // duplicates the agent's output and clutters the final view.
+  it("drops an earlier in-window message of a closed task when a later text exists in the same window", () => {
+    // Promote-on-close only surfaces the LAST text-only of the turn.
+    // Earlier in-window prose was just intermediate thinking that lived
+    // briefly as narration and got overwritten -- it doesn't deserve a
+    // permanent top-level slot.
     const doneTask: TaskInTurn = {
       ticket_id: "t1",
       title: "Pull headlines",
@@ -511,8 +512,9 @@ describe("selectFinalMessages", () => {
       children: [],
       narration: null,
     };
-    const mid = assistantMsg("2026-04-28T01:00:30Z", "Half done with the JSON.", "msg-mid");
-    expect(selectFinalMessages([mid], [doneTask])).toEqual([]);
+    const early = assistantMsg("2026-04-28T01:00:10Z", "Halfway through.", "msg-early");
+    const wrapup = assistantMsg("2026-04-28T01:00:50Z", "All extracted -- here are the headlines.", "msg-wrapup");
+    expect(selectFinalMessages([early, wrapup], [doneTask]).map((e) => e.event_id)).toEqual(["msg-wrapup"]);
   });
 
   it("keeps a text-only message that falls outside every task window", () => {
@@ -539,11 +541,11 @@ describe("selectFinalMessages", () => {
     expect(selectFinalMessages([between], [earlier]).map((e) => e.event_id)).toEqual(["msg-between"]);
   });
 
-  it("surfaces the trailing message of an unclosed task at top level (safety valve)", () => {
-    // If the agent leaves the task open at turn end and emits a final
-    // text message, that message would otherwise sit only in the
-    // narration slot of an unresolved task. Promote it to top level so
-    // the user reliably sees the wrap-up.
+  it("does NOT surface a trailing message of an unclosed task at top level", () => {
+    // No safety valve for unclosed tasks: it would fire transiently for
+    // every mid-task message (the latest is always "last" until the next
+    // arrives) and duplicate with the narration. Trailing prose in an
+    // unclosed task sits only in the narration slot.
     const openTask: TaskInTurn = {
       ticket_id: "t1",
       title: "Investigate",
@@ -561,31 +563,59 @@ describe("selectFinalMessages", () => {
       narration: null,
     };
     const trailing = assistantMsg("2026-04-28T01:00:50Z", "Stuck -- need your call.", "msg-trailing");
-    expect(selectFinalMessages([trailing], [openTask]).map((e) => e.event_id)).toEqual(["msg-trailing"]);
+    expect(selectFinalMessages([trailing], [openTask])).toEqual([]);
   });
 
-  it("drops earlier in-window messages even when the last one is the trailing safety-valve case", () => {
-    // The safety valve only rescues the LAST text-only message of the
-    // turn. Earlier in-window prose still belongs to the narration slot.
-    const openTask: TaskInTurn = {
+  it("promotes the last in-window message to top level when its containing task closed in the turn", () => {
+    // Promote-on-close: the close summary overwrites the task's caption
+    // (the narration slot). Without promotion the agent's last pre-close
+    // prose would vanish. The check is restricted to the LAST text-only
+    // of the turn so mid-turn closures don't keep flushing earlier
+    // intermediate thinking to top level.
+    const doneTask: TaskInTurn = {
       ticket_id: "t1",
       title: "Investigate",
-      status: "active",
-      summary: null,
+      status: "done",
+      summary: "Found root cause, fix is X.",
       is_carryover: false,
       continues_forward: false,
       created_at: "2026-04-28T01:00:00Z",
       started_at: "2026-04-28T01:00:00Z",
       active_window_start: "2026-04-28T01:00:00Z",
-      active_window_end: null,
+      active_window_end: "2026-04-28T01:01:00Z",
       is_step: true,
       parent_id: "",
       children: [],
       narration: null,
     };
-    const mid = assistantMsg("2026-04-28T01:00:20Z", "Looking into thing A.", "msg-mid");
-    const trailing = assistantMsg("2026-04-28T01:00:50Z", "Hit a wall, need your call.", "msg-trailing");
-    expect(selectFinalMessages([mid, trailing], [openTask]).map((e) => e.event_id)).toEqual(["msg-trailing"]);
+    const wrapup = assistantMsg("2026-04-28T01:00:50Z", "Found it -- the OAuth regex was too tight.", "msg-wrapup");
+    expect(selectFinalMessages([wrapup], [doneTask]).map((e) => e.event_id)).toEqual(["msg-wrapup"]);
+  });
+
+  it("does NOT promote an earlier in-window message when a later text-only landed outside any window", () => {
+    // The promote-on-close rule only inspects the LAST text-only of the
+    // turn. If later prose landed outside all windows, that later prose
+    // is already at top level via the outside-window rule -- we don't
+    // also reach back and pull an earlier closed-task message up.
+    const doneTask: TaskInTurn = {
+      ticket_id: "t1",
+      title: "Investigate",
+      status: "done",
+      summary: "Done.",
+      is_carryover: false,
+      continues_forward: false,
+      created_at: "2026-04-28T01:00:00Z",
+      started_at: "2026-04-28T01:00:00Z",
+      active_window_start: "2026-04-28T01:00:00Z",
+      active_window_end: "2026-04-28T01:00:30Z",
+      is_step: true,
+      parent_id: "",
+      children: [],
+      narration: null,
+    };
+    const inWindow = assistantMsg("2026-04-28T01:00:20Z", "Looking into thing A.", "msg-inwindow");
+    const afterClose = assistantMsg("2026-04-28T01:00:40Z", "Wrap-up notes after closing.", "msg-after");
+    expect(selectFinalMessages([inWindow, afterClose], [doneTask]).map((e) => e.event_id)).toEqual(["msg-after"]);
   });
 });
 

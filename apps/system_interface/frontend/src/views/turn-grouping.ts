@@ -484,37 +484,46 @@ export function eventsInTaskWindow(task: TaskInTurn, body_events: TranscriptEven
  * at the top level of the progress block (below the timeline), rather
  * than being absorbed into a task's narration slot.
  *
- * Rules, in order:
+ * Rules:
  *   - Message must be a text-only assistant_message (non-empty `text`
  *     and no `tool_calls`). Tool-bearing messages always stay inside
  *     their task's expanded panel.
- *   - If the message's timestamp is outside every task's active
- *     window, it renders at top level (standalone prose between or
- *     around tasks).
- *   - Otherwise the message is normally consumed as that task's
- *     narration. The one exception is the LAST text-only message of
- *     the turn when its containing task is still active (not done) at
- *     turn end -- the agent left the task open, so we surface its
- *     trailing message at top level too rather than letting it sit
- *     only in the narration slot of an unresolved task.
+ *   - Messages whose timestamp falls outside every task's active
+ *     window render at top level (standalone prose between or around
+ *     tasks).
+ *   - Promote-on-close: the LAST text-only message of the turn, when
+ *     its containing task closed within the turn, ALSO renders at top
+ *     level. The close summary takes the task's caption slot, so the
+ *     agent's last in-flight prose would otherwise vanish; promoting
+ *     it preserves the wrap-up where the agent naturally wrote it.
+ *     We only fire this for the LAST text-only of the turn, not every
+ *     closed task, so mid-turn closures don't keep flushing earlier
+ *     intermediate thinking to top level -- only the genuine
+ *     end-of-turn wrap-up surfaces.
+ *
+ *   In-window messages whose containing task is still active at turn
+ *   end (unclosed) stay only in the narration slot. There's no safety
+ *   valve for that case: it would fire transiently for every mid-task
+ *   message (the latest is always "last" until the next arrives) and
+ *   duplicate with the narration. Agents who want a prominent wrap-up
+ *   should close the task; the promote-on-close rule then surfaces it.
  */
 export function selectFinalMessages(body_events: TranscriptEvent[], tasks: TaskInTurn[]): TranscriptEvent[] {
   const textOnly = body_events.filter(
     (ev) => ev.type === "assistant_message" && !!ev.text && !(ev.tool_calls && ev.tool_calls.length > 0),
   );
   if (textOnly.length === 0) return [];
-  const lastIdx = textOnly.length - 1;
   const result: TranscriptEvent[] = [];
-  for (let i = 0; i < textOnly.length; i++) {
-    const ev = textOnly[i];
-    const containing = findContainingTask(ev.timestamp, tasks);
-    if (containing === null) {
-      result.push(ev);
-      continue;
-    }
-    if (i === lastIdx && containing.status !== "done") {
+  for (const ev of textOnly) {
+    if (findContainingTask(ev.timestamp, tasks) === null) {
       result.push(ev);
     }
   }
+  const lastMsg = textOnly[textOnly.length - 1];
+  const lastContaining = findContainingTask(lastMsg.timestamp, tasks);
+  if (lastContaining !== null && lastContaining.status === "done" && !result.includes(lastMsg)) {
+    result.push(lastMsg);
+  }
+  result.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   return result;
 }
