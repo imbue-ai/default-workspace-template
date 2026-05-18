@@ -34,13 +34,6 @@ def client(app: FastAPI) -> Iterator[TestClient]:
         yield c
 
 
-@pytest.fixture(autouse=True)
-def reset_oauth_session() -> Iterator[None]:
-    claude_auth.abort_oauth_login()
-    yield
-    claude_auth.abort_oauth_login()
-
-
 def _logged_in_runner(_cmd: list[str], _timeout: float) -> FakeFinishedProcess:
     return FakeFinishedProcess(
         stdout='{"loggedIn": true, "email": "u@example.com", "subscriptionType": "Max"}'

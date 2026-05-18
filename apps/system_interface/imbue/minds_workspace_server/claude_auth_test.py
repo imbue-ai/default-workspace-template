@@ -10,7 +10,6 @@ in test_ratchets.py, not dodged via hand-rolled try/finally).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -19,13 +18,6 @@ from pydantic import SecretStr
 from imbue.minds_workspace_server import claude_auth
 from imbue.minds_workspace_server.testing import FakeFinishedProcess
 from imbue.minds_workspace_server.testing import FakePexpectProcess
-
-
-@pytest.fixture(autouse=True)
-def reset_oauth_session() -> Iterator[None]:
-    claude_auth.abort_oauth_login()
-    yield
-    claude_auth.abort_oauth_login()
 
 
 def test_parse_status_payload_full() -> None:
