@@ -1431,3 +1431,19 @@ body {
 }
 
 /* share-modal-btn-create uses the base .share-modal-btn styling (dark button) */
+
+.claude-login-primary-button {
+  background: var(--color-accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+.claude-login-primary-button:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+
+.claude-login-primary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

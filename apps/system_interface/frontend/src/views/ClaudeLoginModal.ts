@@ -215,7 +215,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           "button",
           {
             type: "button",
-            class: "px-4 py-2 bg-primary text-white rounded",
+            class: "claude-login-primary-button px-4 py-2 rounded",
             disabled: !apiKey.trim(),
             onclick: () => {
               void submitApiKey();
@@ -231,8 +231,14 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     return m("div.claude-login-oauth", [
       m("p", "Open this URL in your browser, complete the sign-in, then paste the code back here."),
       m(
-        "a.block.mt-2.break-all.text-link",
-        { href: oauthUrl ?? "#", target: "_blank", rel: "noopener noreferrer" },
+        "a.block.mt-2",
+        {
+          href: oauthUrl ?? "#",
+          target: "_blank",
+          rel: "noopener noreferrer",
+          style:
+            "color: var(--color-accent); word-break: break-all; overflow-wrap: anywhere;",
+        },
         oauthUrl,
       ),
       m("label.block.font-semibold.mt-3.mb-1", { for: "claude-login-code-input" }, "Code"),
@@ -267,7 +273,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           "button",
           {
             type: "button",
-            class: "px-4 py-2 bg-primary text-white rounded",
+            class: "claude-login-primary-button px-4 py-2 rounded",
             disabled: !code.trim(),
             onclick: () => {
               void submitOAuthCode();
@@ -299,7 +305,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           "button",
           {
             type: "button",
-            class: "px-4 py-2 bg-primary text-white rounded",
+            class: "claude-login-primary-button px-4 py-2 rounded",
             onclick: () => attrsRef?.onDismiss(),
           },
           "Done",
