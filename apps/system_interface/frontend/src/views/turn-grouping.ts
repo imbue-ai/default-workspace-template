@@ -331,35 +331,22 @@ export function buildTurns(events: TranscriptEvent[]): Turn[] {
     }
   }
 
-  // Nest step children under their parent ticket where both live in the
-  // same turn. Steps whose parent is NOT in this turn (orphan steps --
-  // typically means the parent already closed in an earlier turn) fall
-  // back to rendering flat as standalone nodes; in practice this is
-  // rare because a closed parent's child step is usually closed in the
-  // same turn too.
+  // Drop regular tickets from the rendered timeline. The progress view
+  // shows STEPS only -- regular tickets are substantive cross-agent
+  // units that can stay open across many turns, and rendering them
+  // inline among per-turn step records confuses the per-turn timeline
+  // (their windows span multiple turns, their captions don't map onto
+  // the "live status" model, and their presence visually clutters what
+  // the user reads as "what happened this turn"). Tickets are still
+  // tracked in tk for cross-agent coordination; they just don't render
+  // in the chat progress block.
+  //
+  // Any step whose `parent_id` pointed at a regular ticket simply
+  // renders flat at top level -- the parent isn't on screen to nest
+  // under. (The earlier nesting pass that folded step children into a
+  // parent ticket was removed along with the ticket rendering itself.)
   for (const turn of turns) {
-    const byId = new Map<string, TaskInTurn>();
-    for (const t of turn.tasks) byId.set(t.ticket_id, t);
-    const kept: TaskInTurn[] = [];
-    for (const t of turn.tasks) {
-      if (t.is_step && t.parent_id) {
-        const parentNode = byId.get(t.parent_id);
-        if (parentNode !== undefined) {
-          parentNode.children.push(t);
-          continue;
-        }
-      }
-      kept.push(t);
-    }
-    // Sort children within each parent by the same byStart rule so the
-    // nested step list reads in the order the agent actually worked
-    // through them.
-    for (const node of kept) {
-      if (node.children.length > 1) {
-        node.children.sort(byStart);
-      }
-    }
-    turn.tasks = kept;
+    turn.tasks = turn.tasks.filter((t) => t.is_step);
   }
 
   return turns;

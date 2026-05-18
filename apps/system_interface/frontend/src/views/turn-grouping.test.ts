@@ -52,7 +52,10 @@ function taskEvent(
     created_at: extras.created_at ?? ts,
     summary: extras.summary ?? null,
     summary_at: extras.summary_at ?? null,
-    step: extras.step,
+    // Default to step: true because the progress view renders steps
+    // only; regular tickets are filtered out by buildTurns. Tests that
+    // specifically exercise regular-ticket behaviour pass step: false.
+    step: extras.step ?? true,
     parent_id: extras.parent_id,
     assignee: extras.assignee,
   };
@@ -695,36 +698,34 @@ describe("narration attribution", () => {
   });
 });
 
-describe("step + ticket nesting", () => {
-  it("nests step children under their parent ticket in the same turn", () => {
-    // Agent picks up a ticket and files two step records under it within
-    // the same turn. The progress block should show the ticket as a
-    // top-level node with both steps in its `children`.
+describe("step-only filtering", () => {
+  it("drops the parent ticket and renders its child steps flat at the top level", () => {
+    // Agent picks up a ticket and files two step records beneath it.
+    // The progress view shows only steps -- the parent ticket is
+    // filtered out, and its child steps render flat in arrival order.
     const events: TranscriptEvent[] = [
       userMsg("2026-04-28T01:00:00Z", "do the auth refactor"),
       taskEvent("auth-1", "in_progress", "2026-04-28T01:00:05Z", {
         title: "Refactor auth middleware",
         assignee: "agent-A",
+        step: false,
       }),
       taskEvent("step-1", "open", "2026-04-28T01:00:10Z", {
         title: "Read the middleware",
-        step: true,
         parent_id: "auth-1",
       }),
       taskEvent("step-2", "open", "2026-04-28T01:00:20Z", {
         title: "Edit it",
-        step: true,
         parent_id: "auth-1",
       }),
     ];
     const turns = buildTurns(events);
     expect(turns).toHaveLength(1);
     const tasks = turns[0].tasks;
-    // After nesting only the parent ticket survives as a top-level task.
-    expect(tasks.map((t) => t.ticket_id)).toEqual(["auth-1"]);
-    expect(tasks[0].is_step).toBe(false);
-    expect(tasks[0].children.map((c) => c.ticket_id)).toEqual(["step-1", "step-2"]);
-    expect(tasks[0].children.every((c) => c.is_step)).toBe(true);
+    expect(tasks.map((t) => t.ticket_id)).toEqual(["step-1", "step-2"]);
+    expect(tasks.every((t) => t.is_step)).toBe(true);
+    // No nesting: steps render flat regardless of their parent_id.
+    expect(tasks.every((t) => t.children.length === 0)).toBe(true);
   });
 
   it("leaves a standalone step (no parent) at the top level", () => {
@@ -742,21 +743,16 @@ describe("step + ticket nesting", () => {
     expect(turns[0].tasks[0].children).toEqual([]);
   });
 
-  it("orphan step (parent absent from turn) renders flat at the top level", () => {
-    // The step's parent_id points at a ticket that isn't in this turn's
-    // task list (e.g. it closed in an earlier turn). The renderer falls
-    // back to flat placement rather than dropping the step.
+  it("drops a turn with only a regular ticket (no steps) -- progress block won't render", () => {
+    // A turn that contains only a regular ticket and no step records
+    // ends up with an empty task list after filtering. ChatPanel's
+    // `turn.tasks.length > 0` gate then falls back to plain rendering.
     const events: TranscriptEvent[] = [
-      userMsg("2026-04-28T01:00:00Z", "follow up"),
-      taskEvent("step-orphan", "open", "2026-04-28T01:00:05Z", {
-        title: "Stray follow-up",
-        step: true,
-        parent_id: "ghost-parent",
-      }),
+      userMsg("2026-04-28T01:00:00Z", "pick up the auth refactor"),
+      taskEvent("auth-1", "in_progress", "2026-04-28T01:00:05Z", { title: "Refactor auth middleware", step: false }),
     ];
     const turns = buildTurns(events);
-    expect(turns[0].tasks.map((t) => t.ticket_id)).toEqual(["step-orphan"]);
-    expect(turns[0].tasks[0].children).toEqual([]);
+    expect(turns[0].tasks).toEqual([]);
   });
 });
 
@@ -815,15 +811,14 @@ describe("parent + children carryover", () => {
       taskEvent("auth-1", "in_progress", "2026-04-28T01:00:05Z", {
         title: "Auth refactor",
         assignee: "agent-A",
+        step: false,
       }),
       taskEvent("step-1", "open", "2026-04-28T01:00:10Z", {
         title: "Read it",
-        step: true,
         parent_id: "auth-1",
       }),
       taskEvent("step-1", "closed", "2026-04-28T01:00:30Z", {
         title: "Read it",
-        step: true,
         parent_id: "auth-1",
         summary: "Read the middleware end-to-end.",
         summary_at: "2026-04-28T01:00:30Z",
@@ -831,19 +826,16 @@ describe("parent + children carryover", () => {
       userMsg("2026-04-28T02:00:00Z", "continue"),
       taskEvent("step-2", "open", "2026-04-28T02:00:05Z", {
         title: "Patch it",
-        step: true,
         parent_id: "auth-1",
       }),
     ];
     const turns = buildTurns(events);
     expect(turns).toHaveLength(2);
-    // Turn 1: parent with step-1 nested.
-    expect(turns[0].tasks.map((t) => t.ticket_id)).toEqual(["auth-1"]);
-    expect(turns[0].tasks[0].children.map((c) => c.ticket_id)).toEqual(["step-1"]);
-    expect(turns[0].tasks[0].continues_forward).toBe(true);
-    // Turn 2: parent carries over, step-2 nests under it. step-1 is
-    // already closed and does NOT re-render.
-    expect(turns[1].tasks.map((t) => t.ticket_id)).toEqual(["auth-1"]);
-    expect(turns[1].tasks[0].children.map((c) => c.ticket_id)).toEqual(["step-2"]);
+    // Turn 1: parent ticket is filtered out, step-1 renders flat.
+    expect(turns[0].tasks.map((t) => t.ticket_id)).toEqual(["step-1"]);
+    expect(turns[0].tasks[0].is_step).toBe(true);
+    // Turn 2: ticket still filtered out; step-2 renders flat. step-1
+    // closed in turn 1 and does not carry over.
+    expect(turns[1].tasks.map((t) => t.ticket_id)).toEqual(["step-2"]);
   });
 });
