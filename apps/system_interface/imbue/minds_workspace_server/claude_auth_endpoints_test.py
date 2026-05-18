@@ -105,7 +105,7 @@ def test_full_oauth_flow_drives_subprocess_runs_welcome_resend_and_skips_restart
     monkeypatch.setattr(claude_auth, "command_runner", _recording_runner)
     monkeypatch.setattr(welcome_resend, "capture_pane", lambda _name: "empty pane")
     monkeypatch.setattr(welcome_resend, "send_message_fn", _record_welcome_send)
-    monkeypatch.setattr(welcome_resend, "_DEFAULT_SKILL_PATH", skill_path)
+    monkeypatch.setattr(welcome_resend, "_default_skill_path", lambda: skill_path)
 
     start = client.post("/api/claude-auth/start", json={"provider": "claudeai"})
     assert start.status_code == 200
@@ -151,7 +151,7 @@ def test_submit_api_key_restarts_all_claude_agents_and_runs_welcome_resend(
     skill_path.write_text(
         "---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nbody\n\n---\n"
     )
-    monkeypatch.setattr(welcome_resend, "_DEFAULT_SKILL_PATH", skill_path)
+    monkeypatch.setattr(welcome_resend, "_default_skill_path", lambda: skill_path)
 
     welcome_calls: list[str] = []
     restart_calls: list[str] = []

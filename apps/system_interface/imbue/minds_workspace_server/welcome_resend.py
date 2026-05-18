@@ -28,7 +28,8 @@ from imbue.minds_workspace_server.agent_discovery import send_message
 
 logger = _loguru_logger
 
-_DEFAULT_SKILL_PATH = Path(".agents/skills/welcome/SKILL.md")
+_WELCOME_SKILL_RELATIVE_PATH = Path(".agents/skills/welcome/SKILL.md")
+_WORK_DIR_ENV_VAR = "MNGR_AGENT_WORK_DIR"
 _FRONTMATTER_DELIMITER = "---"
 _HEADER_LINE_REGEX = re.compile(r"^#{1,6}\s+.+$", re.MULTILINE)
 _WELCOME_COMMAND = "/welcome"
@@ -74,6 +75,24 @@ def _extract_first_message_header(skill_body: str) -> str | None:
     return None
 
 
+def _default_skill_path() -> Path:
+    """Resolve the welcome skill path against the mind's work dir.
+
+    The workspace server is not guaranteed to be launched with its CWD set
+    to the mind's work dir, so a bare relative path would silently miss in
+    production (read_text raises FileNotFoundError, the OSError branch in
+    `check_and_resend_welcome` swallows it, and the welcome never resends).
+    Anchoring on MNGR_AGENT_WORK_DIR -- the same env var
+    `agent_manager._resolve_observe_cwd` uses -- pins the lookup to the
+    correct project root regardless of CWD. Falls back to the bare relative
+    path when the env var is unset.
+    """
+    work_dir = os.environ.get(_WORK_DIR_ENV_VAR, "")
+    if work_dir:
+        return Path(work_dir) / _WELCOME_SKILL_RELATIVE_PATH
+    return _WELCOME_SKILL_RELATIVE_PATH
+
+
 def read_welcome_opening_line(skill_path: Path | None = None) -> str:
     """Read the welcome skill markdown and return the opening line of the message.
 
@@ -81,7 +100,7 @@ def read_welcome_opening_line(skill_path: Path | None = None) -> str:
     block is present, in case the skill layout changes in a future
     revision.
     """
-    path = skill_path or _DEFAULT_SKILL_PATH
+    path = skill_path or _default_skill_path()
     text = path.read_text()
     body = _strip_frontmatter(text)
     header = _extract_first_message_header(body)

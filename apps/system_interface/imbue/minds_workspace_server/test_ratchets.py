@@ -230,8 +230,8 @@ def test_prevent_monkeypatch_setattr() -> None:
     # welcome_resend_test.py, claude_auth_endpoints_test.py). The
     # `claude_auth` and `welcome_resend` modules expose
     # `command_runner`, `pexpect_spawner`, `capture_pane`,
-    # `send_message_fn`, and `_DEFAULT_SKILL_PATH` as module-level
-    # callables/constants so dependencies on the outside world
+    # `send_message_fn`, and `_default_skill_path` as module-level
+    # callables so dependencies on the outside world
     # (subprocesses, pexpect spawns, tmux pane captures, agent
     # message dispatch, the welcome-skill file path) can be swapped
     # for deterministic test fakes without `unittest.mock`. Tests
