@@ -667,6 +667,56 @@ describe("selectFinalMessages", () => {
     );
     expect(selectFinalMessages([wrapup], [parentTicket]).map((e) => e.event_id)).toEqual(["msg-wrapup"]);
   });
+
+  it("does NOT swallow a later message into an abandoned still-open step", () => {
+    // Serial-step invariant: only one step should be in_progress at a
+    // time. If the agent forgets to close step A before starting (and
+    // closing) step B, A's stored window stretches indefinitely. The
+    // renderer caps A's effective end at B's start so any message after
+    // B finished lands outside every step's effective window.
+    const abandoned: TaskInTurn = {
+      ticket_id: "step-a",
+      title: "First, never closed",
+      status: "active",
+      summary: null,
+      is_carryover: false,
+      continues_forward: false,
+      created_at: "2026-04-28T01:00:00Z",
+      started_at: "2026-04-28T01:00:00Z",
+      active_window_start: "2026-04-28T01:00:00Z",
+      active_window_end: null,
+      is_step: true,
+      parent_id: "",
+      children: [],
+      narration: null,
+    };
+    const properlyClosed: TaskInTurn = {
+      ticket_id: "step-b",
+      title: "Second, closed cleanly",
+      status: "done",
+      summary: "Did the second step.",
+      is_carryover: false,
+      continues_forward: false,
+      created_at: "2026-04-28T01:00:10Z",
+      started_at: "2026-04-28T01:00:10Z",
+      active_window_start: "2026-04-28T01:00:10Z",
+      active_window_end: "2026-04-28T01:00:30Z",
+      is_step: true,
+      parent_id: "",
+      children: [],
+      narration: null,
+    };
+    const wrapup = assistantMsg(
+      "2026-04-28T01:00:40Z",
+      "Both done -- here is the wrap-up.",
+      "msg-wrapup",
+    );
+    // 01:00:40 is after step-b closed; step-a's stored window has no
+    // end, but its effective end is capped at step-b's start
+    // (01:00:10), so step-a doesn't contain 01:00:40 either. Outside
+    // every window -> top level.
+    expect(selectFinalMessages([wrapup], [abandoned, properlyClosed]).map((e) => e.event_id)).toEqual(["msg-wrapup"]);
+  });
 });
 
 describe("narration attribution", () => {

@@ -405,10 +405,9 @@ function makeTaskInTurn(
   };
 }
 
-/** Find the step record whose active window contains `ts`, preferring
- *  the most recently started one when multiple match (the "innermost" /
- *  most-specific step). Returns null if no step contains the timestamp.
- *  Pending steps (no active window) are skipped.
+/** Find the step record whose active window contains `ts`. Returns null
+ *  if no step contains the timestamp. Pending steps (no active window)
+ *  are skipped.
  *
  *  Regular tickets are intentionally NOT eligible containers. A regular
  *  ticket can stay open across many turns and contain many step records
@@ -418,27 +417,39 @@ function makeTaskInTurn(
  *  wrap-up into a slot the user can't easily see. Step records are
  *  shorter-lived and are the natural unit for "live status" captions.
  *
+ *  Effective windows: CLAUDE.md's step lifecycle says only one step is
+ *  in_progress at a time. If the agent forgets to close a step before
+ *  starting the next, the stored window of the abandoned step stretches
+ *  indefinitely and would otherwise swallow every subsequent message.
+ *  We enforce the serial-step invariant in the renderer by capping each
+ *  step's effective end at the start of the next step in the turn (when
+ *  one exists), so an abandoned step's window ends as soon as a later
+ *  step begins -- abandoned steps don't pollute the rest of the turn.
+ *
  *  Walks nested children so callers can pass either the flat
  *  pre-nesting list or the post-nesting tree. */
 function findContainingTask(ts: string, tasks: TaskInTurn[]): TaskInTurn | null {
-  let best: TaskInTurn | null = null;
-  let bestStart = "";
+  const steps: TaskInTurn[] = [];
   const visit = (t: TaskInTurn): void => {
-    if (t.is_step) {
-      const start = t.active_window_start;
-      if (start !== null) {
-        const end = t.active_window_end;
-        const inWindow = ts >= start && (end === null || ts <= end);
-        if (inWindow && (best === null || start > bestStart)) {
-          best = t;
-          bestStart = start;
-        }
-      }
-    }
+    if (t.is_step && t.active_window_start !== null) steps.push(t);
     for (const child of t.children) visit(child);
   };
   for (const t of tasks) visit(t);
-  return best;
+  steps.sort((a, b) => (a.active_window_start ?? "").localeCompare(b.active_window_start ?? ""));
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const start = step.active_window_start!;
+    if (ts < start) continue;
+    const originalEnd = step.active_window_end;
+    const nextStart = i + 1 < steps.length ? steps[i + 1].active_window_start : null;
+    let effectiveEnd: string | null = originalEnd;
+    if (nextStart !== null && (effectiveEnd === null || nextStart < effectiveEnd)) {
+      effectiveEnd = nextStart;
+    }
+    if (effectiveEnd !== null && ts > effectiveEnd) continue;
+    return step;
+  }
+  return null;
 }
 
 /** Pick out the body_events that fall inside a task's active window.
