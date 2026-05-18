@@ -72,7 +72,7 @@ Valid `name:` values for this worker:
 
 Run `/autofix` on your commits. Fix anything the reviewer flags.
 
-## Stage 6: Gate 2 -- approval
+## Stage 6: Final-artifact gate
 
 Write a report with `type: gate`, `name: final-artifact`, and body:
 

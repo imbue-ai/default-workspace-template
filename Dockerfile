@@ -4,7 +4,7 @@ FROM python:3.12.13-slim
 ARG TTYD_VERSION=1.7.7
 ARG CLOUDFLARED_VERSION=2026.3.0
 ARG UV_VERSION=0.11.7
-ARG CLAUDE_CODE_VERSION=2.1.116
+ARG CLAUDE_CODE_VERSION=2.1.141
 ARG MODAL_VERSION=1.4.2
 ARG NODE_MAJOR=20
 # Keep in sync with the `playwright==X.Y.Z` pin in the root pyproject.toml so
@@ -89,7 +89,7 @@ RUN mkdir -p /root/.ssh && \
 # LATCHKEY_GATEWAY URL is injected at `mngr create` time by the outside
 # caller (see .mngr/settings.toml's pass_env), so we do not hardcode it here.
 #
-ARG LATCHKEY_VERSION=2.8.0
+ARG LATCHKEY_VERSION=2.11.1
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
 
 # install python dependencies
