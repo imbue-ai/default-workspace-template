@@ -23,7 +23,7 @@ import { getAgentById, getProtoAgents } from "../models/AgentManager";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { MessageInput } from "./MessageInput";
-import { renderUserMessage, renderAssistantMessage } from "./message-renderers";
+import { renderUserMessage, renderAssistantMessage, computeAuthErrorHiddenEventIds } from "./message-renderers";
 import { getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
 
@@ -413,8 +413,10 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       }
     }
 
+    const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
     const messageNodes: m.Vnode[] = [];
     for (const event of events) {
+      if (hiddenEventIds.has(event.event_id)) continue;
       if (event.type === "user_message") {
         const userNode = renderUserMessage(event);
         if (userNode !== null) {
