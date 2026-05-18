@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -299,13 +300,13 @@ def test_post_layout_sends_agent_id_header_and_body(monkeypatch: pytest.MonkeyPa
         def read(self) -> bytes:
             return self._text.encode("utf-8")
 
-        def __enter__(self):
+        def __enter__(self) -> _FakeResponse:
             return self
 
-        def __exit__(self, *_):
+        def __exit__(self, *_: object) -> None:
             return None
 
-    def fake_urlopen(req, timeout):  # type: ignore[no-untyped-def]
+    def fake_urlopen(req: urllib.request.Request, timeout: float) -> _FakeResponse:
         captured["url"] = req.full_url
         captured["headers"] = dict(req.header_items())
         captured["body"] = req.data
