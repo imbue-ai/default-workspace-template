@@ -44,6 +44,11 @@ def _read_subagent_parent_info(jsonl_file: Path) -> dict[str, str] | None:
         return None
     if not first_line_bytes.strip():
         return None
+    # If the line has no trailing newline, the writer is mid-write. Silently
+    # return so the caller retries on the next cycle, rather than spamming a
+    # warning every poll until the line is complete.
+    if not first_line_bytes.endswith(b"\n"):
+        return None
     try:
         first = json.loads(first_line_bytes)
     except json.JSONDecodeError:
