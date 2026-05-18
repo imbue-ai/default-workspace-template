@@ -294,11 +294,19 @@ _current_oauth_process: Any = None
 
 
 def _safe_terminate(process: Any) -> None:
-    if not process.isalive():
-        return
+    """Terminate a pexpect spawn without letting teardown errors propagate.
+
+    `pexpect.spawn.isalive()` reaps the child's exit status and wraps
+    `ptyprocess` errors in `pexpect.ExceptionPexpect`; `terminate()` can
+    raise `OSError` on an already-reaped descriptor. Both live inside the
+    try so a half-torn-down process never crashes the caller (called from
+    every OAuth teardown path, including the auth-success chokepoint).
+    """
     try:
+        if not process.isalive():
+            return
         process.terminate(force=True)
-    except OSError as e:
+    except (OSError, pexpect.ExceptionPexpect) as e:
         logger.warning("OAuth subprocess terminate raised: {}", e)
 
 
