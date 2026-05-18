@@ -66,6 +66,19 @@ you want to consume it programmatically.
 For anything you don't see above, run
 `python3 scripts/layout.py --help` and the per-subcommand `--help`.
 
+## Share-existing-group vs. new-group
+
+`open`, `split`, and `move` default to **tabbing into an existing group**
+that already lives in the requested direction relative to the anchor.
+For example, `open service:terminal` from your chat with a `service:web`
+group already to the right adds `terminal` as a tab inside the web
+group rather than wedging another column between the two. Pass
+`--new-group` when you genuinely want a fresh column / row instead:
+
+```
+python3 scripts/layout.py split api --relative-to=service:web --direction=below --new-group
+```
+
 ## Exit codes
 
 `layout.py` uses distinct exit codes so wrapper scripts can branch:

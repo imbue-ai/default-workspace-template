@@ -547,6 +547,65 @@ function findIframePanelIdForService(serviceName: string): string | null {
   return null;
 }
 
+/** Find a group adjacent to ``anchorGroupId`` in the requested direction.
+ *
+ *  Used by the "share existing splits" default for ``open`` / ``split`` /
+ *  ``move``: if the caller asked to put a panel to the right of (say) a
+ *  chat, and a service iframe is already living to the right of that
+ *  chat, we'd rather tab the new panel into that existing group than
+ *  jam another column between them.
+ *
+ *  Adjacency is measured geometrically off ``getBoundingClientRect`` --
+ *  walking the persisted grid tree would also work but ties us to
+ *  dockview-internal APIs that aren't part of its public surface.
+ *  Among multiple candidates we pick the one with the largest overlap
+ *  on the perpendicular axis: e.g. for ``direction: "right"`` we prefer
+ *  the group whose vertical extent most closely tracks the anchor's.
+ *  Returns null when no group lies in that direction. */
+function findSiblingGroupInDirection(
+  anchorGroupId: string,
+  direction: "left" | "right" | "above" | "below",
+): { id: string } | null {
+  if (!dockview) return null;
+  const anchor = dockview.groups.find((g) => g.id === anchorGroupId);
+  if (!anchor) return null;
+  const anchorRect = anchor.element.getBoundingClientRect();
+  // Pixel slop: dockview separators round to whole pixels and adjacent
+  // edges can be off-by-one after a resize.
+  const tolerance = 2;
+  let best: { id: string; overlap: number; distance: number } | null = null;
+  for (const group of dockview.groups) {
+    if (group.id === anchorGroupId) continue;
+    const rect = group.element.getBoundingClientRect();
+    let inDirection: boolean;
+    let overlap: number;
+    let distance: number;
+    if (direction === "right") {
+      inDirection = rect.left >= anchorRect.right - tolerance;
+      overlap = Math.max(0, Math.min(rect.bottom, anchorRect.bottom) - Math.max(rect.top, anchorRect.top));
+      distance = rect.left - anchorRect.right;
+    } else if (direction === "left") {
+      inDirection = rect.right <= anchorRect.left + tolerance;
+      overlap = Math.max(0, Math.min(rect.bottom, anchorRect.bottom) - Math.max(rect.top, anchorRect.top));
+      distance = anchorRect.left - rect.right;
+    } else if (direction === "below") {
+      inDirection = rect.top >= anchorRect.bottom - tolerance;
+      overlap = Math.max(0, Math.min(rect.right, anchorRect.right) - Math.max(rect.left, anchorRect.left));
+      distance = rect.top - anchorRect.bottom;
+    } else {
+      inDirection = rect.bottom <= anchorRect.top + tolerance;
+      overlap = Math.max(0, Math.min(rect.right, anchorRect.right) - Math.max(rect.left, anchorRect.left));
+      distance = anchorRect.top - rect.bottom;
+    }
+    if (!inDirection || overlap <= 0) continue;
+    // Prefer larger perpendicular overlap; break ties by nearer distance.
+    if (best === null || overlap > best.overlap || (overlap === best.overlap && distance < best.distance)) {
+      best = { id: group.id, overlap, distance };
+    }
+  }
+  return best === null ? null : { id: best.id };
+}
+
 /** Handle an agent-driven open_tab broadcast for ``serviceName``.
  *
  *  Resolution order:
@@ -559,7 +618,7 @@ function findIframePanelIdForService(serviceName: string): string | null {
  *  Drop silently if the service isn't registered in ``applications`` yet --
  *  the script polls registration, but the WS broadcast itself is fire-and-
  *  forget. */
-function handleOpenTabRequest(serviceName: string, requesterAgentId: string): void {
+function handleOpenTabRequest(serviceName: string, requesterAgentId: string, forceNewGroup: boolean): void {
   if (!dockview) return;
 
   const existingPanelId = findIframePanelIdForService(serviceName);
@@ -587,6 +646,23 @@ function handleOpenTabRequest(serviceName: string, requesterAgentId: string): vo
 
   const chatPanelId = findAnchorChatPanelId(requesterAgentId);
   if (chatPanelId !== null) {
+    // Default: tab into an existing group to the right of the anchor
+    // chat if one is open. Callers pass ``forceNewGroup`` to demand a
+    // fresh column instead. See ``findSiblingGroupInDirection`` for the
+    // adjacency rule.
+    const anchorPanel = dockview.panels.find((p) => p.id === chatPanelId);
+    const anchorGroupId = anchorPanel?.api.group.id ?? null;
+    const sibling = !forceNewGroup && anchorGroupId !== null ? findSiblingGroupInDirection(anchorGroupId, "right") : null;
+    if (sibling !== null) {
+      dockview.addPanel({
+        id: panelId,
+        component: "iframe",
+        title: serviceName,
+        params,
+        position: { referenceGroup: sibling.id },
+      });
+      return;
+    }
     const containerWidth = dockviewContainer?.getBoundingClientRect().width ?? 0;
     const initialWidth = containerWidth > 0 ? Math.round(containerWidth * OPEN_TAB_SPLIT_FRACTION) : undefined;
     dockview.addPanel({
@@ -897,7 +973,8 @@ async function handleOpen(args: Record<string, unknown>, requesterAgentId: strin
     return;
   }
   if (ref.startsWith("service:")) {
-    handleOpenTabRequest(ref.substring("service:".length), requesterAgentId);
+    const forceNewGroup = args.new_group === true;
+    handleOpenTabRequest(ref.substring("service:".length), requesterAgentId, forceNewGroup);
     return;
   }
   if (ref.startsWith("chat:")) {
@@ -927,6 +1004,7 @@ async function handleSplit(args: Record<string, unknown>, requesterAgentId: stri
   const relativeTo = asString(args.relative_to);
   const direction = asString(args.direction) ?? "right";
   const ratio = asNumber(args.ratio);
+  const forceNewGroup = args.new_group === true;
   if (!ref || !relativeTo) return;
 
   // ``relative_to`` is an anchor: when the caller passes ``self`` but
@@ -948,6 +1026,23 @@ async function handleSplit(args: Record<string, unknown>, requesterAgentId: stri
 
   const containerRect = dockviewContainer?.getBoundingClientRect();
   const sizes = computeInitialSize(direction, ratio, containerRect);
+
+  // Default: when a group already lives in the requested direction
+  // relative to the anchor, tab the new panel into that group instead
+  // of carving a new column. ``new_group`` opts back in to the
+  // always-fresh-column behavior.
+  const directionArg = directionFromArg(direction);
+  const referencePanel = dockview.panels.find((p) => p.id === referencePanelId);
+  const anchorGroupId = referencePanel?.api.group.id ?? null;
+  const sibling =
+    !forceNewGroup && anchorGroupId !== null ? findSiblingGroupInDirection(anchorGroupId, directionArg) : null;
+  const positionOptions =
+    sibling !== null
+      ? { referenceGroup: sibling.id }
+      : { referencePanel: referencePanelId, direction: directionArg };
+  // Size hints only apply when we're carving a new group; tabbing into
+  // an existing group ignores them anyway, so omit to keep intent clear.
+  const sizeOptions = sibling !== null ? {} : sizes;
 
   if (ref.startsWith("service:")) {
     const serviceName = ref.substring("service:".length);
@@ -976,8 +1071,8 @@ async function handleSplit(args: Record<string, unknown>, requesterAgentId: stri
       component: "iframe",
       title: serviceName,
       params,
-      position: { referencePanel: referencePanelId, direction: directionFromArg(direction) },
-      ...sizes,
+      position: positionOptions,
+      ...sizeOptions,
     });
     return;
   }
@@ -995,8 +1090,8 @@ async function handleSplit(args: Record<string, unknown>, requesterAgentId: stri
     title: agent.name,
     params,
     renderer: "always",
-    position: { referencePanel: referencePanelId, direction: directionFromArg(direction) },
-    ...sizes,
+    position: positionOptions,
+    ...sizeOptions,
   });
 }
 
@@ -1036,6 +1131,7 @@ async function handleMove(args: Record<string, unknown>, requesterAgentId: strin
   const ref = asString(args.ref);
   const relativeTo = asString(args.relative_to);
   const direction = asString(args.direction);
+  const forceNewGroup = args.new_group === true;
   if (!ref || !relativeTo || !direction) return;
   const targetPanelId = await resolveRefToPanelId(ref, requesterAgentId);
   // ``relative_to`` is an anchor (see ``handleSplit``): fall back to
@@ -1048,6 +1144,19 @@ async function handleMove(args: Record<string, unknown>, requesterAgentId: strin
   const targetPanel = dockview.panels.find((p) => p.id === targetPanelId);
   const referencePanel = dockview.panels.find((p) => p.id === referencePanelId);
   if (!targetPanel || !referencePanel) return;
+  // Same share-group default as handleSplit: if a group already lives
+  // in the requested direction, drop the panel into it as a tab unless
+  // the caller asked for a brand-new group.
+  const directionArg = directionFromArg(direction);
+  const anchorGroupId = referencePanel.api.group.id;
+  const sibling = !forceNewGroup ? findSiblingGroupInDirection(anchorGroupId, directionArg) : null;
+  if (sibling !== null) {
+    const siblingGroup = dockview.groups.find((g) => g.id === sibling.id);
+    if (siblingGroup) {
+      targetPanel.api.moveTo({ group: siblingGroup });
+      return;
+    }
+  }
   targetPanel.api.moveTo({
     group: referencePanel.api.group,
     position: directionToPosition(direction),

@@ -113,7 +113,7 @@ def test_open_waits_for_registration_then_posts(tmp_path: Path, monkeypatch: pyt
 
     rc = layout.main(["open", "web"])
     assert rc == 0
-    assert posted == [("open", {"ref": "service:web"})]
+    assert posted == [("open", {"ref": "service:web", "new_group": False})]
 
 
 def test_open_fails_when_service_not_registered(
@@ -144,7 +144,20 @@ def test_open_full_ref_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
     rc = layout.main(["open", "service:web"])
     assert rc == 0
-    assert posted == [("open", {"ref": "service:web"})]
+    assert posted == [("open", {"ref": "service:web", "new_group": False})]
+
+
+def test_open_new_group_flag_sets_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--new-group`` opts out of the share-existing-group default."""
+    apps_file = tmp_path / "applications.toml"
+    _write_apps_toml(apps_file, ["web"])
+    monkeypatch.setattr(layout, "APPLICATIONS_FILE", apps_file)
+    posted: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+
+    rc = layout.main(["open", "service:web", "--new-group"])
+    assert rc == 0
+    assert posted == [("open", {"ref": "service:web", "new_group": True})]
 
 
 def test_split_passes_relative_to_and_direction(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,7 +170,40 @@ def test_split_passes_relative_to_and_direction(monkeypatch: pytest.MonkeyPatch)
     assert rc == 0
     op, args = posted[0]
     assert op == "split"
-    assert args == {"ref": "url:abc12345", "relative_to": "chat:alice", "direction": "above", "ratio": 0.6}
+    assert args == {
+        "ref": "url:abc12345",
+        "relative_to": "chat:alice",
+        "direction": "above",
+        "ratio": 0.6,
+        "new_group": False,
+    }
+
+
+def test_split_new_group_flag_sets_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``split --new-group`` flips the new_group payload field on."""
+    posted: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+    monkeypatch.setattr(layout, "_wait_for_registration", lambda *a, **kw: True)
+
+    rc = layout.main(["split", "service:web", "--relative-to", "chat:alice", "--new-group"])
+    assert rc == 0
+    op, args = posted[0]
+    assert op == "split"
+    assert args["new_group"] is True
+
+
+def test_move_new_group_flag_sets_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``move --new-group`` flips the new_group payload field on."""
+    posted: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+
+    rc = layout.main(
+        ["move", "service:web", "--relative-to", "chat:alice", "--direction", "right", "--new-group"]
+    )
+    assert rc == 0
+    op, args = posted[0]
+    assert op == "move"
+    assert args["new_group"] is True
 
 
 def test_split_preserves_self_in_relative_to(monkeypatch: pytest.MonkeyPatch) -> None:

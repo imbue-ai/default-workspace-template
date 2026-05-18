@@ -4,9 +4,9 @@
 Subcommands:
     list                                List addressable services + agents (open/running flags).
     inspect                             Describe the live dockview state as a ref-resolved tree.
-    open <ref-or-service>               Surface a service (focus-if-open, else split right of caller's chat).
+    open <ref-or-service>               Surface a service (focus-if-open, else tab into / split next to caller's chat).
     focus <ref>                         Activate the named panel within its group.
-    split <ref-or-service> [...]        Open a new panel as a split relative to another panel.
+    split <ref-or-service> [...]        Add a panel relative to another panel; tabs into an existing adjacent group by default.
     close <ref>                         Remove the named panel.
     move <ref> --relative-to <other> [...]  Relocate a panel; iframe DOM is preserved.
     rename <ref> <title>                Update the panel's tab title.
@@ -14,6 +14,10 @@ Subcommands:
     restore                             Exit a maximized group.
     replace-url <ref> <url>             Swap an iframe's src (service:<name>[/<path>] or https://...).
     refresh <ref-or-service>            Reload one iframe; ``service:<name>`` reloads all iframes for that service.
+
+``open`` / ``split`` / ``move`` default to *tabbing into an existing group*
+that already lives in the requested direction relative to the anchor; pass
+``--new-group`` to force a fresh column / row instead.
 
 All ops POST a single body ``{op, args, agent_id}`` to a loopback-only endpoint
 on the workspace server. The caller's ``MNGR_AGENT_ID`` is sent both in the
@@ -242,7 +246,7 @@ def _cmd_open(args: argparse.Namespace) -> int:
             )
             return EXIT_NOT_REGISTERED
     _validate_ref(ref)
-    payload: dict[str, Any] = {"ref": ref}
+    payload: dict[str, Any] = {"ref": ref, "new_group": bool(args.new_group)}
     status, body = _post_layout("open", payload)
     if status != 200:
         return _report_failure("open", status, body)
@@ -276,6 +280,7 @@ def _cmd_split(args: argparse.Namespace) -> int:
         "relative_to": relative_to,
         "direction": args.direction,
         "ratio": args.ratio,
+        "new_group": bool(args.new_group),
     }
     status, body = _post_layout("split", payload)
     if status != 200:
@@ -297,7 +302,12 @@ def _cmd_move(args: argparse.Namespace) -> int:
     _validate_ref(ref)
     relative_to = _normalize_ref(args.relative_to)
     _validate_ref(relative_to)
-    payload: dict[str, Any] = {"ref": ref, "relative_to": relative_to, "direction": args.direction}
+    payload: dict[str, Any] = {
+        "ref": ref,
+        "relative_to": relative_to,
+        "direction": args.direction,
+        "new_group": bool(args.new_group),
+    }
     status, body = _post_layout("move", payload)
     if status != 200:
         return _report_failure("move", status, body)
@@ -362,6 +372,14 @@ def main(argv: list[str] | None = None) -> int:
 
     p_open = subparsers.add_parser("open", help="Surface a service in the UI")
     p_open.add_argument("target", help="Service name or ref (e.g. ``web`` or ``service:web``)")
+    p_open.add_argument(
+        "--new-group",
+        action="store_true",
+        help=(
+            "Force a brand-new dockview group instead of tabbing into an existing "
+            "right-side group (the default reuses adjacent groups when present)."
+        ),
+    )
     p_open.set_defaults(func=_cmd_open)
 
     p_focus = subparsers.add_parser("focus", help="Activate the named panel within its group")
@@ -377,6 +395,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_split.add_argument("--direction", default="right", choices=_DIRECTIONS)
     p_split.add_argument("--ratio", type=float, default=0.6, help="Fraction the new panel occupies (0..1)")
+    p_split.add_argument(
+        "--new-group",
+        action="store_true",
+        help=(
+            "Force a brand-new dockview group instead of tabbing into the group "
+            "that already lives in the requested direction (the default)."
+        ),
+    )
     p_split.set_defaults(func=_cmd_split)
 
     p_close = subparsers.add_parser("close", help="Remove a panel")
@@ -387,6 +413,14 @@ def main(argv: list[str] | None = None) -> int:
     p_move.add_argument("ref", help="Panel ref to move")
     p_move.add_argument("--relative-to", required=True, help="Ref to move relative to")
     p_move.add_argument("--direction", required=True, choices=_DIRECTIONS)
+    p_move.add_argument(
+        "--new-group",
+        action="store_true",
+        help=(
+            "Force a brand-new dockview group instead of moving the panel into "
+            "an adjacent existing group (the default)."
+        ),
+    )
     p_move.set_defaults(func=_cmd_move)
 
     p_rename = subparsers.add_parser("rename", help="Update a panel's tab title")
