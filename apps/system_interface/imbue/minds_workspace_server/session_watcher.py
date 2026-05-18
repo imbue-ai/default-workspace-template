@@ -30,6 +30,46 @@ _POLL_INTERVAL_SECONDS = 1.0
 _BRIEF_WAIT_SECONDS = 0.5
 
 
+def _read_subagent_parent_info(jsonl_file: Path) -> dict[str, str] | None:
+    """Read the first line of a subagent jsonl to recover its parent linkage.
+
+    Returns a dict with `parent_assistant_uuid`, `agent_id`, and `first_timestamp`,
+    or None if the file is unreadable, empty, malformed, or missing the linkage
+    fields (in which case the caller should retry on the next discovery cycle).
+    """
+    try:
+        with open(jsonl_file, "rb") as f:
+            first_line_bytes = f.readline()
+    except OSError:
+        return None
+    if not first_line_bytes.strip():
+        return None
+    try:
+        first = json.loads(first_line_bytes)
+    except json.JSONDecodeError:
+        logger.warning("Subagent jsonl first line is not valid JSON: %s", jsonl_file)
+        return None
+    parent_uuid = first.get("sourceToolAssistantUUID")
+    if not isinstance(parent_uuid, str) or not parent_uuid:
+        # Older Claude Code session schemas wrote only `parentUuid`; on newer
+        # versions it appears to mirror sourceToolAssistantUUID for sidechain
+        # sessions, so this is a safe fallback.
+        parent_uuid = first.get("parentUuid")
+    if not isinstance(parent_uuid, str) or not parent_uuid:
+        return None
+    agent_id = first.get("agentId")
+    if not isinstance(agent_id, str) or not agent_id:
+        return None
+    timestamp = first.get("timestamp", "")
+    if not isinstance(timestamp, str):
+        timestamp = ""
+    return {
+        "parent_assistant_uuid": parent_uuid,
+        "agent_id": agent_id,
+        "first_timestamp": timestamp,
+    }
+
+
 class _ChangeHandler(FileSystemEventHandler):
     """Watchdog handler that wakes the watcher on actual file changes."""
 
@@ -74,6 +114,10 @@ class AgentSessionWatcher:
         self._tool_name_by_call_id: dict[str, str] = {}
         self._existing_event_ids: set[str] = set()
         self._subagent_metadata: dict[str, dict[str, str]] = {}  # sub_id -> {agent_type, description}
+        # sub_id -> {parent_assistant_uuid, agent_id, first_timestamp} read from the subagent
+        # jsonl's first line. Lets us link a parent Agent tool_use to its subagent the moment
+        # the subagent starts writing, before any tool_result lands.
+        self._subagent_parent_info: dict[str, dict[str, str]] = {}
 
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()
@@ -165,17 +209,57 @@ class AgentSessionWatcher:
     def _enrich_subagent_metadata(self, events: list[dict[str, Any]]) -> None:
         """Enrich Agent tool_use events with subagent metadata.
 
-        Matches tool_result events that have a subagent_id (extracted from
-        Agent tool results) to their corresponding tool_use events, and adds
-        subagent_metadata to the assistant_message that contains the tool_use.
-        """
-        # Build map: tool_call_id -> subagent_id from tool_result events
-        subagent_by_tool_call: dict[str, str] = {}
-        for event in events:
-            if event.get("type") == "tool_result" and "subagent_id" in event:
-                subagent_by_tool_call[event["tool_call_id"]] = event["subagent_id"]
+        Builds a tool_call_id -> subagent_id map from two sources, in order:
 
-        # Enrich assistant messages that have Agent tool calls
+        1. Disk-based: each subagent jsonl's first line carries
+           `sourceToolAssistantUUID` pointing at the parent assistant message
+           UUID, and its own `agentId`. Subagents sharing a parent assistant
+           UUID are paired with that message's Agent tool_uses by order
+           (subagents written first → tool_uses listed first). This works the
+           moment a subagent starts, before its tool_result lands, so running
+           subagents get the rich card.
+
+        2. Fallback: tool_result events that already carry a `subagent_id`
+           (extracted from the structured `toolUseResult.agentId` field or the
+           legacy `agentId:` text trailer). Used for sessions whose subagent
+           jsonls are no longer on disk.
+        """
+        subagent_by_tool_call: dict[str, str] = {}
+
+        # 1. Disk-based linkage: group cached subagent parent info by parent assistant UUID,
+        #    ordered by first-line timestamp so multiple Agent tool_uses in a single
+        #    assistant message line up with their subagents in spawn order.
+        subagents_by_parent: dict[str, list[tuple[str, str]]] = {}
+        for info in self._subagent_parent_info.values():
+            parent_uuid = info["parent_assistant_uuid"]
+            agent_id = info["agent_id"]
+            timestamp = info["first_timestamp"]
+            subagents_by_parent.setdefault(parent_uuid, []).append((timestamp, agent_id))
+        for items in subagents_by_parent.values():
+            items.sort()
+
+        for event in events:
+            if event.get("type") != "assistant_message":
+                continue
+            parent_uuid = event.get("message_uuid", "")
+            sub_pairs = subagents_by_parent.get(parent_uuid, [])
+            if not sub_pairs:
+                continue
+            agent_tool_calls = [tc for tc in event.get("tool_calls", []) if tc.get("tool_name") == "Agent"]
+            for tc, (_ts, agent_id) in zip(agent_tool_calls, sub_pairs, strict=False):
+                subagent_by_tool_call[tc["tool_call_id"]] = agent_id
+
+        # 2. Fallback to tool_result-based linkage for tool_use_ids not resolved above.
+        for event in events:
+            if event.get("type") != "tool_result":
+                continue
+            if "subagent_id" not in event:
+                continue
+            tool_call_id = event["tool_call_id"]
+            if tool_call_id not in subagent_by_tool_call:
+                subagent_by_tool_call[tool_call_id] = event["subagent_id"]
+
+        # Enrich assistant messages that have Agent tool calls.
         for event in events:
             if event.get("type") != "assistant_message":
                 continue
@@ -267,30 +351,38 @@ class AgentSessionWatcher:
 
         for jsonl_file in subagents_dir.glob("*.jsonl"):
             sub_id = jsonl_file.stem
-            if sub_id in self._session_states:
-                continue
 
-            self._session_states[sub_id] = SessionFileState(sub_id, jsonl_file)
-            self._known_session_ids.append(sub_id)
+            if sub_id not in self._session_states:
+                self._session_states[sub_id] = SessionFileState(sub_id, jsonl_file)
+                self._known_session_ids.append(sub_id)
+                if self._observer is not None:
+                    try:
+                        self._observer.schedule(_ChangeHandler(self._wake_event), str(subagents_dir), recursive=False)
+                    except OSError:
+                        pass
 
-            # Read .meta.json for subagent metadata
-            meta_file = jsonl_file.with_suffix(".meta.json")
-            if meta_file.exists() and sub_id not in self._subagent_metadata:
-                try:
-                    meta = json.loads(meta_file.read_text())
-                    self._subagent_metadata[sub_id] = {
-                        "agent_type": meta.get("agentType", ""),
-                        "description": meta.get("description", ""),
-                        "session_id": sub_id,
-                    }
-                except (json.JSONDecodeError, OSError):
-                    pass
+            # Cache .meta.json (retry on each pass until present and parseable).
+            if sub_id not in self._subagent_metadata:
+                meta_file = jsonl_file.with_suffix(".meta.json")
+                if meta_file.exists():
+                    try:
+                        meta = json.loads(meta_file.read_text())
+                        self._subagent_metadata[sub_id] = {
+                            "agent_type": meta.get("agentType", ""),
+                            "description": meta.get("description", ""),
+                            "session_id": sub_id,
+                        }
+                    except (json.JSONDecodeError, OSError) as exc:
+                        logger.warning("Failed to read subagent meta.json %s: %s", meta_file, exc)
 
-            if self._observer is not None:
-                try:
-                    self._observer.schedule(_ChangeHandler(self._wake_event), str(subagents_dir), recursive=False)
-                except OSError:
-                    pass
+            # Cache parent linkage from the subagent jsonl's first line. The first line is
+            # written when the subagent starts -- before any tool_result -- so this makes
+            # rich card rendering work for running subagents too. Retry on each pass until
+            # the first line is present and parseable.
+            if sub_id not in self._subagent_parent_info:
+                parent_info = _read_subagent_parent_info(jsonl_file)
+                if parent_info is not None:
+                    self._subagent_parent_info[sub_id] = parent_info
 
     def _find_session_file(self, session_id: str) -> Path | None:
         """Search for a session JSONL file under the Claude projects directory."""
