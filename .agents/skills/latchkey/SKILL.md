@@ -68,7 +68,7 @@ permissions while also minimizing the need for multiple
 iterations with additional permission requests.
 
 The body must be a JSON object with exactly four string fields:
-`agent_id` (use `$MNGR_AGENT_ID`), `key`, `value`, and `rationale`.
+`agent_id` (use `$MNGR_AGENT_ID`), `scope`, `permissions`, and `rationale`.
 
 After posting, wait for a system message indicating whether the user
 approved or denied the permission request.
