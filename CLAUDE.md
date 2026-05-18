@@ -108,9 +108,10 @@ Summary rules: ONE concise line, plain English, describing **the work you did in
 
 After all your steps for the turn are closed, write your final user-facing assistant message — *this* is where the actual results, findings, and recommendations belong. It renders below the progress timeline as the agent's reply to the user.
 
-**Where prose goes while a step is open:** any text-only message you emit between `tk start <id>` and `tk close <id>` becomes that step's *narration* — a single live caption rendered under the step title. Each new text message overwrites the previous one. When you close the step, the close summary replaces the caption (or blanks it if you closed without a summary), and your last pre-close text message is promoted to a prominent top-level message below the timeline — so write the wrap-up wherever feels natural, then close. The narration mechanism is for short live-status captions ("Reading the related files…", "Trying a smaller sample…") while work is in flight; the promote-on-close behavior makes sure your final findings still surface as a real reply once you close the step.
-
-Steps may legitimately carry over to the next turn — if you have more work on a step coming up, leave it open. The renderer enforces the serial-step rule defensively (an earlier open step's effective window is capped at the next step's start), so forgetting to close a step you moved past won't swallow later messages into its narration. Just close steps when their work is genuinely done.
+**Steps and prose:**
+- Text emitted while a step is `in_progress` shows as a live caption under the step, replaced by each new message.
+- On `tk close`, the close summary becomes the caption and your last pre-close text becomes a prominent top-level reply. So write the wrap-up naturally, then close.
+- Steps may stay open across turns. Close when work is done; leave open if work continues.
 
 ## Working with regular tickets
 
