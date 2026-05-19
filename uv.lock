@@ -350,7 +350,7 @@ wheels = [
 
 [[package]]
 name = "concurrency-group"
-version = "0.1.16"
+version = "0.1.17"
 source = { editable = "vendor/mngr/libs/concurrency_group" }
 dependencies = [
     { name = "imbue-common" },
@@ -868,7 +868,7 @@ wheels = [
 
 [[package]]
 name = "imbue-common"
-version = "0.1.16"
+version = "0.1.17"
 source = { editable = "vendor/mngr/libs/imbue_common" }
 dependencies = [
     { name = "click" },
@@ -893,7 +893,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "imbue-mngr"
-version = "0.2.7"
+version = "0.2.8"
 source = { editable = "vendor/mngr/libs/mngr" }
 dependencies = [
     { name = "cel-python" },
@@ -948,7 +948,7 @@ requires-dist = [
 
 [[package]]
 name = "imbue-mngr-claude"
-version = "0.2.7"
+version = "0.2.8"
 source = { editable = "vendor/mngr/libs/mngr_claude" }
 dependencies = [
     { name = "imbue-mngr" },
