@@ -178,7 +178,7 @@ def test_inspect_round_trips_through_script_and_endpoint(
 
     assert result.returncode == 0, f"stderr={result.stderr!r}"
     parsed = json.loads(result.stdout)
-    assert parsed == {"panels": [], "tree": None}
+    assert parsed == {"active_panel": None, "panels": [], "tree": None}
 
 
 def test_list_round_trips_and_includes_seeded_agent(

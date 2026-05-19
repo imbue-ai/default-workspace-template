@@ -107,7 +107,7 @@ def _write_layout(path: Path, dockview: dict[str, Any], panel_params: dict[str, 
 
 def test_inspect_returns_empty_when_no_layout_file(tmp_path: Path) -> None:
     summary = layout_inspect(tmp_path / "missing.json", {})
-    assert summary == {"panels": [], "tree": None}
+    assert summary == {"active_panel": None, "panels": [], "tree": None}
 
 
 def test_inspect_resolves_chat_ref_via_agent_name_map(tmp_path: Path) -> None:

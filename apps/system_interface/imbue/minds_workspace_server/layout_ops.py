@@ -300,7 +300,7 @@ def layout_inspect(layout_json_path: Path | None, agent_name_by_id: dict[str, st
     """
     raw = _read_layout(layout_json_path)
     if raw is None:
-        return {"panels": [], "tree": None}
+        return {"active_panel": None, "panels": [], "tree": None}
     panel_summaries, panels_meta = _build_panel_summaries(raw, agent_name_by_id)
     flat_panels: list[dict[str, Any]] = [
         {k: v for k, v in summary.items() if k != "panel_id"} for summary in panel_summaries.values()
