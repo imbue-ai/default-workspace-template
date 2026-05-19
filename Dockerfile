@@ -157,6 +157,9 @@ RUN mkdir -p /worktree
 RUN ln -sf /code/vendor/tk/ticket /usr/local/bin/tk && \
     ln -sf /code/vendor/tk/ticket /usr/local/bin/ticket
 
+# Mark /code/ as a git safe.directory so commands run inside the container
+# don't refuse on ownership mismatch. No chown is needed: COPY already
+# lands files as root:root by default.
 RUN git config --global --add safe.directory /code/
 
 # Build the system_interface frontend (deps already installed pre-COPY).
