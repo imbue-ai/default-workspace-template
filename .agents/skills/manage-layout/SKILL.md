@@ -1,14 +1,16 @@
 ---
 name: manage-layout
-description: Use when you want to rearrange the workspace dockview tabs (split, move, focus, rename, close, maximize, reload, swap a URL) or inspect the live layout. The mechanics are in scripts/layout.py -- this skill just orients you.
+description: Use when you want to rearrange the workspace dockview tabs (split, move, focus, rename, close, maximize, reload, swap a URL) or inspect the live layout.
 metadata:
   crystallized: true
 ---
 
 # Managing the workspace dockview layout
 
-The dockview tab strip in the desktop client is fully scriptable from
-your agent via `scripts/layout.py`. Use it whenever you want to:
+The user interacts with you and the services you create through a tabbed dockview interface defined in `apps/system_interface`.
+The user's chat with you is visible as one such tab in this interface (of ref-form `chat:name` where `name` is your name).
+They may additionally have a terminal view open of your chat interface; but the direct chat view is their primary interaction point with you.
+This client is fully scriptable from via `scripts/layout.py`. Use it whenever you want to:
 
 - **Surface something new** alongside the chat (web view, terminal,
   another agent's chat).
@@ -18,10 +20,8 @@ your agent via `scripts/layout.py`. Use it whenever you want to:
   maximize/restore, replace an iframe's URL, or close a tab.
 - **Refresh** an iframe after redeploying its backing service.
 
-The helper is preferred over driving the dockview through ad-hoc API
-calls: it serializes mutating ops through an advisory mutex, dispatches
-through a single loopback endpoint, and uses stable type-prefixed refs
-that don't renumber as panels open and close.
+The user may also ask you to do any of these things, in which case you should use the appropriate commands.
+You should only use this helper to mutate the view; do not manually edit the dockview layout configuration.
 
 ## Refs: how you address a panel
 
@@ -37,7 +37,7 @@ Every panel has a stable, type-prefixed ref:
 
 Subcommands that take a "service or ref" argument (`open`, `split`,
 `refresh`) also accept a bare service name (`web`) -- it expands to
-`service:web`. The literal `self` resolves to the caller's own chat
+`service:web`. The literal `self` resolves to your own chat
 panel; it is accepted as a ref anywhere (most usefully as
 `--relative-to=self` for `split` / `move`).
 
