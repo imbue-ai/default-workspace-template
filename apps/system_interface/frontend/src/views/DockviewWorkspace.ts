@@ -873,11 +873,7 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
     return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
   }
   if (ref.startsWith("service:")) {
-    const serviceName = ref.substring("service:".length);
-    for (const [panelId, p] of panelParams) {
-      if (p.panelType === "iframe" && p.serviceName === serviceName) return panelId;
-    }
-    return null;
+    return findIframePanelIdForService(ref.substring("service:".length));
   }
   if (ref.startsWith("chat:")) {
     const agentName = ref.substring("chat:".length);
