@@ -1,0 +1,31 @@
+[project]
+name = "minds-desktop"
+version = "0.1.0"
+requires-python = ">=3.12"
+# All workspace packages must be listed as direct dependencies so uv honors
+# the tool-uv-sources path overrides. uv ignores source overrides for
+# transitive-only packages and falls back to PyPI, which silently installs
+# stale published versions instead of our freshly built wheels.
+# Keep this list in sync with WORKSPACE_PACKAGES in scripts/build.js.
+dependencies = [
+    "minds>=0.1.0",
+    "imbue-mngr>=0.2.0",
+    "imbue-mngr-claude>=0.2.0",
+    "imbue-mngr-lima>=0.1.0",
+    "imbue-mngr-modal>=0.2.0",
+    "imbue-common>=0.1.0",
+    "concurrency-group>=0.1.0",
+    "resource-guards>=0.1.0",
+    "modal-proxy>=0.1.0",
+]
+
+[tool.uv.sources]
+minds = { path = "../wheels/minds-0.1.0-py3-none-any.whl" }
+imbue-mngr = { path = "../wheels/imbue_mngr-0.2.5-py3-none-any.whl" }
+imbue-mngr-claude = { path = "../wheels/imbue_mngr_claude-0.2.5-py3-none-any.whl" }
+imbue-mngr-lima = { path = "../wheels/imbue_mngr_lima-0.1.0-py3-none-any.whl" }
+imbue-mngr-modal = { path = "../wheels/imbue_mngr_modal-0.2.5-py3-none-any.whl" }
+imbue-common = { path = "../wheels/imbue_common-0.1.14-py3-none-any.whl" }
+concurrency-group = { path = "../wheels/concurrency_group-0.1.14-py3-none-any.whl" }
+resource-guards = { path = "../wheels/resource_guards-0.1.4-py3-none-any.whl" }
+modal-proxy = { path = "../wheels/modal_proxy-0.1.6-py3-none-any.whl" }
