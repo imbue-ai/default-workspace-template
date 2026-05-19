@@ -55,7 +55,7 @@ Latchkey via the reserved `latchkey-self.invalid` host:
 latchkey curl http://latchkey-self.invalid/permissions/available/discord
 
 # 2. Retrieve the list of your existing permissions if necessary.
-latchkey curl http://latchkey-self.invalid/permissions/self
+latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
 
 # 3. Ask for the necessary missing permissions.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
