@@ -1,0 +1,195 @@
+import pytest
+
+from imbue.imbue_common.ids import InvalidRandomIdError
+from imbue.minds.desktop_client.templates import render_auth_error_page
+from imbue.minds.desktop_client.templates import render_chrome_page
+from imbue.minds.desktop_client.templates import render_create_form
+from imbue.minds.desktop_client.templates import render_landing_page
+from imbue.minds.desktop_client.templates import render_login_page
+from imbue.minds.desktop_client.templates import render_login_redirect_page
+from imbue.minds.desktop_client.templates import render_recovery_page
+from imbue.minds.desktop_client.templates import render_sidebar_page
+from imbue.minds.primitives import AIProvider
+from imbue.minds.primitives import LaunchMode
+from imbue.minds.primitives import OneTimeCode
+from imbue.mngr.primitives import AgentId
+
+_AGENT_A: AgentId = AgentId("agent-00000000000000000000000000000001")
+_AGENT_B: AgentId = AgentId("agent-00000000000000000000000000000002")
+
+
+def test_render_landing_page_with_agents_lists_them_as_links() -> None:
+    ids = (_AGENT_A, _AGENT_B)
+    html = render_landing_page(accessible_agent_ids=ids)
+    assert f"/goto/{_AGENT_A}/" in html
+    assert f"/goto/{_AGENT_B}/" in html
+    assert str(_AGENT_A) in html
+    assert str(_AGENT_B) in html
+
+
+def test_render_landing_page_with_no_agents_shows_empty_state() -> None:
+    html = render_landing_page(accessible_agent_ids=())
+    assert "No projects yet" in html
+
+
+def test_render_landing_page_discovering_shows_auto_refresh() -> None:
+    html = render_landing_page(accessible_agent_ids=(), is_discovering=True)
+    assert "Discovering agents" in html
+    assert "reload" in html
+    assert "No projects yet" not in html
+    assert "/goto/" not in html
+
+
+def test_render_login_redirect_page_contains_redirect_script() -> None:
+    html = render_login_redirect_page(
+        one_time_code=OneTimeCode("abc123-secret-82341"),
+    )
+    assert "window.location.href" in html
+    # The URL is built at runtime with encodeURIComponent, so the code appears
+    # as a JS string literal (via Jinja's `tojson` filter) rather than inlined
+    # into the URL directly.
+    assert "abc123-secret-82341" in html
+    assert "/authenticate?one_time_code=" in html
+    assert "encodeURIComponent" in html
+
+
+def test_render_auth_error_page_shows_error_message() -> None:
+    html = render_auth_error_page(message="This code has already been used.")
+    assert "This code has already been used." in html
+    assert "Authentication Failed" in html
+    assert "restart the server" in html
+
+
+def test_agent_id_rejects_invalid_format() -> None:
+    with pytest.raises(InvalidRandomIdError):
+        AgentId("not-a-valid-agent-id")
+
+
+def test_agent_id_accepts_valid_format() -> None:
+    agent_id = AgentId("agent-00000000000000000000000000000001")
+    assert agent_id == "agent-00000000000000000000000000000001"
+
+
+def test_render_create_form_has_default_values() -> None:
+    html = render_create_form()
+    assert "assistant" in html
+    assert "forever-claude-template" in html
+    assert "host_name" in html
+    assert "launch_mode" in html
+
+
+def test_render_create_form_prefills_values() -> None:
+    html = render_create_form(git_url="https://custom/repo", host_name="my-workspace", branch="feature/test")
+    assert "https://custom/repo" in html
+    assert "my-workspace" in html
+    assert "feature/test" in html
+
+
+def test_render_create_form_contains_all_launch_modes() -> None:
+    html = render_create_form()
+    for mode in LaunchMode:
+        assert mode.value.lower() in html
+
+
+def test_render_create_form_selects_lima_by_default() -> None:
+    html = render_create_form()
+    assert 'value="LIMA" selected' in html
+
+
+def test_render_create_form_selects_specified_launch_mode() -> None:
+    # CLOUD instead of the default LIMA so the "selection honored over the
+    # default" assertion is meaningful.
+    html = render_create_form(launch_mode=LaunchMode.CLOUD)
+    assert 'value="CLOUD" selected' in html
+    assert 'value="LIMA" selected' not in html
+
+
+def test_render_create_form_contains_ai_provider_options() -> None:
+    html = render_create_form()
+    for provider in AIProvider:
+        assert f'value="{provider.value}"' in html
+
+
+def test_render_create_form_defaults_ai_provider_to_subscription_without_account() -> None:
+    html = render_create_form()
+    assert 'value="SUBSCRIPTION" selected' in html
+
+
+def test_render_create_form_omits_env_file_checkbox() -> None:
+    html = render_create_form()
+    assert "include_env_file" not in html
+
+
+def test_render_create_form_includes_gh_token_field() -> None:
+    html = render_create_form()
+    assert 'name="gh_token"' in html
+
+
+def test_render_create_form_shows_error_message_when_supplied() -> None:
+    html = render_create_form(error_message="Imbue cloud requires an account.")
+    assert "Imbue cloud requires an account." in html
+
+
+def test_render_login_page_shows_prompt() -> None:
+    html = render_login_page()
+    assert "login URL" in html.lower() or "Login" in html
+
+
+def test_render_chrome_page_contains_titlebar() -> None:
+    html = render_chrome_page()
+    assert "minds-titlebar" in html
+    assert "sidebar-toggle" in html
+    assert "home-btn" in html
+    assert "back-btn" in html
+    assert "content-frame" in html
+
+
+def test_render_chrome_page_hides_window_controls_on_mac() -> None:
+    """On macOS, the window-controls row carries the 'hidden' Tailwind class
+    so the native traffic lights are used instead."""
+    html_mac = render_chrome_page(is_mac=True)
+    html_other = render_chrome_page(is_mac=False)
+    # The 'hidden' class only appears on the window-controls wrapper in
+    # mac mode; on other platforms the same element is visible.
+    assert 'class="flex hidden"' in html_mac or 'class="flex  hidden"' in html_mac
+    assert 'class="flex hidden"' not in html_other and 'class="flex  hidden"' not in html_other
+
+
+def test_render_chrome_page_shows_window_controls_on_non_mac() -> None:
+    html = render_chrome_page(is_mac=False)
+    assert "min-btn" in html
+    assert "max-btn" in html
+    assert "close-btn" in html
+
+
+def test_render_sidebar_page_contains_workspace_list() -> None:
+    html = render_sidebar_page()
+    assert "sidebar-workspaces" in html
+    # The interactivity (including the SSE EventSource fallback) now lives
+    # in the external /_static/sidebar.js file; the template should pull it in.
+    assert "/_static/sidebar.js" in html
+
+
+def test_render_recovery_page_includes_agent_id_and_return_to() -> None:
+    html = render_recovery_page(
+        agent_id=_AGENT_A,
+        ws_name="my-workspace",
+        return_to="http://agent.localhost:8421/",
+        initial_status="stuck",
+    )
+    assert str(_AGENT_A) in html
+    assert "my-workspace" in html
+    assert "http://agent.localhost:8421/" in html
+    assert "/api/agents/" in html
+    assert "restart-workspace-server" in html
+    assert 'data-initial-status="stuck"' in html
+
+
+def test_render_recovery_page_restarting_status() -> None:
+    html = render_recovery_page(
+        agent_id=_AGENT_B,
+        ws_name="ws",
+        return_to="",
+        initial_status="restarting",
+    )
+    assert 'data-initial-status="restarting"' in html

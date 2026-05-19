@@ -595,9 +595,8 @@ def test_warn_resolver_miss_throttle_is_per_agent_not_global() -> None:
 # -- workspace_backend_failure envelope + recovery redirect tests --
 
 
-def _make_forward_app_with_capture(
+def _make_forward_app_with_mock_backend(
     tmp_path: Path,
-    capture: list[httpx.Request],
     agent_id: AgentId,
     preauth: str,
     *,
@@ -621,13 +620,13 @@ def _make_forward_app_with_capture(
         preauth_cookie_value=preauth,
     )
 
-    async def _capture(request: httpx.Request) -> httpx.Response:
-        capture.append(request)
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        del request
         if raise_error is not None:
             raise raise_error("simulated failure")
         return httpx.Response(backend_status, content=b"hi")
 
-    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture), follow_redirects=False)
+    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_handler), follow_redirects=False)
     return app, envelope_output, mock_client
 
 
@@ -639,10 +638,8 @@ def test_subdomain_forward_emits_workspace_backend_failure_on_5xx(tmp_path: Path
     """A 502/503/504 backend response triggers a ``workspace_backend_failure`` envelope."""
     agent_id = AgentId()
     preauth = "preauth-cookie-1"
-    captured: list[httpx.Request] = []
-    app, env_out, mock_client = _make_forward_app_with_capture(
+    app, env_out, mock_client = _make_forward_app_with_mock_backend(
         tmp_path,
-        captured,
         agent_id,
         preauth,
         backend_status=503,
@@ -674,10 +671,8 @@ def test_subdomain_forward_does_not_emit_failure_on_2xx(tmp_path: Path) -> None:
     """A successful backend response must not produce a failure envelope."""
     agent_id = AgentId()
     preauth = "preauth-cookie-ok"
-    captured: list[httpx.Request] = []
-    app, env_out, mock_client = _make_forward_app_with_capture(
+    app, env_out, mock_client = _make_forward_app_with_mock_backend(
         tmp_path,
-        captured,
         agent_id,
         preauth,
         backend_status=200,
@@ -698,23 +693,17 @@ def test_subdomain_forward_does_not_emit_failure_on_2xx(tmp_path: Path) -> None:
 
 
 def test_subdomain_forward_emits_workspace_backend_failure_on_sse_startup_disconnect(tmp_path: Path) -> None:
-    """``RemoteProtocolError`` on an SSE-startup ``send()`` must emit ``CONNECT_ERROR``.
+    """``RemoteProtocolError`` on an SSE-startup ``send()`` returns 503 and emits CONNECT_ERROR.
 
-    Regression test: previously, an SSE-style request (``Accept: text/event-stream``)
-    whose backend died between SSH-tunnel accept and channel-open would surface
-    ``httpx.RemoteProtocolError`` from ``http_client.send(..., stream=True)``.
-    That exception was not caught by the SSE branch (only ``ConnectError``
-    and ``TimeoutException`` were), so it bubbled up through starlette as a
-    500 and no failure envelope was emitted -- meaning the minds-side health
-    tracker never transitioned to STUCK and the chrome never navigated to
-    the recovery page.
+    Covers the SSE branch of ``_forward_workspace_http``: an SSE-style request
+    (``Accept: text/event-stream``) whose backend disconnects before any
+    response bytes must produce a 503 and exactly one
+    ``workspace_backend_failure`` envelope with ``reason=CONNECT_ERROR``.
     """
     agent_id = AgentId()
     preauth = "preauth-cookie-sse-startup"
-    captured: list[httpx.Request] = []
-    app, env_out, mock_client = _make_forward_app_with_capture(
+    app, env_out, mock_client = _make_forward_app_with_mock_backend(
         tmp_path,
-        captured,
         agent_id,
         preauth,
         raise_error=httpx.RemoteProtocolError,
@@ -745,10 +734,8 @@ def test_subdomain_forward_returns_plain_503_for_non_html_on_connect_failure(tmp
     """Non-HTML callers (API clients) get the plain 503 with no location header."""
     agent_id = AgentId()
     preauth = "preauth-cookie-json"
-    captured: list[httpx.Request] = []
-    app, env_out, mock_client = _make_forward_app_with_capture(
+    app, _env_out, mock_client = _make_forward_app_with_mock_backend(
         tmp_path,
-        captured,
         agent_id,
         preauth,
         raise_error=httpx.ConnectError,
@@ -769,20 +756,18 @@ def test_subdomain_forward_returns_plain_503_for_non_html_on_connect_failure(tmp
 
 
 def test_subdomain_forward_emits_workspace_backend_failure_on_sse_startup_timeout(tmp_path: Path) -> None:
-    """``TimeoutException`` on an SSE-startup ``send()`` must emit ``CONNECT_ERROR``.
+    """``TimeoutException`` on an SSE-startup ``send()`` returns 504 and emits CONNECT_ERROR.
 
-    Regression test: a wedged-but-listening workspace backend produces a
-    ``httpx.TimeoutException`` (not ``ConnectError``) when ``send(..., stream=True)``
-    waits for response headers that never arrive. Without an envelope on
-    this branch the minds-side tracker would never transition to STUCK
-    for hung-in-user-code backends.
+    A wedged-but-listening workspace backend raises ``httpx.TimeoutException``
+    when ``send(..., stream=True)`` waits for headers that never arrive; this
+    must produce a 504 plus exactly one ``workspace_backend_failure`` envelope
+    tagged ``CONNECT_ERROR`` so the failure is attributable to reaching the
+    backend rather than to the stream itself.
     """
     agent_id = AgentId()
     preauth = "preauth-cookie-sse-timeout"
-    captured: list[httpx.Request] = []
-    app, env_out, mock_client = _make_forward_app_with_capture(
+    app, env_out, mock_client = _make_forward_app_with_mock_backend(
         tmp_path,
-        captured,
         agent_id,
         preauth,
         raise_error=httpx.ConnectTimeout,
@@ -810,19 +795,17 @@ def test_subdomain_forward_emits_workspace_backend_failure_on_sse_startup_timeou
 
 
 def test_subdomain_forward_emits_workspace_backend_failure_on_non_sse_timeout(tmp_path: Path) -> None:
-    """``TimeoutException`` on a non-SSE backend request must emit ``CONNECT_ERROR``.
+    """``TimeoutException`` on a non-SSE backend request returns 504 and emits CONNECT_ERROR.
 
-    Regression test: covers the non-streaming path counterpart to the
-    SSE-startup timeout case. Both paths previously returned a 504 with
-    no failure envelope, so the chrome health SSE never saw a tick toward
-    STUCK for hung backends.
+    Covers the non-streaming branch of ``_forward_workspace_http``: when the
+    backend hangs without ever sending a response, the request must produce a
+    504 plus exactly one ``workspace_backend_failure`` envelope tagged
+    ``CONNECT_ERROR``.
     """
     agent_id = AgentId()
     preauth = "preauth-cookie-json-timeout"
-    captured: list[httpx.Request] = []
-    app, env_out, mock_client = _make_forward_app_with_capture(
+    app, env_out, mock_client = _make_forward_app_with_mock_backend(
         tmp_path,
-        captured,
         agent_id,
         preauth,
         raise_error=httpx.ConnectTimeout,

@@ -1,0 +1,331 @@
+from pathlib import Path
+
+import pytest
+from inline_snapshot import snapshot
+
+from imbue.imbue_common.ratchet_testing import standard_ratchet_checks as rc
+from imbue.imbue_common.ratchet_testing.ratchets import TEST_FILE_PATTERNS
+from imbue.imbue_common.ratchet_testing.ratchets import check_no_ruff_errors
+from imbue.imbue_common.ratchet_testing.ratchets import check_no_type_errors
+
+_DIR = Path(__file__).parent.parent.parent
+
+pytestmark = pytest.mark.xdist_group(name="ratchets")
+
+
+# --- Code safety ---
+
+
+def test_prevent_todos() -> None:
+    rc.check_todos(_DIR, snapshot(0))
+
+
+def test_prevent_exec() -> None:
+    rc.check_exec(_DIR, snapshot(0))
+
+
+def test_prevent_eval() -> None:
+    rc.check_eval(_DIR, snapshot(0))
+
+
+def test_prevent_while_true() -> None:
+    rc.check_while_true(_DIR, snapshot(0))
+
+
+def test_prevent_time_sleep() -> None:
+    # Two matches: ``destroying_test.py`` (a real test poll loop) and
+    # ``cli/env.py::_exec_into_recover`` (the 5-second auto-rollback
+    # countdown -- a deliberate user-facing pause so the operator can
+    # Ctrl-C if they want to intervene before recover fires).
+    rc.check_time_sleep(_DIR, snapshot(2))
+
+
+def test_prevent_global_keyword() -> None:
+    rc.check_global_keyword(_DIR, snapshot(0))
+
+
+def test_prevent_bare_print() -> None:
+    # +5 for scripts/integ_check.py: the integ-test driver's UX is its
+    # stdout PASS/FAIL lines + final RESULT; using logger here would
+    # fight the ratchet's formatting and also send output to stderr by
+    # default, which breaks invoke-and-grep usage.
+    rc.check_bare_print(_DIR, snapshot(18))
+
+
+# --- Exception handling ---
+
+
+def test_prevent_bare_except() -> None:
+    rc.check_bare_except(_DIR, snapshot(0))
+
+
+def test_prevent_broad_exception_catch() -> None:
+    rc.check_broad_exception_catch(_DIR, snapshot(0))
+
+
+def test_prevent_base_exception_catch() -> None:
+    rc.check_base_exception_catch(_DIR, snapshot(0))
+
+
+def test_prevent_builtin_exception_raises() -> None:
+    rc.check_builtin_exception_raises(_DIR, snapshot(0))
+
+
+def test_prevent_silent_decode_error_catches() -> None:
+    rc.check_silent_decode_error_catches(_DIR, snapshot(10))
+
+
+# --- Import style ---
+
+
+def test_prevent_inline_imports() -> None:
+    rc.check_inline_imports(_DIR, snapshot(0))
+
+
+def test_prevent_relative_imports() -> None:
+    rc.check_relative_imports(_DIR, snapshot(0))
+
+
+def test_prevent_import_datetime() -> None:
+    rc.check_import_datetime(_DIR, snapshot(0))
+
+
+def test_prevent_importlib_import_module() -> None:
+    rc.check_importlib_import_module(_DIR, snapshot(0))
+
+
+def test_prevent_getattr() -> None:
+    rc.check_getattr(_DIR, snapshot(0))
+
+
+def test_prevent_setattr() -> None:
+    rc.check_setattr(_DIR, snapshot(0))
+
+
+# --- Banned libraries and patterns ---
+
+
+def test_prevent_asyncio_import() -> None:
+    # app.py uses ``asyncio.get_running_loop()`` and ``asyncio.run_coroutine_threadsafe``
+    # for HTTP route handlers; latchkey/permissions.py uses ``run_in_executor`` to run the
+    # blocking grant/deny path off the event loop. Both are intrinsic to FastAPI integration.
+    # +1 for scripts/integ_check.py: Chrome DevTools Protocol over websockets is inherently
+    # async; the script drives multiple CDP sessions concurrently.
+    rc.check_asyncio_import(_DIR, snapshot(3))
+
+
+def test_prevent_pandas_import() -> None:
+    rc.check_pandas_import(_DIR, snapshot(0))
+
+
+def test_prevent_dataclasses_import() -> None:
+    rc.check_dataclasses_import(_DIR, snapshot(0))
+
+
+def test_prevent_namedtuple() -> None:
+    rc.check_namedtuple(_DIR, snapshot(0))
+
+
+def test_prevent_yaml_usage() -> None:
+    rc.check_yaml_usage(_DIR, snapshot(0))
+
+
+def test_prevent_functools_partial() -> None:
+    rc.check_functools_partial(_DIR, snapshot(0))
+
+
+def test_prevent_exit_stack() -> None:
+    rc.check_exit_stack(_DIR, snapshot(0))
+
+
+# --- Hardcoded paths ---
+
+
+def test_prevent_hardcoded_claude_dir() -> None:
+    rc.check_hardcoded_claude_dir(_DIR, snapshot(0))
+
+
+def test_prevent_hardcoded_guarded_binary() -> None:
+    rc.check_hardcoded_guarded_binary(_DIR, snapshot(0))
+
+
+# --- Naming conventions ---
+
+
+def test_prevent_num_prefix() -> None:
+    rc.check_num_prefix(_DIR, snapshot(0))
+
+
+# --- Documentation ---
+
+
+def test_prevent_trailing_comments() -> None:
+    # ``forward_cli.py`` carries one ``noqa: S603`` suppression next to
+    # the ``subprocess.Popen`` call that spawns ``mngr forward``. The
+    # S603 suppression must be on the same line as the call for ruff to
+    # recognize it; the noqa marker is intentionally not in the
+    # trailing-comment exempt list.
+    rc.check_trailing_comments(_DIR, snapshot(1))
+
+
+def test_prevent_init_docstrings() -> None:
+    rc.check_init_docstrings(_DIR, snapshot(0))
+
+
+@pytest.mark.timeout(10)
+def test_prevent_args_in_docstrings() -> None:
+    rc.check_args_in_docstrings(_DIR, snapshot(0))
+
+
+@pytest.mark.timeout(10)
+def test_prevent_returns_in_docstrings() -> None:
+    rc.check_returns_in_docstrings(_DIR, snapshot(0))
+
+
+# --- Type safety ---
+
+
+def test_prevent_literal_with_multiple_options() -> None:
+    rc.check_literal_with_multiple_options(_DIR, snapshot(0))
+
+
+def test_prevent_bare_generic_types() -> None:
+    rc.check_bare_generic_types(_DIR, snapshot(0))
+
+
+def test_prevent_typing_builtin_imports() -> None:
+    rc.check_typing_builtin_imports(_DIR, snapshot(0))
+
+
+def test_prevent_short_uuid_ids() -> None:
+    rc.check_short_uuid_ids(_DIR, snapshot(0))
+
+
+# --- Pydantic / models ---
+
+
+def test_prevent_model_copy() -> None:
+    rc.check_model_copy(_DIR, snapshot(0))
+
+
+# --- Logging ---
+
+
+def test_prevent_fstring_logging() -> None:
+    rc.check_fstring_logging(_DIR, snapshot(0))
+
+
+def test_prevent_click_echo() -> None:
+    rc.check_click_echo(_DIR, snapshot(0))
+
+
+def test_prevent_logger_exception() -> None:
+    rc.check_logger_exception(_DIR, snapshot(0))
+
+
+# --- Testing conventions ---
+
+
+def test_prevent_unittest_mock_imports() -> None:
+    rc.check_unittest_mock_imports(_DIR, snapshot(0))
+
+
+def test_prevent_monkeypatch_setattr() -> None:
+    rc.check_monkeypatch_setattr(_DIR, snapshot(0))
+
+
+def test_prevent_test_container_classes() -> None:
+    rc.check_test_container_classes(_DIR, snapshot(0))
+
+
+def test_prevent_pytest_mark_integration() -> None:
+    rc.check_pytest_mark_integration(_DIR, snapshot(0))
+
+
+# --- Process management ---
+
+
+def test_prevent_os_fork() -> None:
+    rc.check_os_fork(_DIR, snapshot(0))
+
+
+def test_prevent_bare_urwid_tty_signal_keys() -> None:
+    rc.check_bare_urwid_tty_signal_keys(_DIR, snapshot(0))
+
+
+def test_prevent_direct_subprocess() -> None:
+    # ``latchkey/_spawn.py`` intentionally uses ``subprocess.Popen`` with
+    # ``start_new_session=True`` so that the spawned ``latchkey gateway``
+    # outlives the minds desktop client. That is the opposite of what the
+    # ratchet is designed to enforce (managed cleanup via ConcurrencyGroup),
+    # so we exclude that tiny helper specifically; see its module docstring
+    # for the full justification.
+    #
+    # ``forward_cli.py`` similarly uses ``subprocess.Popen`` directly so it
+    # can hold a reference to the ``mngr forward`` plugin's ``Popen.pid``
+    # for the ``SIGHUP``-bounce path. ``ConcurrencyGroup.RunningProcess``
+    # does not expose the PID today; once it does (a separate cleanup spec
+    # in the concurrency_group lib), this exclusion can be dropped.
+    excluded = TEST_FILE_PATTERNS + (
+        "testing.py",
+        "scripts/*.py",
+        "*/latchkey/_spawn.py",
+        "*/desktop_client/forward_cli.py",
+        # ``destroying.py`` spawns a detached ``bash -c '<mngr destroy ...>'``
+        # so the destroy survives a minds-backend exit; same justification as
+        # ``latchkey/_spawn.py``. See specs/detached-destroy-flow/spec.md.
+        "*/desktop_client/destroying.py",
+    )
+    # The one allowed match is ``cli/env.py::_exec_into_recover``,
+    # which uses ``os.execvp`` to REPLACE the current process with
+    # ``minds env recover`` on deploy failure. That is the opposite of
+    # "spawn a managed child" -- there's no subprocess to clean up,
+    # and the whole point is for stdout/stderr/exit-code to flow
+    # through to the operator's shell as if recover were the original
+    # command. ConcurrencyGroup doesn't apply.
+    rc.check_direct_subprocess(_DIR, snapshot(1), excluded_patterns=excluded)
+
+
+# --- AST-based ratchets ---
+
+
+def test_prevent_if_elif_without_else() -> None:
+    rc.check_if_elif_without_else(_DIR, snapshot(0))
+
+
+def test_prevent_inline_functions() -> None:
+    rc.check_inline_functions(_DIR, snapshot(0))
+
+
+def test_prevent_underscore_imports() -> None:
+    rc.check_underscore_imports(_DIR, snapshot(0))
+
+
+def test_prevent_init_methods_in_non_exception_classes() -> None:
+    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(0))
+
+
+def test_prevent_cast_usage() -> None:
+    rc.check_cast_usage(_DIR, snapshot(0))
+
+
+def test_prevent_assert_isinstance() -> None:
+    rc.check_assert_isinstance(_DIR, snapshot(0))
+
+
+# --- Project-level checks ---
+
+
+def test_prevent_code_in_init_files() -> None:
+    rc.check_code_in_init_files(_DIR, snapshot(0))
+
+
+@pytest.mark.flaky
+def test_no_type_errors() -> None:
+    """Ensure the codebase has zero type errors."""
+    check_no_type_errors(_DIR)
+
+
+def test_no_ruff_errors() -> None:
+    """Ensure the codebase has zero ruff linting errors."""
+    check_no_ruff_errors(_DIR)
