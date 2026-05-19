@@ -60,7 +60,12 @@ latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
 # 3. Ask for the necessary missing permissions.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "scope": "discord_api", "permissions": ["discord-read-all"], "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
+  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "scope": "discord-api", "permissions": ["discord-read-all"], "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
+
+The `scope` field must be a registered bundle name from the gateway's
+catalog — these use kebab-case (e.g. `slack-api`, `discord-api`,
+`github-api`), never snake_case. To discover the correct scope for a
+service, call `GET /permissions/available/<service>` first.
 ```
 
 Try to strike a balance: do not require needlessly broad
