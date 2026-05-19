@@ -253,6 +253,41 @@ def _serialize_grid_node(
     }
 
 
+def _read_layout(layout_json_path: Path | None) -> dict[str, Any] | None:
+    """Read and JSON-decode the persisted ``layout.json``, or return None.
+
+    Centralizes the file-existence + decode + error-log path so callers
+    (``layout_inspect`` / ``_collect_open_refs``) can share it without
+    drifting on which exceptions are caught or how they're logged.
+    """
+    if layout_json_path is None or not layout_json_path.exists():
+        return None
+    try:
+        return json.loads(layout_json_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        _loguru_logger.opt(exception=e).warning("Failed to read layout.json at {}", layout_json_path)
+        return None
+
+
+def _build_panel_summaries(
+    raw: dict[str, Any], agent_name_by_id: dict[str, str]
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Build the panel_id -> ref summary map (with title fallback applied).
+
+    Returns ``(summaries, panels_meta)`` so callers that also want the raw
+    ``panels`` block (for the tree serializer) can use it directly.
+    """
+    panel_params = raw.get("panelParams", {}) or {}
+    panels_meta = (raw.get("dockview", {}) or {}).get("panels", {}) or {}
+    summaries: dict[str, dict[str, Any]] = {}
+    for panel_id in panels_meta.keys():
+        summary = _resolve_ref(panel_id, panel_params.get(panel_id), agent_name_by_id)
+        if not summary.get("title"):
+            summary["title"] = panels_meta.get(panel_id, {}).get("title")
+        summaries[panel_id] = summary
+    return summaries, panels_meta
+
+
 def layout_inspect(layout_json_path: Path | None, agent_name_by_id: dict[str, str]) -> dict[str, Any]:
     """Read the persisted ``layout.json`` and produce a ref-resolved summary.
 
@@ -263,27 +298,15 @@ def layout_inspect(layout_json_path: Path | None, agent_name_by_id: dict[str, st
     layout (``{"panels": []}``) -- which the agent can interpret as "no UI
     initialized yet" without erroring.
     """
-    if layout_json_path is None or not layout_json_path.exists():
+    raw = _read_layout(layout_json_path)
+    if raw is None:
         return {"panels": [], "tree": None}
-    try:
-        raw = json.loads(layout_json_path.read_text())
-    except (json.JSONDecodeError, OSError) as e:
-        _loguru_logger.opt(exception=e).warning("Failed to read layout.json at {}", layout_json_path)
-        return {"panels": [], "tree": None}
+    panel_summaries, panels_meta = _build_panel_summaries(raw, agent_name_by_id)
+    flat_panels: list[dict[str, Any]] = [
+        {k: v for k, v in summary.items() if k != "panel_id"} for summary in panel_summaries.values()
+    ]
     dockview = raw.get("dockview", {}) or {}
-    panel_params = raw.get("panelParams", {}) or {}
-    panels_meta = dockview.get("panels", {}) or {}
-    grid = dockview.get("grid", {}) or {}
-    root = grid.get("root")
-    # Build the flat panel summary first; the tree references it.
-    panel_summaries: dict[str, dict[str, Any]] = {}
-    flat_panels: list[dict[str, Any]] = []
-    for panel_id in panels_meta.keys():
-        summary = _resolve_ref(panel_id, panel_params.get(panel_id), agent_name_by_id)
-        if not summary.get("title"):
-            summary["title"] = panels_meta.get(panel_id, {}).get("title")
-        panel_summaries[panel_id] = summary
-        flat_panels.append({k: v for k, v in summary.items() if k != "panel_id"})
+    root = (dockview.get("grid", {}) or {}).get("root")
     tree = _serialize_grid_node(root, panel_summaries, panels_meta) if root else None
     return {
         "active_panel": dockview.get("activeGroup"),
@@ -338,17 +361,8 @@ def layout_list(
 
 def _collect_open_refs(layout_json_path: Path | None, agent_name_by_id: dict[str, str]) -> set[str]:
     """Return the set of refs currently mounted in the saved layout."""
-    if layout_json_path is None or not layout_json_path.exists():
+    raw = _read_layout(layout_json_path)
+    if raw is None:
         return set()
-    try:
-        raw = json.loads(layout_json_path.read_text())
-    except (json.JSONDecodeError, OSError) as e:
-        _loguru_logger.opt(exception=e).warning("Failed to read layout.json at {}", layout_json_path)
-        return set()
-    panel_params = raw.get("panelParams", {}) or {}
-    panels_meta = (raw.get("dockview", {}) or {}).get("panels", {}) or {}
-    refs: set[str] = set()
-    for panel_id in panels_meta.keys():
-        summary = _resolve_ref(panel_id, panel_params.get(panel_id), agent_name_by_id)
-        refs.add(summary["ref"])
-    return refs
+    panel_summaries, _ = _build_panel_summaries(raw, agent_name_by_id)
+    return {summary["ref"] for summary in panel_summaries.values()}
