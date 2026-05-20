@@ -300,13 +300,11 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       id: Provider;
       label: string;
       description: string;
-      recommended?: boolean;
     }> = [
       {
         id: "claudeai",
         label: "Claude subscription",
         description: "Sign in with your Claude.ai account. Uses your Pro / Max plan quota.",
-        recommended: true,
       },
       {
         id: "console",
@@ -339,10 +337,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
             },
           },
           [
-            m("div.claude-login-provider-label", [
-              p.label,
-              p.recommended ? m("span.claude-login-provider-badge", "Recommended") : null,
-            ]),
+            m("div.claude-login-provider-label", p.label),
             m("div.claude-login-provider-description", p.description),
           ],
         ),
