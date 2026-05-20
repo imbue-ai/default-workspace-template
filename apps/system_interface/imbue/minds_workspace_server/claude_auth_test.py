@@ -10,6 +10,7 @@ in test_ratchets.py, not dodged via hand-rolled try/finally).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -217,9 +218,16 @@ def test_list_claude_agent_names_raises_on_mngr_failure(
         claude_auth.list_claude_agent_names()
 
 
-def test_restart_all_claude_agents_stops_then_starts_each(
-    monkeypatch: pytest.MonkeyPatch,
+def test_restart_all_claude_agents_stops_all_then_starts_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Every agent is stopped before any is started.
+
+    The stop-all/start-all ordering is required so the Claude config
+    prepared between the two phases isn't clobbered by a still-running
+    agent's stale in-memory copy.
+    """
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     payload = '{"agents": [{"name": "a", "type": "claude"}, {"name": "b", "type": "claude"}]}'
     calls: list[str] = []
 
@@ -234,7 +242,71 @@ def test_restart_all_claude_agents_stops_then_starts_each(
     monkeypatch.setattr(claude_auth, "command_runner", _runner)
     names = claude_auth.restart_all_claude_agents()
     assert names == ["a", "b"]
-    assert calls == ["stop a", "start a", "stop b", "start b"]
+    assert calls == ["stop a", "stop b", "start a", "start b"]
+
+
+def test_restart_all_claude_agents_prepares_config_between_stop_and_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Config prep runs after all stops and before any start, with the key approved."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    payload = '{"agents": [{"name": "a", "type": "claude"}]}'
+    calls: list[str] = []
+
+    def _runner(cmd: list[str], _timeout: float) -> FakeFinishedProcess:
+        if cmd[:3] == ["mngr", "list", "--format"]:
+            return FakeFinishedProcess(stdout=payload)
+        if cmd[0] == "mngr" and cmd[1] in {"stop", "start"}:
+            calls.append(f"{cmd[1]} {cmd[2]}")
+            return FakeFinishedProcess(returncode=0)
+        raise AssertionError(f"unexpected cmd: {cmd!r}")
+
+    monkeypatch.setattr(claude_auth, "command_runner", _runner)
+    claude_auth.restart_all_claude_agents(api_key=SecretStr("sk-ant-key-abcdefghijklmnop1234"))
+
+    assert calls == ["stop a", "start a"]
+    config = json.loads((tmp_path / ".claude.json").read_text())
+    assert config["hasCompletedOnboarding"] is True
+    assert config["customApiKeyResponses"]["approved"] == ["abcdefghijklmnop1234"]
+
+
+def test_prepare_claude_config_dismisses_dialogs_and_approves_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    claude_auth._prepare_claude_config_for_restart(SecretStr("sk-ant-x" + "y" * 24))
+    config = json.loads((tmp_path / ".claude.json").read_text())
+    assert config["hasCompletedOnboarding"] is True
+    assert config["effortCalloutDismissed"] is True
+    assert config["hasAcknowledgedCostThreshold"] is True
+    assert config["customApiKeyResponses"]["approved"] == ["y" * 20]
+    assert config["customApiKeyResponses"]["rejected"] == []
+
+
+def test_prepare_claude_config_skips_key_approval_when_no_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    claude_auth._prepare_claude_config_for_restart(None)
+    config = json.loads((tmp_path / ".claude.json").read_text())
+    assert config["hasCompletedOnboarding"] is True
+    assert "customApiKeyResponses" not in config
+
+
+def test_approve_api_key_preserves_existing_approved_entries(tmp_path: Path) -> None:
+    config_path = tmp_path / ".claude.json"
+    config_path.write_text('{"customApiKeyResponses": {"approved": ["existing-suffix-000"]}}')
+    claude_auth._approve_api_key_in_claude_config(config_path, SecretStr("sk-ant-" + "z" * 30))
+    config = json.loads(config_path.read_text())
+    assert config["customApiKeyResponses"]["approved"] == ["existing-suffix-000", "z" * 20]
+
+
+def test_resolve_claude_config_path_raises_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    with pytest.raises(claude_auth.ClaudeAuthError, match="CLAUDE_CONFIG_DIR"):
+        claude_auth._resolve_claude_config_path()
 
 
 def test_submit_oauth_code_drives_subprocess_and_returns_status(
@@ -257,3 +329,50 @@ def test_submit_oauth_code_drives_subprocess_and_returns_status(
     assert status.logged_in is True
     assert status.email == "x@y.com"
     assert fake_process.sendline_calls == ["CODE#STATE"]
+
+
+def test_submit_oauth_code_claudeai_does_not_restart_agents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The subscription provider's credential is re-read live -- no restart."""
+    fake_url = "https://claude.ai/oauth/authorize?x=1"
+    fake_process = FakePexpectProcess(url_match=fake_url, expect_return_index=0)
+    commands: list[tuple[str, ...]] = []
+
+    def _runner(cmd: list[str], _timeout: float) -> FakeFinishedProcess:
+        commands.append(tuple(cmd))
+        return FakeFinishedProcess(stdout='{"loggedIn": true}')
+
+    monkeypatch.setattr(claude_auth, "pexpect_spawner", lambda *_a, **_k: fake_process)
+    monkeypatch.setattr(claude_auth, "command_runner", _runner)
+    start = claude_auth.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
+    claude_auth.submit_oauth_code(start.session_id, "CODE#STATE")
+    assert all(cmd[:2] != ("mngr", "stop") for cmd in commands)
+    assert all(cmd[:2] != ("mngr", "start") for cmd in commands)
+
+
+def test_submit_oauth_code_console_restarts_agents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The console provider writes primaryApiKey into the cached .claude.json,
+    so every claude agent must be restarted to pick it up."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    fake_url = "https://platform.claude.com/oauth/authorize?x=1"
+    fake_process = FakePexpectProcess(url_match=fake_url, expect_return_index=0)
+    restart_calls: list[str] = []
+    list_payload = '{"agents": [{"name": "chat", "type": "claude"}]}'
+
+    def _runner(cmd: list[str], _timeout: float) -> FakeFinishedProcess:
+        if cmd[:3] == ["mngr", "list", "--format"]:
+            return FakeFinishedProcess(stdout=list_payload)
+        if cmd[0] == "mngr" and cmd[1] in {"stop", "start"}:
+            restart_calls.append(f"{cmd[1]} {cmd[2]}")
+            return FakeFinishedProcess(returncode=0)
+        return FakeFinishedProcess(stdout='{"loggedIn": true}')
+
+    monkeypatch.setattr(claude_auth, "pexpect_spawner", lambda *_a, **_k: fake_process)
+    monkeypatch.setattr(claude_auth, "command_runner", _runner)
+    start = claude_auth.start_oauth_login(claude_auth.OAuthProvider.CONSOLE)
+    status = claude_auth.submit_oauth_code(start.session_id, "CODE#STATE")
+    assert status.logged_in is True
+    assert restart_calls == ["stop chat", "start chat"]

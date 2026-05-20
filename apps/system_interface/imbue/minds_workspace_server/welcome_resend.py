@@ -8,7 +8,15 @@ The welcome skill's opening message text is read at runtime from
 `.agents/skills/welcome/SKILL.md`, so this helper and the skill stay in
 sync without manual edits.
 
-Side-effecting dependencies (tmux pane capture and agent message
+Whether the welcome was already delivered is decided from the agent's
+parsed session transcript, not its live tmux pane: the pane is cleared
+and redrawn across `claude --resume` restarts and auth churn, so a
+pane scan would miss a welcome that genuinely was shown and resend a
+duplicate. The transcript JSONL is the durable record -- if any
+assistant turn there rendered the welcome opening line, the welcome has
+been delivered and must not be resent.
+
+Side-effecting dependencies (transcript reading and agent message
 dispatch) are exposed as module-level callables so tests rebind them
 rather than relying on `unittest.mock`.
 """
@@ -22,9 +30,9 @@ from pathlib import Path
 
 from loguru import logger as _loguru_logger
 
-from imbue.concurrency_group.subprocess_utils import ProcessSetupError
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.minds_workspace_server.agent_discovery import discover_agents
 from imbue.minds_workspace_server.agent_discovery import send_message
+from imbue.minds_workspace_server.session_watcher import AgentSessionWatcher
 
 logger = _loguru_logger
 
@@ -33,14 +41,13 @@ _WORK_DIR_ENV_VAR = "MNGR_AGENT_WORK_DIR"
 _FRONTMATTER_DELIMITER = "---"
 _HEADER_LINE_REGEX = re.compile(r"^#{1,6}\s+.+$", re.MULTILINE)
 _WELCOME_COMMAND = "/welcome"
-_TMUX_CAPTURE_TIMEOUT_SECONDS = 5.0
 
 
 class WelcomeResendError(RuntimeError):
     """Raised when the welcome skill cannot be parsed for its opening line."""
 
 
-PaneCaptureFn = Callable[[str], "str | None"]
+TranscriptReadFn = Callable[[str], "str | None"]
 MessageSendFn = Callable[[str, str], bool]
 
 
@@ -112,55 +119,61 @@ def read_welcome_opening_line(skill_path: Path | None = None) -> str:
     raise WelcomeResendError(f"Could not find a verbatim opening line in welcome skill at {path}")
 
 
-def _default_capture_agent_pane(agent_name: str) -> str | None:
-    """Return the tmux pane content for `agent_name`, or None if capture failed."""
-    prefix = os.environ.get("MNGR_PREFIX", "mngr-")
-    session_name = f"{prefix}{agent_name}"
-    command = ["tmux", "capture-pane", "-t", session_name, "-S", "-", "-p"]
-    try:
-        result = run_local_command_modern_version(
-            command=command,
-            cwd=None,
-            is_checked=False,
-            timeout=_TMUX_CAPTURE_TIMEOUT_SECONDS,
-        )
-    except ProcessSetupError as e:
-        logger.warning("tmux capture-pane process setup failed for {}: {}", session_name, e)
+def _default_read_assistant_transcript(agent_name: str) -> str | None:
+    """Return the concatenated text of every assistant turn in the agent's transcript.
+
+    Resolves the agent's session files the same way the `/events` endpoint
+    does (via `AgentSessionWatcher`) and joins the `assistant_message`
+    text. Only assistant turns are included: the `/welcome` skill
+    expansion is a *user* message that also contains the welcome text
+    verbatim, so including user turns would always look like a delivered
+    welcome. Returns None when the agent or its transcript cannot be found
+    so the caller treats the welcome as not-yet-delivered.
+    """
+    matching = [agent for agent in discover_agents() if agent.name == agent_name]
+    if not matching:
+        logger.warning("Agent {} not found while checking welcome transcript", agent_name)
         return None
-    if result.returncode != 0:
-        logger.warning(
-            "tmux capture-pane failed for {}: {}",
-            session_name,
-            result.stderr.strip(),
-        )
-        return None
-    return result.stdout
+    agent = matching[0]
+    watcher = AgentSessionWatcher(
+        agent_id=agent.id,
+        agent_state_dir=agent.agent_state_dir,
+        claude_config_dir=agent.claude_config_dir,
+        on_events=lambda _agent_id, _events: None,
+    )
+    events = watcher.get_all_events()
+    assistant_texts = [
+        event.get("text", "") for event in events if event.get("type") == "assistant_message"
+    ]
+    return "\n".join(assistant_texts)
 
 
 # Injectable module-level dependencies. Production code uses the defaults
-# below; tests rebind these directly (welcome_resend.capture_pane = fake)
+# below; tests rebind these (welcome_resend.read_assistant_transcript = fake)
 # instead of using `unittest.mock`.
-capture_pane: PaneCaptureFn = _default_capture_agent_pane
+read_assistant_transcript: TranscriptReadFn = _default_read_assistant_transcript
 send_message_fn: MessageSendFn = send_message
 
 
-def _pane_contains_welcome(pane: str | None, opening_line: str) -> bool:
-    """Treat a missing/empty pane as 'welcome absent' so we resend.
+def _transcript_shows_welcome(transcript: str | None, opening_line: str) -> bool:
+    """Treat a missing/empty transcript as 'welcome absent' so we resend.
 
-    Per the welcome-resend-race open question, a fresh mind whose agent
-    has not yet printed anything is fine to re-welcome — the worst case
-    is the user sees the greeting twice.
+    A fresh mind whose agent has not produced any assistant turn yet is
+    fine to (re-)welcome. The opening line only ever appears in an
+    assistant turn that actually rendered the greeting -- auth-error
+    turns ("Not logged in ...") never contain it -- so a substring match
+    is a reliable "welcome was delivered" signal.
     """
-    if not pane:
+    if not transcript:
         return False
-    return opening_line in pane
+    return opening_line in transcript
 
 
 def check_and_resend_welcome(agent_name: str, skill_path: Path | None = None) -> bool:
-    """If the agent's pane lacks the welcome opening line, dispatch `/welcome`.
+    """If the agent's transcript lacks the welcome opening line, dispatch `/welcome`.
 
-    Returns True when a resend was issued, False when the pane already had
-    the welcome (no-op).
+    Returns True when a resend was issued, False when the transcript
+    already shows the welcome (no-op).
     """
     try:
         opening_line = read_welcome_opening_line(skill_path)
@@ -168,12 +181,12 @@ def check_and_resend_welcome(agent_name: str, skill_path: Path | None = None) ->
         logger.warning("Could not read welcome skill opening line: {}", e)
         return False
 
-    pane = capture_pane(agent_name)
-    if _pane_contains_welcome(pane, opening_line):
-        logger.debug("Agent {} pane already shows welcome; skipping resend", agent_name)
+    transcript = read_assistant_transcript(agent_name)
+    if _transcript_shows_welcome(transcript, opening_line):
+        logger.debug("Agent {} transcript already shows welcome; skipping resend", agent_name)
         return False
 
-    logger.info("Resending /welcome to agent {} (pane missing opening line)", agent_name)
+    logger.info("Resending /welcome to agent {} (transcript missing opening line)", agent_name)
     sent = send_message_fn(agent_name, _WELCOME_COMMAND)
     if not sent:
         logger.warning("Failed to dispatch /welcome to agent {}", agent_name)
