@@ -231,6 +231,38 @@ body
     assert set(result.keys()) == {"lead_agent", "lead_report_dir"}
 
 
+def test_extra_key_with_invalid_shell_identifier_fails_loud(tmp_path: Path) -> None:
+    """Keys with dashes (or other shell-illegal chars) must fail loud, not silently drop."""
+    task = _write_task(
+        tmp_path,
+        """---
+lead_agent: a
+lead_report_dir: b
+staged-inputs: commit.diff
+---
+body
+""",
+    )
+    with pytest.raises(ValueError, match=r"staged-inputs.*shell identifier"):
+        parse_task_frontmatter.parse(task)
+
+
+def test_extra_key_starting_with_digit_fails_loud(tmp_path: Path) -> None:
+    """POSIX shell identifiers cannot begin with a digit."""
+    task = _write_task(
+        tmp_path,
+        """---
+lead_agent: a
+lead_report_dir: b
+1st_input: commit.diff
+---
+body
+""",
+    )
+    with pytest.raises(ValueError, match=r"1st_input.*shell identifier"):
+        parse_task_frontmatter.parse(task)
+
+
 def test_render_orders_required_first_then_extras_alphabetized(tmp_path: Path) -> None:
     task = _write_task(
         tmp_path,

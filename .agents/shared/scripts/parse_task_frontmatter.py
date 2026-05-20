@@ -31,16 +31,22 @@ order; any extra string fields follow alphabetically:
 
 Non-string frontmatter values (lists, mappings, numbers, bools) are
 silently dropped -- only strings round-trip cleanly through ``eval``.
+Extra string keys must be valid POSIX shell identifiers (so the
+``KEY=value`` line a downstream ``eval`` consumes actually creates a
+variable instead of being parsed as a command). A key like
+``staged-inputs`` fails loud rather than silently disappearing.
 
 On any failure -- no glob match, multiple glob matches, file missing,
-no/broken frontmatter, any required field missing, wrong type, or
-empty string -- prints a human-readable error to stderr and exits 1.
+no/broken frontmatter, any required field missing, wrong type, empty
+string, or an extra key that isn't a valid shell identifier -- prints a
+human-readable error to stderr and exits 1.
 """
 
 from __future__ import annotations
 
 import argparse
 import glob
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -50,6 +56,7 @@ import yaml
 
 
 _REQUIRED_FIELDS = ("lead_agent", "lead_report_dir")
+_SHELL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def resolve(pattern: str) -> Path:
@@ -100,7 +107,10 @@ def parse(task_file: Path) -> dict[str, str]:
     Required fields (``lead_agent``, ``lead_report_dir``) must be present,
     string-typed, and non-empty -- any violation raises ``ValueError``.
     Beyond those, all other top-level string-valued keys are passed
-    through. Non-string values are silently dropped.
+    through; non-string values are silently dropped. Extra keys must
+    also be valid POSIX shell identifiers (``[A-Za-z_][A-Za-z0-9_]*``)
+    so the downstream ``eval`` actually defines a variable rather than
+    silently parsing the rendered line as a command lookup.
     """
     if not task_file.is_file():
         raise ValueError(f"task file not found: {task_file}")
@@ -115,11 +125,22 @@ def parse(task_file: Path) -> dict[str, str]:
             )
         if not value:
             raise ValueError(f"frontmatter.{field} must not be empty")
-    return {
+    result = {
         key: value
         for key, value in frontmatter.items()
         if isinstance(value, str) and value
     }
+    for key in result:
+        if key in _REQUIRED_FIELDS:
+            continue
+        if not _SHELL_IDENTIFIER_RE.match(key):
+            raise ValueError(
+                f"frontmatter key `{key}` is not a valid shell identifier "
+                f"(must match {_SHELL_IDENTIFIER_RE.pattern}); rename it "
+                f"using snake_case so downstream `eval` can consume the "
+                f"rendered KEY=value line."
+            )
+    return result
 
 
 def _render(fields: dict[str, str]) -> str:
