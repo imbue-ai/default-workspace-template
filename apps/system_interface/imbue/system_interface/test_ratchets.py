@@ -225,7 +225,21 @@ def test_prevent_monkeypatch_setattr() -> None:
     # require plumbing a flag through every call site of
     # create_application, which is a much larger blast radius for a
     # test-only workaround.
-    rc.check_monkeypatch_setattr(_DIR, snapshot(1))
+    #
+    # The rest are the in-UI Claude login modal tests (claude_auth_test.py,
+    # welcome_resend_test.py, claude_auth_endpoints_test.py). The
+    # `claude_auth` and `welcome_resend` modules expose
+    # `command_runner`, `pexpect_spawner`, `read_assistant_transcript`,
+    # `send_message_fn`, and `_default_skill_path` as module-level
+    # callables so dependencies on the outside world
+    # (subprocesses, pexpect spawns, session-transcript reads, agent
+    # message dispatch, the welcome-skill file path) can be swapped
+    # for deterministic test fakes without `unittest.mock`. Tests
+    # use `monkeypatch.setattr` rather than hand-rolled try/finally
+    # so the swap is counted by this ratchet (in the spirit of the
+    # rule) rather than dodging the regex. (Count includes references
+    # inside docstrings/comments that the regex catches as well.)
+    rc.check_monkeypatch_setattr(_DIR, snapshot(41))
 
 
 def test_prevent_test_container_classes() -> None:
