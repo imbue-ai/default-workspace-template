@@ -40,7 +40,8 @@ def _read_subagent_parent_info(jsonl_file: Path) -> dict[str, str] | None:
     try:
         with open(jsonl_file, "rb") as f:
             first_line_bytes = f.readline()
-    except OSError:
+    except OSError as exc:
+        logger.debug("Failed to read subagent jsonl first line %s: %s", jsonl_file, exc)
         return None
     if not first_line_bytes.strip():
         return None
