@@ -348,6 +348,42 @@ def test_common_transcript_skipped_when_script_missing(tmp_path: Path) -> None:
     )
 
 
+def test_common_transcript_failure_does_not_abort_dispatch(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A non-zero converter exit must NOT abort dispatch (worker is mid-launch)."""
+    runtime, task, _ = _make_layout(tmp_path)
+    state_dir = _make_state_dir_with_converter(tmp_path)
+    runner = _RecordingRunner()
+    expected_script = str(state_dir / "commands" / "common_transcript.sh")
+    runner.respond((expected_script, "--single-pass"), _StubResult(returncode=2))
+
+    rc = dispatch_mod.dispatch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        extra_pushes=(),
+        workspace="ws-1",
+        state_dir=state_dir,
+        runner=runner,
+    )
+
+    assert rc == 0
+    # The subsequent message send must still run.
+    assert [c.argv for c in runner.calls][-1] == [
+        "mngr",
+        "message",
+        "demo-worker",
+        "--message-file",
+        str(task),
+    ]
+    err = capsys.readouterr().err
+    assert "common_transcript.sh" in err
+    assert "exited 2" in err
+
+
 def test_main_picks_up_state_dir_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

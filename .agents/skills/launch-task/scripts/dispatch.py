@@ -83,13 +83,28 @@ def _flush_common_transcript(state_dir: Path | None, runner: Runner) -> None:
     converter script isn't installed at the standard path (non-claude agents
     don't have it). See module docstring for why this runs before the message
     send.
+
+    Best-effort by design: this is a freshness optimization that merely
+    races the converter's 5s poller, so a converter failure must not
+    abort dispatch (which would orphan a half-launched worker between
+    the runtime push and the message send). On non-zero exit we log a
+    warning to stderr and let dispatch continue; the worker will see
+    whatever the periodic poller has already produced.
     """
     if state_dir is None:
         return
     script = state_dir / _COMMON_TRANSCRIPT_REL
     if not script.is_file():
         return
-    runner.run([str(script), "--single-pass"], check=True)
+    result = runner.run([str(script), "--single-pass"], check=False)
+    returncode = getattr(result, "returncode", 0)
+    if returncode != 0:
+        print(
+            f"dispatch: warning: common_transcript.sh --single-pass exited "
+            f"{returncode}; worker will read whatever the periodic poller "
+            f"has already produced",
+            file=sys.stderr,
+        )
 
 
 def push(name: str, source_dir: Path, runner: Runner) -> None:
