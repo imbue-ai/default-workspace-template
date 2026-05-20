@@ -11,6 +11,7 @@ in test_ratchets.py, not dodged via hand-rolled try/finally).
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -229,20 +230,23 @@ def test_restart_all_claude_agents_stops_all_then_starts_all(
     """
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     payload = '{"agents": [{"name": "a", "type": "claude"}, {"name": "b", "type": "claude"}]}'
-    calls: list[str] = []
+    calls: list[list[str]] = []
 
     def _runner(cmd: list[str], _timeout: float) -> FakeFinishedProcess:
         if cmd[:3] == ["mngr", "list", "--format"]:
             return FakeFinishedProcess(stdout=payload)
         if cmd[0] == "mngr" and cmd[1] in {"stop", "start"}:
-            calls.append(f"{cmd[1]} {cmd[2]}")
+            calls.append(cmd)
             return FakeFinishedProcess(returncode=0)
         raise AssertionError(f"unexpected cmd: {cmd!r}")
 
     monkeypatch.setattr(claude_auth, "command_runner", _runner)
     names = claude_auth.restart_all_claude_agents()
     assert names == ["a", "b"]
-    assert calls == ["stop a", "stop b", "start a", "start b"]
+    # The agent name is always the last arg of each mngr stop/start call.
+    assert [f"{cmd[1]} {cmd[-1]}" for cmd in calls] == ["stop a", "stop b", "start a", "start b"]
+    # Every start passes --no-resume so mngr does not send the resume message.
+    assert all("--no-resume" in cmd for cmd in calls if cmd[1] == "start")
 
 
 def test_restart_all_claude_agents_prepares_config_between_stop_and_start(
@@ -251,20 +255,20 @@ def test_restart_all_claude_agents_prepares_config_between_stop_and_start(
     """Config prep runs after all stops and before any start, with the key approved."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     payload = '{"agents": [{"name": "a", "type": "claude"}]}'
-    calls: list[str] = []
+    calls: list[list[str]] = []
 
     def _runner(cmd: list[str], _timeout: float) -> FakeFinishedProcess:
         if cmd[:3] == ["mngr", "list", "--format"]:
             return FakeFinishedProcess(stdout=payload)
         if cmd[0] == "mngr" and cmd[1] in {"stop", "start"}:
-            calls.append(f"{cmd[1]} {cmd[2]}")
+            calls.append(cmd)
             return FakeFinishedProcess(returncode=0)
         raise AssertionError(f"unexpected cmd: {cmd!r}")
 
     monkeypatch.setattr(claude_auth, "command_runner", _runner)
     claude_auth.restart_all_claude_agents(api_key=SecretStr("sk-ant-key-abcdefghijklmnop1234"))
 
-    assert calls == ["stop a", "start a"]
+    assert [f"{cmd[1]} {cmd[-1]}" for cmd in calls] == ["stop a", "start a"]
     config = json.loads((tmp_path / ".claude.json").read_text())
     assert config["hasCompletedOnboarding"] is True
     assert config["customApiKeyResponses"]["approved"] == ["abcdefghijklmnop1234"]
@@ -359,14 +363,14 @@ def test_submit_oauth_code_console_restarts_agents(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     fake_url = "https://platform.claude.com/oauth/authorize?x=1"
     fake_process = FakePexpectProcess(url_match=fake_url, expect_return_index=0)
-    restart_calls: list[str] = []
+    restart_calls: list[list[str]] = []
     list_payload = '{"agents": [{"name": "chat", "type": "claude"}]}'
 
     def _runner(cmd: list[str], _timeout: float) -> FakeFinishedProcess:
         if cmd[:3] == ["mngr", "list", "--format"]:
             return FakeFinishedProcess(stdout=list_payload)
         if cmd[0] == "mngr" and cmd[1] in {"stop", "start"}:
-            restart_calls.append(f"{cmd[1]} {cmd[2]}")
+            restart_calls.append(cmd)
             return FakeFinishedProcess(returncode=0)
         return FakeFinishedProcess(stdout='{"loggedIn": true}')
 
@@ -375,4 +379,55 @@ def test_submit_oauth_code_console_restarts_agents(
     start = claude_auth.start_oauth_login(claude_auth.OAuthProvider.CONSOLE)
     status = claude_auth.submit_oauth_code(start.session_id, "CODE#STATE")
     assert status.logged_in is True
-    assert restart_calls == ["stop chat", "start chat"]
+    assert [f"{cmd[1]} {cmd[-1]}" for cmd in restart_calls] == ["stop chat", "start chat"]
+    assert all("--no-resume" in cmd for cmd in restart_calls if cmd[1] == "start")
+
+
+def test_get_auth_status_overlays_extra_env_onto_status_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`extra_env` is passed through to the status subprocess environment."""
+    seen_env: dict[str, Mapping[str, str] | None] = {}
+
+    def _runner(
+        _cmd: list[str], _timeout: float, env: Mapping[str, str] | None = None
+    ) -> FakeFinishedProcess:
+        seen_env["env"] = env
+        return FakeFinishedProcess(stdout='{"loggedIn": true}')
+
+    monkeypatch.setattr(claude_auth, "command_runner", _runner)
+    status = claude_auth.get_auth_status(extra_env={"ANTHROPIC_API_KEY": "sk-ant-probe"})
+    assert status.logged_in is True
+    passed = seen_env["env"]
+    assert passed is not None
+    assert passed["ANTHROPIC_API_KEY"] == "sk-ant-probe"
+
+
+def test_submit_api_key_verifies_status_with_key_in_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The verification `claude auth status` runs with the key in its env.
+
+    Regression guard: the workspace-server process never receives the key
+    written to the host env file, so a status check that doesn't overlay
+    the key would report `loggedIn=false` for a valid key and the modal
+    would wrongly tell the user it was rejected.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    the_key = "sk-ant-valid-key-abcdefghijklmnop"
+
+    def _runner(
+        cmd: list[str], _timeout: float, env: Mapping[str, str] | None = None
+    ) -> FakeFinishedProcess:
+        if cmd[:3] == ["mngr", "list", "--format"]:
+            return FakeFinishedProcess(stdout='{"agents": []}')
+        if cmd[:3] == ["claude", "auth", "status"]:
+            # Model claude's real behavior: logged in iff the key is in env.
+            logged_in = bool(env is not None and env.get("ANTHROPIC_API_KEY"))
+            return FakeFinishedProcess(stdout=json.dumps({"loggedIn": logged_in}))
+        return FakeFinishedProcess(returncode=0)
+
+    monkeypatch.setattr(claude_auth, "command_runner", _runner)
+    status = claude_auth.submit_api_key(SecretStr(the_key))
+    assert status.logged_in is True

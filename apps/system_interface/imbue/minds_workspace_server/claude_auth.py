@@ -53,6 +53,7 @@ import re
 import threading
 import uuid
 from collections.abc import Callable
+from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -96,9 +97,11 @@ CommandRunner = Callable[..., Any]
 PexpectSpawner = Callable[..., Any]
 
 
-def _default_command_runner(command: list[str], timeout: float) -> Any:
+def _default_command_runner(
+    command: list[str], timeout: float, env: Mapping[str, str] | None = None
+) -> Any:
     return run_local_command_modern_version(
-        command=command, is_checked=False, timeout=timeout, cwd=None
+        command=command, is_checked=False, timeout=timeout, cwd=None, env=env
     )
 
 
@@ -175,16 +178,32 @@ def _parse_status_payload(payload: dict[str, object]) -> AuthStatus:
     )
 
 
-def get_auth_status() -> AuthStatus:
+def get_auth_status(extra_env: Mapping[str, str] | None = None) -> AuthStatus:
     """Invoke `claude auth status --json` and parse the result.
 
     Returns `logged_in=False` if the `claude` binary is missing or doesn't
     produce output, rather than raising, since the whole point of the
     modal is to recover from broken auth state.
+
+    `extra_env` is overlaid on the current environment for the status
+    subprocess. The API-key path needs this: `submit_api_key` writes
+    `ANTHROPIC_API_KEY` to the host env *file*, but the long-lived
+    workspace-server process that runs this check never received that
+    variable, so without overlaying the key here `claude auth status`
+    would report `loggedIn=false` for a perfectly valid key.
     """
+    runner_env = {**os.environ, **extra_env} if extra_env is not None else None
     try:
-        result = command_runner(
-            ["claude", "auth", "status", "--json"], _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS
+        result = (
+            command_runner(
+                ["claude", "auth", "status", "--json"],
+                _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS,
+                runner_env,
+            )
+            if runner_env is not None
+            else command_runner(
+                ["claude", "auth", "status", "--json"], _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS
+            )
         )
     except ProcessSetupError as e:
         logger.warning("claude auth status failed to launch: {}", e)
@@ -337,6 +356,12 @@ def restart_all_claude_agents(api_key: SecretStr | None = None) -> list[str]:
     while an agent is still running would be silently overwritten by that
     agent's stale in-memory copy on its next write.
 
+    Agents are started with `--no-resume` so mngr does not deliver the
+    configured resume message (e.g. "Continue from where you left off")
+    after the restart -- an auth recovery is not a work interruption the
+    agent should pick back up from, and that message would otherwise
+    appear as a spurious turn in the chat.
+
     `api_key`, when given, is additionally approved in the Claude config
     so the API-key auth path's freshly-written key doesn't trip Claude's
     custom-key challenge.
@@ -353,8 +378,10 @@ def restart_all_claude_agents(api_key: SecretStr | None = None) -> list[str]:
             )
     _prepare_claude_config_for_restart(api_key)
     for name in names:
-        logger.info("Starting type:claude agent {} via mngr start", name)
-        start_result = command_runner(["mngr", "start", name], _MNGR_COMMAND_TIMEOUT_SECONDS)
+        logger.info("Starting type:claude agent {} via mngr start --no-resume", name)
+        start_result = command_runner(
+            ["mngr", "start", "--no-resume", name], _MNGR_COMMAND_TIMEOUT_SECONDS
+        )
         if start_result.returncode != 0:
             raise ClaudeAuthError(
                 f"mngr start {name} failed (exit {start_result.returncode}): {start_result.stderr.strip()}"
@@ -369,10 +396,16 @@ def submit_api_key(api_key: SecretStr) -> AuthStatus:
     process start, so already-running claudes won't pick up the new key
     until their tmux sessions are torn down and respawned. The key is also
     passed to the restart so it gets pre-approved in the Claude config.
+
+    The final status check overlays `ANTHROPIC_API_KEY` onto the
+    subprocess environment: the key was written to the host env *file*,
+    which the long-lived workspace-server process never sourced, so a
+    plain `claude auth status` would report `loggedIn=false` for a valid
+    key and the modal would wrongly tell the user it was rejected.
     """
     write_api_key_to_host_env(api_key)
     restart_all_claude_agents(api_key=api_key)
-    return get_auth_status()
+    return get_auth_status(extra_env={_ANTHROPIC_API_KEY_ENV_VAR: api_key.get_secret_value()})
 
 
 # ---- OAuth PTY flow ----

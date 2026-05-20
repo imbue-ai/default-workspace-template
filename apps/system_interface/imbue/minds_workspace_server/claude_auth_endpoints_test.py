@@ -156,7 +156,7 @@ def test_submit_api_key_restarts_all_claude_agents_and_runs_welcome_resend(
     monkeypatch.setattr(welcome_resend, "_default_skill_path", lambda: skill_path)
 
     welcome_calls: list[str] = []
-    restart_calls: list[str] = []
+    restart_calls: list[list[str]] = []
     list_payload = (
         '{"agents": ['
         '{"name": "ababa", "type": "claude"}, '
@@ -165,11 +165,13 @@ def test_submit_api_key_restarts_all_claude_agents_and_runs_welcome_resend(
         "]}"
     )
 
-    def _runner(cmd: list[str], _timeout: float) -> FakeFinishedProcess:
+    def _runner(
+        cmd: list[str], _timeout: float, _env: object = None
+    ) -> FakeFinishedProcess:
         if cmd[:3] == ["mngr", "list", "--format"]:
             return FakeFinishedProcess(stdout=list_payload)
         if len(cmd) >= 3 and cmd[0] == "mngr" and cmd[1] in {"stop", "start"}:
-            restart_calls.append(f"{cmd[1]} {cmd[2]}")
+            restart_calls.append(cmd)
             return FakeFinishedProcess(returncode=0)
         return _logged_in_runner(cmd, _timeout)
 
@@ -190,12 +192,13 @@ def test_submit_api_key_restarts_all_claude_agents_and_runs_welcome_resend(
     assert response.json()["logged_in"] is True
     env_text = (tmp_path / "env").read_text()
     assert "ANTHROPIC_API_KEY=sk-ant-test-key" in env_text
-    assert restart_calls == [
+    assert [f"{cmd[1]} {cmd[-1]}" for cmd in restart_calls] == [
         "stop ababa",
         "stop worktree-1",
         "start ababa",
         "start worktree-1",
     ]
+    assert all("--no-resume" in cmd for cmd in restart_calls if cmd[1] == "start")
     assert welcome_calls == ["ababa"]
 
 

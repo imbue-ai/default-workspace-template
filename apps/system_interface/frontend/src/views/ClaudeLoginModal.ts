@@ -167,6 +167,11 @@ function copyIcon(): m.Vnode {
 
 export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   let mode: Mode = "select_provider";
+  // The OAuth provider chosen on the select screen. `submitOAuthCode`
+  // reads it to tailor the verifying copy: the console flow restarts the
+  // mind's claude agents (its credential lands in the cached .claude.json),
+  // the subscription flow does not.
+  let oauthProvider: "claudeai" | "console" | null = null;
   let sessionId: string | null = null;
   let oauthUrl: string | null = null;
   let code = "";
@@ -208,8 +213,9 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     m.redraw();
   }
 
-  async function startOAuth(chosen: Provider): Promise<void> {
+  async function startOAuth(chosen: "claudeai" | "console"): Promise<void> {
     clearError();
+    oauthProvider = chosen;
     startVerifying(
       "Starting sign-in...",
       chosen === "claudeai"
@@ -235,7 +241,12 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   async function submitOAuthCode(): Promise<void> {
     if (!sessionId || !code.trim()) return;
     clearError();
-    startVerifying("Verifying code...", "Completing the OAuth handshake.");
+    startVerifying(
+      "Verifying code...",
+      oauthProvider === "console"
+        ? "Completing sign-in and restarting this mind's Claude agents so the new credentials take effect."
+        : "Completing the OAuth handshake.",
+    );
     try {
       const status = await m.request<ClaudeAuthStatus>({
         method: "POST",
