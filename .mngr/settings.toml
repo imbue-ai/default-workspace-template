@@ -153,7 +153,7 @@ extra_provision_command = [
     # -- the agent-side CLI talks to the host-side gateway over HTTP, and 2.x
     # versions across that minor (e.g. 2.7.x CLI vs 2.10.x gateway) reject each
     # other's password-auth wire format with `401 (password)`.
-    "sudo npm install -g latchkey@2.10.1",
+    "sudo npm install -g latchkey@2.11.1",
     "curl -LsSf https://astral.sh/uv/install.sh | sh",
     "ARCH=$(uname -m) && sudo curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${ARCH} -o /usr/local/bin/ttyd && sudo chmod +x /usr/local/bin/ttyd",
     "sudo mkdir -p -m 755 /etc/apt/keyrings && wget -nv -O- https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && echo deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null && sudo apt-get update && sudo apt-get install -y gh",
