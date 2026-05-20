@@ -13,15 +13,32 @@ Two sign-in paths:
    for `--console`) and waits for a `CODE#STATE` paste on stdin. The PTY
    subprocess is held in module state between the `start_oauth_login` and
    `submit_oauth_code` calls so the UI can collect the code from the user
-   in between. The completed flow writes the shared
-   `$CLAUDE_CONFIG_DIR/.credentials.json` file, which every running claude
-   in the mind auto-detects on its next API call -- no restart required.
+   in between.
+
+   The two providers store their credential differently, which dictates
+   whether a restart is needed:
+
+   - `--claudeai` writes a subscription credential that every running
+     claude re-reads on its next API call -- no restart required.
+   - `--console` writes its credential as `primaryApiKey` *inside* the
+     shared `$CLAUDE_CONFIG_DIR/.claude.json`. Claude Code reads that file
+     once at process start and caches it, so an already-running agent
+     never sees the new key. The console path therefore restarts every
+     `type: claude` agent (same mechanism as the API-key path below).
 2. Raw API key: `submit_api_key` writes `ANTHROPIC_API_KEY` into the host
    env file the bootstrap already manages and then restarts every
    `type: claude` agent in the mind via `mngr stop`/`mngr start`. The
    restart is necessary because env vars are inherited at process start
    and cannot be updated in-place; without it, the new key has no effect
    on already-running claudes.
+
+Both restart paths first run `_prepare_claude_config_for_restart`, which
+pre-dismisses the Claude Code startup dialogs (onboarding, theme, custom
+API-key challenge) in `.claude.json` so the freshly restarted agents come
+up clean instead of blocking on an interactive TUI prompt -- mirroring
+what mngr's claude plugin does at agent-creation time. The config edit
+runs while every agent is stopped, so no still-running agent clobbers it
+from its stale in-memory copy.
 
 Dependencies that touch the outside world (subprocess invocation and
 pexpect-driven PTY spawning) are exposed as named callables on the module
@@ -50,11 +67,18 @@ from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.utils.env_utils import parse_env_file
+from imbue.mngr_claude.claude_config import acknowledge_cost_threshold
+from imbue.mngr_claude.claude_config import complete_onboarding
+from imbue.mngr_claude.claude_config import dismiss_effort_callout
+from imbue.mngr_claude.claude_config import read_claude_config
 
 logger = _loguru_logger
 
 _HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
+_CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 _ANTHROPIC_API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+# Claude stores per-key approvals keyed by the last 20 characters of the key.
+_API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
 _OAUTH_URL_REGEX = re.compile(r"https://\S*oauth/authorize\S*")
 _OAUTH_URL_WAIT_SECONDS: Final = 30.0
 _OAUTH_COMPLETE_WAIT_SECONDS: Final = 30.0
@@ -249,22 +273,87 @@ def list_claude_agent_names() -> list[str]:
     return names
 
 
-def restart_all_claude_agents() -> list[str]:
+def _resolve_claude_config_path() -> Path:
+    """Locate the shared `$CLAUDE_CONFIG_DIR/.claude.json` for the mind."""
+    config_dir = os.environ.get(_CLAUDE_CONFIG_DIR_ENV_VAR, "")
+    if not config_dir:
+        raise ClaudeAuthError(
+            f"{_CLAUDE_CONFIG_DIR_ENV_VAR} is unset; cannot locate the Claude config"
+        )
+    return Path(config_dir) / ".claude.json"
+
+
+def _approve_api_key_in_claude_config(config_path: Path, api_key: SecretStr) -> None:
+    """Add `api_key` to `customApiKeyResponses.approved` in the Claude config.
+
+    Claude Code challenges any `ANTHROPIC_API_KEY` it finds in the
+    environment that isn't pre-approved, via an interactive TUI prompt
+    that a restarted agent would then block on. Approvals are keyed by the
+    last 20 characters of the key (mirrors mngr_claude's
+    `approve_api_key_for_claude`). This runs while every agent is stopped,
+    so a plain read/write is safe -- no concurrent writer to race.
+    """
+    config = read_claude_config(config_path)
+    responses = config.get("customApiKeyResponses")
+    if not isinstance(responses, dict):
+        responses = {}
+    approved = list(responses.get("approved", []))
+    suffix = api_key.get_secret_value()[-_API_KEY_APPROVAL_SUFFIX_LENGTH:]
+    if suffix not in approved:
+        approved.append(suffix)
+    responses["approved"] = approved
+    responses.setdefault("rejected", [])
+    config["customApiKeyResponses"] = responses
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+
+
+def _prepare_claude_config_for_restart(api_key: SecretStr | None) -> None:
+    """Pre-dismiss Claude Code's startup dialogs before agents restart.
+
+    A freshly restarted agent re-runs Claude Code's first-launch flow
+    (theme picker, onboarding, custom-API-key challenge). Any of those is
+    an interactive TUI prompt that the agent would block on. mngr's claude
+    plugin dismisses them at agent-creation time; the modal's restart
+    paths must do the same so the recovered agent comes up usable.
+
+    Called between stopping and starting the agents, so the running agents
+    cannot clobber the file from their stale in-memory copy.
+    """
+    config_path = _resolve_claude_config_path()
+    complete_onboarding(config_path)
+    dismiss_effort_callout(config_path)
+    acknowledge_cost_threshold(config_path)
+    if api_key is not None:
+        _approve_api_key_in_claude_config(config_path, api_key)
+
+
+def restart_all_claude_agents(api_key: SecretStr | None = None) -> list[str]:
     """Restart every `type: claude` agent via `mngr stop` then `mngr start`.
 
-    Returns the list of agent names that were restarted. Used by the
-    API-key auth path so the freshly-written `ANTHROPIC_API_KEY` is in
-    effect across every running claude in the mind, not just the one the
-    user happened to be chatting with.
+    Stops every agent first, then prepares the shared Claude config (see
+    `_prepare_claude_config_for_restart`), then starts them again. The
+    stop-all/prepare/start-all ordering matters: editing `.claude.json`
+    while an agent is still running would be silently overwritten by that
+    agent's stale in-memory copy on its next write.
+
+    `api_key`, when given, is additionally approved in the Claude config
+    so the API-key auth path's freshly-written key doesn't trip Claude's
+    custom-key challenge.
+
+    Returns the list of agent names that were restarted.
     """
     names = list_claude_agent_names()
     for name in names:
-        logger.info("Restarting type:claude agent {} via mngr stop+start", name)
+        logger.info("Stopping type:claude agent {} via mngr stop", name)
         stop_result = command_runner(["mngr", "stop", name], _MNGR_COMMAND_TIMEOUT_SECONDS)
         if stop_result.returncode != 0:
             raise ClaudeAuthError(
                 f"mngr stop {name} failed (exit {stop_result.returncode}): {stop_result.stderr.strip()}"
             )
+    _prepare_claude_config_for_restart(api_key)
+    for name in names:
+        logger.info("Starting type:claude agent {} via mngr start", name)
         start_result = command_runner(["mngr", "start", name], _MNGR_COMMAND_TIMEOUT_SECONDS)
         if start_result.returncode != 0:
             raise ClaudeAuthError(
@@ -278,10 +367,11 @@ def submit_api_key(api_key: SecretStr) -> AuthStatus:
 
     All `type: claude` agents must be restarted: env vars are read at
     process start, so already-running claudes won't pick up the new key
-    until their tmux sessions are torn down and respawned.
+    until their tmux sessions are torn down and respawned. The key is also
+    passed to the restart so it gets pre-approved in the Claude config.
     """
     write_api_key_to_host_env(api_key)
-    restart_all_claude_agents()
+    restart_all_claude_agents(api_key=api_key)
     return get_auth_status()
 
 
@@ -385,13 +475,22 @@ def _drive_oauth_code(process: Any, code: str) -> None:
 
 
 def submit_oauth_code(session_id: str, code: str) -> AuthStatus:
-    """Send the user's pasted `CODE#STATE` to the live OAuth subprocess."""
+    """Send the user's pasted `CODE#STATE` to the live OAuth subprocess.
+
+    The Console (`--console`) provider writes its credential as
+    `primaryApiKey` inside the cached `.claude.json`, which an
+    already-running agent never re-reads -- so the console path restarts
+    every `type: claude` agent once the login completes. The subscription
+    (`--claudeai`) provider's credential is re-read live, so it skips the
+    restart.
+    """
     global _current_oauth_record, _current_oauth_process
     with _oauth_lock:
         record = _current_oauth_record
         process = _current_oauth_process
         if record is None or process is None or record.session_id != session_id:
             raise ClaudeAuthError("No active OAuth session matches the provided session_id")
+        provider = record.provider
         try:
             _drive_oauth_code(process, code)
         finally:
@@ -404,6 +503,8 @@ def submit_oauth_code(session_id: str, code: str) -> AuthStatus:
             _safe_close(process)
             _current_oauth_record = None
             _current_oauth_process = None
+    if provider is OAuthProvider.CONSOLE:
+        restart_all_claude_agents()
     return get_auth_status()
 
 

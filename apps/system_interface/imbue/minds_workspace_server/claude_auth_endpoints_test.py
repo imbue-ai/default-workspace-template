@@ -1,10 +1,10 @@
 """Integration tests for the /api/claude-auth/* endpoints.
 
 Tests use `monkeypatch.setattr` to swap the injectable module-level
-callables (`command_runner`, `pexpect_spawner`, `capture_pane`,
+callables (`command_runner`, `pexpect_spawner`, `read_assistant_transcript`,
 `send_message_fn`) so the auth-success chokepoint is exercised end-to-end
 through the FastAPI test client without touching real Claude binaries
-or tmux sessions.
+or session transcripts.
 """
 
 from __future__ import annotations
@@ -74,12 +74,13 @@ def test_start_oauth_rejects_unknown_provider(client: TestClient) -> None:
 def test_full_oauth_flow_drives_subprocess_runs_welcome_resend_and_skips_restart(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """OAuth path writes `.credentials.json` via the PTY; no agent restart needed.
+    """Subscription OAuth (`--claudeai`) needs no agent restart.
 
     The asserted absence of `mngr stop`/`mngr start` calls is the
-    behavioral contract: claude code auto-picks up freshly-written
-    credentials on its next API call, so restart would be disruptive
-    churn for no auth benefit.
+    behavioral contract: the subscription credential is re-read live on
+    the next API call, so restart would be disruptive churn for no auth
+    benefit. (The console provider differs -- see the console restart
+    test in claude_auth_test.py.)
     """
     fake_url = "https://claude.ai/oauth/authorize?abc=1"
     fake_process = FakePexpectProcess(url_match=fake_url)
@@ -103,7 +104,7 @@ def test_full_oauth_flow_drives_subprocess_runs_welcome_resend_and_skips_restart
         claude_auth, "pexpect_spawner", lambda *_args, **_kwargs: fake_process
     )
     monkeypatch.setattr(claude_auth, "command_runner", _recording_runner)
-    monkeypatch.setattr(welcome_resend, "capture_pane", lambda _name: "empty pane")
+    monkeypatch.setattr(welcome_resend, "read_assistant_transcript", lambda _name: "")
     monkeypatch.setattr(welcome_resend, "send_message_fn", _record_welcome_send)
     monkeypatch.setattr(welcome_resend, "_default_skill_path", lambda: skill_path)
 
@@ -144,9 +145,10 @@ def test_submit_api_key_restarts_all_claude_agents_and_runs_welcome_resend(
     The fake `mngr list` returns three agents: two `type: claude` and one
     `type: main`. We assert the main-type agent is skipped (matches
     system-services' shape in a real mind) and both claude agents are
-    restarted via the same `mngr stop`/`mngr start` pair.
+    stopped before either is restarted.
     """
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     skill_path = tmp_path / "SKILL.md"
     skill_path.write_text(
         "---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nbody\n\n---\n"
@@ -176,7 +178,7 @@ def test_submit_api_key_restarts_all_claude_agents_and_runs_welcome_resend(
         return True
 
     monkeypatch.setattr(claude_auth, "command_runner", _runner)
-    monkeypatch.setattr(welcome_resend, "capture_pane", lambda _name: "empty")
+    monkeypatch.setattr(welcome_resend, "read_assistant_transcript", lambda _name: "")
     monkeypatch.setattr(welcome_resend, "send_message_fn", _record_welcome_send)
 
     response = client.post(
@@ -190,8 +192,8 @@ def test_submit_api_key_restarts_all_claude_agents_and_runs_welcome_resend(
     assert "ANTHROPIC_API_KEY=sk-ant-test-key" in env_text
     assert restart_calls == [
         "stop ababa",
-        "start ababa",
         "stop worktree-1",
+        "start ababa",
         "start worktree-1",
     ]
     assert welcome_calls == ["ababa"]
