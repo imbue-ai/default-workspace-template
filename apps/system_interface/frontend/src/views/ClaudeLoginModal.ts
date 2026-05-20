@@ -177,6 +177,17 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     m.redraw();
   }
 
+  // Surface a failure inline within the form the user was filling, instead
+  // of swapping to the full-screen `error` view. Used for submit failures
+  // (OAuth code / API key) where the user should stay on the form and
+  // retry; `setError` remains for `startOAuth` failures, which have no
+  // form to return to.
+  function setInlineError(message: string, formMode: "awaiting_oauth_code" | "api_key_form"): void {
+    errorMessage = message;
+    mode = formMode;
+    m.redraw();
+  }
+
   function startVerifying(title: string, detail: string | null): void {
     verifyingTitle = title;
     verifyingDetail = detail;
@@ -227,11 +238,11 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         mode = "success";
         m.redraw();
       } else {
-        setError("Authentication did not succeed. Please try again.");
+        setInlineError("Authentication did not succeed. Please try again.", "awaiting_oauth_code");
       }
     } catch (error) {
       const errResp = (error as { response?: { detail?: string } }).response;
-      setError(errResp?.detail ?? "Failed to verify code");
+      setInlineError(errResp?.detail ?? "Failed to verify code", "awaiting_oauth_code");
     }
   }
 
@@ -256,11 +267,11 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         mode = "success";
         m.redraw();
       } else {
-        setError("Anthropic did not accept the API key. Double-check and try again.");
+        setInlineError("Anthropic did not accept the API key. Double-check and try again.", "api_key_form");
       }
     } catch (error) {
       const errResp = (error as { response?: { detail?: string } }).response;
-      setError(errResp?.detail ?? "Failed to save API key");
+      setInlineError(errResp?.detail ?? "Failed to save API key", "api_key_form");
     }
   }
 
