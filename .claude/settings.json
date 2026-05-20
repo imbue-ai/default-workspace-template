@@ -28,6 +28,10 @@
           {
             "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_prevent_commit_rewrite.sh"
+          },
+          {
+            "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_require_steps_pretool.sh"
           }
         ]
       }

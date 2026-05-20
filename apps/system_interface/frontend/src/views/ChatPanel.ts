@@ -26,6 +26,7 @@ import { renderUserMessage, renderAssistantMessage, buildToolResultsWithSkillExp
 import { getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
 import { buildTurns, selectFinalMessages } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
+import { UngroupedWorkBlock } from "./UngroupedWorkBlock";
 import { ActivityIndicator } from "./ActivityIndicator";
 
 function getAgentTerminalUrl(agentId: string): string {
@@ -438,16 +439,20 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
           }),
         );
       } else {
-        for (const ev of turn.body_events) {
-          if (ev.type === "assistant_message") {
-            messageNodes.push(renderAssistantMessage(ev, toolResults, agentId));
-          } else if (ev.type === "user_message") {
-            const chipNode = renderUserMessage(ev);
-            if (chipNode !== null) {
-              messageNodes.push(chipNode);
-            }
+        for (const ev of nonBoundaryUserEvents) {
+          const chipNode = renderUserMessage(ev);
+          if (chipNode !== null) {
+            messageNodes.push(chipNode);
           }
         }
+        messageNodes.push(
+          m(UngroupedWorkBlock, {
+            key: `ungrouped-${turn.user_event.event_id}`,
+            body_events: turn.body_events,
+            toolResults,
+            agentId,
+          }),
+        );
       }
     }
 
