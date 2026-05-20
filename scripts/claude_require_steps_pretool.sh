@@ -34,7 +34,7 @@ esac
 if [[ "$tool_name" == "Bash" ]]; then
     command=$(echo "$input" | jq -r '.tool_input.command // empty')
     case "$command" in
-        tk\ *|*/tk\ *|*/ticket\ *)
+        tk\ *|*/tk\ *|*/ticket\ *|*tk\ *)
             exit 0
             ;;
     esac
