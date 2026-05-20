@@ -12,7 +12,7 @@
  * The modal is purely reactive: it opens when ChatPanel receives an
  * auth-error event over the SSE stream, and closes only when the user
  * dismisses it. It does not poll the backend status endpoint, because
- * `claude auth status` reflects the workspace-server process's view of
+ * `claude auth status` reflects the system-interface process's view of
  * auth which can disagree with the already-running agent's cached
  * in-process auth decision.
  */
