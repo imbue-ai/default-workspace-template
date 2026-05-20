@@ -13,8 +13,6 @@ from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 from watchdog.events import FileOpenedEvent
 
-from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.activity_watcher import PERMISSIONS_WAITING_MARKER_FILENAME
 from imbue.mngr.api.discovery_events import AgentDestroyedEvent
 from imbue.mngr.api.discovery_events import DiscoveryEventType
 from imbue.mngr.api.discovery_events import HostDestroyedEvent
@@ -26,6 +24,8 @@ from imbue.mngr.primitives import DiscoveredAgent
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import poll_until
+from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.activity_watcher import PERMISSIONS_WAITING_MARKER_FILENAME
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _make_applications_file_handler
