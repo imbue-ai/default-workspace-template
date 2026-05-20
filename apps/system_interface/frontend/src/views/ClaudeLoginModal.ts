@@ -134,7 +134,7 @@ function closeIcon(): m.Vnode {
   );
 }
 
-function externalLinkIcon(): m.Vnode {
+function copyIcon(): m.Vnode {
   return m(
     "svg",
     {
@@ -144,13 +144,24 @@ function externalLinkIcon(): m.Vnode {
       fill: "none",
       "aria-hidden": "true",
     },
-    m("path", {
-      d: "M14 4h6v6M20 4l-9 9M10 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4",
-      stroke: "currentColor",
-      "stroke-width": 2,
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-    }),
+    [
+      m("rect", {
+        x: 9,
+        y: 9,
+        width: 11,
+        height: 11,
+        rx: 2,
+        stroke: "currentColor",
+        "stroke-width": 2,
+      }),
+      m("path", {
+        d: "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1",
+        stroke: "currentColor",
+        "stroke-width": 2,
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+      }),
+    ],
   );
 }
 
@@ -161,6 +172,8 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   let code = "";
   let apiKey = "";
   let apiKeyRevealed = false;
+  let urlCopied = false;
+  let urlCopiedResetHandle: ReturnType<typeof setTimeout> | null = null;
   let errorMessage: string | null = null;
   let verifyingTitle = "Working...";
   let verifyingDetail: string | null = null;
@@ -282,6 +295,34 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     sessionId = null;
     oauthUrl = null;
     code = "";
+    resetUrlCopied();
+  }
+
+  function resetUrlCopied(): void {
+    urlCopied = false;
+    if (urlCopiedResetHandle !== null) {
+      clearTimeout(urlCopiedResetHandle);
+      urlCopiedResetHandle = null;
+    }
+  }
+
+  async function copyOAuthUrl(): Promise<void> {
+    if (!oauthUrl) return;
+    try {
+      await navigator.clipboard.writeText(oauthUrl);
+    } catch {
+      // Clipboard access can be denied (insecure context, permissions);
+      // the URL stays visible and selectable, so silently skip feedback.
+      return;
+    }
+    urlCopied = true;
+    if (urlCopiedResetHandle !== null) clearTimeout(urlCopiedResetHandle);
+    urlCopiedResetHandle = setTimeout(() => {
+      urlCopied = false;
+      urlCopiedResetHandle = null;
+      m.redraw();
+    }, 2000);
+    m.redraw();
   }
 
   function goBackToProviderSelection(): void {
@@ -333,10 +374,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
               }
             },
           },
-          [
-            m("div.claude-login-provider-label", p.label),
-            m("div.claude-login-provider-description", p.description),
-          ],
+          [m("div.claude-login-provider-label", p.label), m("div.claude-login-provider-description", p.description)],
         ),
       ),
     ]);
@@ -396,19 +434,25 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           "Open this URL in your browser and sign in",
         ]),
         m("div.claude-login-url-box", [
-          m("div.claude-login-url", oauthUrl),
+          m(
+            "a.claude-login-url",
+            {
+              href: oauthUrl,
+              target: "_blank",
+              rel: "noopener noreferrer",
+            },
+            oauthUrl,
+          ),
           m(
             "button.claude-login-url-action",
             {
               type: "button",
               onclick: () => {
-                if (oauthUrl) {
-                  window.open(oauthUrl, "_blank", "noopener,noreferrer");
-                }
+                void copyOAuthUrl();
               },
-              "aria-label": "Open in new tab",
+              "aria-label": "Copy URL to clipboard",
             },
-            [externalLinkIcon(), "Open"],
+            [copyIcon(), urlCopied ? "Copied" : "Copy"],
           ),
         ]),
       ]),
