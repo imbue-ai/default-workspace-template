@@ -1615,18 +1615,6 @@ body {
   line-height: 1.4;
 }
 
-.claude-login-provider-badge {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-accent);
-  background: var(--color-accent-light);
-  padding: 2px 7px;
-  border-radius: 999px;
-  border: 1px solid rgba(47, 107, 79, 0.18);
-}
-
 /* Numbered steps (OAuth flow) */
 .claude-login-step {
   margin-bottom: 16px;
