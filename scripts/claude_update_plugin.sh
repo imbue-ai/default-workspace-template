@@ -15,7 +15,7 @@ fi
 
 # Clear stale plugin cache for our marketplaces to avoid using outdated agents/skills
 CACHE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache"
-rm -rf "$CACHE_DIR/imbue-mngr" "$CACHE_DIR/imbue-code-guardian" 2>/dev/null || true
+rm -rf "$CACHE_DIR/imbue-mngr" "$CACHE_DIR/imbue-code-guardian" "$CACHE_DIR/claude-code-plugins" 2>/dev/null || true
 
 # The plugins and marketplaces are configured at project scope in
 # .claude/settings.json (extraKnownMarketplaces + enabledPlugins).
