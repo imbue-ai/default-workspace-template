@@ -34,7 +34,7 @@ import json
 import os
 import re
 import threading
-import uuid as _uuid
+import uuid
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
@@ -361,7 +361,7 @@ def start_oauth_login(provider: OAuthProvider) -> OAuthStartResult:
             _current_oauth_process = None
         process, oauth_url = _spawn_oauth_and_parse_url(provider)
         record = _OAuthSessionRecord(
-            session_id=_uuid.uuid4().hex, provider=provider, oauth_url=oauth_url
+            session_id=uuid.uuid4().hex, provider=provider, oauth_url=oauth_url
         )
         _current_oauth_record = record
         _current_oauth_process = process
