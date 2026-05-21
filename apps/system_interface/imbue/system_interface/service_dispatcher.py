@@ -17,6 +17,7 @@ Responsibilities:
 """
 
 import asyncio
+import re
 from collections.abc import AsyncGenerator
 from typing import Final
 
@@ -42,6 +43,22 @@ from imbue.system_interface.proxy import rewrite_cookie_path
 from imbue.system_interface.proxy import rewrite_proxied_html
 
 _PROXY_TIMEOUT_SECONDS: Final[float] = 30.0
+
+# Timeout policy for streamed (SSE / chunked) proxied requests. Connect, write,
+# and pool acquisition keep a bounded timeout, but the read timeout is disabled:
+# a legitimate long-lived SSE stream can stay quiet for far longer than 30s
+# between events, and a blanket read timeout would sever it mid-stream.
+_STREAMING_REQUEST_TIMEOUT: Final[httpx.Timeout] = httpx.Timeout(
+    connect=_PROXY_TIMEOUT_SECONDS,
+    read=None,
+    write=_PROXY_TIMEOUT_SECONDS,
+    pool=_PROXY_TIMEOUT_SECONDS,
+)
+
+# A service name is a single path component that flows into generated
+# JavaScript (the service worker, the bootstrap page) and a cookie name.
+# Restrict it to characters that are safe in all of those contexts.
+_SERVICE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z0-9_-]+\Z")
 
 _EXCLUDED_RESPONSE_HEADERS: Final[frozenset[str]] = frozenset(
     {
@@ -133,6 +150,7 @@ async def _forward_http_request_streaming(
         url=proxy_url,
         headers=headers,
         content=body,
+        timeout=_STREAMING_REQUEST_TIMEOUT,
     )
     try:
         backend_response = await http_client.send(backend_request, stream=True)
@@ -220,6 +238,9 @@ async def _handle_service_http(
     request: Request,
 ) -> Response:
     """Handle an HTTP request under ``/service/<name>/<path>``."""
+    if _SERVICE_NAME_PATTERN.match(service_name) is None:
+        return Response(status_code=404, content="Invalid service name")
+
     parsed_service = ServiceName(service_name)
     agent_manager: AgentManager = request.app.state.agent_manager
 
@@ -328,6 +349,10 @@ async def _handle_service_websocket(
     path: str,
 ) -> None:
     """Proxy a WebSocket connection under ``/service/<name>/<path>`` to the backend service."""
+    if _SERVICE_NAME_PATTERN.match(service_name) is None:
+        await websocket.close(code=4004, reason="Invalid service name")
+        return
+
     agent_manager: AgentManager = websocket.app.state.agent_manager
 
     backend_url = agent_manager.get_service_url(service_name)
