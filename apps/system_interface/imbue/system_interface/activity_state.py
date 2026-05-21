@@ -67,20 +67,31 @@ def last_event_type(events: Sequence[dict[str, Any]]) -> str | None:
     return events[-1].get("type")
 
 
+RUNNING_LIFECYCLE_STATES: frozenset[str] = frozenset({"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE"})
+
+
 @pure
 def derive_activity_state(
     *,
+    is_agent_running: bool,
     permissions_waiting: bool,
     has_pending_tool_use: bool,
     tail_event_type: str | None,
 ) -> ActivityState:
-    """Derive an ``ActivityState`` from the permissions marker plus transcript signals.
+    """Derive an ``ActivityState`` from lifecycle state, permissions marker, and transcript signals.
+
+    ``is_agent_running`` reflects the mngr lifecycle state: ``True`` when the
+    agent is in a running state (RUNNING, RUNNING_UNKNOWN_AGENT_TYPE), ``False``
+    otherwise (STOPPED, WAITING, REPLACED, DONE, etc.). A non-running agent is
+    always IDLE regardless of transcript contents, which prevents a STOPPED agent
+    from appearing as "Thinking..." due to stale transcript data.
 
     ``tail_event_type`` is the cached result of :func:`last_event_type` for the
     agent's current transcript (named distinctly from the helper to avoid
     shadowing it in this scope).
 
     Priority:
+      0. agent not running -> IDLE.
       1. ``permissions_waiting`` -> WAITING_ON_PERMISSION (not represented in transcript).
       2. unmatched ``tool_use`` -> TOOL_RUNNING.
       3. last transcript event is ``user_message`` or ``tool_result`` -> THINKING
@@ -88,6 +99,8 @@ def derive_activity_state(
       4. otherwise (last event is ``assistant_message`` or transcript is empty)
          -> IDLE.
     """
+    if not is_agent_running:
+        return ActivityState.IDLE
     if permissions_waiting:
         return ActivityState.WAITING_ON_PERMISSION
     if has_pending_tool_use:

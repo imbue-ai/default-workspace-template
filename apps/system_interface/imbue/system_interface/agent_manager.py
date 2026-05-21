@@ -33,6 +33,7 @@ from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentNameStyle
 from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import derive_activity_state
 from imbue.system_interface.activity_state import has_unmatched_tool_use
 from imbue.system_interface.activity_state import last_event_type
@@ -1006,6 +1007,7 @@ class AgentManager:
             has_pending_tool = self._has_unmatched_tool_use_by_agent.get(agent_id, False)
             cached_last_event_type = self._last_event_type_by_agent.get(agent_id)
             new_state = derive_activity_state(
+                is_agent_running=agent_state.state in RUNNING_LIFECYCLE_STATES,
                 permissions_waiting=permissions_waiting,
                 has_pending_tool_use=has_pending_tool,
                 tail_event_type=cached_last_event_type,

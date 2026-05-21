@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import derive_activity_state
 from imbue.system_interface.activity_state import has_unmatched_tool_use
 from imbue.system_interface.activity_state import last_event_type
@@ -139,8 +140,29 @@ def test_derive_activity_state(
     expected: ActivityState,
 ) -> None:
     state = derive_activity_state(
+        is_agent_running=True,
         permissions_waiting=permissions_waiting,
         has_pending_tool_use=has_pending_tool_use,
         tail_event_type=tail_event_type,
     )
     assert state == expected
+
+
+@pytest.mark.parametrize(
+    "lifecycle_state",
+    [
+        pytest.param("STOPPED", id="stopped"),
+        pytest.param("WAITING", id="waiting"),
+        pytest.param("REPLACED", id="replaced"),
+        pytest.param("DONE", id="done"),
+    ],
+)
+def test_derive_activity_state_non_running_agent_is_always_idle(lifecycle_state: str) -> None:
+    assert lifecycle_state not in RUNNING_LIFECYCLE_STATES
+    state = derive_activity_state(
+        is_agent_running=False,
+        permissions_waiting=True,
+        has_pending_tool_use=True,
+        tail_event_type="user_message",
+    )
+    assert state == ActivityState.IDLE
