@@ -40,32 +40,46 @@ token-based named tunnel that reconnects to the same hostname).
    `_list_managed_windows`; reconcile only fires on `services.toml` mtime
    changes. `restart = "on-failure"` is therefore dead config -- there is no
    per-service crash recovery.
+   *Resolved:* service windows now record their command's exit status into a
+   `@svc_exit_status` window option; the manager polls it every interval and
+   restarts `on-failure` services that exited non-zero.
 
 2. **`runtime-backup` can be permanently wedged by a stale git lock.** If stop
    SIGKILLs it mid-`git commit`, a stale `index.lock` is left in the runtime
    worktree. The service never clears stale locks, so every subsequent tick
    fails identically and backups stop silently and forever.
+   *Resolved:* each tick now clears a stale `index.lock` before `git add`
+   (safe because runtime-backup is the worktree's only, sequential, writer).
 
 3. **`system_interface` has no `restart` policy** while every other
-   long-running server has `restart = "on-failure"` -- an inconsistency
-   (moot today because of #1).
+   long-running server has `restart = "on-failure"` -- an inconsistency.
+   *Resolved:* `system_interface` now declares `restart = "on-failure"`.
 
 4. **`app-watcher` re-emits `service_registered` events on every restart**
-   (its diff state resets to empty), appending duplicates to the persistent
-   `events.jsonl`; it also cannot emit `service_deregistered` for services
-   removed during downtime.
+   (its diff state resets to empty), appending to the persistent
+   `events.jsonl`. *Not a defect:* `events.jsonl` is an append-only event
+   log, and a service genuinely does re-register on restart, so re-emission
+   is correct; `system_interface` reads `applications.toml` directly rather
+   than the event log. The only real gap -- missing a `service_deregistered`
+   for a service explicitly removed (`forward_port.py --remove`) *during* the
+   stop window -- is a negligible edge. No change made.
 
 5. **Stopping `system-services` silently degrades every other agent.**
    chat/worker agents keep running headless but lose the UI, web view,
    tunnel, and -- critically -- `runtime-backup`. Container loss during the
    stop window loses all runtime state since the last pre-stop backup tick.
+   *Not fixed:* this is architectural (one agent owns all shared infra). A
+   real fix is a separate design effort (e.g. infra supervised outside the
+   agent, or a health signal to dependent agents).
 
 6. **Minor:** an interrupted one-shot `deferred-install` re-runs cleanly on
    start. A very narrow first-boot-only window can strand prior `runtime/`
    content in `runtime.preexisting/` if bootstrap is killed mid-init.
+   *Resolved:* `_init_runtime_worktree` now restores `runtime.preexisting/`
+   unconditionally, including on the path where the worktree already exists.
 
 ## Conclusion
 
-A deliberate stop/start is safe. The real exposure is unplanned failure:
-nothing restarts a crashed service (#1), and `runtime-backup` has a silent
-permanent-failure mode (#2).
+A deliberate stop/start is safe. The concrete fragilities (#1, #2, #3, #6)
+are fixed in this change; #4 is not a real defect and #5 is an architectural
+limitation tracked for a future redesign.

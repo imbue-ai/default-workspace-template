@@ -32,6 +32,35 @@ def _git(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _clear_stale_index_lock() -> None:
+    """Remove a stale ``index.lock`` from the runtime worktree, if present.
+
+    runtime-backup is the only writer of this worktree's git index and its
+    ticks run strictly sequentially, so any ``index.lock`` present at the
+    start of a tick is necessarily stale -- left behind by a previous tick's
+    git process that was killed before it could release the lock (e.g. a
+    SIGKILL when ``mngr stop`` interrupted a commit).
+
+    Git never clears a stale lock itself, so without this every subsequent
+    ``git add`` fails identically and backups stop forever. We resolve the
+    lock path via ``--absolute-git-dir`` so it is correct whether runtime/ is
+    a normal repo or (as in production) a linked worktree with a per-worktree
+    git dir.
+    """
+    git_dir_result = _git("rev-parse", "--absolute-git-dir")
+    if git_dir_result.returncode != 0:
+        # runtime/ is not a git repo yet; nothing to clear.
+        return
+    lock_path = Path(git_dir_result.stdout.strip()) / "index.lock"
+    if not lock_path.exists():
+        return
+    logger.warning("Removing stale git index lock at {}", lock_path)
+    try:
+        lock_path.unlink()
+    except OSError as e:
+        logger.warning("Failed to remove stale index lock at {}: {}", lock_path, e)
+
+
 def _has_uncommitted_changes() -> bool:
     """Return True if runtime/ has anything to commit."""
     result = _git("status", "--porcelain")
@@ -52,6 +81,10 @@ def _now_iso_utc() -> str:
 
 def _do_tick(should_push: bool) -> None:
     """Run one backup tick: add, commit-if-dirty, push-if-token."""
+    # Clear any stale index.lock first, so a commit killed by a prior `mngr
+    # stop` cannot wedge every future tick.
+    _clear_stale_index_lock()
+
     add_result = _git("add", "-A")
     if add_result.returncode != 0:
         logger.warning(
