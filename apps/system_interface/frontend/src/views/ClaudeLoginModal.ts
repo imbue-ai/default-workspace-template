@@ -7,7 +7,7 @@
  *   user's CODE#STATE.
  * - Anthropic Console: same flow but `--console`.
  * - Raw API key: paste a `sk-ant-...` value; backend writes it to the host
- *   env file and restarts every running claude agent.
+ *   env file.
  *
  * The modal is purely reactive: it opens when ChatPanel receives an
  * auth-error event over the SSE stream, and closes only when the user
