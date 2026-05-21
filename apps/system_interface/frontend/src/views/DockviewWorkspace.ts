@@ -533,6 +533,28 @@ function findIframePanelIdForService(serviceName: string): string | null {
   return null;
 }
 
+/** Derive a tab title from an external URL: its hostname, falling back to
+ *  the raw string when the URL can't be parsed. */
+function externalUrlTitle(url: string): string {
+  try {
+    return new URL(url).hostname || url;
+  } catch {
+    return url;
+  }
+}
+
+/** Find an existing iframe panel pointed at ``url``, or null. Used to
+ *  dedup ad-hoc external-URL panels (focus-if-open instead of stacking
+ *  duplicates), mirroring the service dedup in ``findIframePanelIdForService``. */
+function findIframePanelIdForUrl(url: string): string | null {
+  for (const [panelId, params] of panelParams) {
+    if (params.panelType === "iframe" && params.url === url) {
+      return panelId;
+    }
+  }
+  return null;
+}
+
 /** Position + size options passed through to ``dockview.addPanel``. */
 type AddPanelPlacementOptions = {
   position?: { referenceGroup: string } | { referencePanel: string; direction: "left" | "right" | "above" | "below" };
@@ -545,11 +567,13 @@ type AddPanelPlacementOptions = {
  *  Shared by ``handleSplit`` and ``handleOpenTabRequest`` so that the
  *  panelParams bookkeeping + addPanel invocation only exist in one place.
  *  When a panel already exists for the ref (service: dedup by serviceName,
- *  chat: dedup by deterministic ``chat-<agent-id>``), focuses it and
- *  returns its id. Otherwise creates the panel with the supplied
- *  positioning and returns the new id. Returns null when dockview isn't
- *  ready, the ref carries a prefix that doesn't create panels in v1
- *  (terminal:/subagent:/url:), or the named chat agent is unknown. */
+ *  chat: dedup by deterministic ``chat-<agent-id>``, https:// dedup by
+ *  URL), focuses it and returns its id. Otherwise creates the panel with
+ *  the supplied positioning and returns the new id. A bare ``https://``
+ *  ref creates an ad-hoc external-URL iframe tab. Returns null when
+ *  dockview isn't ready, the ref carries a prefix that doesn't create
+ *  panels in v1 (terminal:/subagent:/url:), or the named chat agent is
+ *  unknown. */
 function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPanelPlacementOptions): string | null {
   if (!dockview) return null;
 
@@ -599,6 +623,31 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
       title: agent.name,
       params,
       renderer: "always",
+      ...addOptions,
+    });
+    return panelId;
+  }
+
+  if (ref.startsWith("https://")) {
+    const existingPanelId = findIframePanelIdForUrl(ref);
+    if (existingPanelId !== null) {
+      const existing = dockview.panels.find((p) => p.id === existingPanelId);
+      if (existing) dockview.setActivePanel(existing);
+      return existingPanelId;
+    }
+    const ownerId = requesterAgentId || getPrimaryAgentId();
+    const panelId = `iframe-${ownerId}-${Date.now()}`;
+    const title = externalUrlTitle(ref);
+    // ``serviceName`` is intentionally left unset: this is an ad-hoc URL
+    // tab, not a proxied workspace service, so it gets no per-tab Refresh
+    // button and is skipped by service-wide reload matching.
+    const params: PanelParams = { panelType: "iframe", agentId: ownerId, url: ref, title };
+    panelParams.set(panelId, params);
+    dockview.addPanel({
+      id: panelId,
+      component: "iframe",
+      title,
+      params,
       ...addOptions,
     });
     return panelId;
@@ -666,10 +715,12 @@ function findSiblingGroupInDirection(
   return best === null ? null : { id: best.id };
 }
 
-/** Handle an agent-driven open_tab broadcast for ``serviceName``.
+/** Handle an agent-driven ``open`` broadcast for a creatable ``ref``
+ *  (a ``service:`` ref or a bare ``https://`` external URL).
  *
  *  Resolution order:
- *    1. If a panel for ``serviceName`` is already open, focus it.
+ *    1. If a panel for ``ref`` is already open, focus it (handled by
+ *       ``addPanelForRef``'s dedup).
  *    2. If the *requester's own* chat panel is open, add a right-split
  *       iframe sized to ``OPEN_TAB_SPLIT_FRACTION`` of the dockview
  *       container width, anchored on that chat. The previous broader
@@ -677,14 +728,12 @@ function findSiblingGroupInDirection(
  *       avoid landing one agent's service next to a different agent's
  *       chat just because the requester's chat happened to be closed.
  *    3. Otherwise, add a plain iframe tab with dockview's default placement.
- *  Drop silently if the service isn't registered in ``applications`` yet --
- *  the script polls registration, but the WS broadcast itself is fire-and-
- *  forget. */
-function handleOpenTabRequest(serviceName: string, requesterAgentId: string, forceNewGroup: boolean): void {
+ *  Callers are responsible for any registration / validity check on the
+ *  ref before invoking this (e.g. ``handleOpen`` drops unregistered
+ *  services), since the WS broadcast itself is fire-and-forget. */
+function handleOpenPanelRequest(ref: string, requesterAgentId: string, forceNewGroup: boolean): void {
   if (!dockview) return;
-  if (!getApplications().find((a) => a.name === serviceName)) return;
 
-  const ref = `service:${serviceName}`;
   const chatPanelId = findAnchorChatPanelId(requesterAgentId);
   if (chatPanelId === null) {
     addPanelForRef(ref, requesterAgentId, {});
@@ -898,6 +947,12 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
   if (ref.startsWith("service:")) {
     return findIframePanelIdForService(ref.substring("service:".length));
   }
+  if (ref.startsWith("https://")) {
+    // An external-URL ref resolves to whichever ad-hoc iframe tab is
+    // currently pointed at that exact URL (focus-if-open dedup). Once
+    // open, the panel is also addressable by its ``url:<hash>`` ref.
+    return findIframePanelIdForUrl(ref);
+  }
   if (ref.startsWith("chat:")) {
     const agentName = ref.substring("chat:".length);
     const agent = getAgents().find((a) => a.name === agentName);
@@ -993,8 +1048,15 @@ async function handleOpen(args: Record<string, unknown>, requesterAgentId: strin
     return;
   }
   if (ref.startsWith("service:")) {
-    const forceNewGroup = args.new_group === true;
-    handleOpenTabRequest(ref.substring("service:".length), requesterAgentId, forceNewGroup);
+    // Drop silently if the service isn't registered in ``applications``
+    // yet -- the script polls registration, but the broadcast races it.
+    const serviceName = ref.substring("service:".length);
+    if (!getApplications().find((a) => a.name === serviceName)) return;
+    handleOpenPanelRequest(ref, requesterAgentId, args.new_group === true);
+    return;
+  }
+  if (ref.startsWith("https://")) {
+    handleOpenPanelRequest(ref, requesterAgentId, args.new_group === true);
     return;
   }
   if (ref.startsWith("chat:")) {
@@ -1003,8 +1065,8 @@ async function handleOpen(args: Record<string, unknown>, requesterAgentId: strin
     if (agent) addChatPanel(agent.id, agent.name);
     return;
   }
-  // Other ref kinds (subagent/terminal/url) are not creatable from an
-  // ``open`` op: their stable refs only exist after creation through
+  // Other ref kinds (subagent/terminal/url:<hash>) are not creatable from
+  // an ``open`` op: their stable refs only exist after creation through
   // the surrounding code paths (e.g. SubagentView, "New URL" dialog).
 }
 
@@ -1033,10 +1095,11 @@ async function handleSplit(args: Record<string, unknown>, requesterAgentId: stri
   const referencePanelId = await resolveRefToPanelId(relativeTo, requesterAgentId);
   if (referencePanelId === null) return;
 
-  if (!ref.startsWith("service:") && !ref.startsWith("chat:")) {
-    // ``split`` only creates new service/chat panels in v1; terminal,
-    // subagent, and ad-hoc URL panels are created through other UI
-    // paths and addressed by short-hash refs once they exist.
+  if (!ref.startsWith("service:") && !ref.startsWith("chat:") && !ref.startsWith("https://")) {
+    // ``split`` creates new service, chat, and ad-hoc external-URL
+    // (``https://``) panels. Terminal and subagent panels, plus existing
+    // URL panels addressed by ``url:<hash>``, are created through other
+    // UI paths and only addressable once they exist.
     return;
   }
 
@@ -1058,9 +1121,9 @@ async function handleSplit(args: Record<string, unknown>, requesterAgentId: stri
   // an existing group ignores them anyway, so omit to keep intent clear.
   const sizeOptions = sibling !== null ? {} : sizes;
 
-  // Both service: and chat: route through ``addPanelForRef`` which
-  // handles dedup (focus existing instead of duplicating) + panelParams
-  // bookkeeping + the actual addPanel invocation.
+  // service:, chat:, and https:// all route through ``addPanelForRef``
+  // which handles dedup (focus existing instead of duplicating) +
+  // panelParams bookkeeping + the actual addPanel invocation.
   addPanelForRef(ref, requesterAgentId, { position: positionOptions, ...sizeOptions });
 }
 

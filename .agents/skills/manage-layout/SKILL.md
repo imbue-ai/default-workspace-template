@@ -41,6 +41,13 @@ name (`web`) -- it expands to `service:web`. The literal `self`
 resolves to your own chat panel; it is accepted as a ref anywhere
 (most usefully as `--relative-to=self` for `split` / `move`).
 
+To open a panel pointed at an **external URL** (one not backed by a
+registered workspace service), pass a bare `https://` URL as the
+`open` / `split` target -- e.g. `open https://example.com`. The
+optional `url:` prefix (`url:https://example.com`) is also accepted.
+Once open, the resulting ad-hoc tab is addressed by its
+`url:<short-hash>` ref like any other (run `inspect` to get it).
+
 Run `python3 scripts/layout.py inspect` to see refs for the
 currently-open panels.
 
@@ -51,6 +58,7 @@ currently-open panels.
 | List addressable things (services + agents) with open/running flags | `python3 scripts/layout.py list` |
 | Inspect the live tree (orientation, sizes, active panel) | `python3 scripts/layout.py inspect` |
 | Surface a service alongside the primary chat | `python3 scripts/layout.py open web` |
+| Open an external URL in a new tab | `python3 scripts/layout.py open https://example.com` |
 | Reload one tab after redeploying | `python3 scripts/layout.py refresh web` |
 | Add a second panel below an existing one | `python3 scripts/layout.py split api --relative-to=service:web --direction=below --ratio=0.4` |
 | Focus an existing tab | `python3 scripts/layout.py focus service:web` |

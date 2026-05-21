@@ -160,6 +160,43 @@ def test_open_new_group_flag_sets_payload(tmp_path: Path, monkeypatch: pytest.Mo
     assert posted == [("open", {"ref": "service:web", "new_group": True})]
 
 
+def test_open_external_url_skips_registration_and_posts_bare_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare ``https://`` target is an external-URL ref: it must NOT be
+    treated as a service name (no applications.toml registration check)
+    and reaches the server verbatim."""
+    posted: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+    # No applications.toml set up and no _wait_for_registration override:
+    # if the URL were misclassified as a service this would fail/hang.
+
+    rc = layout.main(["open", "https://example.com/dashboard"])
+    assert rc == 0
+    assert posted == [("open", {"ref": "https://example.com/dashboard", "new_group": False})]
+
+
+def test_open_url_prefix_alias_is_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ``url:https://...`` alias normalizes to the bare URL ref."""
+    posted: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+
+    rc = layout.main(["open", "url:https://example.com"])
+    assert rc == 0
+    assert posted == [("open", {"ref": "https://example.com", "new_group": False})]
+
+
+def test_split_accepts_external_url_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``split`` accepts an external ``https://`` URL as the new panel."""
+    posted: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+
+    rc = layout.main(["split", "https://example.com", "--relative-to", "self"])
+    assert rc == 0
+    op, args = posted[0]
+    assert op == "split"
+    assert args["ref"] == "https://example.com"
+    assert args["relative_to"] == "self"
+
+
 def test_split_passes_relative_to_and_direction(monkeypatch: pytest.MonkeyPatch) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))

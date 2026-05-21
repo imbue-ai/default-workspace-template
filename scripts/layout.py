@@ -16,7 +16,9 @@ Subcommands:
     refresh <ref-or-service>            Reload one iframe; ``service:<name>`` reloads all iframes for that service.
 
 Every ref-accepting argument (positional ref, ``--relative-to``) accepts a bare
-service name as shorthand for ``service:<name>``.
+service name as shorthand for ``service:<name>``. ``open`` and ``split`` also
+accept an external ``https://`` URL (bare, or with an optional ``url:`` prefix)
+as the panel to create -- it surfaces as an ad-hoc URL tab.
 
 ``open`` / ``split`` / ``move`` default to *tabbing into an existing group*
 that already lives in the requested direction relative to the anchor; pass
@@ -134,10 +136,18 @@ def _normalize_ref(value: str) -> str:
 
     Anything that already carries a known prefix is returned as-is, and the
     ``self`` sentinel (resolved frontend-side to the caller's chat panel)
-    is preserved verbatim.
+    is preserved verbatim. An external ``https://`` URL -- bare or written
+    with the optional ``url:`` alias -- normalizes to the bare URL, which
+    the frontend treats as a creation ref for an ad-hoc URL panel. (The
+    ``url:<hash>`` form, which addresses an already-open URL panel, is
+    left untouched.)
     """
     if value == _SELF_REF:
         return value
+    if value.startswith("https://"):
+        return value
+    if value.startswith("url:https://"):
+        return value.removeprefix("url:")
     for prefix in _REF_PREFIXES:
         if value.startswith(prefix):
             return value
@@ -147,13 +157,17 @@ def _normalize_ref(value: str) -> str:
 def _validate_ref(ref: str) -> None:
     """Raise SystemExit if the ref carries an unknown prefix.
 
-    The ``self`` sentinel is accepted in addition to the prefix forms.
+    The ``self`` sentinel and bare ``https://`` external URLs are accepted
+    in addition to the prefix forms.
     """
     if ref == _SELF_REF:
         return
+    if ref.startswith("https://"):
+        return
     if not any(ref.startswith(p) for p in _REF_PREFIXES):
         sys.stderr.write(
-            f"error: ref {ref!r} must start with one of {_REF_PREFIXES} or be a bare service name\n"
+            f"error: ref {ref!r} must start with one of {_REF_PREFIXES}, "
+            f"be a bare service name, or be an https:// URL\n"
         )
         raise SystemExit(EXIT_BAD_REQUEST)
 
@@ -389,7 +403,10 @@ def main(argv: list[str] | None = None) -> int:
     p_inspect.set_defaults(func=_cmd_inspect)
 
     p_open = subparsers.add_parser("open", help="Surface a service in the UI")
-    p_open.add_argument("target", help="Service name or ref (e.g. ``web`` or ``service:web``)")
+    p_open.add_argument(
+        "target",
+        help="Service name, ref, or https:// URL (e.g. ``web``, ``service:web``, ``https://example.com``)",
+    )
     p_open.add_argument(
         "--new-group",
         action="store_true",
@@ -405,7 +422,10 @@ def main(argv: list[str] | None = None) -> int:
     p_focus.set_defaults(func=_cmd_focus)
 
     p_split = subparsers.add_parser("split", help="Open a new panel as a split")
-    p_split.add_argument("target", help="Service name or ref to open as the new panel")
+    p_split.add_argument(
+        "target",
+        help="Service name, ref, or https:// URL to open as the new panel",
+    )
     p_split.add_argument(
         "--relative-to",
         default="self",
