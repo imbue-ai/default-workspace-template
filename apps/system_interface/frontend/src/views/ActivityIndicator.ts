@@ -96,10 +96,16 @@ function targetForToolCall(tc: ToolCall): string | null {
   if (filePath !== null) return basename(filePath);
   const path = typeof parsed.path === "string" ? parsed.path : null;
   if (path !== null) return basename(path);
+  const url = typeof parsed.url === "string" ? parsed.url : null;
+  if (url !== null) return shorten(url, MAX_TARGET_LEN);
   const command = typeof parsed.command === "string" ? parsed.command : null;
   if (command !== null) return shorten(command, MAX_TARGET_LEN);
   const pattern = typeof parsed.pattern === "string" ? parsed.pattern : null;
   if (pattern !== null) return `"${shorten(pattern, MAX_TARGET_LEN)}"`;
+  const query = typeof parsed.query === "string" ? parsed.query : null;
+  if (query !== null) return `"${shorten(query, MAX_TARGET_LEN)}"`;
+  const skill = typeof parsed.skill === "string" ? parsed.skill : null;
+  if (skill !== null) return shorten(skill, MAX_TARGET_LEN);
   const description = typeof parsed.description === "string" ? parsed.description : null;
   if (description !== null) return shorten(description, MAX_TARGET_LEN);
   return null;

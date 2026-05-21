@@ -116,17 +116,25 @@ describe("labelForActivityState — TOOL_RUNNING transcript enrichment", () => {
   it("labels Skill with the skill name from the input", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Skill", "tc1", '{"description":"run the autofix skill"}'),
+      toolUse("2026-04-28T01:00:01Z", "Skill", "tc1", '{"skill":"autofix"}'),
     ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Loading skill run the autofix skill");
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Loading skill autofix");
   });
 
   it("labels WebSearch with the search query", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "WebSearch", "tc1", '{"pattern":"playwright MCP setup"}'),
+      toolUse("2026-04-28T01:00:01Z", "WebSearch", "tc1", '{"query":"playwright MCP setup"}'),
     ];
     expect(labelForActivityState("TOOL_RUNNING", events)).toBe('Searching the web "playwright MCP setup"');
+  });
+
+  it("labels WebFetch with the URL from the input", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z"),
+      toolUse("2026-04-28T01:00:01Z", "WebFetch", "tc1", '{"url":"https://example.com/docs","prompt":"summarize"}'),
+    ];
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Fetching page https://example.com/docs");
   });
 
   it("labels WebFetch with 'Fetching page…' when no target", () => {
