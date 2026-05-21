@@ -74,15 +74,17 @@ function statusIcon(status: TaskUiStatus, continues_forward: boolean): m.Vnode {
 }
 
 /** Single sub-caption under the task title:
- *   - done + summary    -> render the close summary
+ *   - done + summary    -> render the close summary (even when expanded)
  *   - done + no summary -> render nothing (clean final state)
+ *   - active + expanded -> hide narration (the expanded panel already shows it)
  *   - active            -> render the latest in-window narration, if any
  *   - pending           -> render nothing (no window yet)
  */
-function renderTaskCaption(task: TaskInTurn): m.Vnode | null {
+function renderTaskCaption(task: TaskInTurn, isExpanded: boolean): m.Vnode | null {
   if (task.status === "done") {
     return task.summary ? m("div.pv-tl-summary", task.summary) : null;
   }
+  if (isExpanded) return null;
   return task.narration ? m("div.pv-tl-narration.markdown-content", m.trust(renderMarkdown(task.narration))) : null;
 }
 
@@ -201,7 +203,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
                 : null,
             ],
           ),
-          renderTaskCaption(task),
+          renderTaskCaption(task, isExpanded),
           isExpanded ? m("div.pv-tl-expanded", renderExpandedTaskBody(taskEvents, toolResults, agentId)) : null,
           // Nested step children (only for parent tickets in practice).
           task.children.length > 0
