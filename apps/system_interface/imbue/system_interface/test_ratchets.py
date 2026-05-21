@@ -67,7 +67,13 @@ def test_prevent_base_exception_catch() -> None:
 
 
 def test_prevent_builtin_exception_raises() -> None:
-    rc.check_builtin_exception_raises(_DIR, snapshot(0))
+    # +1 for ServiceName.__new__ in primitives.py raising ValueError on a name
+    # outside the safe character set. ValueError is the contract-correct type
+    # here: it matches the parent NonEmptyStr.__new__ (which also raises
+    # ValueError) and is the exception type a pydantic after-validator must
+    # raise to be converted into a ValidationError. A custom exception would
+    # not be caught by pydantic.
+    rc.check_builtin_exception_raises(_DIR, snapshot(1))
 
 
 def test_prevent_silent_decode_error_catches() -> None:

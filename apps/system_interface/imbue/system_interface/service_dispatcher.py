@@ -17,7 +17,6 @@ Responsibilities:
 """
 
 import asyncio
-import re
 from collections.abc import AsyncGenerator
 from typing import Final
 
@@ -55,11 +54,6 @@ _STREAMING_REQUEST_TIMEOUT: Final[httpx.Timeout] = httpx.Timeout(
     pool=_PROXY_TIMEOUT_SECONDS,
 )
 
-# A service name is a single path component that flows into generated
-# JavaScript (the service worker, the bootstrap page) and a cookie name.
-# Restrict it to characters that are safe in all of those contexts.
-_SERVICE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"\A[A-Za-z0-9_-]+\Z")
-
 _EXCLUDED_RESPONSE_HEADERS: Final[frozenset[str]] = frozenset(
     {
         "transfer-encoding",
@@ -74,12 +68,17 @@ def _sw_cookie_name(service_name: str) -> str:
 
 
 def _make_loading_html(current_service: ServiceName, agent_manager: AgentManager) -> str:
-    other_services = tuple(
-        ServiceName(name) for name in agent_manager.list_service_names() if name != str(current_service)
-    )
+    other_services: list[ServiceName] = []
+    for name in agent_manager.list_service_names():
+        if name == str(current_service):
+            continue
+        try:
+            other_services.append(ServiceName(name))
+        except ValueError:
+            logger.debug("Skipping service with unsupported name on loading page: {!r}", name)
     return generate_backend_loading_html(
         current_service=current_service,
-        other_services=other_services,
+        other_services=tuple(other_services),
     )
 
 
@@ -224,10 +223,10 @@ def _build_proxy_response(
     return response
 
 
-async def _handle_service_sw_js(service_name: str) -> Response:
+async def _handle_service_sw_js(service_name: ServiceName) -> Response:
     """Serve the scoped service worker script for a service."""
     return Response(
-        content=generate_service_worker_js(ServiceName(service_name)),
+        content=generate_service_worker_js(service_name),
         media_type="application/javascript",
     )
 
@@ -238,14 +237,15 @@ async def _handle_service_http(
     request: Request,
 ) -> Response:
     """Handle an HTTP request under ``/service/<name>/<path>``."""
-    if _SERVICE_NAME_PATTERN.match(service_name) is None:
+    try:
+        parsed_service = ServiceName(service_name)
+    except ValueError:
         return Response(status_code=404, content="Invalid service name")
 
-    parsed_service = ServiceName(service_name)
     agent_manager: AgentManager = request.app.state.agent_manager
 
     if path == "__sw.js":
-        return await _handle_service_sw_js(service_name)
+        return await _handle_service_sw_js(parsed_service)
 
     is_navigation = request.headers.get("sec-fetch-mode") == "navigate"
 
@@ -349,13 +349,15 @@ async def _handle_service_websocket(
     path: str,
 ) -> None:
     """Proxy a WebSocket connection under ``/service/<name>/<path>`` to the backend service."""
-    if _SERVICE_NAME_PATTERN.match(service_name) is None:
+    try:
+        parsed_service = ServiceName(service_name)
+    except ValueError:
         await websocket.close(code=4004, reason="Invalid service name")
         return
 
     agent_manager: AgentManager = websocket.app.state.agent_manager
 
-    backend_url = agent_manager.get_service_url(service_name)
+    backend_url = agent_manager.get_service_url(parsed_service)
     if backend_url is None:
         await websocket.close(code=4004, reason=f"Unknown service: {service_name}")
         return
