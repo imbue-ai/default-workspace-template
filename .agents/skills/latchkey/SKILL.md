@@ -63,10 +63,6 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "scope": "discord_api", "permissions": ["discord-read-all"], "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
 ```
 
-Try to strike a balance: do not require needlessly broad
-permissions while also minimizing the need for multiple
-iterations with additional permission requests.
-
 The body must be a JSON object with exactly four string fields:
 `agent_id` (use `$MNGR_AGENT_ID`), `scope`, `permissions`, and `rationale`.
 
