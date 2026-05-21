@@ -511,7 +511,7 @@ function openIframeTab(url: string, title: string, panelType: PanelType = "ifram
  *  Strict identity: the only acceptable anchor is the requester's own chat
  *  tab (``chat-<requesterAgentId>``). Returns null when the requester id is
  *  empty or their chat panel isn't open -- callers then either fall through
- *  to a non-chat-anchored placement (``handleOpenTabRequest``) or no-op
+ *  to a non-chat-anchored placement (``handleOpenPanelRequest``) or no-op
  *  (``handleSplit`` / ``handleMove`` skip the relative_to=self branch). We
  *  intentionally do not auto-select another agent's chat: that would let
  *  ``layout.py split web`` from agent A land next to agent B's chat
@@ -562,9 +562,9 @@ type AddPanelPlacementOptions = {
   initialHeight?: number;
 };
 
-/** Dedup-then-add for a ``service:`` or ``chat:`` ref.
+/** Dedup-then-add for a ``service:``, ``chat:``, or ``https://`` ref.
  *
- *  Shared by ``handleSplit`` and ``handleOpenTabRequest`` so that the
+ *  Shared by ``handleSplit`` and ``handleOpenPanelRequest`` so that the
  *  panelParams bookkeeping + addPanel invocation only exist in one place.
  *  When a panel already exists for the ref (service: dedup by serviceName,
  *  chat: dedup by deterministic ``chat-<agent-id>``, https:// dedup by
