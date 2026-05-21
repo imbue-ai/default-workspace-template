@@ -34,7 +34,7 @@ def test_prevent_while_true() -> None:
 
 def test_prevent_time_sleep() -> None:
     # +1 for service_dispatcher_test._wait_for_port's TCP-ready poll loop.
-    rc.check_time_sleep(_DIR, snapshot(7))
+    rc.check_time_sleep(_DIR, snapshot(6))
 
 
 def test_prevent_global_keyword() -> None:
