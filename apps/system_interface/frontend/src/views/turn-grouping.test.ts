@@ -544,11 +544,10 @@ describe("selectFinalMessages", () => {
     expect(selectFinalMessages([between], [earlier]).map((e) => e.event_id)).toEqual(["msg-between"]);
   });
 
-  it("does NOT surface a trailing message of an unclosed task at top level", () => {
-    // No safety valve for unclosed tasks: it would fire transiently for
-    // every mid-task message (the latest is always "last" until the next
-    // arrives) and duplicate with the narration. Trailing prose in an
-    // unclosed task sits only in the narration slot.
+  it("does NOT surface a trailing message of an unclosed task in the live turn", () => {
+    // In the live (last) turn, continues_forward is false. Promoting
+    // would fire transiently for every mid-task message and duplicate
+    // with the narration, so trailing prose stays in the narration slot.
     const openTask: TaskInTurn = {
       ticket_id: "t1",
       title: "Investigate",
@@ -567,6 +566,31 @@ describe("selectFinalMessages", () => {
     };
     const trailing = assistantMsg("2026-04-28T01:00:50Z", "Stuck -- need your call.", "msg-trailing");
     expect(selectFinalMessages([trailing], [openTask])).toEqual([]);
+  });
+
+  it("promotes the last in-window message when its containing task continues forward (frozen turn)", () => {
+    // Promote-on-freeze: the turn ended with the task still open (user
+    // sent a new message). The narration slot on a frozen task is a
+    // muted caption the user is unlikely to notice -- promote it to a
+    // full top-level message instead.
+    const frozenTask: TaskInTurn = {
+      ticket_id: "t1",
+      title: "Investigate",
+      status: "active",
+      summary: null,
+      is_carryover: false,
+      continues_forward: true,
+      created_at: "2026-04-28T01:00:00Z",
+      started_at: "2026-04-28T01:00:00Z",
+      active_window_start: "2026-04-28T01:00:00Z",
+      active_window_end: null,
+      is_step: true,
+      parent_id: "",
+      children: [],
+      narration: null,
+    };
+    const trailing = assistantMsg("2026-04-28T01:00:50Z", "Stuck -- need your call.", "msg-trailing");
+    expect(selectFinalMessages([trailing], [frozenTask]).map((e) => e.event_id)).toEqual(["msg-trailing"]);
   });
 
   it("promotes the last in-window message to top level when its containing task closed in the turn", () => {
@@ -741,6 +765,26 @@ describe("narration attribution", () => {
     expect(turn.tasks[0].status).toBe("done");
     expect(turn.tasks[0].summary).toBe("Did the thing.");
     expect(turn.tasks[0].narration).toBeNull();
+  });
+
+  it("leaves narration null on a continues_forward task -- the message is promoted to final instead", () => {
+    // Two turns: the first has an open step with trailing text, then the
+    // user sends a second message. The step in turn 1 gets
+    // continues_forward = true, so its narration should be suppressed
+    // (the text is promoted to a final message by selectFinalMessages).
+    const events: TranscriptEvent[] = [
+      userMsg("2026-04-28T01:00:00Z", "go"),
+      taskEvent("t1", "open", "2026-04-28T01:00:05Z", { title: "Investigate", step: true }),
+      taskEvent("t1", "in_progress", "2026-04-28T01:00:06Z", { step: true }),
+      assistantMsg("2026-04-28T01:00:10Z", "Looking into it.", "a1"),
+      assistantMsg("2026-04-28T01:00:20Z", "Stuck -- need your input.", "a2"),
+      userMsg("2026-04-28T02:00:00Z", "ok here is more context"),
+    ];
+    const turns = buildTurns(events);
+    expect(turns).toHaveLength(2);
+    const firstTurnTask = turns[0].tasks[0];
+    expect(firstTurnTask.continues_forward).toBe(true);
+    expect(firstTurnTask.narration).toBeNull();
   });
 });
 

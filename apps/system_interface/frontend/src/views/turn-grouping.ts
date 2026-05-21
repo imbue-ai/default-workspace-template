@@ -318,7 +318,10 @@ export function buildTurns(events: TranscriptEvent[]): Turn[] {
   // matches overwrite earlier ones so the slot reflects the LATEST text
   // in window. We skip done tasks because their slot will render
   // `summary` (or nothing) instead -- narration is only meaningful while
-  // a task is still in flight.
+  // a task is still in flight. We also skip continues_forward tasks:
+  // their last text-only message is promoted to a top-level final
+  // message by selectFinalMessages, so populating narration would
+  // duplicate it.
   for (const turn of turns) {
     for (const e of turn.body_events) {
       if (e.type !== "assistant_message") continue;
@@ -327,6 +330,7 @@ export function buildTurns(events: TranscriptEvent[]): Turn[] {
       const containing = findContainingTask(e.timestamp, turn.tasks);
       if (containing === null) continue;
       if (containing.status === "done") continue;
+      if (containing.continues_forward) continue;
       containing.narration = e.text;
     }
   }
@@ -510,12 +514,16 @@ export function eventsInTaskWindow(task: TaskInTurn, body_events: TranscriptEven
  *     intermediate thinking to top level -- only the genuine
  *     end-of-turn wrap-up surfaces.
  *
- *   In-window messages whose containing task is still active at turn
- *   end (unclosed) stay only in the narration slot. There's no safety
- *   valve for that case: it would fire transiently for every mid-task
- *   message (the latest is always "last" until the next arrives) and
- *   duplicate with the narration. Agents who want a prominent wrap-up
- *   should close the task; the promote-on-close rule then surfaces it.
+ *   Promote-on-freeze: the LAST text-only message of the turn, when
+ *   its containing task has `continues_forward` set (the turn ended
+ *   with the task still open), ALSO renders at top level. The
+ *   narration slot on a frozen task is a muted caption that the user
+ *   is unlikely to notice; promoting the message makes the agent's
+ *   final prose visible as a full reply. The transient-firing concern
+ *   does not apply here: `continues_forward` is only true for past
+ *   turns (the live turn never sets it), so the message set is
+ *   frozen. The narration attribution pass separately skips
+ *   continues_forward tasks so there is no duplication.
  */
 export function selectFinalMessages(body_events: TranscriptEvent[], tasks: TaskInTurn[]): TranscriptEvent[] {
   const textOnly = body_events.filter(
@@ -530,7 +538,11 @@ export function selectFinalMessages(body_events: TranscriptEvent[], tasks: TaskI
   }
   const lastMsg = textOnly[textOnly.length - 1];
   const lastContaining = findContainingTask(lastMsg.timestamp, tasks);
-  if (lastContaining !== null && lastContaining.status === "done" && !result.includes(lastMsg)) {
+  if (
+    lastContaining !== null &&
+    (lastContaining.status === "done" || lastContaining.continues_forward) &&
+    !result.includes(lastMsg)
+  ) {
     result.push(lastMsg);
   }
   result.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
