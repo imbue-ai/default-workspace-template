@@ -60,11 +60,13 @@ latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
 # 3. Ask for the necessary missing permissions.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "scope": "discord_api", "permissions": ["discord-read-all"], "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
+  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "discord_api", "permissions": ["discord-read-all"]}, "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
 ```
 
-The body must be a JSON object with exactly four string fields:
-`agent_id` (use `$MNGR_AGENT_ID`), `scope`, `permissions`, and `rationale`.
+The body must be a JSON object with exactly four fields:
+`agent_id` (use `$MNGR_AGENT_ID`), `type` (use "predefined"), `payload`, and `rationale`.
+
+`payload` must be an object with exactly two fields: `scope` (string) and `permissions` (array of strings).
 
 After posting, wait for a system message indicating whether the user
 approved or denied the permission request.
