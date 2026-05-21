@@ -114,7 +114,7 @@ function targetForToolCall(tc: ToolCall): string | null {
 /**
  * Parse an MCP tool name like "mcp__sculptor__ask_user_question" or
  * "mcp__plugin_playwright_playwright__browser_click" into a readable
- * label like "Asking user question" or "Running browser click".
+ * label like "Running ask user question" or "Running browser click".
  *
  * Returns null for non-MCP names.
  */
