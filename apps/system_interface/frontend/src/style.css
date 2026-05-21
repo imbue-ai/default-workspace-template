@@ -1641,7 +1641,8 @@ body {
 .claude-login-alts-list {
   display: flex;
   flex-direction: column;
-  margin-top: 8px;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .claude-login-alt {
@@ -1651,29 +1652,33 @@ body {
   gap: 12px;
   text-align: left;
   width: 100%;
-  padding: 9px 8px;
-  background: transparent;
-  border: none;
-  border-radius: 7px;
+  padding: 12px 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   cursor: pointer;
   font: inherit;
   color: inherit;
-  transition: background 100ms ease;
+  transition:
+    border-color 100ms ease,
+    box-shadow 100ms ease;
 }
 
 .claude-login-alt:hover {
-  background: var(--color-bg-hover);
+  border-color: var(--color-accent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 .claude-login-alt:focus-visible {
   outline: 2px solid var(--color-accent);
-  outline-offset: -1px;
+  outline-offset: 1px;
 }
 
 .claude-login-alt-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
 }
 
@@ -1690,11 +1695,14 @@ body {
 }
 
 .claude-login-alt-go {
+  display: flex;
   flex: none;
-  font-size: 0.8rem;
-  font-weight: 600;
+  color: var(--color-text-faint);
+  transition: color 100ms ease;
+}
+
+.claude-login-alt:hover .claude-login-alt-go {
   color: var(--color-accent);
-  white-space: nowrap;
 }
 
 /* Numbered steps (OAuth flow) */

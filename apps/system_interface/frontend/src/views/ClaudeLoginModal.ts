@@ -166,6 +166,26 @@ function caretIcon(): m.Vnode {
   );
 }
 
+function chevronRightIcon(): m.Vnode {
+  return m(
+    "svg",
+    {
+      width: 18,
+      height: 18,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      "aria-hidden": "true",
+    },
+    m("path", {
+      d: "M9 6l6 6-6 6",
+      stroke: "currentColor",
+      "stroke-width": 2,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+    }),
+  );
+}
+
 function externalLinkIcon(): m.Vnode {
   return m(
     "svg",
@@ -433,7 +453,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
                   m("span.claude-login-alt-name", "Anthropic Console"),
                   m("span.claude-login-alt-desc", "Sign in with an API-billing account from console.anthropic.com."),
                 ]),
-                m("span.claude-login-alt-go", "Use this"),
+                m("span.claude-login-alt-go", chevronRightIcon()),
               ]),
               m(
                 "button.claude-login-alt",
@@ -449,7 +469,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
                     m("span.claude-login-alt-name", "Use an API key"),
                     m("span.claude-login-alt-desc", "Paste a raw sk-ant-... key. Restarts every running claude."),
                   ]),
-                  m("span.claude-login-alt-go", "Use this"),
+                  m("span.claude-login-alt-go", chevronRightIcon()),
                 ],
               ),
             ])
