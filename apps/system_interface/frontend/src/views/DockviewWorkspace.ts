@@ -511,12 +511,7 @@ function openIframeTab(url: string, title: string, panelType: PanelType = "ifram
 // before attaching). Generic iframe tabs opened for an agent (e.g. an LLM
 // `openTab` for an arbitrary web URL) must leave it false to avoid a
 // spurious agent-start POST and the terminal-startup UI.
-export function openIframeTabForAgent(
-  agentId: string,
-  url: string,
-  title: string,
-  isAgentTerminal = false,
-): void {
+export function openIframeTabForAgent(agentId: string, url: string, title: string, isAgentTerminal = false): void {
   if (!dockview) return;
   const existing = dockview.panels.find((p) => {
     const pp = panelParams.get(p.id);
