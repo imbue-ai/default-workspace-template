@@ -196,6 +196,36 @@ def test_source_artifacts_dir_non_string_is_fatal(
     assert "source_artifacts_dir" in capsys.readouterr().err
 
 
+def test_malformed_frontmatter_does_not_abort_dispatch(tmp_path: Path) -> None:
+    """A task file with no/broken frontmatter dispatches normally with no artifacts
+    push -- frontmatter schema validation is the worker's job, not dispatch's."""
+    runtime, task, _ = _make_layout(tmp_path)
+    task.write_text("no frontmatter here, just a body\n")
+    runner = _RecordingRunner()
+
+    rc = dispatch_mod.dispatch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        workspace="ws-1",
+        runner=runner,
+    )
+
+    assert rc == 0
+    push_calls = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "push"]]
+    assert push_calls == [
+        [
+            "mngr",
+            "push",
+            f"demo-worker:{runtime}/",
+            "--source",
+            f"{runtime}/",
+            "--uncommitted-changes=merge",
+        ],
+    ]
+
+
 def test_runtime_dir_must_exist(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
