@@ -376,7 +376,13 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     } catch {
       // Clipboard access can be denied (insecure context, permissions).
       // Tell the user the copy failed and reveal the raw URL below so they
-      // can select and copy it manually.
+      // can select and copy it manually. Clear any stale "Link copied"
+      // state from a recent successful copy so the UI isn't contradictory.
+      urlCopied = false;
+      if (urlCopiedResetHandle !== null) {
+        clearTimeout(urlCopiedResetHandle);
+        urlCopiedResetHandle = null;
+      }
       urlCopyFailed = true;
       m.redraw();
       return;
