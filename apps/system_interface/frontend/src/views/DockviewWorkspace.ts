@@ -12,6 +12,7 @@ import {
   type SerializedDockview,
 } from "dockview-core";
 import { ChatPanel } from "./ChatPanel";
+import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { IframePanel, reloadIframesForService } from "./IframePanel";
 import { SubagentView } from "./SubagentView";
 import { CreateAgentModal } from "./CreateAgentModal";
@@ -67,6 +68,10 @@ interface PanelParams {
   // Drives both the WS-driven `refresh_service` broadcast match and the
   // presence of the per-tab Refresh button.
   serviceName?: string;
+  // True for iframe tabs that are an agent's terminal (set by
+  // openIframeTabForAgent). Routes the panel to AgentTerminalPanel, which
+  // ensures the agent is started before attaching its terminal session.
+  isAgentTerminal?: boolean;
 }
 
 // Modal state
@@ -513,7 +518,7 @@ export function openIframeTabForAgent(agentId: string, url: string, title: strin
     return;
   }
   const panelId = `iframe-agent-${agentId}-${Date.now()}`;
-  const params: PanelParams = { panelType: "iframe", agentId, url, title };
+  const params: PanelParams = { panelType: "iframe", agentId, url, title, isAgentTerminal: true };
   panelParams.set(panelId, params);
   dockview.addPanel({
     id: panelId,
@@ -830,12 +835,29 @@ function initializeDockview(parentElement: HTMLElement): void {
             agentId: params?.chatAgentId ?? params?.agentId ?? getPrimaryAgentId(),
           });
 
-        case "iframe":
+        case "iframe": {
+          // Agent-terminal tabs route to AgentTerminalPanel, which starts the
+          // agent before attaching its terminal session. Newer tabs carry the
+          // explicit isAgentTerminal flag; for tabs from layouts saved before
+          // that flag existed, fall back to the agentId -- only agent
+          // terminals point at a non-primary agent (every other iframe tab
+          // uses the primary agent id).
+          const iframeAgentId = params?.agentId ?? "";
+          const isAgentTerminal =
+            params?.isAgentTerminal === true || (iframeAgentId !== "" && iframeAgentId !== getPrimaryAgentId());
+          if (isAgentTerminal) {
+            return createMithrilRenderer(AgentTerminalPanel, {
+              agentId: iframeAgentId,
+              url: params?.url ?? "",
+              title: params?.title ?? "Tab",
+            });
+          }
           return createMithrilRenderer(IframePanel, {
             url: params?.url ?? "",
             title: params?.title ?? "Tab",
             serviceName: params?.serviceName,
           });
+        }
 
         case "subagent":
           return createMithrilRenderer(SubagentView, {

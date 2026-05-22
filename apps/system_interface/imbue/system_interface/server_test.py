@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
@@ -389,3 +390,72 @@ def test_destroy_rejects_is_primary_agent(client: TestClient, app: FastAPI) -> N
     # The guard runs *before* the destroy subprocess, so the agent is still
     # present in the agent manager's state.
     assert services_agent.id in agent_manager._agents
+
+
+def _register_agent(app: FastAPI, agent_id: str, name: str, state: str) -> None:
+    """Insert an agent into the AgentManager's state for endpoint tests."""
+    agent_manager: AgentManager = app.state.agent_manager
+    agent_manager._agents[agent_id] = AgentStateItem(
+        id=agent_id,
+        name=name,
+        state=state,
+        labels={},
+        work_dir="/code",
+    )
+
+
+def test_start_unknown_agent_returns_404(client: TestClient) -> None:
+    """POST /api/agents/<id>/start returns 404 for an unknown agent."""
+    response = client.post("/api/agents/nonexistent/start")
+    assert response.status_code == 404
+
+
+def test_start_running_agent_skips_subprocess(client: TestClient, app: FastAPI) -> None:
+    """A running agent is a no-op: the `mngr start` subprocess is not run."""
+    _register_agent(app, "agent-running", "running-agent", "RUNNING")
+
+    with patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run:
+        response = client.post("/api/agents/agent-running/start")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "already-running"
+    mock_run.assert_not_called()
+
+
+def test_start_stopped_agent_invokes_mngr_start(client: TestClient, app: FastAPI) -> None:
+    """A STOPPED agent is started by running `mngr start <name>`."""
+    _register_agent(app, "agent-stopped", "stopped-agent", "STOPPED")
+
+    finished = FinishedProcess(
+        returncode=0,
+        stdout="Started agent: stopped-agent",
+        stderr="",
+        command=("mngr", "start", "stopped-agent"),
+        is_output_already_logged=False,
+    )
+    with patch(
+        "imbue.system_interface.server.run_local_command_modern_version", return_value=finished
+    ) as mock_run:
+        response = client.post("/api/agents/agent-stopped/start")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "stopped-agent"]
+
+
+def test_start_stopped_agent_failure_returns_500(client: TestClient, app: FastAPI) -> None:
+    """A failed `mngr start` surfaces as a 500 with the subprocess stderr."""
+    _register_agent(app, "agent-stopped", "stopped-agent", "STOPPED")
+
+    finished = FinishedProcess(
+        returncode=1,
+        stdout="",
+        stderr="boom",
+        command=("mngr", "start", "stopped-agent"),
+        is_output_already_logged=False,
+    )
+    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=finished):
+        response = client.post("/api/agents/agent-stopped/start")
+
+    assert response.status_code == 500
+    assert "boom" in response.json()["detail"]

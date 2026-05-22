@@ -90,3 +90,9 @@ class DestroyAgentResponse(FrozenModel):
     """Response from the agent destroy endpoint."""
 
     status: str = Field(description="Result of the destroy operation")
+
+
+class StartAgentResponse(FrozenModel):
+    """Response from the agent start endpoint."""
+
+    status: str = Field(description="Result of the start operation")
