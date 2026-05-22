@@ -72,11 +72,8 @@ BODY_EOF
 
 ## 2. Dispatch the worker
 
-`scripts/dispatch.py` runs the lifecycle commands -- `mngr create` (no
-`--message-file` to avoid racing with the push), `mngr push` of the
-runtime dir, optional extra pushes for gitignored auxiliary state, and
-`mngr message` of the task file. Sending the message *after* the push
-guarantees the worker sees the runtime dir before reading the task.
+`scripts/dispatch.py` runs the worker lifecycle: `mngr create`, the
+runtime-dir push, and the task message.
 
 ```bash
 uv run .agents/skills/launch-task/scripts/dispatch.py \
@@ -86,9 +83,9 @@ uv run .agents/skills/launch-task/scripts/dispatch.py \
     --task-file runtime/launch-task/$NAME/task.md
 ```
 
-If the task references other gitignored files (datasets, credentials,
-extra transcripts), pass them as `--extra-push <dir>/` (repeatable) so
-they land in the worker's worktree alongside the runtime dir.
+If the task references gitignored files outside the runtime dir, set
+`source_artifacts_dir: <dir>` in the task frontmatter; `dispatch.py`
+pushes that directory into the worker's worktree automatically.
 
 ## 3. Background-poll for the worker's report
 
@@ -145,6 +142,6 @@ Flow-specific substitutions when reading `lead-proxy.md`:
   <worker>` and message it to continue -- the worktree is preserved
   across restart. See `references/dead-worker-recovery.md` for the
   manual salvage fallback when restart isn't viable.
-- If the task references gitignored files beyond the runtime dir, pass
-  them as `--extra-push <dir>/` (repeatable) to `dispatch.py` so they
-  land in the worker's worktree before it reads the task message.
+- If the task references gitignored files outside the runtime dir,
+  declare them with `source_artifacts_dir: <dir>` in the task
+  frontmatter -- `dispatch.py` pushes that directory automatically.

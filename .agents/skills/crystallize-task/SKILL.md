@@ -139,13 +139,6 @@ transcript via `mngr transcript`. Include:
   tool output that drove a step, a clarification the user gave).
 <paste quotes here, one per bullet, in original wording.>
 
-## How to read the transcript
-Use `mngr transcript <lead_agent>` (with `--role user --role assistant`
-to strip tool noise, or `--tail N` to scope in) to find the turns above.
-The crystallize-task invocation is the *most recent* turn in your
-lead's transcript; the work to crystallize is *prior* to that
-invocation. Do not crystallize the lead's task-handoff turn itself.
-
 ## Source artifacts (optional)
 If your frontmatter has a `source_artifacts_dir` field, the calling
 skill has pre-staged scripts and sample data at that path in your
@@ -208,10 +201,6 @@ crystallize runtime dir.
 
 ## Step 4: Dispatch the worker
 
-The shared `launch-task` dispatcher runs the lifecycle commands
-(`mngr create` + `mngr push` of the runtime dir + optional extra pushes
-+ `mngr message` of the task file).
-
 ```bash
 uv run .agents/skills/launch-task/scripts/dispatch.py \
     --name crystallize-$NAME \
@@ -220,9 +209,8 @@ uv run .agents/skills/launch-task/scripts/dispatch.py \
     --task-file runtime/crystallize/$NAME/task.md
 ```
 
-If the task frontmatter sets `source_artifacts_dir: <dir>`, add
-`--extra-push <dir>/` so the worker also gets the calling skill's scripts
-and sample data.
+If the task frontmatter sets `source_artifacts_dir`, `dispatch.py` pushes
+that directory to the worker too -- no extra flag needed.
 
 ## Step 5: Background-poll for worker reports (concurrent with other work)
 

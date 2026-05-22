@@ -98,12 +98,10 @@ frontmatter.
 TASK_EOF
 ```
 
-## 2c: Launch the worker and push the commit artifacts
+## 2c: Launch the worker
 
-The shared `launch-task` dispatcher runs `mngr create`, pushes the
-`runtime/update/$TARGET/` dir (so the worker has `task.md`, `commit.log`,
-and `commit.diff` under its worktree), and sends the task as a follow-up
-message so the worker sees the runtime dir first.
+The `runtime/update/$TARGET/` push carries `task.md`, `commit.log`, and
+`commit.diff` into the worker's worktree.
 
 ```bash
 uv run .agents/skills/launch-task/scripts/dispatch.py \

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
+# dependencies = ["pyyaml>=6"]
 # ///
 """Generic worker-dispatch driver.
 
 Collapses the launch-task lifecycle steps (mngr create + mngr push of the
-runtime dir + optional extra pushes + mngr message of the task file) into a
-single invocation, so callers like ``crystallize-task`` don't have to repeat
-the boilerplate.
+runtime dir + mngr message of the task file) into a single invocation, so
+callers like ``crystallize-task`` don't have to repeat the boilerplate.
 
 The caller is responsible for writing the task file (with whatever YAML
 frontmatter the worker template requires) and for placing it -- and any
@@ -19,13 +19,18 @@ Ticket bookkeeping (``tk create`` / ``tk start`` / ``tk close``) is the
 caller's responsibility -- it lives in the calling skill's prose so each
 flow can shape the ticket title, type, and acceptance criteria itself.
 
+When the worker needs gitignored auxiliary state (scripts, sample data)
+that lives outside the runtime dir, the caller declares it in the task
+frontmatter with a ``source_artifacts_dir`` key; dispatch reads that key
+and pushes the directory alongside the runtime dir -- no extra CLI flag.
+
 Lifecycle commands:
 
     mngr create <NAME> -t <TEMPLATE> --label workspace=<MINDS_WORKSPACE_NAME>
     mngr push   <NAME>:<RUNTIME_DIR>/   --source <RUNTIME_DIR>/
                 --uncommitted-changes=merge
-    mngr push   <NAME>:<EXTRA_DIR>/     --source <EXTRA_DIR>/        (per --extra-push)
-                --uncommitted-changes=merge
+    mngr push   <NAME>:<ARTIFACTS_DIR>/ --source <ARTIFACTS_DIR>/
+                --uncommitted-changes=merge   (when frontmatter declares it)
     mngr message <NAME> --message-file <TASK_FILE>
 
 The trailing-slash rewriting and ``--uncommitted-changes=merge`` flag are
@@ -56,6 +61,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+import yaml
 
 _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
 
@@ -63,6 +69,38 @@ _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
 def _normalize_dir(value: str) -> str:
     """Return ``value`` with exactly one trailing slash."""
     return value.rstrip("/") + "/"
+
+
+def _read_source_artifacts_dir(task_file: Path) -> Path | None:
+    """Return the directory declared by the task frontmatter's
+    ``source_artifacts_dir`` key, or ``None`` when the key is absent.
+
+    The caller sets this key when the worker needs gitignored auxiliary
+    state that lives outside the runtime dir; dispatch pushes that
+    directory alongside the runtime dir. Validating the rest of the
+    frontmatter schema is the worker's job (``parse_task_frontmatter.py``);
+    here we only pull out this one key, and only raise if it is present
+    but not a non-empty string.
+    """
+    lines = task_file.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    try:
+        end_idx = lines.index("---", 1)
+    except ValueError:
+        return None
+    try:
+        frontmatter = yaml.safe_load("\n".join(lines[1:end_idx]))
+    except yaml.YAMLError:
+        return None
+    if not isinstance(frontmatter, dict):
+        return None
+    value = frontmatter.get("source_artifacts_dir")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError("frontmatter.source_artifacts_dir must be a non-empty string")
+    return Path(value)
 
 
 class Runner:
@@ -133,15 +171,15 @@ def dispatch(
     template: str,
     runtime_dir: Path,
     task_file: Path,
-    extra_pushes: Sequence[Path],
     workspace: str,
     state_dir: Path | None = None,
     runner: Runner | None = None,
 ) -> int:
     """Run the dispatch lifecycle. Returns the process exit code.
 
-    Pre-flight checks (existence of ``runtime_dir``, ``task_file``, every
-    ``extra_pushes`` entry) run first so a typo doesn't half-create a worker.
+    Pre-flight checks (existence of ``runtime_dir``, ``task_file``, and any
+    ``source_artifacts_dir`` declared in the task frontmatter) run first so
+    a typo doesn't half-create a worker.
 
     ``state_dir`` is the lead's ``MNGR_AGENT_STATE_DIR``; when set, the
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
@@ -159,12 +197,17 @@ def dispatch(
     if not task_file.is_file():
         print(f"dispatch: --task-file not found: {task_file}", file=sys.stderr)
         return 2
-    for extra in extra_pushes:
-        if not extra.is_dir():
-            print(
-                f"dispatch: --extra-push is not a directory: {extra}", file=sys.stderr
-            )
-            return 2
+    try:
+        artifacts_dir = _read_source_artifacts_dir(task_file)
+    except ValueError as exc:
+        print(f"dispatch: {exc}", file=sys.stderr)
+        return 2
+    if artifacts_dir is not None and not artifacts_dir.is_dir():
+        print(
+            f"dispatch: source_artifacts_dir is not a directory: {artifacts_dir}",
+            file=sys.stderr,
+        )
+        return 2
 
     runner.run(
         [
@@ -180,8 +223,8 @@ def dispatch(
     )
 
     push(name, runtime_dir, runner)
-    for extra in extra_pushes:
-        push(name, extra, runner)
+    if artifacts_dir is not None:
+        push(name, artifacts_dir, runner)
 
     _flush_common_transcript(state_dir, runner)
 
@@ -223,14 +266,6 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         type=Path,
         help="Markdown task file (must already exist; typically inside --runtime-dir).",
     )
-    parser.add_argument(
-        "--extra-push",
-        action="append",
-        default=[],
-        type=Path,
-        metavar="DIR",
-        help="Additional directory to push after --runtime-dir; pass multiple times.",
-    )
     args = parser.parse_args(argv)
 
     workspace = os.environ.get("MINDS_WORKSPACE_NAME", "default")
@@ -242,7 +277,6 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         template=args.template,
         runtime_dir=args.runtime_dir,
         task_file=args.task_file,
-        extra_pushes=tuple(args.extra_push),
         workspace=workspace,
         state_dir=state_dir,
         runner=runner,
