@@ -18,14 +18,14 @@ import {
   isBackfillComplete,
   type TranscriptEvent,
 } from "../models/Response";
-import { connectToStream, disconnectFromStream, subscribeToAuthErrors } from "../models/StreamingMessage";
+import { connectToStream, disconnectFromStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
+import { openLoginModal } from "../models/ClaudeAuth";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { MessageInput } from "./MessageInput";
 import { renderUserMessage, renderAssistantMessage, computeAuthErrorHiddenEventIds } from "./message-renderers";
 import { getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
-import { ClaudeLoginModal } from "./ClaudeLoginModal";
 
 function getAgentTerminalUrl(agentId: string): string {
   const baseUrl = getTerminalUrl();
@@ -71,40 +71,22 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   let previousScrollTop = 0;
   let backfillStarted = false;
 
-  // Claude login modal state. The modal opens only when the agent's SSE
-  // stream emits an `is_auth_error` event, and closes only when the user
-  // dismisses it (either after a successful sign-in or by clicking the
-  // close affordance). If the user closes it without signing in, the
-  // next auth-error event will reopen it.
-  let loginModalOpen = false;
-  let unsubscribeAuthError: (() => void) | null = null;
-
-  function handleAuthErrorEvent(eventAgentId: string): void {
-    if (eventAgentId !== currentAgentId) return;
-    if (loginModalOpen) return;
-    loginModalOpen = true;
-    m.redraw();
-  }
-
-  function closeLoginModal(): void {
-    loginModalOpen = false;
-    m.redraw();
-  }
-
   // Snapshot-load path: SSE only carries events emitted after subscription,
   // so an auth-error that happened before the user opened the panel (e.g.
-  // the auto-`/welcome` failing during fresh mind creation) wouldn't pop
+  // the auto-`/welcome` failing during fresh mind creation) wouldn't open
   // the modal otherwise. Walking back to the last assistant_message means
   // an already-recovered agent (whose history contains old auth errors
-  // but has since produced healthy replies) does not pop on reload --
-  // only an agent whose current state is broken does.
+  // but has since produced healthy replies) does not open it on reload --
+  // only an agent whose current state is broken does. The modal itself is
+  // a single app-level instance driven by global auth state (see
+  // models/ClaudeAuth.ts), so this just flips that shared flag.
   function checkLatestAssistantForAuthError(agentId: string): void {
     const events = getEventsForAgent(agentId);
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i];
       if (event.type === "assistant_message") {
         if (event.is_auth_error === true) {
-          handleAuthErrorEvent(agentId);
+          openLoginModal();
         }
         return;
       }
@@ -437,27 +419,15 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   }
 
   return {
-    oncreate() {
-      unsubscribeAuthError = subscribeToAuthErrors((eventAgentId: string) => {
-        handleAuthErrorEvent(eventAgentId);
-      });
-    },
-
     onremove() {
       disconnectLogWs();
       if (currentAgentId !== null) {
         disconnectFromStream(currentAgentId);
       }
-      if (unsubscribeAuthError !== null) {
-        unsubscribeAuthError();
-        unsubscribeAuthError = null;
-      }
     },
 
     view(vnode) {
       const agentId = vnode.attrs.agentId;
-
-      const chatAgentName = getAgentById(agentId)?.name ?? null;
 
       return m("div", { class: "chat-panel flex flex-col h-full relative" }, [
         m(
@@ -491,12 +461,6 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
                 ),
               ]),
             ]),
-        loginModalOpen
-          ? m(ClaudeLoginModal, {
-              chatAgentName,
-              onDismiss: closeLoginModal,
-            })
-          : null,
       ]);
     },
   };

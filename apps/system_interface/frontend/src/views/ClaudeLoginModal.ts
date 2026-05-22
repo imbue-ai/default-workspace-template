@@ -9,12 +9,12 @@
  * - Raw API key: paste a `sk-ant-...` value; backend writes it to the host
  *   env file and restarts every running claude agent.
  *
- * The modal is purely reactive: it opens when ChatPanel receives an
- * auth-error event over the SSE stream, and closes only when the user
- * dismisses it. It does not poll the backend status endpoint, because
- * `claude auth status` reflects the system-interface process's view of
- * auth which can disagree with the already-running agent's cached
- * in-process auth decision.
+ * The modal is purely reactive and a single app-level instance: global
+ * auth state (models/ClaudeAuth.ts) opens it when any agent surfaces an
+ * auth-error, and it closes only when the user dismisses it. It does not
+ * poll the backend status endpoint, because `claude auth status` reflects
+ * the system-interface process's view of auth which can disagree with the
+ * already-running agent's cached in-process auth decision.
  */
 
 import m from "mithril";
@@ -38,7 +38,6 @@ interface OAuthStartResponse {
 type Mode = "select_provider" | "api_key_form" | "awaiting_oauth_code" | "verifying" | "success" | "error";
 
 export interface ClaudeLoginModalAttrs {
-  chatAgentName: string | null;
   // Called when the user closes the modal -- either after a successful
   // sign-in flow ("Done" button) or via the close affordance before
   // signing in. A subsequent auth-error event will reopen it.
@@ -308,7 +307,6 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         body: {
           session_id: sessionId,
           code: code.trim(),
-          chat_agent_name: attrsRef?.chatAgentName ?? null,
         },
       });
       if (status.logged_in) {
@@ -334,7 +332,6 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         url: apiUrl("/api/claude-auth/submit-api-key"),
         body: {
           api_key: apiKey.trim(),
-          chat_agent_name: attrsRef?.chatAgentName ?? null,
         },
       });
       if (status.logged_in) {

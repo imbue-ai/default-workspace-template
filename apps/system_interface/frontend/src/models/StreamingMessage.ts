@@ -8,6 +8,7 @@
 
 import { apiUrl } from "../base-path";
 import { appendEvents, fetchEvents, type TranscriptEvent } from "./Response";
+import { openLoginModal } from "./ClaudeAuth";
 
 const activeStreams = new Map<string, EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
@@ -17,29 +18,12 @@ const explicitlyDisconnectedAgents = new Set<string>();
 // flight, so fetchEvents replacing eventsByAgent[agentId] does not drop them.
 const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
 
-export type AuthErrorListener = (agentId: string, event: TranscriptEvent) => void;
-const authErrorListeners: AuthErrorListener[] = [];
-
-export function subscribeToAuthErrors(callback: AuthErrorListener): () => void {
-  authErrorListeners.push(callback);
-  return () => {
-    const index = authErrorListeners.indexOf(callback);
-    if (index >= 0) {
-      authErrorListeners.splice(index, 1);
-    }
-  };
-}
-
-function dispatchAuthErrorIfPresent(agentId: string, event: TranscriptEvent): void {
-  if (event.type !== "assistant_message" || event.is_auth_error !== true) {
-    return;
-  }
-  for (const listener of authErrorListeners) {
-    try {
-      listener(agentId, event);
-    } catch (error) {
-      console.warn("auth-error listener threw", error);
-    }
+// Claude auth is mind-global, so an auth-error on any agent's stream
+// opens the single shared login modal (see models/ClaudeAuth.ts) -- no
+// per-agent routing needed.
+function openLoginModalIfAuthError(event: TranscriptEvent): void {
+  if (event.type === "assistant_message" && event.is_auth_error === true) {
+    openLoginModal();
   }
 }
 
@@ -71,7 +55,7 @@ export function connectToStream(agentId: string): void {
     } else {
       appendEvents(agentId, [event]);
     }
-    dispatchAuthErrorIfPresent(agentId, event);
+    openLoginModalIfAuthError(event);
   };
 
   eventSource.onerror = () => {

@@ -21,7 +21,7 @@ function makeModal(): { render: () => unknown } {
   const component = ClaudeLoginModal();
   // The view ignores its vnode argument (it reads closure state), so a
   // minimal stand-in cast to the expected parameter type is sufficient.
-  const vnode = { attrs: { chatAgentName: null, onDismiss: () => {} } };
+  const vnode = { attrs: { onDismiss: () => {} } };
   return {
     render: () => component.view(vnode as Parameters<typeof component.view>[0]),
   };
