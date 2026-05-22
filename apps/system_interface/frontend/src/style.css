@@ -1768,6 +1768,26 @@ body {
   border-radius: 2px;
 }
 
+/* Raw OAuth URL fallback, shown when the clipboard write was rejected. */
+.claude-login-rawurl {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  font-family: var(--font-family-mono);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--color-text-primary);
+  word-break: break-all;
+  user-select: all;
+}
+
+.claude-login-rawurl:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
 /* Inputs */
 .claude-login-field {
   display: flex;

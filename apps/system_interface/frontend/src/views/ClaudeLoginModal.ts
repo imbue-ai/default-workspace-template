@@ -230,6 +230,10 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   let apiKey = "";
   let apiKeyRevealed = false;
   let urlCopied = false;
+  // Set when a clipboard write was attempted but rejected (insecure context,
+  // denied permission). Drives the "Failed to copy" label and the raw-URL
+  // fallback block so the user can still select and copy the link by hand.
+  let urlCopyFailed = false;
   let urlCopiedResetHandle: ReturnType<typeof setTimeout> | null = null;
   let errorMessage: string | null = null;
   let verifyingTitle = "Working...";
@@ -358,6 +362,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
 
   function resetUrlCopied(): void {
     urlCopied = false;
+    urlCopyFailed = false;
     if (urlCopiedResetHandle !== null) {
       clearTimeout(urlCopiedResetHandle);
       urlCopiedResetHandle = null;
@@ -369,10 +374,14 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     try {
       await navigator.clipboard.writeText(oauthUrl);
     } catch {
-      // Clipboard access can be denied (insecure context, permissions);
-      // the URL stays visible and selectable, so silently skip feedback.
+      // Clipboard access can be denied (insecure context, permissions).
+      // Tell the user the copy failed and reveal the raw URL below so they
+      // can select and copy it manually.
+      urlCopyFailed = true;
+      m.redraw();
       return;
     }
+    urlCopyFailed = false;
     urlCopied = true;
     if (urlCopiedResetHandle !== null) clearTimeout(urlCopiedResetHandle);
     urlCopiedResetHandle = setTimeout(() => {
@@ -532,10 +541,13 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
                 void copyOAuthUrl();
               },
             },
-            urlCopied ? "Link copied" : "Copy the link",
+            urlCopied ? "Link copied" : urlCopyFailed ? "Failed to copy" : "Copy the link",
           ),
-          urlCopied ? "" : " and paste it into your browser.",
+          urlCopied ? "" : urlCopyFailed ? " — copy this link manually:" : " and paste it into your browser.",
         ]),
+        // When the clipboard write was rejected, surface the raw URL so the
+        // user is never stranded without a way to reach the sign-in page.
+        urlCopyFailed && oauthUrl !== null ? m("div.claude-login-rawurl", { tabindex: 0 }, oauthUrl) : null,
       ]),
       m("div.claude-login-step", [
         m("label.claude-login-step-label", { for: "claude-login-code-input" }, [
