@@ -61,18 +61,30 @@ class _RecordingRunner(dispatch_mod.Runner):
 
 
 def _make_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """Create runtime_dir / task_file / extra_dir under tmp_path."""
+    """Create runtime_dir / task_file / artifacts_dir under tmp_path.
+
+    The task file has plain frontmatter (no ``source_artifacts_dir``); tests
+    that exercise the artifacts push overwrite it via ``_write_task``.
+    """
     runtime = tmp_path / "runtime" / "launch-task" / "demo"
     runtime.mkdir(parents=True)
     task = runtime / "task.md"
     task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
-    extra = tmp_path / "runtime" / "do-something-new" / "demo"
-    extra.mkdir(parents=True)
-    (extra / "sample.json").write_text("{}")
-    return runtime, task, extra
+    artifacts = tmp_path / "runtime" / "do-something-new" / "demo"
+    artifacts.mkdir(parents=True)
+    (artifacts / "sample.json").write_text("{}")
+    return runtime, task, artifacts
 
 
-def test_happy_path_no_extras(tmp_path: Path) -> None:
+def _write_task(task: Path, source_artifacts_dir: str | None) -> None:
+    """Overwrite ``task`` with frontmatter optionally declaring artifacts."""
+    fm = "lead_agent: lead\n"
+    if source_artifacts_dir is not None:
+        fm += f"source_artifacts_dir: {source_artifacts_dir}\n"
+    task.write_text(f"---\n{fm}---\n\nbody\n")
+
+
+def test_happy_path_no_artifacts(tmp_path: Path) -> None:
     runtime, task, _ = _make_layout(tmp_path)
     runner = _RecordingRunner()
 
@@ -81,7 +93,6 @@ def test_happy_path_no_extras(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        extra_pushes=(),
         workspace="ws-1",
         runner=runner,
     )
@@ -102,8 +113,10 @@ def test_happy_path_no_extras(tmp_path: Path) -> None:
     ]
 
 
-def test_extra_push_dirs_are_pushed_after_runtime(tmp_path: Path) -> None:
-    runtime, task, extra = _make_layout(tmp_path)
+def test_source_artifacts_dir_pushed_after_runtime(tmp_path: Path) -> None:
+    """A frontmatter ``source_artifacts_dir`` is pushed right after the runtime dir."""
+    runtime, task, artifacts = _make_layout(tmp_path)
+    _write_task(task, str(artifacts))
     runner = _RecordingRunner()
 
     rc = dispatch_mod.dispatch(
@@ -111,7 +124,6 @@ def test_extra_push_dirs_are_pushed_after_runtime(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        extra_pushes=(extra,),
         workspace="ws-1",
         runner=runner,
     )
@@ -130,12 +142,58 @@ def test_extra_push_dirs_are_pushed_after_runtime(tmp_path: Path) -> None:
         [
             "mngr",
             "push",
-            f"demo-worker:{extra}/",
+            f"demo-worker:{artifacts}/",
             "--source",
-            f"{extra}/",
+            f"{artifacts}/",
             "--uncommitted-changes=merge",
         ],
     ]
+
+
+def test_source_artifacts_dir_missing_is_fatal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A declared but nonexistent ``source_artifacts_dir`` aborts before launch."""
+    runtime, task, _ = _make_layout(tmp_path)
+    _write_task(task, str(tmp_path / "no-such-dir"))
+    runner = _RecordingRunner()
+
+    rc = dispatch_mod.dispatch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        workspace="ws",
+        runner=runner,
+    )
+
+    assert rc == 2
+    assert runner.calls == []
+    assert "source_artifacts_dir" in capsys.readouterr().err
+
+
+def test_source_artifacts_dir_non_string_is_fatal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A non-string ``source_artifacts_dir`` value aborts before launch."""
+    runtime, task, _ = _make_layout(tmp_path)
+    task.write_text(
+        "---\nlead_agent: lead\nsource_artifacts_dir: [a, b]\n---\n\nbody\n"
+    )
+    runner = _RecordingRunner()
+
+    rc = dispatch_mod.dispatch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        workspace="ws",
+        runner=runner,
+    )
+
+    assert rc == 2
+    assert runner.calls == []
+    assert "source_artifacts_dir" in capsys.readouterr().err
 
 
 def test_runtime_dir_must_exist(
@@ -148,7 +206,6 @@ def test_runtime_dir_must_exist(
         template="worker",
         runtime_dir=tmp_path / "missing",
         task_file=task,
-        extra_pushes=(),
         workspace="ws",
         runner=runner,
     )
@@ -167,32 +224,12 @@ def test_task_file_must_exist(
         template="worker",
         runtime_dir=runtime,
         task_file=runtime / "missing.md",
-        extra_pushes=(),
         workspace="ws",
         runner=runner,
     )
     assert rc == 2
     assert runner.calls == []
     assert "task-file" in capsys.readouterr().err
-
-
-def test_extra_push_must_exist(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    runtime, task, _ = _make_layout(tmp_path)
-    runner = _RecordingRunner()
-    rc = dispatch_mod.dispatch(
-        name="demo-worker",
-        template="worker",
-        runtime_dir=runtime,
-        task_file=task,
-        extra_pushes=(tmp_path / "missing",),
-        workspace="ws",
-        runner=runner,
-    )
-    assert rc == 2
-    assert runner.calls == []
-    assert "extra-push" in capsys.readouterr().err
 
 
 def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
@@ -208,7 +245,6 @@ def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
             template="worker",
             runtime_dir=runtime,
             task_file=task,
-            extra_pushes=(),
             workspace="ws",
             runner=runner,
         )
@@ -278,7 +314,6 @@ def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        extra_pushes=(),
         workspace="ws-1",
         state_dir=state_dir,
         runner=runner,
@@ -312,7 +347,6 @@ def test_common_transcript_skipped_when_state_dir_is_none(tmp_path: Path) -> Non
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        extra_pushes=(),
         workspace="ws-1",
         state_dir=None,
         runner=runner,
@@ -336,7 +370,6 @@ def test_common_transcript_skipped_when_script_missing(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        extra_pushes=(),
         workspace="ws-1",
         state_dir=state_dir,
         runner=runner,
@@ -364,7 +397,6 @@ def test_common_transcript_failure_does_not_abort_dispatch(
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        extra_pushes=(),
         workspace="ws-1",
         state_dir=state_dir,
         runner=runner,
@@ -398,5 +430,7 @@ def test_main_picks_up_state_dir_env(
 
     assert rc == 0
     expected_script = str(state_dir / "commands" / "common_transcript.sh")
-    flush_calls = [c.argv for c in runner.calls if c.argv == [expected_script, "--single-pass"]]
+    flush_calls = [
+        c.argv for c in runner.calls if c.argv == [expected_script, "--single-pass"]
+    ]
     assert len(flush_calls) == 1

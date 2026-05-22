@@ -1,7 +1,7 @@
 # Post-crystallize migration checklist
 
-Run this after the lead has merged a worker's `mngr/crystallize-$NAME`
-branch into the calling agent's branch. The new skill is now installed
+Run this after you have merged the worker's `mngr/crystallize-$NAME`
+branch into your branch. The new skill is now installed
 at `.agents/skills/<name>/`, but the calling-skill's runtime artifacts
 (under `runtime/<calling-skill>/<slug>/`) and any code that referred
 to them are still pointing at the temporary scratch shape. This doc
@@ -107,7 +107,7 @@ if command -v tk >/dev/null 2>&1 && [ -s "$TICKET_FILE" ]; then
 fi
 ```
 
-If the file is missing (the lead deleted the runtime dir before
+If the file is missing (you deleted the runtime dir before
 closing the ticket, or `tk` was unavailable at launch), `tk` does not
 have a list command in this build -- look for the ticket in
 `runtime/tickets/` by slug and close it by ID.

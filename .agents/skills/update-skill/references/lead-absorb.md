@@ -51,12 +51,6 @@ The worker will use these to locate the incident in your transcript via
 - 1-2 quotes showing the manual follow-up you did or the final result.
 <paste quotes here, one per bullet.>
 
-## How to read the transcript
-Use \`mngr transcript <lead_agent>\` (with \`--role user --role assistant\`
-to strip tool noise, or \`--tail N\` to scope in) to find the turns above.
-The update-skill invocation is the *most recent* turn; the incident and
-manual follow-up are *prior* to that invocation.
-
 ## What the updated skill must do
 <state the contract the updated skill must honor after this change --
 what inputs it should now accept, what outputs it should now produce.
@@ -87,12 +81,6 @@ content drawn from your conversation -- do not leave the placeholders.
 `FLOW: absorb` is required; the worker fails loudly if the marker is missing.
 
 ## 2b: Launch the worker
-
-The shared `launch-task` dispatcher runs `mngr create`, pushes the runtime
-dir (task file) into the worker's worktree, and sends the task as a
-follow-up message so the worker sees the runtime dir first. The worker's
-`parse_task_frontmatter.py` helper needs `task.md` on disk to validate the
-schema, which is why the push is part of the lifecycle.
 
 ```bash
 uv run .agents/skills/launch-task/scripts/dispatch.py \

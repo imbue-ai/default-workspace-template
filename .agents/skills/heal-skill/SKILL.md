@@ -90,12 +90,6 @@ The worker will use these to locate the incident in your transcript via
 - Any clarifying quote from the user about expected behavior.
 <paste quotes here, one per bullet.>
 
-## How to read the transcript
-Use \`mngr transcript <lead_agent>\` (with \`--role user --role assistant\`
-to strip tool noise, or \`--tail N\` to scope in) to find the turns above.
-The heal-skill invocation is the *most recent* turn; the incident is
-*prior* to that invocation.
-
 ## What the fixed skill must do
 <state the contract the healed skill must honor — what input shapes
 should work, what outputs are correct. Describe only what success
@@ -129,12 +123,6 @@ content drawn from your conversation -- do not leave the placeholders.
 
 ## Step 3: Launch the worker
 
-The shared `launch-task` dispatcher runs `mngr create`, pushes the
-runtime dir (task file) into the worker's worktree, and sends the task
-as a follow-up message so the worker sees the runtime dir first. The
-`crystallize-worker` template pre-installs `heal-skill-worker`
-alongside the other worker sub-skills.
-
 ```bash
 uv run .agents/skills/launch-task/scripts/dispatch.py \
     --name heal-$TARGET \
@@ -142,6 +130,8 @@ uv run .agents/skills/launch-task/scripts/dispatch.py \
     --runtime-dir runtime/heal/$TARGET/ \
     --task-file runtime/heal/$TARGET/task.md
 ```
+
+The `crystallize-worker` template pre-installs `heal-skill-worker`.
 
 ## Step 4: Proxy the final-artifact gate, then merge
 
