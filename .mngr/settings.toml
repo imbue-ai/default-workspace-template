@@ -50,7 +50,7 @@ include__extend = ["""has(labels.workspace)"""]
 [agent_types.claude]
 auto_dismiss_dialogs = true
 auto_allow_permissions = true
-cli_args__extend = """--dangerously-skip-permissions --disallowed-tools AskUserQuestion,ExitPlanMode"""
+cli_args = """--dangerously-skip-permissions --disallowed-tools AskUserQuestion,ExitPlanMode"""
 settings_overrides__extend = {model = "opus[1m]", fastMode = false}
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
@@ -111,7 +111,7 @@ type = "main"
 # bootstrap creates a separate chat agent on first boot and passes
 # `--message /welcome` to it instead.
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=0"]
-extra_window__extend = [
+extra_window = [
     "bootstrap='uv run bootstrap'",
     "telegram='uv run telegram-bot'",
     "terminal='bash scripts/run_ttyd.sh'",
