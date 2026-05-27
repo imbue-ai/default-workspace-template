@@ -300,12 +300,20 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     if (!sessionId || !code.trim()) return;
     clearError();
     startVerifying("Verifying code...", "Completing sign-in.");
+    const submittedSessionId = sessionId;
+    // The backend's submit_oauth_code clears its in-flight session record
+    // unconditionally (in its finally block) once the code is sent, so the
+    // id we just submitted is consumed regardless of whether auth succeeded.
+    // Clear it locally too so a later modal-unmount (e.g. Done after a
+    // successful sign-in) does not fire a spurious /abort against a session
+    // the backend has already discarded.
+    sessionId = null;
     try {
       const status = await m.request<ClaudeAuthStatus>({
         method: "POST",
         url: apiUrl("/api/claude-auth/submit-code"),
         body: {
-          session_id: sessionId,
+          session_id: submittedSessionId,
           code: code.trim(),
         },
       });
