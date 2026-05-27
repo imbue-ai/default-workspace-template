@@ -414,6 +414,39 @@ function makeTaskInTurn(
   };
 }
 
+/** Collect all step records with active windows from a (possibly nested)
+ *  task list, sorted by active_window_start. Used by both
+ *  findContainingTask and computeEffectiveEnd to enforce the serial-step
+ *  invariant consistently. */
+function collectSortedSteps(tasks: TaskInTurn[]): TaskInTurn[] {
+  const steps: TaskInTurn[] = [];
+  const visit = (t: TaskInTurn): void => {
+    if (t.is_step && t.active_window_start !== null) steps.push(t);
+    for (const child of t.children) visit(child);
+  };
+  for (const t of tasks) visit(t);
+  steps.sort((a, b) => (a.active_window_start ?? "").localeCompare(b.active_window_start ?? ""));
+  return steps;
+}
+
+/** Compute the effective window end for a single step, given the full
+ *  sorted-steps list. Caps the stored window end at the start of the
+ *  NEXT step when the agent forgot to close a step before starting
+ *  another -- enforcing the serial-step invariant so an abandoned step's
+ *  window doesn't stretch indefinitely and swallow sibling events.
+ *
+ *  Returns null when the step is the last one and has no stored end
+ *  (still active at end of turn). */
+function computeEffectiveEnd(step: TaskInTurn, sortedSteps: TaskInTurn[]): string | null {
+  const idx = sortedSteps.indexOf(step);
+  const nextStart = idx >= 0 && idx + 1 < sortedSteps.length ? sortedSteps[idx + 1].active_window_start : null;
+  let effectiveEnd: string | null = step.active_window_end;
+  if (nextStart !== null && (effectiveEnd === null || nextStart < effectiveEnd)) {
+    effectiveEnd = nextStart;
+  }
+  return effectiveEnd;
+}
+
 /** Find the step record whose active window contains `ts`. Returns null
  *  if no step contains the timestamp. Pending steps (no active window)
  *  are skipped.
@@ -438,23 +471,12 @@ function makeTaskInTurn(
  *  Walks nested children so callers can pass either the flat
  *  pre-nesting list or the post-nesting tree. */
 function findContainingTask(ts: string, tasks: TaskInTurn[]): TaskInTurn | null {
-  const steps: TaskInTurn[] = [];
-  const visit = (t: TaskInTurn): void => {
-    if (t.is_step && t.active_window_start !== null) steps.push(t);
-    for (const child of t.children) visit(child);
-  };
-  for (const t of tasks) visit(t);
-  steps.sort((a, b) => (a.active_window_start ?? "").localeCompare(b.active_window_start ?? ""));
+  const steps = collectSortedSteps(tasks);
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const start = step.active_window_start!;
     if (ts < start) continue;
-    const originalEnd = step.active_window_end;
-    const nextStart = i + 1 < steps.length ? steps[i + 1].active_window_start : null;
-    let effectiveEnd: string | null = originalEnd;
-    if (nextStart !== null && (effectiveEnd === null || nextStart < effectiveEnd)) {
-      effectiveEnd = nextStart;
-    }
+    const effectiveEnd = computeEffectiveEnd(step, steps);
     if (effectiveEnd !== null && ts > effectiveEnd) continue;
     return step;
   }
@@ -464,15 +486,36 @@ function findContainingTask(ts: string, tasks: TaskInTurn[]): TaskInTurn | null 
 /** Pick out the body_events that fall inside a task's active window.
  *  Used to populate the expanded panel for a given task.
  *
- *  Tool results whose timestamp lands just after `active_window_end` are
+ *  When `tasks` is provided, the serial-step invariant is enforced: an
+ *  abandoned step (never closed, null active_window_end) has its
+ *  effective end capped at the start of the next step -- matching the
+ *  same logic used by `findContainingTask` for narration attribution.
+ *  Without this, expanding an abandoned step would show tool calls that
+ *  belong to the next step.
+ *
+ *  Tool results whose timestamp lands just after the effective end are
  *  pulled in when their `tool_call_id` matches a tool_use already in the
  *  window -- otherwise the expanded panel would render the tool_use as
  *  "unresolved" purely because the result arrived a few ms after the
  *  ticket closed. */
-export function eventsInTaskWindow(task: TaskInTurn, body_events: TranscriptEvent[]): TranscriptEvent[] {
+export function eventsInTaskWindow(
+  task: TaskInTurn,
+  body_events: TranscriptEvent[],
+  tasks?: TaskInTurn[],
+): TranscriptEvent[] {
   const start = task.active_window_start ?? "";
-  const end = task.active_window_end ?? "";
   if (start === "") return [];
+  // Compute the effective end: when the caller provides the sibling task
+  // list, cap the stored window end at the next step's start (serial-step
+  // invariant). Without a sibling list we fall back to the raw stored end.
+  let end: string;
+  if (tasks !== undefined && task.is_step) {
+    const sortedSteps = collectSortedSteps(tasks);
+    const effective = computeEffectiveEnd(task, sortedSteps);
+    end = effective ?? "";
+  } else {
+    end = task.active_window_end ?? "";
+  }
   const inWindow = body_events.filter((e) => {
     if (e.timestamp < start) return false;
     if (end !== "" && e.timestamp > end) return false;

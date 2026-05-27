@@ -137,10 +137,11 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
       body_events: TranscriptEvent[];
       toolResults: Map<string, TranscriptEvent>;
       agentId: string;
+      tasks: TaskInTurn[];
     },
   ): m.Vnode {
-    const { is_last, is_child, body_events, toolResults, agentId } = options;
-    const taskEvents = eventsInTaskWindow(task, body_events);
+    const { is_last, is_child, body_events, toolResults, agentId, tasks } = options;
+    const taskEvents = eventsInTaskWindow(task, body_events, tasks);
     // A task is "expandable" when its window contains any assistant
     // content -- tool calls or plain text. Text-only messages also
     // render in the expanded panel (the latest one additionally
@@ -216,6 +217,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
                     body_events,
                     toolResults,
                     agentId,
+                    tasks,
                   }),
                 ),
               )
@@ -247,6 +249,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           body_events,
           toolResults,
           agentId,
+          tasks,
         }),
       );
 
