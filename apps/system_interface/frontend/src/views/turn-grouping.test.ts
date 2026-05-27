@@ -447,6 +447,62 @@ describe("eventsInTaskWindow", () => {
     const result = eventsInTaskWindow(task, body);
     expect(result.map((e) => e.event_id)).toEqual(["a-tc-late", "r-tc-late"]);
   });
+
+  it("caps an abandoned step's window at the next step's start when tasks are provided", () => {
+    // Regression: an abandoned step (never closed, active_window_end=null)
+    // whose expanded panel was showing tool calls that actually belonged to
+    // the next step. The serial-step invariant says only one step is
+    // in_progress at a time; eventsInTaskWindow must cap the abandoned
+    // step's effective end at the next step's start, matching
+    // findContainingTask's behavior.
+    const abandoned: TaskInTurn = {
+      ticket_id: "step-a",
+      title: "First, never closed",
+      status: "active",
+      summary: null,
+      is_carryover: false,
+      continues_forward: false,
+      created_at: "2026-04-28T01:00:00Z",
+      started_at: "2026-04-28T01:00:00Z",
+      active_window_start: "2026-04-28T01:00:00Z",
+      active_window_end: null,
+      is_step: true,
+      parent_id: "",
+      children: [],
+      narration: null,
+    };
+    const properlyClosed: TaskInTurn = {
+      ticket_id: "step-b",
+      title: "Second, closed cleanly",
+      status: "done",
+      summary: "Did the second step.",
+      is_carryover: false,
+      continues_forward: false,
+      created_at: "2026-04-28T01:00:10Z",
+      started_at: "2026-04-28T01:00:10Z",
+      active_window_start: "2026-04-28T01:00:10Z",
+      active_window_end: "2026-04-28T01:00:30Z",
+      is_step: true,
+      parent_id: "",
+      children: [],
+      narration: null,
+    };
+    const tasks = [abandoned, properlyClosed];
+    const body = [
+      toolUse("2026-04-28T01:00:05Z", "Read", "tc-a"),
+      toolUse("2026-04-28T01:00:15Z", "Edit", "tc-b"),
+      toolUse("2026-04-28T01:00:25Z", "Bash", "tc-c"),
+    ];
+    // Without the tasks parameter, the abandoned step's null end means
+    // all three events would be included. With tasks, its effective end
+    // is capped at step-b's start (01:00:10), so only tc-a (01:00:05)
+    // falls inside the window.
+    const withTasks = eventsInTaskWindow(abandoned, body, tasks);
+    expect(withTasks.map((e) => e.event_id)).toEqual(["a-tc-a"]);
+    // Without tasks, the old behavior returns everything.
+    const withoutTasks = eventsInTaskWindow(abandoned, body);
+    expect(withoutTasks).toHaveLength(3);
+  });
 });
 
 describe("selectFinalMessages", () => {
