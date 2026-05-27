@@ -2,10 +2,9 @@
 
 import json
 import queue
-from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import Any
 from typing import Generator
-from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
@@ -406,9 +405,7 @@ def _register_agent(app: FastAPI, agent_id: str, name: str, state: str) -> None:
     )
 
 
-def _patch_mngr_start(
-    returncode: int, stdout: str = "", stderr: str = ""
-) -> AbstractContextManager[MagicMock]:
+def _patch_mngr_start(returncode: int, stdout: str = "", stderr: str = "") -> Any:
     """Patch `run_local_command_modern_version` to return a canned `mngr start` result."""
     finished = FinishedProcess(
         returncode=returncode,
