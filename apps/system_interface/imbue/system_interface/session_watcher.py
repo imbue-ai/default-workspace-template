@@ -41,7 +41,7 @@ def _read_subagent_parent_info(jsonl_file: Path) -> dict[str, str] | None:
         with open(jsonl_file, "rb") as f:
             first_line_bytes = f.readline()
     except OSError as exc:
-        logger.debug("Failed to read subagent jsonl first line %s: %s", jsonl_file, exc)
+        logger.debug("Failed to read subagent jsonl first line {}: {}", jsonl_file, exc)
         return None
     if not first_line_bytes.strip():
         return None
@@ -53,7 +53,7 @@ def _read_subagent_parent_info(jsonl_file: Path) -> dict[str, str] | None:
     try:
         first = json.loads(first_line_bytes)
     except json.JSONDecodeError:
-        logger.warning("Subagent jsonl first line is not valid JSON: %s", jsonl_file)
+        logger.warning("Subagent jsonl first line is not valid JSON: {}", jsonl_file)
         return None
     parent_uuid = first.get("sourceToolAssistantUUID")
     if not isinstance(parent_uuid, str) or not parent_uuid:
@@ -385,10 +385,10 @@ class AgentSessionWatcher:
                             "session_id": sub_id,
                         }
                     except json.JSONDecodeError as exc:
-                        logger.warning("Subagent meta.json is not valid JSON, giving up: %s: %s", meta_file, exc)
+                        logger.warning("Subagent meta.json is not valid JSON, giving up: {}: {}", meta_file, exc)
                         self._subagent_meta_read_failed.add(sub_id)
                     except OSError as exc:
-                        logger.debug("Failed to read subagent meta.json %s: %s", meta_file, exc)
+                        logger.debug("Failed to read subagent meta.json {}: {}", meta_file, exc)
 
             # Cache parent linkage from the subagent jsonl's first line. The first line is
             # written when the subagent starts -- before any tool_result -- so this makes
