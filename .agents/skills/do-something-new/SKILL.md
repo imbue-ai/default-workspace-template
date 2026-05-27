@@ -105,6 +105,15 @@ latency without de-risking. If no, validate it now.
 For multi-service asks, validate each uncontrolled dependency independently
 *first*, then the combined operation.
 
+**If latchkey is involved in any component of the task, authenticate and test
+it first -- before anything else.** Even if the latchkey-backed piece is a
+small part of a larger pipeline, get it working end-to-end (auth flow
+completed, a real API call succeeds) before building any other component.
+Latchkey auth is the single most common source of late-stage failure in this
+flow; failing fast on it avoids wasted work on downstream components that
+would have to be discarded if auth turns out to be unavailable for that
+service.
+
 - Latchkey setup is part of the normal flow, NOT a failure. Follow the
   `latchkey` skill for auth/permission handling -- load it if you haven't
   already.
