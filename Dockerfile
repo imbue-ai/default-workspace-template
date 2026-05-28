@@ -193,66 +193,27 @@ RUN uv sync --all-packages --frozen
 # Tickets themselves live under .tickets/ (gitignored) at the repo root.
 RUN mkdir -p /root/.local/bin && ln -sf /mngr/code/vendor/tk/ticket /root/.local/bin/tk
 
-# Move the baked workspace off the volume mount path so the shipped image
-# has /mngr/code/ EMPTY. At runtime, /mngr/ is a persistent volume mount;
-# any image-layer content sitting at /mngr/code/ would be shadowed by the
-# mount. /docker_build_code holds the workspace until first boot, where
-# fct_entrypoint.sh (invoked via CMD below) atomically relocates it onto
-# the volume.
+# Move the baked workspace off the volume mount path so the shipped
+# image has /mngr/code/ EMPTY. At runtime, /mngr/ is a persistent
+# volume mount; any image-layer content sitting at /mngr/code/ would
+# be shadowed by the mount. /docker_build_code holds the workspace
+# until first boot, where the post-host-create seed step (see below)
+# atomically relocates it onto the volume.
 RUN mv /mngr/code /docker_build_code
 
-# Bake the /mngr -> /mngr-vol/host_dir symlink at build time so the FCT
-# entrypoint's first-boot seed (which writes to /mngr/code) lands on the
-# mngr-managed persistent volume rather than on an image-layer directory
-# the volume mount would shadow at runtime.
-#
-# Why a symlink instead of mounting the volume directly at /mngr:
-#
-# - The mngr providers (mngr_vps_docker, libs/mngr/.../providers/docker)
-#   mount their unified per-host volume at /mngr-vol (or /mngr-state) and
-#   give each host its own subdir inside (host_dir/). The volume root
-#   carries provider-owned metadata (host_state.json, agents/<id>.json)
-#   that lives next to (but namespace-separated from) the agent-visible
-#   host_dir/ subtree. Mounting the volume directly at /mngr would
-#   collapse those two namespaces and produce on-disk file/directory
-#   collisions (provider's agents/<id>.json vs mngr core's agents/<id>/).
-# - The provider's container setup script
-#   (build_check_and_install_packages_command in
-#   libs/mngr/.../providers/ssh_host_setup.py) creates this same
-#   /mngr -> /mngr-vol/host_dir symlink at install time, but the install
-#   step runs via docker exec AFTER the container's CMD is already up --
-#   so the FCT first-boot seed would race the install-script's
-#   destructive `rm -rf /mngr; ln -s ...` with the in-flight
-#   /mngr/code.moving copy. Baking the symlink into the image makes the
-#   install-script's `[ -L /mngr ] || rm -rf /mngr` guard find an
-#   existing symlink and skip the rm; the subsequent `ln -sfn` is a
-#   no-op against the same target.
-#
-# /mngr-vol does not exist as a real directory in the image -- it
-# materializes at container runtime when the provider mounts the
-# volume. The provider's host-creation step
-# (_seed_host_volume_layout_on_outer in
-# libs/mngr_vps_docker/.../instance.py) seeds host_dir/ + agents/ on the
-# volume before the container starts, so the symlink's target exists by
-# the time fct_entrypoint.sh reads /mngr/code.
-RUN rm -rf /mngr && ln -s /mngr-vol/host_dir /mngr
-
-# Install the first-boot entrypoint at a stable image-layer path. It has
-# to live OUTSIDE /mngr/ (the volume mount path) so the runtime mount
-# does not shadow it, and OUTSIDE /docker_build_code (which gets cleaned
-# up by the entrypoint itself after seeding). /usr/local/bin/ is on PATH,
+# Install the first-boot seed script at a stable image-layer path. It
+# has to live OUTSIDE /mngr/ (the volume mount path) so the runtime
+# mount does not shadow it, and OUTSIDE /docker_build_code (which the
+# seed itself cleans up after relocating). /usr/local/bin/ is on PATH,
 # is image-layer, and survives the bake-and-relocate dance.
 #
-# Sourced from scripts/fct_entrypoint.sh in the repo so the script is
-# editable + reviewable like any other file (rather than buried as an
-# inline CMD string). Source-tree mode bits are already +x; chmod is
-# defensive in case the file is checked out without exec bits (e.g. on
-# filesystems that drop them).
-COPY scripts/fct_entrypoint.sh /usr/local/bin/fct-entrypoint.sh
-RUN chmod +x /usr/local/bin/fct-entrypoint.sh
-
-# Run the first-boot seed-and-wait entrypoint. See
-# scripts/fct_entrypoint.sh for the full per-step rationale (seed dance,
-# stale-staging recovery, broken-volume failure, /mngr/worktree mkdir,
-# PID-1 SIGTERM trap).
-CMD ["/usr/local/bin/fct-entrypoint.sh"]
+# mngr invokes this script synchronously via the `post_host_create_command`
+# create-template hook (see .mngr/settings.toml) after the host is online
+# but before any agent work_dir setup -- the seed therefore has the
+# volume mount, the /mngr symlink dance, and sshd all in place, and
+# completes before anything else writes to /mngr/code.
+#
+# Source mode bits are already +x; chmod is defensive in case the file
+# is checked out without exec bits.
+COPY scripts/fct_seed.sh /usr/local/bin/fct-seed
+RUN chmod +x /usr/local/bin/fct-seed

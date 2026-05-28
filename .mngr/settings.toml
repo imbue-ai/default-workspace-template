@@ -146,7 +146,11 @@ idle_mode = "disabled"
 # this is what gives the agent its ANTHROPIC_API_KEY (etc.) in
 # non-IMBUE_CLOUD compute modes.
 pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
-# I guess it can pass a volume in too if you want
+# Seed /mngr/code from /docker_build_code (baked into the image) onto the
+# per-host volume. Runs synchronously after the host is online but
+# before any agent work_dir setup, so the workspace is in place by the
+# time the user's git refs land on top. See scripts/fct_seed.sh.
+post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 
 # template for lima VM provider
 [create_templates.lima]
@@ -203,6 +207,8 @@ build_arg__extend = ["--file=Dockerfile", "--vps-plan=vc2-2c-4gb", "--vps-region
 idle_mode = "disabled"
 # Same forwarding as the docker template; see comment there.
 pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
+# Same first-boot seed as the docker template; see comment there.
+post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 
 # template for OVH VPS provider (the imbue-cloud pool-bake's default)
 [create_templates.ovh]
@@ -221,6 +227,8 @@ build_arg__extend = ["--file=Dockerfile", "."]
 idle_mode = "disabled"
 # Same forwarding as the docker template; see comment there.
 pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
+# Same first-boot seed as the docker template; see comment there.
+post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 
 # Template for imbue_cloud-leased pool hosts. minds invokes this as
 # `--template main --template imbue_cloud` (mirroring how the other modes
