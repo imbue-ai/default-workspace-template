@@ -83,19 +83,28 @@ export function connectToStream(agentId: string): void {
   };
 }
 
-async function reconnectWithSnapshot(agentId: string): Promise<void> {
+/**
+ * Open the live SSE stream and fetch the snapshot together, buffering any SSE
+ * deltas that arrive while the snapshot fetch is in flight.
+ *
+ * `fetchEvents` replaces `eventsByAgent[agentId]` wholesale with the snapshot,
+ * so a delta that arrives between the stream opening and the snapshot landing
+ * would otherwise be overwritten and lost. Both the initial mount and the
+ * reconnect path go through here so neither can drop events. Re-throws fetch
+ * errors so the caller can surface a load error; buffered deltas are flushed
+ * first regardless.
+ */
+export async function loadSnapshotWithStream(agentId: string): Promise<void> {
   // Subscribe to SSE before the snapshot fetch so deltas that arrive
   // between the snapshot read and the EventSource being registered land in
   // `buffer` instead of being dropped. Hold `buffer` by reference (not via
-  // map lookup in `finally`) so a concurrent reconnect that replaces the
+  // map lookup in `finally`) so a concurrent load that replaces the
   // map slot cannot orphan our buffered events.
   const buffer: TranscriptEvent[] = [];
   inFlightSnapshotBuffersByAgent.set(agentId, buffer);
   connectToStream(agentId);
   try {
     await fetchEvents(agentId);
-  } catch (error) {
-    console.warn(`Snapshot refetch failed for agent ${agentId} during SSE reconnect`, error);
   } finally {
     if (inFlightSnapshotBuffersByAgent.get(agentId) === buffer) {
       inFlightSnapshotBuffersByAgent.delete(agentId);
@@ -103,6 +112,14 @@ async function reconnectWithSnapshot(agentId: string): Promise<void> {
     if (buffer.length > 0 && !explicitlyDisconnectedAgents.has(agentId)) {
       appendEvents(agentId, buffer);
     }
+  }
+}
+
+async function reconnectWithSnapshot(agentId: string): Promise<void> {
+  try {
+    await loadSnapshotWithStream(agentId);
+  } catch (error) {
+    console.warn(`Snapshot refetch failed for agent ${agentId} during SSE reconnect`, error);
   }
 }
 
