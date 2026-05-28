@@ -4,7 +4,7 @@ Uses watchdog for low-latency filesystem change detection with mtime-based
 polling as a safety net fallback, following the pattern from watcher_common.py
 in mngr_recursive.
 
-Parsed events are held in a per-file append-only cache (``_SessionCache``).
+Parsed events are held in a per-file append-only cache (``SessionFileState``).
 Both the background poll loop and the synchronous ``get_all_events`` HTTP path
 bring the cache up to date through the shared ``_ensure_cache_current`` helper,
 which reads only the bytes appended since the last poll. This keeps the
@@ -129,7 +129,7 @@ class AgentSessionWatcher:
         self._on_events = on_events
 
         # Guards _session_states, _main_session_ids, _tool_name_by_call_id,
-        # _existing_event_ids, _subagent_metadata, and every _SessionCache.
+        # _existing_event_ids, _subagent_metadata, and every SessionFileState.
         # Held across file I/O and parsing (cheap, incremental, per-agent) but
         # never across the on_events fan-out callback.
         self._lock = threading.Lock()
