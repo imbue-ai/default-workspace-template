@@ -373,8 +373,9 @@ async def _handle_service_websocket(
                 except asyncio.CancelledError:
                     pass
             for task in done:
-                # Re-raise any unexpected error from the finished direction,
-                # matching the prior asyncio.gather semantics.
+                # Surface any unexpected error from the finished direction
+                # instead of swallowing it (the forward helpers already absorb
+                # normal connection-closed cases on their own).
                 await task
     except (ConnectionRefusedError, OSError, TimeoutError) as connection_error:
         logger.debug("Backend WebSocket connection failed for service {}: {}", service_name, connection_error)
