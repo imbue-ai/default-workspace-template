@@ -153,6 +153,13 @@ provider = "lima"
 target_path = "/code/"
 idle_mode = "disabled"
 start_arg__extend = ["--cpus=2", "--memory=4", "--disk=20"]
+# Back host_dir with an in-VM btrfs additional disk instead of a 9p bind
+# mount, so the minds workspace data lives on a snapshottable filesystem
+# (towards consistent backups). This drops the host-side `volumes/<host_id>/`
+# bind mount; offline reads via `mngr event` / `mngr transcript` against
+# a stopped Lima host stop working in this mode until the host is started.
+# See vendor/mngr/specs/lima-btrfs-host-volume/concise.md for the design.
+setting__extend = ["providers.lima.is_host_data_volume_exposed=false"]
 # Same forwarding as the docker template; see comment there.
 pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
 extra_provision_command__extend = [
