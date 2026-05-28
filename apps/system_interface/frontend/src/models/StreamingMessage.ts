@@ -7,12 +7,26 @@
  */
 
 import { apiUrl } from "../base-path";
+import { ReconnectBackoff } from "./backoff";
 import { appendEvents, fetchEvents, type TranscriptEvent } from "./Response";
+import { parseJsonMessage } from "./ws-json";
 
 const activeStreams = new Map<string, EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
 // from a transient error.
 const explicitlyDisconnectedAgents = new Set<string>();
+// Per-agent reconnect backoff, so a healthy stream's success does not reset an
+// unhealthy stream's growing delay.
+const backoffByAgent = new Map<string, ReconnectBackoff>();
+
+function getBackoff(agentId: string): ReconnectBackoff {
+  let backoff = backoffByAgent.get(agentId);
+  if (backoff === undefined) {
+    backoff = new ReconnectBackoff();
+    backoffByAgent.set(agentId, backoff);
+  }
+  return backoff;
+}
 // Holds SSE deltas that arrive while a reconnect-time snapshot fetch is in
 // flight, so fetchEvents replacing eventsByAgent[agentId] does not drop them.
 const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
@@ -37,8 +51,16 @@ export function connectToStream(agentId: string): void {
   const eventSource = new EventSource(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/stream`));
   activeStreams.set(agentId, eventSource);
 
+  eventSource.onopen = () => {
+    // A successful (re)connection resets this agent's backoff.
+    getBackoff(agentId).reset();
+  };
+
   eventSource.onmessage = (messageEvent: MessageEvent) => {
-    const event = JSON.parse(messageEvent.data) as TranscriptEvent;
+    const event = parseJsonMessage<TranscriptEvent>(messageEvent.data);
+    if (event === null) {
+      return;
+    }
     const pending = inFlightSnapshotBuffersByAgent.get(agentId);
     if (pending !== undefined) {
       pending.push(event);
@@ -56,7 +78,7 @@ export function connectToStream(agentId: string): void {
         if (!wasExplicitlyDisconnected && !activeStreams.has(agentId)) {
           void reconnectWithSnapshot(agentId);
         }
-      }, 3000);
+      }, getBackoff(agentId).nextDelay());
     }
   };
 }
@@ -88,6 +110,9 @@ export function disconnectFromStream(agentId: string): void {
   // Always record the intent, even with no active stream, so a pending
   // error-triggered reconnect timeout sees the tombstone and stays down.
   explicitlyDisconnectedAgents.add(agentId);
+  // Drop the backoff so a later fresh connectToStream starts from the base
+  // delay rather than inheriting a stale grown delay.
+  backoffByAgent.delete(agentId);
   const eventSource = activeStreams.get(agentId);
   if (eventSource !== undefined) {
     eventSource.close();
