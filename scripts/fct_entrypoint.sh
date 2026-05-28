@@ -34,7 +34,15 @@ SEED_TARGET=/mngr/code
 seed_workspace_onto_volume() {
     # Warm-boot fast path: the workspace is already on the volume. Do not
     # touch it -- the agent may have made local edits we must not overwrite.
-    if [ -e "$SEED_TARGET" ]; then
+    #
+    # The check is "exists AND non-empty", not just "exists", because Docker
+    # auto-creates a missing WORKDIR (/mngr/code/, set in the Dockerfile) as
+    # an EMPTY directory at container start time. On a fresh /mngr/ volume,
+    # /mngr/code/ therefore exists at script entry even though no seeding
+    # has happened yet; treating that as a warm boot would skip seeding and
+    # then cleanup_seed_source would delete /docker_build_code, leaving the
+    # container with no workspace at all.
+    if [ -d "$SEED_TARGET" ] && [ -n "$(ls -A "$SEED_TARGET" 2>/dev/null)" ]; then
         return 0
     fi
 
@@ -60,6 +68,15 @@ seed_workspace_onto_volume() {
     # same filesystem.
     echo "fct-seed: staging $SEED_SOURCE -> $SEED_STAGING"
     cp -a "$SEED_SOURCE" "$SEED_STAGING"
+
+    # Remove the empty WORKDIR-auto-created $SEED_TARGET, if any, so the
+    # atomic mv below replaces it cleanly. `mv src dst` when dst is an
+    # existing directory moves src INTO dst (dst/src) rather than
+    # replacing dst, which would land the workspace at /mngr/code/code.moving
+    # instead of /mngr/code/. `rmdir` only succeeds on empty directories,
+    # so this is safe -- and we already early-returned above if the target
+    # was non-empty.
+    rmdir "$SEED_TARGET" 2>/dev/null || true
 
     # Commit: atomic rename. Either fully succeeds or doesn't happen at
     # all, so an interrupted boot either has the workspace fully in place
