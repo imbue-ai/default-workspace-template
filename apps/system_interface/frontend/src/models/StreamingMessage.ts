@@ -27,8 +27,9 @@ function getBackoff(agentId: string): ReconnectBackoff {
   }
   return backoff;
 }
-// Holds SSE deltas that arrive while a reconnect-time snapshot fetch is in
-// flight, so fetchEvents replacing eventsByAgent[agentId] does not drop them.
+// Holds SSE deltas that arrive while a snapshot fetch is in flight (on either
+// the initial mount or a reconnect), so fetchEvents replacing
+// eventsByAgent[agentId] does not drop them.
 const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
 
 export interface StreamingMessage {
