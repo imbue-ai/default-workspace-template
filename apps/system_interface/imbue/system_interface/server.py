@@ -292,15 +292,19 @@ def _get_events(agent_id: str, request: Request) -> Response:
         limit = _DEFAULT_TAIL_COUNT
 
     if before_event_id:
+        # Backfill: bounded indexed read of the `limit` events before the cursor.
         events = watcher.get_backfill_events(before_event_id, limit=limit)
     else:
         # Tail-first load: return only the most recent `limit` main-session
         # events (not subagent events). The client pages further back via the
         # `before` backfill branch above, so capping here bounds the initial
         # payload without hiding history.
-        events = watcher.get_all_events()[-limit:]
+        events = watcher.get_tail_events(limit)
 
-    return JSONResponse(content={"events": events})
+    # `has_more` tells the client whether older history exists before the first
+    # returned event, so it can page back on scroll without a probe request.
+    has_more = bool(events) and watcher.has_events_before(events[0]["event_id"])
+    return JSONResponse(content={"events": events, "has_more": has_more})
 
 
 def _stream_events(agent_id: str, request: Request) -> Response:

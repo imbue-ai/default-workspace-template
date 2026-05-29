@@ -202,21 +202,27 @@ def test_get_events_caps_initial_load_to_tail(client: TestClient, tmp_path: Path
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.get("/api/agents/agent-123/events")
         assert response.status_code == 200
-        events = response.json()["events"]
+        body = response.json()
+        events = body["events"]
         # Only the most recent _DEFAULT_TAIL_COUNT events are returned.
         assert len(events) == _DEFAULT_TAIL_COUNT
         assert events[0]["content"] == f"Message {total_events - _DEFAULT_TAIL_COUNT}"
         assert events[-1]["content"] == f"Message {total_events - 1}"
+        # Older history exists before the tail, so the client is told to page back.
+        assert body["has_more"] is True
 
         # Older events are still reachable by paging backwards from the oldest
         # event in the initial tail.
         oldest_in_tail = events[0]["event_id"]
         backfill = client.get(f"/api/agents/agent-123/events?before={oldest_in_tail}")
         assert backfill.status_code == 200
-        backfill_events = backfill.json()["events"]
+        backfill_body = backfill.json()
+        backfill_events = backfill_body["events"]
         assert len(backfill_events) == total_events - _DEFAULT_TAIL_COUNT
         assert backfill_events[0]["content"] == "Message 0"
         assert backfill_events[-1]["content"] == f"Message {total_events - _DEFAULT_TAIL_COUNT - 1}"
+        # The page reached the very first event, so there is no more history.
+        assert backfill_body["has_more"] is False
 
         # A non-positive limit must not defeat the cap (``[-0:]`` would return
         # the whole list); it falls back to the default tail count.
