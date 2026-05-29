@@ -340,11 +340,15 @@ async def _sse_event_stream(
                     keepalive_counter = 0
                     yield ": keepalive\n\n"
                 continue
-            keepalive_counter = 0
             if event is None:
                 break
             if session_id_filter is not None and event.get("session_id") != session_id_filter:
                 continue
+            # Reset only when a frame is actually sent to the client: the
+            # keepalive tracks time since the last byte emitted, so events
+            # filtered out by session_id_filter must not reset it (otherwise a
+            # subagent stream could stay silent on a busy other-session agent).
+            keepalive_counter = 0
             yield f"data: {json.dumps(event)}\n\n"
     finally:
         event_queues.unregister(agent_id, event_queue)
