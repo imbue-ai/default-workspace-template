@@ -98,6 +98,7 @@ is_enabled = false
 
 [providers.docker]
 is_enabled = false
+isolate_host_volumes = true
 
 # --- Create templates ---
 
