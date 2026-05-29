@@ -95,6 +95,22 @@ export function disconnectFromStream(agentId: string): void {
   }
 }
 
+/**
+ * Tear down and forget all stream state for a destroyed agent. Unlike
+ * disconnectFromStream this leaves no tombstone behind: a destroyed agent
+ * won't reconnect, and keeping per-agent entries around would leak for the
+ * lifetime of the page.
+ */
+export function evictStream(agentId: string): void {
+  const eventSource = activeStreams.get(agentId);
+  if (eventSource !== undefined) {
+    eventSource.close();
+    activeStreams.delete(agentId);
+  }
+  explicitlyDisconnectedAgents.delete(agentId);
+  inFlightSnapshotBuffersByAgent.delete(agentId);
+}
+
 // Compatibility shims
 export function getStreamingMessage(_agentId: string): StreamingMessage | null {
   return null;
