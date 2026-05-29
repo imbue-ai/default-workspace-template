@@ -6,7 +6,7 @@
 """Parse a worker task file's YAML frontmatter and emit its string fields.
 
 Pins the required schema so workers can't silently consume a task file
-whose `lead_agent` / `lead_report_dir` was missing, misspelled, or the
+whose `lead_agent` / `finish_report_path` was missing, misspelled, or the
 wrong type. Beyond those two, any additional top-level string fields
 the lead sets are passed through to the worker -- so leads can attach
 flow-specific context (a ticket id, a feature flag, a list of staged
@@ -26,7 +26,7 @@ metacharacters survive). The required fields come first in fixed
 order; any extra string fields follow alphabetically:
 
     LEAD_AGENT=crystallize-test
-    LEAD_REPORT_DIR=runtime/update/foo/reports/
+    FINISH_REPORT_PATH=runtime/update/foo/reports/report.md
     TICKET_ID=task-42
 
 Non-string frontmatter values (lists, mappings, numbers, bools) are
@@ -54,8 +54,7 @@ from typing import Any
 
 import yaml
 
-
-_REQUIRED_FIELDS = ("lead_agent", "lead_report_dir")
+_REQUIRED_FIELDS = ("lead_agent", "finish_report_path")
 _SHELL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -104,7 +103,7 @@ def _split_frontmatter(text: str) -> dict[str, Any]:
 def parse(task_file: Path) -> dict[str, str]:
     """Return all top-level string fields after validating the required ones.
 
-    Required fields (``lead_agent``, ``lead_report_dir``) must be present,
+    Required fields (``lead_agent``, ``finish_report_path``) must be present,
     string-typed, and non-empty -- any violation raises ``ValueError``.
     Beyond those, all other top-level string-valued keys are passed
     through; non-string values are silently dropped. Extra keys must
@@ -146,7 +145,9 @@ def parse(task_file: Path) -> dict[str, str]:
 def _render(fields: dict[str, str]) -> str:
     extras = sorted(key for key in fields if key not in _REQUIRED_FIELDS)
     ordered = [*_REQUIRED_FIELDS, *extras]
-    lines = [f"{key.upper()}={shlex.quote(fields[key])}" for key in ordered if key in fields]
+    lines = [
+        f"{key.upper()}={shlex.quote(fields[key])}" for key in ordered if key in fields
+    ]
     return "\n".join(lines) + "\n"
 
 

@@ -111,14 +111,14 @@ worker.
 
 The task file's YAML frontmatter follows the schema in
 `.agents/shared/references/worker-reporting.md` -- `lead_agent` and
-`lead_report_dir`.
+`finish_report_path`.
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-lead_report_dir: runtime/crystallize/$NAME/reports/
+finish_report_path: runtime/crystallize/$NAME/reports/report.md
 ---
 FRONTMATTER_EOF
 cat << 'BODY_EOF'
@@ -155,7 +155,7 @@ those decisions.>
 Use the `crystallize-task-worker` sub-skill to drive the end-to-end
 build. When you reach a gate or terminal status, write a report file
 and push it to the lead per the sub-skill's reporting protocol; the
-destination is given by `lead_agent` / `lead_report_dir` in
+destination is given by `lead_agent` / `finish_report_path` in
 frontmatter.
 
 ## Data-capture guidance
@@ -223,7 +223,7 @@ blocking on the poll.
 ```bash
 # Run with Bash run_in_background: true. Substitute $NAME with the slug.
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
-    --runtime-dir runtime/crystallize/$NAME/ \
+    --task-file runtime/crystallize/$NAME/task.md \
     --timeout 90m
 ```
 
@@ -238,7 +238,9 @@ terminal-status handling. Flow-specific substitutions:
 
 - Worker name: `crystallize-$NAME`
 - Branch: `mngr/crystallize-$NAME`
-- Poll path: `runtime/crystallize/$NAME/reports/report.md`
+- Task file (pass to `create_worker.py await --task-file`): `runtime/crystallize/$NAME/task.md`
+- `finish_report_path` / poll path: `runtime/crystallize/$NAME/reports/report.md`
+- Reports dir (`<REPORTS_DIR>` = `dirname finish_report_path`): `runtime/crystallize/$NAME/reports/`
 - Consumed path: `runtime/crystallize/$NAME/reports/consumed/`
 - User-approval gates: `type: gate, name: outline-approval` (Gate 1) and
   `type: gate, name: final-artifact` (Gate 2).

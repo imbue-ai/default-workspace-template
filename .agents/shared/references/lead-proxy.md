@@ -7,14 +7,15 @@ name, branch, runtime path, which gate names and terminal statuses apply).
 ## Polling for the next report
 
 Start a background poll for the report file with `create_worker.py await`. It
-blocks until `<RUNTIME_DIR>/reports/report.md` appears, prints its contents, and
-exits 0; on timeout it exits non-zero (code 124). Run it with Bash's
-`run_in_background: true` so it returns the instant the report lands.
+reads `finish_report_path` from the task file's frontmatter, blocks until that
+file appears, prints its contents, and exits 0; on timeout it exits non-zero
+(code 124). Run it with Bash's `run_in_background: true` so it returns the
+instant the report lands.
 
 ```bash
 # Run with Bash run_in_background: true
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
-    --runtime-dir <RUNTIME_DIR>/
+    --task-file <TASK_FILE>
 ```
 
 `--timeout` defaults to `30m`; pass e.g. `--timeout 60m` to re-arm with a longer

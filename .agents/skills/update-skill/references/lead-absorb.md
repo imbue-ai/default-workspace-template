@@ -23,14 +23,14 @@ steps, or argparse surfaces; surface decisions belong to the worker.
 
 The task file's YAML frontmatter follows the schema documented in
 `.agents/shared/references/worker-reporting.md` -- `lead_agent` and
-`lead_report_dir`, both required.
+`finish_report_path`, both required.
 
 ```bash
 mkdir -p runtime/update/$TARGET
 cat > runtime/update/$TARGET/task.md << TASK_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-lead_report_dir: runtime/update/$TARGET/reports/
+finish_report_path: runtime/update/$TARGET/reports/report.md
 ---
 
 # Task: update the \`$TARGET\` skill (or split a new one)
@@ -64,7 +64,7 @@ Gate 2.
 
 When you reach a gate or terminal status, write a report file and
 push it to the lead per the sub-skill's reporting protocol; the
-destination is given by \`lead_agent\` / \`lead_report_dir\` in
+destination is given by \`lead_agent\` / \`finish_report_path\` in
 frontmatter.
 
 ## Success criteria

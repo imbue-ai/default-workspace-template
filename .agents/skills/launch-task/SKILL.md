@@ -14,7 +14,7 @@ its branch (`mngr/$NAME`), and the local runtime path
 
 Write a clear task file with YAML frontmatter (so the worker can address
 reports back to you) followed by the human-readable task description.
-The frontmatter contains `lead_agent` and `lead_report_dir`.
+The frontmatter contains `lead_agent` and `finish_report_path`.
 
 ```bash
 mkdir -p runtime/launch-task/$NAME
@@ -22,7 +22,7 @@ mkdir -p runtime/launch-task/$NAME
 cat << FRONTMATTER_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-lead_report_dir: runtime/launch-task/$NAME/reports/
+finish_report_path: runtime/launch-task/$NAME/reports/report.md
 ---
 FRONTMATTER_EOF
 cat << 'BODY_EOF'
@@ -40,12 +40,12 @@ cat << 'BODY_EOF'
 
 ## Reporting back
 When you reach a terminal state (success or stuck) or have a
-mid-flight question that blocks progress, write a single
-`report.md` to the directory given by the `lead_report_dir`
-frontmatter field above (resolved relative to your worktree --
-the lead has already pushed that directory into your worktree
-before sending this task; create the directory yourself with
-`mkdir -p` if it does not yet exist). Frontmatter shape:
+mid-flight question that blocks progress, write your report to the
+file given by the `finish_report_path` frontmatter field above
+(resolved relative to your worktree -- the lead has already pushed
+that directory into your worktree before sending this task; create
+its parent directory yourself with `mkdir -p` if it does not yet
+exist). Frontmatter shape:
 
     ---
     type: status   # or `gate` for a mid-flight question
@@ -55,17 +55,19 @@ before sending this task; create the directory yourself with
     <body: address the user directly; one short paragraph for terminal
     statuses, the question itself for gate reports>
 
-Then push the report directory back to the lead:
+Then push the report's parent directory back to the lead (rsync cannot
+push a single file, so push the directory that contains it):
 
-    mngr push <lead_agent>:<lead_report_dir> \
-        --source <lead_report_dir> \
+    mngr push "$LEAD_AGENT:$(dirname "$FINISH_REPORT_PATH")/" \
+        --source "$(dirname "$FINISH_REPORT_PATH")/" \
         --uncommitted-changes=merge
 
-(Substitute the actual values from the frontmatter; the trailing
-slashes matter, and `--uncommitted-changes=merge` is required because
-the lead's worktree usually has uncommitted state.) For a mid-flight
-gate, stop your turn after pushing -- the lead will reply via
-`mngr message` and you resume. For terminal statuses, the run ends.
+(`LEAD_AGENT` / `FINISH_REPORT_PATH` come from parsing the frontmatter
+above; the trailing slashes matter, and `--uncommitted-changes=merge`
+is required because the lead's worktree usually has uncommitted state.)
+For a mid-flight gate, stop your turn after pushing -- the lead will
+reply via `mngr message` and you resume. For terminal statuses, the run
+ends.
 BODY_EOF
 } > runtime/launch-task/$NAME/task.md
 ```
@@ -92,14 +94,14 @@ pushes that directory into the worker's worktree automatically.
 
 Poll with `create_worker.py await` as a background task
 (`run_in_background: true`) and continue with whatever else you were doing. It
-derives the report path (`runtime/launch-task/$NAME/reports/report.md`) from
-the same `--runtime-dir`, blocks until the worker pushes back, then prints the
-report.
+reads `finish_report_path` from the task file
+(`runtime/launch-task/$NAME/reports/report.md`), blocks until the worker pushes
+back, then prints the report.
 
 ```bash
 # Run with Bash run_in_background: true
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
-    --runtime-dir runtime/launch-task/$NAME/
+    --task-file runtime/launch-task/$NAME/task.md
 ```
 
 You own this poll for the lifetime of the dispatch. Without it, gate
@@ -121,8 +123,9 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 
 - Worker name: `$NAME`
 - Branch: `mngr/$NAME`
-- Runtime dir (pass to `create_worker.py await --runtime-dir`): `runtime/launch-task/$NAME/`
-- Reports dir (derived): `runtime/launch-task/$NAME/reports/`
+- Task file (pass to `create_worker.py await --task-file`): `runtime/launch-task/$NAME/task.md`
+- `finish_report_path`: `runtime/launch-task/$NAME/reports/report.md`
+- Reports dir (for `<REPORTS_DIR>`, i.e. `dirname finish_report_path`): `runtime/launch-task/$NAME/reports/`
 - Consumed dir: `runtime/launch-task/$NAME/reports/consumed/`
 - Gate names: `question` (mid-flight; default-escalate to the user
   unless you can answer from context).

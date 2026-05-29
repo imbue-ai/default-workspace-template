@@ -14,19 +14,20 @@ Two subcommands cover the two halves of the lead-side lifecycle:
     delayed background notification.
 
 ``await``
-    Blocks until the worker's ``report.md`` appears under the runtime dir's
-    ``reports/`` subdirectory, prints its contents to stdout, and returns 0.
-    On timeout it returns non-zero so the caller drops into the liveness
+    Reads the ``finish_report_path`` field from the task file's frontmatter and
+    blocks until that file appears, prints its contents to stdout, and returns
+    0. On timeout it returns non-zero so the caller drops into the liveness
     diagnosis described in ``.agents/shared/references/lead-proxy.md``. Callers
     run this in the *background* and re-invoke it once per gate cycle; it is
     deliberately dumb -- it only waits and cats. Parsing the report, deciding
-    answer-vs-escalate, consuming ``report.md`` into ``consumed/``, and merging
-    are all lead judgment and stay in ``lead-proxy.md``.
+    answer-vs-escalate, consuming the report into ``consumed/``, and merging are
+    all lead judgment and stay in ``lead-proxy.md``.
 
-Both subcommands key off the same ``--runtime-dir`` (``runtime/<feature>/<slug>/``):
-``launch`` pushes it into the worker's worktree, and ``await`` derives
-``<runtime-dir>/reports/report.md`` from it. All launch-task-family flows use
-this identical layout, so there is no per-flow path to interpolate.
+Both subcommands take the same ``--task-file``: ``launch`` sends it to the
+worker, and ``await`` reads its ``finish_report_path`` to learn what to wait
+for. Putting the wait target in frontmatter (rather than deriving a fixed path)
+keeps the contract data-driven, so future flows can point ``await`` at a
+different report without a code change.
 
 The caller is responsible for writing the task file (with whatever YAML
 frontmatter the worker template requires) and for placing it -- and any
@@ -57,7 +58,7 @@ required by ``mngr push`` (see ``.agents/shared/references/lead-proxy.md``).
 
 Why ``mngr message`` *after* the pushes (instead of using ``mngr create
 --message-file``): if the worker reads its first message before the runtime
-dir push lands in its worktree, the task file's ``lead_report_dir`` will
+dir push lands in its worktree, the task file's ``finish_report_path`` will
 resolve to nothing. Sending the task as a follow-up message guarantees the
 worker sees the runtime dir first.
 
@@ -84,7 +85,6 @@ from typing import Callable, Sequence, TextIO
 import yaml
 
 _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
-_REPORT_REL = Path("reports/report.md")
 
 _DEFAULT_TIMEOUT = "30m"
 _DEFAULT_POLL_INTERVAL = "5s"
@@ -124,16 +124,13 @@ def _parse_duration(value: str) -> float:
     return magnitude * multiplier
 
 
-def _read_source_artifacts_dir(task_file: Path) -> Path | None:
-    """Return the directory declared by the task frontmatter's
-    ``source_artifacts_dir`` key, or ``None`` when the key is absent.
+def _read_frontmatter_field(task_file: Path, key: str) -> str | None:
+    """Return the string value of frontmatter ``key``, or ``None`` if absent.
 
-    The caller sets this key when the worker needs gitignored auxiliary
-    state that lives outside the runtime dir; launch pushes that
-    directory alongside the runtime dir. Validating the rest of the
-    frontmatter schema is the worker's job (``parse_task_frontmatter.py``);
-    here we only pull out this one key, and only raise if it is present
-    but not a non-empty string.
+    Returns ``None`` when the file has no/broken frontmatter or the key is
+    missing -- full schema validation is the worker's job
+    (``parse_task_frontmatter.py``); here we pull out one key at a time. Raises
+    ``ValueError`` only when the key is present but not a non-empty string.
     """
     lines = task_file.read_text(encoding="utf-8").splitlines()
     if not lines or lines[0].strip() != "---":
@@ -148,11 +145,35 @@ def _read_source_artifacts_dir(task_file: Path) -> Path | None:
         return None
     if not isinstance(frontmatter, dict):
         return None
-    value = frontmatter.get("source_artifacts_dir")
+    value = frontmatter.get(key)
     if value is None:
         return None
     if not isinstance(value, str) or not value:
-        raise ValueError("frontmatter.source_artifacts_dir must be a non-empty string")
+        raise ValueError(f"frontmatter.{key} must be a non-empty string")
+    return value
+
+
+def _read_source_artifacts_dir(task_file: Path) -> Path | None:
+    """Return the optional ``source_artifacts_dir`` declared in the task
+    frontmatter, or ``None`` when absent.
+
+    The caller sets this key when the worker needs gitignored auxiliary state
+    that lives outside the runtime dir; launch pushes that directory alongside
+    the runtime dir.
+    """
+    value = _read_frontmatter_field(task_file, "source_artifacts_dir")
+    return Path(value) if value is not None else None
+
+
+def _read_finish_report_path(task_file: Path) -> Path:
+    """Return the ``finish_report_path`` the worker writes its report to.
+
+    This is the file ``await`` polls for. Required: raises ``ValueError`` if
+    the key is absent (or present but not a non-empty string).
+    """
+    value = _read_frontmatter_field(task_file, "finish_report_path")
+    if value is None:
+        raise ValueError("frontmatter is missing required field `finish_report_path`")
     return Path(value)
 
 
@@ -297,14 +318,14 @@ def launch(
 
 
 def await_report(
-    runtime_dir: Path,
+    report_path: Path,
     timeout_seconds: float,
     poll_interval_seconds: float,
     sleeper: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     out: TextIO | None = None,
 ) -> int:
-    """Block until ``<runtime_dir>/reports/report.md`` exists, then print it.
+    """Block until ``report_path`` exists, then print its contents.
 
     Returns 0 after writing the report contents to ``out`` (default stdout);
     returns ``_AWAIT_TIMEOUT_RC`` if the deadline passes first, leaving a note
@@ -316,16 +337,15 @@ def await_report(
     present returns immediately.
     """
     stream: TextIO = sys.stdout if out is None else out
-    report = runtime_dir / _REPORT_REL
     deadline = clock() + timeout_seconds
     while True:
-        if report.is_file():
-            stream.write(report.read_text(encoding="utf-8"))
+        if report_path.is_file():
+            stream.write(report_path.read_text(encoding="utf-8"))
             return 0
         if clock() >= deadline:
             print(
                 f"create_worker: timed out after {timeout_seconds:g}s waiting for "
-                f"{report}; the worker may still be alive -- diagnose liveness "
+                f"{report_path}; the worker may still be alive -- diagnose liveness "
                 f"per lead-proxy.md before invoking the failure flow",
                 file=sys.stderr,
             )
@@ -349,8 +369,13 @@ def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
 
 
 def _run_await(args: argparse.Namespace) -> int:
+    try:
+        report_path = _read_finish_report_path(args.task_file)
+    except ValueError as exc:
+        print(f"create_worker: {exc}", file=sys.stderr)
+        return 2
     return await_report(
-        runtime_dir=args.runtime_dir,
+        report_path=report_path,
         timeout_seconds=args.timeout,
         poll_interval_seconds=args.poll_interval,
     )
@@ -387,14 +412,15 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
 
     await_parser = subparsers.add_parser(
         "await",
-        help="Block until the worker's report.md appears, then print it. "
+        help="Block until the worker's report file appears, then print it. "
         "Run in the background; re-invoke once per gate cycle.",
     )
     await_parser.add_argument(
-        "--runtime-dir",
+        "--task-file",
         required=True,
         type=Path,
-        help="Same runtime dir as launch; report.md is read from its reports/ subdir.",
+        help="Same task file as launch; its frontmatter `finish_report_path` "
+        "names the file to wait for.",
     )
     await_parser.add_argument(
         "--timeout",

@@ -15,8 +15,9 @@ eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py '<TASK_FILE_GLOB
 ```
 
 Quote the pattern. `LEAD_AGENT` is the `mngr` agent you push reports to
-(and whose transcript you read); `LEAD_REPORT_DIR` is the destination
-directory on the lead's worktree. Any additional string fields the lead
+(and whose transcript you read); `FINISH_REPORT_PATH` is the destination
+path on the lead's worktree where your report file must land -- the lead
+polls for exactly this file. Any additional string fields the lead
 set in the frontmatter also become shell variables -- see your worker
 SKILL.md for which extras (if any) the calling flow stages.
 
@@ -24,7 +25,9 @@ SKILL.md for which extras (if any) the calling flow stages.
 
 At each gate or terminal status:
 
-1. Write `<RUNTIME_REPORTS_DIR>/report.md` (create the directory if missing):
+1. Write your report to `<RUNTIME_REPORTS_DIR>/report.md` (create the directory
+   if missing). `report.md` is the basename of `FINISH_REPORT_PATH`, so pushing
+   the directory in step 2 lands it at the lead's `FINISH_REPORT_PATH`.
 
    ```
    ---
@@ -38,15 +41,17 @@ At each gate or terminal status:
 2. Push the report directory to the lead:
 
    ```bash
-   mngr push <lead_agent>:<lead_report_dir> \
+   mngr push "$LEAD_AGENT:$(dirname "$FINISH_REPORT_PATH")/" \
        --source <RUNTIME_REPORTS_DIR>/ \
        --uncommitted-changes=merge
    ```
 
-   Substitute the actual values from your task file's frontmatter for
-   `<lead_agent>` and `<lead_report_dir>`. The trailing slashes matter (rsync
-   directory semantics). `--uncommitted-changes=merge` is required because the
-   lead's worktree usually has uncommitted local state.
+   `LEAD_AGENT` / `FINISH_REPORT_PATH` come from the `eval` above;
+   `<RUNTIME_REPORTS_DIR>` is your worker SKILL.md's local reports dir. You push
+   the report's *parent directory* (`dirname`) rather than the file itself: the
+   trailing slashes matter (rsync directory semantics) and rsync cannot push a
+   single file. `--uncommitted-changes=merge` is required because the lead's
+   worktree usually has uncommitted local state.
 
 3. Stop your turn. For gate reports, the lead sends the user's reply via
    `mngr message` and you resume; for terminal reports, the lead acts on the

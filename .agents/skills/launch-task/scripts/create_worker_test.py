@@ -494,21 +494,25 @@ def _no_sleep(_seconds: float) -> None:
     return None
 
 
+def _write_await_task(task_file: Path, report_path: Path) -> None:
+    """Write a task file whose frontmatter points await at ``report_path``."""
+    task_file.write_text(
+        f"---\nlead_agent: lead\nfinish_report_path: {report_path}\n---\n\nbody\n"
+    )
+
+
 def test_await_returns_report_immediately_when_present(tmp_path: Path) -> None:
     """A report already on disk is printed at once, before any sleep."""
-    runtime = tmp_path / "runtime" / "launch-task" / "demo"
-    reports = runtime / "reports"
-    reports.mkdir(parents=True)
-    (reports / "report.md").write_text(
-        "---\ntype: status\nname: done\n---\n\nall good\n"
-    )
+    report = tmp_path / "runtime" / "launch-task" / "demo" / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("---\ntype: status\nname: done\n---\n\nall good\n")
     out = io.StringIO()
 
     def _boom(_seconds: float) -> None:
         raise AssertionError("await must not sleep when the report already exists")
 
     rc = create_worker_mod.await_report(
-        runtime_dir=runtime,
+        report_path=report,
         timeout_seconds=1800,
         poll_interval_seconds=5,
         sleeper=_boom,
@@ -523,10 +527,8 @@ def test_await_returns_report_immediately_when_present(tmp_path: Path) -> None:
 
 def test_await_polls_until_report_appears(tmp_path: Path) -> None:
     """await loops, sleeping, until the report shows up, then prints it."""
-    runtime = tmp_path / "runtime" / "launch-task" / "demo"
-    reports = runtime / "reports"
-    reports.mkdir(parents=True)
-    report = reports / "report.md"
+    report = tmp_path / "runtime" / "launch-task" / "demo" / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
     out = io.StringIO()
 
     sleeps: list[float] = []
@@ -537,7 +539,7 @@ def test_await_polls_until_report_appears(tmp_path: Path) -> None:
             report.write_text("---\ntype: gate\nname: question\n---\n\nwhich one?\n")
 
     rc = create_worker_mod.await_report(
-        runtime_dir=runtime,
+        report_path=report,
         timeout_seconds=1800,
         poll_interval_seconds=5,
         sleeper=_sleeper_that_creates_report,
@@ -554,12 +556,12 @@ def test_await_times_out_when_report_never_appears(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """When the deadline passes with no report, await returns the timeout code."""
-    runtime = tmp_path / "runtime" / "launch-task" / "demo"
-    (runtime / "reports").mkdir(parents=True)
+    report = tmp_path / "runtime" / "launch-task" / "demo" / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
     out = io.StringIO()
 
     rc = create_worker_mod.await_report(
-        runtime_dir=runtime,
+        report_path=report,
         timeout_seconds=30,
         poll_interval_seconds=5,
         sleeper=_no_sleep,
@@ -572,50 +574,60 @@ def test_await_times_out_when_report_never_appears(
     assert "timed out" in capsys.readouterr().err
 
 
-def test_await_derives_report_path_under_runtime_dir(tmp_path: Path) -> None:
-    """await reads reports/report.md relative to --runtime-dir, nothing else."""
-    runtime = tmp_path / "runtime" / "crystallize" / "demo"
-    nested = runtime / "reports"
-    nested.mkdir(parents=True)
-    (nested / "report.md").write_text("body\n")
-    # A report.md directly under runtime (wrong place) must be ignored.
-    (runtime / "report.md").write_text("WRONG\n")
-    out = io.StringIO()
+def test_read_finish_report_path_returns_field(tmp_path: Path) -> None:
+    """_read_finish_report_path pulls the path out of the task frontmatter."""
+    task = tmp_path / "task.md"
+    _write_await_task(task, Path("runtime/crystallize/demo/reports/report.md"))
 
-    rc = create_worker_mod.await_report(
-        runtime_dir=runtime,
-        timeout_seconds=10,
-        poll_interval_seconds=1,
-        sleeper=_no_sleep,
-        clock=lambda: 0.0,
-        out=out,
-    )
+    result = create_worker_mod._read_finish_report_path(task)
 
-    assert rc == 0
-    assert out.getvalue() == "body\n"
+    assert result == Path("runtime/crystallize/demo/reports/report.md")
 
 
-def _await_argv(runtime: Path, extra: Sequence[str] = ()) -> list[str]:
-    return ["await", "--runtime-dir", str(runtime), *extra]
+def test_read_finish_report_path_missing_raises(tmp_path: Path) -> None:
+    """A task file without finish_report_path is a hard error for await."""
+    task = tmp_path / "task.md"
+    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+
+    with pytest.raises(ValueError, match="finish_report_path"):
+        create_worker_mod._read_finish_report_path(task)
+
+
+def _await_argv(task_file: Path, extra: Sequence[str] = ()) -> list[str]:
+    return ["await", "--task-file", str(task_file), *extra]
 
 
 def test_main_await_prints_report(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The await subcommand parses, routes through main(), and prints the report.
+    """await parses the task file, finds finish_report_path, and prints the report.
 
     The report exists up front, so main()'s real ``time.sleep`` is never
     reached and the loop returns immediately.
     """
-    runtime = tmp_path / "runtime" / "launch-task" / "demo"
-    reports = runtime / "reports"
-    reports.mkdir(parents=True)
-    (reports / "report.md").write_text("hello from worker\n")
+    report = tmp_path / "runtime" / "launch-task" / "demo" / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("hello from worker\n")
+    task = tmp_path / "task.md"
+    _write_await_task(task, report)
 
-    rc = create_worker_mod.main(_await_argv(runtime))
+    rc = create_worker_mod.main(_await_argv(task))
 
     assert rc == 0
     assert capsys.readouterr().out == "hello from worker\n"
+
+
+def test_main_await_missing_finish_report_path_is_fatal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """await exits 2 (not the timeout code) when the field is absent."""
+    task = tmp_path / "task.md"
+    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+
+    rc = create_worker_mod.main(_await_argv(task))
+
+    assert rc == 2
+    assert "finish_report_path" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

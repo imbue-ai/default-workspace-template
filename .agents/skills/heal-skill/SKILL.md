@@ -71,7 +71,7 @@ mkdir -p runtime/heal/$TARGET
 cat << FRONTMATTER_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-lead_report_dir: runtime/heal/$TARGET/reports/
+finish_report_path: runtime/heal/$TARGET/reports/report.md
 ---
 FRONTMATTER_EOF
 cat << BODY_EOF
@@ -106,7 +106,7 @@ single gate -- no outline gate.
 When you reach the final-artifact gate or a terminal status, write a
 report file and push it to the lead per the sub-skill's reporting
 protocol; the destination is given by \`lead_agent\` /
-\`lead_report_dir\` in frontmatter.
+\`finish_report_path\` in frontmatter.
 
 ## Success criteria
 - The incident reproduces against the current skill before the fix.
@@ -143,8 +143,9 @@ Flow-specific substitutions:
 
 - Worker name: `heal-$TARGET`
 - Branch: `mngr/heal-$TARGET`
-- Runtime dir (pass to `create_worker.py await --runtime-dir`): `runtime/heal/$TARGET/`
-- Poll path (derived): `runtime/heal/$TARGET/reports/report.md`
+- Task file (pass to `create_worker.py await --task-file`): `runtime/heal/$TARGET/task.md`
+- `finish_report_path` / poll path: `runtime/heal/$TARGET/reports/report.md`
+- Reports dir (`<REPORTS_DIR>` = `dirname finish_report_path`): `runtime/heal/$TARGET/reports/`
 - Consumed path: `runtime/heal/$TARGET/reports/consumed/`
 - The only user-approval gate is `type: gate, name: final-artifact`.
   A heal has no outline gate.
