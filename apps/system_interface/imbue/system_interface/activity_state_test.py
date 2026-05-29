@@ -80,24 +80,9 @@ def test_last_event_type(events: list[dict[str, Any]], expected: str | None) -> 
 
 
 @pytest.mark.parametrize(
-    "permissions_waiting, has_pending_tool_use, tail_event_type, expected",
+    "has_pending_tool_use, tail_event_type, expected",
     [
         pytest.param(
-            True,
-            True,
-            "user_message",
-            ActivityState.WAITING_ON_PERMISSION,
-            id="permissions_overrides_pending_tool",
-        ),
-        pytest.param(
-            True,
-            False,
-            "assistant_message",
-            ActivityState.WAITING_ON_PERMISSION,
-            id="permissions_overrides_idle_signals",
-        ),
-        pytest.param(
-            False,
             True,
             "assistant_message",
             ActivityState.TOOL_RUNNING,
@@ -105,13 +90,11 @@ def test_last_event_type(events: list[dict[str, Any]], expected: str | None) -> 
         ),
         pytest.param(
             False,
-            False,
             "user_message",
             ActivityState.THINKING,
             id="thinking_when_last_event_is_user_message",
         ),
         pytest.param(
-            False,
             False,
             "tool_result",
             ActivityState.THINKING,
@@ -119,13 +102,11 @@ def test_last_event_type(events: list[dict[str, Any]], expected: str | None) -> 
         ),
         pytest.param(
             False,
-            False,
             "assistant_message",
             ActivityState.IDLE,
             id="idle_when_last_event_is_assistant_message",
         ),
         pytest.param(
-            False,
             False,
             None,
             ActivityState.IDLE,
@@ -134,14 +115,12 @@ def test_last_event_type(events: list[dict[str, Any]], expected: str | None) -> 
     ],
 )
 def test_derive_activity_state(
-    permissions_waiting: bool,
     has_pending_tool_use: bool,
     tail_event_type: str | None,
     expected: ActivityState,
 ) -> None:
     state = derive_activity_state(
         is_agent_running=True,
-        permissions_waiting=permissions_waiting,
         has_pending_tool_use=has_pending_tool_use,
         tail_event_type=tail_event_type,
     )
@@ -161,7 +140,6 @@ def test_derive_activity_state_non_running_agent_is_always_idle(lifecycle_state:
     assert lifecycle_state not in RUNNING_LIFECYCLE_STATES
     state = derive_activity_state(
         is_agent_running=False,
-        permissions_waiting=True,
         has_pending_tool_use=True,
         tail_event_type="user_message",
     )

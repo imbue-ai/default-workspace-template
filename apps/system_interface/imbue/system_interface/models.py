@@ -54,8 +54,8 @@ class AgentStateItem(FrozenModel):
         default=None,
         description=(
             "Per-agent chat activity state value (THINKING / TOOL_RUNNING / "
-            "WAITING_ON_PERMISSION / IDLE), or None when no activity tracking "
-            "is available for this agent."
+            "IDLE), or None when no activity tracking is available for this "
+            "agent."
         ),
     )
 

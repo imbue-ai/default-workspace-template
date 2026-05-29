@@ -389,7 +389,7 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
             labels={},
             work_dir=str(tmp_path / "work"),
         )
-    manager._ensure_marker_watcher(agent_id)
+    manager._ensure_activity_tracking(agent_id)
 
     app = create_application(agent_manager=manager)
     agent_info = AgentInfo(

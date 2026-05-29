@@ -25,7 +25,6 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import poll_until
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.activity_watcher import PERMISSIONS_WAITING_MARKER_FILENAME
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _make_applications_file_handler
@@ -35,10 +34,10 @@ from imbue.system_interface.models import ApplicationEntry
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Several tests in this module spin up real watchdog FSEvents observers
-# (via ``_ensure_marker_watcher`` and ``_start_app_watcher``). On macOS the
-# FSEvents emitter thread occasionally stalls during shutdown, tripping
-# pytest-timeout. Mark the whole file as flaky so offload retries it
-# automatically -- mirrors ``ws_broadcaster_test.py``.
+# (via ``_start_app_watcher``). On macOS the FSEvents emitter thread
+# occasionally stalls during shutdown, tripping pytest-timeout. Mark the
+# whole file as flaky so offload retries it automatically -- mirrors
+# ``ws_broadcaster_test.py``.
 pytestmark = pytest.mark.flaky
 
 
@@ -918,28 +917,28 @@ def test_handle_observe_output_line_logs_stderr_as_warning(
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_marker_watcher_skips_when_state_dir_missing(agent_manager: AgentManager) -> None:
-    """No watcher is started for an agent whose host_dir state directory is absent."""
+def test_ensure_activity_tracking_skips_when_state_dir_missing(agent_manager: AgentManager) -> None:
+    """No activity tracking is started for an agent whose host_dir state directory is absent."""
     _seed_agent(agent_manager, "remote-agent")
-    agent_manager._ensure_marker_watcher("remote-agent")
+    agent_manager._ensure_activity_tracking("remote-agent")
     try:
         with agent_manager._lock:
-            assert "remote-agent" not in agent_manager._marker_watchers
+            assert "remote-agent" not in agent_manager._activity_tracked_agents
     finally:
         agent_manager.stop()
 
 
-def test_ensure_marker_watcher_seeds_idle_state_silently(
+def test_ensure_activity_tracking_seeds_idle_state_silently(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """When the state dir exists with no markers, the agent is seeded as IDLE without broadcasting."""
+    """When the state dir exists, the agent is seeded as IDLE without broadcasting."""
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
 
     listener = broadcaster.register()
     try:
-        agent_manager._ensure_marker_watcher("agent-1")
+        agent_manager._ensure_activity_tracking("agent-1")
         # No broadcast should have happened (lifecycle handlers broadcast separately).
         with pytest.raises(queue.Empty):
             listener.get_nowait()
@@ -963,7 +962,7 @@ def test_session_events_user_message_drives_thinking(
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
-    agent_manager._ensure_marker_watcher("agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
 
     listener = broadcaster.register()
     try:
@@ -987,7 +986,7 @@ def test_session_events_assistant_message_at_tail_is_idle(agent_manager: AgentMa
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
-    agent_manager._ensure_marker_watcher("agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
 
     try:
         agent_manager.update_session_events(
@@ -1003,36 +1002,13 @@ def test_session_events_assistant_message_at_tail_is_idle(agent_manager: AgentMa
         agent_manager.stop()
 
 
-def test_permissions_marker_overrides_thinking(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """A live permissions_waiting marker overrides transcript-derived THINKING."""
-    state_dir = tmp_path / "agents" / "agent-1"
-    state_dir.mkdir(parents=True)
-    _seed_agent(agent_manager, "agent-1")
-    agent_manager._ensure_marker_watcher("agent-1")
-
-    try:
-        agent_manager.update_session_events(
-            "agent-1",
-            [{"type": "user_message", "content": "go"}],
-        )
-        with agent_manager._lock:
-            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
-
-        (state_dir / PERMISSIONS_WAITING_MARKER_FILENAME).touch()
-        agent_manager._on_markers_changed("agent-1")
-        with agent_manager._lock:
-            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.WAITING_ON_PERMISSION
-    finally:
-        agent_manager.stop()
-
-
 def test_update_session_events_flips_to_tool_running(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
-    agent_manager._ensure_marker_watcher("agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
 
     listener = broadcaster.register()
     try:
@@ -1063,13 +1039,12 @@ def test_update_session_events_flips_to_tool_running(
         agent_manager.stop()
 
 
-def test_update_session_events_no_op_when_no_watcher(agent_manager: AgentManager) -> None:
-    """Calling update_session_events for an unknown agent is a quiet no-op.
+def test_update_session_events_no_op_when_not_tracked(agent_manager: AgentManager) -> None:
+    """Calling update_session_events for an untracked agent is a quiet no-op.
 
     Beyond not raising, it must leave no residue in the per-agent caches:
-    otherwise those entries would never be cleared (``_stop_marker_watcher``
-    only fires for agents that previously had a watcher), accumulating
-    indefinitely.
+    otherwise those entries would never be cleared (``_stop_activity_tracking``
+    only fires for agents that were being tracked), accumulating indefinitely.
     """
     agent_manager.update_session_events(
         "ghost",
@@ -1081,11 +1056,11 @@ def test_update_session_events_no_op_when_no_watcher(agent_manager: AgentManager
         assert "ghost" not in agent_manager._last_event_type_by_agent
 
 
-def test_stop_marker_watcher_clears_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
+def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
-    agent_manager._ensure_marker_watcher("agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
     # Seed a non-default cached state so we can verify it's cleared.
     agent_manager.update_session_events(
         "agent-1",
@@ -1093,22 +1068,22 @@ def test_stop_marker_watcher_clears_caches(agent_manager: AgentManager, tmp_path
     )
 
     with agent_manager._lock:
-        assert "agent-1" in agent_manager._marker_watchers
+        assert "agent-1" in agent_manager._activity_tracked_agents
         assert "agent-1" in agent_manager._activity_state_by_agent
         assert "agent-1" in agent_manager._has_unmatched_tool_use_by_agent
         assert "agent-1" in agent_manager._last_event_type_by_agent
 
-    agent_manager._stop_marker_watcher("agent-1")
+    agent_manager._stop_activity_tracking("agent-1")
 
     with agent_manager._lock:
-        assert "agent-1" not in agent_manager._marker_watchers
+        assert "agent-1" not in agent_manager._activity_tracked_agents
         assert "agent-1" not in agent_manager._activity_state_by_agent
         assert "agent-1" not in agent_manager._has_unmatched_tool_use_by_agent
         assert "agent-1" not in agent_manager._last_event_type_by_agent
 
 
-def test_handle_agent_destroyed_stops_marker_watcher(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """An AGENT_DESTROYED event should clear the marker watcher and caches."""
+def test_handle_agent_destroyed_stops_activity_tracking(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """An AGENT_DESTROYED event should clear the activity tracking and caches."""
     test_agent_id = MngrAgentId()
     host_id = HostId()
     str_id = str(test_agent_id)
@@ -1116,28 +1091,28 @@ def test_handle_agent_destroyed_stops_marker_watcher(agent_manager: AgentManager
     state_dir = tmp_path / "agents" / str_id
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, str_id)
-    agent_manager._ensure_marker_watcher(str_id)
+    agent_manager._ensure_activity_tracking(str_id)
     with agent_manager._lock:
-        assert str_id in agent_manager._marker_watchers
+        assert str_id in agent_manager._activity_tracked_agents
 
     event = _make_agent_destroyed_event(test_agent_id, host_id)
     agent_manager._handle_agent_destroyed(event)
 
     with agent_manager._lock:
-        assert str_id not in agent_manager._marker_watchers
+        assert str_id not in agent_manager._activity_tracked_agents
         assert str_id not in agent_manager._activity_state_by_agent
 
 
-def test_full_snapshot_preserves_activity_state_for_existing_watcher(
+def test_full_snapshot_preserves_activity_state_for_tracked_agent(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """A FullDiscoverySnapshot must not wipe the activity_state of agents that
-    already have a marker watcher.
+    are already being tracked for activity.
 
     Regression test: ``_handle_full_snapshot`` rebuilds ``_agents`` from the
     raw discovery payload (which has no ``activity_state`` field), then calls
-    ``_ensure_marker_watcher`` per agent. Previously, the watcher-already-
-    exists branch returned early and skipped the recompute, so the broadcast
+    ``_ensure_activity_tracking`` per agent. Previously, the already-tracked
+    branch returned early and skipped the recompute, so the broadcast
     that follows the snapshot emitted ``activity_state=None`` for every
     previously-tracked agent and the chat panel indicator briefly disappeared.
     """

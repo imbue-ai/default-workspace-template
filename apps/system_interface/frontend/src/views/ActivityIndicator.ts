@@ -2,10 +2,9 @@
  * Activity strip that sits just above the message input.
  *
  * The backend (system interface) is the source of truth for *which* state
- * the agent is in -- IDLE / THINKING / TOOL_RUNNING / WAITING_ON_PERMISSION
- * -- because the WAITING_ON_PERMISSION case relies on a marker file that
- * the transcript alone cannot detect. The state is delivered on each
- * agent's ``activity_state`` field via the ``agents_updated`` WS payload.
+ * the agent is in -- IDLE / THINKING / TOOL_RUNNING. The state is delivered
+ * on each agent's ``activity_state`` field via the ``agents_updated`` WS
+ * payload.
  *
  * The frontend's only job is to pick a label for the current state. For
  * TOOL_RUNNING we enrich the generic "Running tool…" label by walking the
@@ -180,7 +179,6 @@ function pendingToolCall(events: TranscriptEvent[]): ToolCall | null {
 export function labelForActivityState(state: string | null | undefined, events: TranscriptEvent[]): string | null {
   if (state === null || state === undefined) return null;
   if (state === "IDLE") return null;
-  if (state === "WAITING_ON_PERMISSION") return "Waiting for permission";
   if (state === "THINKING") return "Thinking…";
   if (state === "TOOL_RUNNING") {
     const pending = pendingToolCall(events);

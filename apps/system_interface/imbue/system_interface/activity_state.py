@@ -1,20 +1,15 @@
 """Per-agent activity state surfaced on the chat panel.
 
-The state is derived from three inputs:
+The state is derived from two inputs:
 - the agent's mngr lifecycle state (RUNNING, STOPPED, etc.) -- a non-running
   agent is always IDLE regardless of the other signals, which prevents a
   STOPPED agent from appearing as "Thinking..." due to stale transcript data
-- the ``permissions_waiting`` marker file written by the Claude readiness hooks
-  (``$MNGR_AGENT_STATE_DIR/permissions_waiting``), which is the only state
-  signal not represented in the session transcript
 - the parsed transcript events from the agent's session JSONL files
 
 We deliberately do *not* consult the legacy ``active`` marker file: it can
 become stale (e.g. when Claude exits abnormally and the ``Stop`` hook never
 runs to clear it), which would falsely show "Thinking..." indefinitely. The
 transcript itself is authoritative for IDLE / THINKING / TOOL_RUNNING.
-
-Marker semantics live in ``mngr_claude.claude_config.build_readiness_hooks_config``.
 """
 
 from collections.abc import Sequence
@@ -31,7 +26,6 @@ class ActivityState(UpperCaseStrEnum):
     IDLE = auto()
     THINKING = auto()
     TOOL_RUNNING = auto()
-    WAITING_ON_PERMISSION = auto()
 
 
 @pure
@@ -77,11 +71,10 @@ RUNNING_LIFECYCLE_STATES: frozenset[str] = frozenset({"RUNNING", "RUNNING_UNKNOW
 def derive_activity_state(
     *,
     is_agent_running: bool,
-    permissions_waiting: bool,
     has_pending_tool_use: bool,
     tail_event_type: str | None,
 ) -> ActivityState:
-    """Derive an ``ActivityState`` from lifecycle state, permissions marker, and transcript signals.
+    """Derive an ``ActivityState`` from lifecycle state and transcript signals.
 
     ``is_agent_running`` reflects the mngr lifecycle state: ``True`` when the
     agent is in a running state (RUNNING, RUNNING_UNKNOWN_AGENT_TYPE), ``False``
@@ -95,17 +88,14 @@ def derive_activity_state(
 
     Priority:
       0. agent not running -> IDLE.
-      1. ``permissions_waiting`` -> WAITING_ON_PERMISSION (not represented in transcript).
-      2. unmatched ``tool_use`` -> TOOL_RUNNING.
-      3. last transcript event is ``user_message`` or ``tool_result`` -> THINKING
+      1. unmatched ``tool_use`` -> TOOL_RUNNING.
+      2. last transcript event is ``user_message`` or ``tool_result`` -> THINKING
          (Claude has been handed input but hasn't replied yet).
-      4. otherwise (last event is ``assistant_message`` or transcript is empty)
+      3. otherwise (last event is ``assistant_message`` or transcript is empty)
          -> IDLE.
     """
     if not is_agent_running:
         return ActivityState.IDLE
-    if permissions_waiting:
-        return ActivityState.WAITING_ON_PERMISSION
     if has_pending_tool_use:
         return ActivityState.TOOL_RUNNING
     if tail_event_type in ("user_message", "tool_result"):

@@ -45,10 +45,6 @@ describe("labelForActivityState — fixed-label states", () => {
     expect(labelForActivityState("SOMETHING_NEW", [])).toBe(null);
   });
 
-  it("returns 'Waiting for permission' for WAITING_ON_PERMISSION", () => {
-    expect(labelForActivityState("WAITING_ON_PERMISSION", [])).toBe("Waiting for permission");
-  });
-
   it("returns 'Thinking…' for THINKING", () => {
     expect(labelForActivityState("THINKING", [userMsg("2026-04-28T01:00:00Z")])).toBe("Thinking…");
   });
