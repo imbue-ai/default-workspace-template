@@ -257,16 +257,17 @@ async def _forward_http_request(
         logger.warning("Request body to service {} exceeded {} bytes", service_name, _MAX_REQUEST_BODY_BYTES)
         return _body_too_large_response()
 
+    parsed_service_name = ServiceName(service_name)
     content_type = backend_response.headers.get("content-type", "")
     if "text/html" in content_type:
         try:
             return await _build_rewritten_html_response(
-                backend_response, ServiceName(service_name), _MAX_REWRITABLE_HTML_BYTES
+                backend_response, parsed_service_name, _MAX_REWRITABLE_HTML_BYTES
             )
         finally:
             await backend_response.aclose()
 
-    return _build_streaming_proxy_response(backend_response, ServiceName(service_name))
+    return _build_streaming_proxy_response(backend_response, parsed_service_name)
 
 
 def _sw_cookie_name(service_name: str) -> str:
