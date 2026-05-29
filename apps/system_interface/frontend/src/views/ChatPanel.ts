@@ -19,10 +19,11 @@ import {
 } from "../models/Response";
 import { connectToStream, disconnectFromStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
+import { openLoginModal } from "../models/ClaudeAuth";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { MessageInput } from "./MessageInput";
-import { renderUserMessage, renderAssistantMessage, buildToolResultsWithSkillExpansions } from "./message-renderers";
+import { renderUserMessage, renderAssistantMessage, buildToolResultsWithSkillExpansions, computeAuthErrorHiddenEventIds } from "./message-renderers";
 import { getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
 import { buildTurns, selectFinalMessages } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
@@ -72,6 +73,28 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   let userScrolledUp = false;
   let previousScrollTop = 0;
   let backfillStarted = false;
+
+  // Snapshot-load path: SSE only carries events emitted after subscription,
+  // so an auth-error that happened before the user opened the panel (e.g.
+  // the auto-`/welcome` failing during fresh mind creation) wouldn't open
+  // the modal otherwise. Walking back to the last assistant_message means
+  // an already-recovered agent (whose history contains old auth errors
+  // but has since produced healthy replies) does not open it on reload --
+  // only an agent whose current state is broken does. The modal itself is
+  // a single app-level instance driven by global auth state (see
+  // models/ClaudeAuth.ts), so this just flips that shared flag.
+  function checkLatestAssistantForAuthError(agentId: string): void {
+    const events = getEventsForAgent(agentId);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i];
+      if (event.type === "assistant_message") {
+        if (event.is_auth_error === true) {
+          openLoginModal();
+        }
+        return;
+      }
+    }
+  }
 
   // Screen capture state (shown when agent has no conversation)
   let screenContent: string | null = null;
@@ -201,6 +224,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       if (agentId === currentAgentId) {
         loading = false;
         loadingError = null;
+        checkLatestAssistantForAuthError(agentId);
       }
     } catch (error) {
       if (agentId === currentAgentId) {
@@ -369,13 +393,16 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
 
     const toolResults = buildToolResultsWithSkillExpansions(events);
 
+    const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
+    const visibleEvents = events.filter((e) => !hiddenEventIds.has(e.event_id));
+
     // Group events into turns and decide per turn whether to render the
     // tk-driven progress view or the plain (legacy) chat view. A turn is
     // a "progress turn" iff it has at least one task attributed to it;
     // turns with no tasks render exactly as today (assistant text +
     // inline tool blocks). Sessions that predate the tk integration have
     // zero task_events, so every turn is plain -- backwards-compatible.
-    const turns = buildTurns(events);
+    const turns = buildTurns(visibleEvents);
 
     const messageNodes: m.Children[] = [];
 
@@ -386,7 +413,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     // returns [] only when there are no user_messages, so we render only
     // assistant_messages here -- a user_message branch would be unreachable.
     if (turns.length === 0) {
-      for (const event of events) {
+      for (const event of visibleEvents) {
         if (event.type === "assistant_message") {
           messageNodes.push(renderAssistantMessage(event, toolResults, agentId));
         }
@@ -476,7 +503,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     view(vnode) {
       const agentId = vnode.attrs.agentId;
 
-      return m("div", { class: "chat-panel flex flex-col h-full" }, [
+      return m("div", { class: "chat-panel flex flex-col h-full relative" }, [
         m(
           "main",
           {
