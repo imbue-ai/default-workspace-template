@@ -56,15 +56,17 @@ exist). Frontmatter shape:
     statuses, the question itself for gate reports>
 
 Then push the report's parent directory back to the lead (rsync cannot
-push a single file, so push the directory that contains it):
+push a single file, so push the directory that contains it). Substitute
+the `lead_agent` value and the directory part of `finish_report_path`
+from the frontmatter above (shown here as `<lead_agent>` and
+`<reports_dir>`):
 
-    mngr push "$LEAD_AGENT:$(dirname "$FINISH_REPORT_PATH")/" \
-        --source "$(dirname "$FINISH_REPORT_PATH")/" \
+    mngr push <lead_agent>:<reports_dir>/ \
+        --source <reports_dir>/ \
         --uncommitted-changes=merge
 
-(`LEAD_AGENT` / `FINISH_REPORT_PATH` come from parsing the frontmatter
-above; the trailing slashes matter, and `--uncommitted-changes=merge`
-is required because the lead's worktree usually has uncommitted state.)
+(The trailing slashes matter, and `--uncommitted-changes=merge` is
+required because the lead's worktree usually has uncommitted state.)
 For a mid-flight gate, stop your turn after pushing -- the lead will
 reply via `mngr message` and you resume. For terminal statuses, the run
 ends.
