@@ -414,96 +414,75 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     const agent = getAgentById(agentId);
     const agentIsIdle = agent?.activity_state === "IDLE";
 
-    // Find user-message boundaries to partition the stream.
-    const userMessages = visibleEvents
-      .filter((e) => e.type === "user_message" && !isNonBoundaryUserMessage(e.content ?? ""))
-      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-
     const messageNodes: m.Children[] = [];
+    let sectionUserEvent: TranscriptEvent | null = null;
+    let sectionStart = "";
+    let bodyEvents: TranscriptEvent[] = [];
 
-    if (userMessages.length === 0) {
-      for (const event of visibleEvents) {
-        if (event.type === "assistant_message") {
-          messageNodes.push(renderAssistantMessage(event, toolResults, agentId));
-        }
-      }
-      return m("div", { class: "message-list-wrapper" }, [
-        m(
-          "div",
-          { class: "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6" },
-          messageNodes,
-        ),
-      ]);
-    }
-
-    // Walk the event stream, partitioned by user-message boundaries.
-    for (let i = 0; i < userMessages.length; i++) {
-      const userEvent = userMessages[i];
-      const start_ts = userEvent.timestamp;
-      const end_ts = i + 1 < userMessages.length ? userMessages[i + 1].timestamp : "";
-      const isTail = end_ts === "";
-
-      const userNode = renderUserMessage(userEvent);
-      if (userNode !== null) {
-        messageNodes.push(userNode);
-      }
-
-      // Collect body events (assistant messages, tool results, non-boundary
-      // user messages) that fall in this partition's window.
-      const body_events: TranscriptEvent[] = [];
-      for (const e of visibleEvents) {
-        if (e === userEvent) continue;
-        const isNonBoundary = e.type === "user_message" && isNonBoundaryUserMessage(e.content ?? "");
-        if (e.type !== "assistant_message" && e.type !== "tool_result" && !isNonBoundary) continue;
-        if (e.timestamp < start_ts) continue;
-        if (end_ts !== "" && e.timestamp >= end_ts) continue;
-        body_events.push(e);
-      }
-      body_events.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-
-      // Non-boundary user messages render as chips above the progress block.
-      const nonBoundaryUserEvents = body_events.filter((e) => e.type === "user_message");
-      for (const ev of nonBoundaryUserEvents) {
-        const chipNode = renderUserMessage(ev);
-        if (chipNode !== null) {
-          messageNodes.push(chipNode);
-        }
-      }
-
-      // Find steps active during this partition.
+    function flushSection(nextBoundaryTs: string): void {
+      if (sectionUserEvent === null) return;
+      const endTs = nextBoundaryTs;
+      const isTail = endTs === "";
       const isSettled = !isTail || agentIsIdle;
+
       const steps = sortSteps(
         Array.from(taskRecords.values())
-          .filter((r) => r.step && stepActiveInWindow(r, start_ts, end_ts))
+          .filter((r) => r.step && stepActiveInWindow(r, sectionStart, endTs))
           .map((r) => makeStepView(r, isSettled && r.final_status !== "closed")),
         taskRecords,
-        start_ts,
+        sectionStart,
       );
-      attributeNarration(steps, body_events);
+      attributeNarration(steps, bodyEvents);
 
       if (steps.length > 0) {
-        const finalMessages = selectFinalMessages(body_events, steps);
+        const finalMessages = selectFinalMessages(bodyEvents, steps);
         messageNodes.push(
           m(ProgressBlock, {
-            key: `progress-${userEvent.event_id}`,
+            key: `progress-${sectionUserEvent.event_id}`,
             tasks: steps,
-            body_events,
+            body_events: bodyEvents,
             toolResults,
             final_messages: finalMessages,
             agentId,
           }),
         );
-      } else {
+      } else if (bodyEvents.length > 0) {
         messageNodes.push(
           m(UngroupedWorkBlock, {
-            key: `ungrouped-${userEvent.event_id}`,
-            body_events,
+            key: `ungrouped-${sectionUserEvent.event_id}`,
+            body_events: bodyEvents,
             toolResults,
             agentId,
           }),
         );
       }
     }
+
+    for (const event of visibleEvents) {
+      if (event.type === "user_message") {
+        if (isNonBoundaryUserMessage(event.content ?? "")) {
+          const chipNode = renderUserMessage(event);
+          if (chipNode !== null) messageNodes.push(chipNode);
+          bodyEvents.push(event);
+        } else {
+          flushSection(event.timestamp);
+          sectionUserEvent = event;
+          sectionStart = event.timestamp;
+          bodyEvents = [];
+          const userNode = renderUserMessage(event);
+          if (userNode !== null) messageNodes.push(userNode);
+        }
+      } else if (event.type === "assistant_message") {
+        if (sectionUserEvent === null) {
+          messageNodes.push(renderAssistantMessage(event, toolResults, agentId));
+        } else {
+          bodyEvents.push(event);
+        }
+      } else if (event.type === "tool_result") {
+        bodyEvents.push(event);
+      }
+    }
+    flushSection("");
 
     return m("div", { class: "message-list-wrapper" }, [
       m(
