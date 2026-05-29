@@ -297,9 +297,6 @@ export function eventsInTaskWindow(
   return [...inWindow, ...trailingResults].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
-/** Where a top-level (promoted) text message sits relative to the timeline. */
-export type MessagePosition = "leading" | "inter_step" | "trailing";
-
 /** An inter-step message plus the id of the step it interrupts before. */
 export interface InterStepMessage {
   event: TranscriptEvent;
