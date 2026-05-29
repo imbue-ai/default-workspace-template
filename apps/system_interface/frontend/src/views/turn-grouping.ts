@@ -63,9 +63,6 @@ export interface StepView {
   is_settled: boolean;
 }
 
-// Alias for consumers that still reference the old name.
-export type TaskInTurn = StepView;
-
 /** Fold task_event events into per-ticket TaskRecord. Latest status
  *  (by STATUS_RANK) wins; transitions track each timestamp. */
 export function buildTaskRecords(events: TranscriptEvent[]): Map<string, TaskRecord> {

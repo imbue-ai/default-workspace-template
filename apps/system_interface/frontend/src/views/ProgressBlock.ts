@@ -11,11 +11,11 @@ import m from "mithril";
 import { MarkdownContent, renderMarkdown } from "../markdown";
 import type { TranscriptEvent } from "../models/Response";
 import { renderAssistantMessageChildren } from "./message-renderers";
-import type { TaskInTurn, TaskUiStatus } from "./turn-grouping";
+import type { StepView, TaskUiStatus } from "./turn-grouping";
 import { eventsInTaskWindow } from "./turn-grouping";
 
 interface ProgressBlockAttrs {
-  tasks: TaskInTurn[];
+  tasks: StepView[];
   body_events: TranscriptEvent[];
   /** Prebuilt tool_call_id -> tool_result map for the WHOLE event stream,
    *  with skill-expansion user_messages already folded into their
@@ -78,7 +78,7 @@ function statusIcon(status: TaskUiStatus, is_settled: boolean): m.Vnode {
  *   - active            -> render the latest in-window narration, if any
  *   - pending           -> render nothing (no window yet)
  */
-function renderTaskCaption(task: TaskInTurn, isExpanded: boolean): m.Vnode | null {
+function renderTaskCaption(task: StepView, isExpanded: boolean): m.Vnode | null {
   if (task.status === "done") {
     return task.summary ? m("div.pv-tl-summary", task.summary) : null;
   }
@@ -128,14 +128,14 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
   }
 
   function renderTaskNode(
-    task: TaskInTurn,
+    task: StepView,
     options: {
       is_last: boolean;
       is_child: boolean;
       body_events: TranscriptEvent[];
       toolResults: Map<string, TranscriptEvent>;
       agentId: string;
-      tasks: TaskInTurn[];
+      tasks: StepView[];
     },
   ): m.Vnode {
     const { is_last, is_child, body_events, toolResults, agentId, tasks } = options;
