@@ -4,12 +4,12 @@
 >
 > * **Guiding principle:** the progress view does the right thing whether or not steps get closed; agents shouldn't have to fight the system. Rendering is the load-bearing fix; prompt/hook steering is best-effort only.
 > * **Reply detection (backward scan):** scan backward from the end of a turn collecting text-only assistant messages; stop at the first `closed` task event OR tool activity. That trailing run is the user-facing reply, promoted to the top level.
->   * Consequence: "close last step, then write the wrap-up" promotes cleanly (the ideal path). "Speak, then close" leaves the message in-step — accepted, with a deferred escape hatch.
+>   * Consequence: "close last step, then write the wrap-up" promotes cleanly (the ideal path). "Speak, then close" leaves the message in-step; a `tk close` nudge catches this and prompts the agent to re-output user-facing text after the close.
 > * **Position-aware top-level messages:** leading text (before the first step) renders *above* the timeline; inter-step text (after a close, before the next step starts) *interrupts* the timeline inline at its chronological position; the trailing reply renders *below* the timeline. No top-level text is ever hidden under a step.
 > * **Unclosed steps at idle:** drop the internal-jargon "settled" tag; keep the static partial-ring icon; show no caption when there's nothing to show; any surviving caption is static + italic + muted (no shimmer).
 > * **UngroupedWorkBlock:** apply the same backward-scan + leading-above / trailing-below positioning for consistency.
 > * **Steering (best-effort):** claude.md guidance = "close your final step *before* writing your wrap-up reply," with a short why. Existing PreToolUse step-creation nudge and non-blocking Stop nudge stay as-is.
-> * **Deferred:** a `tk close` flag for the agent to signal "promote my already-given wrap-up" — designed but not built; revisit only if testing shows the speak-then-close case is frequent. No `tk close` flags shipped now.
+> * **`tk close` nudge (not a flag):** when text was emitted between the last tool call and the close, a Claude Code hook on the `tk close` invocation reminds the agent that the user won't see that text by default and to re-output it if it was a general/user-facing message. No `tk close` flags.
 > * **Validation:** regen the HTML mocks first (with side-by-side variants for the open inter-step visual), discuss, then unit tests on the pure `turn-grouping` functions (the scenarios as cases); manual testing in the real app by the user.
 
 ---
@@ -30,10 +30,10 @@
 Scenario references map to `attachments/end-of-turn-scenarios.html`.
 
 - **Reply detection is a backward scan.** From the last event of a turn, walk backward gathering text-only assistant messages. Stop at the first `closed` task event or any tool activity (a tool call or tool result). The gathered run (in chronological order) is the turn's top-level reply.
-  - Close-then-speak (S2): the post-close message is the reply → rendered below the timeline.
-  - Speak-then-close (S3): the message precedes the close, so the scan stops at the close and the message is **not** promoted — it stays as in-step content. This is the accepted trade-off; the deferred flag is the escape hatch.
-  - Speak / more tools / speak (S7): only the trailing message (after the last tool result) is the reply; the earlier message remains in-step narration (it was followed by tool activity), not dropped from the timeline's expandable body.
-  - Speak, close, speak again (S4): the scan stops at the close, so only the post-close message is promoted. The pre-close message stays in-step.
+  - Close-then-speak (A2): the post-close message is the reply → rendered below the timeline.
+  - Speak-then-close (A3): the message precedes the close, so the scan stops at the close and it is not promoted on its own — it stays in-step (expandable). The `tk close` nudge fires here, prompting the agent to re-output the text after the close (turning it into the A2 case) when it was meant for the user.
+  - Speak / more tools / speak (B3): only the trailing message (after the last tool result) is the reply; the earlier message remains in-step narration (it was followed by tool activity), not dropped from the timeline's expandable body.
+  - Speak, close, speak again (A4): the scan stops at the close, so only the post-close message is promoted; the pre-close message stays in-step, and the close nudge applies as in A3.
 - **Top-level text is placed by position, never hidden:**
   - **Leading** text emitted before the first step is created renders *above* the entire timeline as plain prose.
   - **Inter-step** text emitted after a step closes and before the next step starts *interrupts* the timeline at that chronological point (exact visual chosen during mock review).
@@ -67,14 +67,18 @@ Relative to the existing system, without implementation detail:
   - Add a static (non-animated) variant of the settled-step caption; ensure the shimmer is reserved for genuinely active narration.
 - **claude.md — steering:**
   - Add concise guidance: close the final step before writing the user-facing wrap-up reply, with a one-line rationale tying it to how the progress view promotes replies. Frame as best-effort, not a hard requirement.
+- **`tk close` nudge hook (new):**
+  - A Claude Code hook on the `tk close` invocation that reads the conversation transcript (`transcript_path`). If text-only assistant output was emitted since the last tool call (i.e. it will be stranded inside the closing step under the reply rule), it injects a reminder: the user only sees that text on close inspection, so re-output it after the close if it was a general/user-facing message.
+  - Lives as a hook (entry in `.claude/settings.json` + a script under `scripts/`), not inside `tk` itself, since `tk` has no access to the transcript. Mirrors the existing `claude_require_steps_pretool.sh` / `claude_open_tickets_stop_nudge.sh` pattern.
+  - Fires on any close with dangling pre-close text (including mid-turn closes), since that text is stranded regardless of position.
 - **Mocks — `attachments/end-of-turn-scenarios.html`:**
   - Regenerate to cover the full scenario matrix under the new rules, and present **side-by-side variants** for the open inter-step visual question (continuous-thread inset card vs. thread marker/glyph vs. broken-thread full-width block).
 - **Tests — `turn-grouping.test.ts`:**
   - Add cases encoding the scenario matrix (close/no-close × idle/active × leading/inter-step/trailing × single/multiple messages), asserting reply detection and positional classification on the pure functions.
-- **Deferred (not built now):** a `tk close` flag (e.g. signaling "promote my already-given wrap-up message") in `vendor/tk`, plus a close-time hook/nudge. Documented as future work; add only if manual testing shows speak-then-close is common.
+- **Out of scope:** any `tk close` flag or `tk`-code change for promotion — the close-time nudge plus re-output covers the speak-then-close case. Revisit a flag only if re-output proves too noisy in practice.
 
 ## Open questions
 
 - **Inter-step visual (the one deliberately-open item):** which treatment reads most intuitively as "the agent paused mid-plan to speak" — a continuous thread with an inset aside card, a thread marker/glyph with text beside it, or a clean broken-thread full-width block? To be decided after reviewing side-by-side mock variants.
 - **Settled-caption fallback:** when an unclosed-idle step has in-step narration but no promoted reply, do we surface that narration as a static caption, or prefer a fully bare node? Lean toward showing it, but confirm against the regenerated mocks.
-- **Escape-hatch trigger:** what real-world frequency of speak-then-close (S3) would justify building the deferred `tk close` flag? Decide from manual testing observations.
+- **Nudge mechanics:** which hook event (`PreToolUse` vs `PostToolUse` on the `tk close` Bash call) reads best, and how to robustly detect "text since the last tool call" from the transcript; plus whether frequent firing becomes noisy enough to want suppression (or a flag) later.
