@@ -113,6 +113,85 @@ on `event_id`. The agent-destroy/watcher-teardown coordination still applies.
 4. Client-side eviction (4c): in scope now, or deferred pending profiling?
 5. Ship the eager-loop + dedup fix (4b-pre) as an independent first PR?
 
+### CONFIRMED DECISIONS (user, 2026-05-28)
+
+1. **Drop the on-disk sidecar `.idx` file.** Confirmed.
+2. **Bound backend memory with an evicting cache** -- do NOT leave it at O(N).
+   This *reverses* correctness-ob's "hold every parsed event forever" choice
+   and is now in scope for PR 4.
+3. **In-house virtualization.** Confirmed (no `@tanstack/virtual`).
+4. **Client-side eviction is in scope** for this work.
+5. **Do not split out a 4b-pre.** The eager-loop + dedup fixes fold into the
+   main frontend PR.
+
+### Reconciling decisions 1 + 2: the consequence to sign off on
+
+Decisions 1 and 2 are in tension and the resolution determines the backend
+shape. If the parsed-event cache **evicts** old events (2) to bound memory,
+then backfilling history that has been evicted must re-read it **from the
+JSONL on disk**. With NO index of any kind, locating "the N events before
+`event_id` X" on disk means re-scanning the file -> O(N) disk per backfill of
+old data -> O(N^2) paging. That just moves correctness-ob's problem back onto
+disk.
+
+The resolution: **drop the on-disk index file (1), but keep a compact
+*in-memory* locator index (2).** Concretely, split today's monolithic
+`state.events` (full parsed bodies) into two tiers per session file:
+
+- **Locator tier (never evicted, tiny):** an ordered list of
+  `(event_id, timestamp, byte_offset, byte_len)` built incrementally as the
+  watcher tails -- the same loop that already advances `byte_offset_consumed`.
+  No message text, no tool output. ~tens of bytes/event; ~16 MB for 1M events.
+  This is O(N)-count but small, and lives only in memory (no `.idx` file).
+- **Body tier (bounded, evicting):** an LRU window of fully-parsed events
+  (the heavy `text`/`output`/`tool_calls` payloads). Capacity is a fixed
+  number of events (e.g. a few thousand). On a miss, seek to the locator's
+  `byte_offset`, read `byte_len`, parse, and populate.
+
+`get_tail(limit)` and `get_backfill(before_event_id, limit)` both become:
+locate via the in-memory index (O(log N) or O(1)), ensure those `limit` bodies
+are resident (bounded disk read on miss), return. No full re-sort, no
+re-scan, no full-file read. Backend memory is then bounded by the body-tier
+cap plus the compact locator index.
+
+**This is the one point I want explicit sign-off on:** "drop the on-disk
+index" + "bounded memory" together still implies a small *in-memory* locator
+index (O(N)-count but bodies-free). If you truly want O(1) backend memory
+(not even the locator list), the only way is an on-disk index, which decision
+1 rules out. I read your answers as: in-memory locator index is fine, just no
+sidecar file. Please confirm.
+
+(Sparse variant, if even the locator list feels too big: checkpoint a
+`byte_offset` every K events instead of every event -> O(N/K) memory; backfill
+seeks to the nearest checkpoint and parses forward <= K events. Noted as an
+implementation tuning knob, not a separate decision.)
+
+### Revised sub-PR sequence (post-confirmation)
+
+- **4a (backend): two-tier evicting cache + bounded tail/backfill.**
+  Refactor `SessionFileState` into the locator + body tiers above; rewrite
+  `get_backfill_events` and the tail path to use bounded reads; add `has_more`
+  to the events response. Replaces the old "sidecar index" 4a.
+- **4b (frontend): scroll-triggered backfill + in-house virtualization +
+  persistent dedup Set.** Kills the eager `runBackfillLoop`, windows the DOM,
+  fixes the O(N^2) `appendEvents`/`prependEvents`. (Absorbs the former
+  4b-pre.)
+- **4c (frontend): client-side eviction** of far-offscreen events from
+  `eventsByAgent`, re-fetching via 4a's bounded backfill on scroll-back. Now
+  in scope (decision 4).
+
+Acceptance criteria to encode as tests:
+- Backend: backfill of *evicted* history does a bounded number of disk-read
+  bytes independent of N (a test that fails on an O(N) re-scan); tail +
+  backfill correctness vs. a brute-force oracle over a synthetic 50k-100k
+  event transcript spanning multiple (resumed) session files and
+  multi-event lines; body-tier cap is respected (resident count stays
+  bounded while paging across the whole history).
+- Frontend: only viewport (+overscan) messages are in the DOM for a large
+  transcript; scroll-up triggers exactly one backfill page (not a drain);
+  scroll position preserved across prepend; dedup is O(1) amortized per
+  event; client memory bounded after scrolling through and back.
+
 ---
 
 ## 1. Confirmed problem: O(total-transcript) stages
