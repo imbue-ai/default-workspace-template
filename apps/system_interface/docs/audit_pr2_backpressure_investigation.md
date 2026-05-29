@@ -91,3 +91,32 @@ buffer HTML to run `rewrite_proxied_html`. Always
 HTML under the cap, stream everything else. Pass `request.stream()` as
 httpx `content`, wrapped with a byte counter enforcing the cap (413 on
 exceed). Confirm `duplex: 'half'` browser support before changing the SW.
+
+## Implementation outcome
+
+Deviations from the investigation, decided during implementation:
+
+- **Issue A** uses drop-and-evict mirroring `WebSocketBroadcaster` (bounded
+  queue + consecutive-full counter + `None` sentinel), not a cursor sentinel.
+  The dormant `_event_buffers` STORE path is also capped.
+- **Issue B** eviction is driven by an agent-removed listener on
+  `AgentManager` (fires for REST destroy and observe-driven destroy /
+  host-destroy alike); the lifespan registers a listener that stops the
+  session watcher and evicts the event queues. `_destroy_agent` runs
+  `remove_agent` off the event loop so the watcher join does not block it.
+- **Issue C** uses a `threading.Queue` polled via
+  `run_in_threadpool(get, timeout=1)` inside an `async def` generator (the
+  `_run_ws_broadcast_loop` pattern), not `asyncio.Queue` -- the producer runs
+  on the watcher thread. The two generators collapse into `_sse_event_stream`
+  with an optional `session_id` filter.
+- **Issue D**: streaming is now decided by backend `content-type` (HTML
+  buffered+rewritten under a cap, everything else streamed), which also fixes
+  the weak `Accept` detection. httpx 0.28 forces `Transfer-Encoding: chunked`
+  for async-iterable content, so stale `content-length` / `transfer-encoding`
+  request headers are stripped. The byte caps are injected as parameters
+  (testable without monkeypatch). The **service worker was left unchanged**:
+  streaming request bodies require `duplex: 'half'`, which only works in
+  Chrome over HTTP/2+HTTPS and is unsupported in Firefox/Safari and over
+  plain-HTTP local dev. The server-side stream+cap is the portable protection
+  for the stated OOM target (the server); browser-side request buffering
+  remains a documented, portability-constrained limitation.
