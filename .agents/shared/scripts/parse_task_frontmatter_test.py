@@ -136,7 +136,9 @@ finish_report_path: [b, c]
 body
 """,
     )
-    with pytest.raises(ValueError, match="finish_report_path must be a string, got list"):
+    with pytest.raises(
+        ValueError, match="finish_report_path must be a string, got list"
+    ):
         parse_task_frontmatter.parse(task)
 
 
@@ -278,8 +280,5 @@ body
     fields = parse_task_frontmatter.parse(task)
     rendered = parse_task_frontmatter._render(fields)
     assert rendered == (
-        "LEAD_AGENT=a\n"
-        "FINISH_REPORT_PATH=b\n"
-        "FLOW=verify\n"
-        "TICKET_ID=task-42\n"
+        "LEAD_AGENT=a\nFINISH_REPORT_PATH=b\nFLOW=verify\nTICKET_ID=task-42\n"
     )
