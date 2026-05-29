@@ -168,10 +168,17 @@ implementation tuning knob, not a separate decision.)
 
 ### Revised sub-PR sequence (post-confirmation)
 
-- **4a (backend): two-tier evicting cache + bounded tail/backfill.**
-  Refactor `SessionFileState` into the locator + body tiers above; rewrite
-  `get_backfill_events` and the tail path to use bounded reads; add `has_more`
-  to the events response. Replaces the old "sidecar index" 4a.
+- **4a (backend): two-tier evicting cache + bounded tail/backfill.** DONE.
+  `SessionFileState` now holds a compact `EventLocator` index (a `tuple`
+  subclass, `__slots__`, never evicted); parsed bodies live in a bounded LRU
+  (`_DEFAULT_BODY_CACHE_CAPACITY`, injectable) keyed by `event_id`, re-read from
+  disk via the locator byte range on a miss. `get_tail_events` and
+  `get_backfill_events` locate via `_locator_ref_by_id` (O(1)) and resolve at
+  most `limit` bodies (O(limit) disk, independent of N). `_get_events` returns
+  the bounded tail plus a `has_more` flag. Tests added: oracle-equivalence for
+  tail/backfill across resumed files and multi-event lines, correctness of
+  backfill over evicted history, disk-reads-bounded-independent-of-N, and
+  body-cache-capacity-respected-while-paging.
 - **4b (frontend): scroll-triggered backfill + in-house virtualization +
   persistent dedup Set.** Kills the eager `runBackfillLoop`, windows the DOM,
   fixes the O(N^2) `appendEvents`/`prependEvents`. (Absorbs the former
