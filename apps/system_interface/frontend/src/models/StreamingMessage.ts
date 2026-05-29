@@ -104,12 +104,7 @@ export function disconnectFromStream(agentId: string): void {
  * destroyed agent no longer needs.
  */
 export function evictStream(agentId: string): void {
-  explicitlyDisconnectedAgents.add(agentId);
-  const eventSource = activeStreams.get(agentId);
-  if (eventSource !== undefined) {
-    eventSource.close();
-    activeStreams.delete(agentId);
-  }
+  disconnectFromStream(agentId);
   inFlightSnapshotBuffersByAgent.delete(agentId);
 }
 
