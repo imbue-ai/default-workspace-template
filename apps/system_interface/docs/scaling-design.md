@@ -1,8 +1,124 @@
 # PR 4: Scaling architecture -- design report
 
-Status: investigation complete, awaiting design confirmation. No code written.
+Status: re-assessed after stacking on `gabriel/correctness-ob`. Awaiting
+design confirmation. No implementation code written.
+
+---
+
+## 0. Re-assessment after stacking on `gabriel/correctness-ob`
+
+This branch is now merged on top of `gabriel/correctness-ob` (the PR 2
+territory I had flagged as a dependency). That branch already reworked the
+**backend** scaling and changes the picture materially. Sections 1-6 below are
+the original pre-merge analysis against plain `main`; read them through the
+lens of this section.
+
+### What correctness-ob already fixed
+
+- **Finding (a) -- whole-file re-read.** SOLVED on disk.
+  `SessionFileState` now holds an **append-only in-memory parsed-events cache**
+  (`session_watcher.py:99-113`); `_ensure_cache_current` (`:218-280`) reads
+  only the bytes appended past `byte_offset_consumed` and parses just that
+  tail (with correct handling of partial trailing lines and truncation/rewrite
+  via the dedup-set discard at `:242-246`). A file is fully parsed once, then
+  only its growing tail. Disk I/O per `get_all_events` call is now O(delta),
+  not O(N).
+- **Finding (c) -- initial response returns everything.** SOLVED.
+  `_get_events` now returns `watcher.get_all_events()[-limit:]`
+  (`server.py:301`), with `_DEFAULT_TAIL_COUNT = 50` and a guard against
+  non-positive limits (`:289-292`). The payload is bounded.
+- **Truncation / atomic-rewrite correctness**, partial-line safety, and
+  SSE-delta buffering during the initial snapshot fetch
+  (`loadSnapshotWithStream` in `StreamingMessage.ts`, wired into
+  `ChatPanel.loadAgent`) are all handled. Reconnect backoff and safe JSON
+  parsing on the WS/SSE handlers too.
+
+### What correctness-ob did NOT fix (still O(N) -- the remaining work)
+
+- **(a-residual) `get_all_events` is still O(N) CPU + memory per call.**
+  Even with incremental disk reads, every call does
+  `all_events.extend(state.events)` over the full cache, then
+  `all_events.sort(...)` (O(N log N)), then `_enrich_subagent_metadata`
+  (O(N)) -- `session_watcher.py:184-191`. And the cache itself
+  (`state.events`) now holds **every event in memory for the agent's
+  lifetime, by design** -- so backend memory is O(N) (this supersedes my old
+  finding (d): it is no longer an accidental leak but a deliberate cache, and
+  is the new ceiling).
+- **(b) `get_backfill_events` is still O(N) per page -> O(N^2) paging.**
+  `session_watcher.py:194-210` still calls `get_all_events()` (now O(N) CPU,
+  not O(N) disk) and linear-scans for `before_event_id`. No bounded range
+  access.
+- **(f) No frontend virtualization.** `ChatPanel.renderMessages` and
+  `SubagentView` still render every message to the DOM. Untouched.
+- **(g) Eager backfill drain loop still present.** `runBackfillLoop`
+  (`ChatPanel.ts:231-257`, `startBackfill` at `:260`) still loops
+  `while (!isBackfillComplete(agentId))`, pulling the *entire* transcript to
+  the client on open -- defeating the new server-side tail cap. Untouched.
+- **(e/h) `Response.ts` untouched.** `eventsByAgent` still holds the whole
+  transcript; `appendEvents`/`prependEvents` still rebuild an O(N) id Set per
+  call -> O(N^2) over a session.
+
+### How this re-scopes PR 4
+
+The sidecar **on-disk `.idx` file (old sub-PR 4a) is now largely unnecessary**
+and I recommend dropping it. correctness-ob's in-memory append-only cache
+already provides incremental parsing; a disk index would only add value for
+(i) avoiding a one-time re-parse on process restart and (ii) bounding backend
+memory below O(N). Neither is the user-facing problem, and (ii) directly
+contradicts correctness-ob's deliberate "hold everything in memory" choice.
+Adding a disk index now would be a large, redundant change fighting the branch
+we are stacking on.
+
+**Revised plan -- PR 4 becomes primarily a frontend effort plus one small
+backend bound:**
+
+- **4a (backend, small): bounded backfill over the in-memory cache.** Give
+  `SessionFileState` (or the watcher) an `event_id -> cache index` map, so
+  `get_backfill_events` returns a bounded slice of the already-parsed,
+  already-cached `state.events` without re-sorting or re-scanning the whole
+  transcript. This kills (b) cheaply, reusing correctness-ob's cache instead
+  of a new file format. Also add a `has_more` flag to the events response.
+  (Optional: memoize the merged+sorted+enriched view so `get_all_events`
+  isn't re-sorting O(N) per call -- only re-sort when the cache grew.)
+- **4b (frontend, the bulk): kill the eager loop + virtualize.**
+  - Replace `runBackfillLoop`'s drain-to-completion with a **scroll-triggered
+    single-page** fetch (finding g). This is the highest-leverage fix:
+    without it, no amount of server-side capping helps.
+  - **Minimal in-house windowed list** (finding f, i) -- recommendation
+    unchanged from section 2.4; rationale (dynamic/collapsible heights) still
+    holds.
+  - **Persistent per-agent id Set** in `Response.ts` (finding h).
+- **4c (frontend, optional): client-side eviction** of far-offscreen events
+  from `eventsByAgent` (finding e), re-fetch on scroll-back via 4a. Defer
+  unless profiling shows JS heap pressure.
+
+A tiny **4b-pre** (eager-loop fix + dedup fix, ~Response.ts + ChatPanel only)
+is still worth shipping first as an independent low-risk win.
+
+### Dependency note now resolved
+
+The PR 2 cursor-identity question from section 4 is effectively answered by
+stacking: correctness-ob keeps `event_id` (`<uuid>-<suffix>`) as the stable
+identity and the events-response shape, so 4a can safely key its backfill map
+on `event_id`. The agent-destroy/watcher-teardown coordination still applies.
+
+### Revised open questions
+
+1. Agree to **drop the on-disk sidecar index** in favor of bounded access to
+   correctness-ob's in-memory cache? (My recommendation: yes.)
+2. Is backend memory at O(N) (the cache holding all events) acceptable as the
+   standing ceiling, deferring any disk-backed/evicting cache to future work?
+   (correctness-ob already committed to this; PR 4 would not change it.)
+3. Minimal in-house virtualization (recommended) vs. `@tanstack/virtual`?
+4. Client-side eviction (4c): in scope now, or deferred pending profiling?
+5. Ship the eager-loop + dedup fix (4b-pre) as an independent first PR?
+
+---
 
 ## 1. Confirmed problem: O(total-transcript) stages
+
+> Note: section 1 is the original analysis against plain `main`, before the
+> correctness-ob merge. See section 0 for which of these are now fixed.
 
 Data path traced end to end. Every stage below is O(N) or worse in the total
 transcript length N (events), and several are hit repeatedly.
