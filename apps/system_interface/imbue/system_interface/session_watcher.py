@@ -227,7 +227,7 @@ class AgentSessionWatcher:
         with self._lock:
             return self._subagent_metadata.get(subagent_session_id)
 
-    def _ensure_cache_current(self, state: SessionFileState) -> None:
+    def _ensure_cache_current(self, state: SessionFileState, mark_all_emitted: bool = False) -> None:
         """Bring ``state``'s cache up to the file's current contents under the lock.
 
         Appends any newly parsed events to ``state.events`` (the full accumulated
@@ -235,6 +235,12 @@ class AgentSessionWatcher:
         that need to broadcast deltas drive that off ``state.emitted_count`` so a
         concurrent HTTP read parsing the tail does not rob the poll loop of the
         events to emit.
+
+        When ``mark_all_emitted`` is set (the priming path), the whole current
+        backlog is marked as already emitted *in the same lock hold* that filled
+        the cache. Splitting the fill and the mark across two lock acquisitions
+        would let a concurrent ``get_all_events`` append events in between that
+        then get marked emitted and never reach SSE clients.
         """
         with self._lock:
             try:
@@ -262,6 +268,8 @@ class AgentSessionWatcher:
                 state.emitted_count = 0
 
             if current_size == state.byte_offset_consumed and current_mtime == state.last_mtime:
+                if mark_all_emitted:
+                    state.emitted_count = len(state.events)
                 return
 
             try:
@@ -293,6 +301,8 @@ class AgentSessionWatcher:
             state.byte_offset_consumed += len(complete)
             state.last_mtime = current_mtime
             state.events.extend(new_events)
+            if mark_all_emitted:
+                state.emitted_count = len(state.events)
 
     def _enrich_subagent_metadata(self, events: list[dict[str, Any]]) -> None:
         """Enrich Agent tool_use events with subagent metadata.
@@ -362,9 +372,10 @@ class AgentSessionWatcher:
             states = list(self._session_states.values())
         for state in states:
             if state.file_path.exists():
-                self._ensure_cache_current(state)
-                with self._lock:
-                    state.emitted_count = len(state.events)
+                # Fill the cache and mark the whole backlog emitted atomically so
+                # a concurrent get_all_events cannot slip in events that then get
+                # marked emitted and never reach SSE clients.
+                self._ensure_cache_current(state, mark_all_emitted=True)
 
     def _discover_sessions(self) -> None:
         """Read claude_session_id_history to find all session IDs."""

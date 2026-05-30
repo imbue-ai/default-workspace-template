@@ -485,6 +485,42 @@ def test_concurrent_reads_and_discovery_do_not_raise(tmp_path: Path) -> None:
     assert errors == [], f"Concurrent access raised: {errors!r}"
 
 
+def test_prime_caches_marks_backlog_emitted_atomically(tmp_path: Path) -> None:
+    """Priming must mark the existing backlog emitted in the same lock hold that
+    fills the cache, so the poll loop never re-broadcasts the backlog while still
+    emitting events appended after start.
+
+    The cache fill and the emitted-count mark used to span two separate lock
+    acquisitions; a get_all_events landing in the gap could append events that
+    then got marked emitted and never reached SSE clients. Priming now marks
+    atomically. This asserts the resulting invariant: the whole primed backlog
+    is emitted (poll emits nothing for it) and a later append is still emitted.
+    """
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_user_event(0)) + "\n").encode("utf-8"))
+        f.write((json.dumps(_user_event(1)) + "\n").encode("utf-8"))
+
+    collected: list[dict[str, Any]] = []
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
+    watcher._discover_sessions()
+    watcher._prime_caches()
+
+    state = watcher._session_states["test-session"]
+    # The whole backlog is cached and marked emitted, so the poll loop has
+    # nothing to broadcast for it.
+    assert [e["event_id"] for e in state.events] == ["uuid-0-user", "uuid-1-user"]
+    assert state.emitted_count == len(state.events)
+    watcher._poll_for_changes()
+    assert collected == []
+
+    # An event appended after priming is still emitted exactly once.
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_user_event(2)) + "\n").encode("utf-8"))
+    watcher._poll_for_changes()
+    assert [e["event_id"] for e in collected] == ["uuid-2-user"]
+
+
 def test_watcher_handles_missing_session_file(tmp_path: Path) -> None:
     agent_state_dir = tmp_path / "agent_state"
     agent_state_dir.mkdir()
