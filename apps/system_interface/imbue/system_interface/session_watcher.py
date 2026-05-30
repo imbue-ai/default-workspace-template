@@ -11,6 +11,12 @@ which reads only the bytes appended since the last poll. This keeps the
 transcript loader cheap for arbitrarily long conversations: a file is fully
 parsed once, then only its growing tail is parsed on subsequent reads.
 
+Because both paths share the cache, the poll loop must not infer "new events to
+broadcast" from what its own parse produced -- a concurrent HTTP read may have
+parsed the tail first. Instead each ``SessionFileState`` tracks an
+``emitted_count``, and the poll loop emits every cached event past that marker,
+guaranteeing each event reaches connected SSE clients exactly once.
+
 All access to the shared session collections and per-file caches is guarded by
 ``_lock`` because the watcher thread and FastAPI handler threads touch them
 concurrently. File I/O and parsing run while the lock is held, but the
@@ -103,6 +109,11 @@ class SessionFileState:
     line that has been parsed into ``events`` (an append-only cache of all
     parsed events for the file). ``last_mtime`` lets the poller short-circuit
     when neither size nor mtime changed.
+
+    ``emitted_count`` is the number of leading ``events`` already handed to the
+    ``on_events`` SSE fan-out. It is tracked separately from parsing so the poll
+    loop emits every not-yet-emitted event even when a concurrent HTTP
+    ``get_all_events`` was the thread that actually parsed the new tail.
     """
 
     def __init__(self, session_id: str, file_path: Path) -> None:
@@ -111,6 +122,7 @@ class SessionFileState:
         self.byte_offset_consumed: int = 0
         self.last_mtime: float = 0.0
         self.events: list[dict[str, Any]] = []
+        self.emitted_count: int = 0
 
 
 class AgentSessionWatcher:
@@ -215,20 +227,21 @@ class AgentSessionWatcher:
         with self._lock:
             return self._subagent_metadata.get(subagent_session_id)
 
-    def _ensure_cache_current(self, state: SessionFileState) -> list[dict[str, Any]]:
+    def _ensure_cache_current(self, state: SessionFileState) -> None:
         """Bring ``state``'s cache up to the file's current contents under the lock.
 
-        Returns the events newly parsed by this call (empty if nothing changed),
-        so a caller acting as the live source -- the poll loop -- can emit only
-        the genuinely new events. The full accumulated transcript always lives in
-        ``state.events``.
+        Appends any newly parsed events to ``state.events`` (the full accumulated
+        transcript). Emission to SSE clients is decoupled from parsing: callers
+        that need to broadcast deltas drive that off ``state.emitted_count`` so a
+        concurrent HTTP read parsing the tail does not rob the poll loop of the
+        events to emit.
         """
         with self._lock:
             try:
                 stat = state.file_path.stat()
             except OSError as e:
                 logger.debug("Failed to stat session file {}: {}", state.file_path, e)
-                return []
+                return
 
             current_size = stat.st_size
             current_mtime = stat.st_mtime
@@ -244,9 +257,12 @@ class AgentSessionWatcher:
                     self._existing_event_ids.discard(event["event_id"])
                 state.byte_offset_consumed = 0
                 state.events = []
+                # The re-read content must be re-emitted to live SSE clients, so
+                # the emission marker resets alongside the cache.
+                state.emitted_count = 0
 
             if current_size == state.byte_offset_consumed and current_mtime == state.last_mtime:
-                return []
+                return
 
             try:
                 with open(state.file_path, "rb") as f:
@@ -254,19 +270,19 @@ class AgentSessionWatcher:
                     new_data = f.read()
             except OSError as e:
                 logger.debug("Failed to read session file {}: {}", state.file_path, e)
-                return []
+                return
 
             complete, _fragment = _split_at_last_complete_line(new_data)
             if not complete:
                 # Only a partial trailing line so far; leave the offset where it
                 # is and re-read on the next poll once the writer flushes.
-                return []
+                return
 
             try:
                 decoded = complete.decode("utf-8")
             except UnicodeDecodeError as e:
                 logger.warning("UTF-8 decode error in session file {}: {}", state.file_path, e)
-                return []
+                return
 
             new_events = parse_session_lines(
                 decoded.splitlines(),
@@ -277,7 +293,6 @@ class AgentSessionWatcher:
             state.byte_offset_consumed += len(complete)
             state.last_mtime = current_mtime
             state.events.extend(new_events)
-            return new_events
 
     def _enrich_subagent_metadata(self, events: list[dict[str, Any]]) -> None:
         """Enrich Agent tool_use events with subagent metadata.
@@ -340,13 +355,16 @@ class AgentSessionWatcher:
         ``get_all_events`` path, so the watcher must not also broadcast the
         backlog through ``on_events`` (that would flood the bounded SSE queues
         for long histories). Priming fills ``cache.events`` and advances the
-        byte offset to EOF so the poll loop afterwards emits only new events.
+        byte offset to EOF, then marks the whole backlog as already emitted so
+        the poll loop afterwards emits only events appended after start.
         """
         with self._lock:
             states = list(self._session_states.values())
         for state in states:
             if state.file_path.exists():
                 self._ensure_cache_current(state)
+                with self._lock:
+                    state.emitted_count = len(state.events)
 
     def _discover_sessions(self) -> None:
         """Read claude_session_id_history to find all session IDs."""
@@ -476,7 +494,12 @@ class AgentSessionWatcher:
             logger.debug("Failed to start watchdog observer, falling back to polling only: {}", e)
 
     def _poll_for_changes(self) -> None:
-        """Check all session files for new content and emit newly parsed events."""
+        """Check all session files for new content and emit any not-yet-emitted events.
+
+        Emission is driven by ``emitted_count`` rather than by what this call
+        parsed, so events that a concurrent HTTP ``get_all_events`` parsed into
+        the cache are still delivered to connected SSE clients exactly once.
+        """
         with self._lock:
             states = list(self._session_states.values())
 
@@ -484,7 +507,10 @@ class AgentSessionWatcher:
             if not state.file_path.exists():
                 continue
 
-            new_events = self._ensure_cache_current(state)
-            if new_events:
-                self._enrich_subagent_metadata(new_events)
-                self._on_events(self._agent_id, new_events)
+            self._ensure_cache_current(state)
+            with self._lock:
+                pending_events = state.events[state.emitted_count :]
+                state.emitted_count = len(state.events)
+            if pending_events:
+                self._enrich_subagent_metadata(pending_events)
+                self._on_events(self._agent_id, pending_events)

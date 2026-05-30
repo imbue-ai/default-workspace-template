@@ -359,6 +359,36 @@ def test_poll_re_reads_truncated_file_with_recurring_event_ids(tmp_path: Path) -
     assert [e["event_id"] for e in final_state.events] == ["uuid-0-user", "uuid-1-user"]
 
 
+def test_poll_still_emits_events_parsed_by_a_concurrent_get_all_events(tmp_path: Path) -> None:
+    """A concurrent HTTP read must not rob the poll loop of events to emit.
+
+    ``get_all_events`` and the poll loop share the per-file cache offset. If
+    emission were driven by what the poll's own parse produced, an
+    interleaved ``get_all_events`` that parsed the new tail first would leave
+    the poll loop with nothing to emit, and connected SSE clients (which never
+    re-fetch) would permanently miss the event. Emission is instead driven by
+    ``emitted_count``, so the poll loop still delivers the event exactly once.
+    """
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    collected: list[dict[str, Any]] = []
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, collected)
+    watcher._discover_sessions()
+
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_user_event(0)) + "\n").encode("utf-8"))
+
+    # Simulate the HTTP path parsing the new tail into the shared cache before
+    # the poll loop gets to it.
+    watcher.get_all_events()
+
+    watcher._poll_for_changes()
+    assert [e["event_id"] for e in collected] == ["uuid-0-user"]
+
+    # A second poll with no new bytes must not re-emit the same event.
+    watcher._poll_for_changes()
+    assert [e["event_id"] for e in collected] == ["uuid-0-user"]
+
+
 def test_get_all_events_caches_parsed_events(tmp_path: Path) -> None:
     """Unchanged files are not re-parsed across calls (issue D)."""
     agent_state_dir, claude_config_dir, _ = _setup_agent(
