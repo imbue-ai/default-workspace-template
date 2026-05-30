@@ -195,6 +195,18 @@ extra_provision_command__extend = [
     "mkdir -p $HOME/.local/bin && ln -sf /mngr/code/vendor/tk/ticket $HOME/.local/bin/tk",
 ]
 
+# template for sbx (Docker Sandboxes) provider. Mirrors the lima template:
+# an sshd-bridged provider with no Dockerfile build. The mngr_sbx provider
+# installs openssh/git/rsync/tmux inside the sandbox during create_host, so
+# (unlike lima) no package-install provision step is needed here; the shared
+# [create_templates.main] tmux-config command still stacks on top.
+[create_templates.sbx]
+provider = "sbx"
+target_path = "/mngr/code/"
+idle_mode = "disabled"
+# Same forwarding as the docker/lima templates; see comment on the docker template.
+pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
+
 # template for vultr VPS provider (cloud mode)
 [create_templates.vultr]
 provider = "vultr"
