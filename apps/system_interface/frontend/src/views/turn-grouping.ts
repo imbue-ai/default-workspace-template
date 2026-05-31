@@ -399,6 +399,16 @@ function sortedWindowedSteps(steps: StepView[]): StepView[] {
     .sort((a, b) => (a.active_window_start ?? "").localeCompare(b.active_window_start ?? ""));
 }
 
+/** ticket_id of the first step (in window-start order) that starts strictly
+ *  after `ts`, or "" when none does. Positions a timeline interrupt (woven
+ *  prose or a stop-hook chip): it renders immediately before that step, or at
+ *  the end of the timeline when nothing starts later. `sorted` must be the
+ *  output of `sortedWindowedSteps`. */
+function firstStepStartingAfter(sorted: StepView[], ts: string): string {
+  const next = sorted.find((s) => (s.active_window_start ?? "") > ts);
+  return next ? next.ticket_id : "";
+}
+
 /** Timestamps of the stop-hook feedback messages in the section, sorted.
  *  Each one ends the agent's prior reply segment and starts a new one: a
  *  Stop hook fires when the agent thinks its turn is over, so a wrap-up reply
@@ -512,12 +522,6 @@ export function classifyTopLevelMessages(body_events: TranscriptEvent[], steps: 
   // when there are none). A reply detected before this point belongs to an
   // earlier segment and is woven in chronologically rather than rendered below.
   const finalSegmentStart = segmentBounds.length > 0 ? segmentBounds[segmentBounds.length - 1] : "";
-  // Position a woven message before the first step that starts after it (or at
-  // the timeline's end when none do) -- the same rule the stop-hook chip uses.
-  const weaveBeforeStepId = (ts: string): string => {
-    const next = sorted.find((s) => (s.active_window_start ?? "") > ts);
-    return next ? next.ticket_id : "";
-  };
 
   for (const ev of textOnly) {
     const ts = ev.timestamp;
@@ -531,7 +535,7 @@ export function classifyTopLevelMessages(body_events: TranscriptEvent[], steps: 
       if (ts >= finalSegmentStart) {
         result.trailing.push(ev);
       } else {
-        result.inter_step.push({ event: ev, before_step_id: weaveBeforeStepId(ts) });
+        result.inter_step.push({ event: ev, before_step_id: firstStepStartingAfter(sorted, ts) });
       }
       continue;
     }
@@ -567,8 +571,7 @@ export function placeStopHookChips(body_events: TranscriptEvent[], steps: StepVi
   const placed: PlacedChip[] = [];
   for (const e of body_events) {
     if (e.type !== "user_message" || !isStopHookFeedback(e.content ?? "")) continue;
-    const next = sorted.find((s) => (s.active_window_start ?? "") > e.timestamp);
-    placed.push({ event: e, before_step_id: next ? next.ticket_id : "" });
+    placed.push({ event: e, before_step_id: firstStepStartingAfter(sorted, e.timestamp) });
   }
   return placed;
 }
