@@ -47,18 +47,21 @@ and pushes the directory alongside the runtime dir -- no extra CLI flag.
 Launch lifecycle commands:
 
     mngr create <NAME> -t <TEMPLATE> --label workspace=<MINDS_WORKSPACE_NAME>
-    mngr push   <NAME>:<RUNTIME_DIR>/   --source <RUNTIME_DIR>/
-                --uncommitted-changes=merge
-    mngr push   <NAME>:<ARTIFACTS_DIR>/ --source <ARTIFACTS_DIR>/
-                --uncommitted-changes=merge   (when frontmatter declares it)
+    mngr rsync  <RUNTIME_DIR>/   <NAME>:<RUNTIME_DIR>/   --uncommitted-changes=merge
+    mngr rsync  <ARTIFACTS_DIR>/ <NAME>:<ARTIFACTS_DIR>/ --uncommitted-changes=merge
+                (when frontmatter declares it)
     mngr message <NAME> --message-file <TASK_FILE>
 
-The trailing-slash rewriting and ``--uncommitted-changes=merge`` flag are
-required by ``mngr push`` (see ``.agents/shared/references/lead-proxy.md``).
+``mngr rsync`` takes ``SOURCE DESTINATION`` (the local source dir first, then
+the ``<NAME>:<PATH>`` agent endpoint). The trailing slash on both ends makes
+rsync copy directory *contents* into the destination; mngr passes the paths
+through verbatim, so the slash is load-bearing. The
+``--uncommitted-changes=merge`` flag is required (see
+``.agents/shared/references/lead-proxy.md``).
 
-Why ``mngr message`` *after* the pushes (instead of using ``mngr create
+Why ``mngr message`` *after* the syncs (instead of using ``mngr create
 --message-file``): if the worker reads its first message before the runtime
-dir push lands in its worktree, the task file's ``finish_report_path`` will
+dir sync lands in its worktree, the task file's ``finish_report_path`` will
 resolve to nothing. Sending the task as a follow-up message guarantees the
 worker sees the runtime dir first.
 
@@ -219,21 +222,23 @@ def _flush_common_transcript(state_dir: Path | None, runner: Runner) -> None:
         )
 
 
-def push(name: str, source_dir: Path, runner: Runner) -> None:
-    """Push ``source_dir`` into worker ``name``'s worktree at the same path.
+def rsync_dir(name: str, source_dir: Path, runner: Runner) -> None:
+    """Rsync ``source_dir`` into worker ``name``'s worktree at the same path.
 
-    Uses the directory form (trailing slash on both sides) and
-    ``--uncommitted-changes=merge`` -- see lead-proxy.md § "mngr push
-    rationale" for why both are required.
+    ``mngr rsync`` takes ``SOURCE DESTINATION``: the local ``source_dir`` first,
+    then the ``<name>:<path>`` agent endpoint. The directory form (trailing
+    slash on both sides) makes rsync copy the directory *contents* into the
+    destination rather than nesting it, and ``--uncommitted-changes=merge``
+    keeps the worker's post-create uncommitted state from refusing the sync --
+    see lead-proxy.md § "mngr rsync rationale" for why both are required.
     """
     normalized = _normalize_dir(str(source_dir))
     runner.run(
         [
             "mngr",
-            "push",
-            f"{name}:{normalized}",
-            "--source",
+            "rsync",
             normalized,
+            f"{name}:{normalized}",
             "--uncommitted-changes=merge",
         ],
         check=True,
@@ -296,9 +301,9 @@ def launch(
         check=True,
     )
 
-    push(name, runtime_dir, runner)
+    rsync_dir(name, runtime_dir, runner)
     if artifacts_dir is not None:
-        push(name, artifacts_dir, runner)
+        rsync_dir(name, artifacts_dir, runner)
 
     _flush_common_transcript(state_dir, runner)
 
