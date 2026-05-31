@@ -28,8 +28,16 @@ export function isNonBoundaryUserMessage(content: string): boolean {
   return false;
 }
 
+/** True for the stop-hook feedback user_message Claude Code injects when a
+ *  Stop hook fires. Distinct from skill expansions: a stop hook marks the
+ *  end of the agent's genuine turn, so the reply-detection layer treats it
+ *  as a reply-segment boundary (see classifyTopLevelMessages). */
+export function isStopHookFeedback(content: string): boolean {
+  return content.startsWith("Stop hook feedback:\n");
+}
+
 export function isCollapsibleUserMessage(content: string): { label: string } | null {
-  if (content.startsWith("Stop hook feedback:\n")) {
+  if (isStopHookFeedback(content)) {
     return { label: "Stop hook feedback" };
   }
   if (content.startsWith("Base directory for this skill:")) {

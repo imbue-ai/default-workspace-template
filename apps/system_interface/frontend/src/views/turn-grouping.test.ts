@@ -3,9 +3,8 @@ import type { TranscriptEvent } from "../models/Response";
 import type { StepView } from "./turn-grouping";
 import {
   buildTaskRecords,
-  makeStepView,
+  buildSectionSteps,
   stepActiveInWindow,
-  sortSteps,
   attributeNarration,
   eventsInTaskWindow,
   classifyTopLevelMessages,
@@ -98,14 +97,7 @@ function taskEvent(
 /** Helper: build steps active in a window from events, mirroring what
  *  ChatPanel does inline. */
 function stepsForWindow(events: TranscriptEvent[], start_ts: string, end_ts: string, is_settled: boolean): StepView[] {
-  const records = buildTaskRecords(events);
-  const steps: StepView[] = [];
-  for (const r of records.values()) {
-    if (!r.step) continue;
-    if (!stepActiveInWindow(r, start_ts, end_ts)) continue;
-    steps.push(makeStepView(r, is_settled && r.final_status !== "closed"));
-  }
-  return sortSteps(steps, records, start_ts);
+  return buildSectionSteps(buildTaskRecords(events), start_ts, end_ts, is_settled);
 }
 
 /** Helper: collect body events in a window from the full event list. */
@@ -220,7 +212,11 @@ describe("step rendering in partitions", () => {
     });
   });
 
-  it("shows an unfinished step in both partitions when it spans a user message", () => {
+  it("clamps a step's status to each partition: still active in the earlier block, done in the later one", () => {
+    // The step is in_progress at the 01:01:00 boundary and only closes at
+    // 01:01:30, in the second partition. The earlier block must render it as
+    // still-active (not retroactively "done"), and its summary/closed_at must
+    // not leak backwards; the later block renders the close.
     const events: TranscriptEvent[] = [
       taskEvent("t1", "open", "2026-04-28T01:00:10Z", { created_at: "2026-04-28T01:00:10Z", title: "Step 1" }),
       taskEvent("t1", "in_progress", "2026-04-28T01:00:20Z"),
@@ -229,15 +225,15 @@ describe("step rendering in partitions", () => {
         summary_at: "2026-04-28T01:01:25Z",
       }),
     ];
-    // First partition: 01:00:00 -> 01:01:00
+    // First partition: 01:00:00 -> 01:01:00 (closes later, so still active here)
     const steps1 = stepsForWindow(events, "2026-04-28T01:00:00Z", "2026-04-28T01:01:00Z", true);
     expect(steps1).toHaveLength(1);
-    expect(steps1[0]).toMatchObject({ ticket_id: "t1", status: "done" });
+    expect(steps1[0]).toMatchObject({ ticket_id: "t1", status: "active", summary: null, active_window_end: null });
 
-    // Second partition: 01:01:00 -> "" (tail)
+    // Second partition: 01:01:00 -> "" (tail) -- the close lands here
     const steps2 = stepsForWindow(events, "2026-04-28T01:01:00Z", "", false);
     expect(steps2).toHaveLength(1);
-    expect(steps2[0]).toMatchObject({ ticket_id: "t1", status: "done" });
+    expect(steps2[0]).toMatchObject({ ticket_id: "t1", status: "done", summary: "Wrapped up step 1" });
   });
 
   it("does not show a step that was closed before the partition", () => {
@@ -368,6 +364,43 @@ describe("is_settled", () => {
     const steps = stepsForWindow(events, "2026-04-28T01:00:00Z", "2026-04-28T01:01:00Z", true);
     expect(steps[0].status).toBe("done");
     expect(steps[0].is_settled).toBe(false);
+  });
+
+  it("spins only the frontier step in the running tail; an earlier still-open step settles", () => {
+    // The agent is on the most-recently-started step. An earlier step left
+    // open is not the frontier, so it must not show a live spinner above it.
+    const events: TranscriptEvent[] = [
+      taskEvent("a", "open", "2026-04-28T01:00:05Z", { created_at: "2026-04-28T01:00:05Z", title: "First" }),
+      taskEvent("a", "in_progress", "2026-04-28T01:00:10Z"),
+      taskEvent("b", "open", "2026-04-28T01:00:15Z", { created_at: "2026-04-28T01:00:15Z", title: "Second" }),
+      taskEvent("b", "in_progress", "2026-04-28T01:00:20Z"),
+    ];
+    const steps = stepsForWindow(events, "2026-04-28T01:00:00Z", "", false);
+    const a = steps.find((s) => s.ticket_id === "a")!;
+    const b = steps.find((s) => s.ticket_id === "b")!;
+    expect(a.status).toBe("active");
+    expect(a.is_settled).toBe(true); // superseded -> static ring, no spinner
+    expect(b.status).toBe("active");
+    expect(b.is_settled).toBe(false); // frontier -> live spinner
+  });
+
+  it("settles an earlier open step even when the later step that superseded it is already done", () => {
+    // The screenshot bug: step 'a' spins while a *later* step 'b' is already
+    // done. Once a later step started -- even one that has since closed -- the
+    // earlier open step was left behind and must render static, not spinning.
+    const events: TranscriptEvent[] = [
+      taskEvent("a", "open", "2026-04-28T01:00:05Z", { created_at: "2026-04-28T01:00:05Z", title: "Start service" }),
+      taskEvent("a", "in_progress", "2026-04-28T01:00:10Z"),
+      taskEvent("b", "open", "2026-04-28T01:00:15Z", { created_at: "2026-04-28T01:00:15Z", title: "Build UI" }),
+      taskEvent("b", "in_progress", "2026-04-28T01:00:20Z"),
+      taskEvent("b", "closed", "2026-04-28T01:00:40Z", { summary: "Built the UI." }),
+    ];
+    const steps = stepsForWindow(events, "2026-04-28T01:00:00Z", "", false);
+    const a = steps.find((s) => s.ticket_id === "a")!;
+    const b = steps.find((s) => s.ticket_id === "b")!;
+    expect(a.status).toBe("active");
+    expect(a.is_settled).toBe(true); // not the frontier (b started later) -> static
+    expect(b.status).toBe("done");
   });
 });
 
@@ -690,6 +723,27 @@ describe("classifyTopLevelMessages", () => {
     expect(classifyTopLevelMessages([], [doneStep])).toEqual({ leading: [], inter_step: [], trailing: [] });
   });
 
+  // Issue 4: a wrap-up reply emitted at end of turn while a step is still
+  // open must stay promoted after the next user message arrives and the step
+  // later closes. With the per-partition clamp, the step renders active (no
+  // future closed_at) in the earlier block, so the reply boundary stays at
+  // the last tool call and the wrap-up remains the trailing reply.
+  it("keeps the end-of-turn reply trailing when its step only closes in a later partition", () => {
+    const events: TranscriptEvent[] = [
+      taskEvent("t1", "open", "2026-04-28T01:00:10Z", { created_at: "2026-04-28T01:00:10Z", title: "Work" }),
+      taskEvent("t1", "in_progress", "2026-04-28T01:00:20Z"),
+      toolUse("2026-04-28T01:00:30Z", "Edit", "tc-1"),
+      assistantMsg("2026-04-28T01:00:50Z", "Done -- want me to also add a test?", "msg-reply"),
+      // The step is only closed in the next partition (after a later user msg).
+      taskEvent("t1", "closed", "2026-04-28T01:02:00Z", { summary: "Did the work." }),
+    ];
+    const steps = stepsForWindow(events, "2026-04-28T01:00:00Z", "2026-04-28T01:01:00Z", true);
+    expect(steps[0]).toMatchObject({ status: "active", active_window_end: null });
+    const body = bodyEventsInWindow(events, "2026-04-28T01:00:00Z", "2026-04-28T01:01:00Z");
+    const placed = classifyTopLevelMessages(body, steps);
+    expect(placed.trailing.map((e) => e.event_id)).toEqual(["msg-reply"]);
+  });
+
   it("promotes a multi-message trailing reply run as a single trailing block", () => {
     const doneStep = stepView({
       ticket_id: "t1",
@@ -701,6 +755,69 @@ describe("classifyTopLevelMessages", () => {
     const r2 = assistantMsg("2026-04-28T01:00:45Z", "And one caveat.", "msg-2");
     const placed = classifyTopLevelMessages([r1, r2], [doneStep]);
     expect(placed.trailing.map((e) => e.event_id)).toEqual(["msg-1", "msg-2"]);
+  });
+});
+
+describe("stop-hook reply segments (issue 3)", () => {
+  const doneStep = (): StepView =>
+    stepView({
+      ticket_id: "t1",
+      status: "done",
+      active_window_start: "2026-04-28T01:00:00Z",
+      active_window_end: "2026-04-28T01:00:20Z",
+      summary: "Did the work.",
+    });
+
+  it("surfaces BOTH the pre-hook wrap-up and the post-hook reply when post-hook tool work follows", () => {
+    // Without segmentation, the post-hook tool call pushes the reply boundary
+    // past the pre-hook reply, collapsing it and promoting the post-hook prose
+    // as the sole headline. With per-segment scanning both surface.
+    const body = [
+      toolUse("2026-04-28T01:00:10Z", "Edit", "tc-pre"),
+      assistantMsg("2026-04-28T01:00:30Z", "Done -- here is the summary.", "msg-pre"),
+      userMsg("2026-04-28T01:00:40Z", "Stop hook feedback:\nRun /autofix.", "u-hook"),
+      toolUse("2026-04-28T01:00:50Z", "Bash", "tc-post"),
+      assistantMsg("2026-04-28T01:01:00Z", "Autofix found nothing; working tree clean.", "msg-post"),
+    ];
+    const placed = classifyTopLevelMessages(body, [doneStep()]);
+    expect(placed.trailing.map((e) => e.event_id)).toEqual(["msg-pre", "msg-post"]);
+    expect(placed.leading).toEqual([]);
+    expect(placed.inter_step).toEqual([]);
+  });
+
+  it("surfaces a post-hook reply that has no further tool work, without collapsing the pre-hook reply", () => {
+    const body = [
+      toolUse("2026-04-28T01:00:10Z", "Edit", "tc-pre"),
+      assistantMsg("2026-04-28T01:00:30Z", "Done -- want a test?", "msg-pre"),
+      userMsg("2026-04-28T01:00:40Z", "Stop hook feedback:\nReview the conversation.", "u-hook"),
+      assistantMsg("2026-04-28T01:00:50Z", "Nothing to change; ready for your go-ahead.", "msg-post"),
+    ];
+    const placed = classifyTopLevelMessages(body, [doneStep()]);
+    expect(placed.trailing.map((e) => e.event_id)).toEqual(["msg-pre", "msg-post"]);
+  });
+
+  it("keeps post-hook mid-work narration in-step; only the post-hook trailing reply is promoted", () => {
+    // After the hook the agent narrates, does more tool work, then replies.
+    // The narration (followed by a post-hook tool) is not the segment's reply.
+    const openStep = stepView({
+      ticket_id: "t1",
+      status: "active",
+      active_window_start: "2026-04-28T01:00:00Z",
+      active_window_end: null,
+      is_settled: true,
+    });
+    const body = [
+      toolUse("2026-04-28T01:00:10Z", "Edit", "tc-pre"),
+      assistantMsg("2026-04-28T01:00:30Z", "Finished the change.", "msg-pre"),
+      userMsg("2026-04-28T01:00:40Z", "Stop hook feedback:\nRun /autofix.", "u-hook"),
+      assistantMsg("2026-04-28T01:00:45Z", "Re-running autofix now.", "msg-post-narr"),
+      toolUse("2026-04-28T01:00:50Z", "Bash", "tc-post"),
+      assistantMsg("2026-04-28T01:01:00Z", "All clean.", "msg-post-reply"),
+    ];
+    const placed = classifyTopLevelMessages(body, [openStep]);
+    expect(placed.trailing.map((e) => e.event_id)).toEqual(["msg-pre", "msg-post-reply"]);
+    // msg-post-narr is mid-work in the post-hook segment, not a reply.
+    expect(placed.trailing.map((e) => e.event_id)).not.toContain("msg-post-narr");
   });
 });
 
