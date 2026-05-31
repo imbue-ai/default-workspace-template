@@ -16,6 +16,7 @@
  */
 
 import type { TranscriptEvent, TaskEventStatus } from "../models/Response";
+import { isStopHookFeedback } from "./user-message-classification";
 
 export type TaskUiStatus = "pending" | "active" | "done";
 
@@ -115,10 +116,29 @@ export function buildTaskRecords(events: TranscriptEvent[]): Map<string, TaskRec
   return records;
 }
 
-/** Build a StepView from a TaskRecord. */
-export function makeStepView(record: TaskRecord, is_settled: boolean): StepView {
-  const status: TaskUiStatus =
-    record.final_status === "closed" ? "done" : record.final_status === "in_progress" ? "active" : "pending";
+/** A step's status *as of* a partition's end boundary.
+ *
+ *  `buildTaskRecords` folds a ticket's whole history into one record whose
+ *  `final_status` is the LATEST status seen anywhere. Rendering that global
+ *  status in an *earlier* partition is wrong: a step that was still
+ *  in_progress at this partition's boundary, but closes in a later one,
+ *  would retroactively show as "done" here -- and its future `closed_at`
+ *  would leak backwards (moving the reply boundary, collapsing the
+ *  end-of-turn reply). Clamp to the status that was actually true at
+ *  `partition_end`. `partition_end === ""` is the open tail: no clamp. */
+function statusAsOf(record: TaskRecord, partition_end: string): TaskEventStatus {
+  if (partition_end === "") return record.final_status;
+  if (record.closed_at !== null && record.closed_at < partition_end) return "closed";
+  if (record.started_at !== null && record.started_at < partition_end) return "in_progress";
+  return "open";
+}
+
+/** Build a StepView from a TaskRecord, clamped to `partition_end` (see
+ *  `statusAsOf`). `partition_end === ""` (the default) renders the latest
+ *  known status, for the open tail partition. */
+export function makeStepView(record: TaskRecord, is_settled: boolean, partition_end: string = ""): StepView {
+  const effective = statusAsOf(record, partition_end);
+  const status: TaskUiStatus = effective === "closed" ? "done" : effective === "in_progress" ? "active" : "pending";
   return {
     ticket_id: record.ticket_id,
     title: record.title,
@@ -170,6 +190,62 @@ export function sortSteps(steps: StepView[], records: Map<string, TaskRecord>, p
   const carry = steps.filter((s) => isStepCarryover(records.get(s.ticket_id)!, partition_start)).sort(byStart);
   const own = steps.filter((s) => !isStepCarryover(records.get(s.ticket_id)!, partition_start)).sort(byStart);
   return [...carry, ...own];
+}
+
+/** ticket_id of the live "frontier" step in a partition: the most
+ *  recently-*started* step as of `partition_end`, whatever its status now.
+ *  This is the step the agent is actually on -- the only one that may show a
+ *  live spinner. Crucially the frontier is chosen across both in_progress and
+ *  already-closed steps: once a *later* step has started (even one that has
+ *  since finished), any earlier still-open step was left behind and must not
+ *  keep spinning above it. When the frontier is a done step, no in_progress
+ *  step matches it, so every lingering open step settles. Returns null when
+ *  no step has started yet. */
+function frontierStepId(records: TaskRecord[], partition_end: string): string | null {
+  let frontier: TaskRecord | null = null;
+  let frontierStart = "";
+  for (const r of records) {
+    if (statusAsOf(r, partition_end) === "open") continue; // not started as of this boundary
+    const started = r.started_at ?? r.created_at;
+    if (frontier === null || started > frontierStart) {
+      frontier = r;
+      frontierStart = started;
+    }
+  }
+  return frontier === null ? null : frontier.ticket_id;
+}
+
+/** Build the sorted, partition-clamped StepViews for one section window.
+ *
+ *  - Status / summary / active window are clamped to `partition_end` so a
+ *    step that closes in a *later* partition still renders as active here
+ *    (see `statusAsOf`): a global close must not retroactively flip an
+ *    earlier block to "done", nor leak its future `closed_at` into the
+ *    earlier block's reply-boundary scan.
+ *  - `is_settled` is computed per step, not once per partition: an active
+ *    step shows the live spinner only when it is the frontier (the agent's
+ *    current step) AND the partition is the still-running tail. A non-tail
+ *    or idle partition settles every step; a superseded earlier step (a
+ *    later step has since started) settles even in the running tail, so it
+ *    can't spin above a step that already finished. */
+export function buildSectionSteps(
+  records: Map<string, TaskRecord>,
+  partition_start: string,
+  partition_end: string,
+  partition_is_settled: boolean,
+): StepView[] {
+  const active = Array.from(records.values()).filter(
+    (r) => r.step && stepActiveInWindow(r, partition_start, partition_end),
+  );
+  const frontier = frontierStepId(active, partition_end);
+  const views = active.map((r) => {
+    const effective = statusAsOf(r, partition_end);
+    // is_settled only governs the active-step icon (spinner vs static ring);
+    // done/pending steps carry false, matching the prior behavior.
+    const settled = effective !== "in_progress" ? false : partition_is_settled || r.ticket_id !== frontier;
+    return makeStepView(r, settled, partition_end);
+  });
+  return sortSteps(views, records, partition_start);
 }
 
 /** True when `e` is a text-only assistant message (prose, no tool calls). */
@@ -323,13 +399,52 @@ function sortedWindowedSteps(steps: StepView[]): StepView[] {
     .sort((a, b) => (a.active_window_start ?? "").localeCompare(b.active_window_start ?? ""));
 }
 
-/** Timestamp of the last "stop boundary" for the backward reply scan: the
- *  latest tool activity OR step close in the section. Text strictly after
- *  this is the trailing reply run. Null when the section has neither. */
-function lastReplyBoundary(body_events: TranscriptEvent[], steps: StepView[]): string | null {
+/** Timestamps of the stop-hook feedback messages in the section, sorted.
+ *  Each one ends the agent's prior reply segment and starts a new one: a
+ *  Stop hook fires when the agent thinks its turn is over, so a wrap-up reply
+ *  written before it and a reply written after it are two distinct replies,
+ *  detected independently. Skill expansions and ordinary chips are NOT
+ *  segment boundaries -- they happen mid-work. */
+function replySegmentBoundaries(body_events: TranscriptEvent[]): string[] {
+  return body_events
+    .filter((e) => e.type === "user_message" && isStopHookFeedback(e.content ?? ""))
+    .map((e) => e.timestamp)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/** The reply segment [start, end) that contains `ts`. start === "" means the
+ *  pre-hook segment (no lower bound); end === "" means the final segment (no
+ *  upper bound). */
+function segmentFor(ts: string, boundaries: string[]): { start: string; end: string } {
+  let start = "";
+  let end = "";
+  for (const b of boundaries) {
+    if (b <= ts) {
+      start = b;
+    } else {
+      end = b;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+/** The last "stop boundary" for the backward reply scan *within one reply
+ *  segment*: the latest tool activity OR step close in [seg_start, seg_end).
+ *  Text strictly after this (and before the segment end) is that segment's
+ *  trailing reply. Null when the segment has neither. Passing
+ *  seg_start = seg_end = "" scans the whole section (the no-stop-hook case),
+ *  matching the original single-boundary behavior. */
+function segmentReplyBoundary(
+  body_events: TranscriptEvent[],
+  steps: StepView[],
+  seg_start: string,
+  seg_end: string,
+): string | null {
+  const inSegment = (ts: string): boolean => ts >= seg_start && (seg_end === "" || ts < seg_end);
   let last: string | null = null;
   const bump = (ts: string | null): void => {
-    if (ts !== null && (last === null || ts > last)) last = ts;
+    if (ts !== null && inSegment(ts) && (last === null || ts > last)) last = ts;
   };
   for (const e of body_events) {
     if (isToolActivity(e)) bump(e.timestamp);
@@ -373,6 +488,14 @@ function locate(ts: string, sorted: StepView[]): Located {
  *
  * Text that falls inside a step's window and is *not* trailing stays in
  * the step (as narration / expandable body) and is not returned here.
+ *
+ * The backward reply scan is **per reply segment**, where a stop-hook
+ * feedback message splits the section into segments. This makes the scan
+ * robust to stop hooks: post-hook tool activity can no longer bury the
+ * genuine pre-hook wrap-up reply, and a reply the agent writes *in response
+ * to* a stop hook surfaces as its own trailing reply rather than collapsing
+ * or replacing the pre-hook one. Each segment can contribute a trailing
+ * reply; they render below the timeline in chronological order.
  */
 export function classifyTopLevelMessages(body_events: TranscriptEvent[], steps: StepView[]): PlacedMessages {
   const result: PlacedMessages = { leading: [], inter_step: [], trailing: [] };
@@ -381,13 +504,14 @@ export function classifyTopLevelMessages(body_events: TranscriptEvent[], steps: 
 
   const sorted = sortedWindowedSteps(steps);
   const firstStart = sorted.length > 0 ? sorted[0].active_window_start : null;
-  const boundary = lastReplyBoundary(body_events, steps);
-  const isTrailing = (ts: string): boolean =>
-    boundary !== null ? ts > boundary : firstStart !== null && ts >= firstStart;
+  const segmentBounds = replySegmentBoundaries(body_events);
 
   for (const ev of textOnly) {
     const ts = ev.timestamp;
-    if (isTrailing(ts)) {
+    const segment = segmentFor(ts, segmentBounds);
+    const boundary = segmentReplyBoundary(body_events, steps, segment.start, segment.end);
+    const isTrailing = boundary !== null ? ts > boundary : firstStart !== null && ts >= firstStart;
+    if (isTrailing) {
       result.trailing.push(ev);
       continue;
     }

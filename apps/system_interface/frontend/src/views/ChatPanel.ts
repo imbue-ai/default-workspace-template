@@ -31,14 +31,7 @@ import {
   computeAuthErrorHiddenEventIds,
 } from "./message-renderers";
 import { getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
-import {
-  buildTaskRecords,
-  makeStepView,
-  stepActiveInWindow,
-  sortSteps,
-  attributeNarration,
-  classifyTopLevelMessages,
-} from "./turn-grouping";
+import { buildTaskRecords, buildSectionSteps, attributeNarration, classifyTopLevelMessages } from "./turn-grouping";
 import { isNonBoundaryUserMessage } from "./user-message-classification";
 import { ProgressBlock } from "./ProgressBlock";
 import { ActivityIndicator } from "./ActivityIndicator";
@@ -424,13 +417,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       const isTail = endTs === "";
       const isSettled = !isTail || agentIsIdle;
 
-      const steps = sortSteps(
-        Array.from(taskRecords.values())
-          .filter((r) => r.step && stepActiveInWindow(r, sectionStart, endTs))
-          .map((r) => makeStepView(r, isSettled && r.final_status !== "closed")),
-        taskRecords,
-        sectionStart,
-      );
+      const steps = buildSectionSteps(taskRecords, sectionStart, endTs, isSettled);
       attributeNarration(steps, bodyEvents);
 
       if (steps.length > 0) {
