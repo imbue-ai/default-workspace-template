@@ -84,6 +84,13 @@ class AgentSessionWatcher:
         # the subagent jsonl's first line: `parentUuid` is null and `sourceToolAssistantUUID`
         # is absent, so the meta.json is the only pre-completion source.)
         self._subagent_tool_use_id: dict[str, str] = {}
+        # tool_call_id -> subagent_id, accumulated from parent tool_results as they stream in.
+        # Persistent (like _subagent_tool_use_id) so a parent assistant message broadcast in an
+        # earlier poll cycle can be re-linked once its subagent's tool_result lands in a later
+        # cycle, rather than only on a full re-parse (page refresh). This is the linkage that
+        # works on Claude Code versions whose meta.json omits toolUseId; it resolves the moment
+        # the subagent finishes (during the run the card stays plain until the result lands).
+        self._subagent_id_by_tool_call: dict[str, str] = {}
         # message_uuid -> assistant_message event that was streamed with at least one Agent
         # tool_call still missing its subagent_metadata. A subagent's jsonl (and thus its
         # parent linkage) can appear after the parent was already broadcast, so we keep the
@@ -202,11 +209,13 @@ class AgentSessionWatcher:
            the moment the subagent spawns, before its tool_result lands, so
            running subagents get the rich card.
 
-        2. Fallback: tool_result events that already carry a `subagent_id`
-           (extracted from the structured `toolUseResult.agentId` field or the
-           legacy `agentId:` text trailer). Used for sessions whose subagent
-           meta.json predates the `toolUseId` field, or whose subagent files are
-           no longer on disk.
+        2. Fallback: tool_result events that carry a `subagent_id` (from the
+           structured `toolUseResult.agentId` field or the legacy `agentId:`
+           text trailer). These mappings are accumulated persistently across
+           poll cycles, so a parent broadcast in an earlier cycle re-links the
+           moment its subagent's tool_result lands -- not only on a full
+           re-parse. This is the linkage that fires on versions whose meta.json
+           omits `toolUseId`.
         """
         subagent_by_tool_call: dict[str, str] = {}
 
@@ -216,15 +225,18 @@ class AgentSessionWatcher:
         for sub_id, tool_use_id in self._subagent_tool_use_id.items():
             subagent_by_tool_call[tool_use_id] = sub_id
 
-        # 2. Fallback to tool_result-based linkage for tool_use_ids not resolved above.
+        # 2. Accumulate tool_result-based linkage from this batch into the persistent map,
+        #    then resolve against the full accumulated map (not just this batch's events).
+        #    Persisting it lets the rebroadcast pass link a cached parent against a
+        #    tool_result that arrived in a different poll cycle.
         for event in events:
             if event.get("type") != "tool_result":
                 continue
             if "subagent_id" not in event:
                 continue
-            tool_call_id = event["tool_call_id"]
-            if tool_call_id not in subagent_by_tool_call:
-                subagent_by_tool_call[tool_call_id] = event["subagent_id"]
+            self._subagent_id_by_tool_call.setdefault(event["tool_call_id"], event["subagent_id"])
+        for tool_call_id, subagent_id in self._subagent_id_by_tool_call.items():
+            subagent_by_tool_call.setdefault(tool_call_id, subagent_id)
 
         # Enrich assistant messages that have Agent tool calls.
         for event in events:
@@ -257,9 +269,14 @@ class AgentSessionWatcher:
             if self._stop_event.is_set():
                 break
 
+            # Order matters: discover refreshes the meta.json/toolUseId caches, poll
+            # reads new events (accumulating tool_result linkage and caching new unlinked
+            # parents), and rebroadcast runs last so it re-links cached parents against the
+            # caches as they stand after BOTH -- letting a tool_result that lands this cycle
+            # upgrade an older parent's card in the same cycle.
             self._discover_sessions()
-            self._rebroadcast_relinked_parents()
             self._poll_for_changes()
+            self._rebroadcast_relinked_parents()
 
         if self._observer is not None:
             self._observer.stop()

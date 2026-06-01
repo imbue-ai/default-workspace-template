@@ -553,6 +553,80 @@ def test_inorder_subagent_discovery_does_not_rebroadcast(tmp_path: Path) -> None
     assert len(collected) == emissions_before, "nothing left to re-broadcast"
 
 
+def test_tool_result_in_later_poll_relinks_cached_parent(tmp_path: Path) -> None:
+    """On Claude Code versions whose meta.json omits toolUseId, a parent Agent tool_call
+    broadcast before its subagent finishes must still upgrade to the rich card the moment
+    the subagent's tool_result lands in a LATER poll cycle -- not only on a page refresh.
+
+    This exercises the persistent tool_result linkage: the parent (cycle A) and its
+    tool_result (cycle B) never share a poll batch, so the rebroadcast pass must resolve
+    the cached parent against the accumulated tool_call_id -> subagent_id map."""
+    parent_assistant_uuid = "assistant-uuid-tr"
+    tool_use_id = "toolu_tr"
+    parent_event = _make_agent_tool_use_assistant(
+        uuid=parent_assistant_uuid,
+        timestamp="2026-01-01T00:00:01Z",
+        tool_use_id=tool_use_id,
+        description="explore tr",
+    )
+    tool_result_line: dict[str, Any] = {
+        "type": "user",
+        "uuid": "user-uuid-tr",
+        "timestamp": "2026-01-01T00:00:09Z",
+        "toolUseResult": {"status": "completed", "agentId": "trsubid"},
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": tool_use_id, "content": "done", "is_error": False}
+            ],
+        },
+    }
+
+    agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, [])
+    parent_session_file = claude_config_dir / "projects" / "hash123" / f"{session_id}.jsonl"
+
+    collected: list[tuple[str, list[dict[str, Any]]]] = []
+    watcher = AgentSessionWatcher(
+        agent_id="test-agent",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+        on_events=lambda aid, evts: collected.append((aid, evts)),
+    )
+
+    watcher._discover_sessions()
+    watcher._read_initial_offsets()
+
+    # The subagent's meta.json was discovered (so its agent_type/description are known) but
+    # carries no toolUseId on this version, so the disk linkage cannot fire.
+    watcher._subagent_metadata["agent-trsubid"] = {
+        "agent_type": "Explore",
+        "description": "explore tr",
+        "session_id": "agent-trsubid",
+    }
+
+    # Cycle A: the parent assistant message arrives and is broadcast without metadata.
+    with open(parent_session_file, "a") as f:
+        f.write(json.dumps(parent_event) + "\n")
+    watcher._poll_for_changes()
+    watcher._rebroadcast_relinked_parents()
+    broadcast_tc = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
+    assert broadcast_tc is not None
+    assert "subagent_metadata" not in broadcast_tc, "no metadata while the subagent is still running"
+
+    emissions_before = len(collected)
+
+    # Cycle B (later): the subagent finishes and its tool_result lands in a separate batch.
+    with open(parent_session_file, "a") as f:
+        f.write(json.dumps(tool_result_line) + "\n")
+    watcher._poll_for_changes()
+    watcher._rebroadcast_relinked_parents()
+
+    assert len(collected) > emissions_before, "parent should be re-broadcast once the tool_result lands"
+    relinked_tc = _latest_agent_tool_call(collected, parent_assistant_uuid, tool_use_id)
+    assert relinked_tc is not None
+    assert relinked_tc["subagent_metadata"]["description"] == "explore tr"
+
+
 def test_is_main_session_event_excludes_subagent_sessions(tmp_path: Path) -> None:
     """The predicate that keeps subagent-session events out of the main stream."""
     agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, [])
