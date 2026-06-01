@@ -15,7 +15,7 @@
  * partition. There is no formalized "turn" or "section" abstraction here.
  */
 
-import type { TranscriptEvent, TaskEventStatus } from "../models/Response";
+import type { TranscriptEvent, AssistantMessageEvent, UserMessageEvent, TaskEventStatus } from "../models/Response";
 import { isStopHookFeedback } from "./user-message-classification";
 
 export type TaskUiStatus = "pending" | "active" | "done";
@@ -249,7 +249,7 @@ export function buildSectionSteps(
 }
 
 /** True when `e` is a text-only assistant message (prose, no tool calls). */
-function isTextOnlyAssistant(e: TranscriptEvent): boolean {
+function isTextOnlyAssistant(e: TranscriptEvent): e is AssistantMessageEvent {
   return e.type === "assistant_message" && !!e.text && !(e.tool_calls && e.tool_calls.length > 0);
 }
 
@@ -373,22 +373,26 @@ export function eventsInTaskWindow(
   return [...inWindow, ...trailingResults].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
-/** An inter-step message plus the id of the step it interrupts before. */
+/** An inter-step message plus the id of the step it interrupts before.
+ *  Always a text-only assistant message (the only thing classified into a
+ *  placement). */
 export interface InterStepMessage {
-  event: TranscriptEvent;
+  event: AssistantMessageEvent;
   /** ticket_id of the step whose node renders immediately after this block. */
   before_step_id: string;
 }
 
-/** Positionally-classified top-level messages for a section. */
+/** Positionally-classified top-level messages for a section. All entries are
+ *  text-only assistant messages -- the only events `classifyTopLevelMessages`
+ *  places. */
 export interface PlacedMessages {
   /** Prose emitted before the first step started -> above the timeline. */
-  leading: TranscriptEvent[];
+  leading: AssistantMessageEvent[];
   /** Prose in a gap between a closed step and the next step's start ->
    *  interrupts the timeline inline at that point. */
   inter_step: InterStepMessage[];
   /** The user-facing reply (backward-scan run) -> below the timeline. */
-  trailing: TranscriptEvent[];
+  trailing: AssistantMessageEvent[];
 }
 
 /** Top-level steps that have an active window, sorted by window start. */
@@ -556,7 +560,7 @@ export function classifyTopLevelMessages(body_events: TranscriptEvent[], steps: 
  *  before in the timeline. `before_step_id === ""` means render after the
  *  last step (the hook fired after all step activity in the section). */
 export interface PlacedChip {
-  event: TranscriptEvent;
+  event: UserMessageEvent;
   before_step_id: string;
 }
 

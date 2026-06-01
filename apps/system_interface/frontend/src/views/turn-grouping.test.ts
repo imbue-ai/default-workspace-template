@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { TranscriptEvent } from "../models/Response";
+import type { TranscriptEvent, TaskEvent } from "../models/Response";
 import type { StepView } from "./turn-grouping";
 import {
   buildTaskRecords,
@@ -76,7 +76,7 @@ function taskEvent(
   ticketId: string,
   status: "open" | "in_progress" | "closed",
   ts: string,
-  extras: Partial<TranscriptEvent> = {},
+  extras: Partial<TaskEvent> = {},
 ): TranscriptEvent {
   return {
     timestamp: ts,

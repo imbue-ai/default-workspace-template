@@ -29,19 +29,30 @@ export interface ToolCall {
  */
 export type TaskEventStatus = "open" | "in_progress" | "closed";
 
-export interface TranscriptEvent {
+/**
+ * Fields shared by every event, regardless of `type`. The merged `/events`
+ * stream interleaves two independent sources -- the session transcript
+ * (user/assistant/tool_result) and the tickets watcher (task_event) -- so
+ * the only fields guaranteed on all of them are these transport-level ones.
+ */
+export interface BaseTranscriptEvent {
   timestamp: string;
-  type: "user_message" | "assistant_message" | "tool_result" | "task_event";
   event_id: string;
   source: string;
   message_uuid?: string;
   session_id?: string;
+}
 
-  // user_message fields
+/** A message from the user (or a hook/system message rendered as one). */
+export interface UserMessageEvent extends BaseTranscriptEvent {
+  type: "user_message";
   role?: string;
   content?: string;
+}
 
-  // assistant_message fields
+/** A model turn: prose text and/or tool calls. */
+export interface AssistantMessageEvent extends BaseTranscriptEvent {
+  type: "assistant_message";
   model?: string;
   text?: string;
   tool_calls?: ToolCall[];
@@ -52,18 +63,29 @@ export interface TranscriptEvent {
     cache_read_tokens?: number | null;
     cache_write_tokens?: number | null;
   } | null;
-
-  // assistant_message: true when the text matches a known Claude auth-error pattern
+  // True when the text matches a known Claude auth-error pattern.
   is_auth_error?: boolean;
+}
 
-  // tool_result fields
+/** The result of a single tool call, keyed back by `tool_call_id`. */
+export interface ToolResultEvent extends BaseTranscriptEvent {
+  type: "tool_result";
   tool_call_id?: string;
   tool_name?: string;
   output?: string;
   is_error?: boolean;
+}
 
-  // task_event fields (emitted by the tickets_watcher; one event per
-  // (ticket_id, status) tuple, three at most per ticket lifetime).
+/**
+ * A tk ticket state transition, emitted by the tickets_watcher (one event
+ * per (ticket_id, status) tuple, three at most per ticket lifetime). Unlike
+ * the other variants this is not a harness-level transcript event: it is
+ * parsed from the agent's `.tickets/*.md` files and merged into the same
+ * timestamp-ordered stream so the progress view can interleave ticket
+ * windows with the transcript.
+ */
+export interface TaskEvent extends BaseTranscriptEvent {
+  type: "task_event";
   ticket_id?: string;
   title?: string;
   status?: TaskEventStatus;
@@ -82,6 +104,12 @@ export interface TranscriptEvent {
   // first turn rather than the originator's creation turn).
   assignee?: string;
 }
+
+/**
+ * A single entry in the merged event stream, discriminated by `type`.
+ * Narrow on `event.type` before touching variant-specific fields.
+ */
+export type TranscriptEvent = UserMessageEvent | AssistantMessageEvent | ToolResultEvent | TaskEvent;
 
 // For hook compatibility
 export interface ResponseItem {

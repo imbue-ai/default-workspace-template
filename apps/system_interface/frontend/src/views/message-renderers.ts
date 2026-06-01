@@ -5,7 +5,13 @@
 
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
-import type { TranscriptEvent, ToolCall } from "../models/Response";
+import type {
+  TranscriptEvent,
+  AssistantMessageEvent,
+  UserMessageEvent,
+  ToolResultEvent,
+  ToolCall,
+} from "../models/Response";
 import { openSubagentTab } from "./DockviewWorkspace";
 import {
   isCollapsibleUserMessage,
@@ -17,9 +23,9 @@ import {
  *  user_messages into the output of their preceding "Skill" tool call so
  *  the SKILL.md body renders inside the same dropdown rather than as a
  *  separate inline chip. */
-export function buildToolResultsWithSkillExpansions(events: TranscriptEvent[]): Map<string, TranscriptEvent> {
+export function buildToolResultsWithSkillExpansions(events: TranscriptEvent[]): Map<string, ToolResultEvent> {
   const sorted = [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  const toolResults = new Map<string, TranscriptEvent>();
+  const toolResults = new Map<string, ToolResultEvent>();
   for (const e of sorted) {
     if (e.type === "tool_result" && e.tool_call_id) {
       toolResults.set(e.tool_call_id, e);
@@ -108,7 +114,7 @@ export function computeAuthErrorHiddenEventIds(events: TranscriptEvent[]): Set<s
   return hidden;
 }
 
-export function StableUserMessage(): m.Component<{ event: TranscriptEvent }> {
+export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   let renderedEventId: string | null = null;
   return {
     onbeforeupdate(vnode) {
@@ -148,7 +154,7 @@ export function StableUserMessage(): m.Component<{ event: TranscriptEvent }> {
   };
 }
 
-export function renderUserMessage(event: TranscriptEvent): m.Vnode | null {
+export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
   const content = event.content || "";
   if (isHiddenUserMessage(content)) {
     return null;
@@ -160,7 +166,7 @@ export function renderUserMessage(event: TranscriptEvent): m.Vnode | null {
 
 export function countResolvedToolResults(
   toolCalls: ToolCall[] | undefined,
-  toolResults: Map<string, TranscriptEvent>,
+  toolResults: Map<string, ToolResultEvent>,
 ): number {
   if (!toolCalls) return 0;
   let count = 0;
@@ -171,8 +177,8 @@ export function countResolvedToolResults(
 }
 
 export function StableAssistantMessage(): m.Component<{
-  event: TranscriptEvent;
-  toolResults: Map<string, TranscriptEvent>;
+  event: AssistantMessageEvent;
+  toolResults: Map<string, ToolResultEvent>;
   agentId: string;
 }> {
   let renderedEventId: string | null = null;
@@ -196,8 +202,8 @@ export function StableAssistantMessage(): m.Component<{
 }
 
 export function renderAssistantMessage(
-  event: TranscriptEvent,
-  toolResults: Map<string, TranscriptEvent>,
+  event: AssistantMessageEvent,
+  toolResults: Map<string, ToolResultEvent>,
   agentId: string,
 ): m.Vnode {
   return m(
@@ -241,7 +247,7 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string): m.Vnode
   ]);
 }
 
-export function renderToolCallBlock(toolCall: ToolCall, toolResult: TranscriptEvent | null): m.Vnode {
+export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEvent | null): m.Vnode {
   const headerText = `Tool: ${toolCall.tool_name}`;
   const inputText = toolCall.input_preview || "";
   const outputText = toolResult?.output || "";
@@ -277,8 +283,8 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: TranscriptEv
  * Used by both the stable (memoized) and simple assistant message renderers.
  */
 export function renderAssistantMessageChildren(
-  event: TranscriptEvent,
-  toolResults: Map<string, TranscriptEvent>,
+  event: AssistantMessageEvent,
+  toolResults: Map<string, ToolResultEvent>,
   agentId: string,
 ): m.Children[] {
   const textContent = event.text || "";

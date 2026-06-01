@@ -9,7 +9,7 @@
 
 import m from "mithril";
 import { MarkdownContent, renderMarkdown } from "../markdown";
-import type { TranscriptEvent } from "../models/Response";
+import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent } from "../models/Response";
 import { renderAssistantMessageChildren, renderUserMessage } from "./message-renderers";
 import type { InterStepMessage, PlacedChip, StepView, TaskUiStatus } from "./turn-grouping";
 import { eventsInTaskWindow } from "./turn-grouping";
@@ -23,7 +23,7 @@ interface ProgressBlockAttrs {
    *  threads it through so that expanding a task doesn't trigger a
    *  per-task O(n log n) rebuild of the same map. Lookups by id work
    *  fine even though only a subset of events is in this turn. */
-  toolResults: Map<string, TranscriptEvent>;
+  toolResults: Map<string, ToolResultEvent>;
   /** Top-level prose placed by chronological position so nothing is hidden
    *  under a step (see classifyTopLevelMessages in turn-grouping):
    *    - leading: emitted before the first step -> rendered above the timeline.
@@ -31,9 +31,9 @@ interface ProgressBlockAttrs {
    *      step's start -> interrupts the timeline inline before that step.
    *    - trailing: the user-facing reply (backward-scan run) -> below the
    *      timeline. */
-  leading_messages: TranscriptEvent[];
+  leading_messages: AssistantMessageEvent[];
   interstep_messages: InterStepMessage[];
-  trailing_messages: TranscriptEvent[];
+  trailing_messages: AssistantMessageEvent[];
   /** Stop-hook feedback chips, positioned chronologically in the timeline
    *  (before a given step, or after the last step). Rendered as a
    *  thread-interrupting band so a stop hook that fired mid-turn shows where
@@ -96,7 +96,7 @@ function renderTaskCaption(task: StepView, isExpanded: boolean): m.Vnode | null 
 
 function renderExpandedTaskBody(
   events: TranscriptEvent[],
-  toolResults: Map<string, TranscriptEvent>,
+  toolResults: Map<string, ToolResultEvent>,
   agentId: string,
 ): m.Vnode {
   // Callers must only mount this when there are events to render
@@ -141,7 +141,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
       is_last: boolean;
       is_child: boolean;
       body_events: TranscriptEvent[];
-      toolResults: Map<string, TranscriptEvent>;
+      toolResults: Map<string, ToolResultEvent>;
       agentId: string;
       tasks: StepView[];
     },
