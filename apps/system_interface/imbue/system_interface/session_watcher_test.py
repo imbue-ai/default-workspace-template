@@ -234,18 +234,24 @@ def _make_agent_tool_use_assistant(
 def _write_subagent_session(
     parent_session_file: Path,
     agent_id: str,
-    parent_assistant_uuid: str,
+    tool_use_id: str,
     first_timestamp: str,
     *,
     agent_type: str = "Explore",
     description: str = "test sub",
 ) -> Path:
+    """Write a subagent jsonl + meta.json mirroring real Claude Code output.
+
+    The jsonl first line has parentUuid=None and no sourceToolAssistantUUID (as real
+    sidechain sessions do); the parent linkage lives in the meta.json `toolUseId`,
+    which names the parent Agent tool_use directly.
+    """
     subagents_dir = parent_session_file.parent / parent_session_file.stem / "subagents"
     subagents_dir.mkdir(parents=True, exist_ok=True)
     sub_id = f"agent-{agent_id}"
     sub_file = subagents_dir / f"{sub_id}.jsonl"
     first_line = {
-        "parentUuid": parent_assistant_uuid,
+        "parentUuid": None,
         "isSidechain": True,
         "agentId": agent_id,
         "type": "user",
@@ -253,11 +259,10 @@ def _write_subagent_session(
         "uuid": f"sub-first-{agent_id}",
         "timestamp": first_timestamp,
         "sessionId": parent_session_file.stem,
-        "sourceToolAssistantUUID": parent_assistant_uuid,
     }
     sub_file.write_text(json.dumps(first_line) + "\n")
     (subagents_dir / f"{sub_id}.meta.json").write_text(
-        json.dumps({"agentType": agent_type, "description": description})
+        json.dumps({"agentType": agent_type, "description": description, "toolUseId": tool_use_id})
     )
     return sub_file
 
@@ -265,7 +270,7 @@ def _write_subagent_session(
 def test_running_subagent_gets_rich_card_from_disk_linkage(tmp_path: Path) -> None:
     """A subagent that has started but not yet returned a tool_result should still
     get subagent_metadata attached to its parent Agent tool_use, sourced from the
-    subagent jsonl's first line."""
+    subagent meta.json's toolUseId."""
     parent_assistant_uuid = "assistant-uuid-1"
     parent_events: list[dict[str, Any]] = [
         _make_agent_tool_use_assistant(
@@ -281,7 +286,7 @@ def test_running_subagent_gets_rich_card_from_disk_linkage(tmp_path: Path) -> No
     _write_subagent_session(
         parent_session_file,
         agent_id="abc123running",
-        parent_assistant_uuid=parent_assistant_uuid,
+        tool_use_id="toolu_running",
         first_timestamp="2026-01-01T00:00:02Z",
         agent_type="Explore",
         description="explore foo",
@@ -302,9 +307,10 @@ def test_running_subagent_gets_rich_card_from_disk_linkage(tmp_path: Path) -> No
     assert agent_tc["subagent_metadata"]["description"] == "explore foo"
 
 
-def test_multiple_agent_tool_uses_match_subagents_in_spawn_order(tmp_path: Path) -> None:
-    """When one assistant message contains multiple Agent tool_uses, subagent
-    files written earliest should be paired with tool_uses listed first."""
+def test_multiple_agent_tool_uses_link_to_their_subagents(tmp_path: Path) -> None:
+    """When one assistant message contains multiple Agent tool_uses, each subagent's
+    meta.json toolUseId links it to its specific parent tool_use (no spawn-order
+    heuristic needed)."""
     parent_assistant_uuid = "assistant-uuid-multi"
     extra: list[dict[str, Any]] = [
         {
@@ -326,21 +332,22 @@ def test_multiple_agent_tool_uses_match_subagents_in_spawn_order(tmp_path: Path)
 
     agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, parent_events)
     parent_session_file = claude_config_dir / "projects" / "hash123" / f"{session_id}.jsonl"
-    _write_subagent_session(
-        parent_session_file,
-        agent_id="aaaaafirst",
-        parent_assistant_uuid=parent_assistant_uuid,
-        first_timestamp="2026-01-01T00:00:02Z",
-        agent_type="Explore",
-        description="first sub",
-    )
+    # Deliberately link the SECOND tool_use first to prove ordering is irrelevant.
     _write_subagent_session(
         parent_session_file,
         agent_id="bbbbbsecond",
-        parent_assistant_uuid=parent_assistant_uuid,
-        first_timestamp="2026-01-01T00:00:03Z",
+        tool_use_id="toolu_second",
+        first_timestamp="2026-01-01T00:00:02Z",
         agent_type="Explore",
         description="second sub",
+    )
+    _write_subagent_session(
+        parent_session_file,
+        agent_id="aaaaafirst",
+        tool_use_id="toolu_first",
+        first_timestamp="2026-01-01T00:00:03Z",
+        agent_type="Explore",
+        description="first sub",
     )
 
     watcher = AgentSessionWatcher(
@@ -474,7 +481,7 @@ def test_late_subagent_discovery_rebroadcasts_enriched_parent(tmp_path: Path) ->
     _write_subagent_session(
         parent_session_file,
         agent_id="latesubid",
-        parent_assistant_uuid=parent_assistant_uuid,
+        tool_use_id=tool_use_id,
         first_timestamp="2026-01-01T00:00:02Z",
         agent_type="Explore",
         description="explore late",
@@ -526,7 +533,7 @@ def test_inorder_subagent_discovery_does_not_rebroadcast(tmp_path: Path) -> None
     _write_subagent_session(
         parent_session_file,
         agent_id="inordersubid",
-        parent_assistant_uuid=parent_assistant_uuid,
+        tool_use_id=tool_use_id,
         first_timestamp="2026-01-01T00:00:02Z",
         agent_type="Explore",
         description="explore inorder",
