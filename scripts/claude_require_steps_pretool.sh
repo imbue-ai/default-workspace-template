@@ -1,12 +1,25 @@
 #!/usr/bin/env bash
 # PreToolUse hook: soft-block substantive tool calls when the agent has no
-# in_progress step record. Injects a system reminder (exit 0 with stdout)
-# rather than hard-blocking (exit 2), so the tool call still proceeds but
-# the agent sees the nudge.
+# in_progress step record. Injects a system reminder the agent can see while
+# letting the tool call proceed, rather than hard-blocking (exit 2).
+#
+# IMPORTANT: for PreToolUse, plain stdout on exit 0 is written only to the
+# debug log -- the agent never sees it (unlike UserPromptSubmit/SessionStart,
+# where stdout is added to context). To reach the agent without blocking, the
+# reminder must be emitted as JSON via hookSpecificOutput.additionalContext,
+# which Claude Code injects as a system reminder next to the tool result.
+# See https://code.claude.com/docs/en/hooks.
 #
 # Skipped for read-only / introspection tools (Read, Glob, Grep, etc.) and
 # for Bash commands that invoke tk itself (so the agent can create steps).
 set -euo pipefail
+
+# Emit a non-blocking PreToolUse reminder as additionalContext, then exit.
+emit_reminder() {
+    jq -n --arg ctx "$1" \
+        '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $ctx}}'
+    exit 0
+}
 
 repo_root="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
 tickets_dir="${TICKETS_DIR:-${repo_root}/.tickets}"
@@ -61,31 +74,25 @@ fi
 open_steps=$("$tk_script" steps 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
 
 if [[ -n "$open_steps" ]]; then
-    cat <<'EOF'
-
+    emit_reminder "
 [Step tracking reminder]
 
-You have declared step records but none is currently in_progress. Call `tk start <id>` on your next step before doing more work. Steps must be serial -- only one in_progress at a time.
-
-EOF
-    exit 0
+You have declared step records but none is currently in_progress. Call \`tk start <id>\` on your next step before doing more work. Steps must be serial -- only one in_progress at a time.
+"
 fi
 
 # No steps at all -- the agent is doing substantive work without declaring
 # any plan.
-cat <<'EOF'
-
+emit_reminder "
 [Step tracking reminder]
 
 You are about to do work without declaring any step records. The chat progress view requires steps to render your work as a structured timeline.
 
 Before continuing, declare your plan as step records:
-  S1=$(tk create --step "Description of first step")
-  S2=$(tk create --step "Description of second step")
+  S1=\$(tk create --step \"Description of first step\")
+  S2=\$(tk create --step \"Description of second step\")
   ...
-Then start the first step: tk start "$S1"
+Then start the first step: tk start \"\$S1\"
 
 See CLAUDE.md > Task management for the full protocol.
-
-EOF
-exit 0
+"
