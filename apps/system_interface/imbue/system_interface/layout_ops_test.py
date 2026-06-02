@@ -152,8 +152,13 @@ def test_inspect_emits_url_ref_for_ad_hoc_iframe(tmp_path: Path) -> None:
         panel_params={"p1": {"panelType": "iframe", "url": "https://example.com/"}},
     )
     summary = layout_inspect(layout_path, {})
-    ref = summary["panels"][0]["ref"]
-    assert ref.startswith("url:")
+    panel = summary["panels"][0]
+    assert panel["ref"].startswith("url:")
+    # The ``url`` field is surfaced on iframe panel summaries so the CLI's
+    # wait-stable / no-op detection for ``replace-url`` and ``open
+    # https://...`` can match by URL rather than by the synthetic
+    # ``url:<hash>`` ref.
+    assert panel["url"] == "https://example.com/"
 
 
 def test_inspect_preserves_grid_arrangement_in_tree(tmp_path: Path) -> None:
