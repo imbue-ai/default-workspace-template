@@ -762,3 +762,54 @@ def test_maximize_is_unobservable_and_notes_it(
     assert posted == [("maximize", {"ref": "service:web"})]
     err = capsys.readouterr().err
     assert "no observable layout-state change" in err
+
+
+def test_move_within_self_uses_any_change_predicate_not_share_group(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``move --direction=within --relative-to=self`` must NOT use
+    ``_predicate_share_group`` (which would look for the literal ``self``
+    sentinel in inspect output and never match -- causing a 5 s
+    wait-stable timeout). The CLI cannot resolve ``self`` to a real ref
+    client-side, so it falls back to ``_predicate_any_change`` -- the
+    same relaxed predicate cardinal-direction moves already use.
+
+    The fake inspect serves the same snapshot for the pre-op snapshot
+    (taken in ``_cmd_move`` to build the any-change predicate) and the
+    ``before`` snapshot in ``_run_mutating_op``, then a different
+    snapshot for the post-op poll. The predicate fires on the second
+    distinct layout -> success diff, not timeout."""
+    monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE, raising=False)
+
+    before_layout = {
+        "active_panel": None,
+        "panels": [{"ref": "service:web"}],
+        "tree": {"type": "leaf", "panels": [{"ref": "service:web"}]},
+    }
+    after_layout = {
+        "active_panel": None,
+        "panels": [{"ref": "service:web"}],
+        "tree": {"type": "leaf", "panels": [{"ref": "service:web"}, {"ref": "chat:alice"}]},
+    }
+    call_count = {"inspect": 0}
+
+    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+        if op == "inspect":
+            call_count["inspect"] += 1
+            # First two inspect calls (snapshot in _cmd_move, then ``before``
+            # in _run_mutating_op) return the pre-op layout so the predicate
+            # is compared against a stable baseline. Subsequent polls return
+            # the post-op layout to fire the predicate.
+            if call_count["inspect"] <= 2:
+                return 200, {"ok": True, "layout": before_layout}
+            return 200, {"ok": True, "layout": after_layout}
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(layout, "_post_layout", fake_post)
+
+    rc = layout.main(["move", "service:web", "--relative-to", "self", "--direction", "within"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    # Success diff, not a timeout error.
+    assert "moved" in err
+    assert "timeout" not in err

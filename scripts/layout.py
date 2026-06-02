@@ -922,14 +922,19 @@ def _cmd_move(args: argparse.Namespace) -> int:
         "new_group": bool(args.new_group),
     }
 
-    # For ``within`` the predicate is precise (ref + anchor share a leaf).
+    # For ``within`` with an explicit anchor ref the predicate is precise
+    # (ref + anchor share a leaf). ``within`` with ``--relative-to=self``
+    # falls back to ``any_change`` because the ``self`` sentinel never
+    # appears as a real ref in inspect output -- the frontend resolves it
+    # server-side, but client-side we have no way to map it to the
+    # caller's ``chat:<name>`` leaf without an extra round trip.
     # For cardinal directions the exact end-position depends on whether a
     # sibling group exists in that direction (frontend resolves
     # dynamically); ``any_change`` is the right relaxed predicate, built
     # against a snapshot taken right before the post. When wait-stable is
     # bypassed (test mode), skip the snapshot -- ``_run_mutating_op`` will
     # short-circuit before the predicate is ever called.
-    if args.direction == _WITHIN_DIRECTION:
+    if args.direction == _WITHIN_DIRECTION and relative_to != _SELF_REF:
         predicate: _Predicate = _predicate_share_group(ref, relative_to)
         on_noop: _NoopMessage = lambda b: f"no change: {ref} is already in the same group as {relative_to}\n"
     elif os.environ.get(ENV_NO_WAIT_STABLE):
