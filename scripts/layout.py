@@ -908,8 +908,10 @@ def _cmd_open(args: argparse.Namespace) -> int:
     # post-op predicate is "the server-allocated terminal ref is now
     # present". The allocated ref comes back in the HTTP response body,
     # so we have to POST first, then wait. For every other ``open``
-    # target the ref is stable: if it's already present the op is a no-op
-    # (focus-in-place), otherwise we wait for the new panel to appear.
+    # target the ref is stable: if it's already present the op is a
+    # no-op (skips the POST entirely; ``focus`` is the explicit
+    # bring-to-foreground op), otherwise we wait for the new panel to
+    # appear.
     if ref == "service:terminal":
         return _run_terminal_creation_op("open", payload)
 
