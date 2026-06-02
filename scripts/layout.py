@@ -407,7 +407,15 @@ def _require_open(op: str, *refs: str) -> int | None:
     writing a stderr line if any ref is missing, else ``None``. A
     transient ``inspect`` failure (returns ``None``) is treated as "can't
     tell, proceed" so we don't block legitimate work on a flaky read.
+
+    Honors ``MINDS_LAYOUT_NO_WAIT_STABLE``: that escape hatch is for
+    environments with no live frontend, where ``inspect`` returns nothing
+    meaningful and this pre-flight would spuriously block every op. Its
+    documented contract is "return as soon as the POST succeeds", so the
+    inspect-based check is skipped along with the wait-stable path.
     """
+    if os.environ.get(ENV_NO_WAIT_STABLE):
+        return None
     layout = _fetch_layout()
     if layout is None:
         return None

@@ -803,12 +803,15 @@ def test_move_within_explicit_anchor_uses_share_group_predicate(
             "panels": [{"ref": "chat:alice"}, {"ref": "service:web"}],
         },
     }
-    call_count = {"inspect": 0}
+    posted_op = {"done": False}
 
     def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+        # Every pre-op read -- the ref-existence pre-flight (_require_open)
+        # and the wait-stable ``before`` snapshot -- sees the pre-op layout;
+        # the post-op poll sees the after layout once the move is POSTed.
         if op == "inspect":
-            call_count["inspect"] += 1
-            return 200, {"ok": True, "layout": before_layout if call_count["inspect"] == 1 else after_layout}
+            return 200, {"ok": True, "layout": after_layout if posted_op["done"] else before_layout}
+        posted_op["done"] = True
         return 200, {"ok": True}
 
     monkeypatch.setattr(layout, "_post_layout", fake_post)
@@ -924,14 +927,16 @@ def test_rename_emits_diff_after_observed_change(
     # Drop the autouse bypass so the wait-stable code path runs.
     monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE, raising=False)
 
-    layouts = iter([
-        {"active_panel": None, "panels": [{"ref": "chat:alice", "title": "alice"}], "tree": None},
-        {"active_panel": None, "panels": [{"ref": "chat:alice", "title": "Alice (lead)"}], "tree": None},
-    ])
+    before_layout = {"active_panel": None, "panels": [{"ref": "chat:alice", "title": "alice"}], "tree": None}
+    after_layout = {"active_panel": None, "panels": [{"ref": "chat:alice", "title": "Alice (lead)"}], "tree": None}
+    posted_op = {"done": False}
 
     def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+        # Pre-op reads (ref-existence pre-flight + wait-stable ``before``
+        # snapshot) see the old title; the post-op poll sees the new one.
         if op == "inspect":
-            return 200, {"ok": True, "layout": next(layouts)}
+            return 200, {"ok": True, "layout": after_layout if posted_op["done"] else before_layout}
+        posted_op["done"] = True
         return 200, {"ok": True}
 
     monkeypatch.setattr(layout, "_post_layout", fake_post)
@@ -980,11 +985,27 @@ def test_maximize_is_unobservable_and_notes_it(
     monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE, raising=False)
 
     posted: list[tuple[str, dict[str, Any]]] = []
-    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+    # ``maximize`` runs the ref-existence pre-flight (_require_open), which
+    # reads ``inspect``; serve a layout that contains the ref and record
+    # only the mutating broadcast in ``posted``.
+    open_layout = {
+        "active_panel": None,
+        "panels": [{"ref": "service:web"}],
+        "tree": {"type": "leaf", "panels": [{"ref": "service:web"}]},
+    }
+
+    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+        if op == "inspect":
+            return 200, {"ok": True, "layout": open_layout}
+        posted.append((op, args))
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(layout, "_post_layout", fake_post)
 
     rc = layout.main(["maximize", "service:web"])
     assert rc == 0
-    # Only the broadcast went out -- no inspect probes.
+    # Only the broadcast went out -- the unobservable op skips the
+    # wait-stable poll (the pre-flight inspect is not recorded here).
     assert posted == [("maximize", {"ref": "service:web"})]
     err = capsys.readouterr().err
     assert "no observable layout-state change" in err
@@ -1078,24 +1099,36 @@ def test_split_https_url_uses_url_predicate_not_ref(
     monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE, raising=False)
 
     target_url = "https://example.com/page"
-    before_layout = {"active_panel": None, "panels": [], "tree": None}
+    # The anchor (``chat:alice``) must already be open for the ref-existence
+    # pre-flight to pass; the URL panel only appears in the after layout.
+    before_layout = {
+        "active_panel": None,
+        "panels": [{"ref": "chat:alice"}],
+        "tree": {"type": "leaf", "panels": [{"ref": "chat:alice"}]},
+    }
     after_layout = {
         "active_panel": "p1",
         "panels": [
+            {"ref": "chat:alice"},
             {"ref": "url:def67890", "panel_type": "iframe", "url": target_url, "title": "example"},
         ],
         "tree": {
-            "type": "leaf",
-            "size_ratio": 1.0,
-            "panels": [{"ref": "url:def67890", "active": True}],
+            "type": "branch",
+            "arrangement": "row",
+            "children": [
+                {"type": "leaf", "panels": [{"ref": "chat:alice"}]},
+                {"type": "leaf", "size_ratio": 1.0, "panels": [{"ref": "url:def67890", "active": True}]},
+            ],
         },
     }
-    call_count = {"inspect": 0}
+    posted_op = {"done": False}
 
     def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+        # Pre-op reads see the anchor-only layout; the post-op poll sees the
+        # added URL panel once the split is POSTed.
         if op == "inspect":
-            call_count["inspect"] += 1
-            return 200, {"ok": True, "layout": before_layout if call_count["inspect"] == 1 else after_layout}
+            return 200, {"ok": True, "layout": after_layout if posted_op["done"] else before_layout}
+        posted_op["done"] = True
         return 200, {"ok": True}
 
     monkeypatch.setattr(layout, "_post_layout", fake_post)
@@ -1203,15 +1236,14 @@ def test_replace_url_predicate_matches_resolved_service_url_not_shorthand(
             "panels": [{"ref": "service:web", "active": True}],
         },
     }
-    call_count = {"inspect": 0}
+    posted_op = {"done": False}
 
     def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+        # Pre-op reads (ref-existence pre-flight + wait-stable ``before``
+        # snapshot) see the old URL; the post-op poll sees the resolved one.
         if op == "inspect":
-            call_count["inspect"] += 1
-            return 200, {
-                "ok": True,
-                "layout": layout_before if call_count["inspect"] == 1 else layout_after,
-            }
+            return 200, {"ok": True, "layout": layout_after if posted_op["done"] else layout_before}
+        posted_op["done"] = True
         return 200, {"ok": True}
 
     monkeypatch.setattr(layout, "_post_layout", fake_post)
