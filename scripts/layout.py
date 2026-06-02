@@ -219,6 +219,29 @@ def _validate_replace_url(url: str) -> None:
     raise SystemExit(EXIT_ERROR)
 
 
+def _resolve_replace_url(url: str) -> str:
+    """Project a ``replace-url`` URL argument to the form stored on the panel.
+
+    Mirrors the frontend's ``resolveReplaceUrl`` (in ``DockviewWorkspace.ts``):
+    ``service:<name>`` becomes ``/service/<name>/`` (matching ``getServiceUrl``),
+    ``service:<name>/<path>`` becomes ``/service/<name>/<path>``, and plain
+    ``https://`` URLs pass through unchanged. The wait-stable predicate for
+    ``replace-url`` compares against the panel's stored URL, so it must use
+    this resolved form rather than the literal shorthand the agent typed --
+    otherwise every ``service:`` replace-url times out waiting for a string
+    that will never appear.
+    """
+    if not url.startswith("service:"):
+        return url
+    remainder = url.removeprefix("service:")
+    slash_index = remainder.find("/")
+    if slash_index == -1:
+        return f"/service/{remainder}/"
+    name = remainder[:slash_index]
+    path = remainder[slash_index + 1 :]
+    return f"/service/{name}/{path}"
+
+
 def _post_layout(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
     """POST {op, args, agent_id} to /api/layout/broadcast and return (status, parsed_or_raw)."""
     url = f"{_workspace_base_url()}/api/layout/broadcast"
@@ -1086,14 +1109,18 @@ def _cmd_replace_url(args: argparse.Namespace) -> int:
     ref = _normalize_ref(args.ref)
     _validate_ref(ref)
     _validate_replace_url(args.url)
+    # The frontend rewrites ``service:<name>[/<path>]`` to ``/service/<name>...``
+    # before storing it on the panel; the wait-stable predicate must compare
+    # against that resolved form, not the literal shorthand the agent typed.
+    expected_url = _resolve_replace_url(args.url)
     return _run_mutating_op(
         "replace-url",
         {"ref": ref, "url": args.url},
-        _predicate_url(ref, args.url),
+        _predicate_url(ref, expected_url),
         on_success=lambda b, a: (
-            f"replace-url {ref}: {(_find_panel_summary(b, ref) or {}).get('url')!r} -> {args.url!r}\n"
+            f"replace-url {ref}: {(_find_panel_summary(b, ref) or {}).get('url')!r} -> {expected_url!r}\n"
         ),
-        on_noop=lambda b: f"no change: {ref} is already pointed at {args.url!r}\n",
+        on_noop=lambda b: f"no change: {ref} is already pointed at {expected_url!r}\n",
     )
 
 

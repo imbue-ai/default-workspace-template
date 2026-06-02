@@ -930,3 +930,83 @@ def test_move_within_self_uses_any_change_predicate_not_share_group(
     # Success diff, not a timeout error.
     assert "moved" in err
     assert "timeout" not in err
+
+
+def test_replace_url_predicate_matches_resolved_service_url_not_shorthand(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``replace-url <ref> service:<name>[/<path>]`` must compare its
+    wait-stable predicate against the frontend-resolved ``/service/...``
+    path, not the literal ``service:...`` shorthand. The frontend's
+    ``resolveReplaceUrl`` projects the shorthand onto the on-origin path
+    before storing it on the panel, so a predicate that compared against
+    the literal shorthand would never match and the CLI would time out
+    after 5 s with an error -- even though the op actually succeeded."""
+    monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE, raising=False)
+
+    resolved_url = "/service/api/health"
+    layout_after = {
+        "active_panel": "p1",
+        "panels": [
+            {
+                "ref": "service:web",
+                "panel_type": "iframe",
+                "url": resolved_url,
+                "title": "web",
+            },
+        ],
+        "tree": {
+            "type": "leaf",
+            "size_ratio": 1.0,
+            "panels": [{"ref": "service:web", "active": True}],
+        },
+    }
+    layout_before = {
+        "active_panel": "p1",
+        "panels": [
+            {
+                "ref": "service:web",
+                "panel_type": "iframe",
+                "url": "/service/web/",
+                "title": "web",
+            },
+        ],
+        "tree": {
+            "type": "leaf",
+            "size_ratio": 1.0,
+            "panels": [{"ref": "service:web", "active": True}],
+        },
+    }
+    call_count = {"inspect": 0}
+
+    def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
+        if op == "inspect":
+            call_count["inspect"] += 1
+            return 200, {
+                "ok": True,
+                "layout": layout_before if call_count["inspect"] == 1 else layout_after,
+            }
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(layout, "_post_layout", fake_post)
+
+    rc = layout.main(["replace-url", "service:web", "service:api/health"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    # Success diff (with resolved URL), not a timeout error.
+    assert "replace-url" in err
+    assert resolved_url in err
+    assert "timeout" not in err
+
+
+def test_resolve_replace_url_matches_frontend_resolver() -> None:
+    """``_resolve_replace_url`` mirrors the frontend's ``resolveReplaceUrl``:
+    ``service:<name>`` -> ``/service/<name>/`` (trailing slash, matches
+    ``getServiceUrl``), ``service:<name>/<path>`` -> ``/service/<name>/<path>``,
+    ``https://...`` passes through. Any divergence between this helper and
+    the frontend breaks the wait-stable predicate for ``replace-url``."""
+    assert layout._resolve_replace_url("service:web") == "/service/web/"
+    assert layout._resolve_replace_url("service:web/") == "/service/web/"
+    assert layout._resolve_replace_url("service:api/health") == "/service/api/health"
+    assert layout._resolve_replace_url("service:api/v1/users") == "/service/api/v1/users"
+    assert layout._resolve_replace_url("https://example.com/") == "https://example.com/"
