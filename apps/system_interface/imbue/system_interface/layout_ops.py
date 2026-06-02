@@ -271,9 +271,7 @@ def _serialize_grid_node(
     # ``row`` = children side by side (dockview internal ``HORIZONTAL``
     # divider), ``column`` = children stacked top to bottom (internal
     # ``VERTICAL`` divider). The names match how panels are arranged on
-    # screen rather than the divider's orientation -- the previous
-    # ``orientation: horizontal|vertical`` consistently misled readers
-    # into thinking ``vertical`` meant "stacked top to bottom".
+    # screen rather than the divider's orientation.
     data = node.get("data", []) or []
     return {
         "type": "branch",
