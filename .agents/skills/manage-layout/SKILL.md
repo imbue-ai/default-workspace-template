@@ -38,14 +38,15 @@ iframe. Pass `--new-group` to force a fresh column instead.
 
 Targets `open` accepts:
 
-- A workspace service name (`web`) -- focuses an existing iframe for
-  that service if one is open; otherwise creates one.
+- A workspace service name (`web`) -- creates a new iframe for that
+  service, or reports a no-op if one is already open (use `focus` to
+  bring it to the foreground).
 - `terminal` -- creates a fresh terminal in the primary agent's
   work_dir (each call adds a new one, just like the UI's "New
   terminal" button). The new tab's ref (`terminal:<hash>`) is printed
   to stdout so you can capture it for later ops.
-- An external URL (`https://example.com`) -- focuses an existing
-  ad-hoc URL tab pointed at that URL, otherwise opens one.
+- An external URL (`https://example.com`) -- creates a new ad-hoc URL
+  tab, or reports a no-op if one is already open pointed at that URL.
 - A chat ref (`chat:alice`) -- opens another mngr-level agent's chat.
 
 ## Refs: how every panel is addressed
