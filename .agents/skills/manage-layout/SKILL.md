@@ -136,10 +136,7 @@ row size=1.0
 
 The `*` marks the active tab in each group. The header line names
 the **arrangement** of each branch: `row` means children sit side by
-side (left to right), `column` means they stack top to bottom. (The
-older `orientation: horizontal | vertical` wording consistently
-misled readers about which axis was meant; the field was renamed
-accordingly.)
+side (left to right), `column` means they stack top to bottom.
 
 Pass `--verbose` for the full YAML tree (including `panel_id`,
 iframe URLs, and per-panel details) or `--json` for the structured
