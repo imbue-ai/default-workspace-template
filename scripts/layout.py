@@ -954,6 +954,16 @@ def _cmd_focus(args: argparse.Namespace) -> int:
 
 
 def _cmd_split(args: argparse.Namespace) -> int:
+    # Reject incompatible flag combinations before any network / polling work
+    # so users get immediate feedback rather than waiting through
+    # ``_wait_for_registration`` only to be told the flags can't be used
+    # together.
+    if args.direction == _WITHIN_DIRECTION and args.new_group:
+        sys.stderr.write(
+            f"error: --new-group is meaningless with --direction={_WITHIN_DIRECTION} "
+            f"(within tabs into the anchor's own group; a new group would defeat the point)\n"
+        )
+        return EXIT_ERROR
     ref = _normalize_ref(args.target)
     if ref.startswith("service:"):
         service_name = ref.removeprefix("service:")
@@ -966,12 +976,6 @@ def _cmd_split(args: argparse.Namespace) -> int:
     _validate_ref(ref)
     relative_to = _normalize_ref(args.relative_to)
     _validate_ref(relative_to)
-    if args.direction == _WITHIN_DIRECTION and args.new_group:
-        sys.stderr.write(
-            f"error: --new-group is meaningless with --direction={_WITHIN_DIRECTION} "
-            f"(within tabs into the anchor's own group; a new group would defeat the point)\n"
-        )
-        return EXIT_ERROR
     payload: dict[str, Any] = {
         "ref": ref,
         "relative_to": relative_to,
@@ -1025,16 +1029,18 @@ def _cmd_close(args: argparse.Namespace) -> int:
 
 
 def _cmd_move(args: argparse.Namespace) -> int:
-    ref = _normalize_ref(args.ref)
-    _validate_ref(ref)
-    relative_to = _normalize_ref(args.relative_to)
-    _validate_ref(relative_to)
+    # Cheap flag-compatibility check up front so users get immediate
+    # feedback on misuse, mirroring ``_cmd_split``.
     if args.direction == _WITHIN_DIRECTION and args.new_group:
         sys.stderr.write(
             f"error: --new-group is meaningless with --direction={_WITHIN_DIRECTION} "
             f"(within targets the anchor's own group)\n"
         )
         return EXIT_ERROR
+    ref = _normalize_ref(args.ref)
+    _validate_ref(ref)
+    relative_to = _normalize_ref(args.relative_to)
+    _validate_ref(relative_to)
     payload: dict[str, Any] = {
         "ref": ref,
         "relative_to": relative_to,
