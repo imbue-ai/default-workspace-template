@@ -263,6 +263,16 @@ idle_mode = "disabled"
 # ``vendor/mngr/apps/minds/imbue/minds/desktop_client/agent_creator.py``)
 # so the host actually has them at the moment ``--pass-host-env`` reads.
 pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "MNGR_PREFIX", "GH_TOKEN"]
+# Build config for the SLOW (rebuild) path. fast_mode=require adopts the
+# pre-baked container and ignores all of these; fast_mode=prevent tears the
+# baked container down and rebuilds from scratch on the leased VPS, where it
+# needs the same FCT image build as a fresh ovh host. Mirror the ovh template:
+# build the FCT Dockerfile, seed /mngr/code from the in-image bake, and target
+# /mngr/code/ for the transfer. ``fct-seed`` is idempotent (no-ops when
+# /mngr/code is already populated), so it's a no-op on the adopt path.
+target_path = "/mngr/code/"
+build_arg__extend = ["--file=Dockerfile", "."]
+post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 
 ## and these templates are for sub-agents created within the sandbox
 
