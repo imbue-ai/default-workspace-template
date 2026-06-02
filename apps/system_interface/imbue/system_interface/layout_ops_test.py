@@ -191,8 +191,7 @@ def test_inspect_preserves_grid_arrangement_in_tree(tmp_path: Path) -> None:
     tree = summary["tree"]
     assert tree["type"] == "branch"
     # Dockview ``HORIZONTAL`` (children side by side) is exposed as
-    # ``arrangement: "row"`` -- the previous ``orientation: "horizontal"``
-    # consistently misled readers about which axis was meant.
+    # ``arrangement: "row"``.
     assert tree["arrangement"] == "row"
     assert len(tree["children"]) == 2
     # Coarse size ratios are preserved so an agent can reason about layout.
