@@ -986,7 +986,9 @@ def _cmd_split(args: argparse.Namespace) -> int:
 
     # ``service:terminal`` always allocates a fresh ref; same pattern as
     # ``open``. For other refs the predicate is "ref is now present" --
-    # if it's already open, ``split`` just focuses (no-op).
+    # if it's already open, ``split`` reports a no-op without posting
+    # (the frontend's focus-existing side effect is skipped along with
+    # the broadcast; use ``focus`` if you want to switch tabs).
     if ref == "service:terminal":
         return _run_terminal_creation_op("split", payload)
 
