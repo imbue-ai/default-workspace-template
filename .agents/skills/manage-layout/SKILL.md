@@ -162,7 +162,7 @@ consumption.
 Run `python3 scripts/layout.py --help` (or `<subcommand> --help`) for
 the full surface.
 
-## Mutating ops are synchronous now
+## Mutating ops are synchronous
 
 Every mutating op (`open`, `split`, `move`, `focus`, `close`,
 `rename`, `maximize`, `restore`, `replace-url`, `refresh`) waits for
