@@ -30,31 +30,6 @@ _POLL_INTERVAL_SECONDS = 1.0
 _BRIEF_WAIT_SECONDS = 0.5
 
 
-def _read_subagent_first_timestamp(jsonl_file: Path) -> str | None:
-    """Read the timestamp of a subagent jsonl's first line, for spawn-order pairing.
-
-    Returns None if the file is unreadable, empty, mid-write (no trailing newline yet),
-    malformed, or missing a string timestamp -- in which case the caller retries on the
-    next discovery cycle.
-    """
-    try:
-        with open(jsonl_file, "rb") as f:
-            first_line_bytes = f.readline()
-    except OSError as exc:
-        logger.debug("Failed to read subagent jsonl first line {}: {}", jsonl_file, exc)
-        return None
-    if not first_line_bytes.strip() or not first_line_bytes.endswith(b"\n"):
-        return None
-    try:
-        first = json.loads(first_line_bytes)
-    except json.JSONDecodeError:
-        return None
-    timestamp = first.get("timestamp")
-    if not isinstance(timestamp, str) or not timestamp:
-        return None
-    return timestamp
-
-
 class _ChangeHandler(FileSystemEventHandler):
     """Watchdog handler that wakes the watcher on actual file changes."""
 
@@ -116,16 +91,6 @@ class AgentSessionWatcher:
         # works on Claude Code versions whose meta.json omits toolUseId; it resolves the moment
         # the subagent finishes (during the run the card stays plain until the result lands).
         self._subagent_id_by_tool_call: dict[str, str] = {}
-        # sub_id -> first-line timestamp of the subagent jsonl, used to order subagents within a
-        # (agent_type, description) group for the content-based fallback linkage below.
-        self._subagent_first_ts: dict[str, str] = {}
-        # tool_call_id -> (subagent_type, description, spawn_timestamp) for every Agent tool_call
-        # seen in the main transcript. Accumulated so the content-based fallback can pair calls to
-        # subagents across the whole session (by matching (subagent_type, description) and ordering
-        # within that group by time), not just within the current poll batch. This is the only
-        # linkage available *during* a run on Claude Code versions that emit no toolUseId; it is
-        # lowest precedence and overridden by the authoritative toolUseId/tool_result links.
-        self._agent_tool_call_info: dict[str, tuple[str, str, str]] = {}
         # message_uuid -> assistant_message event that was streamed with at least one Agent
         # tool_call still missing its subagent_metadata. A subagent's jsonl (and thus its
         # parent linkage) can appear after the parent was already broadcast, so we keep the
@@ -237,28 +202,22 @@ class AgentSessionWatcher:
     def _enrich_subagent_metadata(self, events: list[dict[str, Any]]) -> None:
         """Enrich Agent tool_use events with subagent metadata.
 
-        Builds a tool_call_id -> subagent_id map from three sources, highest
-        precedence first (later sources only fill tool calls the earlier ones
-        left unresolved):
+        Builds a tool_call_id -> subagent_id map from two sources, highest
+        precedence first (the second only fills tool calls the first left
+        unresolved):
 
         1. ``toolUseId`` from each subagent's `<id>.meta.json`, which names the
            parent Agent tool_use directly. Written at spawn time, so it links
-           running subagents immediately -- but only emitted by newer Claude
-           Code versions.
+           running subagents immediately. Emitted by the pinned Claude Code
+           version (see CLAUDE_CODE_VERSION in the Dockerfile).
 
         2. ``subagent_id`` from the parent's tool_result (structured
            `toolUseResult.agentId` or the legacy `agentId:` trailer), accumulated
-           persistently across poll cycles. Authoritative, but only available
-           once the subagent finishes. Works on every version.
-
-        3. Content + spawn-order matching: pair parent Agent tool calls and
-           discovered subagents that share a `(subagent_type, description)` key,
-           ordering within each group by time. This is the only link available
-           *during* a run on versions without `toolUseId`. It is heuristic and
-           lowest precedence, so the authoritative sources override it the moment
-           they arrive (a mispaired running subagent self-corrects on completion).
+           persistently across poll cycles. Authoritative but only available once
+           the subagent finishes; the fallback for sessions recorded on older
+           Claude Code versions whose meta.json predates `toolUseId`, or whose
+           subagent files are no longer on disk.
         """
-        self._accumulate_agent_tool_call_info(events)
         subagent_by_tool_call: dict[str, str] = {}
 
         # 1. Disk-based linkage: each subagent meta.json's toolUseId names its parent
@@ -279,9 +238,6 @@ class AgentSessionWatcher:
         for tool_call_id, subagent_id in self._subagent_id_by_tool_call.items():
             subagent_by_tool_call.setdefault(tool_call_id, subagent_id)
 
-        # 3. Content + spawn-order fallback for tool calls still unresolved.
-        self._apply_content_order_linkage(subagent_by_tool_call)
-
         # Enrich assistant messages that have Agent tool calls.
         for event in events:
             if event.get("type") != "assistant_message":
@@ -299,67 +255,6 @@ class AgentSessionWatcher:
                 metadata = self._subagent_metadata.get(sub_id) or self._subagent_metadata.get(f"agent-{sub_id}")
                 if metadata:
                     tc["subagent_metadata"] = metadata
-
-    def _accumulate_agent_tool_call_info(self, events: list[dict[str, Any]]) -> None:
-        """Record each Agent tool_call's (subagent_type, description, spawn time).
-
-        Persisted across calls so the content-order fallback can pair calls to subagents
-        over the whole session. Insertion order is preserved, so Agent calls within a
-        single assistant message (which share a timestamp) keep their listed order.
-        """
-        for event in events:
-            if event.get("type") != "assistant_message":
-                continue
-            spawn_ts = event.get("timestamp", "")
-            for tc in event.get("tool_calls", []):
-                if tc.get("tool_name") != "Agent":
-                    continue
-                tool_call_id = tc.get("tool_call_id", "")
-                if not tool_call_id or tool_call_id in self._agent_tool_call_info:
-                    continue
-                self._agent_tool_call_info[tool_call_id] = (
-                    tc.get("subagent_type", ""),
-                    tc.get("description", ""),
-                    spawn_ts,
-                )
-
-    def _apply_content_order_linkage(self, subagent_by_tool_call: dict[str, str]) -> None:
-        """Fill still-unresolved Agent tool calls by content + spawn-order matching.
-
-        Groups parent Agent tool calls and discovered subagents by
-        ``(subagent_type/agent_type, description)``, then within each group pairs the
-        tool calls and subagents in timestamp order. Only assigns tool calls not already
-        resolved by an authoritative source, and only consumes subagents not already
-        claimed by one, so it cannot double-assign or override the explicit links.
-        """
-        # Subagents already linked authoritatively (sources 1 & 2), normalized to the
-        # "agent-<id>" stem so they are excluded from the content-order pairing below.
-        claimed_sub_stems = {
-            sub_id if sub_id.startswith("agent-") else f"agent-{sub_id}"
-            for sub_id in subagent_by_tool_call.values()
-        }
-
-        subagents_by_key: dict[tuple[str, str], list[tuple[str, str]]] = {}
-        for sub_id, metadata in self._subagent_metadata.items():
-            if sub_id in claimed_sub_stems:
-                continue
-            key = (metadata.get("agent_type", ""), metadata.get("description", ""))
-            subagents_by_key.setdefault(key, []).append((self._subagent_first_ts.get(sub_id, ""), sub_id))
-
-        calls_by_key: dict[tuple[str, str], list[tuple[str, str]]] = {}
-        for tool_call_id, (subagent_type, description, spawn_ts) in self._agent_tool_call_info.items():
-            if tool_call_id in subagent_by_tool_call:
-                continue
-            calls_by_key.setdefault((subagent_type, description), []).append((spawn_ts, tool_call_id))
-
-        for key, calls in calls_by_key.items():
-            subs = subagents_by_key.get(key)
-            if not subs:
-                continue
-            calls.sort()
-            subs.sort()
-            for (_call_ts, tool_call_id), (_sub_ts, sub_id) in zip(calls, subs, strict=False):
-                subagent_by_tool_call[tool_call_id] = sub_id
 
     def _run(self) -> None:
         """Main watcher loop."""
@@ -477,13 +372,6 @@ class AgentSessionWatcher:
                     except OSError as exc:
                         logger.debug("Failed to read subagent meta.json {}: {}", meta_file, exc)
 
-            # Cache the first-line timestamp for spawn-order pairing in the content-based
-            # fallback. Retry each pass until the first line is fully written and parseable.
-            if sub_id not in self._subagent_first_ts:
-                first_ts = _read_subagent_first_timestamp(jsonl_file)
-                if first_ts is not None:
-                    self._subagent_first_ts[sub_id] = first_ts
-
     def _find_session_file(self, session_id: str) -> Path | None:
         """Search for a session JSONL file under the Claude projects directory."""
         projects_dir = self._claude_config_dir / "projects"
@@ -586,13 +474,12 @@ class AgentSessionWatcher:
                 self._on_events(self._agent_id, new_events)
 
     def _cache_unlinked_agent_parents(self, events: list[dict[str, Any]]) -> None:
-        """Remember assistant messages whose Agent tool_calls aren't authoritatively linked.
+        """Remember assistant messages whose Agent tool_calls aren't linked yet.
 
         When an Agent tool_call is broadcast before its subagent's linkage exists, it goes
-        out without subagent_metadata (or with only a provisional content-order link). We
-        keep the event so a later cycle can re-enrich and re-broadcast it (see
-        _rebroadcast_relinked_parents). Parents already linked by an authoritative source
-        (toolUseId / tool_result) are skipped -- there is nothing left to resolve or correct.
+        out without subagent_metadata. We keep the event so a later cycle can re-enrich and
+        re-broadcast it once the linkage lands (see _rebroadcast_relinked_parents). Fully
+        linked parents are skipped -- there is nothing left to resolve.
         """
         for event in events:
             if event.get("type") != "assistant_message":
@@ -600,56 +487,50 @@ class AgentSessionWatcher:
             agent_tool_calls = [tc for tc in event.get("tool_calls", []) if tc.get("tool_name") == "Agent"]
             if not agent_tool_calls:
                 continue
-            if self._is_authoritatively_fully_linked(event):
+            if self._is_fully_linked(event):
                 continue
             message_uuid = event.get("message_uuid", "")
             if message_uuid:
                 self._unlinked_agent_parent_events[message_uuid] = event
 
     def _rebroadcast_relinked_parents(self) -> None:
-        """Re-emit cached parent events whose subagent linkage changed since broadcast.
+        """Re-emit cached parent events that gained subagent links since broadcast.
 
-        A subagent's linkage can appear (or change) after the parent Agent tool_call was
-        already streamed: the subagent's files show up a cycle later (content-order or
-        toolUseId link), or its tool_result lands later still (authoritative link, which
-        may correct a provisional content-order guess). Re-enriching the cached parent and
-        re-broadcasting it on any change lets the frontend upgrade the plain tool-call block
-        into the rich card -- and fix the click-through target if a provisional link was
-        wrong -- without a page refresh. Parents linked by an authoritative source for every
-        Agent tool_call are dropped from the cache; provisional-only links stay cached so the
-        authoritative source can still correct them.
+        A subagent's linkage can appear after the parent Agent tool_call was already
+        streamed: the subagent's meta.json (with toolUseId) shows up a cycle later, or its
+        tool_result lands later still. Re-enriching the cached parent and re-broadcasting it
+        once it links lets the frontend upgrade the plain tool-call block into the rich card
+        without a page refresh. Parents whose Agent tool_calls are all linked are dropped
+        from the cache.
         """
         relinked: list[dict[str, Any]] = []
         for message_uuid, event in list(self._unlinked_agent_parent_events.items()):
-            before = self._linked_agent_signatures(event)
+            before = self._linked_agent_tool_call_ids(event)
             self._enrich_subagent_metadata([event])
-            if self._linked_agent_signatures(event) != before:
+            if self._linked_agent_tool_call_ids(event) != before:
                 relinked.append(event)
-            if self._is_authoritatively_fully_linked(event):
+            if self._is_fully_linked(event):
                 del self._unlinked_agent_parent_events[message_uuid]
         if relinked:
             self._on_events(self._agent_id, relinked)
 
     @staticmethod
-    def _linked_agent_signatures(event: dict[str, Any]) -> frozenset[tuple[str, str]]:
-        """(tool_call_id, linked session_id) for each Agent tool_call carrying metadata.
-
-        Includes the session_id so a corrected linkage (same tool_call, different subagent
-        session) counts as a change and triggers a re-broadcast.
-        """
+    def _linked_agent_tool_call_ids(event: dict[str, Any]) -> frozenset[str]:
+        """tool_call_ids of Agent tool_calls in ``event`` that already carry metadata."""
         return frozenset(
-            (tc.get("tool_call_id", ""), tc.get("subagent_metadata", {}).get("session_id", ""))
+            tc.get("tool_call_id", "")
             for tc in event.get("tool_calls", [])
             if tc.get("tool_name") == "Agent" and "subagent_metadata" in tc
         )
 
-    def _is_authoritatively_fully_linked(self, event: dict[str, Any]) -> bool:
-        """True if every Agent tool_call in ``event`` is linked by an authoritative source.
+    def _is_fully_linked(self, event: dict[str, Any]) -> bool:
+        """True if every Agent tool_call in ``event`` is linked to a subagent.
 
-        Authoritative = toolUseId (meta.json) or tool_result agentId. Content-order links
-        are provisional and deliberately excluded, so a parent linked only by content-order
-        stays cached and can still be corrected once its tool_result lands.
+        Linkage is resolved by toolUseId (meta.json) or tool_result agentId; both are read
+        from disk. A tool_call counts as linked once it appears in either source's map, even
+        if no metadata could be attached (e.g. the subagent's files were cleaned up), so such
+        a parent is not retried forever.
         """
-        authoritative = set(self._subagent_tool_use_id.values()) | set(self._subagent_id_by_tool_call.keys())
+        linked = set(self._subagent_tool_use_id.values()) | set(self._subagent_id_by_tool_call.keys())
         agent_tool_calls = [tc for tc in event.get("tool_calls", []) if tc.get("tool_name") == "Agent"]
-        return bool(agent_tool_calls) and all(tc.get("tool_call_id") in authoritative for tc in agent_tool_calls)
+        return bool(agent_tool_calls) and all(tc.get("tool_call_id") in linked for tc in agent_tool_calls)
