@@ -144,6 +144,14 @@ Skip this step for routes that emit only JSON, only redirects, or that
 serve an existing third-party UI through the escape hatch below --
 there's no markup to design.
 
+### Calling Claude from your service
+
+If your service needs to call Claude (classify/summarize content, run a one-shot
+agentic task, or launch a full agent), use the `use-ai-integration` skill and the
+`ai_integration` library rather than hand-rolling API or `claude -p` calls. It
+handles credentialing, the `claude -p` environment fix, billing-path selection,
+and spend control for you.
+
 ### File-path conventions
 
 Two cases, two patterns:
