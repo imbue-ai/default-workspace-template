@@ -51,6 +51,11 @@ SVC_COMMAND_OPTION = "@svc_command"
 # that has exited -- the window itself stays open at an idle shell, so its mere
 # existence is not a liveness signal -- and then applies the `restart` policy.
 SVC_EXIT_STATUS_OPTION = "@svc_exit_status"
+# Supported `restart` policies for a service in services.toml. "never" leaves an
+# exited service dead; "on-failure" restarts it when it exits non-zero. An
+# unrecognized value falls back to DEFAULT_RESTART_POLICY (with a warning).
+DEFAULT_RESTART_POLICY = "never"
+VALID_RESTART_POLICIES = frozenset({"never", "on-failure"})
 POLL_INTERVAL = 5  # seconds
 
 RUNTIME_DIR = Path("runtime")
@@ -515,9 +520,32 @@ def _load_services() -> dict[str, dict]:
             continue
         result[name] = {
             "command": command,
-            "restart": config.get("restart", "never"),
+            "restart": _normalize_restart_policy(name, config.get("restart")),
         }
     return result
+
+
+def _normalize_restart_policy(name: str, restart: str | None) -> str:
+    """Validate a service's `restart` value, defaulting unknown ones with a warning.
+
+    An absent policy is the default and is not flagged. A present-but-unrecognized
+    policy (e.g. a typo like "on_failure") is almost certainly a misconfiguration,
+    so it is logged and falls back to DEFAULT_RESTART_POLICY rather than silently
+    disabling restarts for that service.
+    """
+    if restart is None:
+        return DEFAULT_RESTART_POLICY
+    if restart not in VALID_RESTART_POLICIES:
+        logger.warning(
+            "Service {} has unrecognized restart policy {!r}; expected one of {}; "
+            "treating as {!r}",
+            name,
+            restart,
+            sorted(VALID_RESTART_POLICIES),
+            DEFAULT_RESTART_POLICY,
+        )
+        return DEFAULT_RESTART_POLICY
+    return restart
 
 
 def _build_service_keystrokes(command: str) -> str:
@@ -647,7 +675,7 @@ def _compute_restarts(
         config = desired.get(name)
         if config is None:
             continue
-        if config.get("restart", "never") == "on-failure" and status != "0":
+        if config.get("restart", DEFAULT_RESTART_POLICY) == "on-failure" and status != "0":
             restarts.append(name)
     return restarts
 

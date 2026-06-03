@@ -9,11 +9,13 @@ from pathlib import Path
 import pytest
 
 from bootstrap.manager import (
+    DEFAULT_RESTART_POLICY,
     SVC_EXIT_STATUS_OPTION,
     _build_create_chat_command,
     _build_service_keystrokes,
     _compute_actions,
     _compute_restarts,
+    _normalize_restart_policy,
     _ensure_host_claude_config_dir,
     _format_env_file,
     _initialize_workspace_main_branch,
@@ -134,6 +136,25 @@ def test_compute_restarts_handles_mixed_services() -> None:
     }
     exited = {"crash": "2", "clean": "0", "oneshot": "1"}
     assert _compute_restarts(desired, exited) == ["crash"]
+
+
+# --- Restart policy: _normalize_restart_policy ---
+
+
+def test_normalize_restart_policy_passes_through_valid_values() -> None:
+    assert _normalize_restart_policy("svc", "never") == "never"
+    assert _normalize_restart_policy("svc", "on-failure") == "on-failure"
+
+
+def test_normalize_restart_policy_defaults_when_absent() -> None:
+    assert _normalize_restart_policy("svc", None) == DEFAULT_RESTART_POLICY
+
+
+def test_normalize_restart_policy_warns_and_defaults_on_unknown_value() -> None:
+    # A typo'd policy must not silently disable restarts; it falls back to the
+    # default so the misconfiguration is visible (warning) and safe.
+    assert _normalize_restart_policy("svc", "on_failure") == DEFAULT_RESTART_POLICY
+    assert _normalize_restart_policy("svc", "always") == DEFAULT_RESTART_POLICY
 
 
 # --- Env-file helpers ---
