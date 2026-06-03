@@ -1,6 +1,6 @@
 """Validate that a ``mngr <subcommand> ...`` argv is accepted by the *live* mngr CLI.
 
-This is the antidote to the failure mode that let PR #77 ship a broken
+This is the antidote to the failure mode that let PR 77 ship a broken
 ``mngr push`` invocation: every repo-side test that exercised a ``mngr`` CLI
 call did so by asserting the emitted argv against a *hand-written expected
 argv* using a stubbed subprocess runner. The expected argv was authored from
@@ -19,9 +19,9 @@ callbacks, type coercion, required-option enforcement) do NOT run. We are
 verifying the CLI surface the repo depends on, not the runtime values a
 particular invocation carries.
 
-The repo already depends on ``imbue-mngr`` (editable, pointing at
-``vendor/mngr/libs/mngr``), so importing the live tree costs nothing extra and
-keeps the check in lockstep with whatever mngr the repo is pinned to.
+This lives in its own workspace package so both repo-side pytest passes (the
+root pass and the isolated apps/system_interface pass, which share one
+workspace venv) import a single copy rather than duplicating the validator.
 """
 
 from __future__ import annotations

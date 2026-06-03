@@ -10,59 +10,6 @@ rather than being copy-pasted into each test module.
 from __future__ import annotations
 
 import re
-from typing import Sequence
-
-import click
-
-from imbue.mngr.main import cli
-
-
-class MngrArgvContractError(AssertionError):
-    """Raised when an argv is not accepted by the live mngr CLI surface."""
-
-
-def assert_mngr_argv_valid(argv: Sequence[str]) -> None:
-    """Assert that ``argv`` is structurally accepted by the live mngr CLI.
-
-    Resolves the (possibly nested) subcommand against ``imbue.mngr.main.cli``
-    and parses the remaining tokens with each command's low-level option parser,
-    so value validators (``Path(exists=True)``, callbacks, type coercion,
-    required-option enforcement) do NOT run -- we verify the CLI *surface* the
-    code depends on, not the runtime values a given invocation carries.
-    ``argv[0]`` (the mngr binary, possibly an absolute path) is ignored.
-
-    This is a copy of the repo-root ``mngr_cli_contract.assert_mngr_argv_valid``;
-    apps/system_interface runs as an isolated package (its own venv + pytest
-    invocation) and cannot import repo-root test modules, so the validator is
-    duplicated here. Both consume the same live ``imbue.mngr.main.cli``.
-    """
-    try:
-        _resolve_against_cli(cli, click.Context(cli, info_name="mngr"), list(argv[1:]))
-    except click.exceptions.ClickException as exc:
-        raise MngrArgvContractError(
-            f"mngr argv not accepted by the live CLI: {list(argv)!r}\n"
-            f"  {type(exc).__name__}: {exc.format_message()}\n"
-            f"  The vendored mngr CLI surface changed under this invocation. "
-            f"Update the producing code to match the current mngr CLI."
-        ) from exc
-
-
-def _resolve_against_cli(
-    command: click.Command, ctx: click.Context, tokens: list[str]
-) -> None:
-    """Descend the click tree for ``tokens``, raising on an unknown subcommand
-    or option. Recurses through nested groups (mngr's tree is shallow); a leaf
-    command's low-level parser validates the option tokens without running
-    click's value converters."""
-    if isinstance(command, click.Group):
-        name, subcommand, rest = command.resolve_command(ctx, tokens)
-        if subcommand is None:
-            raise click.exceptions.UsageError(f"No such command {name!r}.")
-        _resolve_against_cli(
-            subcommand, click.Context(subcommand, info_name=name, parent=ctx), rest
-        )
-    else:
-        command.make_parser(ctx).parse_args(args=list(tokens))
 
 
 class FakeFinishedProcess:

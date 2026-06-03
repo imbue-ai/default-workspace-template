@@ -35,6 +35,8 @@ dev = [
     "coverage",
     "inline-snapshot>=0.13",
     "resource-guards",
+    # Shared mngr CLI argv validator used by mngr_cli_argv_contract_test.py.
+    "mngr-cli-contract",
     "import-linter>=2.0",
     "ruff~=0.12.8",
     # Used by check_no_type_errors in test_ratchets.py. Pinned to 0.0.24 because

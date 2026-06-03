@@ -20,9 +20,8 @@ Coverage split:
 from __future__ import annotations
 
 from bootstrap.manager import _build_create_chat_command
+from mngr_cli_contract.contract import assert_mngr_argv_valid
 from telegram_bot.bot import _build_message_command
-
-from mngr_cli_contract import assert_mngr_argv_valid
 
 
 def test_bootstrap_initial_chat_create_argv_accepted_by_live_cli() -> None:

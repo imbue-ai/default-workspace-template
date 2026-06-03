@@ -12,10 +12,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mngr_cli_contract.contract import assert_mngr_argv_valid
+
 from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _build_worktree_create_command
-from imbue.system_interface.testing import assert_mngr_argv_valid
 
 
 def test_worktree_create_argv_accepted_by_live_cli() -> None:

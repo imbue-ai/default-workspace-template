@@ -3,14 +3,14 @@
 These pin the validator's own behaviour against the live mngr CLI: it must
 accept the real invocations the repo emits and reject the kinds of drift a
 vendor/mngr CLI change introduces (removed subcommand, removed/renamed flag,
-bogus flag) -- which is the exact regression that slipped through on PR #77.
+bogus flag) -- which is the exact regression that slipped through on PR 77.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from mngr_cli_contract import MngrArgvContractError, assert_mngr_argv_valid
+from mngr_cli_contract.contract import MngrArgvContractError, assert_mngr_argv_valid
 
 
 @pytest.mark.parametrize(
@@ -31,7 +31,7 @@ def test_accepts_real_invocations(argv: list[str]) -> None:
 
 
 def test_rejects_removed_subcommand() -> None:
-    """The literal PR #77 regression: ``push`` was removed in favour of ``rsync``."""
+    """The literal PR 77 regression: ``push`` was removed in favour of ``rsync``."""
     with pytest.raises(MngrArgvContractError, match="not accepted"):
         assert_mngr_argv_valid(
             ["mngr", "push", "demo:/x/", "--source", "/x/", "--uncommitted-changes=merge"]
