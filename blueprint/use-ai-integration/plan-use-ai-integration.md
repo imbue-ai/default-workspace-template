@@ -52,6 +52,13 @@ selection, logging, and spend control.
   inherited `MAIN_CLAUDE_SESSION_ID` makes a child `claude -p` look like the managed main session.
 - `launch-task` is extended (not forked) with a synchronous create -> wait -> collect -> destroy
   path and clearer, gate-agnostic `await` docs, since this PR adds a new gate-less usage.
+- The zero-setup onramp is **implicit in the library**, not a process the agent narrates:
+  `run_completion()` uses the direct Anthropic API whenever a key is present (always cheaper than
+  `claude -p` for non-agentic work) and silently falls back to `claude -p` when there's no key. So a
+  keyless user develops and tests immediately, and adding `ANTHROPIC_API_KEY` later transparently
+  upgrades every call to the cheaper path — no code change, no agent decision. When running the
+  keyless fallback, the library logs that setting a key would cut cost (~10x), so the nudge is
+  emitted by the library rather than prescribed in skill instructions.
 - The skill steers agents to **measure cost on a small sample before building a high-volume flow**,
   and to **surface the cost/approach tradeoff to the user** with real numbers — prose guidance, not a
   template. Grounded in the observed `claude -p` cost profile: each invocation reloads the full
@@ -81,26 +88,35 @@ selection, logging, and spend control.
   is unset), fixing the mngr bug.
 - A service awaiting a launched agent reads `await` as a plain poll-until-report primitive — no gate
   semantics implied.
-- Before committing to a high-volume processing flow, the agent runs a small metered sample
-  (measuring per-item cost and latency), recognizes when `claude -p` per-call overhead dominates, and
-  presents the user a concrete choice (e.g. "stay on `claude -p`, batched, ~$X" vs "switch to the
-  direct API, ~$Y, needs a key") rather than silently scaling up the expensive path.
+- A keyless user can develop and test an AI flow end-to-end on the implicit `claude -p` fallback;
+  adding a key later transparently upgrades non-agentic calls to the cheaper direct API with no code
+  change. The direct-API-vs-`claude -p` routing is never a manual choice — the library decides by key
+  presence.
+- Before committing to a high-volume flow, the agent runs a small metered sample (per-item cost and
+  latency) and surfaces the cost magnitude to the user — e.g. "this batch of N will cost ~$X" or, for
+  agentic `run_task()` work where direct API is not an option, whether to batch vs parallelize. This
+  is about whether the volume is worth it, not about picking the billing path (the library already
+  routes that).
 
 ## Changes
 
 - **New skill `.agents/skills/use-ai-integration/`** (symlinked into `.claude/skills/`): SKILL.md
   (decision tree, three-pattern playbook, billing/credentialing model with the post-Jun-15 two-pool
   table, the `MAIN_CLAUDE_SESSION_ID` rationale, tight-scoping guidance for launched agents, and the
-  **measure-cost-on-a-sample-then-surface-the-tradeoff** practice — including the `claude -p` per-call
-  overhead profile, "batch over parallelize," and "direct API is ~10x cheaper when no agency is
-  needed") + `references/` for the billing/credentialing reference (carrying the empirical cost
-  numbers) and worked per-pattern sketches.
+  **measure-cost-on-a-sample-then-surface-the-magnitude** practice — including the `claude -p`
+  per-call overhead profile and "batch over parallelize" for agentic `run_task()` work. Note the
+  guidance does NOT prescribe choosing direct-API vs `claude -p`: that routing is implicit in the
+  library by key presence; the guidance is about whether the volume is worth it) + `references/` for
+  the billing/credentialing reference (carrying the empirical cost numbers) and worked per-pattern
+  sketches.
 - **New lib `libs/ai_integration/`** (uv workspace member, registered in root `pyproject.toml`):
   the three async `run_*` functions plus shared internals — credential resolution (+ loud failure),
-  `claude -p` child-env construction (unset `MAIN_CLAUDE_SESSION_ID`; optional `MNGR_*` strip),
-  direct-Anthropic-API client factory (cheap-model default, prompt caching, structured-output
-  support), billing-path logging, and the per-service spend tracker/ceiling with `send-user-message`
-  escalation. Frozen data types, README, zero-count ratchet test.
+  implicit billing-path routing for `run_completion()` (direct API when a key is present, else
+  `claude -p` fallback; adding a key later upgrades transparently, and the keyless path logs the
+  ~10x-cheaper-with-a-key nudge), `claude -p` child-env construction (unset `MAIN_CLAUDE_SESSION_ID`;
+  optional `MNGR_*` strip), direct-Anthropic-API client factory (cheap-model default, prompt caching,
+  structured-output support), billing-path logging, and the per-service spend tracker/ceiling with
+  `send-user-message` escalation. Frozen data types, README, zero-count ratchet test.
 - **Extend `launch-task`**: add a synchronous launch -> await -> collect-structured-result ->
   destroy path + structured terminal-report extraction + a destroy step in `create_worker.py`; and
   reword its `await` docstring + subparser help and the `lead-proxy.md` framing so `await` reads as a
