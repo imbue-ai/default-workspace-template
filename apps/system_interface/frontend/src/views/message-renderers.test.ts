@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { parsePermissionRequest, renderPermissionRequestCard, openPermissionRequest } from "./message-renderers";
+import { parsePermissionRequest, renderPermissionRequestFooter, openPermissionRequest } from "./message-renderers";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 
 function makeToolCall(inputPreview: string): ToolCall {
@@ -73,15 +73,41 @@ describe("parsePermissionRequest", () => {
   });
 });
 
-describe("renderPermissionRequestCard", () => {
-  it("renders a button labeled 'Permission request'", () => {
-    const vnode = renderPermissionRequestCard("req-123") as {
+// Depth-first search for the first vnode matching a predicate.
+function findVnode(
+  node: unknown,
+  pred: (v: { tag?: unknown }) => boolean,
+): { tag?: unknown; children?: unknown } | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findVnode(child, pred);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (node !== null && typeof node === "object") {
+    const vnode = node as { tag?: unknown; children?: unknown };
+    if (pred(vnode)) return vnode;
+    return findVnode(vnode.children, pred);
+  }
+  return null;
+}
+
+describe("renderPermissionRequestFooter", () => {
+  it("renders a footer div containing a 'Permission request' button", () => {
+    const vnode = renderPermissionRequestFooter("req-123") as unknown as {
       tag: string;
-      children: { children: unknown }[];
+      attrs: { className: string };
     };
-    expect(vnode.tag).toBe("button");
-    // Mithril wraps a bare string child in a text vnode.
-    expect(vnode.children[0].children).toBe("Permission request");
+    expect(vnode.tag).toBe("div");
+    // Mithril normalizes the `class` attr to `className`.
+    expect(vnode.attrs.className).toBe("tool-call-permission-footer");
+
+    const button = findVnode(vnode, (v) => v.tag === "button");
+    expect(button).not.toBeNull();
+    // Mithril wraps the label string in a text vnode (tag "#").
+    const label = findVnode(button, (v) => v.tag === "#");
+    expect(label?.children).toBe("Permission request");
   });
 });
 

@@ -264,29 +264,61 @@ export function openPermissionRequest(requestId: string): void {
   window.parent.postMessage({ type: "minds:open-request-modal", requestId }, "*");
 }
 
-export function renderPermissionRequestCard(requestId: string): m.Vnode {
+/** Small lock glyph for the permission-request footer button. */
+function renderLockIcon(): m.Vnode {
   return m(
-    "button",
+    "svg",
     {
-      class: "permission-request-button",
-      type: "button",
-      onclick(e: Event) {
-        e.preventDefault();
-        e.stopPropagation();
-        openPermissionRequest(requestId);
-      },
+      class: "permission-request-icon",
+      width: "14",
+      height: "14",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      "aria-hidden": "true",
     },
-    "Permission request",
+    [m("rect", { x: "3", y: "11", width: "18", height: "11", rx: "2" }), m("path", { d: "M7 11V7a5 5 0 0 1 10 0v4" })],
   );
 }
 
-export function renderToolCallBlock(toolCall: ToolCall, toolResult: TranscriptEvent | null): m.Vnode {
+/**
+ * Footer rendered inside a permission-request tool block: an outlined button
+ * that opens the modal. Living inside the block (rather than alongside it)
+ * ties the affordance visually to the request that created it.
+ */
+export function renderPermissionRequestFooter(requestId: string): m.Vnode {
+  return m("div", { class: "tool-call-permission-footer" }, [
+    m(
+      "button",
+      {
+        class: "permission-request-button",
+        type: "button",
+        onclick(e: Event) {
+          e.preventDefault();
+          e.stopPropagation();
+          openPermissionRequest(requestId);
+        },
+      },
+      [renderLockIcon(), m("span", "Permission request")],
+    ),
+  ]);
+}
+
+export function renderToolCallBlock(
+  toolCall: ToolCall,
+  toolResult: TranscriptEvent | null,
+  footer: m.Vnode | null = null,
+): m.Vnode {
   const headerText = `Tool: ${toolCall.tool_name}`;
   const inputText = toolCall.input_preview || "";
   const outputText = toolResult?.output || "";
   const isError = toolResult?.is_error === true;
+  const blockClass = footer ? "tool-call-block tool-call-block--permission-request" : "tool-call-block";
 
-  return m("div", { class: "tool-call-block" }, [
+  return m("div", { class: blockClass }, [
     m(
       "div",
       {
@@ -308,6 +340,7 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: TranscriptEv
           ])
         : null,
     ]),
+    footer,
   ]);
 }
 
@@ -333,15 +366,13 @@ export function renderAssistantMessageChildren(
       continue;
     }
     const result = toolResults.get(toolCall.tool_call_id) ?? null;
-    // Always render the tool-call block, then append the button when this is a
-    // successful permission request. Appending (rather than replacing the
-    // block) keeps the block in place so the layout doesn't jump when the
-    // result arrives.
-    children.push(renderToolCallBlock(toolCall, result));
+    // For a successful permission request, render the button as a footer inside
+    // the tool block so the affordance is visually bound to the request. The
+    // block stays in place (the footer is appended within it once the result
+    // arrives), so the layout doesn't jump.
     const permissionRequest = parsePermissionRequest(toolCall, result);
-    if (permissionRequest) {
-      children.push(renderPermissionRequestCard(permissionRequest.requestId));
-    }
+    const footer = permissionRequest ? renderPermissionRequestFooter(permissionRequest.requestId) : null;
+    children.push(renderToolCallBlock(toolCall, result, footer));
   }
   return children;
 }
