@@ -10,6 +10,52 @@ rather than being copy-pasted into each test module.
 from __future__ import annotations
 
 import re
+from typing import Sequence
+
+import click
+
+from imbue.mngr.main import cli
+
+
+class MngrArgvContractError(AssertionError):
+    """Raised when an argv is not accepted by the live mngr CLI surface."""
+
+
+def assert_mngr_argv_valid(argv: Sequence[str]) -> None:
+    """Assert that ``argv`` is structurally accepted by the live mngr CLI.
+
+    Resolves the (possibly nested) subcommand against ``imbue.mngr.main.cli``
+    and parses the remaining tokens with each command's low-level option parser,
+    so value validators (``Path(exists=True)``, callbacks, type coercion,
+    required-option enforcement) do NOT run -- we verify the CLI *surface* the
+    code depends on, not the runtime values a given invocation carries.
+    ``argv[0]`` (the mngr binary, possibly an absolute path) is ignored.
+
+    This is a copy of the repo-root ``mngr_cli_contract.assert_mngr_argv_valid``;
+    apps/system_interface runs as an isolated package (its own venv + pytest
+    invocation) and cannot import repo-root test modules, so the validator is
+    duplicated here. Both consume the same live ``imbue.mngr.main.cli``.
+    """
+    tokens = list(argv[1:])
+    group: click.Command = cli
+    parent_ctx = click.Context(cli, info_name="mngr")
+    try:
+        while True:
+            name, command, rest = group.resolve_command(parent_ctx, tokens)
+            assert command is not None  # resolve_command raises rather than returning None
+            sub_ctx = click.Context(command, info_name=name, parent=parent_ctx)
+            if isinstance(command, click.Group):
+                group, parent_ctx, tokens = command, sub_ctx, rest
+                continue
+            command.make_parser(sub_ctx).parse_args(args=list(rest))
+            return
+    except click.exceptions.ClickException as exc:
+        raise MngrArgvContractError(
+            f"mngr argv not accepted by the live CLI: {list(argv)!r}\n"
+            f"  {type(exc).__name__}: {exc.format_message()}\n"
+            f"  The vendored mngr CLI surface changed under this invocation. "
+            f"Update the producing code to match the current mngr CLI."
+        ) from exc
 
 
 class FakeFinishedProcess:
