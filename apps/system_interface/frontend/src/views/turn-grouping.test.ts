@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type {
   TranscriptEvent,
-  TaskEvent,
   ToolResultEvent,
   AssistantMessageEvent,
   UserMessageEvent,
+  StepEnrichment,
 } from "../models/Response";
-import type { StepEnrichment, StepNode, TimelineItem } from "./turn-grouping";
-import { buildEnrichment, buildSections } from "./turn-grouping";
+import type { StepNode, TimelineItem } from "./turn-grouping";
+import { buildSections } from "./turn-grouping";
 
 // --- Event builders ---
 
@@ -76,29 +76,6 @@ function result(ts: string, callId: string, output: string): ToolResultEvent {
   };
 }
 
-function taskEvent(
-  ticketId: string,
-  status: "open" | "in_progress" | "closed",
-  ts: string,
-  extras: Partial<TaskEvent> = {},
-): TranscriptEvent {
-  return {
-    timestamp: ts,
-    type: "task_event",
-    event_id: `${ticketId}-${status}`,
-    source: "tk",
-    ticket_id: ticketId,
-    title: extras.title ?? "Some step",
-    status,
-    created_at: extras.created_at ?? ts,
-    summary: extras.summary ?? null,
-    summary_at: extras.summary_at ?? null,
-    step: extras.step ?? true,
-    parent_id: extras.parent_id ?? "",
-    assignee: extras.assignee ?? "",
-  };
-}
-
 function enrich(entries: Record<string, Partial<StepEnrichment>>): Map<string, StepEnrichment> {
   const m = new Map<string, StepEnrichment>();
   for (const [id, e] of Object.entries(entries)) {
@@ -124,28 +101,6 @@ function run(events: TranscriptEvent[], enrichment: Map<string, StepEnrichment> 
 function stepItems(items: TimelineItem[]): StepNode[] {
   return items.filter((i): i is { kind: "step"; step: StepNode } => i.kind === "step").map((i) => i.step);
 }
-
-describe("buildEnrichment", () => {
-  it("folds task_events by id, keeps only steps, latest status wins, summary on close", () => {
-    const events = [
-      taskEvent("s1", "open", "2026-04-28T01:00:00Z", { title: "First", created_at: "2026-04-28T01:00:00Z" }),
-      taskEvent("s1", "in_progress", "2026-04-28T01:00:05Z", { title: "First", created_at: "2026-04-28T01:00:00Z" }),
-      taskEvent("s1", "closed", "2026-04-28T01:00:10Z", {
-        title: "First",
-        created_at: "2026-04-28T01:00:00Z",
-        summary: "Did the thing",
-      }),
-      taskEvent("reg", "open", "2026-04-28T01:00:00Z", { step: false }),
-    ];
-    const table = buildEnrichment(events);
-    expect(table.has("reg")).toBe(false);
-    const s1 = table.get("s1")!;
-    expect(s1.title).toBe("First");
-    expect(s1.status).toBe("closed");
-    expect(s1.summary).toBe("Did the thing");
-    expect(s1.created_at).toBe("2026-04-28T01:00:00Z");
-  });
-});
 
 describe("bug fixes", () => {
   // BUG 1: work done before the first step must not vanish.

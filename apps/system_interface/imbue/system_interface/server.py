@@ -208,12 +208,12 @@ def _get_or_create_tickets_watcher(request: Request, agent_info: AgentInfo) -> A
         return tickets_watchers[agent_info.id]
 
     def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
-        # IGNORE: task events are persisted as .md files on disk and
-        # recoverable via the REST /events endpoint (which folds in the
-        # watcher's full get_all_events() on every fetch); storing them in
-        # the in-memory replay buffer would grow unboundedly for the
-        # agent's lifetime as tickets are created and updated. Mirrors the
-        # _get_or_create_watcher session-events branch.
+        # The tickets watcher emits a single `step_enrichment` snapshot message
+        # whenever ticket state changes. IGNORE keeps it out of the in-memory
+        # replay buffer: it is a full snapshot recomputed on every GET /events
+        # (via get_enrichment()), so buffering successive snapshots would grow
+        # unboundedly for no benefit. The frontend replaces its enrichment
+        # table each time one arrives.
         for event in events:
             event_queues.broadcast(agent_id, {**event, "buffer_behavior": BufferBehavior.IGNORE})
 
@@ -331,17 +331,16 @@ def _agent_not_found_response(agent_id: str) -> JSONResponse:
 
 
 def _get_combined_events(request: Request, agent_info: AgentInfo) -> list[dict[str, Any]]:
-    """Merged ordered event list for an agent: main session events plus
-    task events (tk tickets). New per-source watchers can be plugged in
-    here without growing per-source merging logic in route handlers.
+    """Ordered session event list for an agent.
+
+    tk ticket state is NOT merged in here. The progress view derives all
+    structure from the transcript (the `tk` tool calls already live in the
+    session stream); tk is delivered separately as an enrichment snapshot
+    (see `_get_events`), so transcript order -- not cross-clock timestamps --
+    drives ordering.
     """
     watcher = _get_or_create_watcher(request, agent_info)
-    tickets_watcher = _get_or_create_tickets_watcher(request, agent_info)
-    merged = watcher.get_all_events()
-    if tickets_watcher is not None:
-        merged.extend(tickets_watcher.get_all_events())
-    merged.sort(key=lambda e: e.get("timestamp", ""))
-    return merged
+    return watcher.get_all_events()
 
 
 def _backfill_slice(merged: list[dict[str, Any]], before_event_id: str, limit: int) -> list[dict[str, Any]]:
@@ -374,7 +373,12 @@ def _get_events(agent_id: str, request: Request) -> Response:
 
     merged = _get_combined_events(request, agent_info)
     events = _backfill_slice(merged, before_event_id, limit) if before_event_id else merged
-    return JSONResponse(content={"events": events})
+    # tk step enrichment ships as a separate, unpaginated snapshot (always
+    # complete regardless of where the transcript window is), joined to the
+    # transcript-derived steps by id on the frontend.
+    tickets_watcher = _get_or_create_tickets_watcher(request, agent_info)
+    step_enrichment = tickets_watcher.get_enrichment() if tickets_watcher is not None else {}
+    return JSONResponse(content={"events": events, "step_enrichment": step_enrichment})
 
 
 def _stream_events(agent_id: str, request: Request) -> Response:

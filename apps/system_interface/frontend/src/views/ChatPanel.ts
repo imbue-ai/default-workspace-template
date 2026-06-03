@@ -13,6 +13,7 @@ import {
   fetchEvents,
   fetchBackfillEvents,
   getEventsForAgent,
+  getEnrichmentForAgent,
   getFirstEventId,
   isConversationNotFound,
   isBackfillComplete,
@@ -30,7 +31,7 @@ import {
   computeAuthErrorHiddenEventIds,
 } from "./message-renderers";
 import { getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
-import { buildEnrichment, buildSections } from "./turn-grouping";
+import { buildSections } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
 import { ActivityIndicator } from "./ActivityIndicator";
 
@@ -401,10 +402,11 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     const visibleEvents = events.filter((e) => !hiddenEventIds.has(e.event_id));
 
     // tk is an enrichment side-table (titles, summaries, pending roster),
-    // joined onto the transcript-derived structure by id. Structure -- which
-    // steps exist, their order, grouping -- comes purely from the transcript
-    // walk; enrichment never decides order or grouping.
-    const enrichment = buildEnrichment(visibleEvents);
+    // joined onto the transcript-derived structure by id. It arrives as a
+    // separate snapshot (GET /events + the step_enrichment SSE message), kept
+    // current in the Response model; structure -- which steps exist, their
+    // order, grouping -- comes purely from the transcript walk.
+    const enrichment = getEnrichmentForAgent(agentId);
     const agent = getAgentById(agentId);
     const agentIsIdle = agent?.activity_state === "IDLE";
 

@@ -33,23 +33,11 @@ import type {
   UserMessageEvent,
   ToolResultEvent,
   ToolCall,
-  TaskEventStatus,
+  StepEnrichment,
 } from "../models/Response";
 import { isNonBoundaryUserMessage, isStopHookFeedback } from "./user-message-classification";
 
 export type StepStatus = "pending" | "active" | "done";
-
-/** Per-id enrichment: the canonical text and roster facts tk owns. Joined
- *  onto the transcript-derived skeleton by ticket id. */
-export interface StepEnrichment {
-  title: string;
-  summary: string | null;
-  /** Global tk status; used only to identify pending (never-started) steps
-   *  for the roster. Positioned steps take their status from the walk. */
-  status: TaskEventStatus;
-  /** tk's own creation timestamp; used ONLY to order pending placeholders. */
-  created_at: string;
-}
 
 /** A step as it should render in one section. The same ticket id can produce
  *  two independent nodes across two sections (carryover); each holds its own
@@ -95,8 +83,6 @@ export interface SectionView {
   trailing_reply: AssistantMessageEvent[];
 }
 
-const STATUS_RANK: Record<TaskEventStatus, number> = { open: 0, in_progress: 1, closed: 2 };
-
 /** Detects a `tk`/`ticket` lifecycle invocation in a Bash tool call's input
  *  preview. The verb sits at the front of the command, so this survives the
  *  200-char input_preview truncation. `super` is the plugin-bypassing form. */
@@ -106,37 +92,6 @@ const TK_LIFECYCLE_RE = /\b(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b
  *  `Updated <id> -> <status>` (see vendor/tk/ticket). Global so a batched
  *  command that flips several tickets is read in order. */
 const TK_UPDATED_RE = /Updated\s+(\S+)\s+->\s+(open|in_progress|closed)/g;
-
-/** Fold the task_event stream into a per-id enrichment table (latest status
- *  wins). Only step records are kept -- regular tickets do not render. This is
- *  the temporary in-stream enrichment source; the backend will later deliver
- *  the same table as a snapshot, but the shape consumed here is unchanged. */
-export function buildEnrichment(events: TranscriptEvent[]): Map<string, StepEnrichment> {
-  const table = new Map<string, StepEnrichment>();
-  const rank = new Map<string, number>();
-  for (const e of events) {
-    if (e.type !== "task_event" || !e.ticket_id || !e.step) continue;
-    const existing = table.get(e.ticket_id);
-    if (existing === undefined) {
-      table.set(e.ticket_id, {
-        title: e.title,
-        summary: e.status === "closed" ? e.summary : null,
-        status: e.status,
-        created_at: e.created_at || e.timestamp,
-      });
-      rank.set(e.ticket_id, STATUS_RANK[e.status]);
-      continue;
-    }
-    existing.title = e.title || existing.title;
-    if (e.created_at) existing.created_at = e.created_at;
-    if (e.status === "closed" && e.summary !== null) existing.summary = e.summary;
-    if (STATUS_RANK[e.status] >= (rank.get(e.ticket_id) ?? 0)) {
-      existing.status = e.status;
-      rank.set(e.ticket_id, STATUS_RANK[e.status]);
-    }
-  }
-  return table;
-}
 
 /** True when a tool call is a tk lifecycle command (consumed as a structural
  *  marker, not rendered as work). */

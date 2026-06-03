@@ -1,9 +1,10 @@
 """Unit tests for AgentTicketsWatcher.
 
-The watcher emits one event per OBSERVED state transition. On replay
-(the watcher is started against a directory whose tickets are already
-past-`open`), only the current status emits an event -- earlier
-transitions weren't observed and are not synthesized.
+The watcher maintains a current ENRICHMENT snapshot of the agent's step
+records (ticket_id -> {title, summary, status, created_at}) rather than
+emitting positioned transition events. It serves the snapshot via
+get_enrichment() and broadcasts a single `step_enrichment` message whenever
+the snapshot changes. Only step records surface; regular tickets are dropped.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from imbue.system_interface.tickets_watcher import AgentTicketsWatcher
+from imbue.system_interface.tickets_watcher import ENRICHMENT_MESSAGE_TYPE
 
 
 def _capture() -> tuple[list[tuple[str, list[dict[str, Any]]]], Any]:
@@ -33,31 +35,23 @@ def _ticket_text(
     *,
     title: str = "Sample task",
     created: str = "2026-04-28T01:00:00Z",
-    started: str | None = None,
-    closed: str | None = None,
     notes: str | None = None,
     agent: str | None = None,
-    step: bool = False,
-    parent: str | None = None,
-    assignee: str | None = None,
+    step: bool = True,
 ) -> str:
-    """Build a tk-shaped ticket body. Centralizes the boilerplate frontmatter
-    so individual tests only describe the parts that actually vary."""
-    started_line = f"started: {started}\n" if started is not None else ""
-    closed_line = f"closed: {closed}\n" if closed is not None else ""
+    """Build a tk-shaped ticket body. Defaults to a step record (the only kind
+    the watcher surfaces) so individual tests only describe what varies."""
     agent_line = f"agent: {agent}\n" if agent is not None else ""
     step_line = "step: true\n" if step else ""
-    parent_line = f"parent: {parent}\n" if parent is not None else ""
-    assignee_line = f"assignee: {assignee}\n" if assignee is not None else ""
     body = f"""---
 id: {ticket_id}
 status: {status}
 deps: []
 links: []
 created: {created}
-{started_line}{closed_line}type: task
+type: task
 priority: 2
-{assignee_line}{agent_line}{step_line}{parent_line}---
+{agent_line}{step_line}---
 # {title}
 """
     if notes is not None:
@@ -65,7 +59,7 @@ priority: 2
     return body
 
 
-def _write_ticket_with_status(
+def _write_ticket(
     tickets_dir: Path,
     ticket_id: str,
     status: str,
@@ -73,90 +67,54 @@ def _write_ticket_with_status(
     title: str = "Sample task",
     notes: str | None = None,
     agent: str | None = None,
-    step: bool = False,
-    parent: str | None = None,
-    assignee: str | None = None,
+    step: bool = True,
 ) -> Path:
     tickets_dir.mkdir(parents=True, exist_ok=True)
     path = tickets_dir / f"{ticket_id}.md"
-    path.write_text(
-        _ticket_text(
-            ticket_id,
-            status,
-            title=title,
-            notes=notes,
-            agent=agent,
-            step=step,
-            parent=parent,
-            assignee=assignee,
-        )
-    )
+    path.write_text(_ticket_text(ticket_id, status, title=title, notes=notes, agent=agent, step=step))
     return path
 
 
 def test_silent_when_tickets_dir_missing(tmp_path: Path) -> None:
     _calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tmp_path / ".tickets", cb)
-    assert watcher.get_all_events() == []
+    assert watcher.get_enrichment() == {}
 
 
 def test_scan_skips_files_with_invalid_utf8(tmp_path: Path) -> None:
-    """A *.md file containing non-UTF-8 bytes must not crash the watcher;
-    it should be skipped silently like any other unreadable file. Without
-    this, a single malformed file would propagate UnicodeDecodeError up
-    through _scan() and kill the watcher's background thread."""
+    """A *.md file containing non-UTF-8 bytes must not crash the watcher; it is
+    skipped silently like any other unreadable file."""
     tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(tickets_dir, "tt-good", "open", title="Valid ticket")
-    bad_file = tickets_dir / "tt-bad.md"
-    bad_file.write_bytes(b"---\nid: tt-bad\nstatus: open\n---\n# \xff\xfe\xfd not utf-8\n")
+    _write_ticket(tickets_dir, "tt-good", "open", title="Valid step")
+    (tickets_dir / "tt-bad.md").write_bytes(b"---\nid: tt-bad\nstatus: open\nstep: true\n---\n# \xff\xfe\xfd\n")
 
     _calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
-    events = watcher.get_all_events()
-    # The valid ticket comes through; the malformed one is silently skipped.
-    assert [e["ticket_id"] for e in events] == ["tt-good"]
+    enrichment = watcher.get_enrichment()
+    assert list(enrichment.keys()) == ["tt-good"]
 
 
-def test_open_ticket_emits_one_event_with_created_at_timestamp(tmp_path: Path) -> None:
-    """A freshly-discovered open ticket emits a single open event whose
-    timestamp comes from the frontmatter `created` field (truthful)."""
+def test_open_step_snapshot_entry(tmp_path: Path) -> None:
+    """A freshly-discovered open step appears in the snapshot with its title,
+    status, and a normalised created_at; no summary while not closed."""
     tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(tickets_dir, "tt-aaaa", "open", title="Hello world")
+    _write_ticket(tickets_dir, "tt-aaaa", "open", title="Hello world")
     _calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
-    events = watcher.get_all_events()
-    assert len(events) == 1
-    assert events[0]["event_id"] == "tt-aaaa-open"
-    assert events[0]["status"] == "open"
-    # The frontmatter `created` (second resolution here) is normalised to the
-    # uniform fixed-width microsecond format every emitted timestamp uses.
-    assert events[0]["timestamp"] == "2026-04-28T01:00:00.000000Z"
-    assert events[0]["title"] == "Hello world"
+    entry = watcher.get_enrichment()["tt-aaaa"]
+    assert entry == {
+        "title": "Hello world",
+        "summary": None,
+        "status": "open",
+        # second-resolution frontmatter normalised to fixed-width microseconds
+        "created_at": "2026-04-28T01:00:00.000000Z",
+    }
 
 
-def test_replayed_in_progress_ticket_emits_only_current_status(tmp_path: Path) -> None:
-    """A ticket discovered already at in_progress was not observed
-    transitioning from open -- so we emit a single in_progress event,
-    NOT a synthetic open event."""
+def test_closed_step_carries_summary(tmp_path: Path) -> None:
+    """A closed step's snapshot entry carries the most-recent note as summary."""
     tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(tickets_dir, "tt-bbbb", "in_progress", title="In progress task")
-    _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
-    events = watcher.get_all_events()
-    assert len(events) == 1
-    assert events[0]["event_id"] == "tt-bbbb-in_progress"
-    # created_at field still carries the frontmatter value (normalised to the
-    # uniform microsecond format) -- the frontend uses that for turn
-    # attribution and the "ticket existed since" lower bound.
-    assert events[0]["created_at"] == "2026-04-28T01:00:00.000000Z"
-
-
-def test_replayed_closed_ticket_emits_only_closed_event_with_summary(tmp_path: Path) -> None:
-    """A ticket discovered already at closed emits one closed event;
-    no synthetic in_progress is generated. Summary still rides on the
-    closed event."""
-    tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(
+    _write_ticket(
         tickets_dir,
         "tt-cccc",
         "closed",
@@ -165,283 +123,132 @@ def test_replayed_closed_ticket_emits_only_closed_event_with_summary(tmp_path: P
     )
     _calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
-    events = watcher.get_all_events()
-    assert len(events) == 1
-    assert events[0]["event_id"] == "tt-cccc-closed"
-    assert events[0]["status"] == "closed"
-    assert events[0]["summary"] == "Final summary text for this task."
-    assert events[0]["summary_at"] == "2026-04-28T01:05:00.000000Z"
+    entry = watcher.get_enrichment()["tt-cccc"]
+    assert entry["status"] == "closed"
+    assert entry["summary"] == "Final summary text for this task."
 
 
-def test_summary_only_on_closed_event(tmp_path: Path) -> None:
-    """A ticket with notes still in_progress: no summary leaks; the
-    in_progress event's summary field is None."""
+def test_summary_only_on_closed(tmp_path: Path) -> None:
+    """An in_progress step with notes does not leak the note as a summary."""
     tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(
+    _write_ticket(
         tickets_dir,
         "tt-dddd",
         "in_progress",
         title="Still working",
-        notes="**2026-04-28T01:02:00Z**\n\nInterim note that should not appear as a summary yet.",
+        notes="**2026-04-28T01:02:00Z**\n\nInterim note, not a summary yet.",
     )
     _calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
-    events = watcher.get_all_events()
-    assert len(events) == 1
-    assert events[0]["summary"] is None
-    assert events[0]["summary_at"] is None
+    assert watcher.get_enrichment()["tt-dddd"]["summary"] is None
 
 
-def test_repeated_get_all_events_is_idempotent(tmp_path: Path) -> None:
-    """Re-calling get_all_events() against an unchanged directory yields
-    the same cumulative history. This is the contract _get_combined_events
-    in server.py relies on: every page reload re-issues GET /events and
-    expects the full event list back, not just deltas since the last poll."""
+def test_get_enrichment_is_idempotent(tmp_path: Path) -> None:
+    """Re-reading an unchanged directory yields the same snapshot."""
     tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(tickets_dir, "tt-eeee", "open", title="Stable")
+    _write_ticket(tickets_dir, "tt-eeee", "open", title="Stable")
     _calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
-    first = watcher.get_all_events()
-    assert [e["event_id"] for e in first] == ["tt-eeee-open"]
-    second = watcher.get_all_events()
-    assert second == first
+    first = watcher.get_enrichment()
+    second = watcher.get_enrichment()
+    assert first == second
+    assert list(first.keys()) == ["tt-eeee"]
 
 
-def test_lifecycle_accumulates_one_event_per_observed_transition(tmp_path: Path) -> None:
-    """A ticket the watcher observes through its full lifecycle (open
-    -> in_progress -> closed) accumulates exactly three events in the
-    cumulative history, one per observed transition. get_all_events()
-    returns the full accumulated list each call."""
+def test_lifecycle_updates_snapshot_status(tmp_path: Path) -> None:
+    """As a step moves open -> in_progress -> closed, the snapshot entry's
+    status (and summary on close) tracks the latest file state."""
     tickets_dir = tmp_path / ".tickets"
-    tickets_dir.mkdir(parents=True, exist_ok=True)
-    path = tickets_dir / "tt-ffff.md"
-
-    path.write_text(_ticket_text("tt-ffff", "open", title="Lifecycle test"))
-
+    path = _write_ticket(tickets_dir, "tt-ffff", "open", title="Lifecycle")
     _calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
+    assert watcher.get_enrichment()["tt-ffff"]["status"] == "open"
 
-    events1 = watcher.get_all_events()
-    assert [e["event_id"] for e in events1] == ["tt-ffff-open"]
+    path.write_text(_ticket_text("tt-ffff", "in_progress", title="Lifecycle"))
+    assert watcher.get_enrichment()["tt-ffff"]["status"] == "in_progress"
 
-    path.write_text(_ticket_text("tt-ffff", "in_progress", title="Lifecycle test"))
-    events2 = watcher.get_all_events()
-    assert [e["event_id"] for e in events2] == ["tt-ffff-open", "tt-ffff-in_progress"]
-
-    path.write_text(
-        _ticket_text(
-            "tt-ffff",
-            "closed",
-            title="Lifecycle test",
-            notes="**2026-04-28T01:10:00Z**\n\nAll done.",
-        )
-    )
-    events3 = watcher.get_all_events()
-    assert [e["event_id"] for e in events3] == ["tt-ffff-open", "tt-ffff-in_progress", "tt-ffff-closed"]
-    assert events3[-1]["summary"] == "All done."
+    path.write_text(_ticket_text("tt-ffff", "closed", title="Lifecycle", notes="**2026-04-28T01:10:00Z**\n\nAll done."))
+    final = watcher.get_enrichment()["tt-ffff"]
+    assert final["status"] == "closed"
+    assert final["summary"] == "All done."
 
 
-def test_in_progress_event_timestamp_comes_from_started_field(tmp_path: Path) -> None:
-    """When a ticket carries a `started:` frontmatter field (written by
-    `tk start`), the in_progress event is timestamped from it -- truthful even
-    on replay -- rather than from the file's mtime, and normalised to the
-    uniform microsecond format."""
+def test_created_at_falls_back_to_mtime_when_field_absent(tmp_path: Path) -> None:
+    """A step with no `created:` frontmatter still gets a sortable created_at:
+    the file's mtime, in the uniform microsecond format -- never empty, which
+    would sort to the front of the pending tail."""
     tickets_dir = tmp_path / ".tickets"
     tickets_dir.mkdir(parents=True, exist_ok=True)
-    (tickets_dir / "tt-strt.md").write_text(
-        _ticket_text("tt-strt", "in_progress", title="Working", started="2026-04-28T01:02:03.456789Z")
-    )
-    _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
-    events = watcher.get_all_events()
-    assert events[0]["event_id"] == "tt-strt-in_progress"
-    assert events[0]["timestamp"] == "2026-04-28T01:02:03.456789Z"
-
-
-def test_closed_event_timestamp_comes_from_closed_field(tmp_path: Path) -> None:
-    """A `closed:` frontmatter field (written by `tk close`) is the source of
-    the closed event's timestamp."""
-    tickets_dir = tmp_path / ".tickets"
-    tickets_dir.mkdir(parents=True, exist_ok=True)
-    (tickets_dir / "tt-clsd.md").write_text(
-        _ticket_text("tt-clsd", "closed", title="Done", closed="2026-04-28T01:09:09.111222Z")
-    )
-    _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
-    events = watcher.get_all_events()
-    assert events[0]["event_id"] == "tt-clsd-closed"
-    assert events[0]["timestamp"] == "2026-04-28T01:09:09.111222Z"
-
-
-def test_transition_timestamp_falls_back_to_mtime_when_field_absent(tmp_path: Path) -> None:
-    """A ticket written by an older tk (no `started:` field) still gets a
-    sensible in_progress timestamp: the watcher falls back to the file's mtime,
-    in the same fixed-width microsecond format. Never an empty string, which
-    would sort to the front of the merged stream."""
-    tickets_dir = tmp_path / ".tickets"
-    tickets_dir.mkdir(parents=True, exist_ok=True)
-    path = tickets_dir / "tt-oldd.md"
-    path.write_text(_ticket_text("tt-oldd", "in_progress", title="Legacy in progress"))
-    # Pin the mtime to a known instant so we can assert the fallback exactly.
+    path = tickets_dir / "tt-nocreate.md"
+    path.write_text("---\nid: tt-nocreate\nstatus: open\nstep: true\n---\n# No created field\n")
     mtime = 1_777_000_000.123456
     os.utime(path, (mtime, mtime))
 
     _calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
-    events = watcher.get_all_events()
     expected = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    assert events[0]["timestamp"] == expected
+    assert watcher.get_enrichment()["tt-nocreate"]["created_at"] == expected
 
 
-def test_filters_out_tickets_stamped_with_a_different_agent(tmp_path: Path) -> None:
-    """When workers share a TICKETS_DIR with their lead (the default minds
-    setup), each agent's watcher must only surface tickets stamped with
-    its own MNGR_AGENT_NAME. Tickets stamped with a sibling agent's name
-    are silently skipped so they don't pollute the lead's progress view.
-    """
+def test_regular_tickets_are_dropped(tmp_path: Path) -> None:
+    """Regular (non-step) tickets are a separate construct and never appear in
+    the progress view's enrichment."""
     tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(tickets_dir, "td-own", "open", title="Lead task", agent="lead-agent")
-    _write_ticket_with_status(
-        tickets_dir,
-        "tw-sibling",
-        "open",
-        title="Worker task",
-        agent="worker-agent",
-    )
-
+    _write_ticket(tickets_dir, "ts-step", "open", title="A step", step=True)
+    _write_ticket(tickets_dir, "tt-regular", "open", title="A regular ticket", step=False)
     _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("lead-id", "lead-agent", tickets_dir, cb)
-    events = watcher.get_all_events()
-    assert [e["ticket_id"] for e in events] == ["td-own"]
+    watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
+    assert list(watcher.get_enrichment().keys()) == ["ts-step"]
 
 
-def test_includes_unstamped_tickets_for_backwards_compatibility(tmp_path: Path) -> None:
-    """Ticket files written before the stamping patch (and ticket files
-    written by any tk invocation outside an mngr context) have no `agent:`
-    line. They are kept for every agent's watcher -- attributing them to
-    whoever is looking is the least-surprising behaviour and keeps the
-    rollout from making historical tickets disappear from the chat."""
+def test_step_surfaces_only_to_its_creator(tmp_path: Path) -> None:
+    """Step records are creator-private: a step stamped with a sibling agent's
+    name must not leak into this agent's snapshot (the bug two agents sharing a
+    TICKETS_DIR would otherwise hit)."""
     tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(tickets_dir, "tu-bare", "open", title="Legacy task")
+    _write_ticket(tickets_dir, "ts-mine", "open", title="My step", agent="agent-A")
+    _write_ticket(tickets_dir, "ts-theirs", "open", title="Their step", agent="agent-B")
     _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("lead-id", "lead-agent", tickets_dir, cb)
-    events = watcher.get_all_events()
-    assert [e["ticket_id"] for e in events] == ["tu-bare"]
+    watcher = AgentTicketsWatcher("agent-A-id", "agent-A", tickets_dir, cb)
+    assert list(watcher.get_enrichment().keys()) == ["ts-mine"]
 
 
-def test_get_all_events_forwards_newly_emitted_events_through_callback(tmp_path: Path) -> None:
-    """`get_all_events()` documents that any transitions discovered by its
-    catch-up scan are forwarded through `on_events`, so other connected
-    websocket subscribers don't silently miss those events. Without this
-    contract a request-handler scan would mark transitions "seen" in the
-    watcher's cache before the background `_run` loop got a chance to
-    observe them."""
+def test_unstamped_step_surfaces_to_everyone(tmp_path: Path) -> None:
+    """A step with no `agent:` stamp (older tk) surfaces to every agent's
+    watcher so a rollout doesn't make historical steps vanish."""
     tickets_dir = tmp_path / ".tickets"
-    path = _write_ticket_with_status(tickets_dir, "tt-cb-1", "open", title="First")
+    _write_ticket(tickets_dir, "ts-bare", "open", title="Legacy step")
+    _calls, cb = _capture()
+    watcher = AgentTicketsWatcher("any-id", "any-agent", tickets_dir, cb)
+    assert list(watcher.get_enrichment().keys()) == ["ts-bare"]
+
+
+def test_get_enrichment_broadcasts_snapshot_on_change(tmp_path: Path) -> None:
+    """get_enrichment() forwards a single `step_enrichment` snapshot message
+    through on_events when its catch-up scan finds a change, so live SSE
+    subscribers update without a refetch; an unchanged scan is a callback
+    no-op."""
+    tickets_dir = tmp_path / ".tickets"
+    path = _write_ticket(tickets_dir, "ts-cb", "open", title="First")
     calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
 
-    # First call discovers tt-cb-1 -> one callback invocation with one event.
-    watcher.get_all_events()
+    # First read discovers ts-cb -> one broadcast carrying the snapshot.
+    watcher.get_enrichment()
     assert len(calls) == 1
-    assert calls[0][0] == "agent-1"
-    assert [e["event_id"] for e in calls[0][1]] == ["tt-cb-1-open"]
-
-    # No new transitions: the next call is a no-op for the callback.
-    watcher.get_all_events()
-    assert len(calls) == 1
-
-    # A new transition triggers another forward.
-    path.write_text(_ticket_text("tt-cb-1", "in_progress", title="First"))
-    watcher.get_all_events()
-    assert len(calls) == 2
-    assert [e["event_id"] for e in calls[1][1]] == ["tt-cb-1-in_progress"]
-
-
-def test_step_record_surfaces_only_to_its_creator(tmp_path: Path) -> None:
-    """Step records (`step: true`) are turn-bound progress markers and
-    must NEVER leak across agents -- two agents sharing TICKETS_DIR are
-    the precise bug this rule fixes. Even if the step's assignee field
-    happens to match a sibling agent, it stays creator-scoped."""
-    tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(
-        tickets_dir, "ts-mine", "open", title="My step", agent="agent-A", step=True
-    )
-    _write_ticket_with_status(
-        tickets_dir, "ts-theirs", "open", title="Their step", agent="agent-B", step=True
-    )
-
-    _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-A-id", "agent-A", tickets_dir, cb)
-    events = watcher.get_all_events()
-    assert [e["ticket_id"] for e in events] == ["ts-mine"]
-    assert events[0]["step"] is True
-
-
-def test_regular_ticket_surfaces_to_assignee_not_creator(tmp_path: Path) -> None:
-    """Regular tickets (no `step`) surface to their CURRENT assignee.
-    A ticket created by A and picked up by B (assignee=B) shows in B's
-    progress view, not A's. This is what makes ticket pickup work."""
-    tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(
-        tickets_dir,
-        "tt-picked",
-        "in_progress",
-        title="A's idea, B's work",
-        agent="agent-A",
-        assignee="agent-B",
-    )
-
-    _calls_a, cb_a = _capture()
-    watcher_a = AgentTicketsWatcher("agent-A-id", "agent-A", tickets_dir, cb_a)
-    assert watcher_a.get_all_events() == []
-
-    _calls_b, cb_b = _capture()
-    watcher_b = AgentTicketsWatcher("agent-B-id", "agent-B", tickets_dir, cb_b)
-    events = watcher_b.get_all_events()
-    assert [e["ticket_id"] for e in events] == ["tt-picked"]
-    assert events[0]["assignee"] == "agent-B"
-
-
-def test_unassigned_ticket_still_surfaces_to_creator_until_picked_up(tmp_path: Path) -> None:
-    """A filed-but-not-yet-picked-up ticket has `agent:` set (creator)
-    and `assignee:` empty/unset. It should surface to the creator's
-    progress view while it waits -- once another agent runs `tk start`
-    on it (setting assignee), it stops surfacing to the creator and
-    starts surfacing to the picker. This is the routing handoff."""
-    tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(
-        tickets_dir, "tt-filed", "open", title="Filed", agent="agent-A"
-    )
-
-    _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-A-id", "agent-A", tickets_dir, cb)
-    events = watcher.get_all_events()
-    assert [e["ticket_id"] for e in events] == ["tt-filed"]
-
-
-def test_event_carries_step_parent_id_and_assignee_fields(tmp_path: Path) -> None:
-    """The frontend's turn-grouping needs step / parent_id / assignee on
-    every task_event to decide nesting and attribution. Verify the
-    watcher actually stamps them into _make_event's payload."""
-    tickets_dir = tmp_path / ".tickets"
-    _write_ticket_with_status(
-        tickets_dir,
-        "ts-child",
-        "open",
-        title="Child step",
-        agent="agent-A",
-        step=True,
-        parent="tt-parent",
-    )
-
-    _calls, cb = _capture()
-    watcher = AgentTicketsWatcher("agent-A-id", "agent-A", tickets_dir, cb)
-    events = watcher.get_all_events()
+    agent_id, events = calls[0]
+    assert agent_id == "agent-1"
     assert len(events) == 1
-    e = events[0]
-    assert e["step"] is True
-    assert e["parent_id"] == "tt-parent"
-    # assignee may be empty for steps -- they aren't part of the
-    # pickup-handoff flow -- but the field must still be present.
-    assert e["assignee"] == ""
+    msg = events[0]
+    assert msg["type"] == ENRICHMENT_MESSAGE_TYPE
+    assert msg["enrichment"]["ts-cb"]["status"] == "open"
+
+    # No change -> no new broadcast.
+    watcher.get_enrichment()
+    assert len(calls) == 1
+
+    # A change -> another broadcast with the updated snapshot.
+    path.write_text(_ticket_text("ts-cb", "in_progress", title="First"))
+    watcher.get_enrichment()
+    assert len(calls) == 2
+    assert calls[1][1][0]["enrichment"]["ts-cb"]["status"] == "in_progress"
