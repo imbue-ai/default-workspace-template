@@ -853,17 +853,25 @@ body {
   text-decoration: underline;
 }
 
-/* ── Permission request button ── */
+/* ── Permission request footer (inside the tool-call block) ── */
+.tool-call-block--permission-request {
+  border-color: var(--color-accent);
+}
+
+.tool-call-permission-footer {
+  border-top: 1px solid var(--color-accent);
+  background: var(--color-accent-light);
+  padding: 8px 10px;
+}
+
 .permission-request-button {
-  margin-top: 0.25em;
-  margin-bottom: 0.25em;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   font-size: 13px;
   font-weight: 500;
   color: var(--color-accent);
-  background: var(--color-accent-light);
+  background: transparent;
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-base);
   padding: 5px 12px;
@@ -875,7 +883,11 @@ body {
 
 .permission-request-button:hover {
   color: var(--color-accent-hover);
-  background: var(--color-bg-hover);
+  background: #dfeee7;
+}
+
+.permission-request-icon {
+  flex-shrink: 0;
 }
 
 /* ── Dockview workspace ── */
