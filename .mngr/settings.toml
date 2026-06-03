@@ -72,7 +72,7 @@ use_env_config_dir = true
 parent_type = "claude"
 sync_home_settings = false
 sync_claude_json = false
-sync_claude_credentials = false
+sync_claude_credentials = true
 sync_credentials_on_login = false
 # Keep this agent's per-agent CLAUDE_CONFIG_DIR (don't inherit the parent's
 # new shared-mode default). Every other agent in the workspace points at
