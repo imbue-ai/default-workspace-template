@@ -83,9 +83,12 @@ export interface SectionView {
 }
 
 /** Detects a `tk`/`ticket` lifecycle invocation in a Bash tool call's input
- *  preview. The verb sits at the front of the command, so this survives the
- *  200-char input_preview truncation. `super` is the plugin-bypassing form. */
-const TK_LIFECYCLE_RE = /\b(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
+ *  preview. Anchored to the start of the Bash `command` value, so a command
+ *  that merely mentions a tk verb (e.g. `git commit -m "tk close ..."` or
+ *  `echo "run tk start later"`) is NOT misclassified and stripped. The verb
+ *  sits at the command's front, well within the 200-char input_preview
+ *  truncation. `super` is the plugin-bypassing form. */
+const TK_LIFECYCLE_RE = /"command"\s*:\s*"\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
 
 /** A status transition line printed by tk on every state change:
  *  `Updated <id> -> <status>` (see vendor/tk/ticket). Global so a batched
@@ -93,9 +96,10 @@ const TK_LIFECYCLE_RE = /\b(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b
 const TK_UPDATED_RE = /Updated\s+(\S+)\s+->\s+(open|in_progress|closed)/g;
 
 /** True when a tool call is a tk lifecycle command (consumed as a structural
- *  marker, not rendered as work). */
+ *  marker, not rendered as work). Restricted to Bash calls whose command
+ *  begins with the tk verb (see TK_LIFECYCLE_RE). */
 function isTkLifecycleCall(tc: ToolCall): boolean {
-  return TK_LIFECYCLE_RE.test(tc.input_preview);
+  return tc.tool_name === "Bash" && TK_LIFECYCLE_RE.test(tc.input_preview);
 }
 
 interface ParsedMessage {
@@ -110,11 +114,12 @@ interface ParsedMessage {
 /** Split an assistant message into the tk transitions it caused and the
  *  renderable remainder (text + non-tk tool calls). */
 function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolResultEvent>): ParsedMessage {
-  const tkCalls = e.tool_calls.filter(isTkLifecycleCall);
-  const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc));
-
+  // Transitions are read from EVERY tool call's output -- the
+  // `Updated <id> -> <status>` line is specific enough that a genuine
+  // transition is never missed, even if the command form isn't recognised as a
+  // tk lifecycle call (so e.g. `cd x && tk close s1` still closes the step).
   const transitions: { id: string; status: "in_progress" | "closed" }[] = [];
-  for (const tc of tkCalls) {
+  for (const tc of e.tool_calls) {
     const output = toolResults.get(tc.tool_call_id)?.output ?? "";
     TK_UPDATED_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -126,7 +131,11 @@ function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolRes
     }
   }
 
-  if (tkCalls.length === 0) {
+  // Only a recognised, pure tk lifecycle call is hidden from the rendered
+  // output. Anything else -- including a command that merely mentions a tk verb
+  // -- renders as normal work, so real work is never silently dropped.
+  const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc));
+  if (realCalls.length === e.tool_calls.length) {
     return { transitions, render: e };
   }
   // Pure tk command (no text, no real work): fully consumed.
@@ -149,12 +158,6 @@ function isProse(e: AssistantMessageEvent): boolean {
 
 // --- Section assembly ---
 
-/** A routed message plus where it landed: under a step (by id) or ungrouped. */
-interface Placement {
-  event: AssistantMessageEvent;
-  step_id: string | null;
-}
-
 /** An ordered skeleton entry recorded as the transcript is walked. A `step`
  *  entry marks where a step node first appears -- its first transition (an
  *  open, or a close with no prior open) -- so the node is positioned by that
@@ -171,7 +174,6 @@ interface SectionBuilder {
   /** Step nodes in first-appearance (transcript) order. */
   steps: Map<string, StepNode>;
   step_order: string[];
-  placements: Placement[];
   /** Ordered skeleton of step appearances and routed events (see SectionEntry),
    *  used to assemble timeline items in transcript order. */
   entries: SectionEntry[];
@@ -187,7 +189,6 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
     key,
     steps: new Map(),
     step_order: [],
-    placements: [],
     entries: [],
     chips: [],
     current_step_id: null,
@@ -239,10 +240,15 @@ export function buildSections(
     if (e.type === "assistant_message") {
       if (current === null) current = ensureSection(null, "section-pre");
       const parsed = parseMessage(e, toolResults);
-      for (const t of parsed.transitions) applyTransition(current, t);
+      // Apply opens BEFORE routing this message's content, so work that shares
+      // a message with a `tk start` groups under the step it opens. Apply
+      // closes AFTER, so work that shares a message with a `tk close` still
+      // groups under the step being closed rather than falling out ungrouped.
+      for (const t of parsed.transitions) if (t.status === "in_progress") applyTransition(current, t);
       if (parsed.render !== null && (parsed.render.text || parsed.render.tool_calls.length > 0)) {
         routeMessage(current, parsed.render);
       }
+      for (const t of parsed.transitions) if (t.status === "closed") applyTransition(current, t);
       continue;
     }
     // tool_result events are resolved by id via toolResults; no routing needed.
@@ -253,7 +259,8 @@ export function buildSections(
 
 /** Open (or re-open) a step node as the current step. */
 function openStep(section: SectionBuilder, id: string, is_carryover: boolean): void {
-  if (!section.steps.has(id)) {
+  const existing = section.steps.get(id);
+  if (existing === undefined) {
     section.steps.set(id, {
       ticket_id: id,
       title: id,
@@ -266,6 +273,11 @@ function openStep(section: SectionBuilder, id: string, is_carryover: boolean): v
     });
     section.step_order.push(id);
     section.entries.push({ kind: "step", id });
+  } else if (existing.status === "done") {
+    // Re-opened (a `tk start` on a previously-closed id in this section): it is
+    // active again, so it must not keep showing as done/settled.
+    existing.status = "active";
+    existing.summary = null;
   }
   section.current_step_id = id;
 }
@@ -300,7 +312,6 @@ function applyTransition(section: SectionBuilder, t: { id: string; status: "in_p
 
 function routeMessage(section: SectionBuilder, e: AssistantMessageEvent): void {
   const step_id = section.current_step_id;
-  section.placements.push({ event: e, step_id });
   section.entries.push({ kind: "event", event: e, step_id });
   if (step_id !== null) {
     section.steps.get(step_id)!.events.push(e);
@@ -321,23 +332,30 @@ function finalizeSection(
   agentIsIdle: boolean,
   is_tail: boolean,
 ): SectionView {
-  // 1. Trailing reply: prose after the last real-work placement.
-  let lastWorkIdx = -1;
-  for (let i = 0; i < section.placements.length; i++) {
-    if (isWork(section.placements[i].event)) lastWorkIdx = i;
+  // 1. Trailing reply: text-only messages after the reply boundary -- the
+  //    later of the last real (non-tk) work and the last stop-hook chip.
+  //    Treating a chip as a boundary keeps a reply written before a chip inline
+  //    at its chronological spot (rather than hoisting it below the chip), so a
+  //    chip that interrupts two reply fragments still reads top-to-bottom.
+  let lastWorkEntryIdx = -1;
+  for (let i = 0; i < section.entries.length; i++) {
+    const en = section.entries[i];
+    if (en.kind === "event" && isWork(en.event)) lastWorkEntryIdx = i;
   }
+  let maxChipAfter = -1;
+  for (const c of section.chips) if (c.after > maxChipAfter) maxChipAfter = c.after;
+  const replyBoundary = Math.max(lastWorkEntryIdx, maxChipAfter);
   const trailingIds = new Set<string>();
   const trailing_reply: AssistantMessageEvent[] = [];
-  for (let i = lastWorkIdx + 1; i < section.placements.length; i++) {
-    const p = section.placements[i];
-    if (isProse(p.event)) {
-      trailing_reply.push(p.event);
-      trailingIds.add(p.event.event_id);
-      // Remove promoted prose from its step's grouped events.
-      if (p.step_id !== null) {
-        const node = section.steps.get(p.step_id);
-        if (node !== undefined) node.events = node.events.filter((ev) => ev.event_id !== p.event.event_id);
-      }
+  for (let i = replyBoundary + 1; i < section.entries.length; i++) {
+    const en = section.entries[i];
+    if (en.kind !== "event" || !isProse(en.event)) continue;
+    trailing_reply.push(en.event);
+    trailingIds.add(en.event.event_id);
+    // Remove promoted prose from its step's grouped events.
+    if (en.step_id !== null) {
+      const node = section.steps.get(en.step_id);
+      if (node !== undefined) node.events = node.events.filter((ev) => ev.event_id !== en.event.event_id);
     }
   }
 
