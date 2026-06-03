@@ -60,6 +60,15 @@ headless `claude -p`. You do not choose -- routing is by key presence. Any
 Anthropic API option can be passed through `anthropic_options=...` (tools,
 response formats, temperature, etc.), and structured output works the same way.
 
+**`system` is required here** (unlike `run_task`). On the keyless `claude -p`
+fallback the library passes it as `--system-prompt` and disables tools
+(`--tools ""`). This is not just a cost optimization: the keyless fallback is
+*non-bare* (bare can't authenticate without an API key), so it always auto-loads
+this repo's CLAUDE.md -- and with an empty system prompt the model answers *that*
+ambient text instead of your prompt. A real `system` neutralizes it. Make it a
+genuine instruction for the task ("You are an email triage classifier."), not a
+placeholder.
+
 ### The onramp is automatic -- do not make the user set up a key first
 
 A user with no API key can build and test the whole flow on the `claude -p`
@@ -82,7 +91,10 @@ result = await run_task(
 ```
 
 Always headless `claude -p` (it has tools and file access, which a plain API call
-does not). Direct API is not an option here.
+does not). Direct API is not an option here. Tools stay enabled -- the point is to
+ride the default agent. Pass `append_system="..."` to layer task instructions on
+top of the default agent prompt (`--append-system-prompt`), or `system="..."` to
+replace it outright (rare; you usually want the default agent here).
 
 ## Pattern 1 -- `run_agent` (full agent)
 
@@ -117,8 +129,16 @@ The live concern is **cost**, so:
 - **Measure on a small sample before scaling.** Before wiring up a high-volume
   flow, run the pattern on a handful of items, look at `result.cost_usd`, and tell
   the user the projected cost ("this batch of N will cost ~$X"). For `run_task`,
-  remember `claude -p` cost is dominated by per-call overhead, so **batch rather
-  than parallelize** (fewer, larger calls).
+  remember `claude -p` cost is dominated by per-call overhead (each invocation
+  reloads the agent), so **batch rather than parallelize** (fewer, larger calls).
+- **Know why `claude -p` costs more than the direct API.** It's the default
+  agent's per-call context: system prompt + tool definitions + auto-loaded
+  CLAUDE.md/skills, plus a multi-turn tool loop. `run_completion`'s keyless
+  fallback already sheds most of this (`--system-prompt` + `--tools ""`), but the
+  direct API carries none of it -- which is why a key is cheaper and why the
+  library nudges you toward one once volume justifies it. (The deeper measured
+  breakdown and the `--bare`-vs-keyless-auth constraint are in
+  [references/billing-and-credentialing.md](references/billing-and-credentialing.md).)
 - **Confirm the billing path with the user at setup.** When wiring up a service
   that will do volume, surface which path it will use and roughly what it will
   cost, and get their OK before turning it on.

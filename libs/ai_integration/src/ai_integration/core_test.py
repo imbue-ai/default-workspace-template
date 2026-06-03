@@ -4,7 +4,7 @@ from pathlib import Path
 import anyio
 import pytest
 
-from ai_integration.core import run_agent, run_completion
+from ai_integration.core import run_agent, run_completion, run_task
 from ai_integration.data_types import AgentOutcome, BillingPath, CompletionResult, Usage
 from ai_integration.errors import CredentialsUnavailableError
 from ai_integration.spend import SpendTracker
@@ -34,6 +34,7 @@ def test_run_completion_prefers_direct_api_when_key_present() -> None:
         functools.partial(
             run_completion,
             "hello",
+            system="You are terse.",
             service_name="svc",
             env={"ANTHROPIC_API_KEY": "sk"},
             api_backend=fake_api,
@@ -42,6 +43,8 @@ def test_run_completion_prefers_direct_api_when_key_present() -> None:
     )
     assert result.billing_path is BillingPath.DIRECT_API
     assert seen["api_key"] == "sk"
+    # The required system prompt flows to the API backend as the system block.
+    assert seen["system"] == "You are terse."
 
 
 def test_run_completion_falls_back_to_cli_without_key(tmp_path) -> None:
@@ -64,6 +67,7 @@ def test_run_completion_falls_back_to_cli_without_key(tmp_path) -> None:
         functools.partial(
             run_completion,
             "hi",
+            system="You are terse.",
             service_name="svc",
             env=env,
             api_backend=fake_api,
@@ -75,6 +79,10 @@ def test_run_completion_falls_back_to_cli_without_key(tmp_path) -> None:
     cli_env = seen["env"]
     assert isinstance(cli_env, dict)
     assert "MAIN_CLAUDE_SESSION_ID" not in cli_env
+    # The lean non-agentic fallback passes the system prompt and disables tools,
+    # so the call answers the prompt rather than being hijacked by CLAUDE.md.
+    assert seen["system"] == "You are terse."
+    assert seen["tools"] == ""
 
 
 def test_run_completion_raises_without_any_credentials(tmp_path) -> None:
@@ -91,6 +99,7 @@ def test_run_completion_raises_without_any_credentials(tmp_path) -> None:
             functools.partial(
                 run_completion,
                 "hi",
+                system="You are terse.",
                 service_name="svc",
                 env=env,
                 api_backend=fake_api,
@@ -118,6 +127,7 @@ def test_run_completion_records_spend(tmp_path) -> None:
         functools.partial(
             run_completion,
             "hi",
+            system="You are terse.",
             service_name="svc",
             env={"ANTHROPIC_API_KEY": "sk"},
             spend_tracker=tracker,
@@ -126,6 +136,32 @@ def test_run_completion_records_spend(tmp_path) -> None:
         )
     )
     assert tracker.spent_in_window() == 0.001
+
+
+def test_run_task_forwards_append_system_and_keeps_tools_enabled(tmp_path) -> None:
+    (tmp_path / ".credentials.json").write_text("{}")
+    env = {"CLAUDE_CONFIG_DIR": str(tmp_path), "HOME": str(tmp_path / "home")}
+    seen: dict[str, object] = {}
+
+    async def fake_cli(**kwargs: object) -> CompletionResult:
+        seen.update(kwargs)
+        return _result(BillingPath.CLAUDE_CLI)
+
+    anyio.run(
+        functools.partial(
+            run_task,
+            "do the work",
+            service_name="svc",
+            env=env,
+            append_system="Extra task instructions.",
+            cli_backend=fake_cli,
+        )
+    )
+    assert seen["append_system"] == "Extra task instructions."
+    # Agentic tasks ride on the default agent: tools must NOT be disabled, and
+    # no replacement system prompt is forced.
+    assert "tools" not in seen
+    assert seen["system"] is None
 
 
 @pytest.mark.parametrize(

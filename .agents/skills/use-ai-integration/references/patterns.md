@@ -8,9 +8,9 @@ no file access, one prompt -> one response.
 ```python
 result = await run_completion(
     prompt,
+    system="You are an email triage classifier.",   # REQUIRED -- see below
     service_name="my-service",
     model="claude-haiku-4-5",
-    system="optional system prompt (cached automatically)",
     anthropic_options={"temperature": 0},   # any Messages API param
     spend_tracker=tracker,
 )
@@ -21,6 +21,11 @@ text = result.text
 - Default model is the cheapest tier; override per call.
 - Structured output: pass the relevant Messages API options through
   `anthropic_options`.
+- **`system` is required.** API path: cache-controlled system block. Keyless
+  `claude -p` fallback: passed as `--system-prompt` with `--tools ""` (lean,
+  non-bare). It must be a real instruction -- an empty system prompt lets the
+  auto-loaded CLAUDE.md hijack the non-bare fallback. See
+  [billing-and-credentialing.md](billing-and-credentialing.md#why-claude--p-costs-more-and-the-three-cost-levers).
 
 ## Pattern 2 -- `run_task` (one-shot agentic)
 
@@ -31,11 +36,15 @@ file and act", "open the repo and summarize the diff".
 result = await run_task(
     "Read runtime/x/input.json and write runtime/x/output.json with ...",
     service_name="my-service",
+    append_system="Only touch files under runtime/x/.",  # optional, layered on default
     spend_tracker=tracker,
 )
 ```
 
-- Always `claude -p` (agentic). No direct-API option.
+- Always `claude -p` (agentic). No direct-API option. Tools stay enabled.
+- `system` / `append_system` are *optional* here (unlike `run_completion`): the
+  default agent is the point. `append_system` (`--append-system-prompt`) adds task
+  instructions on top of it; `system` (`--system-prompt`) replaces it outright.
 - Cost is dominated by per-call overhead (each invocation reloads the agent
   context). **Batch** many items into fewer, larger calls instead of spawning one
   call per item.

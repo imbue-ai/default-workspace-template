@@ -13,8 +13,17 @@ selection, logging, and spend control.
 > * **Pattern 3 — no agency** → `run_completion()`: direct Anthropic API if `ANTHROPIC_API_KEY`
 >   present (cheap-model default e.g. Haiku, caller-overridable, prompt caching on, any Anthropic
 >   API option passable; text by default with optional JSON/schema-validated structured output),
->   else fall back to headless `claude -p`.
-> * **Pattern 2 — one-shot agentic** (tools/file access) → `run_task()`: always headless `claude -p`.
+>   else fall back to headless `claude -p`. `system` is a **required** parameter: on the API path it
+>   is the cache-controlled system block; on the keyless `claude -p` fallback it is passed as
+>   `--system-prompt` alongside `--tools ""` (the lean non-bare config). Required because the non-bare
+>   fallback always auto-loads CLAUDE.md, and an empty/absent system prompt lets that ambient text
+>   hijack the response (measured: the model answered the repo's instructions instead of the prompt);
+>   a mandatory `system` neutralizes it by construction.
+> * **Pattern 2 — one-shot agentic** (tools/file access) → `run_task()`: always headless `claude -p`,
+>   tools left enabled (the point is to ride the default agent). Optional `append_system`
+>   (`--append-system-prompt`) layers task instructions on the default; optional `system`
+>   (`--system-prompt`) fully replaces it. `--bare` is not used (it strips the agent and can't auth
+>   keyless).
 > * **Pattern 1 — full agent** → `run_agent()`: thin wrapper over an extended `launch-task`
 >   synchronous launch -> await -> collect-structured-result -> destroy. User- or error-triggered
 >   only; the self-editing-service "apply the result" flow is a *separate future skill*, out of scope.
@@ -66,11 +75,24 @@ selection, logging, and spend control.
   surface it to the user.
 - The skill steers agents to **measure cost on a small sample before building a high-volume flow**,
   and to **surface the cost/approach tradeoff to the user** with real numbers — prose guidance, not a
-  template. Grounded in the observed `claude -p` cost profile: each invocation reloads the full
-  Claude Code agent (~127k tokens of cached context), so cost is dominated by *per-call* overhead.
-  Two consequences the guidance names explicitly: (a) batch rather than parallelize (fewer, larger
-  calls amortize the overhead), and (b) when no agency is needed, the direct Anthropic API skips that
-  overhead and is roughly an order of magnitude cheaper.
+  template. Grounded in the `claude -p` cost profile, which has **three controllable levers** (all
+  measured on this repo, Haiku, a trivial prompt):
+  - *Default agent* `claude -p` reloads the full Claude Code context (system prompt + tool
+    definitions + auto-discovered CLAUDE.md/skills) **and** runs a multi-turn tool loop — measured
+    ~7 turns / ~$0.086 for a one-line prompt, and it even wandered off-task (tried to `git commit` an
+    unrelated dirty file). This is the expensive, *dangerous* default for non-agentic work.
+  - *Stripped non-bare* (`--system-prompt <s>` + `--tools ""`) drops it to **1 turn / ~$0.016 / ~13k
+    context** and keeps it on task. This is what `run_completion`'s keyless fallback uses. The
+    residual ~13k is CLAUDE.md + skills, which only `--bare` removes.
+  - *`--bare`* strips CLAUDE.md/skills too, but **cannot authenticate without an API key** (OAuth and
+    keychain are never read — confirmed empirically: bare returns "Not logged in"). So bare is
+    unavailable on the keyless subscription path, and once a key exists `run_completion` routes to the
+    direct API anyway — so the library never uses bare.
+  Two consequences the guidance names explicitly: (a) for agentic `run_task` work, batch rather than
+  parallelize (fewer, larger calls amortize the per-call agent reload); and (b) when no agency is
+  needed, the direct Anthropic API carries none of this overhead and is the cheapest path — the gap to
+  the stripped keyless fallback narrows from ~10x (vs the default agent) toward ~2–3x for small
+  prompts, but direct API still wins.
 
 ## Expected behavior
 
