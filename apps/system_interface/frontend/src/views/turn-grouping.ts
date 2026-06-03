@@ -3,16 +3,15 @@
  *
  * The progress view is a frontend for the transcript. Structure -- which
  * steps exist, their order, their open/close transitions, which events
- * belong to which step -- is read purely from transcript *position*, never
- * reconstructed from timestamps. tk lifecycle commands (`tk create/start/
- * close`) appear in the transcript as Bash tool calls; their results carry
- * the canonical id and status (`Updated <id> -> <status>`), which is all the
- * structure we need.
+ * belong to which step -- is read from transcript *position*. tk lifecycle
+ * commands (`tk create/start/close`) appear in the transcript as Bash tool
+ * calls; their results carry the canonical id and status
+ * (`Updated <id> -> <status>`), which is all the structure we need.
  *
- * tk is demoted to an *enrichment* side-table keyed by id: it supplies the
- * canonical title, the close summary, and the roster of pending (not-yet-
- * started) steps. It decorates the transcript-derived skeleton; it never
- * decides order or grouping.
+ * tk also provides an *enrichment* side-table keyed by id: the canonical
+ * title, the close summary, and the roster of pending (not-yet-started)
+ * steps. Enrichment decorates the transcript-derived skeleton by id; it does
+ * not decide order or grouping.
  *
  * The walk maintains a single "current open step": events while a step is
  * open group under it; events while none is open fall into an ungrouped

@@ -1,22 +1,21 @@
 """Watch an agent's `.tickets/` directory and expose a step ENRICHMENT table.
 
 The chat progress view derives all *structure* (which steps exist, their
-order, their open/close transitions, the grouping of work) purely from the
-session transcript -- the `tk` tool calls and their `Updated <id> -> <status>`
-output already live there. tk is therefore not the source of structure; it is
-a side-table of *enrichment*, keyed by ticket id: the canonical title, the
-close summary, the current status, and the creation timestamp (used only to
-order not-yet-started steps among themselves).
+order, their open/close transitions, the grouping of work) from the session
+transcript -- the `tk` tool calls and their `Updated <id> -> <status>` output
+already live there. tk is the source of *enrichment*, not structure: a
+side-table keyed by ticket id holding the canonical title, the close summary,
+the current status, and the creation timestamp (used only to order
+not-yet-started steps among themselves).
 
-So this watcher does NOT emit positioned, timestamped transition events into
-the transcript stream (an earlier design did, and comparing those tk-clock
-timestamps against session-clock timestamps to reconstruct order was a
-persistent source of bugs). Instead it maintains a current SNAPSHOT of the
-step records for this agent and:
+So this watcher maintains a current SNAPSHOT of the agent's step records and:
 
   - serves it on demand via ``get_enrichment()`` (read on every GET /events),
   - broadcasts a single ``step_enrichment`` message whenever the snapshot
     changes, so live subscribers update without a refetch.
+
+The snapshot is keyed by id and joined onto the transcript-derived steps by
+id, so it never carries position or ordering information.
 
 Only step records (``step: true``) surface; regular tk tickets are a separate
 construct and do not render in the progress view. A step is surfaced to its

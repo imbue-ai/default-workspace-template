@@ -347,11 +347,10 @@ def _agent_not_found_response(agent_id: str) -> JSONResponse:
 def _get_combined_events(request: Request, agent_info: AgentInfo) -> list[dict[str, Any]]:
     """Ordered session event list for an agent.
 
-    tk ticket state is NOT merged in here. The progress view derives all
-    structure from the transcript (the `tk` tool calls already live in the
-    session stream); tk is delivered separately as an enrichment snapshot
-    (see `_get_events`), so transcript order -- not cross-clock timestamps --
-    drives ordering.
+    This is purely session transcript events. The progress view derives all
+    structure from the transcript (the `tk` tool calls live in the session
+    stream), and tk ticket state is delivered separately as an enrichment
+    snapshot (see `_get_events`).
     """
     watcher = _get_or_create_watcher(request, agent_info)
     return watcher.get_all_events()

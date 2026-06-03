@@ -1,10 +1,10 @@
 """Unit tests for AgentTicketsWatcher.
 
 The watcher maintains a current ENRICHMENT snapshot of the agent's step
-records (ticket_id -> {title, summary, status, created_at}) rather than
-emitting positioned transition events. It serves the snapshot via
-get_enrichment() and broadcasts a single `step_enrichment` message whenever
-the snapshot changes. Only step records surface; regular tickets are dropped.
+records (ticket_id -> {title, summary, status, created_at}). It serves the
+snapshot via get_enrichment() and broadcasts a single `step_enrichment`
+message whenever the snapshot changes. Only step records surface; regular
+tickets are dropped.
 """
 
 from __future__ import annotations
