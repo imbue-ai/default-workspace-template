@@ -149,6 +149,31 @@ def _parse_duration(value: str) -> float:
     return magnitude * multiplier
 
 
+def _split_frontmatter(text: str) -> tuple[dict[str, object] | None, str]:
+    """Split leading YAML frontmatter from the body.
+
+    Returns ``(frontmatter, body)``. ``frontmatter`` is ``None`` when there is no
+    leading ``---`` fence, the closing fence is missing, or the parsed YAML is not
+    a mapping; otherwise it is the parsed mapping. ``body`` is the text below the
+    closing fence (``""`` when there is no fence). Raises ``yaml.YAMLError`` when a
+    fenced block contains invalid YAML -- callers decide whether to surface that
+    (an authoring bug in a deterministic input) or swallow it (tolerant parsing of
+    agent-authored runtime output). The shared scan/parse for both callers.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None, ""
+    try:
+        end_idx = lines.index("---", 1)
+    except ValueError:
+        return None, ""
+    frontmatter = yaml.safe_load("\n".join(lines[1:end_idx]))
+    body = "\n".join(lines[end_idx + 1 :]).strip("\n")
+    if not isinstance(frontmatter, dict):
+        return None, body
+    return frontmatter, body
+
+
 def _read_frontmatter_field(task_file: Path, key: str) -> str | None:
     """Return the string value of frontmatter ``key``, or ``None`` if absent.
 
@@ -163,20 +188,13 @@ def _read_frontmatter_field(task_file: Path, key: str) -> str | None:
     than silently degrading it to "field absent" and launching the worker with
     the wrong inputs.
     """
-    lines = task_file.read_text(encoding="utf-8").splitlines()
-    if not lines or lines[0].strip() != "---":
-        return None
     try:
-        end_idx = lines.index("---", 1)
-    except ValueError:
-        return None
-    try:
-        frontmatter = yaml.safe_load("\n".join(lines[1:end_idx]))
+        frontmatter, _body = _split_frontmatter(task_file.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ValueError(
             f"{task_file}: frontmatter block is present but contains invalid YAML"
         ) from exc
-    if not isinstance(frontmatter, dict):
+    if frontmatter is None:
         return None
     value = frontmatter.get(key)
     if value is None:
@@ -419,20 +437,14 @@ def parse_report(text: str) -> ReportResult:
     than crashing the collection path and losing the worker's output. No data is
     discarded -- ``raw`` always holds the verbatim text.
     """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return ReportResult(None, None, text, text)
     try:
-        end_idx = lines.index("---", 1)
-    except ValueError:
-        return ReportResult(None, None, text, text)
-    try:
-        frontmatter = yaml.safe_load("\n".join(lines[1:end_idx]))
+        frontmatter, body = _split_frontmatter(text)
     except yaml.YAMLError:
         return ReportResult(None, None, text, text)
-    if not isinstance(frontmatter, dict):
+    if frontmatter is None:
+        # No parseable frontmatter: preserve the whole text as the body so no
+        # data is discarded (and the caller can still surface the raw report).
         return ReportResult(None, None, text, text)
-    body = "\n".join(lines[end_idx + 1 :]).strip("\n")
     report_type = frontmatter.get("type")
     name = frontmatter.get("name")
     return ReportResult(
