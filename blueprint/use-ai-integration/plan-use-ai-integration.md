@@ -60,8 +60,10 @@ selection, logging, and spend control.
   runs the `claude -p` calls, the keyless nudge is a **calculated** figure, not a rule of thumb: it
   captures each call's actual token usage/cost and computes the counterfactual direct-API cost for the
   same usage, so it can report concrete cumulative savings ("you've spent ~$X on `claude -p`; the same
-  calls via the direct API would have cost ~$Y — set `ANTHROPIC_API_KEY` to save ~$Z"). The nudge is
-  emitted by the library, not prescribed in skill instructions.
+  calls via the direct API would have cost ~$Y — set `ANTHROPIC_API_KEY` to save ~$Z"). The library
+  emits the nudge and guarantees the routing so correctness never depends on the agent remembering to
+  do it; the skill instructions still explain this behavior so the agent understands it and can
+  surface it to the user.
 - The skill steers agents to **measure cost on a small sample before building a high-volume flow**,
   and to **surface the cost/approach tradeoff to the user** with real numbers — prose guidance, not a
   template. Grounded in the observed `claude -p` cost profile: each invocation reloads the full
@@ -107,10 +109,12 @@ selection, logging, and spend control.
   (decision tree, three-pattern playbook, billing/credentialing model with the post-Jun-15 two-pool
   table, the `MAIN_CLAUDE_SESSION_ID` rationale, tight-scoping guidance for launched agents, and the
   **measure-cost-on-a-sample-then-surface-the-magnitude** practice — including the `claude -p`
-  per-call overhead profile and "batch over parallelize" for agentic `run_task()` work. Note the
-  guidance does NOT prescribe choosing direct-API vs `claude -p`: that routing is implicit in the
-  library by key presence; the guidance is about whether the volume is worth it) + `references/` for
-  the billing/credentialing reference (carrying the empirical cost numbers) and worked per-pattern
+  per-call overhead profile and "batch over parallelize" for agentic `run_task()` work. The
+  instructions explain the implicit onramp/routing and the calculated-savings nudge so the agent
+  understands the library's behavior and can communicate it; the library enforces that routing
+  regardless, so the agent isn't the single point of failure. The cost-probe guidance is about
+  whether the volume is worth it, not about manually picking the billing path) + `references/` for the
+  billing/credentialing reference (carrying the empirical cost numbers) and worked per-pattern
   sketches.
 - **New lib `libs/ai_integration/`** (uv workspace member, registered in root `pyproject.toml`):
   the three async `run_*` functions plus shared internals — credential resolution (+ loud failure),
