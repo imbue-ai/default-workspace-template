@@ -12,6 +12,7 @@ import {
   type SerializedDockview,
 } from "dockview-core";
 import { ChatPanel } from "./ChatPanel";
+import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { IframePanel, IFRAME_PANEL_PANEL_ID_ATTR, reloadIframesForService } from "./IframePanel";
 import { SubagentView } from "./SubagentView";
 import { CreateAgentModal } from "./CreateAgentModal";
@@ -1677,12 +1678,29 @@ function initializeDockview(parentElement: HTMLElement): void {
             agentId: params?.chatAgentId ?? params?.agentId ?? getPrimaryAgentId(),
           });
 
-        case "iframe":
+        case "iframe": {
+          // Agent-terminal tabs route to AgentTerminalPanel, which starts the
+          // agent before attaching its terminal session. They are identified
+          // by their URL shape: the terminal service URL plus the ttyd
+          // agent-dispatch key (`arg=agent`), which `buildAgentTerminalUrl`
+          // constructs and no other iframe URL uses. Terminals are never the
+          // target of an agent-driven ``replace-url``, so they don't need the
+          // reactive renderer below.
+          const iframeUrl = params?.url ?? "";
+          const isAgentTerminal = iframeUrl.startsWith(getTerminalUrl()) && iframeUrl.includes("arg=agent");
+          if (isAgentTerminal) {
+            return createMithrilRenderer(AgentTerminalPanel, {
+              agentId: params?.agentId ?? "",
+              url: iframeUrl,
+              title: params?.title ?? "Tab",
+            });
+          }
           // Pull live values out of ``panelParams`` on every redraw so an
           // agent-driven ``replace-url`` (which mutates the stored
           // params) re-renders the iframe with the new src instead of
           // staying frozen on the initial url captured at mount time.
           return createReactiveIframeRenderer(options.id);
+        }
 
         case "subagent":
           return createMithrilRenderer(SubagentView, {
