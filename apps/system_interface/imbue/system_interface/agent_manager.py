@@ -28,7 +28,7 @@ from imbue.mngr.api.discovery_events import AgentDiscoveryEvent
 from imbue.mngr.api.discovery_events import FullDiscoverySnapshotEvent
 from imbue.mngr.api.discovery_events import HostDestroyedEvent
 from imbue.mngr.api.discovery_events import parse_discovery_event_line
-from imbue.mngr.errors import BaseMngrError
+from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentNameStyle
 from imbue.mngr.utils.name_generator import generate_agent_name
@@ -599,7 +599,7 @@ class AgentManager:
                 if agent_info.id == self._own_agent_id and agent_info.work_dir:
                     self._start_app_watcher(agent_info.id, Path(agent_info.work_dir))
                 self._ensure_activity_tracking(agent_info.id)
-        except (OSError, ValueError, RuntimeError, BaseMngrError) as e:
+        except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Initial agent discovery failed")
 
     def _refresh_agents(self) -> None:
@@ -629,7 +629,7 @@ class AgentManager:
 
             self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
-        except (OSError, ValueError, RuntimeError, BaseMngrError) as e:
+        except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Agent refresh failed")
 
     def _resolve_observe_events_dir(self) -> Path:
@@ -764,7 +764,7 @@ class AgentManager:
             # parse_discovery_event_line only returns None for empty/whitespace lines,
             # which we filtered out above; reaching here indicates an internal contract
             # violation in the parser.
-            raise BaseMngrError(f"parse_discovery_event_line returned None for non-empty line: {stripped[:200]!r}")
+            raise MngrError(f"parse_discovery_event_line returned None for non-empty line: {stripped[:200]!r}")
         self._handle_discovery_event(event)
 
     def _handle_discovery_event(self, event: object) -> None:
