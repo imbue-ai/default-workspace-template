@@ -686,9 +686,7 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         help="Destroy a worker agent (mngr destroy --force). The mngr/<name> "
         "branch survives.",
     )
-    destroy_parser.add_argument(
-        "--name", required=True, help="Worker name to destroy."
-    )
+    destroy_parser.add_argument("--name", required=True, help="Worker name to destroy.")
 
     args = parser.parse_args(argv)
 
