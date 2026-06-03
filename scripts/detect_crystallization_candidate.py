@@ -410,7 +410,9 @@ def _write_nudge_state(path: Path, transcript_id: str, commit_count: int) -> Non
         pass
 
 
-def _previous_response_boundary(events: list[dict[str, Any]], before: int) -> int | None:
+def _previous_response_boundary(
+    events: list[dict[str, Any]], before: int
+) -> int | None:
     """Index of the most recent response boundary before ``before``.
 
     A response boundary is either:
