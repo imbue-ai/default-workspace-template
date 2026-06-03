@@ -56,9 +56,12 @@ selection, logging, and spend control.
   `run_completion()` uses the direct Anthropic API whenever a key is present (always cheaper than
   `claude -p` for non-agentic work) and silently falls back to `claude -p` when there's no key. So a
   keyless user develops and tests immediately, and adding `ANTHROPIC_API_KEY` later transparently
-  upgrades every call to the cheaper path — no code change, no agent decision. When running the
-  keyless fallback, the library logs that setting a key would cut cost (~10x), so the nudge is
-  emitted by the library rather than prescribed in skill instructions.
+  upgrades every call to the cheaper path — no code change, no agent decision. Because the library
+  runs the `claude -p` calls, the keyless nudge is a **calculated** figure, not a rule of thumb: it
+  captures each call's actual token usage/cost and computes the counterfactual direct-API cost for the
+  same usage, so it can report concrete cumulative savings ("you've spent ~$X on `claude -p`; the same
+  calls via the direct API would have cost ~$Y — set `ANTHROPIC_API_KEY` to save ~$Z"). The nudge is
+  emitted by the library, not prescribed in skill instructions.
 - The skill steers agents to **measure cost on a small sample before building a high-volume flow**,
   and to **surface the cost/approach tradeoff to the user** with real numbers — prose guidance, not a
   template. Grounded in the observed `claude -p` cost profile: each invocation reloads the full
@@ -112,8 +115,12 @@ selection, logging, and spend control.
 - **New lib `libs/ai_integration/`** (uv workspace member, registered in root `pyproject.toml`):
   the three async `run_*` functions plus shared internals — credential resolution (+ loud failure),
   implicit billing-path routing for `run_completion()` (direct API when a key is present, else
-  `claude -p` fallback; adding a key later upgrades transparently, and the keyless path logs the
-  ~10x-cheaper-with-a-key nudge), `claude -p` child-env construction (unset `MAIN_CLAUDE_SESSION_ID`;
+  `claude -p` fallback; adding a key later upgrades transparently). The keyless path captures each
+  `claude -p` call's reported usage/cost (e.g. via `--output-format json`) and, using a per-model
+  direct-API price table (the same table the spend tracker uses to estimate cost), computes the
+  counterfactual cost to report concrete cumulative savings ("set a key to save ~$Z"); confirm the
+  exact `claude -p` cost/usage field names at implementation.
+  Also: `claude -p` child-env construction (unset `MAIN_CLAUDE_SESSION_ID`;
   optional `MNGR_*` strip), direct-Anthropic-API client factory (cheap-model default, prompt caching,
   structured-output support), billing-path logging, and the per-service spend tracker/ceiling with
   `send-user-message` escalation. Frozen data types, README, zero-count ratchet test.
