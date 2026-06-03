@@ -20,6 +20,45 @@ Consequence: **the live concern is cost, not chat availability.** That is why th
 library logs the billing path and supports a spend ceiling, rather than gating
 calls to protect the chat.
 
+## Why `claude -p` costs more, and the three cost levers
+
+`claude -p` is pricier than a direct API call not because of the model but because
+of the **default agent context it reloads per call**: the Claude Code system
+prompt, all tool definitions, and the auto-discovered CLAUDE.md / skills -- plus it
+runs a multi-turn tool loop. Three levers control this (numbers measured on this
+repo, Haiku, a one-line prompt):
+
+| Config | Turns | Context | Cost | Notes |
+|---|---|---|---|---|
+| Default `claude -p` | ~7 | ~238k | ~$0.086 | Wandered off-task (tried to `git commit` an unrelated dirty file) |
+| `--system-prompt <s>` + `--tools ""` | 1 | ~13k | ~$0.016 | What `run_completion`'s keyless fallback uses; on-task |
+| `--bare` (+ replace) | -- | -- | -- | Strips CLAUDE.md/skills too, but **fails to auth keyless** |
+
+Takeaways:
+
+- **`--tools ""` is a correctness fix, not just cost.** The default agent given a
+  "just answer this" prompt will use tools and act -- in the measurement it tried
+  to commit files. The non-agentic `run_completion` fallback always disables tools.
+- **The residual ~13k is CLAUDE.md + skills.** Only `--bare` removes them, and
+  `--bare` does **not** read OAuth/keychain -- it requires `ANTHROPIC_API_KEY` or
+  an `apiKeyHelper` (verified: bare returns "Not logged in" with no key). So bare
+  is unavailable on the keyless subscription path, and once a key exists
+  `run_completion` routes to the direct API anyway. **The library never uses bare.**
+- **A required `system` on `run_completion` is load-bearing.** Because the keyless
+  fallback is non-bare, CLAUDE.md is always loaded; an empty/absent system prompt
+  lets that ambient text become the de-facto instruction set (measured: the model
+  answered the repo's CLAUDE.md guidance instead of the user's prompt). Requiring
+  `system` -- passed as `--system-prompt` -- guarantees a neutralizing prompt.
+- **The savings nudge is honest.** `result.cost_usd` on the fallback already
+  reflects the stripped config, so the "set a key to save ~$Z" figure compares the
+  *stripped* `claude -p` cost against the direct-API counterfactual, not the
+  heavier default agent.
+
+The relevant flags also include `--system-prompt-file` / `--append-system-prompt-file`
+(file variants), `--json-schema` (structured output on the CLI path), and
+`--max-budget-usd` (a per-invocation hard cap, complementary to the cross-call
+`SpendTracker` ceiling).
+
 ## The footgun
 
 If `ANTHROPIC_API_KEY` is set in the environment, `claude -p` bills **full API

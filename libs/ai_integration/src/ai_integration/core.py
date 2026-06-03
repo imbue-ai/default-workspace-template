@@ -45,8 +45,11 @@ def _log_keyless_savings(result: CompletionResult, prompt: str, model: str) -> N
     """Log the calculated savings a direct-API key would unlock for this call.
 
     Only meaningful on the ``claude -p`` fallback (where ``cost_usd`` is the actual
-    reported cost). The counterfactual prices just the user's prompt + response --
-    a direct call carries none of ``claude -p``'s agent-context overhead.
+    reported cost). ``result.cost_usd`` already reflects the lean fallback config
+    (``--system-prompt`` + ``--tools ""``), so this is an honest stripped-cli vs
+    direct-API comparison, not a comparison against the heavier default agent. The
+    counterfactual prices just the user's prompt + response -- a direct call carries
+    none of ``claude -p``'s system-prompt / tool-definition / CLAUDE.md overhead.
     """
     if result.cost_usd is None:
         return
@@ -66,9 +69,9 @@ def _log_keyless_savings(result: CompletionResult, prompt: str, model: str) -> N
 async def run_completion(
     prompt: str,
     *,
+    system: str,
     service_name: str,
     model: str = DEFAULT_MODEL,
-    system: str | None = None,
     max_tokens: int = 1024,
     spend_tracker: SpendTracker | None = None,
     env: Mapping[str, str] | None = None,
@@ -78,7 +81,19 @@ async def run_completion(
     api_backend: _ApiBackend = backends.complete_via_api,
     cli_backend: _CliBackend = backends.complete_via_cli,
 ) -> CompletionResult:
-    """Pattern 3: one non-agentic completion, direct API if keyed else ``claude -p``."""
+    """Pattern 3: one non-agentic completion, direct API if keyed else ``claude -p``.
+
+    ``system`` is **required**. On the direct-API path it is the (cache-controlled)
+    system block. On the keyless ``claude -p`` fallback it is passed as
+    ``--system-prompt`` *and* tools are disabled (``--tools ""``), which keeps the
+    call lean and -- critically -- prevents the auto-discovered CLAUDE.md from
+    hijacking the response. ``claude -p`` is non-bare on the keyless path (bare
+    can't authenticate without an API key), so CLAUDE.md is always loaded; with an
+    empty/absent system prompt the model answers *that* ambient text instead of the
+    user's prompt. Requiring ``system`` makes the neutralizing prompt mandatory by
+    construction, so both backends share the same ``system`` and behave consistently
+    even though the CLI fallback can't be made fully context-free.
+    """
     resolved_env = os.environ if env is None else env
     if spend_tracker is not None:
         spend_tracker.check_ceiling()
@@ -97,7 +112,12 @@ async def run_completion(
         require_credentials(resolved_env)
         cli_env = build_claude_cli_env(resolved_env, strip_mngr_agent_vars)
         result = await cli_backend(
-            model=model, prompt=prompt, env=cli_env, extra_args=claude_cli_args
+            model=model,
+            prompt=prompt,
+            env=cli_env,
+            system=system,
+            tools="",
+            extra_args=claude_cli_args,
         )
         _log_keyless_savings(result, prompt, model)
 
@@ -118,20 +138,35 @@ async def run_task(
     *,
     service_name: str,
     model: str = DEFAULT_MODEL,
+    system: str | None = None,
+    append_system: str | None = None,
     spend_tracker: SpendTracker | None = None,
     env: Mapping[str, str] | None = None,
     strip_mngr_agent_vars: bool = False,
     claude_cli_args: Sequence[str] | None = None,
     cli_backend: _CliBackend = backends.complete_via_cli,
 ) -> CompletionResult:
-    """Pattern 2: one-shot agentic task via headless ``claude -p`` (tools/file access)."""
+    """Pattern 2: one-shot agentic task via headless ``claude -p`` (tools/file access).
+
+    Unlike ``run_completion``, ``system`` / ``append_system`` are *optional* and
+    tools stay enabled: the point of an agentic task is to ride on Claude Code's
+    default agent (its tools, file access, and base system prompt). ``append_system``
+    (``--append-system-prompt``) layers task instructions on top of that default;
+    pass ``system`` (``--system-prompt``) only to fully replace it. ``--bare`` is
+    not used -- it would strip the agent and, keyless, can't authenticate.
+    """
     resolved_env = os.environ if env is None else env
     if spend_tracker is not None:
         spend_tracker.check_ceiling()
     require_credentials(resolved_env)
     cli_env = build_claude_cli_env(resolved_env, strip_mngr_agent_vars)
     result = await cli_backend(
-        model=model, prompt=prompt, env=cli_env, extra_args=claude_cli_args
+        model=model,
+        prompt=prompt,
+        env=cli_env,
+        system=system,
+        append_system=append_system,
+        extra_args=claude_cli_args,
     )
     logger.info(
         "ai_integration task: service={} model={} billing={} cost_usd={}",

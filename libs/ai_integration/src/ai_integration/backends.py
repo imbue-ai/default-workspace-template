@@ -104,17 +104,54 @@ def parse_cli_result(data: object, model: str) -> CompletionResult:
     )
 
 
+def build_claude_cli_argv(
+    *,
+    prompt: str,
+    model: str,
+    system: str | None,
+    append_system: str | None,
+    tools: str | None,
+    extra_args: Sequence[str] | None,
+) -> list[str]:
+    """Build the ``claude -p`` argv. Pure, so flag emission is unit-testable.
+
+    ``--system-prompt`` *replaces* the default Claude Code system prompt;
+    ``--append-system-prompt`` adds to it. ``--tools ""`` disables all tools.
+    ``tools`` is checked against ``None`` (not falsiness) because the empty string
+    is the meaningful "disable every tool" value, distinct from "leave the flag off
+    and inherit the default tool set".
+    """
+    argv = ["claude", "-p", prompt, "--output-format", "json"]
+    if model:
+        argv += ["--model", model]
+    if system is not None:
+        argv += ["--system-prompt", system]
+    if append_system is not None:
+        argv += ["--append-system-prompt", append_system]
+    if tools is not None:
+        argv += ["--tools", tools]
+    argv += list(extra_args or [])
+    return argv
+
+
 def _run_claude_cli_blocking(
     *,
     prompt: str,
     model: str,
     env: Mapping[str, str],
+    system: str | None,
+    append_system: str | None,
+    tools: str | None,
     extra_args: Sequence[str] | None,
 ) -> object:
-    argv = ["claude", "-p", prompt, "--output-format", "json"]
-    if model:
-        argv += ["--model", model]
-    argv += list(extra_args or [])
+    argv = build_claude_cli_argv(
+        prompt=prompt,
+        model=model,
+        system=system,
+        append_system=append_system,
+        tools=tools,
+        extra_args=extra_args,
+    )
     proc = subprocess.run(
         argv, capture_output=True, text=True, env=dict(env), check=False
     )
@@ -133,6 +170,9 @@ async def complete_via_cli(
     model: str,
     prompt: str,
     env: Mapping[str, str],
+    system: str | None = None,
+    append_system: str | None = None,
+    tools: str | None = None,
     extra_args: Sequence[str] | None = None,
 ) -> CompletionResult:
     """One completion/agentic run through headless ``claude -p``.
@@ -140,10 +180,25 @@ async def complete_via_cli(
     Runs the CLI in a worker thread (so the async caller isn't blocked) and parses
     its JSON usage/cost. ``env`` should be built via
     ``credentials.build_claude_cli_env`` so ``MAIN_CLAUDE_SESSION_ID`` is unset.
+
+    ``system`` maps to ``--system-prompt`` (replacing Claude Code's default agent
+    system prompt) and ``append_system`` to ``--append-system-prompt``. ``tools``
+    maps to ``--tools`` -- pass ``""`` to disable all tools (the non-agentic
+    completion path does this so the call answers the prompt and nothing else).
+    These flags are how a non-agentic ``claude -p`` call sheds most of the default
+    agent's per-call context overhead; note they do *not* drop the auto-discovered
+    CLAUDE.md / skills, which only ``--bare`` removes -- and ``--bare`` requires an
+    API key, so it is unavailable on the keyless subscription path.
     """
     data = await to_thread.run_sync(
         lambda: _run_claude_cli_blocking(
-            prompt=prompt, model=model, env=env, extra_args=extra_args
+            prompt=prompt,
+            model=model,
+            env=env,
+            system=system,
+            append_system=append_system,
+            tools=tools,
+            extra_args=extra_args,
         )
     )
     return parse_cli_result(data, model)

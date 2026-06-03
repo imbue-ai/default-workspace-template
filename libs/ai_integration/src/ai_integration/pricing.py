@@ -137,8 +137,8 @@ def counterfactual_direct_api_cost_usd(
 
     This is the "if you had a key" figure for the keyless ``claude -p`` savings
     nudge: it prices only the user's prompt + the model's response (a direct API
-    call carries none of ``claude -p``'s ~127k-token agent-context overhead).
-    Returns ``None`` for unknown models.
+    call carries none of ``claude -p``'s system-prompt / tool-definition /
+    CLAUDE.md agent-context overhead). Returns ``None`` for unknown models.
     """
     price = price_for(model)
     if price is None:
