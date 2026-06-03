@@ -291,7 +291,11 @@ def test_prevent_init_methods_in_non_exception_classes() -> None:
     # session_watcher.py before the tickets pipeline arrived; it now
     # lives in watcher_common.py as the shared WakeOnChangeHandler
     # consumed by both watchers).
-    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(5))
+    # +1 for layout_ops.LayoutMutex.__init__. The mutex holds runtime state
+    # (a ``threading.Lock`` and a holder dict mutated under that lock) that
+    # is not a natural fit for a Pydantic model, matching the precedent
+    # already set by session_watcher / event_queues entries here.
+    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(6))
 
 
 def test_prevent_cast_usage() -> None:
