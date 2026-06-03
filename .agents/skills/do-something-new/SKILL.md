@@ -160,20 +160,11 @@ Apply by default to any batch step -- don't try to judge in advance
 whether it's "long enough" to need this. Sampling is cheap when the
 operation is fast and load-bearing when it's slow.
 
-## Step 6: Deliver remaining surfaces one at a time
+## Step 6: Crystallize in the background and hand off to interface design
 
-Once the user approves the Step 5 sample, additional surfaces (scheduling,
-persistence, history, live integration with a forwarded service, etc.) each
-get their *own* delivery and feedback gate. Don't bundle them. Build one,
-ship it, ask "want me to add scheduling next, or stop here?", wait, then
-build the next.
-
-This applies even when the user's original prompt enumerated several
-surfaces -- a single approval on the sample is not blanket approval for the
-rest. The user needs to be able to thumbs-up / thumbs-down each surface
-independently, which is impossible if four of them land at once.
-
-## Step 7: Crystallize in the background and hand off to interface design
+It may take several rounds of iteration before the user is satisfied with the sample.
+That's expected, and you should confirm they like it before moving on.
+Once it seems like they're reasonably satisfied, you should:
 
 1. **Kick off `crystallize-task`** with `source_artifacts_dir:
    runtime/do-something-new/$SLUG/`.
@@ -192,6 +183,19 @@ The skill's *flow* responsibility ends here; lead-proxy ownership for
 the dispatched worker continues until that worker reports terminal
 status. Interface design happens in subsequent turns.
 
+## Step 7: Deliver remaining surfaces one at a time
+
+Once the user approves the Step 5 sample and you've kicked off crystallization in the background, additional surfaces (scheduling,
+persistence, history, live integration with a forwarded service, etc.) each
+get their *own* delivery and feedback gate. Don't bundle them. Build one,
+ship it, ask "want me to add scheduling next, or stop here?", wait, then
+build the next.
+
+This applies even when the user's original prompt enumerated several
+surfaces -- a single approval on the sample is not blanket approval for the
+rest. The user needs to be able to thumbs-up / thumbs-down each surface
+independently, which is impossible if four of them land at once.
+
 ## Re-fetch while crystallize is running
 
 If the user asks to re-fetch while the in-flight crystallize is still running,
@@ -205,7 +209,9 @@ matter), send a short note to the worker:
 mngr message crystallize-$SLUG -m "<short note about what changed>"
 ```
 
-Otherwise stay silent -- no automatic post-every-refetch ping.
+This way the crystallized skill stays up-to-date with the user's requirements.
+When you review crystallization gates, you can check to make sure the worker
+incorporated the newer requirements in its design.
 
 ## Background crystallize gates
 
