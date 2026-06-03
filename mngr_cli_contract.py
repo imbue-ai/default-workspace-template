@@ -51,22 +51,8 @@ def assert_mngr_argv_valid(argv: Sequence[str]) -> None:
     (nonexistent paths, missing required options): those are not CLI-surface
     drift and would make the contract check brittle.
     """
-    tokens = list(argv[1:])
-    group: click.Command = cli
-    parent_ctx = click.Context(cli, info_name="mngr")
     try:
-        while True:
-            name, command, rest = group.resolve_command(parent_ctx, tokens)
-            assert command is not None  # resolve_command raises rather than returning None
-            sub_ctx = click.Context(command, info_name=name, parent=parent_ctx)
-            if isinstance(command, click.Group):
-                group, parent_ctx, tokens = command, sub_ctx, rest
-                continue
-            # Leaf command: the low-level parser recognizes/rejects option
-            # tokens and handles arity without running click's value
-            # converters (which would, e.g., reject a not-yet-created file).
-            command.make_parser(sub_ctx).parse_args(args=list(rest))
-            return
+        _resolve_against_cli(cli, click.Context(cli, info_name="mngr"), list(argv[1:]))
     except click.exceptions.ClickException as exc:
         raise MngrArgvContractError(
             f"mngr argv not accepted by the live CLI: {list(argv)!r}\n"
@@ -74,3 +60,22 @@ def assert_mngr_argv_valid(argv: Sequence[str]) -> None:
             f"  The vendored mngr CLI surface changed under this invocation. "
             f"Update the producing code to match the current mngr CLI."
         ) from exc
+
+
+def _resolve_against_cli(
+    command: click.Command, ctx: click.Context, tokens: list[str]
+) -> None:
+    """Descend the click tree for ``tokens``, raising on an unknown subcommand
+    or option. Recurses through nested groups (mngr's tree is shallow); a leaf
+    command's low-level parser recognizes/rejects option tokens and handles
+    arity without running click's value converters (which would, e.g., reject a
+    not-yet-created file)."""
+    if isinstance(command, click.Group):
+        name, subcommand, rest = command.resolve_command(ctx, tokens)
+        if subcommand is None:
+            raise click.exceptions.UsageError(f"No such command {name!r}.")
+        _resolve_against_cli(
+            subcommand, click.Context(subcommand, info_name=name, parent=ctx), rest
+        )
+    else:
+        command.make_parser(ctx).parse_args(args=list(tokens))

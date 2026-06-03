@@ -3,7 +3,7 @@
 agent_manager shells out to ``mngr create`` (worktree + chat) and
 ``mngr observe``. Previously these argvs were only checked at ``cmd[0]`` (the
 binary path), so a vendor/mngr CLI rename would not have been caught here --
-the same blind spot that let PR #77 ship a broken ``mngr push``. These tests
+the same blind spot that shipped the broken ``mngr push`` (PR 77). These tests
 confront the actual builder output with ``imbue.mngr.main.cli`` so a dropped
 subcommand or renamed flag fails the build.
 """
