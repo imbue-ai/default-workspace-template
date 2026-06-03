@@ -64,20 +64,37 @@ async def complete_via_api(
     )
 
 
+def _as_int(value: object) -> int:
+    """Coerce a JSON value to an int, treating anything non-numeric as 0."""
+    return int(value) if isinstance(value, (int, float)) else 0
+
+
+def _str_keyed(value: object) -> dict[str, object]:
+    """Materialize a ``dict[str, object]`` from an arbitrary JSON value.
+
+    ``json.loads`` output is statically ``object``; coercing keys to ``str`` here
+    gives the rest of the parser a precisely-typed mapping to read from (rather
+    than indexing an ``Unknown``-keyed dict that the type checker rejects).
+    """
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
 def parse_cli_result(data: object, model: str) -> CompletionResult:
     """Build a ``CompletionResult`` from ``claude -p --output-format json`` output."""
-    if not isinstance(data, dict):
+    if not isinstance(data, Mapping):
         raise ClaudeCLIError("claude -p JSON output was not an object")
-    raw_usage = data.get("usage")
-    usage_dict = raw_usage if isinstance(raw_usage, dict) else {}
+    payload = _str_keyed(data)
+    usage_dict = _str_keyed(payload.get("usage"))
     usage = Usage(
-        input_tokens=int(usage_dict.get("input_tokens", 0) or 0),
-        output_tokens=int(usage_dict.get("output_tokens", 0) or 0),
-        cache_read_tokens=int(usage_dict.get("cache_read_input_tokens", 0) or 0),
-        cache_write_tokens=int(usage_dict.get("cache_creation_input_tokens", 0) or 0),
+        input_tokens=_as_int(usage_dict.get("input_tokens")),
+        output_tokens=_as_int(usage_dict.get("output_tokens")),
+        cache_read_tokens=_as_int(usage_dict.get("cache_read_input_tokens")),
+        cache_write_tokens=_as_int(usage_dict.get("cache_creation_input_tokens")),
     )
-    cost = data.get("total_cost_usd")
-    text = data.get("result")
+    cost = payload.get("total_cost_usd")
+    text = payload.get("result")
     return CompletionResult(
         text=text if isinstance(text, str) else "",
         billing_path=BillingPath.CLAUDE_CLI,

@@ -1,10 +1,11 @@
 import functools
+from pathlib import Path
 
 import anyio
 import pytest
 
-from ai_integration.core import run_completion
-from ai_integration.data_types import BillingPath, CompletionResult, Usage
+from ai_integration.core import run_agent, run_completion
+from ai_integration.data_types import AgentOutcome, BillingPath, CompletionResult, Usage
 from ai_integration.errors import CredentialsUnavailableError
 from ai_integration.spend import SpendTracker
 
@@ -100,7 +101,7 @@ def test_run_completion_raises_without_any_credentials(tmp_path) -> None:
 
 def test_run_completion_records_spend(tmp_path) -> None:
     tracker = SpendTracker(
-        "svc",
+        service_name="svc",
         ceiling_usd=10.0,
         state_root=tmp_path,
         window_seconds=1000,
@@ -125,3 +126,40 @@ def test_run_completion_records_spend(tmp_path) -> None:
         )
     )
     assert tracker.spent_in_window() == 0.001
+
+
+@pytest.mark.parametrize(
+    "payload,expected_outcome",
+    [
+        ({"name": "done", "type": "status"}, AgentOutcome.DONE),
+        ({"name": "stuck", "type": "status"}, AgentOutcome.STUCK),
+        ({"name": "no-update-needed", "type": "status"}, AgentOutcome.NO_UPDATE_NEEDED),
+        ({"name": "something-else", "type": "gate"}, AgentOutcome.UNKNOWN),
+        ({"timed_out": True}, AgentOutcome.TIMED_OUT),
+    ],
+)
+def test_run_agent_maps_report_name_to_outcome(
+    payload: dict[str, object], expected_outcome: AgentOutcome
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_runner(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {**payload, "branch": "mngr/demo", "body": "hi", "raw_report": "raw"}
+
+    result = anyio.run(
+        functools.partial(
+            run_agent,
+            name="demo",
+            template="worker",
+            runtime_dir=Path("/tmp/runtime"),
+            task_file=Path("/tmp/runtime/task.md"),
+            service_name="svc",
+            repo_root=Path("/repo"),
+            runner=fake_runner,
+        )
+    )
+    assert result.outcome is expected_outcome
+    assert result.branch == "mngr/demo"
+    # The injected runner is handed the resolved repo_root, not the process cwd.
+    assert captured["repo_root"] == Path("/repo")

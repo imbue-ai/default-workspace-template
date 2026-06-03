@@ -105,7 +105,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Callable, NamedTuple, Sequence, TextIO
+from typing import Callable, Mapping, NamedTuple, Sequence, TextIO
 
 import yaml
 
@@ -453,6 +453,23 @@ def destroy(name: str, runner: Runner | None = None) -> None:
     runner.run(["mngr", "destroy", name, "--force"], check=True)
 
 
+def _emit_run_result(
+    payload: Mapping[str, object], stream: TextIO, result_path: Path | None
+) -> None:
+    """Write the run-result JSON to stdout and, if given, to a dedicated file.
+
+    The file is the machine contract for programmatic callers (e.g.
+    ``ai_integration.run_agent``): they read the exact payload from a path they
+    chose, rather than guessing which stdout line is the result. Stdout still
+    carries the JSON for humans / shell callers and back-compat.
+    """
+    line = json.dumps(payload)
+    stream.write(line + "\n")
+    if result_path is not None:
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(line, encoding="utf-8")
+
+
 def run_sync(
     name: str,
     template: str,
@@ -467,6 +484,7 @@ def run_sync(
     sleeper: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     out: TextIO | None = None,
+    result_path: Path | None = None,
 ) -> int:
     """Launch a worker, wait for its report in the *foreground*, emit JSON, destroy.
 
@@ -475,7 +493,8 @@ def run_sync(
     appears (without destroying -- the report may still be coming), or 0 once a
     report is collected. Writes a single JSON object to ``out`` (default stdout)
     describing the outcome: ``timed_out`` plus the report ``type``/``name``/``body``
-    and the worker ``branch``.
+    and the worker ``branch``. When ``result_path`` is set, the same JSON is also
+    written there as the machine-readable contract for programmatic callers.
     """
     runner = runner or Runner()
     stream: TextIO = sys.stdout if out is None else out
@@ -505,35 +524,33 @@ def run_sync(
     branch = f"mngr/{name}"
     if await_rc != 0:
         # Timed out: leave the worker alive for liveness diagnosis.
-        stream.write(
-            json.dumps(
-                {
-                    "timed_out": True,
-                    "type": None,
-                    "name": None,
-                    "body": "",
-                    "branch": branch,
-                }
-            )
-            + "\n"
+        _emit_run_result(
+            {
+                "timed_out": True,
+                "type": None,
+                "name": None,
+                "body": "",
+                "branch": branch,
+            },
+            stream,
+            result_path,
         )
         return await_rc
 
     report = parse_report(buffer.getvalue())
     if destroy_on_finish:
         destroy(name, runner)
-    stream.write(
-        json.dumps(
-            {
-                "timed_out": False,
-                "type": report.report_type,
-                "name": report.name,
-                "body": report.body,
-                "branch": branch,
-                "raw_report": report.raw,
-            }
-        )
-        + "\n"
+    _emit_run_result(
+        {
+            "timed_out": False,
+            "type": report.report_type,
+            "name": report.name,
+            "body": report.body,
+            "branch": branch,
+            "raw_report": report.raw,
+        },
+        stream,
+        result_path,
     )
     return 0
 
@@ -584,6 +601,7 @@ def _run_run(args: argparse.Namespace, runner: Runner | None) -> int:
         destroy_on_finish=not args.keep_agent,
         state_dir=state_dir,
         runner=runner,
+        result_path=args.result_json,
     )
 
 
@@ -692,6 +710,13 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         action="store_true",
         help="Do not destroy the worker after a report is collected "
         "(default: destroy). A timeout never destroys regardless.",
+    )
+    run_parser.add_argument(
+        "--result-json",
+        type=Path,
+        default=None,
+        help="Also write the result JSON to this path (the machine-readable "
+        "contract for programmatic callers; stdout still carries it too).",
     )
 
     destroy_parser = subparsers.add_parser(

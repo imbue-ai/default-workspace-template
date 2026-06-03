@@ -750,6 +750,37 @@ def test_run_sync_collects_report_and_destroys(tmp_path: Path) -> None:
     ]
 
 
+def test_run_sync_writes_result_json_file(tmp_path: Path) -> None:
+    """``result_path`` receives the same JSON payload as stdout, so a programmatic
+    caller reads an unambiguous file instead of scraping the last stdout line."""
+    runtime, task, report = _make_run_layout(tmp_path)
+    report.write_text("---\ntype: status\nname: done\n---\n\nReady to merge.\n")
+    runner = _RecordingRunner()
+    out = io.StringIO()
+    result_path = tmp_path / "out" / "result.json"
+
+    rc = create_worker_mod.run_sync(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        workspace="ws-1",
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        destroy_on_finish=True,
+        runner=runner,
+        sleeper=_boom_sleeper,
+        clock=lambda: 0.0,
+        out=out,
+        result_path=result_path,
+    )
+
+    assert rc == 0
+    # The file holds exactly the stdout payload (the machine-readable contract).
+    assert json.loads(result_path.read_text()) == json.loads(out.getvalue())
+    assert json.loads(result_path.read_text())["name"] == "done"
+
+
 def test_run_sync_timeout_does_not_destroy(tmp_path: Path) -> None:
     """A timeout returns the timeout code, emits timed_out JSON, and leaves the
     worker alive for liveness diagnosis."""

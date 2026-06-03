@@ -16,6 +16,7 @@ tools / read files, which the plain API call cannot).
 import json
 import os
 import subprocess
+import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -145,16 +146,21 @@ async def run_task(
 
 
 def _outcome_for(payload: Mapping[str, object]) -> AgentOutcome:
+    # Maps the worker report's open-ended ``name`` string onto the normalized
+    # outcome enum. The input is a free-form report field (not itself an enum),
+    # so the catch-all ``UNKNOWN`` is the deliberate fallback rather than an
+    # ``assert_never`` exhaustiveness check.
     if payload.get("timed_out"):
         return AgentOutcome.TIMED_OUT
-    name = payload.get("name")
-    if name == "done":
-        return AgentOutcome.DONE
-    if name == "stuck":
-        return AgentOutcome.STUCK
-    if name == "no-update-needed":
-        return AgentOutcome.NO_UPDATE_NEEDED
-    return AgentOutcome.UNKNOWN
+    match payload.get("name"):
+        case "done":
+            return AgentOutcome.DONE
+        case "stuck":
+            return AgentOutcome.STUCK
+        case "no-update-needed":
+            return AgentOutcome.NO_UPDATE_NEEDED
+        case _:
+            return AgentOutcome.UNKNOWN
 
 
 def _agent_result_from_payload(payload: Mapping[str, object]) -> AgentResult:
@@ -184,38 +190,50 @@ def _run_create_worker_blocking(
     keep_agent: bool,
     repo_root: Path,
 ) -> Mapping[str, object]:
-    argv = [
-        "uv",
-        "run",
-        str(repo_root / _CREATE_WORKER_REL),
-        "run",
-        "--name",
-        name,
-        "--template",
-        template,
-        "--runtime-dir",
-        str(runtime_dir),
-        "--task-file",
-        str(task_file),
-        "--timeout",
-        timeout,
-        "--poll-interval",
-        poll_interval,
-    ]
-    if keep_agent:
-        argv.append("--keep-agent")
-    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
-    # create_worker.py exits 0 on a collected report and 124 on await timeout;
-    # both carry a JSON payload on the last stdout line. Anything else is an error.
-    if proc.returncode not in (0, 124):
-        raise AgentRunError(
-            f"create_worker run exited {proc.returncode}: {proc.stderr.strip()[:500]}"
-        )
-    lines = [line for line in proc.stdout.splitlines() if line.strip()]
-    if not lines:
-        raise AgentRunError("create_worker run produced no JSON result line")
+    # Collect the result from a dedicated ``--result-json`` file rather than
+    # scraping stdout: create_worker's ``run`` interleaves human-readable launch
+    # messages (and the worker's mngr-destroy output) on stdout, so picking "the
+    # last line" is fragile. A file the caller names is the unambiguous contract.
+    with tempfile.TemporaryDirectory(prefix="ai_integration_run_") as tmp:
+        result_path = Path(tmp) / "result.json"
+        argv = [
+            "uv",
+            "run",
+            str(repo_root / _CREATE_WORKER_REL),
+            "run",
+            "--name",
+            name,
+            "--template",
+            template,
+            "--runtime-dir",
+            str(runtime_dir),
+            "--task-file",
+            str(task_file),
+            "--timeout",
+            timeout,
+            "--poll-interval",
+            poll_interval,
+            "--result-json",
+            str(result_path),
+        ]
+        if keep_agent:
+            argv.append("--keep-agent")
+        proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+        # create_worker.py exits 0 on a collected report and 124 on await
+        # timeout; both write the JSON payload to ``--result-json``. Any other
+        # exit code means it failed before producing a result.
+        if proc.returncode not in (0, 124):
+            raise AgentRunError(
+                f"create_worker run exited {proc.returncode}: {proc.stderr.strip()[:500]}"
+            )
+        if not result_path.is_file():
+            raise AgentRunError(
+                "create_worker run produced no result-json file "
+                f"(exit {proc.returncode}): {proc.stderr.strip()[:500]}"
+            )
+        raw = result_path.read_text(encoding="utf-8")
     try:
-        payload = json.loads(lines[-1])
+        payload = json.loads(raw)
     except ValueError as exc:
         raise AgentRunError(f"create_worker run result was not JSON: {exc}") from exc
     if not isinstance(payload, dict):
@@ -242,6 +260,11 @@ async def run_agent(
     (with ``lead_agent`` / ``finish_report_path`` frontmatter) under ``runtime_dir``
     first. Returns the structured terminal result; what to do with the worker's
     branch (merge / review) is the caller's concern (a separate future skill).
+
+    ``repo_root`` locates ``create_worker.py``; it defaults to the current working
+    directory, which matches this repo's "cwd = repo root" convention (services
+    run from the checkout root). Pass it explicitly when the caller runs from
+    elsewhere.
     """
     root = Path.cwd() if repo_root is None else repo_root
     payload = await to_thread.run_sync(

@@ -11,6 +11,7 @@ cost").
 """
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from pydantic import Field
 
 from ai_integration.data_types import Usage
 
@@ -24,10 +25,14 @@ _PER_MTOK = 1_000_000.0
 class ModelPrice(FrozenModel):
     """USD-per-MTok prices for one model."""
 
-    input_per_mtok: float
-    output_per_mtok: float
-    cache_read_per_mtok: float
-    cache_write_5m_per_mtok: float
+    input_per_mtok: float = Field(description="USD per million uncached input tokens")
+    output_per_mtok: float = Field(description="USD per million output tokens")
+    cache_read_per_mtok: float = Field(
+        description="USD per million prompt-cache read tokens"
+    )
+    cache_write_5m_per_mtok: float = Field(
+        description="USD per million prompt-cache write tokens (5-minute write rate)"
+    )
 
 
 # Keyed by model-id prefix, longest-match-wins. Opus 4.5+ is priced very

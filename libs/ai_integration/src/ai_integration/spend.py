@@ -15,7 +15,9 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
+from pydantic import Field
 
 from ai_integration.errors import SpendCeilingExceededError
 
@@ -29,29 +31,41 @@ def _default_escalate(message: str) -> None:
     logger.warning("ai_integration spend ceiling: {}", message)
 
 
-class SpendTracker:
+class SpendTracker(MutableModel):
     """Tracks per-service spend against a rolling-window ceiling.
 
-    ``clock`` and ``escalate`` are injectable for testing. ``escalate`` is called
-    once when the ceiling is hit (default: log a warning -- a service should pass
-    a callback that routes through ``send-user-message``).
+    A stateful Implementation: it owns the on-disk spend ledger under
+    ``state_root/<service_name>/ai_spend.json``. ``clock`` and ``escalate`` are
+    injected (tests pass deterministic fakes); ``escalate`` is called once when
+    the ceiling is hit (default: log a warning -- a service should pass a
+    callback that routes through ``send-user-message``).
     """
 
-    def __init__(
-        self,
-        service_name: str,
-        ceiling_usd: float,
-        state_root: Path = Path("runtime"),
-        window_seconds: float = DEFAULT_WINDOW_SECONDS,
-        clock: Callable[[], float] = time.time,
-        escalate: Callable[[str], None] = _default_escalate,
-    ) -> None:
-        self._service_name = service_name
-        self._ceiling_usd = ceiling_usd
-        self._state_path = state_root / service_name / "ai_spend.json"
-        self._window_seconds = window_seconds
-        self._clock = clock
-        self._escalate = escalate
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
+
+    service_name: str = Field(description="The service whose spend this tracks")
+    ceiling_usd: float = Field(
+        description="Rolling-window spend ceiling; paused once cumulative spend meets it"
+    )
+    state_root: Path = Field(
+        default=Path("runtime"),
+        description="Root under which the per-service spend ledger is persisted",
+    )
+    window_seconds: float = Field(
+        default=DEFAULT_WINDOW_SECONDS,
+        description="Length of the rolling spend window in seconds",
+    )
+    clock: Callable[[], float] = Field(
+        default=time.time, description="Wall-clock source (injected for tests)"
+    )
+    escalate: Callable[[str], None] = Field(
+        default=_default_escalate,
+        description="Called once when the ceiling is hit (default: log a warning)",
+    )
+
+    @property
+    def _state_path(self) -> Path:
+        return self.state_root / self.service_name / "ai_spend.json"
 
     def _load(self) -> list[_Record]:
         if not self._state_path.is_file():
@@ -81,7 +95,7 @@ class SpendTracker:
         )
 
     def _within_window(self, records: Sequence[_Record]) -> list[_Record]:
-        cutoff = self._clock() - self._window_seconds
+        cutoff = self.clock() - self.window_seconds
         return [(ts, cost) for ts, cost in records if ts >= cutoff]
 
     def spent_in_window(self) -> float:
@@ -91,7 +105,7 @@ class SpendTracker:
     def record(self, cost_usd: float) -> None:
         """Append a paid call's cost and prune entries outside the window."""
         records = self._within_window(self._load())
-        records.append((self._clock(), cost_usd))
+        records.append((self.clock(), cost_usd))
         self._save(records)
 
     def check_ceiling(self) -> None:
@@ -101,11 +115,11 @@ class SpendTracker:
         is exhausted.
         """
         spent = self.spent_in_window()
-        if spent >= self._ceiling_usd:
+        if spent >= self.ceiling_usd:
             message = (
-                f"service '{self._service_name}' has spent ~${spent:.2f} in the last "
-                f"{self._window_seconds / 3600:.0f}h, at or over its ${self._ceiling_usd:.2f} "
+                f"service '{self.service_name}' has spent ~${spent:.2f} in the last "
+                f"{self.window_seconds / 3600:.0f}h, at or over its ${self.ceiling_usd:.2f} "
                 f"ceiling; pausing paid AI calls"
             )
-            self._escalate(message)
+            self.escalate(message)
             raise SpendCeilingExceededError(message)
