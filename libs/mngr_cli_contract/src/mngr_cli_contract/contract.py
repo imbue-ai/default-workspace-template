@@ -26,7 +26,7 @@ workspace venv) import a single copy rather than duplicating the validator.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 import click
 from imbue.mngr.main import cli
