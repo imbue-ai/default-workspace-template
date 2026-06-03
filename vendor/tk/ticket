@@ -195,6 +195,21 @@ update_yaml_field() {
     fi
 }
 
+# Remove an existing `## Summary` section -- the heading through the line
+# before the next `## ` heading (or EOF). Lets `tk close` replace a prior
+# close summary instead of appending a duplicate when a ticket is re-closed.
+# No-op when there is no summary section.
+_strip_summary_section() {
+    local file="$1"
+    _grep -q '^## Summary' "$file" || return 0
+    local tmp="${file}.tmp.$$"
+    awk '
+        /^## Summary[[:space:]]*$/ { in_summary = 1; next }
+        in_summary && /^## / { in_summary = 0 }
+        !in_summary { print }
+    ' "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
 cmd_create() {
     ensure_dir
 
@@ -429,23 +444,20 @@ cmd_close() {
         return 1
     fi
 
-    # Single close timestamp shared by the `closed:` frontmatter field and the
-    # summary note, so they agree to the microsecond.
-    local timestamp
-    timestamp=$(_iso_date)
-
     if [[ -n "$summary" ]]; then
-        # Reuse the same timestamped-note format that cmd_add_note writes,
-        # so the parser's existing "latest note = summary" logic picks it up.
-        if ! _grep -q '^## Notes' "$file"; then
-            printf '\n## Notes\n' >> "$file"
-        fi
-        printf '\n**%s**\n\n%s\n' "$timestamp" "$summary" >> "$file"
+        # Store the one-line close summary in its own `## Summary` section.
+        # printf-appended (not routed through the sed-based frontmatter
+        # editor), so it is escaping-safe for arbitrary text -- slashes,
+        # ampersands, quotes. The chat-progress parser reads this section
+        # verbatim; no timestamp is involved. A re-close replaces any prior
+        # summary so only the latest remains.
+        _strip_summary_section "$file"
+        printf '\n## Summary\n\n%s\n' "$summary" >> "$file"
     fi
 
     # Record the close time so consumers can order finished steps by when they
     # completed, and bound the step's active window.
-    update_yaml_field "$file" "closed" "$timestamp"
+    update_yaml_field "$file" "closed" "$(_iso_date)"
 
     cmd_status "$id" "closed"
 }

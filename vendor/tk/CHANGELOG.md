@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- `tk close <id> "summary"` now stores the close summary in a dedicated, untimestamped `## Summary` section (printf-appended, so arbitrary text is escaping-safe) instead of a timestamped `## Notes` entry; a re-close replaces the prior summary rather than appending a duplicate
 - Extracted `edit`, `ls`, `query`, and `migrate-beads` commands to plugins (ticket-extras)
 - Timestamps (`created`, note timestamps) now carry microsecond precision where the platform's `date` supports it (GNU `%N`), with a `.000000` fallback elsewhere; the fixed-width format keeps lexicographic order equal to chronological order
 

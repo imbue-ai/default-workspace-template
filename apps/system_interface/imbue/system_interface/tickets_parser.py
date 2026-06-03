@@ -8,7 +8,7 @@ A tk ticket file looks like:
 
     ---
     id: tt-2efd
-    status: in_progress
+    status: closed
     deps: []
     links: []
     created: 2026-04-28T01:17:08Z
@@ -20,20 +20,18 @@ A tk ticket file looks like:
 
     Optional description body...
 
-    ## Notes
+    ## Summary
 
-    **2026-04-28T01:19:03Z**
+    Found a new "midnight" theme in your settings file.
 
-    Found a new "midnight" theme in your settings file...
-
-The most recent note in the `## Notes` section is treated as the ticket's
-current "summary" (rendered under the task in the chat progress view when
-the ticket is closed). Earlier notes are ignored.
+`tk close <id> "summary"` writes the one-line close summary into its own
+`## Summary` section. That text is the ticket's "summary" -- rendered under
+the task in the chat progress view when the ticket is closed. No timestamp is
+involved: the section is written verbatim and read verbatim.
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from loguru import logger as _loguru_logger
@@ -45,14 +43,8 @@ logger = _loguru_logger
 
 _VALID_STATUSES = frozenset({"open", "in_progress", "closed"})
 
-# Matches a single timestamped note inside the `## Notes` section:
-#   **2026-04-28T01:19:03Z**
-#   <blank line>
-#   <text body until next note marker or EOF>
-_NOTE_PATTERN = re.compile(
-    r"\*\*(?P<ts>[0-9TZ:\-]+)\*\*\s*\n\n(?P<body>.+?)(?=\n\s*\*\*[0-9TZ:\-]+\*\*|\Z)",
-    re.DOTALL,
-)
+# The heading that opens the close-summary section written by `tk close`.
+_SUMMARY_HEADING = "## Summary"
 
 
 class TicketState(FrozenModel):
@@ -70,8 +62,7 @@ class TicketState(FrozenModel):
     # watcher then falls back to mtime).
     started_at: str = Field(description="frontmatter `started` field, ISO-8601, or empty string")
     closed_at: str = Field(description="frontmatter `closed` field, ISO-8601, or empty string")
-    summary: str | None = Field(description="Most recent note text, or None")
-    summary_at: str | None = Field(description="Timestamp of the most recent note, or None")
+    summary: str | None = Field(description="Close summary from the `## Summary` section, or None")
     # The mngr agent that created the ticket, captured from $MNGR_AGENT_NAME
     # by the patched `tk create` (see vendor/tk/ticket). Empty string when
     # the ticket was created outside an mngr context or by an older tk that
@@ -136,7 +127,7 @@ def parse_ticket_text(text: str) -> TicketState | None:
             title = stripped[2:].strip() or ticket_id
             break
 
-    summary, summary_at = _extract_latest_note(body)
+    summary = _extract_summary_section(body)
 
     return TicketState(
         ticket_id=ticket_id,
@@ -146,7 +137,6 @@ def parse_ticket_text(text: str) -> TicketState | None:
         started_at=started_at,
         closed_at=closed_at,
         summary=summary,
-        summary_at=summary_at,
         agent=agent,
         step=step,
         parent_id=parent_id,
@@ -165,35 +155,33 @@ def parse_ticket_file(path: Path) -> TicketState | None:
     return parse_ticket_text(text)
 
 
-def _extract_latest_note(body: str) -> tuple[str | None, str | None]:
-    """Find the most-recent timestamped note in the body's `## Notes` section.
+def _extract_summary_section(body: str) -> str | None:
+    """Return the text of the `## Summary` section, or None if absent.
 
-    Returns (note_text, note_timestamp), or (None, None) if there are no
-    notes. "Most recent" is determined by lexicographic timestamp order,
-    which matches ISO-8601 chronological order for the format tk emits.
+    `tk close <id> "summary"` writes the one-line close summary into its own
+    `## Summary` section (see vendor/tk/ticket). The section runs from the
+    heading line to the next `## ` heading or EOF; its stripped contents are
+    the summary. No timestamp is parsed -- the text is read verbatim, so it is
+    robust to any character the summary may contain.
 
-    The `## Notes` marker must appear as a heading -- a line whose stripped
-    contents are exactly `## Notes`. A bare substring match would be a
+    The `## Summary` marker must appear as a heading -- a line whose stripped
+    contents are exactly `## Summary`. A bare substring match would be a
     false-positive risk if the ticket description prose happens to contain
-    `## Notes` mid-line (e.g. inline reference to the section, or pasted
-    output containing the literal text).
+    `## Summary` mid-line.
     """
-    notes_section: str | None = None
-    cursor = 0
-    for line in body.splitlines(keepends=True):
-        if line.strip() == "## Notes":
-            notes_section = body[cursor + len(line) :]
+    lines = body.splitlines()
+    start: int | None = None
+    for i, line in enumerate(lines):
+        if line.strip() == _SUMMARY_HEADING:
+            start = i + 1
             break
-        cursor += len(line)
-    if notes_section is None:
-        return (None, None)
+    if start is None:
+        return None
 
-    latest_text: str | None = None
-    latest_ts: str | None = None
-    for match in _NOTE_PATTERN.finditer(notes_section):
-        ts = match.group("ts")
-        text = match.group("body").strip()
-        if latest_ts is None or ts > latest_ts:
-            latest_ts = ts
-            latest_text = text
-    return (latest_text, latest_ts)
+    collected: list[str] = []
+    for line in lines[start:]:
+        if line.startswith("## "):
+            break
+        collected.append(line)
+    text = "\n".join(collected).strip()
+    return text or None
