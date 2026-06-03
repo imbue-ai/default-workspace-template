@@ -675,7 +675,10 @@ def _compute_restarts(
         config = desired.get(name)
         if config is None:
             continue
-        if config.get("restart", DEFAULT_RESTART_POLICY) == "on-failure" and status != "0":
+        if (
+            config.get("restart", DEFAULT_RESTART_POLICY) == "on-failure"
+            and status != "0"
+        ):
             restarts.append(name)
     return restarts
 
