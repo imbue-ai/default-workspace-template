@@ -36,12 +36,14 @@ def _ticket_text(
     *,
     title: str = "Sample task",
     created: str = "2026-04-28T01:00:00Z",
-    notes: str | None = None,
+    summary: str | None = None,
     agent: str | None = None,
     step: bool = True,
 ) -> str:
     """Build a tk-shaped ticket body. Defaults to a step record (the only kind
-    the watcher surfaces) so individual tests only describe what varies."""
+    the watcher surfaces) so individual tests only describe what varies.
+    `summary` is written into a `## Summary` section, matching what
+    `tk close <id> "summary"` emits."""
     agent_line = f"agent: {agent}\n" if agent is not None else ""
     step_line = "step: true\n" if step else ""
     body = f"""---
@@ -55,8 +57,8 @@ priority: 2
 {agent_line}{step_line}---
 # {title}
 """
-    if notes is not None:
-        body += f"\n## Notes\n\n{notes}\n"
+    if summary is not None:
+        body += f"\n## Summary\n\n{summary}\n"
     return body
 
 
@@ -66,13 +68,13 @@ def _write_ticket(
     status: str,
     *,
     title: str = "Sample task",
-    notes: str | None = None,
+    summary: str | None = None,
     agent: str | None = None,
     step: bool = True,
 ) -> Path:
     tickets_dir.mkdir(parents=True, exist_ok=True)
     path = tickets_dir / f"{ticket_id}.md"
-    path.write_text(_ticket_text(ticket_id, status, title=title, notes=notes, agent=agent, step=step))
+    path.write_text(_ticket_text(ticket_id, status, title=title, summary=summary, agent=agent, step=step))
     return path
 
 
@@ -113,14 +115,14 @@ def test_open_step_snapshot_entry(tmp_path: Path) -> None:
 
 
 def test_closed_step_carries_summary(tmp_path: Path) -> None:
-    """A closed step's snapshot entry carries the most-recent note as summary."""
+    """A closed step's snapshot entry carries the `## Summary` text as summary."""
     tickets_dir = tmp_path / ".tickets"
     _write_ticket(
         tickets_dir,
         "tt-cccc",
         "closed",
         title="Done task",
-        notes="**2026-04-28T01:05:00Z**\n\nFinal summary text for this task.",
+        summary="Final summary text for this task.",
     )
     _calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
@@ -130,14 +132,15 @@ def test_closed_step_carries_summary(tmp_path: Path) -> None:
 
 
 def test_summary_only_on_closed(tmp_path: Path) -> None:
-    """An in_progress step with notes does not leak the note as a summary."""
+    """An in_progress step with a Summary section does not leak it as a summary
+    (only closed steps surface a summary)."""
     tickets_dir = tmp_path / ".tickets"
     _write_ticket(
         tickets_dir,
         "tt-dddd",
         "in_progress",
         title="Still working",
-        notes="**2026-04-28T01:02:00Z**\n\nInterim note, not a summary yet.",
+        summary="Interim text, not a final summary yet.",
     )
     _calls, cb = _capture()
     watcher = AgentTicketsWatcher("agent-1", "agent-1-name", tickets_dir, cb)
@@ -168,7 +171,7 @@ def test_lifecycle_updates_snapshot_status(tmp_path: Path) -> None:
     path.write_text(_ticket_text("tt-ffff", "in_progress", title="Lifecycle"))
     assert watcher.get_enrichment()["tt-ffff"]["status"] == "in_progress"
 
-    path.write_text(_ticket_text("tt-ffff", "closed", title="Lifecycle", notes="**2026-04-28T01:10:00Z**\n\nAll done."))
+    path.write_text(_ticket_text("tt-ffff", "closed", title="Lifecycle", summary="All done."))
     final = watcher.get_enrichment()["tt-ffff"]
     assert final["status"] == "closed"
     assert final["summary"] == "All done."

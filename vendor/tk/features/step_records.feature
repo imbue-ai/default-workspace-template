@@ -47,11 +47,12 @@ Feature: Step records (turn-bound progress markers)
     And the output should contain "Plain ticket"
     And the output should contain "Progress marker"
 
-  Scenario: tk close <id> "summary" appends the summary as a timestamped note
+  Scenario: tk close <id> "summary" writes the summary into a Summary section
     Given a ticket exists with ID "tt-summable" and title "Summable"
     When I run "ticket close tt-summable 'Did the thing.'"
     Then the command should succeed
     And ticket "tt-summable" should have field "status" with value "closed"
+    And ticket "tt-summable" should contain "## Summary"
     And ticket "tt-summable" should contain "Did the thing."
 
   Scenario: tk show renders separate Children and Steps sections
