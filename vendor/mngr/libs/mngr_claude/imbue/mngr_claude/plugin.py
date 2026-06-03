@@ -38,6 +38,7 @@ from imbue.mngr.agents.common_transcript import provision_scripts_to_commands_di
 from imbue.mngr.agents.tui_agent import InteractiveTuiAgent
 from imbue.mngr.agents.tui_utils import send_enter_via_tmux_wait_for_hook
 from imbue.mngr.api.providers import get_provider_instance
+from imbue.mngr.config.agent_config_registry import resolve_agent_type
 from imbue.mngr.config.data_types import AgentTypeConfig
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import AgentStartError
@@ -722,32 +723,14 @@ def _claude_json_has_primary_api_key() -> bool:
 
 
 def _read_macos_keychain_credential(label: str, concurrency_group: ConcurrencyGroup) -> str | None:
-    """Read a credential from the macOS keychain by label.
-
-    Bounded by a short timeout: `security find-generic-password` will block
-    indefinitely when macOS pops a keychain ACL prompt that the user does
-    not see / answer (e.g. when a different signed binary first reads an
-    entry owned by another app). A hung keychain read used to block all of
-    `mngr create` -- agent provisioning would stop at "_setup_per_agent_config_dir"
-    with no further log lines.
-    """
+    """Read a credential from the macOS keychain by label."""
     try:
         result = concurrency_group.run_process_to_completion(
             ["security", "find-generic-password", "-l", label, "-w"],
             is_checked_after=False,
-            timeout=10.0,
         )
     except ProcessSetupError:
         logger.debug("macOS security binary not found")
-        return None
-    if result.is_timed_out:
-        logger.warning(
-            "macOS keychain read for label {!r} timed out (likely a hidden ACL prompt); "
-            "skipping. If you need this credential merged into the agent's config, "
-            "grant the running app access in Keychain Access.app or set "
-            "convert_macos_credentials=false in the agent config.",
-            label,
-        )
         return None
     if result.returncode != 0:
         logger.debug("No keychain credential found for label {!r}", label)
@@ -1987,6 +1970,24 @@ class ClaudeAgent(InteractiveTuiAgent[ClaudeAgentConfig], HasCommonTranscriptMix
         # 3. Write generated files to config_dir
         _write_generated_files(host, config_dir, generated_files, mngr_ctx)
 
+        # 4. Bridge .credentials.json to the remote's default Claude home so
+        # any nested mngr_claude (e.g. system_interface's mngr creating its
+        # own inner agents inside this workspace VM) finds them at the
+        # standard ~/.claude/.credentials.json path. Without this, the
+        # host's mngr_claude correctly delivers .credentials.json to this
+        # outer agent's per-agent dir, but inner agents created by nested
+        # mngr inside the VM look at ~/.claude/.credentials.json (which is
+        # empty since Claude CLI 2.x moved host-side storage to the macOS
+        # Keychain). Symlink so credential refreshes on the host propagate
+        # without re-rsync; -fn ensures we replace any stale link without
+        # dereferencing.
+        if not host.is_local and generated_files.get(Path(".credentials.json")):
+            bridged_target = config_dir / ".credentials.json"
+            host.execute_idempotent_command(
+                f"mkdir -p ~/.claude && ln -sfn {shlex.quote(str(bridged_target))} ~/.claude/.credentials.json",
+                timeout_seconds=5.0,
+            )
+
     def provision(
         self,
         host: OnlineHostInterface,
@@ -2802,18 +2803,23 @@ def register_cli_options(command_name: str) -> Mapping[str, list[OptionStackItem
 
 
 @hookimpl
-def on_before_create(args: OnBeforeCreateArgs) -> OnBeforeCreateArgs | None:
-    """Validate create args when --adopt-session is used: agent type must
-    be claude (or unset), and the option is incompatible with cloning via
-    ``--from <agent>`` (both adopt a session into the new agent).
+def on_before_create(args: OnBeforeCreateArgs, mngr_ctx: MngrContext) -> OnBeforeCreateArgs | None:
+    """Validate create args when --adopt-session is used: the agent type must
+    be claude (or a subtype of claude), and the option is incompatible with
+    cloning via ``--from <agent>`` (both adopt a session into the new agent).
     """
     adopt_session = args.agent_options.plugin_data.get("adopt_session", ())
     if not adopt_session:
         return None
 
-    agent_type = args.agent_options.agent_type
-    if agent_type is not None and str(agent_type) != "claude":
-        raise UserInputError(f"--adopt-session can only be used with the claude agent type, not '{agent_type}'.")
+    # Resolve through the centralized agent-type registry so any subtype of the
+    # claude agent is accepted, not just the literal "claude" type name.
+    resolved = resolve_agent_type(args.agent_options.agent_type, mngr_ctx.config)
+    if not issubclass(resolved.agent_class, ClaudeAgent):
+        raise UserInputError(
+            f"--adopt-session can only be used with a Claude agent type (claude or a subtype of it), "
+            f"not '{args.agent_options.agent_type}'."
+        )
 
     if args.agent_options.source_agent_state_location is not None:
         raise UserInputError(

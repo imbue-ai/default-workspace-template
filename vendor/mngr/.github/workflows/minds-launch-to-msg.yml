@@ -1,0 +1,451 @@
+name: minds launch-to-first-message
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Commit SHA (or branch / tag) to build a fresh ToDesktop draft from. Mutually exclusive with app_zip_url. Leave both empty to verify the latest released build.'
+        required: false
+        default: ''
+      app_zip_url:
+        description: 'ToDesktop .zip URL to verify directly (skips the build job). Takes precedence over commit_sha.'
+        required: false
+        default: ''
+      skip_first_message:
+        description: 'Skip the first-message round-trip step (smoke-only: install + launch + backend-ready).'
+        type: boolean
+        required: false
+        default: false
+      skip_slack_flow:
+        description: 'Skip the slack-permission-flow Playwright step. Implied true when skip_first_message is true.'
+        type: boolean
+        required: false
+        default: false
+      template_ref:
+        description: 'forever-claude-template ref (branch / tag / SHA) the agent is created from. Empty -> script default (pilot_2, known-compatible with the bundled mngr). Set to "main" to verify the user-default path.'
+        required: false
+        default: ''
+      template_url:
+        description: 'Override the FCT git URL (forks). Empty -> https://github.com/imbue-ai/forever-claude-template.'
+        required: false
+        default: ''
+      wipe_lima_caches:
+        description: 'Cold-cache benchmark mode: wipe ~/.lima (Ubuntu cloudimg cache, ~600MB) before the run. Simulates fresh-install user experience.'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: mac-runner
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Run only when a commit_sha was supplied AND no direct URL was given.
+    # When both are empty, skip; `verify` will resolve the latest released
+    # build via the electron-updater feed instead.
+    if: ${{ inputs.commit_sha != '' && inputs.app_zip_url == '' }}
+    # MUST be macOS: scripts/download-binaries.js uses `xcrun --find git`
+    # for the darwin git bundle, and bundling uv/lima needs the target's
+    # native binary. Linux runners produce ELF binaries that the shipped
+    # .app can't exec on Mac.
+    runs-on: [self-hosted, macOS, minds-runner]
+    # 40 min covers a cold-cache install + a full pnpm dist that waits on
+    # ToDesktop's per-target cloud build (sign + notarize all 3 archs).
+    # 25 min was too tight: cache-miss installs + arm64 signing repeatedly
+    # grazed the deadline. The post-failure cancel step then tore down
+    # ToDesktop's in-flight build, wasting both sides.
+    timeout-minutes: 40
+    env:
+      TODESKTOP_ACCESS_TOKEN: ${{ secrets.TODESKTOP_ACCESS_TOKEN }}
+      TODESKTOP_EMAIL:        ${{ secrets.TODESKTOP_EMAIL }}
+      # Resolved relative to pnpm's CWD (apps/minds), not the repo root.
+      MINDS_CLIENT_CONFIG_BUNDLE: imbue/minds/config/envs/production/client.toml
+      MINDS_ROOT_NAME_BUNDLE: minds
+    outputs:
+      app_zip_url: ${{ steps.existing.outputs.url || steps.parse.outputs.url }}
+      build_id:    ${{ steps.existing.outputs.build_id || steps.parse.outputs.build_id }}
+      reused:      ${{ steps.existing.outputs.url != '' }}
+    steps:
+      - name: check ToDesktop secrets
+        run: |
+          missing=0
+          if [[ -z "${TODESKTOP_ACCESS_TOKEN:-}" ]]; then
+            echo "::error::TODESKTOP_ACCESS_TOKEN secret is not set."
+            missing=1
+          fi
+          if [[ -z "${TODESKTOP_EMAIL:-}" ]]; then
+            echo "::error::TODESKTOP_EMAIL secret is not set."
+            missing=1
+          fi
+          if (( missing )); then
+            echo "Add both at Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "TODESKTOP_ACCESS_TOKEN length=${#TODESKTOP_ACCESS_TOKEN}, TODESKTOP_EMAIL length=${#TODESKTOP_EMAIL}"
+      - name: checkout @ ${{ inputs.commit_sha }}
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.commit_sha }}
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+      - name: setup pnpm
+        run: |
+          npm install -g pnpm@10.33.4
+          pnpm --version
+      - name: setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: latest
+      - name: pnpm install
+        working-directory: apps/minds
+        run: pnpm install --frozen-lockfile
+      - name: read ToDesktop APP_ID from todesktop.js
+        working-directory: apps/minds
+        run: |
+          APP_ID=$(node -e "console.log(require('./todesktop.js').id)")
+          echo "APP_ID=$APP_ID" >> "$GITHUB_ENV"
+      - name: resolve full commit_sha (input may be a branch/tag)
+        id: sha
+        working-directory: apps/minds
+        run: |
+          FULL_SHA=$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)
+          echo "full_sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved input ${{ inputs.commit_sha }} -> $FULL_SHA"
+      - name: check for existing ToDesktop build matching this commit
+        id: existing
+        working-directory: apps/minds
+        env:
+          TARGET_SHA: ${{ steps.sha.outputs.full_sha }}
+        run: |
+          # ToDesktop returns versionControlInfo.commitId on each build via
+          # `todesktop builds --format json`. If a clean ready build exists
+          # for this SHA we can skip the 15+ min build by reusing its
+          # arm64 .zip URL.
+          mkdir -p resources  # todesktop config validation requires extraResources dir
+          pnpm exec todesktop builds --format json --count 30 --exit > /tmp/td-builds.json 2>&1 || true
+          URL=$(python3 -c '
+          import json, os, sys
+          try:
+              builds = json.load(open("/tmp/td-builds.json"))
+          except Exception:
+              sys.exit(0)
+          if not isinstance(builds, list):
+              sys.exit(0)
+          target = os.environ["TARGET_SHA"]
+          for b in builds:
+              vci = b.get("versionControlInfo") or {}
+              if vci.get("commitId") != target:                continue
+              if vci.get("hasUncommittedChanges"):              continue
+              if b.get("status") not in ("ready",):             continue
+              mac = (b.get("mac") or {}).get("zip") or {}
+              # mac.zip can be a dict {arm64: {url}, x64: {url}} OR a list of
+              # {arch, url} entries depending on CLI version; cover both.
+              if isinstance(mac, dict):
+                  arm = mac.get("arm64") or {}
+                  url = arm.get("url") if isinstance(arm, dict) else None
+              elif isinstance(mac, list):
+                  url = next((e.get("url") for e in mac if isinstance(e, dict) and e.get("arch") == "arm64"), None)
+              else:
+                  url = None
+              if url:
+                  print(url)
+                  print(b.get("id", ""), file=sys.stderr)
+                  sys.exit(0)
+          ' 2> /tmp/td-existing-build-id.txt || true)
+          if [[ -n "$URL" ]]; then
+            BID=$(cat /tmp/td-existing-build-id.txt | tr -d '[:space:]')
+            echo "url=$URL"      >> "$GITHUB_OUTPUT"
+            echo "build_id=$BID" >> "$GITHUB_OUTPUT"
+            echo "Reusing existing build $BID for commit $TARGET_SHA"
+            echo "  -> $URL"
+          else
+            echo "No existing build matches $TARGET_SHA; will build fresh."
+          fi
+      - name: pnpm dist (build + upload to ToDesktop)
+        id: dist
+        if: steps.existing.outputs.url == ''
+        working-directory: apps/minds
+        # build.js::bundleLatchkey smoke-tests the bundled CLI via
+        # `latchkey --version`. Latchkey tries to read/init an encryption
+        # key from the macOS keychain at startup; on the headless CI
+        # runner the keychain is locked and the call exits 1. Provide a
+        # throwaway random key just for the smoke test -- the shipped
+        # .app uses the end-user's own keychain at runtime, so the
+        # value chosen here never leaves CI.
+        env:
+          LATCHKEY_ENCRYPTION_KEY: ci-throwaway-build-smoketest-key-not-used-at-runtime
+        run: |
+          set -o pipefail
+          pnpm dist 2>&1 | tee /tmp/minds-dist.log
+      - name: parse build URL
+        id: parse
+        if: steps.existing.outputs.url == ''
+        run: |
+          # ToDesktop prints "Retrieved build ID: <id>" early in the upload
+          # step. Construct the arm64 .zip URL from it — pnpm dist's final
+          # "Build complete!" line is the dashboard URL, not a direct artifact.
+          BUILD_ID=$(grep -oE 'Retrieved build ID: [a-z0-9]+' /tmp/minds-dist.log 2>/dev/null | awk '{print $NF}' | tail -1 || true)
+          if [[ -z "$BUILD_ID" ]]; then
+            echo "::error::could not extract build ID from /tmp/minds-dist.log. Check the uploaded build-log artifact."
+            exit 1
+          fi
+          URL="https://dl.todesktop.com/${APP_ID}/builds/${BUILD_ID}/mac/zip/arm64"
+          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+          echo "url=$URL"           >> "$GITHUB_OUTPUT"
+      - name: emit build summary
+        if: always()
+        run: |
+          if [[ -n "${{ steps.existing.outputs.url }}" ]]; then
+            URL='${{ steps.existing.outputs.url }}'
+            BID='${{ steps.existing.outputs.build_id }}'
+            SRC='reused (no rebuild needed)'
+          else
+            URL='${{ steps.parse.outputs.url }}'
+            BID='${{ steps.parse.outputs.build_id }}'
+            SRC='freshly built'
+          fi
+          {
+            echo "## Build result ($SRC)"
+            echo ""
+            echo "- commit: \`${{ inputs.commit_sha }}\` (resolved \`${{ steps.sha.outputs.full_sha }}\`)"
+            echo "- build_id: \`${BID:-<none>}\`"
+            echo "- url: ${URL:-<none>}"
+            echo "- dashboard: https://app.todesktop.com/apps/${APP_ID}/builds/${BID}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: cancel ToDesktop build if workflow cancelled or build job failed
+        # Fires on user-cancelled workflow or on pnpm-dist failure once an
+        # upload has happened. The buildId is only known after the upload
+        # step prints "Retrieved build ID: ...", which lives in
+        # /tmp/minds-dist.log; if the pre-upload phase failed there will
+        # be no id to cancel and this is a clean no-op.
+        if: ${{ always() && (cancelled() || failure()) && steps.existing.outputs.url == '' }}
+        run: |
+          BUILD_ID=$(grep -oE 'Retrieved build ID: [a-z0-9]+' /tmp/minds-dist.log 2>/dev/null | awk '{print $NF}' | tail -1 || true)
+          if [[ -z "$BUILD_ID" ]]; then
+            echo "no build ID in /tmp/minds-dist.log -- ToDesktop upload didn't happen, nothing to cancel"
+            exit 0
+          fi
+          echo "cancelling orphaned ToDesktop build $BUILD_ID"
+          bash apps/minds/scripts/cancel-todesktop-build.sh "$APP_ID" "$BUILD_ID" || {
+            echo "::warning::cancel-todesktop-build.sh failed (build may have already completed/failed); see logs"
+            exit 0
+          }
+      - name: upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minds-dist-log-${{ github.run_id }}
+          path: /tmp/minds-dist.log
+          retention-days: 7
+
+  verify:
+    needs: [build]
+    # Run when build succeeded, or when build was skipped (workflow_dispatch
+    # with app_zip_url, or no inputs at all). On build failure verify is
+    # skipped; the build job's own `upload build log` step uses always() so
+    # the dist log artifact is preserved either way.
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    runs-on: [self-hosted, macOS, minds-runner]
+    timeout-minutes: 40
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: verify ANTHROPIC_API_KEY injected
+        run: |
+          if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            echo "ANTHROPIC_API_KEY is empty — secret not reaching the runner"; exit 1
+          fi
+          echo "ANTHROPIC_API_KEY present, length=${#ANTHROPIC_API_KEY}"
+      - name: setup node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+      - name: setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: latest
+      - name: setup Python via uv
+        run: uv python install 3.12
+      - name: install minds workspace + playwright python
+        run: |
+          uv sync --package minds --frozen 2>&1 | tail -5 || uv sync --all-packages --frozen
+          uv run --package minds python -c "from playwright.async_api import async_playwright; print('playwright imports OK')"
+      - name: resolve build URL
+        id: url
+        run: |
+          if [[ -n "${{ inputs.app_zip_url }}" ]]; then
+            URL='${{ inputs.app_zip_url }}'
+            SRC='direct input'
+          elif [[ -n '${{ needs.build.outputs.app_zip_url }}' ]]; then
+            URL='${{ needs.build.outputs.app_zip_url }}'
+            SRC='build job (commit ${{ inputs.commit_sha }}, build_id ${{ needs.build.outputs.build_id }})'
+          else
+            URL=$(bash apps/minds/scripts/resolve-latest-todesktop-url.sh)
+            SRC='resolved latest released build'
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Verifying: $URL"
+          echo "Source: $SRC"
+          {
+            echo "## Verifying"
+            echo ""
+            echo "- URL: $URL"
+            echo "- Source: $SRC"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: reset to clean state and install fresh app
+        env:
+          WIPE_LIMA_CACHES: ${{ inputs.wipe_lima_caches && '1' || '0' }}
+        run: bash apps/minds/scripts/mac-runner-reset.sh "${{ steps.url.outputs.url }}"
+
+      - name: ensure socat (slack mock TLS terminator)
+        run: |
+          for BREW in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+            [[ -x "$BREW" ]] && export PATH="$(dirname "$BREW"):$PATH" && break
+          done
+          if ! command -v socat >/dev/null; then
+            brew install socat
+          fi
+          (socat -V 2>&1 || true) | head -1 || true
+          for D in /opt/homebrew/bin /usr/local/bin; do
+            if [[ -d "$D" ]]; then echo "$D" >> "$GITHUB_PATH"; fi
+          done
+
+      - name: launch-to-msg + slack flow (Python)
+        env:
+          GIT_BRANCH:         ${{ inputs.template_ref }}
+          GIT_URL:            ${{ inputs.template_url }}
+          SKIP_FIRST_MESSAGE: ${{ inputs.skip_first_message && '1' || '0' }}
+          SKIP_SLACK_FLOW:    ${{ inputs.skip_slack_flow    && '1' || '0' }}
+        run: |
+          # pipefail is REQUIRED: without it, the pipeline below exits
+          # with tee's status (always 0), so an e2e failure (exit 1) is
+          # silently masked and GHA reports the step as success. That
+          # caused run 26850735596 to be marked completed/success despite
+          # a real Lima provisioning failure -- the only signal was 5
+          # screenshots instead of the usual 26-28.
+          set -o pipefail
+          # Tee stdout+stderr to a file so the e2e script's structured
+          # output (loguru lines: phase=, kick attempts, navigation
+          # debug) is preserved in the artifact alongside the daemon
+          # logs. GHA's own console log expires; the artifact zip is
+          # what survives for post-mortem.
+          mkdir -p /tmp/launch-to-msg-logs
+          uv run --package minds python apps/minds/scripts/launch_to_msg_e2e.py 2>&1 \
+            | tee /tmp/launch-to-msg-logs/e2e-stdout.log
+
+      - name: collect screenshots + diagnostics
+        if: always()
+        run: |
+          mkdir -p artifacts
+          # Screenshots from BOTH the bash phase (launch-and-verify.sh +
+          # first-message-verify.sh via `screencapture -x`) and the
+          # Playwright phase (drive-slack-ci.js via `page.screenshot`).
+          # Numbered 00..12 so they sort in flow order in the GH UI.
+          if [ -d /tmp/launch-to-msg-screenshots ]; then
+            cp -R /tmp/launch-to-msg-screenshots artifacts/screenshots 2>/dev/null || true
+          fi
+          # Diagnostic logs (also useful on success for tuning).
+          [ -d /tmp/launch-to-msg-logs ] && cp -R /tmp/launch-to-msg-logs artifacts/ || true
+          [ -d "$HOME/.minds/logs" ] && cp -R "$HOME/.minds/logs" artifacts/ || true
+          [ -d "$HOME/.minds/events" ] && cp -R "$HOME/.minds/events" artifacts/ || true
+          [ -d "$HOME/.minds/mngr" ] && cp -R "$HOME/.minds/mngr"/*/events artifacts/agent-events 2>/dev/null || true
+          log show --process Minds --last 5m 2>/dev/null > artifacts/macos-console.log || true
+          ls -la "$HOME/.minds" > artifacts/minds-dir-listing.txt 2>&1 || true
+          [ -f /tmp/minds-electron.log ] && cp /tmp/minds-electron.log artifacts/ || true
+          for f in /tmp/first-message-*.json /tmp/first-message-*.txt /tmp/first-message-*.html; do
+            [ -f "$f" ] && cp "$f" artifacts/ 2>/dev/null || true
+          done
+          [ -f /tmp/post-slack-delete.json ] && cp /tmp/post-slack-delete.json artifacts/ 2>/dev/null || true
+          [ -d /tmp/slack-mock ] && cp -R /tmp/slack-mock artifacts/ 2>/dev/null || true
+          # Latchkey gateway state (encryption_key excluded by directory selection).
+          if [ -d "$HOME/.minds/latchkey" ]; then
+            mkdir -p artifacts/latchkey
+            cp -R "$HOME/.minds/latchkey/mngr_latchkey" artifacts/latchkey/ 2>/dev/null || true
+            cp "$HOME/.minds/latchkey/latchkey_gateway.log" artifacts/latchkey/ 2>/dev/null || true
+            cp "$HOME/.minds/latchkey/latchkey_ensure_browser.log" artifacts/latchkey/ 2>/dev/null || true
+          fi
+          [ -d apps/minds/test-results ] && cp -R apps/minds/test-results artifacts/playwright-test-results 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: launch-to-first-message-${{ github.run_id }}
+          path: artifacts/
+          retention-days: 7
+
+      - name: write timing + screenshot summary
+        if: always()
+        run: |
+          shots_dir=artifacts/screenshots
+          if [ ! -d "$shots_dir" ]; then
+            echo "(no screenshots to summarize)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # ---- Timing metrics block --------------------------------------
+          # Read launch-to-msg-timings.json (written by the e2e script) and
+          # surface the per-phase wall-clocks at the very top of the
+          # summary so creation time is visible at a glance.
+          timings_json="$shots_dir/launch-to-msg-timings.json"
+          if [ -f "$timings_json" ]; then
+            total=$(jq -r '.total_create_s' "$timings_json")
+            mm=$(awk -v t="$total" 'BEGIN{printf "%d", t/60}')
+            ss=$(awk -v t="$total" 'BEGIN{printf "%02d", int(t)%60}')
+            phases=$(jq -r '.phase_durations_s | to_entries | map("\(.key)=\(.value)s") | join(" | ")' "$timings_json")
+            {
+              echo "## Agent creation timings"
+              echo ""
+              echo "**Total agent creation: ${total}s (${mm}:${ss})** -- ${phases}"
+              echo ""
+              echo '```json'
+              # The e2e-written JSON may lack a trailing newline; ensure
+              # one so the closing fence below doesn't merge onto the
+              # `}` line and open a new (unterminated) code fence that
+              # swallows the rest of the summary as preformatted text.
+              cat "$timings_json"
+              echo
+              echo '```'
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # ---- Flow screenshot manifest ----------------------------------
+          # Screenshots are not committed to git (an orphan branch of
+          # binary PNGs bloated every clone). They ride in the
+          # `launch-to-first-message-<run_id>` artifact attached to this
+          # run; download + open locally to view. The per-window `.win.png`
+          # shots show the page Playwright asked Electron to render; the
+          # `.desktop.png` shots are full-desktop dupes (often show
+          # whichever BrowserWindow WindowServer had on top -- usually
+          # /welcome -- since CDP page activation does not move OS
+          # z-order).
+          artifact_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts"
+          {
+            echo "## Flow screenshots"
+            echo ""
+            echo "Screenshots ride in the [\`launch-to-first-message-${{ github.run_id }}\` artifact]($artifact_url) (download + open locally)."
+            echo ""
+            echo "| Milestone | Per-window (.win.png) | Full-desktop (.desktop.png) |"
+            echo "|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for prefix in 00 01 02 03 04 04b 05 06 07 07a 07b 07c 07d 08 09 10 11 12 99; do
+            for win in "$shots_dir"/${prefix}-*.win.png; do
+              [ -f "$win" ] || continue
+              base=$(basename "$win" .win.png)
+              desk="$shots_dir/${base}.png"
+              win_cell="\`${base}.win.png\`"
+              desk_cell="—"
+              [ -f "$desk" ] && desk_cell="\`${base}.png\`"
+              echo "| $base | $win_cell | $desk_cell |" >> "$GITHUB_STEP_SUMMARY"
+            done
+          done
+      - name: post-test cleanup (best effort)
+        if: always()
+        run: |
+          # Wipe state after the run so the runner sits idle clean.
+          # Pre-test reset on the NEXT run also cleans, this is belt+braces.
+          # All steps are best-effort; we never want cleanup to fail the job.
+          bash apps/minds/scripts/mac-runner-reset.sh 2>&1 || true

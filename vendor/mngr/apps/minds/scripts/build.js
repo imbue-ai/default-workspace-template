@@ -9,15 +9,97 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const https = require('https');
-const http = require('http');
 const { execSync, execFileSync } = require('child_process');
+const { downloadGit, downloadUv, downloadRestic, download } = require('./download-binaries.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const RESOURCES_DIR = path.join(ROOT, 'resources');
 
-const UV_VERSION = '0.7.12';
-const LIMA_VERSION = '2.1.1';
+// Pinned at 2.0.3 to avoid the gvisor-tap-vsock TCP forwarder regression
+// introduced in lima 2.1.0. Lima 2.1.x's usernet forwarder (the path used
+// when the guest's systemd < 256, which includes Ubuntu 24.04, our FCT
+// base) wedges fresh ssh connections post-VM-READY: TCP-accepted on the
+// host then CLOSE_WAIT, no data flow to the in-VM sshd, no
+// git-receive-pack ever spawns -- mngr create hangs forever at
+// "Transferring git repository...". Root cause is the inetaf/tcpproxy
+// "half-close dance" leaking goroutines in io.Copy; lima a2b52885
+// (gvisor-tap-vsock 0.8.7 -> 0.8.8) is the regression boundary.
+// Tracked upstream as lima-vm/lima#4558 + #5042, no fix in flight yet.
+const LIMA_VERSION = '2.0.3';
+
+const MONOREPO_ROOT = path.resolve(ROOT, '../..');
+
+/**
+ * Workspace packages bundled into the standalone app. Each entry maps the
+ * package name (as it appears in `dependencies` / `[tool.uv.sources]`) to its
+ * path inside the monorepo.
+ *
+ * The packaged app only needs the transitive runtime closure of what minds
+ * imports; other workspace members (e.g. mngr_vps_docker, mngr_kanpan) are
+ * not included.
+ *
+ * This list is mirrored in electron/env-setup.js, electron/pyproject/
+ * pyproject.toml, and scripts/build_test.py. The drift guard
+ * `test_workspace_package_lists_are_consistent` in build_test.py fails if any
+ * of them disagree, so update all four together.
+ */
+const WORKSPACE_PACKAGES = {
+  'minds':                  'apps/minds',
+  'imbue-mngr':             'libs/mngr',
+  'imbue-mngr-claude':      'libs/mngr_claude',
+  'imbue-mngr-forward':     'libs/mngr_forward',
+  'imbue-mngr-imbue-cloud': 'libs/mngr_imbue_cloud',
+  'imbue-mngr-latchkey':    'libs/mngr_latchkey',
+  'imbue-mngr-lima':        'libs/mngr_lima',
+  'imbue-mngr-modal':       'libs/mngr_modal',
+  'imbue-mngr-ovh':         'libs/mngr_ovh',
+  'imbue-mngr-vps-docker':  'libs/mngr_vps_docker',
+  'imbue-common':           'libs/imbue_common',
+  'concurrency-group':      'libs/concurrency_group',
+  'resource-guards':        'libs/resource_guards',
+  'modal-proxy':            'libs/modal_proxy',
+};
+
+/**
+ * Build each workspace package as a wheel into `resources/wheels/`.
+ *
+ * Relies on each package's `pyproject.toml` (and hatchling's
+ * `[tool.hatch.build.targets.wheel]` config) to determine what goes into the
+ * wheel. In particular, the `exclude = [...]` line in each package's config
+ * is what keeps tests out of the wheel.
+ *
+ * Returns a map of package name → wheel filename, used downstream when
+ * rewriting `pyproject.toml` to reference the wheels.
+ */
+function buildWorkspaceWheels() {
+  const wheelsDir = path.join(RESOURCES_DIR, 'wheels');
+  fs.mkdirSync(wheelsDir, { recursive: true });
+
+  const wheelByPackage = {};
+  for (const name of Object.keys(WORKSPACE_PACKAGES)) {
+    execSync(`uv build --package ${JSON.stringify(name)} --wheel --out-dir ${JSON.stringify(wheelsDir)}`, {
+      cwd: MONOREPO_ROOT, stdio: 'inherit',
+    });
+    // Wheel filenames follow PEP 427: `{name}-{version}-{py}-{abi}-{platform}.whl`
+    // where `name` has hyphens normalized to underscores. Since we build
+    // serially and clean RESOURCES_DIR at the top of main(), exactly one
+    // wheel per package should exist with the expected prefix.
+    const normalized = name.replace(/-/g, '_');
+    const matches = fs.readdirSync(wheelsDir).filter(
+      (f) => f.endsWith('.whl') && f.startsWith(normalized + '-'),
+    );
+    if (matches.length !== 1) {
+      throw new Error(
+        `Expected exactly one wheel for ${name} (prefix "${normalized}-") in ${wheelsDir}, ` +
+        `found ${matches.length}: ${JSON.stringify(matches)}`,
+      );
+    }
+    wheelByPackage[name] = matches[0];
+    console.log(`Built wheel for ${name}: ${matches[0]}`);
+  }
+  return wheelByPackage;
+}
+
 
 function getPlatformArch() {
   const platform = process.platform;
@@ -29,41 +111,12 @@ function getPlatformArch() {
   throw new Error(`Unsupported platform/arch: ${platform}/${arch}`);
 }
 
-function getUvDownloadUrl({ platform, arch }) {
-  const target = platform === 'darwin'
-    ? `uv-${arch}-apple-darwin`
-    : `uv-${arch}-unknown-linux-gnu`;
-  return `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${target}.tar.gz`;
-}
-
-function download(url) {
-  return new Promise((resolve, reject) => {
-    const client = url.startsWith('https') ? https : http;
-    client.get(url, { headers: { 'User-Agent': 'minds-build' } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume(); // Drain the redirect response to free the connection
-        download(res.headers.location).then(resolve).catch(reject);
-        return;
-      }
-      if (res.statusCode !== 200) {
-        res.resume(); // Drain the error response to free the connection
-        reject(new Error(`HTTP ${res.statusCode} for ${url}`));
-        return;
-      }
-      const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-      res.on('error', reject);
-    }).on('error', reject);
-  });
-}
-
 /**
  * Download a gzipped tarball to ``destDir`` and extract it in place with
  * ``--strip-components=1``, then verify and chmod the named binary.
  *
  * Used for binaries that ship as a single self-contained tarball rooted one
- * level deep (e.g. uv, Lima). ``label`` is used only for log lines and error
+ * level deep (e.g. Lima). ``label`` is used only for log lines and error
  * messages; ``archiveName`` is the on-disk filename for the downloaded
  * tarball (deleted after extraction); ``binaryPath`` is the absolute path
  * the caller expects the extracted binary to live at.
@@ -84,17 +137,6 @@ async function downloadAndExtractTarball({ destDir, url, archiveName, binaryPath
   }
   fs.chmodSync(binaryPath, 0o755);
   console.log(`${label} binary installed at ${binaryPath}`);
-}
-
-async function downloadUv({ platform, arch }) {
-  const uvDir = path.join(RESOURCES_DIR, 'uv');
-  await downloadAndExtractTarball({
-    destDir: uvDir,
-    url: getUvDownloadUrl({ platform, arch }),
-    archiveName: 'uv.tar.gz',
-    binaryPath: path.join(uvDir, 'uv'),
-    label: 'uv',
-  });
 }
 
 /**
@@ -380,48 +422,22 @@ async function downloadLima({ platform, arch }) {
   }
 }
 
-async function downloadGit() {
-  const gitDir = path.join(RESOURCES_DIR, 'git');
-  const binDir = path.join(gitDir, 'bin');
-  fs.mkdirSync(binDir, { recursive: true });
-
-  // Copy the system git binary into the resources directory.
-  const systemGit = execSync('which git', { encoding: 'utf-8' }).trim();
-  if (!systemGit) {
-    throw new Error('git not found on system -- install git first');
+/**
+ * Write the current git SHA into electron/build-info.json so the runtime
+ * can surface it in the About panel. Falls back to "unknown" if the
+ * working tree has no .git (e.g. building from a tarball).
+ */
+function bakeBuildInfo() {
+  let gitSha;
+  try {
+    gitSha = execSync('git rev-parse HEAD', { cwd: MONOREPO_ROOT }).toString().trim();
+  } catch (err) {
+    console.warn(`Could not resolve git SHA (${err.message}); falling back to "unknown".`);
+    gitSha = 'unknown';
   }
-
-  const destGit = path.join(binDir, 'git');
-  fs.copyFileSync(systemGit, destGit);
-  fs.chmodSync(destGit, 0o755);
-  console.log(`git binary copied to ${destGit}`);
-}
-
-function copyPyproject() {
-  const srcDir = path.join(ROOT, 'electron', 'pyproject');
-  const destDir = path.join(RESOURCES_DIR, 'pyproject');
-  fs.mkdirSync(destDir, { recursive: true });
-
-  // Copy pyproject.toml, stripping any [tool.uv.sources] section that
-  // contains local editable paths (only valid in the monorepo layout)
-  const pyprojectSrc = path.join(srcDir, 'pyproject.toml');
-  if (fs.existsSync(pyprojectSrc)) {
-    let content = fs.readFileSync(pyprojectSrc, 'utf-8');
-    content = content.replace(/\[tool\.uv\.sources\][^\[]*/, '').trimEnd() + '\n';
-    fs.writeFileSync(path.join(destDir, 'pyproject.toml'), content);
-    console.log(`Copied pyproject.toml to ${destDir} (stripped local sources)`);
-  } else {
-    console.warn(`Warning: ${pyprojectSrc} not found`);
-  }
-
-  // Copy lockfile as-is
-  const lockSrc = path.join(srcDir, 'uv.lock');
-  if (fs.existsSync(lockSrc)) {
-    fs.copyFileSync(lockSrc, path.join(destDir, 'uv.lock'));
-    console.log(`Copied uv.lock to ${destDir}`);
-  } else {
-    console.warn(`Warning: ${lockSrc} not found`);
-  }
+  const buildInfoPath = path.join(ROOT, 'electron', 'build-info.json');
+  fs.writeFileSync(buildInfoPath, JSON.stringify({ gitSha }) + '\n');
+  console.log(`Bundled gitSha=${gitSha} -> ${buildInfoPath}`);
 }
 
 /**
@@ -525,6 +541,71 @@ function bundleClientConfig() {
   fs.writeFileSync(bundledRootNameFile, rootNameBundle + '\n');
   console.log(`Bundled ${resolvedConfig} -> ${bundledClient}`);
   console.log(`Bundled MINDS_ROOT_NAME=${rootNameBundle} -> ${bundledRootNameFile}`);
+
+  // The source-tree _bundled/ above ends up inside app.asar, which the
+  // Python backend subprocess cannot read. paths.js getBundledConfigDir()
+  // resolves the packaged-mode bundle under the pyproject resources dir
+  // (extraResources copies resources/ -> Resources/), so stage a second
+  // copy there on the real filesystem where `minds run --config-file`
+  // can reach it.
+  const packagedBundledDir = path.join(
+    RESOURCES_DIR,
+    'pyproject',
+    'imbue',
+    'minds',
+    'config',
+    'envs',
+    '_bundled'
+  );
+  fs.mkdirSync(packagedBundledDir, { recursive: true });
+  fs.copyFileSync(resolvedConfig, path.join(packagedBundledDir, 'client.toml'));
+  fs.writeFileSync(path.join(packagedBundledDir, 'root_name'), rootNameBundle + '\n');
+  console.log(`Staged bundled config for packaged runtime at ${packagedBundledDir}`);
+}
+
+/**
+ * Write `resources/pyproject/pyproject.toml` and regenerate `uv.lock`.
+ *
+ * Starts from `electron/pyproject/pyproject.toml` (the dev-time pyproject),
+ * replaces `[tool.uv.sources]` with entries pointing at the bundled wheels,
+ * and then runs `uv lock` in-place so the lockfile matches the rewritten
+ * pyproject. This re-resolves PyPI deps from scratch, which is fine -- they're
+ * the same deps, just locked against the new workspace source definitions.
+ */
+function stageRuntimePyproject(wheelByPackage) {
+  const srcDir = path.join(ROOT, 'electron', 'pyproject');
+  const destDir = path.join(RESOURCES_DIR, 'pyproject');
+  fs.mkdirSync(destDir, { recursive: true });
+
+  const pyprojectSrc = path.join(srcDir, 'pyproject.toml');
+  if (!fs.existsSync(pyprojectSrc)) {
+    throw new Error(`Source pyproject.toml not found at ${pyprojectSrc}`);
+  }
+  let content = fs.readFileSync(pyprojectSrc, 'utf-8');
+
+  const sourceLines = ['[tool.uv.sources]'];
+  for (const [name, whlFile] of Object.entries(wheelByPackage)) {
+    sourceLines.push(`${name} = { path = "../wheels/${whlFile}" }`);
+  }
+  const newSources = sourceLines.join('\n') + '\n';
+
+  // Anchor at start-of-line so the literal "[tool.uv.sources]" substring
+  // inside the file-level docstring (a comment that names the section) is
+  // not mistaken for the section header itself.
+  const sectionRe = /^\[tool\.uv\.sources\][^\[]*/m;
+  if (sectionRe.test(content)) {
+    content = content.replace(sectionRe, newSources);
+  } else {
+    content = content.trimEnd() + '\n\n' + newSources;
+  }
+  fs.writeFileSync(path.join(destDir, 'pyproject.toml'), content);
+  console.log(`Staged pyproject.toml at ${destDir}`);
+
+  // Regenerate the lockfile against the rewritten pyproject. This is simpler
+  // and more robust than string-surgery on the dev-time uv.lock: uv emits the
+  // exact right shape for wheel-path sources itself.
+  execSync('uv lock', { cwd: destDir, stdio: 'inherit' });
+  console.log(`Regenerated uv.lock at ${destDir}`);
 }
 
 async function main() {
@@ -541,14 +622,17 @@ async function main() {
 
   // Download binaries and copy pyproject in parallel
   await Promise.all([
-    downloadUv({ platform, arch }),
+    downloadUv(RESOURCES_DIR, { platform, arch }),
     downloadLima({ platform, arch }),
-    downloadGit(),
+    downloadGit(RESOURCES_DIR, { platform }),
+    downloadRestic(RESOURCES_DIR, { platform, arch }),
   ]);
 
   bundleLatchkey();
-  copyPyproject();
+  const wheelByPackage = buildWorkspaceWheels();
+  stageRuntimePyproject(wheelByPackage);
   bundleClientConfig();
+  bakeBuildInfo();
 
   console.log('\nBuild complete!');
   console.log(`Resources directory: ${RESOURCES_DIR}`);

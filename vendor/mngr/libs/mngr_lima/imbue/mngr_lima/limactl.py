@@ -78,11 +78,6 @@ def _start_serial_tailer(cg: ConcurrencyGroup, serial_log_path: str) -> None:
     terminated explicitly via ``_stop_serial_tailer``.
     """
     global _active_serial_tailer
-    # `-F` = follow-by-name + retry on missing file, on both BSD (macOS) and
-    # GNU tail. GNU-style `--follow=name --retry` is unsupported on macOS
-    # BSD tail and causes the tailer to exit immediately with "unrecognized
-    # option", producing no serial-log output during VM boot (non-fatal,
-    # but loses diagnostics when Lima boot itself misbehaves).
     _active_serial_tailer = cg.run_process_in_background(
         ["tail", "-F", serial_log_path],
         is_checked_by_group=False,
@@ -237,6 +232,59 @@ def limactl_delete(
         result = cg.run_process_to_completion(cmd, timeout=timeout)
     if result.returncode != 0:
         raise LimaCommandError("delete", result.returncode, result.stderr)
+
+
+def limactl_disk_create(
+    cg: ConcurrencyGroup,
+    disk_name: str,
+    size: str,
+    timeout: float = 60.0,
+) -> None:
+    """Create a Lima-managed disk.
+
+    Runs: limactl disk create <disk_name> --size <size>
+
+    Lima only auto-formats an additionalDisk when the disk record already
+    exists at ``~/.lima/_disks/<name>/datadisk``; without this pre-create
+    step, ``limactl start`` fails with "could not load disk ... no such
+    file or directory". Always creates the disk as the default qcow2
+    format; the in-VM ``fsType`` (e.g. btrfs) is applied by Lima's
+    ``format: true`` machinery on first attach.
+    """
+    cmd = ["limactl", "disk", "create", disk_name, "--size", size]
+    with log_span("Running limactl disk create: {} (size {})", disk_name, size):
+        result = cg.run_process_to_completion(cmd, timeout=timeout)
+    if result.returncode != 0:
+        raise LimaCommandError("disk create", result.returncode, result.stderr)
+
+
+def limactl_disk_delete(
+    cg: ConcurrencyGroup,
+    disk_name: str,
+    force: bool = True,
+    timeout: float = 60.0,
+) -> None:
+    """Delete a Lima-managed disk.
+
+    Runs: limactl disk delete [--force] <disk_name>
+
+    Tolerates the disk already being absent (returncode != 0 plus a stderr
+    that mentions "not found") -- this is the case after a normal host
+    destroy that already removed the VM but the disk record is still
+    referenced.
+    """
+    cmd = ["limactl", "disk", "delete"]
+    if force:
+        cmd.append("--force")
+    cmd.append(disk_name)
+    with log_span("Running limactl disk delete: {}", disk_name):
+        result = cg.run_process_to_completion(cmd, timeout=timeout)
+    if result.returncode != 0:
+        stderr_lower = result.stderr.lower()
+        if "not found" in stderr_lower or "does not exist" in stderr_lower:
+            logger.debug("Lima disk {} already absent, skipping", disk_name)
+            return
+        raise LimaCommandError("disk delete", result.returncode, result.stderr)
 
 
 def limactl_list(cg: ConcurrencyGroup, timeout: float = 30.0) -> list[dict[str, Any]]:

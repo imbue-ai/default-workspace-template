@@ -1,7 +1,7 @@
 [project]
 name = "minds-desktop"
 version = "0.1.0"
-requires-python = ">=3.12"
+requires-python = "==3.12.13"
 # All workspace packages must be listed as direct dependencies so uv honors
 # the tool-uv-sources path overrides. uv ignores source overrides for
 # transitive-only packages and falls back to PyPI, which silently installs
@@ -26,6 +26,12 @@ dependencies = [
     "resource-guards>=0.1.0",
     "modal-proxy>=0.1.0",
 ]
+
+# TEMPORARY: supply-chain cooldown disabled (was a fixed cutoff at
+# 2026-05-23) while we stabilize the CI pipeline. The cutoff was added
+# in PR #1768; restore when the build/CI churn settles. Tracked TODO
+# for revisit.
+[tool.uv]
 
 [tool.uv.sources]
 minds = { path = "../../../../apps/minds", editable = true }
