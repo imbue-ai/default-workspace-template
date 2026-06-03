@@ -489,3 +489,16 @@ def test_synthetic_api_error_message_is_still_shown() -> None:
     events = parse_session_lines([line])
     assert [e["type"] for e in events] == ["assistant_message"]
     assert events[0]["text"] == error_text
+
+
+def test_tool_output_preserves_tk_transition_past_truncation() -> None:
+    """A tk transition line (`Updated <id> -> <status>`) that falls past the
+    output truncation limit is preserved, so the progress view never loses a
+    step transition when a tk command is batched after verbose output."""
+    output = ("x" * 5000) + "\nUpdated s1 -> closed\n"
+    lines = [_make_tool_result_line("uuid-trunc", "2026-01-01T00:00:02Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert events[0]["type"] == "tool_result"
+    assert "Updated s1 -> closed" in events[0]["output"]
+    # Still truncated overall (not the full verbose output).
+    assert len(events[0]["output"]) < len(output)
