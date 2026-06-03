@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import io
+import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -643,3 +644,181 @@ def test_parse_duration_accepts_suffixes(text: str, expected: float) -> None:
 def test_parse_duration_rejects_invalid(bad: str) -> None:
     with pytest.raises(argparse.ArgumentTypeError):
         create_worker_mod._parse_duration(bad)
+
+
+# --- parse_report ---------------------------------------------------------
+
+
+def test_parse_report_extracts_frontmatter_and_body() -> None:
+    result = create_worker_mod.parse_report(
+        "---\ntype: status\nname: done\n---\n\nCommitted on branch `mngr/x`.\n"
+    )
+    assert result.report_type == "status"
+    assert result.name == "done"
+    assert result.body == "Committed on branch `mngr/x`."
+
+
+def test_parse_report_without_frontmatter_is_none_typed() -> None:
+    """An unparseable report yields None type/name and the whole text as body."""
+    result = create_worker_mod.parse_report("just a body, no frontmatter\n")
+    assert result.report_type is None
+    assert result.name is None
+    assert "just a body" in result.body
+
+
+# --- destroy --------------------------------------------------------------
+
+
+def test_destroy_invokes_mngr_destroy_force() -> None:
+    runner = _RecordingRunner()
+    create_worker_mod.destroy("demo-worker", runner=runner)
+    assert [c.argv for c in runner.calls] == [
+        ["mngr", "destroy", "demo-worker", "--force"]
+    ]
+
+
+# --- run_sync -------------------------------------------------------------
+
+
+def _make_run_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """runtime_dir + task_file (with finish_report_path) + the report path."""
+    runtime = tmp_path / "runtime" / "launch-task" / "demo"
+    (runtime / "reports").mkdir(parents=True)
+    report = runtime / "reports" / "report.md"
+    task = runtime / "task.md"
+    task.write_text(
+        f"---\nlead_agent: lead\nfinish_report_path: {report}\n---\n\nbody\n"
+    )
+    return runtime, task, report
+
+
+def _boom_sleeper(_seconds: float) -> None:
+    raise AssertionError("run_sync must not sleep when the report already exists")
+
+
+def test_run_sync_collects_report_and_destroys(tmp_path: Path) -> None:
+    runtime, task, report = _make_run_layout(tmp_path)
+    report.write_text("---\ntype: status\nname: done\n---\n\nReady to merge.\n")
+    runner = _RecordingRunner()
+    out = io.StringIO()
+
+    rc = create_worker_mod.run_sync(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        workspace="ws-1",
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        destroy_on_finish=True,
+        runner=runner,
+        sleeper=_boom_sleeper,
+        clock=lambda: 0.0,
+        out=out,
+    )
+
+    assert rc == 0
+    payload = json.loads(out.getvalue())
+    assert payload == {
+        "timed_out": False,
+        "type": "status",
+        "name": "done",
+        "body": "Ready to merge.",
+        "branch": "mngr/demo-worker",
+        "raw_report": report.read_text(),
+    }
+    # The lifecycle ran create -> rsync -> message, then destroy after the report.
+    assert ["mngr", "destroy", "demo-worker", "--force"] in [
+        c.argv for c in runner.calls
+    ]
+
+
+def test_run_sync_timeout_does_not_destroy(tmp_path: Path) -> None:
+    """A timeout returns the timeout code, emits timed_out JSON, and leaves the
+    worker alive for liveness diagnosis."""
+    runtime, task, _ = _make_run_layout(tmp_path)  # report never written
+    runner = _RecordingRunner()
+    out = io.StringIO()
+
+    rc = create_worker_mod.run_sync(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        workspace="ws-1",
+        timeout_seconds=30,
+        poll_interval_seconds=5,
+        destroy_on_finish=True,
+        runner=runner,
+        sleeper=_no_sleep,
+        clock=_FakeClock(step=20),
+        out=out,
+    )
+
+    assert rc == create_worker_mod._AWAIT_TIMEOUT_RC
+    assert json.loads(out.getvalue())["timed_out"] is True
+    assert not any(c.argv[:2] == ["mngr", "destroy"] for c in runner.calls)
+
+
+def test_run_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
+    runtime, task, report = _make_run_layout(tmp_path)
+    report.write_text("---\ntype: status\nname: done\n---\n\nReady to merge.\n")
+    runner = _RecordingRunner()
+    out = io.StringIO()
+
+    rc = create_worker_mod.run_sync(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        workspace="ws-1",
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        destroy_on_finish=False,
+        runner=runner,
+        sleeper=_boom_sleeper,
+        clock=lambda: 0.0,
+        out=out,
+    )
+
+    assert rc == 0
+    assert not any(c.argv[:2] == ["mngr", "destroy"] for c in runner.calls)
+
+
+def test_main_destroy_dispatch() -> None:
+    runner = _RecordingRunner()
+    rc = create_worker_mod.main(["destroy", "--name", "demo-worker"], runner=runner)
+    assert rc == 0
+    assert [c.argv for c in runner.calls] == [
+        ["mngr", "destroy", "demo-worker", "--force"]
+    ]
+
+
+def test_main_run_missing_finish_report_path_is_fatal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """run validates finish_report_path up front and never launches without it."""
+    runtime = tmp_path / "runtime" / "launch-task" / "demo"
+    runtime.mkdir(parents=True)
+    task = runtime / "task.md"
+    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.main(
+        [
+            "run",
+            "--name",
+            "x",
+            "--template",
+            "worker",
+            "--runtime-dir",
+            str(runtime),
+            "--task-file",
+            str(task),
+        ],
+        runner=runner,
+    )
+
+    assert rc == 2
+    assert runner.calls == []
+    assert "finish_report_path" in capsys.readouterr().err
