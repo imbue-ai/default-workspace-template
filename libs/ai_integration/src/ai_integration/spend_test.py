@@ -68,6 +68,21 @@ def test_check_ceiling_ok_under_budget(tmp_path) -> None:
     tracker.check_ceiling()  # must not raise
 
 
+def test_corrupt_ledger_is_tolerated_as_empty(tmp_path) -> None:
+    tracker = SpendTracker(
+        service_name="svc",
+        ceiling_usd=10.0,
+        state_root=tmp_path,
+        window_seconds=1000,
+        clock=_Clock(),
+    )
+    ledger = tmp_path / "svc" / "ai_spend.json"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("{not valid json")
+    # A corrupt ledger must not crash; it reads as empty spend.
+    assert tracker.spent_in_window() == 0.0
+
+
 def test_spend_persists_across_instances(tmp_path) -> None:
     clock = _Clock()
     first = SpendTracker(

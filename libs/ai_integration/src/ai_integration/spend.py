@@ -72,7 +72,16 @@ class SpendTracker(MutableModel):
             return []
         try:
             raw = json.loads(self._state_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            # The ledger is the budget guardrail; a corrupt/unreadable file is
+            # tolerated (return empty rather than crash a service) but must be
+            # logged so the silent spend reset it implies is observable.
+            logger.warning(
+                "ai_integration spend: could not read ledger {}; treating spend as "
+                "empty (the rolling-window ceiling will not see prior spend): {}",
+                self._state_path,
+                exc,
+            )
             return []
         if not isinstance(raw, list):
             return []
