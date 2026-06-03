@@ -340,3 +340,124 @@ describe("pending roster", () => {
     expect(stepItems(sections[1].items).map((s) => s.ticket_id)).toEqual(["sp"]);
   });
 });
+
+describe("audit regressions", () => {
+  // FIX C: a Bash command that merely mentions a tk verb must render as work,
+  // not be misclassified as a tk lifecycle command and silently dropped.
+  it("renders a non-tk command that mentions a tk verb as work (grouped under the open step)", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z", "go"),
+      tkMsg("2026-04-28T01:00:01Z", "tk start s1", "k1"),
+      result("2026-04-28T01:00:01Z", "k1", "Updated s1 -> in_progress"),
+      // A real git command whose message mentions "tk close" -- not a tk command.
+      tkMsg("2026-04-28T01:00:02Z", "git commit -m 'tk close the bug'", "gc"),
+      result("2026-04-28T01:00:02Z", "gc", "[main abc] tk close the bug"),
+    ];
+    const sections = run(events, enrich({ s1: { status: "in_progress" } }), /* idle */ false);
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-gc"]);
+  });
+
+  it("keeps a tk-mentioning command visible (ungrouped) when no step is open", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z", "go"),
+      tkMsg("2026-04-28T01:00:01Z", "echo 'run tk start later'", "e1"),
+      result("2026-04-28T01:00:01Z", "e1", "run tk start later"),
+    ];
+    const sections = run(events, new Map());
+    const ung = sections[0].items.filter((i) => i.kind === "ungrouped");
+    expect(ung).toHaveLength(1);
+  });
+
+  it("still applies a transition when the tk command is not at the command's front", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z", "go"),
+      tkMsg("2026-04-28T01:00:01Z", "tk start s1", "k1"),
+      result("2026-04-28T01:00:01Z", "k1", "Updated s1 -> in_progress"),
+      tkMsg("2026-04-28T01:00:02Z", "cd /code && tk close s1", "cc"),
+      result("2026-04-28T01:00:02Z", "cc", "Updated s1 -> closed"),
+    ];
+    const sections = run(events, enrich({ s1: { status: "closed" } }));
+    expect(stepItems(sections[0].items)[0].status).toBe("done");
+  });
+
+  // FIX A-VioB: real work batched in the SAME assistant message as a tk close
+  // must stay inside the step, not fall out into an ungrouped run.
+  it("keeps work batched with tk close in the same message inside the step", () => {
+    const mixed: TranscriptEvent = {
+      timestamp: "2026-04-28T01:00:03Z",
+      type: "assistant_message",
+      event_id: "a-mixed",
+      source: "test",
+      model: "m",
+      text: "",
+      tool_calls: [
+        { tool_call_id: "real1", tool_name: "Edit", input_preview: `{"path":"x"}` },
+        { tool_call_id: "tkc", tool_name: "Bash", input_preview: `{"command":"tk close s1"}` },
+      ],
+      stop_reason: null,
+      usage: null,
+      is_auth_error: false,
+    };
+    const events = [
+      userMsg("2026-04-28T01:00:00Z", "go"),
+      tkMsg("2026-04-28T01:00:01Z", "tk start s1", "k1"),
+      result("2026-04-28T01:00:01Z", "k1", "Updated s1 -> in_progress"),
+      mixed,
+      result("2026-04-28T01:00:03Z", "real1", "ok"),
+      result("2026-04-28T01:00:03Z", "tkc", "Updated s1 -> closed"),
+    ];
+    const sections = run(events, enrich({ s1: { status: "closed" } }));
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].status).toBe("done");
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-mixed"]);
+    expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
+  });
+
+  // FIX A-VioA: a step started again after being closed is active again.
+  it("re-activates a step started again after being closed", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z", "go"),
+      tkMsg("2026-04-28T01:00:01Z", "tk start s1", "k1"),
+      result("2026-04-28T01:00:01Z", "k1", "Updated s1 -> in_progress"),
+      workMsg("2026-04-28T01:00:02Z", "Edit", "w1"),
+      result("2026-04-28T01:00:02Z", "w1", "ok"),
+      tkMsg("2026-04-28T01:00:03Z", "tk close s1", "k2"),
+      result("2026-04-28T01:00:03Z", "k2", "Updated s1 -> closed"),
+      tkMsg("2026-04-28T01:00:04Z", "tk start s1", "k3"),
+      result("2026-04-28T01:00:04Z", "k3", "Updated s1 -> in_progress"),
+      workMsg("2026-04-28T01:00:05Z", "Edit", "w2"),
+      result("2026-04-28T01:00:05Z", "w2", "ok"),
+    ];
+    const sections = run(events, enrich({ s1: { status: "in_progress" } }), /* idle */ false);
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].status).toBe("active");
+    expect(steps[0].is_frontier).toBe(true);
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1", "a-w2"]);
+  });
+
+  // FIX B: a stop-hook chip between two reply fragments keeps chronological
+  // order -- the pre-chip reply stays inline, only the post-chip reply trails.
+  it("weaves a stop-hook chip between two reply fragments in order", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z", "go"),
+      tkMsg("2026-04-28T01:00:01Z", "tk start s1", "k1"),
+      result("2026-04-28T01:00:01Z", "k1", "Updated s1 -> in_progress"),
+      workMsg("2026-04-28T01:00:02Z", "Edit", "w1"),
+      result("2026-04-28T01:00:02Z", "w1", "ok"),
+      tkMsg("2026-04-28T01:00:03Z", "tk close s1", "k2"),
+      result("2026-04-28T01:00:03Z", "k2", "Updated s1 -> closed"),
+      assistantText("2026-04-28T01:00:04Z", "reply A", "rA"),
+      userMsg("2026-04-28T01:00:05Z", "Stop hook feedback:\nhook", "sh1"),
+      assistantText("2026-04-28T01:00:06Z", "reply B", "rB"),
+    ];
+    const sections = run(events, enrich({ s1: { status: "closed" } }));
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["step", "ungrouped", "chip"]);
+    const ung = sections[0].items.find((i) => i.kind === "ungrouped") as { events: { event_id: string }[] };
+    expect(ung.events.map((e) => e.event_id)).toEqual(["rA"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["rB"]);
+  });
+});
