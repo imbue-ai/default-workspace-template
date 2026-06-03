@@ -99,6 +99,8 @@ replace it outright (rare; you usually want the default agent here).
 ## Pattern 1 -- `run_agent` (full agent)
 
 ```python
+from ai_integration.data_types import AgentOutcome
+
 result = await run_agent(
     name="email-triage-selfedit-42",
     template="worker",
