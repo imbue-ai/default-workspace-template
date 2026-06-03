@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import pytest
+
 from mngr_cli_contract import assert_mngr_argv_valid
 
 _SCRIPT = Path(__file__).parent / "create_worker.py"
