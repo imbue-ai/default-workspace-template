@@ -238,11 +238,18 @@ never a parallel re-implementation of the processing. The first version of a
 surface is literally `render(sample.json)`: it shows exactly what the user
 approved, so there is structurally *no gap* to fill with a cheaper stand-in
 (heuristics, regex, a stub classifier). When the crystallized pipeline is
-ready, point the surface at its output; the shape is identical, so the surface
-code does not change and fidelity is automatic. **If you ever feel the urge to
-write a second, different way of producing the data to feed a surface, stop**
--- that divergence (the surface showing something the user never confirmed) is
-the exact bug this rule exists to prevent.
+ready, point the surface at its output. **The pipeline may have changed the
+shape** -- crystallization is exactly the moment the worker rethinks how the
+task should be done, and improving the output schema there is allowed and
+expected. So when you swap it in, diff its output against the confirmed
+sample: if the shape changed, update the surface to match and **re-confirm the
+result with the user** (they signed off on the sample's shape, not the new
+one). The rule that stays absolute is the *single source*: a surface renders
+the pipeline's output, or until it lands the confirmed sample -- never a
+third, parallel re-implementation. **If you ever feel the urge to write a
+second, different way of producing the data to feed a surface, stop** -- that
+divergence (the surface showing something the user never confirmed) is the
+exact bug this rule exists to prevent.
 
 Once the surface is seeded from the confirmed sample, additional surfaces (scheduling,
 persistence, history, live integration with a forwarded service, etc.) each
