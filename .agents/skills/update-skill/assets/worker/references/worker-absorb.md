@@ -25,7 +25,12 @@ Include:
 - **Decision**: update-in-place of `<existing-name>`, or create-new-skill
   named `<new-name>`.
 - What changes / what the new skill does.
-- Inputs, outputs, step-by-step flow.
+- Inputs, outputs, step-by-step flow. Tag each step `[script]`,
+  `[ai-script]`, or `[prose]` per
+  `.agents/shared/references/spec-summary.md`; model-judgement steps default
+  to `[ai-script]` (scripted via `ai_integration`).
+- Prose justification: for any model-judgement step you keep as `[prose]`,
+  state why a scripted `ai_integration` call cannot do it.
 - Justification: for any subcommand or subflow in the planned flow, what
   invariant makes it separate vs. inlined? If no invariant demands
   separation, inline it.
@@ -51,10 +56,11 @@ user's reply (delivered via `mngr message`) before coding.
 ### Update-in-place
 
 - Edit the relevant parts of the skill in place: scripts under `scripts/`,
-  SKILL.md prose, or both. A new script step goes in `scripts/`; a new
-  judgement step goes in SKILL.md as prose instructions for the agent using
-  the skill. Preserve the existing contract for current callers unless the
-  outline explicitly calls for a breaking change.
+  SKILL.md prose, or both. A new deterministic step goes in `scripts/`; a
+  new model-judgement step is scripted as an `ai_integration` call
+  (`[ai-script]`) in `scripts/`, not added as prose; only executor meta-work
+  goes in SKILL.md as prose. Preserve the existing contract for current
+  callers unless the outline explicitly calls for a breaking change.
 - Keep SKILL.md under ~500 lines; split long content into `references/`.
 
 ### Cross-section alignment sweep

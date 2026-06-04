@@ -36,10 +36,13 @@ pointers.
 
 ## Principles
 
-"Repeatable" covers both script-shaped extensions (extra flag, new output
-format) and prose-shaped extensions (an additional judgement step with a
-stable recipe). Both land inside a skill: scripts under `scripts/`,
-judgement steps as SKILL.md prose.
+"Repeatable" covers deterministic extensions (extra flag, new output
+format), model-judgement extensions (an additional judgement step with a
+stable recipe), and executor meta-work. The first two are scripted -- a
+deterministic step under `scripts/`, a model-judgement step as an
+`ai_integration` call (`[ai-script]`; see
+`.agents/shared/references/spec-summary.md`) -- so the flow stays runnable
+headless. Only genuine executor meta-work lands as SKILL.md prose.
 
 **Reliability is the floor; simplicity is the target.** Default to a
 single entry point and one flow. Add surface only when a specific

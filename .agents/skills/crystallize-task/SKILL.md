@@ -1,6 +1,6 @@
 ---
 name: crystallize-task
-description: "Turn a process from the turn that just finished into a reusable skill. A skill captures a stable process -- SKILL.md prose describing the recipe, with scripts for deterministic steps and prose instructions for nondeterministic steps. Consider using after completing a task where a re-run with new inputs would follow a largely similar process. The process does not have to be the entire turn -- a sub-process (e.g. a data pipeline within a larger build) counts. Strong signal: you learned how to do something through research or debugging that is likely to be useful again."
+description: "Turn a process from the turn that just finished into a reusable skill. A skill captures a stable process -- SKILL.md prose describing the recipe, with scripts for both deterministic steps and model-judgement steps (the latter scripted via the ai_integration library), and prose reserved for executor meta-work. Consider using after completing a task where a re-run with new inputs would follow a largely similar process. The process does not have to be the entire turn -- a sub-process (e.g. a data pipeline within a larger build) counts. Strong signal: you learned how to do something through research or debugging that is likely to be useful again."
 ---
 
 # Crystallizing a task into a skill
@@ -25,15 +25,18 @@ Summary:
    touch many files or make many web requests or other tool uses).
 2. **Re-run test**: if the user asked you to do this again with different
    inputs, much of the process would be recognizably the same -- same
-   sources, same steps, same criteria, just different data. Judgement steps
-   in the middle of a flow are fine; they live in SKILL.md as prose
-   instructions.
+   sources, same steps, same criteria, just different data. Model-judgement
+   steps in the middle of a flow are fine; by default they are scripted as
+   `ai_integration` calls so the flow stays runnable headless, leaving only
+   executor meta-work as SKILL.md prose.
 3. You expect this task (or one like it) to recur, either because the user suggested it might or because it seems like a useful task to repeat.
 
-A skill is a SKILL.md (process recipe) plus optional scripts for the
-deterministic steps. Judgement steps live in SKILL.md as prose and are
-executed by the agent using the skill. Do not demand end-to-end
-scriptability before crystallizing.
+A skill is a SKILL.md (process recipe) plus scripts for its flow steps --
+both deterministic steps and model-judgement steps (the latter scripted as
+`ai_integration` calls by default, so the flow runs headless). SKILL.md
+prose is reserved for executor meta-work that genuinely needs the agent in
+the loop. Aim to script the model steps, but don't decline to crystallize
+just because some executor meta-work remains as prose.
 
 **Default to asking the user**, not to deciding silently. If you can name
 any plausible skill shape, propose it to the user and let them decide.
@@ -274,8 +277,9 @@ commit so the migration is reviewable on its own.
 - Never crystallize a turn whose process would not repeat recognizably on a
   re-run. If each hypothetical re-run would require entirely different
   steps rather than the same recipe with different data, decline. Note
-  that judgement steps within an otherwise stable process do NOT
-  disqualify crystallization -- they live in SKILL.md as prose.
+  that model-judgement steps within an otherwise stable process do NOT
+  disqualify crystallization -- by default they are scripted via
+  `ai_integration`, with prose reserved for executor meta-work.
 - The worker owns outline and implementation decisions. Do not second-guess
   the worker's skill structure unless something is clearly wrong.
 - Worker failure handling: see `launch-task/references/worker-failure.md`.
