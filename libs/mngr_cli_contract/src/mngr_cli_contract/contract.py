@@ -53,9 +53,7 @@ def assert_mngr_argv_valid(argv: Sequence[str]) -> None:
     except click.exceptions.ClickException as exc:
         raise MngrArgvContractError(
             f"mngr argv not accepted by the live CLI: {list(argv)!r}\n"
-            f"  {type(exc).__name__}: {exc.format_message()}\n"
-            f"  The vendored mngr CLI surface changed under this invocation. "
-            f"Update the producing code to match the current mngr CLI."
+            f"  {type(exc).__name__}: {exc.format_message()}"
         ) from exc
 
 
