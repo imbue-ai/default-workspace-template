@@ -148,7 +148,15 @@ build_arg__extend = ["--file=Dockerfile", "."]
 # binaries. `--cap-add=SYS_PTRACE` was removed deliberately -- gVisor is the
 # isolation boundary now, and the extra capability widened the container's
 # privileges with no upside for untrusted agents.
-start_arg__extend = ["--security-opt=no-new-privileges"]
+#
+# `--workdir=/` overrides the image's `WORKDIR /mngr/code` for the container's
+# idle entrypoint. Under gVisor (runsc), sandbox startup tries to create the
+# process working directory and aborts with "file exists" when it already
+# exists -- and `/mngr/code` exists inside the mounted `/mngr` volume. runc
+# tolerates a pre-existing cwd; runsc does not. Pointing the cwd at `/` (always
+# present) sidesteps it; nothing depends on the host container's default cwd
+# (the entrypoint just sleeps; agents set their own work_dir=/mngr/code).
+start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/"]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
 idle_mode = "disabled"
