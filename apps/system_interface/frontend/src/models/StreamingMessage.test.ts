@@ -47,6 +47,7 @@ function makeEvent(id: string, content: string): TranscriptEvent {
     event_id: id,
     source: "test",
     message_uuid: id,
+    role: "user",
     content,
   };
 }

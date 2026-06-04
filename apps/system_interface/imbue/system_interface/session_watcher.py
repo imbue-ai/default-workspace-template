@@ -48,17 +48,14 @@ from typing import Any
 from typing import Callable
 
 from loguru import logger as _loguru_logger
-from watchdog.events import FileSystemEvent
-from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from imbue.system_interface.session_parser import parse_session_lines
+from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
+from imbue.system_interface.watcher_common import WakeOnChangeHandler
 
 logger = _loguru_logger
 
-_NON_CHANGE_EVENT_TYPES = frozenset({"opened", "closed", "closed_no_write"})
-
-_POLL_INTERVAL_SECONDS = 1.0
 _BRIEF_WAIT_SECONDS = 0.5
 
 
@@ -101,18 +98,6 @@ def _split_at_last_complete_line(data: bytes) -> tuple[bytes, bytes]:
     if newline_index == -1:
         return b"", data
     return data[: newline_index + 1], fragment
-
-
-class _ChangeHandler(FileSystemEventHandler):
-    """Watchdog handler that wakes the watcher on actual file changes."""
-
-    def __init__(self, wake_event: threading.Event) -> None:
-        self._wake_event = wake_event
-
-    def on_any_event(self, event: FileSystemEvent) -> None:
-        if event.event_type in _NON_CHANGE_EVENT_TYPES:
-            return
-        self._wake_event.set()
 
 
 class SessionFileState:
@@ -427,7 +412,7 @@ class AgentSessionWatcher:
         self._prime_caches()
 
         while not self._stop_event.is_set():
-            self._wake_event.wait(timeout=_POLL_INTERVAL_SECONDS)
+            self._wake_event.wait(timeout=POLL_INTERVAL_SECONDS)
             self._wake_event.clear()
 
             if self._stop_event.is_set():
@@ -508,7 +493,7 @@ class AgentSessionWatcher:
             if self._observer is not None:
                 parent_dir = str(file_path.parent)
                 try:
-                    self._observer.schedule(_ChangeHandler(self._wake_event), parent_dir, recursive=False)
+                    self._observer.schedule(WakeOnChangeHandler(self._wake_event), parent_dir, recursive=False)
                 except OSError as e:
                     logger.debug("Failed to schedule watchdog for {}: {}", parent_dir, e)
 
@@ -542,7 +527,7 @@ class AgentSessionWatcher:
 
             if is_new_session and self._observer is not None:
                 try:
-                    self._observer.schedule(_ChangeHandler(self._wake_event), str(subagents_dir), recursive=False)
+                    self._observer.schedule(WakeOnChangeHandler(self._wake_event), str(subagents_dir), recursive=False)
                 except OSError as e:
                     logger.debug("Failed to schedule watchdog for {}: {}", subagents_dir, e)
 
@@ -612,7 +597,7 @@ class AgentSessionWatcher:
 
         try:
             observer = Observer()
-            handler = _ChangeHandler(self._wake_event)
+            handler = WakeOnChangeHandler(self._wake_event)
             for dir_path in watched_dirs:
                 observer.schedule(handler, dir_path, recursive=False)
             observer.start()
