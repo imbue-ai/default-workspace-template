@@ -5,8 +5,8 @@ from __future__ import annotations
 from imbue.system_interface.tickets_parser import parse_ticket_text
 
 
-def test_parse_open_ticket_with_no_notes() -> None:
-    """A freshly-created tk ticket has status open and no Notes section."""
+def test_parse_open_ticket_with_no_summary() -> None:
+    """A freshly-created tk ticket has status open and no Summary section."""
     text = """---
 id: tt-2efd
 status: open
@@ -26,7 +26,6 @@ assignee: Test User
     assert result.status == "open"
     assert result.created_at == "2026-04-28T01:17:08Z"
     assert result.summary is None
-    assert result.summary_at is None
     # An open ticket has not started or closed -- those fields are absent.
     assert result.started_at == ""
     assert result.closed_at == ""
@@ -73,23 +72,25 @@ priority: 2
     assert result.summary is None
 
 
-def test_parse_closed_ticket_with_summary_note() -> None:
-    """The most recent note in the Notes section becomes the summary."""
+def test_parse_closed_ticket_with_summary_section() -> None:
+    """The body of the `## Summary` section becomes the summary. This fixture
+    mirrors exactly what `tk close <id> "summary"` writes -- microsecond
+    `closed:` timestamp and the summary in its own untimestamped section -- so
+    the parser is exercised against tk's real output, not a hand-tuned form."""
     text = """---
 id: tt-2efd
 status: closed
 deps: []
 links: []
-created: 2026-04-28T01:17:08Z
+created: 2026-04-28T01:17:08.000000Z
+closed: 2026-04-28T01:19:03.123456Z
 type: task
 priority: 2
 ---
 # Look through your recent changes to find the new theme
 
 
-## Notes
-
-**2026-04-28T01:19:03Z**
+## Summary
 
 Found a new "midnight" theme in your settings file. It defines colors for dark mode but isn't being registered with the theme switcher.
 """
@@ -98,19 +99,39 @@ Found a new "midnight" theme in your settings file. It defines colors for dark m
     assert result.status == "closed"
     assert result.summary is not None
     assert "midnight" in result.summary
-    assert result.summary_at == "2026-04-28T01:19:03Z"
 
 
-def test_parse_picks_latest_of_multiple_notes() -> None:
-    """When multiple notes exist, the one with the latest ISO timestamp wins."""
+def test_parse_summary_preserves_special_characters() -> None:
+    """The summary is read verbatim, so characters that would break a
+    sed-based frontmatter write -- slashes, ampersands, quotes -- survive
+    intact. This is the reason the summary lives in its own section rather
+    than a frontmatter field."""
     text = """---
 id: tt-2efd
 status: closed
-deps: []
-links: []
 created: 2026-04-28T01:17:08Z
-type: task
-priority: 2
+closed: 2026-04-28T01:19:03.123456Z
+---
+# A task
+
+## Summary
+
+Fixed the read/write & "escaping" path: 100% done.
+"""
+    result = parse_ticket_text(text)
+    assert result is not None
+    assert result.summary == 'Fixed the read/write & "escaping" path: 100% done.'
+
+
+def test_parse_reads_summary_section_not_notes() -> None:
+    """A ticket may carry both an `add-note`-written `## Notes` section and a
+    close-written `## Summary` section. Only the `## Summary` body is the
+    summary; `## Notes` content is ignored."""
+    text = """---
+id: tt-2efd
+status: closed
+created: 2026-04-28T01:17:08Z
+closed: 2026-04-28T01:20:00.000000Z
 ---
 # A multi-step task
 
@@ -118,17 +139,15 @@ priority: 2
 
 **2026-04-28T01:18:00Z**
 
-First, some interim observation that should be ignored.
+An interim observation that is not the close summary.
 
-**2026-04-28T01:20:00Z**
+## Summary
 
-Final summary that should be picked up.
+The actual close summary.
 """
     result = parse_ticket_text(text)
     assert result is not None
-    assert result.summary is not None
-    assert result.summary.startswith("Final summary")
-    assert result.summary_at == "2026-04-28T01:20:00Z"
+    assert result.summary == "The actual close summary."
 
 
 def test_parse_returns_none_for_no_frontmatter() -> None:
@@ -169,9 +188,9 @@ Some body text without an H1 heading.
     assert result.title == "tt-noheader"
 
 
-def test_note_pattern_does_not_match_random_bold_text() -> None:
-    """Bold text in the body that isn't a timestamped Notes header must not
-    be misread as a summary."""
+def test_closed_ticket_without_summary_section_has_no_summary() -> None:
+    """A ticket closed with no summary argument has no `## Summary` section,
+    so the parser reports no summary -- body prose is never mistaken for one."""
     text = """---
 id: tt-prose
 status: closed
@@ -179,7 +198,7 @@ created: 2026-04-28T01:17:08Z
 ---
 # Title
 
-Some **bold prose** here that is not a note.
+Some body prose here that is not a summary.
 """
     result = parse_ticket_text(text)
     assert result is not None
@@ -324,12 +343,11 @@ agent: agent-creator
     assert result.assignee == ""
 
 
-def test_inline_notes_substring_does_not_anchor_notes_section() -> None:
-    """A `## Notes` substring appearing mid-line (or mid-paragraph) must
-    NOT be treated as the start of the Notes section. The real Notes
-    heading -- a line whose stripped contents are exactly `## Notes` --
-    is the only valid anchor; otherwise prose `**...**` runs after a
-    false-positive marker could leak in as the summary.
+def test_inline_summary_substring_does_not_anchor_summary_section() -> None:
+    """A `## Summary` substring appearing mid-line must NOT be treated as the
+    start of the Summary section. The real heading -- a line whose stripped
+    contents are exactly `## Summary` -- is the only valid anchor; otherwise
+    prose after a false-positive marker could leak in as the summary.
     """
     text = """---
 id: tt-prose
@@ -338,16 +356,13 @@ created: 2026-04-28T01:17:08Z
 ---
 # Title
 
-The user mentioned "## Notes" inline as part of their description, so
-the parser must not anchor on that. **Not a real note timestamp.**
+The user mentioned "## Summary" inline as part of their description, so
+the parser must not anchor on that.
 
-## Notes
+## Summary
 
-**2026-04-28T01:30:00Z**
-
-Real summary in the real notes section.
+Real summary in the real summary section.
 """
     result = parse_ticket_text(text)
     assert result is not None
-    assert result.summary == "Real summary in the real notes section."
-    assert result.summary_at == "2026-04-28T01:30:00Z"
+    assert result.summary == "Real summary in the real summary section."

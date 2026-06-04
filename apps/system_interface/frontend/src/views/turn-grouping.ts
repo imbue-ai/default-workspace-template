@@ -10,8 +10,14 @@
  *
  * tk also provides an *enrichment* side-table keyed by id: the canonical
  * title, the close summary, and the roster of pending (not-yet-started)
- * steps. Enrichment decorates the transcript-derived skeleton by id; it does
- * not decide order or grouping.
+ * steps. The table holds step records only (built from `step: true`
+ * frontmatter), so it doubles as the membership test for the walk: a
+ * `tk start`/`tk close` transition whose id is NOT in the table belongs to a
+ * regular ticket the agent picked up -- it carries the same
+ * `Updated <id> -> <status>` line a step does, so the walk skips it to avoid
+ * minting a phantom node. Beyond that membership gate, enrichment only
+ * decorates the transcript-derived skeleton by id; it does not decide order
+ * or grouping.
  *
  * The walk maintains a single "current open step": events while a step is
  * open group under it; events while none is open fall into an ungrouped
@@ -59,6 +65,12 @@ export interface StepNode {
   /** The grouped real-work events (assistant text + non-tk tool calls) that
    *  occurred while this step was the open step in this section. */
   events: AssistantMessageEvent[];
+  /** True when no enrichment entry backs this node -- the step's `.tickets/`
+   *  file is gone (the user cleared the directory), so its title fell back to
+   *  the raw id and its close summary is unavailable. The node only exists
+   *  because the id self-identifies as a step (see STEP_ID_RE). The UI flags
+   *  this with a "?" marker. Always false for a node that has enrichment. */
+  file_missing: boolean;
 }
 
 /** One item on a section's timeline, in transcript order. */
@@ -83,19 +95,37 @@ export interface SectionView {
 }
 
 /** Detects a `tk`/`ticket` lifecycle invocation in a Bash tool call's input
- *  preview. The verb sits at the front of the command, so this survives the
- *  200-char input_preview truncation. `super` is the plugin-bypassing form. */
-const TK_LIFECYCLE_RE = /\b(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
+ *  preview. Anchored to the start of the Bash `command` value, so a command
+ *  that merely mentions a tk verb (e.g. `git commit -m "tk close ..."` or
+ *  `echo "run tk start later"`) is NOT misclassified and stripped. The verb
+ *  sits at the command's front, well within the 200-char input_preview
+ *  truncation. `super` is the plugin-bypassing form. */
+const TK_LIFECYCLE_RE = /"command"\s*:\s*"\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
 
 /** A status transition line printed by tk on every state change:
  *  `Updated <id> -> <status>` (see vendor/tk/ticket). Global so a batched
  *  command that flips several tickets is read in order. */
 const TK_UPDATED_RE = /Updated\s+(\S+)\s+->\s+(open|in_progress|closed)/g;
 
+/** A step id (minted by `tk create --step`) carries a literal `-step-` segment,
+ *  e.g. `cod-step-f1zl`; a regular ticket id has none (`cod-f1zl`). The walk
+ *  uses this to recognise a step from its transition id alone -- so a step keeps
+ *  its tool-call grouping even after its `.tickets/` file is deleted and the
+ *  enrichment table no longer knows it. A regular ticket the agent picked up
+ *  never matches, so it stays filtered out of the timeline even with no
+ *  enrichment. (Only ids minted after this tk change carry the segment; an older
+ *  step whose file is deleted has no marker and is lost, which is acceptable.) */
+const STEP_ID_RE = /-step-[a-z0-9]+$/;
+
+function isStepId(id: string): boolean {
+  return STEP_ID_RE.test(id);
+}
+
 /** True when a tool call is a tk lifecycle command (consumed as a structural
- *  marker, not rendered as work). */
+ *  marker, not rendered as work). Restricted to Bash calls whose command
+ *  begins with the tk verb (see TK_LIFECYCLE_RE). */
 function isTkLifecycleCall(tc: ToolCall): boolean {
-  return TK_LIFECYCLE_RE.test(tc.input_preview);
+  return tc.tool_name === "Bash" && TK_LIFECYCLE_RE.test(tc.input_preview);
 }
 
 interface ParsedMessage {
@@ -110,11 +140,12 @@ interface ParsedMessage {
 /** Split an assistant message into the tk transitions it caused and the
  *  renderable remainder (text + non-tk tool calls). */
 function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolResultEvent>): ParsedMessage {
-  const tkCalls = e.tool_calls.filter(isTkLifecycleCall);
-  const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc));
-
+  // Transitions are read from EVERY tool call's output -- the
+  // `Updated <id> -> <status>` line is specific enough that a genuine
+  // transition is never missed, even if the command form isn't recognised as a
+  // tk lifecycle call (so e.g. `cd x && tk close s1` still closes the step).
   const transitions: { id: string; status: "in_progress" | "closed" }[] = [];
-  for (const tc of tkCalls) {
+  for (const tc of e.tool_calls) {
     const output = toolResults.get(tc.tool_call_id)?.output ?? "";
     TK_UPDATED_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -126,7 +157,11 @@ function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolRes
     }
   }
 
-  if (tkCalls.length === 0) {
+  // Only a recognised, pure tk lifecycle call is hidden from the rendered
+  // output. Anything else -- including a command that merely mentions a tk verb
+  // -- renders as normal work, so real work is never silently dropped.
+  const realCalls = e.tool_calls.filter((tc) => !isTkLifecycleCall(tc));
+  if (realCalls.length === e.tool_calls.length) {
     return { transitions, render: e };
   }
   // Pure tk command (no text, no real work): fully consumed.
@@ -149,11 +184,15 @@ function isProse(e: AssistantMessageEvent): boolean {
 
 // --- Section assembly ---
 
-/** A routed message plus where it landed: under a step (by id) or ungrouped. */
-interface Placement {
-  event: AssistantMessageEvent;
-  step_id: string | null;
-}
+/** An ordered skeleton entry recorded as the transcript is walked. A `step`
+ *  entry marks where a step node first appears -- its first transition (an
+ *  open, or a close with no prior open) -- so the node is positioned by that
+ *  transition even when the step carries no work. An `event` entry is a routed
+ *  assistant message. Timeline items are rebuilt from these in transcript
+ *  order. */
+type SectionEntry =
+  | { kind: "step"; id: string }
+  | { kind: "event"; event: AssistantMessageEvent; step_id: string | null };
 
 interface SectionBuilder {
   user_event: UserMessageEvent | null;
@@ -161,12 +200,12 @@ interface SectionBuilder {
   /** Step nodes in first-appearance (transcript) order. */
   steps: Map<string, StepNode>;
   step_order: string[];
-  placements: Placement[];
-  /** Non-boundary user-message chips, with the index into `placements` they
+  /** Ordered skeleton of step appearances and routed events (see SectionEntry),
+   *  used to assemble timeline items in transcript order. */
+  entries: SectionEntry[];
+  /** Non-boundary user-message chips, with the index into `entries` they
    *  follow, so they render at their chronological spot. */
   chips: { event: UserMessageEvent; after: number }[];
-  /** Ordered record of step/ungrouped openings so items can be rebuilt in
-   *  transcript order. Each entry is a step id or null (ungrouped run break). */
   current_step_id: string | null;
 }
 
@@ -176,7 +215,7 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
     key,
     steps: new Map(),
     step_order: [],
-    placements: [],
+    entries: [],
     chips: [],
     current_step_id: null,
   };
@@ -213,7 +252,7 @@ export function buildSections(
       if (isNonBoundaryUserMessage(e.content ?? "")) {
         // Stop-hook feedback and the like: a chip inside the current section.
         if (current !== null && isStopHookFeedback(e.content ?? "")) {
-          current.chips.push({ event: e, after: current.placements.length - 1 });
+          current.chips.push({ event: e, after: current.entries.length - 1 });
         }
         // Hidden non-boundary messages (skill expansions, /welcome) are dropped.
         continue;
@@ -227,9 +266,37 @@ export function buildSections(
     if (e.type === "assistant_message") {
       if (current === null) current = ensureSection(null, "section-pre");
       const parsed = parseMessage(e, toolResults);
-      for (const t of parsed.transitions) applyTransition(current, t);
+      // Apply transitions in transcript order so each step node lands at its
+      // real position -- a batched `tk close a && tk start b` must keep a's node
+      // before b's. Then route this message's content to the step it belongs
+      // to: the step it opened (work shares a message with its `tk start`), or
+      // else the step that was current before the message (work shares a
+      // message with a `tk close` -- it stays in the closing step).
+      const stepBefore = current.current_step_id;
+      let lastOpened: string | null = null;
+      for (const t of parsed.transitions) {
+        // Only step records render in the timeline. A `tk start`/`tk close` on a
+        // regular ticket the agent picked up prints the same
+        // `Updated <id> -> <status>` line as a step does, but a regular ticket
+        // is absent from the steps-only enrichment table. Skip its transition
+        // rather than mint a phantom node titled with the raw ticket id; any
+        // work batched with that command stays in the step that was already
+        // open (or renders inline if none was), exactly as if the tk verb
+        // weren't there. (See the enrichment side-table, which the tickets
+        // watcher builds from `step: true` frontmatter only.)
+        //
+        // The id shape is a second, file-independent step signal: when the
+        // `.tickets/` directory was cleared, enrichment is empty, but a
+        // `-step-` id still self-identifies as a step, so the node (and its
+        // grouping) survives. A regular ticket id has no `-step-` segment, so it
+        // is still skipped -- the picked-up-ticket filter holds even with no
+        // enrichment.
+        if (!enrichment.has(t.id) && !isStepId(t.id)) continue;
+        applyTransition(current, t);
+        if (t.status === "in_progress") lastOpened = t.id;
+      }
       if (parsed.render !== null && (parsed.render.text || parsed.render.tool_calls.length > 0)) {
-        routeMessage(current, parsed.render);
+        routeMessage(current, parsed.render, lastOpened ?? stepBefore);
       }
       continue;
     }
@@ -241,7 +308,8 @@ export function buildSections(
 
 /** Open (or re-open) a step node as the current step. */
 function openStep(section: SectionBuilder, id: string, is_carryover: boolean): void {
-  if (!section.steps.has(id)) {
+  const existing = section.steps.get(id);
+  if (existing === undefined) {
     section.steps.set(id, {
       ticket_id: id,
       title: id,
@@ -251,8 +319,15 @@ function openStep(section: SectionBuilder, id: string, is_carryover: boolean): v
       is_carryover,
       is_frontier: false,
       events: [],
+      file_missing: false,
     });
     section.step_order.push(id);
+    section.entries.push({ kind: "step", id });
+  } else if (existing.status === "done") {
+    // Re-opened (a `tk start` on a previously-closed id in this section): it is
+    // active again, so it must not keep showing as done/settled.
+    existing.status = "active";
+    existing.summary = null;
   }
   section.current_step_id = id;
 }
@@ -278,17 +353,18 @@ function applyTransition(section: SectionBuilder, t: { id: string; status: "in_p
       is_carryover: false,
       is_frontier: false,
       events: [],
+      file_missing: false,
     });
     section.step_order.push(t.id);
+    section.entries.push({ kind: "step", id: t.id });
   }
   if (section.current_step_id === t.id) section.current_step_id = null;
 }
 
-function routeMessage(section: SectionBuilder, e: AssistantMessageEvent): void {
-  const step_id = section.current_step_id;
-  section.placements.push({ event: e, step_id });
+function routeMessage(section: SectionBuilder, e: AssistantMessageEvent, step_id: string | null): void {
+  section.entries.push({ kind: "event", event: e, step_id });
   if (step_id !== null) {
-    section.steps.get(step_id)!.events.push(e);
+    section.steps.get(step_id)?.events.push(e);
   }
 }
 
@@ -306,23 +382,30 @@ function finalizeSection(
   agentIsIdle: boolean,
   is_tail: boolean,
 ): SectionView {
-  // 1. Trailing reply: prose after the last real-work placement.
-  let lastWorkIdx = -1;
-  for (let i = 0; i < section.placements.length; i++) {
-    if (isWork(section.placements[i].event)) lastWorkIdx = i;
+  // 1. Trailing reply: text-only messages after the reply boundary -- the
+  //    later of the last real (non-tk) work and the last stop-hook chip.
+  //    Treating a chip as a boundary keeps a reply written before a chip inline
+  //    at its chronological spot (rather than hoisting it below the chip), so a
+  //    chip that interrupts two reply fragments still reads top-to-bottom.
+  let lastWorkEntryIdx = -1;
+  for (let i = 0; i < section.entries.length; i++) {
+    const en = section.entries[i];
+    if (en.kind === "event" && isWork(en.event)) lastWorkEntryIdx = i;
   }
-  const trailingIdx = new Set<number>();
+  let maxChipAfter = -1;
+  for (const c of section.chips) if (c.after > maxChipAfter) maxChipAfter = c.after;
+  const replyBoundary = Math.max(lastWorkEntryIdx, maxChipAfter);
+  const trailingIds = new Set<string>();
   const trailing_reply: AssistantMessageEvent[] = [];
-  for (let i = lastWorkIdx + 1; i < section.placements.length; i++) {
-    const p = section.placements[i];
-    if (isProse(p.event)) {
-      trailing_reply.push(p.event);
-      trailingIdx.add(i);
-      // Remove promoted prose from its step's grouped events.
-      if (p.step_id !== null) {
-        const node = section.steps.get(p.step_id);
-        if (node !== undefined) node.events = node.events.filter((ev) => ev.event_id !== p.event.event_id);
-      }
+  for (let i = replyBoundary + 1; i < section.entries.length; i++) {
+    const en = section.entries[i];
+    if (en.kind !== "event" || !isProse(en.event)) continue;
+    trailing_reply.push(en.event);
+    trailingIds.add(en.event.event_id);
+    // Remove promoted prose from its step's grouped events.
+    if (en.step_id !== null) {
+      const node = section.steps.get(en.step_id);
+      if (node !== undefined) node.events = node.events.filter((ev) => ev.event_id !== en.event.event_id);
     }
   }
 
@@ -343,19 +426,28 @@ function finalizeSection(
   //    only when not idle, only the current open step.
   const frontierId = is_tail && !agentIsIdle ? section.current_step_id : null;
 
-  // 4. Join enrichment onto each node.
+  // 4. Join enrichment onto each node. A node with no enrichment entry exists
+  //    only because its id self-identifies as a step (STEP_ID_RE) -- its
+  //    `.tickets/` file is gone, so it keeps the raw id as its title, has no
+  //    summary, and is flagged file_missing for the "?" marker.
   for (const id of section.step_order) {
     const node = section.steps.get(id)!;
     const enrich = enrichment.get(id);
     if (enrich !== undefined) {
       node.title = enrich.title || node.title;
       if (node.status === "done") node.summary = enrich.summary;
+    } else {
+      node.file_missing = true;
     }
     node.is_frontier = node.ticket_id === frontierId && node.status === "active";
   }
 
-  // 5. Build items in transcript order: walk placements, emitting each step
-  //    node at its first appearance and coalescing ungrouped prose/work runs.
+  // 5. Build timeline items by walking the entry skeleton in transcript order.
+  //    Each step node is emitted at its first appearance -- its transition --
+  //    so a step renders at its transcript position even if it carried no work.
+  //    Routed events live in their step node (already emitted) or coalesce into
+  //    an inline ungrouped run when no step was open. Carryover steps were
+  //    recorded as the section's first entries, so they lead the timeline.
   const items: TimelineItem[] = [];
   const emittedSteps = new Set<string>();
   let ungrouped: AssistantMessageEvent[] = [];
@@ -367,52 +459,39 @@ function finalizeSection(
     }
   };
 
-  // Carryover steps that were re-opened render at the very top, before any
-  // placement (they carry no new events until the agent acts).
-  for (const id of section.step_order) {
-    const node = section.steps.get(id)!;
-    if (node.is_carryover && !emittedSteps.has(id)) {
-      items.push({ kind: "step", step: node });
-      emittedSteps.add(id);
-    }
-  }
-
   const chipsAfter = new Map<number, UserMessageEvent[]>();
   for (const c of section.chips) {
     const arr = chipsAfter.get(c.after) ?? [];
     arr.push(c.event);
     chipsAfter.set(c.after, arr);
   }
-  // A chip that fires before any placement (after === -1) renders at the top.
-  for (const c of chipsAfter.get(-1) ?? []) items.push({ kind: "chip", event: c });
-
-  for (let i = 0; i < section.placements.length; i++) {
-    if (trailingIdx.has(i)) continue;
-    const p = section.placements[i];
-    if (p.step_id !== null) {
-      flushUngrouped();
-      if (!emittedSteps.has(p.step_id)) {
-        items.push({ kind: "step", step: section.steps.get(p.step_id)! });
-        emittedSteps.add(p.step_id);
-      }
-    } else {
-      ungrouped.push(p.event);
-    }
-    for (const c of chipsAfter.get(i) ?? []) {
+  const emitChips = (afterIdx: number): void => {
+    for (const c of chipsAfter.get(afterIdx) ?? []) {
       flushUngrouped();
       items.push({ kind: "chip", event: c });
     }
+  };
+
+  // A chip that fires before any entry (after === -1) renders at the top.
+  emitChips(-1);
+
+  for (let i = 0; i < section.entries.length; i++) {
+    const entry = section.entries[i];
+    if (entry.kind === "step") {
+      flushUngrouped();
+      if (!emittedSteps.has(entry.id)) {
+        items.push({ kind: "step", step: section.steps.get(entry.id)! });
+        emittedSteps.add(entry.id);
+      }
+    } else if (!trailingIds.has(entry.event.event_id) && entry.step_id === null) {
+      // An ungrouped event (no step open): coalesce into an inline run.
+      // In-step events render inside the step node; trailing prose renders
+      // below the timeline (see trailing_reply).
+      ungrouped.push(entry.event);
+    }
+    emitChips(i);
   }
   flushUngrouped();
-
-  // Any step that transitioned but never received a placement (e.g. created
-  // and closed with no work) still needs to render, in its declared order.
-  for (const id of section.step_order) {
-    if (!emittedSteps.has(id)) {
-      items.push({ kind: "step", step: section.steps.get(id)! });
-      emittedSteps.add(id);
-    }
-  }
 
   // 6. Pending roster (tail section only): steps in enrichment that never
   //    started anywhere, as dashed placeholders at the tail, in tk `created`
@@ -434,6 +513,9 @@ function finalizeSection(
           is_carryover: false,
           is_frontier: false,
           events: [],
+          // Pending nodes come straight from the enrichment roster, so they
+          // always have a backing file.
+          file_missing: false,
         },
       });
     }

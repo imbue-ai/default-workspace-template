@@ -91,6 +91,16 @@ _sed_i() {
 
 # Generate ticket ID from directory name + random string
 generate_id() {
+    # When the first argument is "1", mint a STEP id carrying a literal
+    # `-step-` segment (e.g. `cod-step-f1zl`) instead of the plain
+    # `cod-f1zl`. The segment makes a step distinguishable from a regular
+    # ticket by its id alone, without reading the file's `step: true`
+    # frontmatter. The chat progress view relies on this: when the backing
+    # `.tickets/` file is gone (the user cleared the directory), the
+    # enrichment side-table is empty, but a step id still self-identifies so
+    # the view can keep that step's tool-call grouping.
+    local is_step="${1:-0}"
+
     local dir_name
     dir_name=$(basename "$(pwd)")
 
@@ -105,7 +115,11 @@ generate_id() {
     local hash
     hash=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 4)
 
-    echo "${prefix}-${hash}"
+    if [[ "$is_step" == "1" ]]; then
+        echo "${prefix}-step-${hash}"
+    else
+        echo "${prefix}-${hash}"
+    fi
 }
 
 # Ensure tickets directory exists
@@ -195,6 +209,29 @@ update_yaml_field() {
     fi
 }
 
+# Remove an existing `## Summary` section -- the heading through the line
+# before the next `## ` heading (or EOF). Lets `tk close` replace a prior
+# close summary instead of appending a duplicate when a ticket is re-closed.
+# No-op when there is no summary section.
+#
+# Trailing blank lines left behind by the removal are also dropped (blank lines
+# are buffered and only emitted once a non-blank line follows). Without this,
+# the blank line that preceded the stripped `## Summary` heading would survive
+# and `cmd_close`'s leading `\n` would prepend another on the next close, so
+# repeated re-closes would accumulate blank lines before the heading.
+_strip_summary_section() {
+    local file="$1"
+    _grep -q '^## Summary' "$file" || return 0
+    local tmp="${file}.tmp.$$"
+    awk '
+        /^## Summary[[:space:]]*$/ { in_summary = 1; next }
+        in_summary && /^## / { in_summary = 0 }
+        in_summary { next }
+        /^[[:space:]]*$/ { blanks++; next }
+        { while (blanks > 0) { print ""; blanks-- } print }
+    ' "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
 cmd_create() {
     ensure_dir
 
@@ -279,7 +316,7 @@ cmd_create() {
 
     title="${title:-Untitled}"
     local id
-    id=$(generate_id)
+    id=$(generate_id "$is_step")
     local file="$TICKETS_DIR/${id}.md"
     local now
     now=$(_iso_date)
@@ -429,23 +466,20 @@ cmd_close() {
         return 1
     fi
 
-    # Single close timestamp shared by the `closed:` frontmatter field and the
-    # summary note, so they agree to the microsecond.
-    local timestamp
-    timestamp=$(_iso_date)
-
     if [[ -n "$summary" ]]; then
-        # Reuse the same timestamped-note format that cmd_add_note writes,
-        # so the parser's existing "latest note = summary" logic picks it up.
-        if ! _grep -q '^## Notes' "$file"; then
-            printf '\n## Notes\n' >> "$file"
-        fi
-        printf '\n**%s**\n\n%s\n' "$timestamp" "$summary" >> "$file"
+        # Store the one-line close summary in its own `## Summary` section.
+        # printf-appended (not routed through the sed-based frontmatter
+        # editor), so it is escaping-safe for arbitrary text -- slashes,
+        # ampersands, quotes. The chat-progress parser reads this section
+        # verbatim; no timestamp is involved. A re-close replaces any prior
+        # summary so only the latest remains.
+        _strip_summary_section "$file"
+        printf '\n## Summary\n\n%s\n' "$summary" >> "$file"
     fi
 
     # Record the close time so consumers can order finished steps by when they
     # completed, and bound the step's active window.
-    update_yaml_field "$file" "closed" "$timestamp"
+    update_yaml_field "$file" "closed" "$(_iso_date)"
 
     cmd_status "$id" "closed"
 }

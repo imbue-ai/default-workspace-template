@@ -17,6 +17,19 @@ Feature: Step records (turn-bound progress markers)
     And the created ticket should contain "id:"
     And the created ticket should not contain "step:"
 
+  Scenario: A step record id carries a -step- segment
+    # The segment lets a consumer (the chat progress view) tell a step from a
+    # regular ticket by the id alone -- needed when the ticket file is gone and
+    # the step: true frontmatter is unreadable.
+    When I run "ticket create 'Progress marker' --step"
+    Then the command should succeed
+    And the output should match pattern "-step-"
+
+  Scenario: A regular ticket id has no -step- segment
+    When I run "ticket create 'Regular ticket'"
+    Then the command should succeed
+    And the output should not contain "-step-"
+
   Scenario: ticket ready hides step records by default
     When I run "ticket create 'Plain ticket'"
     Then the command should succeed
@@ -47,11 +60,12 @@ Feature: Step records (turn-bound progress markers)
     And the output should contain "Plain ticket"
     And the output should contain "Progress marker"
 
-  Scenario: tk close <id> "summary" appends the summary as a timestamped note
+  Scenario: tk close <id> "summary" writes the summary into a Summary section
     Given a ticket exists with ID "tt-summable" and title "Summable"
     When I run "ticket close tt-summable 'Did the thing.'"
     Then the command should succeed
     And ticket "tt-summable" should have field "status" with value "closed"
+    And ticket "tt-summable" should contain "## Summary"
     And ticket "tt-summable" should contain "Did the thing."
 
   Scenario: tk show renders separate Children and Steps sections
