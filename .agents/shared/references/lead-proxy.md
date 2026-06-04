@@ -125,7 +125,7 @@ the directory is clean for future runs.
 When syncing reports (or the initial runtime dir to the worker):
 
 ```bash
-mngr rsync ./<SOURCE_DIR>/ <WORKER>:<SOURCE_DIR>/ \
+mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
     --uncommitted-changes=merge
 ```
 
