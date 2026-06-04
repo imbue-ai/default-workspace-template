@@ -481,7 +481,9 @@ def _get_subagent_events(agent_id: str, subagent_session_id: str, request: Reque
     # renders a real progress timeline (titles, summaries) with the same code as
     # the main chat -- not raw tk Bash calls.
     tickets_watcher = _get_or_create_tickets_watcher(request, agent_info)
-    step_enrichment = tickets_watcher.get_enrichment(session_id=subagent_session_id) if tickets_watcher is not None else {}
+    step_enrichment = (
+        tickets_watcher.get_enrichment(session_id=subagent_session_id) if tickets_watcher is not None else {}
+    )
 
     return JSONResponse(content={"events": events, "metadata": metadata, "step_enrichment": step_enrichment})
 
