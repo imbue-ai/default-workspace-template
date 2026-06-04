@@ -111,21 +111,8 @@ export interface SectionView {
  *  that merely mentions a tk verb (e.g. `git commit -m "tk close ..."` or
  *  `echo "run tk start later"`) is NOT misclassified and stripped. The verb
  *  sits at the command's front, well within the 200-char input_preview
- *  truncation. `super` is the plugin-bypassing form.
- *
- *  A single optional leading `cd <path>` (joined by `&&`, `;`, or a newline) is
- *  allowed before the verb and treated as transparent: tk must be run from the
- *  repo root, so agents routinely prefix `cd /repo && tk close ...` (or
- *  `cd /repo\ntk close ...`). That `cd` is pure navigation, not work the user
- *  cares about, so the whole command is still consumed as a lifecycle marker
- *  rather than leaking into the timeline as a raw Bash block. (The cd path is a
- *  single bare token -- no command substitution or quoted/spaced paths -- which
- *  covers the real cases without risking a match on something exotic.) Anything
- *  chained *after* the tk verb follows the same rule the bare `tk ...` form
- *  already does: a `cd x && tk close s1 && real_work` is consumed in full, just
- *  as `tk close s1 && real_work` always has been. */
-const TK_LIFECYCLE_RE =
-  /"command"\s*:\s*"\s*(?:cd\s+\S+\s*(?:&&|;|\\n|\n)\s*)?(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
+ *  truncation. `super` is the plugin-bypassing form. */
+const TK_LIFECYCLE_RE = /"command"\s*:\s*"\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
 
 /** A status transition line printed by tk on every state change:
  *  `Updated <id> -> <status>` (see vendor/tk/ticket). Global so a batched
@@ -148,8 +135,7 @@ function isStepId(id: string): boolean {
 
 /** True when a tool call is a tk lifecycle command (consumed as a structural
  *  marker, not rendered as work). Restricted to Bash calls whose command
- *  begins with the tk verb, optionally after a single leading `cd <path>`
- *  (see TK_LIFECYCLE_RE). */
+ *  begins with the tk verb (see TK_LIFECYCLE_RE). */
 function isTkLifecycleCall(tc: ToolCall): boolean {
   return tc.tool_name === "Bash" && TK_LIFECYCLE_RE.test(tc.input_preview);
 }

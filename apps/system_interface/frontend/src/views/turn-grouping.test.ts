@@ -492,46 +492,16 @@ describe("audit regressions", () => {
     expect(ung).toHaveLength(1);
   });
 
-  // A `cd <repo> && tk close` (agents run tk from the repo root) is a pure
-  // lifecycle command behind a transparent cd: it must close the step AND be
-  // consumed, never leaking into the timeline as a raw Bash block.
-  it("consumes a cd-prefixed tk close (&&), closing the step without showing the command", () => {
+  it("still applies a transition when the tk command is not at the command's front", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z", "go"),
       tkMsg("2026-04-28T01:00:01Z", "tk start s1", "k1"),
       result("2026-04-28T01:00:01Z", "k1", "Updated s1 -> in_progress"),
-      workMsg("2026-04-28T01:00:02Z", "Edit", "w1"),
-      result("2026-04-28T01:00:02Z", "w1", "ok"),
-      tkMsg("2026-04-28T01:00:03Z", "cd /code && tk close s1", "cc"),
-      result("2026-04-28T01:00:03Z", "cc", "Updated s1 -> closed"),
+      tkMsg("2026-04-28T01:00:02Z", "cd /code && tk close s1", "cc"),
+      result("2026-04-28T01:00:02Z", "cc", "Updated s1 -> closed"),
     ];
     const sections = run(events, enrich({ s1: { status: "closed" } }));
     expect(stepItems(sections[0].items)[0].status).toBe("done");
-    // The cd-prefixed close did not render as work anywhere.
-    expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
-    expect(stepItems(sections[0].items)[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
-  });
-
-  // The real emaildigest case: a final `tk close` prefixed by `cd /mngr/code`
-  // and a NEWLINE (`cd /mngr/code\ntk close <id> "<summary>"`). It was leaking
-  // into the timeline as an ungrouped Bash block because the cd prefix defeated
-  // the lifecycle matcher. It must be consumed.
-  it("consumes a cd-prefixed tk close joined by a newline", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z", "go"),
-      tkMsg("2026-04-28T01:00:01Z", "tk start cod-step-vl83", "k1"),
-      result("2026-04-28T01:00:01Z", "k1", "Updated cod-step-vl83 -> in_progress"),
-      workMsg("2026-04-28T01:00:02Z", "Edit", "w1"),
-      result("2026-04-28T01:00:02Z", "w1", "ok"),
-      tkMsg("2026-04-28T01:00:03Z", 'cd /mngr/code\\ntk close cod-step-vl83 \\"Documented and tested.\\"', "cc"),
-      result("2026-04-28T01:00:03Z", "cc", "Updated cod-step-vl83 -> closed"),
-    ];
-    const sections = run(events, enrich({ "cod-step-vl83": { status: "closed" } }));
-    const steps = stepItems(sections[0].items);
-    expect(steps[0].status).toBe("done");
-    // No raw Bash block for the close command anywhere in the timeline.
-    expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
-    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
   });
 
   // FIX A-VioB: real work batched in the SAME assistant message as a tk close
@@ -626,9 +596,8 @@ describe("regular ticket transitions (cod-oglc repro)", () => {
       userMsg("2026-04-28T01:00:00Z", "go"),
       tkMsg("2026-04-28T01:00:01Z", "tk start s1", "k1"),
       result("2026-04-28T01:00:01Z", "k1", "Updated s1 -> in_progress"),
-      // The crystallize command: a pure tk chain behind a leading `cd /code`,
-      // so it is consumed as a lifecycle command (the cd prefix is transparent);
-      // its output starts a regular ticket.
+      // The crystallize command: not a recognised pure-tk call (begins with cd),
+      // so it renders as work; its output starts a regular ticket.
       tkMsg("2026-04-28T01:00:02Z", "cd /code && tk create x && tk start cod-oglc", "cr"),
       result("2026-04-28T01:00:02Z", "cr", "Updated cod-oglc -> in_progress\nTICKET=cod-oglc"),
       workMsg("2026-04-28T01:00:03Z", "Bash", "w1"),
@@ -639,12 +608,9 @@ describe("regular ticket transitions (cod-oglc repro)", () => {
     const steps = stepItems(sections[0].items);
     // Only the real step renders; cod-oglc never becomes a node.
     expect(steps.map((s) => s.ticket_id)).toEqual(["s1"]);
-    // The cd-prefixed tk command is consumed (not shown); the regular-ticket
-    // start never hijacked the current step, so the work after it stays grouped
-    // under s1.
-    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
-    // The consumed command does not leak into the timeline as ungrouped work.
-    expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
+    // The crystallize command and the work after it stay inside the open step,
+    // since the regular-ticket start never hijacked the current step.
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-cr", "a-w1"]);
   });
 });
 
@@ -720,9 +686,8 @@ describe("missing tickets directory (step-id fallback)", () => {
       userMsg("2026-04-28T01:00:00Z", "go"),
       tkMsg("2026-04-28T01:00:01Z", "tk start cod-step-aaaa", "k1"),
       result("2026-04-28T01:00:01Z", "k1", "Updated cod-step-aaaa -> in_progress"),
-      // A regular ticket the agent picked up via a cd-prefixed pure tk command:
-      // consumed as a lifecycle command (cd is transparent); its output starts
-      // the ticket.
+      // A regular ticket the agent picked up: not a recognised pure-tk call
+      // (begins with cd), so it renders as work; its output starts the ticket.
       tkMsg("2026-04-28T01:00:02Z", "cd /code && tk start cod-oglc", "cr"),
       result("2026-04-28T01:00:02Z", "cr", "Updated cod-oglc -> in_progress"),
       workMsg("2026-04-28T01:00:03Z", "Bash", "w1"),
@@ -731,10 +696,9 @@ describe("missing tickets directory (step-id fallback)", () => {
     const sections = run(events, new Map(), /* idle */ false);
     const steps = stepItems(sections[0].items);
     // Only the step-shaped id becomes a node; the regular ticket is skipped
-    // even though enrichment is empty. The cd-prefixed tk command is consumed,
-    // so only the real work after it remains in the step.
+    // even though enrichment is empty, and its command stays inside the step.
     expect(steps.map((s) => s.ticket_id)).toEqual(["cod-step-aaaa"]);
-    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-cr", "a-w1"]);
   });
 
   it("does not flag a step as file-missing when enrichment still has it", () => {
