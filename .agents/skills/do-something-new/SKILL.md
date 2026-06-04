@@ -179,13 +179,11 @@ re-propose (re-run Step 2 only if the new ask needs fresh research).
 
 Save the raw sample to `runtime/do-something-new/$SLUG/sample.json` so the
 user can ask to see it and so it can **seed the first surface** (Step 7).
-Include in each sampled record its **raw payload and a source reference**
-(the original record as the source returned it, plus a permalink / id back
-to the origin), not only the processed fields -- the first surface renders
-this sample, and per the preserve-and-surface principle (CLAUDE.md) that
-surface must be able to show the raw record and link to its source. If the
-sample carries only extracted fields, the raw/source affordance has nothing
-to point at.
+Include in each sampled record its **raw payload and a source reference**,
+not only the processed fields -- the first surface renders this sample, and
+per the preserve-and-surface principle (CLAUDE.md) that surface must be able
+to show the raw record and link to its source. If the sample carries only
+extracted fields, the raw/source affordance has nothing to point at.
 Default presentation is a brief natural-language summary; pick a table /
 inline JSON / structured prose if the data or the user's preference makes it
 clearer.
