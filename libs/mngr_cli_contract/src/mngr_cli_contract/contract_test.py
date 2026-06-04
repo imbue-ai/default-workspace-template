@@ -2,8 +2,8 @@
 
 These pin the validator's own behaviour against the live mngr CLI: it must
 accept the real invocations the repo emits and reject the kinds of drift a
-vendor/mngr CLI change introduces (removed subcommand, removed/renamed flag,
-bogus flag) -- which is the exact regression that slipped through on PR 77.
+vendor/mngr CLI change introduces -- a removed subcommand, a removed or renamed
+flag, or a bogus flag.
 """
 
 from __future__ import annotations
@@ -31,7 +31,8 @@ def test_accepts_real_invocations(argv: list[str]) -> None:
 
 
 def test_rejects_removed_subcommand() -> None:
-    """The literal PR 77 regression: ``push`` was removed in favour of ``rsync``."""
+    """A subcommand the live CLI does not have is rejected (``push`` is a
+    genuinely removed command -- mngr replaced it with ``rsync``)."""
     with pytest.raises(MngrArgvContractError, match="not accepted"):
         assert_mngr_argv_valid(
             ["mngr", "push", "demo:/x/", "--source", "/x/", "--uncommitted-changes=merge"]
@@ -39,9 +40,9 @@ def test_rejects_removed_subcommand() -> None:
 
 
 def test_rejects_removed_flag_on_existing_subcommand() -> None:
-    """``rsync`` exists but takes positional SOURCE DEST, not ``--source`` -- a
-    naive push->rsync rename that kept the flag would still be broken, and a
-    subcommand-only check would miss it."""
+    """``rsync`` exists but takes positional ``SOURCE DEST``, not ``--source``,
+    so this exercises a removed/renamed flag on an existing subcommand -- a case
+    a subcommand-only check would miss."""
     with pytest.raises(MngrArgvContractError):
         assert_mngr_argv_valid(["mngr", "rsync", "demo:/x/", "--source", "/x/"])
 

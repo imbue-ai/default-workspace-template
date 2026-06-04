@@ -2,10 +2,9 @@
 
 Skills carry ``mngr ...`` command examples in their prose that agents copy and
 run verbatim. When vendor/mngr renames or removes a subcommand, those examples
-go stale silently -- exactly what happened to ``mngr push`` and what PR #128
-had to fix by hand across several SKILL.md / reference files. This test scans
-skill markdown for code-formatted ``mngr <subcommand>`` tokens and asserts each
-subcommand exists in the live mngr CLI, so the next such drift fails at merge.
+go stale silently. This test scans skill markdown for code-formatted
+``mngr <subcommand>`` tokens and asserts each subcommand exists in the live mngr
+CLI, so that drift fails at merge.
 
 Scope and limitations (deliberate, to keep the guard low-false-positive):
   - Only tokens inside inline code spans or fenced code blocks are considered;

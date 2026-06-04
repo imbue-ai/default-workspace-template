@@ -1,17 +1,14 @@
 """Validate that a ``mngr <subcommand> ...`` argv is accepted by the *live* mngr CLI.
 
-This is the antidote to the failure mode that let PR 77 ship a broken
-``mngr push`` invocation: every repo-side test that exercised a ``mngr`` CLI
-call did so by asserting the emitted argv against a *hand-written expected
-argv* using a stubbed subprocess runner. The expected argv was authored from
-the same assumption as the production code, so the test only confirmed "the
-code emits the bytes we told it to emit" -- it never confronted that argv with
-the real ``mngr`` command surface. When vendor/mngr renamed ``push`` -> ``rsync``
-(and dropped ``--source`` in favour of a positional ``SOURCE DESTINATION``),
-both the production string and its mirrored test string still said ``push``,
-so nothing went red.
+Repo code shells out to the ``mngr`` CLI by constructing argvs. A test that
+pins such an argv against a *hand-written expected argv* (via a stubbed
+subprocess runner) only confirms "the code emits the bytes we told it to
+emit" -- the expected argv is authored from the same assumption as the
+production code, so the two drift together and the test can never notice when
+vendor/mngr renames or removes the subcommand or one of its flags. That
+divergence then surfaces only at runtime.
 
-``assert_mngr_argv_valid`` closes that hole by resolving the argv against the
+``assert_mngr_argv_valid`` closes that gap by resolving the argv against the
 actual ``imbue.mngr.main.cli`` click command tree. It checks *shape* only --
 the subcommand must exist and every option token must be recognized -- using
 click's low-level ``OptionParser`` so value validators (``Path(exists=True)``,

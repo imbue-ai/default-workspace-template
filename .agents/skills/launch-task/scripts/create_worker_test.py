@@ -155,13 +155,11 @@ def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
     """Every ``mngr ...`` argv launch actually emits must be accepted by the
     live mngr CLI surface.
 
-    This is the regression guard for PR #77: rather than re-asserting a
-    hand-written expected argv (which mirrors the production assumption and so
-    can never catch a divergence), we take exactly what ``launch`` hands the
-    runner and confront it with ``imbue.mngr.main.cli``. On the pre-#128 tree
-    -- which emitted ``mngr push ... --source ...`` -- this fails, because mngr
-    renamed ``push`` to a positional ``rsync``. It exercises the broadest argv
-    set (create + two rsyncs + message) by declaring a ``source_artifacts_dir``.
+    Rather than re-asserting a hand-written expected argv (which mirrors the
+    production assumption and so can never catch a divergence when vendor/mngr
+    changes its CLI), we take exactly what ``launch`` hands the runner and
+    confront it with ``imbue.mngr.main.cli``. It exercises the broadest argv set
+    (create + two rsyncs + message) by declaring a ``source_artifacts_dir``.
     """
     runtime, task, artifacts = _make_layout(tmp_path)
     _write_task(task, str(artifacts))
