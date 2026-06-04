@@ -3,9 +3,10 @@
  *
  * The section is a flat, ordered list of timeline items produced by the
  * transcript walk (see turn-grouping): step nodes, ungrouped work/prose runs
- * (rendered inline, thread-breaking), and chips. Step nodes carry their own
- * grouped events; expanding a step reveals that grouped work. The wrap-up
- * reply renders below the timeline.
+ * (rendered inline, thread-breaking), inter-step interjections (a step's
+ * closing prose, promoted to break the thread between two steps), and chips.
+ * Step nodes carry their own grouped events; expanding a step reveals that
+ * grouped work. The wrap-up reply renders below the timeline.
  *
  * This component renders structure it is given; it does no grouping or
  * ordering itself.
@@ -140,8 +141,10 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           ? m(
               "span.pv-tl-missing",
               {
-                "data-tooltip": "The ticket file backing this step is missing. Rich information (title, closing summary) is unavailable.",
-                "aria-label": "The ticket file backing this step is missing. Rich information (title, closing summary) is unavailable.",
+                "data-tooltip":
+                  "The ticket file backing this step is missing. Rich information (title, closing summary) is unavailable.",
+                "aria-label":
+                  "The ticket file backing this step is missing. Rich information (title, closing summary) is unavailable.",
               },
               "?",
             )
@@ -169,6 +172,16 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           // as a thread-breaking block, exactly like a no-steps turn.
           return m(
             "div.pv-ungrouped",
+            { key: item.key },
+            item.events.map((e) => renderAssistantMessage(e, toolResults, agentId)),
+          );
+        }
+        if (item.kind === "interjection") {
+          // A step's closing prose, promoted to break the timeline thread
+          // between the closing step and the next (top/bottom hairlines mark
+          // the break -- see .pv-interstep).
+          return m(
+            "div.pv-interstep",
             { key: item.key },
             item.events.map((e) => renderAssistantMessage(e, toolResults, agentId)),
           );
