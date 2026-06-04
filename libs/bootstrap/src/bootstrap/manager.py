@@ -1019,13 +1019,21 @@ def main() -> None:
     _init_backup_config()
 
     last_mtime = None
+    # Cache of the parsed services.toml, refreshed only when the file's mtime
+    # changes. Parsing (and the per-service restart-policy validation/warnings
+    # in _load_services) must NOT run every poll: the restart loop below needs
+    # `desired` each iteration, but re-reading the file every POLL_INTERVAL
+    # would re-emit any unrecognized-policy warning on every tick and re-parse
+    # the file needlessly. So we load once per change and reuse the cache.
+    desired: dict[str, dict] = {}
 
     while True:
         current_mtime = _get_file_mtime()
-        desired = _load_services()
 
-        # Reconcile on startup or when services.toml changes.
+        # Reconcile (and reload the cached services) on startup or when
+        # services.toml changes.
         if current_mtime != last_mtime:
+            desired = _load_services()
             current = _list_managed_windows(session)
             _reconcile(session, desired, current)
             last_mtime = current_mtime
