@@ -108,6 +108,19 @@ isolate_host_volumes = true
 # MNGR__PROVIDERS__DOCKER__DOCKER_RUNTIME=runc.
 docker_runtime = "runsc"
 
+[providers.lima]
+# Run the minds workspace inside a Docker container *in* the Lima VM (built from
+# the same Dockerfile as the docker/vultr providers) rather than directly in the
+# VM -- one Dockerfile installs every provider's deps identically. is_host_in_docker
+# forces the in-VM btrfs additional-disk layout, so is_host_data_volume_exposed
+# must be false (host_dir lives on a per-host btrfs subvolume bind-mounted into the
+# container). These live on the provider block (not the lima create-template's
+# setting__extend) because template `--setting` entries don't reach provider config
+# -- the same reason docker_runtime is on [providers.docker] above. See
+# imbue-ai/mngr#1914.
+is_host_in_docker = true
+is_host_data_volume_exposed = false
+
 # --- Create templates ---
 
 ## these are all for launching the original agent (from outside the sandbox, in the first place)
@@ -177,20 +190,11 @@ provider = "lima"
 target_path = "/mngr/code/"
 idle_mode = "disabled"
 start_arg__extend = ["--cpus=2", "--memory=4", "--disk=20"]
-# Run the minds workspace inside a Docker container *in* the Lima VM (built
-# from the same Dockerfile as the docker/vultr providers) rather than directly
-# in the VM. This keeps every provider's dependencies installed identically
-# (one Dockerfile, no sudo, always in sync) and replaces the hand-maintained
-# toolchain install that used to live in extra_provision_command__extend.
-# is_host_in_docker forces the in-VM btrfs additional-disk layout, so
-# is_host_data_volume_exposed must be false; host_dir lives on a per-host btrfs
-# subvolume bind-mounted into the container, giving consistent snapshots.
+# Docker-in-Lima mode (is_host_in_docker / is_host_data_volume_exposed) is
+# configured on the [providers.lima] block above, not here -- template
+# `setting__extend` entries don't reach provider config (imbue-ai/mngr#1914).
 # Offline reads via `mngr event` / `mngr transcript` against a stopped Lima
 # host stop working in this mode until the host is started.
-setting__extend = [
-    "providers.lima.is_host_in_docker=true",
-    "providers.lima.is_host_data_volume_exposed=false",
-]
 # Build the project image inside the VM, exactly like the docker template.
 build_arg__extend = ["--file=Dockerfile", "."]
 # Same forwarding as the docker template; see comment there.
