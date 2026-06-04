@@ -179,12 +179,17 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
         if (item.kind === "interjection") {
           // A step's closing prose, promoted to break the timeline thread
           // between the closing step and the next (top/bottom hairlines mark
-          // the break -- see .pv-interstep).
-          return m(
-            "div.pv-interstep",
-            { key: item.key },
-            item.events.map((e) => renderAssistantMessage(e, toolResults, agentId)),
-          );
+          // the break -- see .pv-interstep). Interjection events are always
+          // pure prose (no tool calls), so render the text directly like the
+          // trailing reply does -- NOT via renderAssistantMessage, whose
+          // `.message-assistant` wrapper carries a 20px bottom margin that
+          // would sit inside the bordered block and leave a lopsided gap below
+          // the text.
+          const interText = item.events
+            .map((e) => e.text ?? "")
+            .filter(Boolean)
+            .join("\n\n");
+          return m("div.pv-interstep", { key: item.key }, m(MarkdownContent, { content: interText }));
         }
         // chip
         return m("div.pv-stophook", { key: `chip-${item.event.event_id}` }, renderUserMessage(item.event));
