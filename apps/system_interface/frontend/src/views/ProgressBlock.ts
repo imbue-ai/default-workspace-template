@@ -132,11 +132,19 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
         ),
         // The step's backing .tickets file is gone (the directory was cleared),
         // so the title fell back to the raw id and the summary is unavailable.
-        // A "?" marker with a hover tooltip signals this. Rendered as a sibling
-        // of the title button (not a child) so the native tooltip still fires
-        // when the button is disabled (a step with no expandable work).
+        // A "?" marker signals this, with a CSS tooltip (data-tooltip + ::after)
+        // rather than the native `title` attribute -- the desktop client renders
+        // in a webview where native title tooltips don't reliably appear.
+        // aria-label carries the same text for assistive tech.
         step.file_missing
-          ? m("span.pv-tl-missing", { title: "The ticket file backing this step is missing." }, "?")
+          ? m(
+              "span.pv-tl-missing",
+              {
+                "data-tooltip": "The ticket file backing this step is missing.",
+                "aria-label": "The ticket file backing this step is missing.",
+              },
+              "?",
+            )
           : null,
         renderStepCaption(step, isExpanded),
         isExpanded ? m("div.pv-tl-expanded", renderExpandedStepBody(step, toolResults, agentId)) : null,
