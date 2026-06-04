@@ -132,14 +132,11 @@ mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
 - `mngr rsync` takes `SOURCE DESTINATION` (positional): the local source dir
   first, then the `<WORKER>:<PATH>` agent endpoint. Exactly one side must
   reference an agent or remote host.
-- `./`-prefix the local source. `mngr rsync` only treats a path starting with
-  `/`, `./`, `../`, or `~/` as local; a bare `runtime/foo/` is misread as an
-  *agent name* and the command fails with "Not a valid agent name or ID".
-- Keep the agent destination repo-relative (`<WORKER>:runtime/foo/`, not
-  `./`-prefixed and not absolute). mngr resolves a relative agent `:PATH`
-  against the worker's workdir, so the same repo-relative path lands at the
-  matching spot inside the worker's worktree; an absolute path would instead
-  target that literal path on the worker's host (e.g. the lead's own checkout).
+- Path resolution: mngr treats an argument as a *local path* only when it
+  starts with `/`, `./`, `../`, or `~/` -- a bare `runtime/foo` is read as an
+  *agent name* (hence the `./` on the source above). On an agent endpoint, a
+  relative `<WORKER>:PATH` resolves against the worker's workdir; an absolute
+  `<WORKER>:/PATH` is used verbatim.
 - Use the directory form (trailing slash on both sides). mngr passes the paths
   through to rsync verbatim, so the trailing slash is load-bearing: it makes
   rsync copy directory *contents* into the destination instead of nesting the

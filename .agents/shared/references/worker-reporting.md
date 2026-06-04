@@ -49,15 +49,14 @@ At each gate or terminal status:
    `mngr rsync` takes `SOURCE DESTINATION`: your local `<RUNTIME_REPORTS_DIR>/`
    first, then the lead endpoint. `LEAD_AGENT` / `FINISH_REPORT_PATH` come from
    the `eval` above; `<RUNTIME_REPORTS_DIR>` is your worker SKILL.md's local
-   reports dir. `./`-prefix the local source: `mngr rsync` reads a bare
-   `runtime/foo/` as an agent name and fails, so the leading `./` marks it as a
-   local path. The lead endpoint stays repo-relative (the `dirname` is a
-   repo-relative path), so mngr resolves it against the lead's workdir and the
-   report lands at the matching spot in the lead's worktree. You sync the
-   report's *parent directory* (`dirname`) rather than the file itself: the
-   trailing slashes matter (rsync directory semantics) and rsync cannot transfer
-   a single file. `--uncommitted-changes=merge` is required because the lead's
-   worktree usually has uncommitted local state.
+   reports dir. mngr treats an argument as a local path only when it starts with
+   `/`, `./`, `../`, or `~/` (hence the `./` on the source; a bare `runtime/foo`
+   reads as an agent name), and a relative path on the lead endpoint resolves
+   against the lead's workdir. You sync the report's *parent directory*
+   (`dirname`) rather than the file itself: the trailing slashes matter (rsync
+   directory semantics) and rsync cannot transfer a single file.
+   `--uncommitted-changes=merge` is required because the lead's worktree usually
+   has uncommitted local state.
 
 3. Stop your turn. For gate reports, the lead sends the user's reply via
    `mngr message` and you resume; for terminal reports, the lead acts on the
