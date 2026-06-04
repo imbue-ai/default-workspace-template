@@ -6,8 +6,16 @@
  * independently; each agent gets its own EventSource.
  */
 
+import m from "mithril";
 import { apiUrl } from "../base-path";
-import { appendEvents, fetchEvents, type TranscriptEvent } from "./Response";
+import {
+  appendEvents,
+  applyEnrichmentSnapshot,
+  fetchEvents,
+  type StepEnrichment,
+  type TranscriptEvent,
+} from "./Response";
+import { openLoginModal } from "./ClaudeAuth";
 
 const activeStreams = new Map<string, EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
@@ -16,6 +24,15 @@ const explicitlyDisconnectedAgents = new Set<string>();
 // Holds SSE deltas that arrive while a reconnect-time snapshot fetch is in
 // flight, so fetchEvents replacing eventsByAgent[agentId] does not drop them.
 const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
+
+// Claude auth is mind-global, so an auth-error on any agent's stream
+// opens the single shared login modal (see models/ClaudeAuth.ts) -- no
+// per-agent routing needed.
+function openLoginModalIfAuthError(event: TranscriptEvent): void {
+  if (event.type === "assistant_message" && event.is_auth_error === true) {
+    openLoginModal();
+  }
+}
 
 export interface StreamingMessage {
   conversationId: string;
@@ -38,13 +55,22 @@ export function connectToStream(agentId: string): void {
   activeStreams.set(agentId, eventSource);
 
   eventSource.onmessage = (messageEvent: MessageEvent) => {
-    const event = JSON.parse(messageEvent.data) as TranscriptEvent;
+    const raw = JSON.parse(messageEvent.data) as { type?: string };
+    // A step_enrichment message is a full enrichment snapshot, not a
+    // transcript event -- replace the agent's table and redraw.
+    if (raw.type === "step_enrichment") {
+      applyEnrichmentSnapshot(agentId, (raw as { enrichment?: Record<string, StepEnrichment> }).enrichment);
+      m.redraw();
+      return;
+    }
+    const event = raw as TranscriptEvent;
     const pending = inFlightSnapshotBuffersByAgent.get(agentId);
     if (pending !== undefined) {
       pending.push(event);
     } else {
       appendEvents(agentId, [event]);
     }
+    openLoginModalIfAuthError(event);
   };
 
   eventSource.onerror = () => {

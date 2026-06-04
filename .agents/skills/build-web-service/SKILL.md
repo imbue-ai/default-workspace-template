@@ -144,6 +144,25 @@ Skip this step for routes that emit only JSON, only redirects, or that
 serve an existing third-party UI through the escape hatch below --
 there's no markup to design.
 
+### Always surface the raw data and its source
+
+When a view renders data *derived* from underlying records (a summary,
+a reformatted list, extracted fields), include -- by default, without
+the user asking -- a clean affordance to see the raw record the view
+was built from and/or jump to its source. Concretely: a "view raw"
+control that shows the original record (e.g. the full email rendered),
+and, when the record came from an external service, an "open in
+<source>" link back to the origin (e.g. open the email in Gmail).
+This is the surfacing half of the preserve-and-surface principle in
+CLAUDE.md: the derived view inevitably leaves gaps (a field the agent
+didn't extract, a rendering it didn't anticipate), and a raw/source
+affordance lets the user bridge that gap immediately instead of waiting
+for a rebuild. Design it in from the first version -- it depends on the
+data layer having persisted the raw payload and source reference (see
+the crystallize data-capture guidance), so confirm that's available and
+flag it if it isn't. Keep it unobtrusive (a small per-record control,
+not clutter), but always present.
+
 ### File-path conventions
 
 Two cases, two patterns:
@@ -151,7 +170,7 @@ Two cases, two patterns:
 - **Runtime state files** (caches, cursors, last-visit timestamps,
   JSON snapshots written and read across runs): use cwd-relative
   paths like `Path("runtime/<name>/...")`. The bootstrap-managed
-  services run from `/code` (repo root), so this resolves
+  services run from `/mngr/code` (repo root), so this resolves
   consistently. Do NOT use `Path(__file__)`-based paths for runtime
   state.
 - **Static assets shipped alongside the .py file** (templates,
@@ -178,11 +197,11 @@ new tab. Without this step the user would have to discover it via the
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-python3 scripts/web_view.py open <name>
+python3 scripts/layout.py open <name>
 ```
 
-`web_view.py` POSTs to a loopback-only workspace_server endpoint that
-broadcasts an `open_tab` message over its WebSocket. The frontend
+`layout.py` POSTs to a loopback-only workspace_server endpoint that
+broadcasts a `layout_op` message over its WebSocket. The frontend
 focuses the panel if a tab for `<name>` is already open, otherwise
 splits a new iframe alongside the primary chat (60% web / 40% chat).
 The script briefly waits for the service to appear in
@@ -193,13 +212,18 @@ To force a reload of an already-open tab (e.g. after redeploying the
 service) without prompting the user to click Refresh:
 
 ```bash
-python3 scripts/web_view.py refresh <name>
+python3 scripts/layout.py refresh <name>
 ```
 
-`web_view.py list` prints every user-facing registered service name
-(one per line; the workspace chrome's own `system_interface` entry is
-hidden), which is useful when the user is asking about what tabs are
-available.
+You should always `refresh` services after making changes, to make sure the user can see the updates.
+
+For anything beyond `open` / `refresh` -- splitting, moving, focusing,
+renaming, maximizing, replacing an iframe's URL, inspecting the live
+tree -- see the `manage-layout` skill. `layout.py list` is also useful
+when the user is asking about what tabs are available (it prints every
+user-facing registered service plus every mngr-level agent, with
+open/running flags; the workspace chrome's own `system_interface` entry
+is hidden).
 
 ## Escape hatch: wrap an existing server
 

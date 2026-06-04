@@ -13,33 +13,42 @@ import {
   fetchEvents,
   fetchBackfillEvents,
   getEventsForAgent,
+  getEnrichmentForAgent,
   getFirstEventId,
   isConversationNotFound,
   isBackfillComplete,
-  type TranscriptEvent,
 } from "../models/Response";
 import { connectToStream, disconnectFromStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
+import { openLoginModal } from "../models/ClaudeAuth";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { MessageInput } from "./MessageInput";
-import { renderUserMessage, renderAssistantMessage } from "./message-renderers";
-import { getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
+import {
+  renderUserMessage,
+  renderAssistantMessage,
+  buildToolResultsWithSkillExpansions,
+  computeAuthErrorHiddenEventIds,
+} from "./message-renderers";
+import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
+import { buildSections } from "./turn-grouping";
+import { ProgressBlock } from "./ProgressBlock";
+import { ActivityIndicator } from "./ActivityIndicator";
 
 function getAgentTerminalUrl(agentId: string): string {
-  const baseUrl = getTerminalUrl();
-  const separator = baseUrl.includes("?") ? "&" : "?";
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
-  // the first trailing arg becomes $0 (not $1). The dispatch reads KEY="$1",
-  // so we prepend a dummy "_" to land the real key in $1. That matches the
-  // pattern used by the existing workdir deep-link in DockviewWorkspace.ts.
-  // Passing the agent name as $2 lets agent.sh attach to that agent's tmux
-  // session ("${MNGR_PREFIX}<name>") rather than the primary agent's. If the
-  // agent isn't in the local cache yet, fall back to no name arg and let
-  // agent.sh attach to the ambient session.
+  // the first trailing arg becomes $0 (not $1). ``buildAgentTerminalUrl``
+  // emits ``arg=_&arg=agent&arg=<name>`` so the dispatch lands ``agent`` in
+  // ``$1`` and the name in ``$2``, mirroring the workdir deep-link pattern.
+  // When the agent isn't in the local cache yet, fall back to the bare
+  // base URL and let agent.sh attach to the ambient session.
   const agent = getAgentById(agentId);
-  const args = agent?.name ? `arg=_&arg=agent&arg=${encodeURIComponent(agent.name)}` : "arg=_&arg=agent";
-  return `${baseUrl}${separator}${args}`;
+  if (!agent?.name) {
+    const baseUrl = getTerminalUrl();
+    const separator = baseUrl.includes("?") ? "&" : "?";
+    return `${baseUrl}${separator}arg=_&arg=agent`;
+  }
+  return buildAgentTerminalUrl(agent.name);
 }
 
 function openAgentTerminalTab(agentId: string): void {
@@ -69,6 +78,28 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   let userScrolledUp = false;
   let previousScrollTop = 0;
   let backfillStarted = false;
+
+  // Snapshot-load path: SSE only carries events emitted after subscription,
+  // so an auth-error that happened before the user opened the panel (e.g.
+  // the auto-`/welcome` failing during fresh mind creation) wouldn't open
+  // the modal otherwise. Walking back to the last assistant_message means
+  // an already-recovered agent (whose history contains old auth errors
+  // but has since produced healthy replies) does not open it on reload --
+  // only an agent whose current state is broken does. The modal itself is
+  // a single app-level instance driven by global auth state (see
+  // models/ClaudeAuth.ts), so this just flips that shared flag.
+  function checkLatestAssistantForAuthError(agentId: string): void {
+    const events = getEventsForAgent(agentId);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i];
+      if (event.type === "assistant_message") {
+        if (event.is_auth_error === true) {
+          openLoginModal();
+        }
+        return;
+      }
+    }
+  }
 
   // Screen capture state (shown when agent has no conversation)
   let screenContent: string | null = null;
@@ -198,6 +229,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       if (agentId === currentAgentId) {
         loading = false;
         loadingError = null;
+        checkLatestAssistantForAuthError(agentId);
       }
     } catch (error) {
       if (agentId === currentAgentId) {
@@ -364,23 +396,58 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
 
     startBackfill(agentId);
 
-    const toolResults = new Map<string, TranscriptEvent>();
-    for (const event of events) {
-      if (event.type === "tool_result" && event.tool_call_id) {
-        toolResults.set(event.tool_call_id, event);
-      }
-    }
+    const toolResults = buildToolResultsWithSkillExpansions(events);
 
-    const messageNodes: m.Vnode[] = [];
-    for (const event of events) {
-      if (event.type === "user_message") {
-        const userNode = renderUserMessage(event);
-        if (userNode !== null) {
-          messageNodes.push(userNode);
-        }
-      } else if (event.type === "assistant_message") {
-        messageNodes.push(renderAssistantMessage(event, toolResults, agentId));
+    const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
+    const visibleEvents = events.filter((e) => !hiddenEventIds.has(e.event_id));
+
+    // tk is an enrichment side-table (titles, summaries, pending roster),
+    // joined onto the transcript-derived structure by id. It arrives as a
+    // separate snapshot (GET /events + the step_enrichment SSE message), kept
+    // current in the Response model; structure -- which steps exist, their
+    // order, grouping -- comes purely from the transcript walk.
+    const enrichment = getEnrichmentForAgent(agentId);
+    const agent = getAgentById(agentId);
+    const agentIsIdle = agent?.activity_state === "IDLE";
+
+    // A single in-order walk of the transcript produces the turn sections:
+    // each carries its timeline items (steps, ungrouped runs, chips) and its
+    // wrap-up reply. There is no timestamp-based grouping or sorting.
+    const sections = buildSections(visibleEvents, toolResults, enrichment, agentIsIdle);
+
+    const messageNodes: m.Children[] = [];
+    for (const section of sections) {
+      if (section.user_event !== null) {
+        const userNode = renderUserMessage(section.user_event);
+        if (userNode !== null) messageNodes.push(userNode);
       }
+
+      const hasSteps = section.items.some((i) => i.kind === "step");
+      if (hasSteps) {
+        messageNodes.push(
+          m(ProgressBlock, {
+            key: `progress-${section.key}`,
+            items: section.items,
+            trailing_reply: section.trailing_reply,
+            toolResults,
+            agentId,
+          }),
+        );
+        continue;
+      }
+
+      // No steps this turn: render the body as plain chat -- prose and
+      // tool-call blocks inline, the same as assistant messages outside a
+      // progress section. Items are already in transcript order.
+      for (const item of section.items) {
+        if (item.kind === "ungrouped") {
+          for (const e of item.events) messageNodes.push(renderAssistantMessage(e, toolResults, agentId));
+        } else if (item.kind === "chip") {
+          const chipNode = renderUserMessage(item.event);
+          if (chipNode !== null) messageNodes.push(chipNode);
+        }
+      }
+      for (const e of section.trailing_reply) messageNodes.push(renderAssistantMessage(e, toolResults, agentId));
     }
 
     return m("div", { class: "message-list-wrapper" }, [
@@ -403,7 +470,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     view(vnode) {
       const agentId = vnode.attrs.agentId;
 
-      return m("div", { class: "chat-panel flex flex-col h-full" }, [
+      return m("div", { class: "chat-panel flex flex-col h-full relative" }, [
         m(
           "main",
           {
@@ -423,6 +490,9 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
           ? null
           : m("footer", { class: "app-footer" }, [
               m(EmptySlot, { name: "conversation-before-input" }),
+              isConversationNotFound(agentId)
+                ? null
+                : m(ActivityIndicator, { agentId, events: getEventsForAgent(agentId) }),
               m(MessageInput, { agentId }),
               m("div", { class: "chat-agent-terminal-link" }, [
                 m(
