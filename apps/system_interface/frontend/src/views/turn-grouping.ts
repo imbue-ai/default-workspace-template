@@ -45,7 +45,7 @@ import type {
   ToolCall,
   StepEnrichment,
 } from "../models/Response";
-import { isNonBoundaryUserMessage, isStopHookFeedback } from "./user-message-classification";
+import { isNonBoundaryUserMessage, isPermissionRequestCall, isStopHookFeedback } from "./message-classification";
 
 export type StepStatus = "pending" | "active" | "done";
 
@@ -135,26 +135,6 @@ function isStepId(id: string): boolean {
  *  begins with the tk verb (see TK_LIFECYCLE_RE). */
 function isTkLifecycleCall(tc: ToolCall): boolean {
   return tc.tool_name === "Bash" && TK_LIFECYCLE_RE.test(tc.input_preview);
-}
-
-/** The reserved latchkey host an agent POSTs to when asking the user to approve
- *  an action (see the latchkey skill). Short enough to survive the 200-char
- *  input_preview truncation. */
-const PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests";
-
-/** A POST method flag in a latchkey/curl command's input preview. */
-const PERMISSION_REQUEST_POST_RE = /-X\s*POST|--request\s*POST/i;
-
-/** True when a tool call is an agent permission request: a POST to the reserved
- *  latchkey permission-requests host. Detected from the tool *input* alone, so a
- *  request is recognised the moment it is issued -- even while it is still
- *  pending with no result yet, which is exactly when the user most needs to see
- *  and act on it. (Contrast `parsePermissionRequest` in message-renderers, which
- *  additionally needs a successful result to pull out the request id for the
- *  modal button.) */
-export function isPermissionRequestCall(tc: ToolCall): boolean {
-  const input = tc.input_preview || "";
-  return input.includes(PERMISSION_REQUEST_HOST) && PERMISSION_REQUEST_POST_RE.test(input);
 }
 
 /** True when an assistant message issues a permission request. */

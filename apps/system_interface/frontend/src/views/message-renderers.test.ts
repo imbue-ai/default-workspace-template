@@ -7,7 +7,7 @@ import {
   openPermissionRequest,
   renderSubagentCard,
 } from "./message-renderers";
-import { isSkillExpansionUserMessage } from "./user-message-classification";
+import { isSkillExpansionUserMessage } from "./message-classification";
 
 // Avoid importing the heavy/DOM-dependent module graph (dockview, dompurify) at test time;
 // renderSubagentCard only needs openSubagentTab, and the card path never calls MarkdownContent.

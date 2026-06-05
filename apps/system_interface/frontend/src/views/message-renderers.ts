@@ -13,12 +13,12 @@ import type {
   ToolCall,
 } from "../models/Response";
 import { openSubagentTab } from "./DockviewWorkspace";
-import { isPermissionRequestCall } from "./turn-grouping";
 import {
   isCollapsibleUserMessage,
   isHiddenUserMessage,
+  isPermissionRequestCall,
   isSkillExpansionUserMessage,
-} from "./user-message-classification";
+} from "./message-classification";
 
 /** Build a tool_call_id -> tool_result map, merging skill-expansion
  *  user_messages into the output of their preceding "Skill" tool call so

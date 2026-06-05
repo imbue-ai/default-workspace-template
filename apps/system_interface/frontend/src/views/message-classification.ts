@@ -1,14 +1,18 @@
 /**
- * Pure predicates that classify a user_message event's content.
+ * Pure predicates that classify transcript events -- user_message content and
+ * tool calls -- shared by the turn-grouping layer (deciding turn boundaries and
+ * which events break the timeline) and the rendering layer (deciding inline
+ * chrome and per-call affordances). They live in their own module, rather than
+ * inside either layer, because both need to ask the same questions and neither
+ * should depend on the other.
  *
- * The transcript stream uses the user_message type for several things
- * other than a genuine human turn: skill expansions, stop-hook feedback,
- * /welcome-style command invocations, etc. Both the turn-grouping layer
- * (deciding turn boundaries) and the rendering layer (deciding inline
- * chrome) need to ask the same questions about a given user_message,
- * which is why these live in their own module rather than inside either
- * layer.
+ * The transcript stream uses the user_message type for several things other
+ * than a genuine human turn: skill expansions, stop-hook feedback,
+ * /welcome-style command invocations, etc. It also carries tool calls whose
+ * shape determines how they render -- e.g. an agent permission request.
  */
+
+import type { ToolCall } from "../models/Response";
 
 /**
  * True for user_message events that are NOT a genuine user prompt --
@@ -71,4 +75,24 @@ export function isHiddenUserMessage(content: string): boolean {
     return true;
   }
   return false;
+}
+
+/** The reserved latchkey host an agent POSTs to when asking the user to approve
+ *  an action (see the latchkey skill). Short enough to survive the 200-char
+ *  input_preview truncation. */
+const PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests";
+
+/** A POST method flag in a latchkey/curl command's input preview. */
+const PERMISSION_REQUEST_POST_RE = /-X\s*POST|--request\s*POST/i;
+
+/** True when a tool call is an agent permission request: a POST to the reserved
+ *  latchkey permission-requests host. Detected from the tool *input* alone, so a
+ *  request is recognised the moment it is issued -- even while it is still
+ *  pending with no result yet, which is exactly when the user most needs to see
+ *  and act on it. (Contrast `parsePermissionRequest` in message-renderers, which
+ *  additionally needs a successful result to pull out the request id for the
+ *  modal button.) */
+export function isPermissionRequestCall(tc: ToolCall): boolean {
+  const input = tc.input_preview || "";
+  return input.includes(PERMISSION_REQUEST_HOST) && PERMISSION_REQUEST_POST_RE.test(input);
 }
