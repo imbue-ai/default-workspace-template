@@ -177,8 +177,8 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
         }
         if (item.kind === "permission") {
           // A permission request lifted out of its step: rendered inline as a
-          // thread-breaking block so it is always visible, with the
-          // "Permission request" button the renderer attaches to it.
+          // thread-breaking block so it is always visible, as the
+          // permission-request card the renderer produces (with its review button).
           return m(
             "div.pv-permission",
             { key: `perm-${item.event.event_id}` },
