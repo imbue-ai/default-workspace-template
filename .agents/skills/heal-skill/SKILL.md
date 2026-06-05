@@ -71,7 +71,7 @@ mkdir -p runtime/heal/$TARGET
 cat << FRONTMATTER_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-lead_report_dir: runtime/heal/$TARGET/reports/
+finish_report_path: runtime/heal/$TARGET/reports/report.md
 ---
 FRONTMATTER_EOF
 cat << BODY_EOF
@@ -90,12 +90,6 @@ The worker will use these to locate the incident in your transcript via
 - Any clarifying quote from the user about expected behavior.
 <paste quotes here, one per bullet.>
 
-## How to read the transcript
-Use \`mngr transcript <lead_agent>\` (with \`--role user --role assistant\`
-to strip tool noise, or \`--tail N\` to scope in) to find the turns above.
-The heal-skill invocation is the *most recent* turn; the incident is
-*prior* to that invocation.
-
 ## What the fixed skill must do
 <state the contract the healed skill must honor — what input shapes
 should work, what outputs are correct. Describe only what success
@@ -112,7 +106,7 @@ single gate -- no outline gate.
 When you reach the final-artifact gate or a terminal status, write a
 report file and push it to the lead per the sub-skill's reporting
 protocol; the destination is given by \`lead_agent\` /
-\`lead_report_dir\` in frontmatter.
+\`finish_report_path\` in frontmatter.
 
 ## Success criteria
 - The incident reproduces against the current skill before the fix.
@@ -129,19 +123,15 @@ content drawn from your conversation -- do not leave the placeholders.
 
 ## Step 3: Launch the worker
 
-The shared `launch-task` dispatcher runs `mngr create`, pushes the
-runtime dir (task file) into the worker's worktree, and sends the task
-as a follow-up message so the worker sees the runtime dir first. The
-`crystallize-worker` template pre-installs `heal-skill-worker`
-alongside the other worker sub-skills.
-
 ```bash
-uv run .agents/skills/launch-task/scripts/dispatch.py \
+uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name heal-$TARGET \
     --template crystallize-worker \
     --runtime-dir runtime/heal/$TARGET/ \
     --task-file runtime/heal/$TARGET/task.md
 ```
+
+The `crystallize-worker` template pre-installs `heal-skill-worker`.
 
 ## Step 4: Proxy the final-artifact gate, then merge
 
@@ -153,17 +143,19 @@ Flow-specific substitutions:
 
 - Worker name: `heal-$TARGET`
 - Branch: `mngr/heal-$TARGET`
-- Poll path: `runtime/heal/$TARGET/reports/report.md`
+- Task file (pass to `create_worker.py await --task-file`): `runtime/heal/$TARGET/task.md`
+- `finish_report_path` / poll path: `runtime/heal/$TARGET/reports/report.md`
+- Reports dir (`<REPORTS_DIR>` = `dirname finish_report_path`): `runtime/heal/$TARGET/reports/`
 - Consumed path: `runtime/heal/$TARGET/reports/consumed/`
 - The only user-approval gate is `type: gate, name: final-artifact`.
   A heal has no outline gate.
 - Terminal statuses: `type: status, name: done` (merge);
   `type: status, name: stuck` (failure-handling flow).
 
-On successful merge, close the tracking ticket:
+On successful merge, close the tracking ticket with a summary:
 
 ```bash
-tk close "$TICKET_ID"
+tk close "$TICKET_ID" "Healed $TARGET -- worker branch merged."
 ```
 
 ## Gotchas

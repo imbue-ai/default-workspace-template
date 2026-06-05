@@ -10,15 +10,29 @@ from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr.api.find import find_one_agent
+from imbue.mngr.api.find import resolve_to_started_host_and_running_agent
 from imbue.mngr.api.list import ErrorBehavior
 from imbue.mngr.api.list import list_agents
 from imbue.mngr.api.message import send_message_to_agents
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.loader import load_config
 from imbue.mngr.main import get_or_create_plugin_manager
+from imbue.mngr.primitives import AgentAddress
+from imbue.mngr.primitives import AgentName
 from imbue.mngr.utils.env_utils import parse_env_file
 
 logger = _loguru_logger
+
+
+def get_host_dir() -> Path:
+    """Return the mngr host directory from the environment.
+
+    Falls back to ``~/.mngr`` when ``MNGR_HOST_DIR`` is unset. This is the
+    canonical resolver shared by both the API layer (``server._find_agent``)
+    and the activity-state tracker (``AgentManager``).
+    """
+    return Path(os.environ.get("MNGR_HOST_DIR", str(Path.home() / ".mngr")))
 
 
 class AgentInfo(FrozenModel):
@@ -103,6 +117,36 @@ def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
     return Path.home() / ".claude"
 
 
+def read_tickets_dir_from_env_file(agent_state_dir: Path, work_dir: Path) -> Path:
+    """Resolve the TICKETS_DIR for an agent.
+
+    Priority:
+      1. ``TICKETS_DIR`` in the agent's env file at ``<agent_state_dir>/env``.
+      2. ``TICKETS_DIR`` in the system interface's own process environment.
+      3. ``<work_dir>/.tickets`` (tk's default).
+
+    Minds sets ``TICKETS_DIR=/code/runtime/tickets`` via ``host_env`` in
+    ``.mngr/settings.toml`` so tickets ride the runtime-backup branch.
+    ``host_env`` entries are forwarded to the container's process
+    environment but are *not* written into the per-agent env file, so the
+    env-file lookup alone misses them; the os.environ fallback catches
+    that case for the co-located system interface.
+    """
+    env_file = agent_state_dir / "env"
+    if env_file.exists():
+        try:
+            env_vars = parse_env_file(env_file.read_text())
+            tickets_dir = env_vars.get("TICKETS_DIR", "").strip()
+            if tickets_dir:
+                return Path(tickets_dir)
+        except OSError:
+            logger.debug("Failed to read env file: {}", env_file)
+    process_env_value = os.environ.get("TICKETS_DIR", "").strip()
+    if process_env_value:
+        return Path(process_env_value)
+    return work_dir / ".tickets"
+
+
 def discover_agents(
     provider_names: tuple[str, ...] | None = None,
     include_filters: tuple[str, ...] = (),
@@ -170,3 +214,36 @@ def send_message(agent_name: str, message: str) -> bool:
     finally:
         cg.__exit__(None, None, None)
     return len(result.successful_agents) > 0
+
+
+def start_agent(agent_name: str) -> None:
+    """Ensure an agent is running, starting it if it is STOPPED.
+
+    This deliberately goes through the *same* in-process mngr path that
+    ``send_message`` uses to auto-start a STOPPED agent: it loads the mngr
+    context exactly the same way (so the same config, env, and cwd apply),
+    then resolves the agent and runs mngr's own ``ensure_agent_started``
+    (via ``resolve_to_started_host_and_running_agent(..., allow_auto_start=
+    True)``). That is what gives us the invariant that opening an agent's
+    terminal and sending it a message succeed or fail together -- neither
+    reimplements the start, so neither can diverge from the other.
+
+    ``ensure_agent_started`` is a clean no-op for an agent that is already
+    running, so this is cheap in the common case (opening the terminal of an
+    agent that is already up).
+
+    Raises ``MngrError`` (e.g. ``AgentNotFoundError`` if the agent does
+    not exist, or a start failure) -- callers surface these to the user.
+    """
+    mngr_ctx, cg = _get_mngr_context()
+    try:
+        address = AgentAddress(agent=AgentName(agent_name))
+        host_ref, agent_ref = find_one_agent(address, mngr_ctx)
+        resolve_to_started_host_and_running_agent(
+            host_ref=host_ref,
+            agent_ref=agent_ref,
+            allow_auto_start=True,
+            mngr_ctx=mngr_ctx,
+        )
+    finally:
+        cg.__exit__(None, None, None)

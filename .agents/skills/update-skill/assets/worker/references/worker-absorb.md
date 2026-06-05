@@ -5,24 +5,12 @@ Follow this flow when your task file carries `FLOW: absorb`. Both Gate 1
 
 ## Stage 1: Replicate
 
-1. Read the task file. Pay close attention to the `## Incident summary`
-   description and the `## Anchors` verbatim quotes -- these are your
-   primary guide.
-2. Explore the lead's transcript with `mngr transcript $LEAD_AGENT`
-   (substitute the value parsed from frontmatter). Start with
-   `--role user --role assistant` to strip tool-call noise, and search
-   for the anchor quotes to locate the incident turns. Then re-read
-   those turns with full tool detail (default format, scoped with
-   `--tail` once you know where to look) to see how the skill was
-   invoked, what it produced, and what manual post-processing the lead
-   did to fully satisfy the user's request. The update-skill invocation
-   is the most recent turn in the lead's transcript; the incident and
-   manual follow-up are *prior* to it.
+1. Read the task file. The `## Incident summary` description and the
+   `## Anchors` verbatim quotes are your primary guide.
+2. Locate the incident and the manual follow-up in the lead's transcript
+   -- follow `.agents/shared/references/transcript-exploration.md`.
 3. Read the target skill's current `SKILL.md` and any scripts under
    `scripts/`. A skill may be pure prose.
-
-Do NOT re-execute destructive operations from the transcript. Reading the
-transcript is enough.
 
 ## Stage 2: Decide update-in-place vs. create-new
 

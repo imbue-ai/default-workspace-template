@@ -1,6 +1,6 @@
 ---
 name: crystallize-task-worker
-description: Turn a crystallization task (a replay transcript plus a task description) into a committed, reviewed, user-approved skill. Invoke when your task file asks you to crystallize a turn into a new skill.
+description: Turn a crystallization task (a description of work plus verbatim quote anchors that locate it in the lead's transcript) into a committed, reviewed, user-approved skill. Invoke when your task file asks you to crystallize a turn into a new skill.
 metadata:
   role: worker-sub-skill
 ---
@@ -8,7 +8,8 @@ metadata:
 # Building a crystallized skill
 
 Your task file describes a turn of work that should become a reusable skill
-and points at a replay transcript on disk. Follow these stages to go from
+and gives you verbatim quote anchors for locating it in the lead's
+transcript via `mngr transcript`. Follow these stages to go from
 "task handed off" to "new skill committed on your branch".
 
 **Principle.** Reliability is the floor; simplicity is the target. Default to
@@ -35,26 +36,14 @@ Valid `name:` values for this worker:
 
 ## Stage 1: Replicate
 
-1. Read the task file. Pay close attention to the `## What was done`
-   description and the `## Anchors` verbatim quotes -- these are your
-   primary guide.
-2. Explore the lead's transcript with `mngr transcript $LEAD_AGENT`
-   (substitute the value parsed from frontmatter). Start with
-   `--role user --role assistant` to strip tool-call noise, and search
-   for the anchor quotes to locate the relevant turns. Then re-read
-   those turns with full tool detail (default format, scoped with
-   `--tail` once you know where to look) to understand what tools were
-   called, with what inputs, and why. The crystallize-task invocation
-   is the most recent turn in the lead's transcript; the work you are
-   crystallizing is *prior* to it. Do not crystallize the task-handoff
-   turn itself.
+1. Read the task file. The `## What was done` description and the
+   `## Anchors` verbatim quotes are your primary guide.
+2. Locate the work being crystallized in the lead's transcript -- follow
+   `.agents/shared/references/transcript-exploration.md`.
 3. Research the relevant APIs, libraries, and existing utilities you will
    need. Prefer reusing existing functions over reimplementing.
 4. If anything is unclear, add your question to the list you will surface
    in Gate 1.
-
-Do NOT re-execute destructive operations from the transcript. Reading the
-transcript is enough.
 
 ## Stage 2: Propose an outline
 
@@ -82,6 +71,16 @@ Produce a short outline with:
   recipe) is valid -- do not invent scripts where judgement is clearer.
 - 2-3 evaluation scenarios you plan to hand-craft (happy path + edge cases).
 - Any edge cases you foresaw but chose not to handle (and why).
+
+**You are not bound to the sample's data shape.** The lead may hand you sample
+data or scratch scripts (via `source_artifacts_dir`) that fix a particular
+output schema, but crystallization is exactly the moment to reconsider how the
+task should be done -- including improving the output shape, field names, or
+structure. Changing it is allowed and expected; reliability and a clean design
+win over matching the scratch shape. When your planned output differs from the
+sample the lead handed off, **call that out explicitly in the outline** (and
+again at Gate 2): the lead may have surfaces built on the old shape that need
+reconciling, and they can only do that if you flag the delta.
 
 ### Gate 1: outline approval
 
@@ -190,6 +189,8 @@ Built `<name>`:
 - SKILL.md: <one-line summary>
 - Scripts: <one-line summary per script, or "none -- pure prose skill">
 - Scenarios run: <list, with pass/fail>
+- Shape changes from the sample: <none, or list the output-schema / field /
+  CLI / exit-code deltas a consumer or surface would need to adapt to>
 
 Approve and save? (yes / no with notes)
 ```

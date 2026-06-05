@@ -111,14 +111,14 @@ worker.
 
 The task file's YAML frontmatter follows the schema in
 `.agents/shared/references/worker-reporting.md` -- `lead_agent` and
-`lead_report_dir`.
+`finish_report_path`.
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-lead_report_dir: runtime/crystallize/$NAME/reports/
+finish_report_path: runtime/crystallize/$NAME/reports/report.md
 ---
 FRONTMATTER_EOF
 cat << 'BODY_EOF'
@@ -139,13 +139,6 @@ transcript via `mngr transcript`. Include:
   tool output that drove a step, a clarification the user gave).
 <paste quotes here, one per bullet, in original wording.>
 
-## How to read the transcript
-Use `mngr transcript <lead_agent>` (with `--role user --role assistant`
-to strip tool noise, or `--tail N` to scope in) to find the turns above.
-The crystallize-task invocation is the *most recent* turn in your
-lead's transcript; the work to crystallize is *prior* to that
-invocation. Do not crystallize the lead's task-handoff turn itself.
-
 ## Source artifacts (optional)
 If your frontmatter has a `source_artifacts_dir` field, the calling
 skill has pre-staged scripts and sample data at that path in your
@@ -162,7 +155,7 @@ those decisions.>
 Use the `crystallize-task-worker` sub-skill to drive the end-to-end
 build. When you reach a gate or terminal status, write a report file
 and push it to the lead per the sub-skill's reporting protocol; the
-destination is given by `lead_agent` / `lead_report_dir` in
+destination is given by `lead_agent` / `finish_report_path` in
 frontmatter.
 
 ## Data-capture guidance
@@ -173,6 +166,17 @@ downstream consumers (e.g. an interface built later on top of the
 captured data) unconstrained. Pagination is a normal part of the
 workflow if the original ask requires it. Do NOT make extra
 un-asked-for API calls just to gather more data.
+
+Go further than fields: **persist the raw payload of each record and a
+reference to its source, durably** (e.g. under `runtime/<name>/`), not
+just the extracted/processed fields (see the preserve-and-surface
+principle in CLAUDE.md for what "raw payload" and "source reference"
+mean). A pipeline that fetches, transforms, and discards the raw payload
+cannot satisfy that principle no matter what consumers do: persisting it
+is what lets a *later* change in processing requirements re-derive new
+fields with no refetch, and what lets surfaces show the raw record or
+link out to the source. Make this a postcondition of the skill's
+data-capture step.
 
 ## Worker sub-skills
 The `crystallize-task-worker`, `heal-skill-worker`, and
@@ -206,23 +210,18 @@ source_artifacts_dir: runtime/<calling-skill>/<slug>/
 Step 4 then pushes that directory to the worker alongside the standard
 crystallize runtime dir.
 
-## Step 4: Dispatch the worker
-
-The shared `launch-task` dispatcher runs the lifecycle commands
-(`mngr create` + `mngr push` of the runtime dir + optional extra pushes
-+ `mngr message` of the task file).
+## Step 4: Launch the worker
 
 ```bash
-uv run .agents/skills/launch-task/scripts/dispatch.py \
+uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name crystallize-$NAME \
     --template crystallize-worker \
     --runtime-dir runtime/crystallize/$NAME/ \
     --task-file runtime/crystallize/$NAME/task.md
 ```
 
-If the task frontmatter sets `source_artifacts_dir: <dir>`, add
-`--extra-push <dir>/` so the worker also gets the calling skill's scripts
-and sample data.
+If the task frontmatter sets `source_artifacts_dir`, `create_worker.py launch`
+pushes that directory to the worker too -- no extra flag needed.
 
 ## Step 5: Background-poll for worker reports (concurrent with other work)
 
@@ -234,10 +233,9 @@ blocking on the poll.
 
 ```bash
 # Run with Bash run_in_background: true. Substitute $NAME with the slug.
-timeout 90m bash -c '
-  while [ ! -f runtime/crystallize/'"$NAME"'/reports/report.md ]; do sleep 10; done
-  cat runtime/crystallize/'"$NAME"'/reports/report.md
-'
+uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    --task-file runtime/crystallize/$NAME/task.md \
+    --timeout 90m
 ```
 
 You still own this poll even if you reached this step from another skill
@@ -246,12 +244,14 @@ assume "fire and forget" -- without the poll, Gate 1 / Gate 2 reports
 never reach the user and the worker deadlocks waiting for approval.
 
 Follow `.agents/shared/references/lead-proxy.md` for gate decisions, the
-"do not interrupt more recent user work" rule, `mngr push` rationale, and
+"do not interrupt more recent user work" rule, `mngr rsync` rationale, and
 terminal-status handling. Flow-specific substitutions:
 
 - Worker name: `crystallize-$NAME`
 - Branch: `mngr/crystallize-$NAME`
-- Poll path: `runtime/crystallize/$NAME/reports/report.md`
+- Task file (pass to `create_worker.py await --task-file`): `runtime/crystallize/$NAME/task.md`
+- `finish_report_path` / poll path: `runtime/crystallize/$NAME/reports/report.md`
+- Reports dir (`<REPORTS_DIR>` = `dirname finish_report_path`): `runtime/crystallize/$NAME/reports/`
 - Consumed path: `runtime/crystallize/$NAME/reports/consumed/`
 - User-approval gates: `type: gate, name: outline-approval` (Gate 1) and
   `type: gate, name: final-artifact` (Gate 2).
