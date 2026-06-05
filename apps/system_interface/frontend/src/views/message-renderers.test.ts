@@ -365,7 +365,7 @@ function textOf(node: unknown): string | null {
 }
 
 describe("renderPermissionRequestBlock", () => {
-  it("heads the card with the service name and shows the rationale and a button", () => {
+  it("heads the card with the service name and shows the request and a button", () => {
     const vnode = renderPermissionRequestBlock(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT));
 
     const title = findVnode(
@@ -375,7 +375,15 @@ describe("renderPermissionRequestBlock", () => {
     );
     expect(textOf(title)).toBe("Permission request: Slack");
 
-    // The rationale and the "Requesting" value are both present.
+    // The "Requesting" value is shown.
+    expect(
+      findVnode(
+        vnode,
+        (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-read-all on slack-api",
+      ),
+    ).not.toBeNull();
+
+    // The rationale is NOT repeated in the card -- it belongs to the surrounding prose.
     expect(
       findVnode(
         vnode,
@@ -383,13 +391,7 @@ describe("renderPermissionRequestBlock", () => {
           v.tag === "#" &&
           (v as { children?: unknown }).children === "I need to read #eng-releases to summarize the deploy thread.",
       ),
-    ).not.toBeNull();
-    expect(
-      findVnode(
-        vnode,
-        (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-read-all on slack-api",
-      ),
-    ).not.toBeNull();
+    ).toBeNull();
 
     const button = findVnode(vnode, (v) => v.tag === "button");
     expect(button).not.toBeNull();

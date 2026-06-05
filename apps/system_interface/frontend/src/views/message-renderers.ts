@@ -459,10 +459,11 @@ function permissionRequesting(details: PermissionRequestDetails | null): string 
 }
 
 /**
- * Render an agent permission request as a card: the service it touches, the
- * agent's rationale, what's being requested, a button that opens the modal, and
- * a disclosure preserving the raw request/response. Replaces the generic
- * "Tool: Bash" block so the request reads as what it is.
+ * Render an agent permission request as a card: the service it touches (in the
+ * heading), what's being requested, a button that opens the modal, and a
+ * disclosure preserving the raw request/response. Replaces the generic
+ * "Tool: Bash" block so the request reads as what it is. The agent's rationale
+ * is left to its surrounding prose rather than repeated in the card.
  *
  * Before the result lands (still pending) the details are null: the card shows
  * a waiting state with no button. The button appears once the result carries a
@@ -480,15 +481,7 @@ export function renderPermissionRequestBlock(toolCall: ToolCall, toolResult: Too
       renderLockIcon(),
       m("span", { class: "permission-request-title" }, permissionHeading(details)),
     ]),
-    details === null
-      ? m(
-          "div",
-          { class: "permission-request-rationale permission-request-rationale--pending" },
-          "Waiting for the request to register…",
-        )
-      : details.rationale
-        ? m("div", { class: "permission-request-rationale" }, details.rationale)
-        : null,
+    details === null ? m("div", { class: "permission-request-status" }, "Waiting for the request to register…") : null,
     requesting
       ? m("div", { class: "permission-request-detail" }, [
           m("span", { class: "permission-request-detail-label" }, "Requesting"),

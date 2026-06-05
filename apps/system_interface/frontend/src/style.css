@@ -914,14 +914,9 @@ body {
   font-weight: 600;
 }
 
-.permission-request-rationale {
+.permission-request-status {
   margin-top: 9px;
   font-size: 13px;
-  line-height: 1.45;
-  color: var(--color-text-primary);
-}
-
-.permission-request-rationale--pending {
   color: var(--color-text-secondary);
 }
 
