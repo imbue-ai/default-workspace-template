@@ -13,6 +13,7 @@ import type {
   ToolCall,
 } from "../models/Response";
 import { openSubagentTab } from "./DockviewWorkspace";
+import { isPermissionRequestCall } from "./turn-grouping";
 import {
   isCollapsibleUserMessage,
   isHiddenUserMessage,
@@ -290,15 +291,10 @@ export function parsePermissionRequest(
   toolCall: ToolCall,
   toolResult: ToolResultEvent | null,
 ): { requestId: string } | null {
-  // The command is JSON-encoded inside input_preview; the reserved host is
-  // short enough to survive the 200-char preview truncation.
-  const input = toolCall.input_preview || "";
-  if (!input.includes("latchkey-self.invalid/permission-requests")) {
-    return null;
-  }
-  // Only a creation (POST) yields a request_id; reads of existing permissions
-  // hit different endpoints and are excluded by the host check above anyway.
-  if (!/-X\s*POST|--request\s*POST/i.test(input)) {
+  // The same input-only predicate the timeline walk uses to lift the request
+  // out of its step, so the two stay in lockstep. A creation (POST) yields a
+  // request_id; reads of existing permissions hit different endpoints.
+  if (!isPermissionRequestCall(toolCall)) {
     return null;
   }
   if (!toolResult || toolResult.is_error === true) {

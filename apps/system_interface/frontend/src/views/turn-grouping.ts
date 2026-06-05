@@ -26,6 +26,11 @@
  * it re-renders at the top of the new turn, while the prior turn's node
  * freezes at its last-known state.
  *
+ * One message is never grouped under a step: an agent permission request. It
+ * is lifted out into a dedicated inline break (the `permission` timeline item)
+ * so the user always sees it and can respond without expanding a step. The step
+ * it interrupted stays open, so work resumed afterwards keeps grouping under it.
+ *
  * The ONLY timestamp this module reads is tk's own `created` (from the
  * enrichment table), used solely to order pending placeholders among
  * themselves. Grouping and the positioning of any transitioned step read
@@ -79,6 +84,10 @@ export type TimelineItem =
   /** Real work (and/or prose) that happened while no step was open. Rendered
    *  inline, exactly like a no-steps plain-chat turn. */
   | { kind: "ungrouped"; key: string; events: AssistantMessageEvent[] }
+  /** An agent permission request, lifted out of any open step so it always
+   *  renders inline as a thread-breaking block. The user must be able to see and
+   *  act on it without expanding a step. */
+  | { kind: "permission"; event: AssistantMessageEvent }
   /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
   | { kind: "chip"; event: UserMessageEvent };
 
@@ -126,6 +135,31 @@ function isStepId(id: string): boolean {
  *  begins with the tk verb (see TK_LIFECYCLE_RE). */
 function isTkLifecycleCall(tc: ToolCall): boolean {
   return tc.tool_name === "Bash" && TK_LIFECYCLE_RE.test(tc.input_preview);
+}
+
+/** The reserved latchkey host an agent POSTs to when asking the user to approve
+ *  an action (see the latchkey skill). Short enough to survive the 200-char
+ *  input_preview truncation. */
+const PERMISSION_REQUEST_HOST = "latchkey-self.invalid/permission-requests";
+
+/** A POST method flag in a latchkey/curl command's input preview. */
+const PERMISSION_REQUEST_POST_RE = /-X\s*POST|--request\s*POST/i;
+
+/** True when a tool call is an agent permission request: a POST to the reserved
+ *  latchkey permission-requests host. Detected from the tool *input* alone, so a
+ *  request is recognised the moment it is issued -- even while it is still
+ *  pending with no result yet, which is exactly when the user most needs to see
+ *  and act on it. (Contrast `parsePermissionRequest` in message-renderers, which
+ *  additionally needs a successful result to pull out the request id for the
+ *  modal button.) */
+export function isPermissionRequestCall(tc: ToolCall): boolean {
+  const input = tc.input_preview || "";
+  return input.includes(PERMISSION_REQUEST_HOST) && PERMISSION_REQUEST_POST_RE.test(input);
+}
+
+/** True when an assistant message issues a permission request. */
+function hasPermissionRequest(e: AssistantMessageEvent): boolean {
+  return e.tool_calls.some(isPermissionRequestCall);
 }
 
 interface ParsedMessage {
@@ -192,6 +226,9 @@ function isProse(e: AssistantMessageEvent): boolean {
  *  order. */
 type SectionEntry =
   | { kind: "step"; id: string }
+  /** A permission request, lifted out of any open step to render inline as a
+   *  visible break (see hasPermissionRequest / the `permission` TimelineItem). */
+  | { kind: "permission"; event: AssistantMessageEvent }
   | { kind: "event"; event: AssistantMessageEvent; step_id: string | null };
 
 interface SectionBuilder {
@@ -296,7 +333,15 @@ export function buildSections(
         if (t.status === "in_progress") lastOpened = t.id;
       }
       if (parsed.render !== null && (parsed.render.text || parsed.render.tool_calls.length > 0)) {
-        routeMessage(current, parsed.render, lastOpened ?? stepBefore);
+        if (hasPermissionRequest(parsed.render)) {
+          // A permission request breaks out of any open step: it must always be
+          // directly visible, never collapsed inside a step node. The step stays
+          // open (current_step_id is untouched), so work resumed after the user
+          // responds keeps grouping under it.
+          current.entries.push({ kind: "permission", event: parsed.render });
+        } else {
+          routeMessage(current, parsed.render, lastOpened ?? stepBefore);
+        }
       }
       continue;
     }
@@ -390,7 +435,11 @@ function finalizeSection(
   let lastWorkEntryIdx = -1;
   for (let i = 0; i < section.entries.length; i++) {
     const en = section.entries[i];
-    if (en.kind === "event" && isWork(en.event)) lastWorkEntryIdx = i;
+    // A permission request is real (non-tk) activity, so it acts as a reply
+    // boundary just like a work event -- prose before a trailing permission
+    // request stays in its step, not hoisted below the timeline as a reply.
+    if (en.kind === "permission") lastWorkEntryIdx = i;
+    else if (en.kind === "event" && isWork(en.event)) lastWorkEntryIdx = i;
   }
   let maxChipAfter = -1;
   for (const c of section.chips) if (c.after > maxChipAfter) maxChipAfter = c.after;
@@ -483,6 +532,11 @@ function finalizeSection(
         items.push({ kind: "step", step: section.steps.get(entry.id)! });
         emittedSteps.add(entry.id);
       }
+    } else if (entry.kind === "permission") {
+      // A permission break ends any in-flight ungrouped run and stands as its
+      // own always-visible item at its transcript position.
+      flushUngrouped();
+      items.push({ kind: "permission", event: entry.event });
     } else if (!trailingIds.has(entry.event.event_id) && entry.step_id === null) {
       // An ungrouped event (no step open): coalesce into an inline run.
       // In-step events render inside the step node; trailing prose renders

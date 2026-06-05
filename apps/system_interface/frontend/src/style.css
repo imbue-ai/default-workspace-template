@@ -1977,6 +1977,17 @@ body {
   background: var(--color-bg);
 }
 
+/* Agent permission request, lifted out of any open step so it is always
+   directly visible and breaks the timeline flow. Positioned like an ungrouped
+   run (opaque background + z-index) so the timeline thread doesn't draw through
+   it; the request block carries its own permission-request styling and button. */
+.pv-permission {
+  position: relative;
+  z-index: 2;
+  margin: 6px 0 14px 0;
+  background: var(--color-bg);
+}
+
 /* ─────────────────────────────────────────────────────────────────────
    ACTIVITY INDICATOR (replaces the generic "Running tool..." strip)
    ─────────────────────────────────────────────────────────────────── */

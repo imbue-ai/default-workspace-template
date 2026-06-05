@@ -442,6 +442,8 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       for (const item of section.items) {
         if (item.kind === "ungrouped") {
           for (const e of item.events) messageNodes.push(renderAssistantMessage(e, toolResults, agentId));
+        } else if (item.kind === "permission") {
+          messageNodes.push(renderAssistantMessage(item.event, toolResults, agentId));
         } else if (item.kind === "chip") {
           const chipNode = renderUserMessage(item.event);
           if (chipNode !== null) messageNodes.push(chipNode);

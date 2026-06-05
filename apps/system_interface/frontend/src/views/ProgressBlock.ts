@@ -173,6 +173,16 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             item.events.map((e) => renderAssistantMessage(e, toolResults, agentId)),
           );
         }
+        if (item.kind === "permission") {
+          // A permission request lifted out of its step: rendered inline as a
+          // thread-breaking block so it is always visible, with the
+          // "Permission request" button the renderer attaches to it.
+          return m(
+            "div.pv-permission",
+            { key: `perm-${item.event.event_id}` },
+            renderAssistantMessage(item.event, toolResults, agentId),
+          );
+        }
         // chip
         return m("div.pv-stophook", { key: `chip-${item.event.event_id}` }, renderUserMessage(item.event));
       });
