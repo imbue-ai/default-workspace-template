@@ -48,7 +48,7 @@ def test_prevent_time_sleep() -> None:
     # _poll_for_deploy_id`` (polling /version after a forced auto-
     # rollback to confirm the rolled-back version is the one actually
     # serving traffic; same Modal swap-window justification).
-    rc.check_time_sleep(_DIR, snapshot(9))
+    rc.check_time_sleep(_DIR, snapshot(6))
 
 
 def test_prevent_global_keyword() -> None:
@@ -56,11 +56,7 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    # +5 for scripts/integ_check.py: the integ-test driver's UX is its
-    # stdout PASS/FAIL lines + final RESULT; using logger here would
-    # fight the ratchet's formatting and also send output to stderr by
-    # default, which breaks invoke-and-grep usage.
-    rc.check_bare_print(_DIR, snapshot(18))
+    rc.check_bare_print(_DIR, snapshot(13))
 
 
 # --- Exception handling ---
@@ -71,7 +67,7 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    rc.check_broad_exception_catch(_DIR, snapshot(12))
+    rc.check_broad_exception_catch(_DIR, snapshot(0))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -79,18 +75,18 @@ def test_prevent_base_exception_catch() -> None:
 
 
 def test_prevent_builtin_exception_raises() -> None:
-    rc.check_builtin_exception_raises(_DIR, snapshot(10))
+    rc.check_builtin_exception_raises(_DIR, snapshot(0))
 
 
 def test_prevent_silent_decode_error_catches() -> None:
-    rc.check_silent_decode_error_catches(_DIR, snapshot(12))
+    rc.check_silent_decode_error_catches(_DIR, snapshot(11))
 
 
 # --- Import style ---
 
 
 def test_prevent_inline_imports() -> None:
-    rc.check_inline_imports(_DIR, snapshot(2))
+    rc.check_inline_imports(_DIR, snapshot(0))
 
 
 def test_prevent_relative_imports() -> None:
@@ -117,15 +113,12 @@ def test_prevent_setattr() -> None:
 
 
 def test_prevent_asyncio_import() -> None:
-    # Four: app.py uses ``asyncio.get_running_loop()`` and
-    # ``asyncio.run_coroutine_threadsafe`` for HTTP route handlers; the two
-    # sibling permission handlers under ``latchkey/handlers/`` (``predefined.py``
-    # and ``file_sharing.py``) both use ``run_in_executor`` to run the blocking
-    # grant/deny path off the event loop -- all three intrinsic to FastAPI
-    # integration. The fourth is scripts/integ_check.py: Chrome DevTools
-    # Protocol over websockets is inherently async; the script drives multiple
-    # CDP sessions concurrently.
-    rc.check_asyncio_import(_DIR, snapshot(5))
+    # Three: app.py uses ``asyncio.get_running_loop()`` and ``asyncio.run_coroutine_threadsafe``
+    # for HTTP route handlers; the two sibling permission handlers under
+    # ``latchkey/handlers/`` (``predefined.py`` and ``file_sharing.py``) both use
+    # ``run_in_executor`` to run the blocking grant/deny path off the event loop. All three
+    # are intrinsic to FastAPI integration.
+    rc.check_asyncio_import(_DIR, snapshot(3))
 
 
 def test_prevent_pandas_import() -> None:
@@ -141,7 +134,7 @@ def test_prevent_namedtuple() -> None:
 
 
 def test_prevent_yaml_usage() -> None:
-    rc.check_yaml_usage(_DIR, snapshot(1))
+    rc.check_yaml_usage(_DIR, snapshot(0))
 
 
 def test_prevent_functools_partial() -> None:
@@ -167,7 +160,7 @@ def test_prevent_hardcoded_guarded_binary() -> None:
 
 
 def test_prevent_num_prefix() -> None:
-    rc.check_num_prefix(_DIR, snapshot(1))
+    rc.check_num_prefix(_DIR, snapshot(0))
 
 
 # --- Documentation ---
@@ -179,7 +172,7 @@ def test_prevent_trailing_comments() -> None:
     # S603 suppression must be on the same line as the call for ruff to
     # recognize it; the noqa marker is intentionally not in the
     # trailing-comment exempt list.
-    rc.check_trailing_comments(_DIR, snapshot(9))
+    rc.check_trailing_comments(_DIR, snapshot(1))
 
 
 def test_prevent_init_docstrings() -> None:
@@ -204,7 +197,7 @@ def test_prevent_literal_with_multiple_options() -> None:
 
 
 def test_prevent_bare_generic_types() -> None:
-    rc.check_bare_generic_types(_DIR, snapshot(1))
+    rc.check_bare_generic_types(_DIR, snapshot(0))
 
 
 def test_prevent_typing_builtin_imports() -> None:
@@ -234,7 +227,7 @@ def test_prevent_click_echo() -> None:
 
 
 def test_prevent_logger_exception() -> None:
-    rc.check_logger_exception(_DIR, snapshot(1))
+    rc.check_logger_exception(_DIR, snapshot(0))
 
 
 # --- Testing conventions ---
@@ -313,7 +306,7 @@ def test_prevent_direct_subprocess() -> None:
     # and the whole point is for stdout/stderr/exit-code to flow
     # through to the operator's shell as if recover were the original
     # command. ConcurrencyGroup doesn't apply.
-    rc.check_direct_subprocess(_DIR, snapshot(3), excluded_patterns=excluded)
+    rc.check_direct_subprocess(_DIR, snapshot(1), excluded_patterns=excluded)
 
 
 def test_prevent_bare_tmux_targets() -> None:
@@ -324,7 +317,7 @@ def test_prevent_bare_tmux_targets() -> None:
 
 
 def test_prevent_if_elif_without_else() -> None:
-    rc.check_if_elif_without_else(_DIR, snapshot(1))
+    rc.check_if_elif_without_else(_DIR, snapshot(0))
 
 
 def test_prevent_inline_functions() -> None:
@@ -345,6 +338,10 @@ def test_prevent_cast_usage() -> None:
 
 def test_prevent_assert_isinstance() -> None:
     rc.check_assert_isinstance(_DIR, snapshot(0))
+
+
+def test_prevent_per_file_host_upload() -> None:
+    rc.check_per_file_host_upload(_DIR, snapshot(0))
 
 
 # --- Project-level checks ---
