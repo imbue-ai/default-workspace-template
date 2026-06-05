@@ -28,11 +28,37 @@ a backfill page costs O(limit) disk work rather than re-reading the whole file.
 compatibility/oracle path; it resolves every body and is not on the main-view
 hot path.
 
-All access to the shared session collections, per-file locator lists and the
-body cache is guarded by ``_lock`` because the watcher thread and FastAPI
-handler threads touch them concurrently. File I/O and parsing run while the lock
-is held, but the ``on_events`` callback (which fans out to SSE queues) is always
-invoked outside the lock to avoid serializing fan-out and to avoid re-entrancy.
+Emission decoupled from parsing
+-------------------------------
+Both the background poll loop and the synchronous HTTP read paths bring a file's
+locator index up to date through the shared ``_ensure_cache_current`` helper. So
+the poll loop must not infer "new events to broadcast" from what its own parse
+produced -- a concurrent HTTP read may have parsed the tail first. Instead each
+``SessionFileState`` tracks an ``emitted_count`` high-water mark over its locator
+index, and the poll loop broadcasts every locator past that marker (resolving
+their bodies), guaranteeing each event reaches connected SSE clients exactly
+once even when an HTTP read was the thread that advanced the byte offset.
+
+Subagent linkage
+----------------
+On top of the cache the watcher links each parent Agent tool_call to the
+subagent session it spawned, so the frontend can render a rich subagent card.
+Linkage comes from two sources (see ``_enrich_subagent_metadata``): the
+subagent's ``<id>.meta.json`` ``toolUseId`` (written at spawn time, so running
+subagents link immediately) and the parent's tool_result ``subagent_id``
+(authoritative but only available once the subagent finishes). Because a
+subagent's linkage can land after its parent Agent tool_call was already
+broadcast, unlinked parent events are cached and re-broadcast once linkage
+appears (see ``_cache_unlinked_agent_parents`` /
+``_rebroadcast_relinked_parents``), letting the frontend upgrade a plain
+tool-call block into the rich card without a page refresh.
+
+All access to the shared session collections, per-file locator lists, the body
+cache and the subagent linkage maps is guarded by ``_lock`` because the watcher
+thread and FastAPI handler threads touch them concurrently. File I/O and parsing
+run while the lock is held, but the ``on_events`` callback (which fans out to SSE
+queues) is always invoked outside the lock to avoid serializing fan-out and to
+avoid re-entrancy / deadlock.
 """
 
 from __future__ import annotations
@@ -47,17 +73,14 @@ from typing import Any
 from typing import Callable
 
 from loguru import logger as _loguru_logger
-from watchdog.events import FileSystemEvent
-from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from imbue.system_interface.session_parser import parse_session_lines
+from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
+from imbue.system_interface.watcher_common import WakeOnChangeHandler
 
 logger = _loguru_logger
 
-_NON_CHANGE_EVENT_TYPES = frozenset({"opened", "closed", "closed_no_write"})
-
-_POLL_INTERVAL_SECONDS = 1.0
 _BRIEF_WAIT_SECONDS = 0.5
 
 # Maximum number of parsed event bodies held resident across all of an agent's
@@ -170,18 +193,6 @@ class EventLocator(tuple[str, str, int, int]):
         return self[3]
 
 
-class _ChangeHandler(FileSystemEventHandler):
-    """Watchdog handler that wakes the watcher on actual file changes."""
-
-    def __init__(self, wake_event: threading.Event) -> None:
-        self._wake_event = wake_event
-
-    def on_any_event(self, event: FileSystemEvent) -> None:
-        if event.event_type in _NON_CHANGE_EVENT_TYPES:
-            return
-        self._wake_event.set()
-
-
 class SessionFileState:
     """Tracks reading and locator state for a single session JSONL file.
 
@@ -190,6 +201,12 @@ class SessionFileState:
     for the file). ``last_mtime`` lets the poller short-circuit when neither size
     nor mtime changed. Parsed event *bodies* are not stored here -- they live in
     the watcher's bounded body cache.
+
+    ``emitted_count`` is the number of leading ``locators`` already handed to the
+    ``on_events`` SSE fan-out. It is tracked separately from parsing so the poll
+    loop emits every not-yet-emitted event even when a concurrent HTTP read was
+    the thread that actually parsed (and advanced the byte offset past) the new
+    tail.
     """
 
     def __init__(self, session_id: str, file_path: Path) -> None:
@@ -198,6 +215,7 @@ class SessionFileState:
         self.byte_offset_consumed: int = 0
         self.last_mtime: float = 0.0
         self.locators: list[EventLocator] = []
+        self.emitted_count: int = 0
 
 
 class AgentSessionWatcher:
@@ -218,19 +236,41 @@ class AgentSessionWatcher:
         self._body_cache_capacity = body_cache_capacity
 
         # Guards _session_states, _main_session_ids, _tool_name_by_call_id,
-        # _existing_event_ids, _subagent_metadata, _subagent_id_by_tool_call,
-        # _body_cache, _locator_ref_by_id, and every SessionFileState. Held
-        # across file I/O and parsing (cheap, incremental, per-agent) but never
-        # across the on_events fan-out callback.
+        # _existing_event_ids, _subagent_metadata, _subagent_meta_read_failed,
+        # _subagent_tool_use_id, _subagent_id_by_tool_call,
+        # _unlinked_agent_parent_events, _body_cache, _locator_ref_by_id, and
+        # every SessionFileState. Held across file I/O and parsing (cheap,
+        # incremental, per-agent) but never across the on_events fan-out callback.
         self._lock = threading.Lock()
         self._session_states: dict[str, SessionFileState] = {}
         self._main_session_ids: list[str] = []
         self._tool_name_by_call_id: dict[str, str] = {}
         self._existing_event_ids: set[str] = set()
         self._subagent_metadata: dict[str, dict[str, str]] = {}  # sub_id -> {agent_type, description}
-        # Maps tool_call_id -> subagent session id, populated as tool_result
-        # events are parsed, so metadata enrichment works across windows.
+        # sub_ids whose meta.json we've already determined is permanently malformed.
+        # Used to log the warning once per file instead of once per poll cycle.
+        self._subagent_meta_read_failed: set[str] = set()
+        # sub_id -> the parent Agent tool_use id, read from the subagent's `<id>.meta.json`
+        # `toolUseId` field. This is the direct, spawn-time link between a parent Agent
+        # tool_call and its subagent -- written before any tool_result lands -- so running
+        # subagents get the rich card. (Claude Code does NOT put a usable parent pointer in
+        # the subagent jsonl's first line: `parentUuid` is null and `sourceToolAssistantUUID`
+        # is absent, so the meta.json is the only pre-completion source.)
+        self._subagent_tool_use_id: dict[str, str] = {}
+        # tool_call_id -> subagent_id, accumulated from parent tool_results as they stream in.
+        # Persistent (like _subagent_tool_use_id) so a parent assistant message broadcast in an
+        # earlier poll cycle can be re-linked once its subagent's tool_result lands in a later
+        # cycle, rather than only on a full re-parse (page refresh). This is the fallback that
+        # links sessions recorded on Claude Code versions whose meta.json omits toolUseId; it
+        # resolves the click-through when the subagent finishes (the card itself renders from
+        # the tool call's description/subagent_type as soon as the call appears).
         self._subagent_id_by_tool_call: dict[str, str] = {}
+        # message_uuid -> assistant_message event that was streamed with at least one Agent
+        # tool_call still missing its subagent_metadata. A subagent's jsonl (and thus its
+        # parent linkage) can appear after the parent was already broadcast, so we keep the
+        # event around to re-enrich and re-broadcast it once linkage lands (see
+        # _rebroadcast_relinked_parents). Fully-linked parents are never cached.
+        self._unlinked_agent_parent_events: dict[str, dict[str, Any]] = {}
 
         # Bounded LRU of parsed event bodies, keyed by event_id, plus a bodyless
         # locator -> position index so any event can be located and re-resolved.
@@ -344,6 +384,21 @@ class AgentSessionWatcher:
         self._discover_sessions()
         with self._lock:
             return self._subagent_metadata.get(subagent_session_id)
+
+    def is_main_session_event(self, event: dict[str, Any]) -> bool:
+        """True if an event belongs to a main session rather than a subagent session.
+
+        Events with no ``session_id`` (e.g. plugin-injected application events) are
+        treated as main so they keep reaching the main stream. Subagent-session events
+        are delivered only through the per-subagent stream, so the main stream must
+        drop them -- otherwise a running subagent's own prompt, tool calls, and
+        assistant messages would render inline in the parent thread.
+        """
+        session_id = event.get("session_id")
+        if session_id is None:
+            return True
+        with self._lock:
+            return session_id in self._main_session_ids
 
     def _selected_states_current(self, session_id: str | None) -> list[SessionFileState]:
         """Discover sessions, bring the selected files' caches current, return them.
@@ -479,19 +534,27 @@ class AgentSessionWatcher:
             session_id=state.session_id,
         )
 
-    def _ensure_cache_current(self, state: SessionFileState) -> list[dict[str, Any]]:
+    def _ensure_cache_current(self, state: SessionFileState, mark_all_emitted: bool = False) -> None:
         """Bring ``state``'s locator index up to the file's current contents (lock held internally).
 
-        Returns the events newly parsed by this call (empty if nothing changed),
-        so a caller acting as the live source -- the poll loop -- can emit only
-        the genuinely new events. New bodies are also written into the LRU cache.
+        Appends a locator for each newly parsed event and writes its body into the
+        bounded LRU. Emission to SSE clients is decoupled from parsing: callers
+        that need to broadcast deltas drive that off ``state.emitted_count`` so a
+        concurrent HTTP read parsing the tail does not rob the poll loop of the
+        events to emit.
+
+        When ``mark_all_emitted`` is set (the priming path), the whole current
+        backlog is marked as already emitted *in the same lock hold* that filled
+        the index. Splitting the fill and the mark across two lock acquisitions
+        would let a concurrent read append locators in between that then get
+        marked emitted and never reach SSE clients.
         """
         with self._lock:
             try:
                 stat = state.file_path.stat()
             except OSError as e:
                 logger.debug("Failed to stat session file {}: {}", state.file_path, e)
-                return []
+                return
 
             current_size = stat.st_size
             current_mtime = stat.st_mtime
@@ -503,16 +566,20 @@ class AgentSessionWatcher:
             # deduplicated against the stale pre-truncation IDs and silently drop
             # every record whose ID recurs (the typical atomic save-rewrite
             # case), and the locator index would keep dangling pre-truncation
-            # offsets.
+            # offsets. The re-read content must be re-emitted to live SSE clients,
+            # so the emission marker resets alongside the index.
             if current_size < state.byte_offset_consumed:
                 for locator in state.locators:
                     self._existing_event_ids.discard(locator.event_id)
                     self._locator_ref_by_id.pop(locator.event_id, None)
                 state.byte_offset_consumed = 0
                 state.locators = []
+                state.emitted_count = 0
 
             if current_size == state.byte_offset_consumed and current_mtime == state.last_mtime:
-                return []
+                if mark_all_emitted:
+                    state.emitted_count = len(state.locators)
+                return
 
             try:
                 with open(state.file_path, "rb") as f:
@@ -520,15 +587,16 @@ class AgentSessionWatcher:
                     new_data = f.read()
             except OSError as e:
                 logger.debug("Failed to read session file {}: {}", state.file_path, e)
-                return []
+                return
 
             complete, _fragment = _split_at_last_complete_line(new_data)
             if not complete:
                 # Only a partial trailing line so far; leave the offset where it
                 # is and re-read on the next poll once the writer flushes.
-                return []
+                if mark_all_emitted:
+                    state.emitted_count = len(state.locators)
+                return
 
-            new_events: list[dict[str, Any]] = []
             for byte_offset, byte_len, line_bytes in _iter_line_spans(complete, state.byte_offset_consumed):
                 try:
                     decoded_line = line_bytes.decode("utf-8")
@@ -552,48 +620,76 @@ class AgentSessionWatcher:
                     state.locators.append(locator)
                     self._cache_put_locked(event)
                     if event.get("type") == "tool_result" and "subagent_id" in event:
-                        self._subagent_id_by_tool_call[event["tool_call_id"]] = event["subagent_id"]
-                new_events.extend(line_events)
+                        self._subagent_id_by_tool_call.setdefault(event["tool_call_id"], event["subagent_id"])
 
             state.byte_offset_consumed += len(complete)
             state.last_mtime = current_mtime
-            return new_events
+            if mark_all_emitted:
+                state.emitted_count = len(state.locators)
 
     def _enrich_subagent_metadata(self, events: list[dict[str, Any]]) -> None:
         """Enrich Agent tool_use events with subagent metadata.
 
-        Links assistant ``Agent`` tool calls to their subagent sessions and
-        attaches the subagent's metadata. The tool_call -> subagent mapping comes
-        from the watcher-wide ``_subagent_id_by_tool_call`` index (populated as
-        tool_result events are parsed), so enrichment works even when the
-        matching tool_result falls outside the returned window. The passed
-        events are also scanned so a freshly parsed batch enriches before its
-        results are indexed.
+        Builds a tool_call_id -> subagent_id map from two sources, highest
+        precedence first (the second only fills tool calls the first left
+        unresolved):
+
+        1. ``toolUseId`` from each subagent's `<id>.meta.json`, which names the
+           parent Agent tool_use directly. Written at spawn time, so it links
+           running subagents immediately. Emitted by the pinned Claude Code
+           version (see CLAUDE_CODE_VERSION in the Dockerfile).
+
+        2. ``subagent_id`` from the parent's tool_result (structured
+           `toolUseResult.agentId` or the legacy `agentId:` trailer), accumulated
+           persistently across poll cycles. Authoritative but only available once
+           the subagent finishes; the fallback for sessions recorded on older
+           Claude Code versions whose meta.json predates `toolUseId`, or whose
+           subagent files are no longer on disk.
+
+        Accumulating tool_result linkage mutates shared maps, and the metadata
+        lookups read shared maps, so the whole body runs under ``_lock``. The
+        ``events`` list and its dicts are not handed to ``on_events`` from here,
+        so holding the lock across the in-memory enrichment cannot deadlock on
+        the fan-out.
         """
         with self._lock:
-            subagent_metadata = dict(self._subagent_metadata)
-            subagent_by_tool_call = dict(self._subagent_id_by_tool_call)
+            subagent_by_tool_call: dict[str, str] = {}
 
-        for event in events:
-            if event.get("type") == "tool_result" and "subagent_id" in event:
-                subagent_by_tool_call[event["tool_call_id"]] = event["subagent_id"]
+            # 1. Disk-based linkage: each subagent meta.json's toolUseId names its parent
+            #    Agent tool_use directly. sub_id is the jsonl stem ("agent-<id>").
+            for sub_id, tool_use_id in self._subagent_tool_use_id.items():
+                subagent_by_tool_call[tool_use_id] = sub_id
 
-        for event in events:
-            if event.get("type") != "assistant_message":
-                continue
-            tool_calls = event.get("tool_calls", [])
-            for tc in tool_calls:
-                if tc.get("tool_name") != "Agent":
+            # 2. Accumulate tool_result-based linkage from this batch into the persistent map,
+            #    then resolve against the full accumulated map (not just this batch's events),
+            #    so the rebroadcast pass links a cached parent against a tool_result that
+            #    arrived in a different poll cycle.
+            for event in events:
+                if event.get("type") != "tool_result":
                     continue
-                sub_id = subagent_by_tool_call.get(tc["tool_call_id"])
-                if not sub_id:
+                if "subagent_id" not in event:
                     continue
-                # The agentId in tool results is bare (e.g. "af25b729465418580")
-                # but session files are named "agent-af25b729465418580.jsonl",
-                # so metadata is keyed by "agent-<id>". Try both forms.
-                metadata = subagent_metadata.get(sub_id) or subagent_metadata.get(f"agent-{sub_id}")
-                if metadata:
-                    tc["subagent_metadata"] = metadata
+                self._subagent_id_by_tool_call.setdefault(event["tool_call_id"], event["subagent_id"])
+            for tool_call_id, subagent_id in self._subagent_id_by_tool_call.items():
+                subagent_by_tool_call.setdefault(tool_call_id, subagent_id)
+
+            # Enrich assistant messages that have Agent tool calls.
+            for event in events:
+                if event.get("type") != "assistant_message":
+                    continue
+                tool_calls = event.get("tool_calls", [])
+                for tc in tool_calls:
+                    if tc.get("tool_name") != "Agent":
+                        continue
+                    sub_id = subagent_by_tool_call.get(tc["tool_call_id"])
+                    if not sub_id:
+                        continue
+                    # The agentId in tool results is bare (e.g. "af25b729465418580")
+                    # but session files are named "agent-af25b729465418580.jsonl",
+                    # so metadata is keyed by "agent-<id>". Try both forms.
+                    metadata = self._subagent_metadata.get(sub_id) or self._subagent_metadata.get(f"agent-{sub_id}")
+                    if metadata:
+                        tc["subagent_metadata"] = metadata
 
     def _run(self) -> None:
         """Main watcher loop."""
@@ -602,14 +698,20 @@ class AgentSessionWatcher:
         self._prime_caches()
 
         while not self._stop_event.is_set():
-            self._wake_event.wait(timeout=_POLL_INTERVAL_SECONDS)
+            self._wake_event.wait(timeout=POLL_INTERVAL_SECONDS)
             self._wake_event.clear()
 
             if self._stop_event.is_set():
                 break
 
+            # Order matters: discover refreshes the meta.json/toolUseId caches, poll
+            # reads new events (accumulating tool_result linkage and caching new unlinked
+            # parents), and rebroadcast runs last so it re-links cached parents against the
+            # caches as they stand after BOTH -- letting a tool_result that lands this cycle
+            # upgrade an older parent's card in the same cycle.
             self._discover_sessions()
             self._poll_for_changes()
+            self._rebroadcast_relinked_parents()
 
         if self._observer is not None:
             self._observer.stop()
@@ -621,15 +723,17 @@ class AgentSessionWatcher:
         The initial transcript is delivered to clients via the REST tail/backfill
         path, so the watcher must not also broadcast the backlog through
         ``on_events`` (that would flood the bounded SSE queues for long
-        histories). Priming builds each file's locator index and advances the
-        byte offset to EOF so the poll loop afterwards emits only new events.
-        Bodies beyond the cache capacity are dropped here and re-read on demand.
+        histories). Priming builds each file's locator index, advances the byte
+        offset to EOF, and marks the whole backlog as already emitted -- all in a
+        single lock hold per file so a concurrent read cannot slip in events that
+        then get marked emitted and never reach SSE clients. Bodies beyond the
+        cache capacity are dropped here and re-read on demand.
         """
         with self._lock:
             states = list(self._session_states.values())
         for state in states:
             if state.file_path.exists():
-                self._ensure_cache_current(state)
+                self._ensure_cache_current(state, mark_all_emitted=True)
 
     def _discover_sessions(self) -> None:
         """Read claude_session_id_history to find all session IDs."""
@@ -660,7 +764,7 @@ class AgentSessionWatcher:
                 time.sleep(_BRIEF_WAIT_SECONDS)
                 file_path = self._find_session_file(session_id)
                 if file_path is None:
-                    logger.debug("Session file not found for %s, will retry on next cycle", session_id)
+                    logger.debug("Session file not found for {}, will retry on next cycle", session_id)
                     continue
 
             with self._lock:
@@ -673,7 +777,7 @@ class AgentSessionWatcher:
             if self._observer is not None:
                 parent_dir = str(file_path.parent)
                 try:
-                    self._observer.schedule(_ChangeHandler(self._wake_event), parent_dir, recursive=False)
+                    self._observer.schedule(WakeOnChangeHandler(self._wake_event), parent_dir, recursive=False)
                 except OSError as e:
                     logger.debug("Failed to schedule watchdog for {}: {}", parent_dir, e)
 
@@ -685,38 +789,64 @@ class AgentSessionWatcher:
             self._discover_subagent_sessions(state.session_id, state.file_path)
 
     def _discover_subagent_sessions(self, parent_session_id: str, parent_file_path: Path) -> None:
-        """Discover subagent session files under <session_id>/subagents/."""
+        """Discover subagent session files under <session_id>/subagents/.
+
+        Registers each subagent's jsonl into the cache-model ``_session_states`` and
+        reads its ``<id>.meta.json`` for display metadata plus the ``toolUseId`` that
+        links it to its parent Agent tool_call.
+        """
         subagents_dir = parent_file_path.parent / parent_session_id / "subagents"
         if not subagents_dir.exists():
             return
 
         for jsonl_file in subagents_dir.glob("*.jsonl"):
             sub_id = jsonl_file.stem
+
             with self._lock:
-                if sub_id in self._session_states:
-                    continue
-                self._session_states[sub_id] = SessionFileState(sub_id, jsonl_file)
+                is_new_session = sub_id not in self._session_states
+                if is_new_session:
+                    self._session_states[sub_id] = SessionFileState(sub_id, jsonl_file)
+                meta_already_resolved = sub_id in self._subagent_metadata or sub_id in self._subagent_meta_read_failed
 
-            # Read .meta.json for subagent metadata
-            meta_file = jsonl_file.with_suffix(".meta.json")
-            if meta_file.exists():
+            if is_new_session and self._observer is not None:
                 try:
-                    meta = json.loads(meta_file.read_text())
-                    with self._lock:
-                        if sub_id not in self._subagent_metadata:
-                            self._subagent_metadata[sub_id] = {
-                                "agent_type": meta.get("agentType", ""),
-                                "description": meta.get("description", ""),
-                                "session_id": sub_id,
-                            }
-                except (json.JSONDecodeError, OSError) as e:
-                    logger.warning("Failed to read subagent metadata {}: {}", meta_file, e)
-
-            if self._observer is not None:
-                try:
-                    self._observer.schedule(_ChangeHandler(self._wake_event), str(subagents_dir), recursive=False)
+                    self._observer.schedule(WakeOnChangeHandler(self._wake_event), str(subagents_dir), recursive=False)
                 except OSError as e:
                     logger.debug("Failed to schedule watchdog for {}: {}", subagents_dir, e)
+
+            # Cache .meta.json. Retry on each pass while the read fails with OSError
+            # (transient: mid-write, momentary permission glitch). Give up after a
+            # JSONDecodeError (truly malformed -- won't self-heal) so we don't spam
+            # the log on every poll cycle.
+            if meta_already_resolved:
+                continue
+            meta_file = jsonl_file.with_suffix(".meta.json")
+            if not meta_file.exists():
+                continue
+            try:
+                meta = json.loads(meta_file.read_text())
+            except json.JSONDecodeError as exc:
+                logger.warning("Subagent meta.json is not valid JSON, giving up: {}: {}", meta_file, exc)
+                with self._lock:
+                    self._subagent_meta_read_failed.add(sub_id)
+                continue
+            except OSError as exc:
+                logger.debug("Failed to read subagent meta.json {}: {}", meta_file, exc)
+                continue
+
+            # toolUseId points directly at the parent Agent tool_use, giving the
+            # running subagent its rich card before any tool_result lands. Absent
+            # on older Claude Code versions, which fall back to tool_result linkage.
+            tool_use_id = meta.get("toolUseId")
+            with self._lock:
+                if sub_id not in self._subagent_metadata:
+                    self._subagent_metadata[sub_id] = {
+                        "agent_type": meta.get("agentType", ""),
+                        "description": meta.get("description", ""),
+                        "session_id": sub_id,
+                    }
+                if isinstance(tool_use_id, str) and tool_use_id:
+                    self._subagent_tool_use_id[sub_id] = tool_use_id
 
     def _find_session_file(self, session_id: str) -> Path | None:
         """Search for a session JSONL file under the Claude projects directory."""
@@ -750,7 +880,7 @@ class AgentSessionWatcher:
 
         try:
             observer = Observer()
-            handler = _ChangeHandler(self._wake_event)
+            handler = WakeOnChangeHandler(self._wake_event)
             for dir_path in watched_dirs:
                 observer.schedule(handler, dir_path, recursive=False)
             observer.start()
@@ -759,7 +889,18 @@ class AgentSessionWatcher:
             logger.debug("Failed to start watchdog observer, falling back to polling only: {}", e)
 
     def _poll_for_changes(self) -> None:
-        """Check all session files for new content and emit newly parsed events."""
+        """Check all session files for new content and emit any not-yet-emitted events.
+
+        Emission is driven by ``emitted_count`` (a high-water mark over the
+        locator index) rather than by what this call parsed, so events that a
+        concurrent HTTP read parsed into the index are still delivered to
+        connected SSE clients exactly once. Pending bodies are resolved from the
+        LRU (re-read from disk on a miss) before broadcast.
+
+        Each batch is enriched with subagent metadata before broadcast, and any
+        Agent-parent events still missing linkage are cached so a later cycle can
+        re-broadcast them once linkage lands (see ``_rebroadcast_relinked_parents``).
+        """
         with self._lock:
             states = list(self._session_states.values())
 
@@ -767,7 +908,90 @@ class AgentSessionWatcher:
             if not state.file_path.exists():
                 continue
 
-            new_events = self._ensure_cache_current(state)
-            if new_events:
-                self._enrich_subagent_metadata(new_events)
-                self._on_events(self._agent_id, new_events)
+            self._ensure_cache_current(state)
+            with self._lock:
+                pending_pairs = [(state, locator) for locator in state.locators[state.emitted_count :]]
+                state.emitted_count = len(state.locators)
+                pending_events = self._resolve_bodies_locked(pending_pairs)
+            if pending_events:
+                self._enrich_subagent_metadata(pending_events)
+                self._cache_unlinked_agent_parents(pending_events)
+                self._on_events(self._agent_id, pending_events)
+
+    def _cache_unlinked_agent_parents(self, events: list[dict[str, Any]]) -> None:
+        """Remember assistant messages whose Agent tool_calls aren't linked yet.
+
+        When an Agent tool_call is broadcast before its subagent's linkage exists, it goes
+        out without subagent_metadata. We keep the event so a later cycle can re-enrich and
+        re-broadcast it once the linkage lands (see _rebroadcast_relinked_parents). Fully
+        linked parents are skipped -- there is nothing left to resolve.
+        """
+        for event in events:
+            if event.get("type") != "assistant_message":
+                continue
+            agent_tool_calls = [tc for tc in event.get("tool_calls", []) if tc.get("tool_name") == "Agent"]
+            if not agent_tool_calls:
+                continue
+            if self._is_fully_linked(event):
+                continue
+            message_uuid = event.get("message_uuid", "")
+            if message_uuid:
+                with self._lock:
+                    self._unlinked_agent_parent_events[message_uuid] = event
+
+    def _rebroadcast_relinked_parents(self) -> None:
+        """Re-emit cached parent events that gained subagent links since broadcast.
+
+        A subagent's linkage can appear after the parent Agent tool_call was already
+        streamed: the subagent's meta.json (with toolUseId) shows up a cycle later, or its
+        tool_result lands later still. Re-enriching the cached parent and re-broadcasting it
+        once it links lets the frontend upgrade the plain tool-call block into the rich card
+        without a page refresh. Parents whose Agent tool_calls are all linked are dropped
+        from the cache.
+
+        The cache snapshot and removals run under ``_lock`` (they mutate shared state), but
+        ``_enrich_subagent_metadata`` / ``_is_fully_linked`` take the lock themselves and the
+        ``on_events`` fan-out runs unlocked, so the lock is never held across either.
+        """
+        with self._lock:
+            cached = list(self._unlinked_agent_parent_events.items())
+
+        relinked: list[dict[str, Any]] = []
+        fully_linked_uuids: list[str] = []
+        for message_uuid, event in cached:
+            before = self._linked_agent_tool_call_ids(event)
+            self._enrich_subagent_metadata([event])
+            if self._linked_agent_tool_call_ids(event) != before:
+                relinked.append(event)
+            if self._is_fully_linked(event):
+                fully_linked_uuids.append(message_uuid)
+
+        if fully_linked_uuids:
+            with self._lock:
+                for message_uuid in fully_linked_uuids:
+                    self._unlinked_agent_parent_events.pop(message_uuid, None)
+
+        if relinked:
+            self._on_events(self._agent_id, relinked)
+
+    @staticmethod
+    def _linked_agent_tool_call_ids(event: dict[str, Any]) -> frozenset[str]:
+        """tool_call_ids of Agent tool_calls in ``event`` that already carry metadata."""
+        return frozenset(
+            tc.get("tool_call_id", "")
+            for tc in event.get("tool_calls", [])
+            if tc.get("tool_name") == "Agent" and "subagent_metadata" in tc
+        )
+
+    def _is_fully_linked(self, event: dict[str, Any]) -> bool:
+        """True if every Agent tool_call in ``event`` is linked to a subagent.
+
+        Linkage is resolved by toolUseId (meta.json) or tool_result agentId; both are read
+        from disk. A tool_call counts as linked once it appears in either source's map, even
+        if no metadata could be attached (e.g. the subagent's files were cleaned up), so such
+        a parent is not retried forever.
+        """
+        with self._lock:
+            linked = set(self._subagent_tool_use_id.values()) | set(self._subagent_id_by_tool_call.keys())
+        agent_tool_calls = [tc for tc in event.get("tool_calls", []) if tc.get("tool_name") == "Agent"]
+        return bool(agent_tool_calls) and all(tc.get("tool_call_id") in linked for tc in agent_tool_calls)
