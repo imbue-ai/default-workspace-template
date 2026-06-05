@@ -444,6 +444,7 @@ def test_layout_broadcast_refresh_bypasses_mutex(app: FastAPI) -> None:
             }
 
 
+@pytest.mark.timeout(10)
 def test_layout_broadcast_reload_interface_emits_ws_message(app: FastAPI) -> None:
     """``reload_interface`` broadcasts a full-page reload op (no args, no mutex)."""
     with TestClient(app, client=("127.0.0.1", _TEST_CLIENT_PORT)) as loopback_client:
