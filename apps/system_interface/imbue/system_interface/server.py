@@ -6,6 +6,7 @@ import socket
 import threading
 import traceback
 from collections.abc import AsyncIterator
+from collections.abc import Callable
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,14 +27,26 @@ from starlette.websockets import WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.mngr.errors import MngrError
+from imbue.system_interface import claude_auth_endpoints
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
+from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.system_interface.agent_discovery import read_tickets_dir_from_env_file
 from imbue.system_interface.agent_discovery import send_message
+from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.claude_auth import ClaudeAuthService
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.events import BufferBehavior
+from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.layout_ops import allocate_terminal_panel_id
+from imbue.system_interface.layout_ops import is_broadcasting_op
+from imbue.system_interface.layout_ops import is_known_op
+from imbue.system_interface.layout_ops import is_mutating_op
+from imbue.system_interface.layout_ops import layout_inspect
+from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentListItem
 from imbue.system_interface.models import AgentListResponse
@@ -42,13 +55,16 @@ from imbue.system_interface.models import CreateChatRequest
 from imbue.system_interface.models import CreateWorktreeRequest
 from imbue.system_interface.models import DestroyAgentResponse
 from imbue.system_interface.models import ErrorResponse
+from imbue.system_interface.models import InterruptAgentResponse
 from imbue.system_interface.models import RandomNameResponse
 from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
+from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.plugins import get_plugin_manager
-from imbue.system_interface.request_writer import write_refresh_request
 from imbue.system_interface.service_dispatcher import register_service_routes
 from imbue.system_interface.session_watcher import AgentSessionWatcher
+from imbue.system_interface.tickets_watcher import AgentTicketsWatcher
+from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -78,7 +94,6 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
     """
     event_queues = AgentEventQueues()
     application.state.event_queues = event_queues
-    application.state.watchers = {}
 
     preconfigured_agent_manager: AgentManager | None = application.state.preconfigured_agent_manager
     if preconfigured_agent_manager is None:
@@ -91,6 +106,10 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
 
     application.state.broadcaster = broadcaster
     application.state.agent_manager = agent_manager
+    # Advisory in-process mutex serializing layout-mutating ops. The agent
+    # script never auto-retries on contention -- it surfaces the 409 to the
+    # agent along with the in-flight holder's metadata.
+    application.state.layout_mutex = LayoutMutex()
 
     # Single shared httpx client for the /service/<name>/ forwarding layer.
     application.state.http_client = httpx.AsyncClient(
@@ -132,26 +151,44 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 
 def _stop_all_watchers(application: FastAPI) -> None:
-    watchers: dict[str, AgentSessionWatcher] = getattr(application.state, "watchers", {})
+    watchers: dict[str, AgentSessionWatcher] = application.state.watchers
     for watcher in watchers.values():
         watcher.stop()
     watchers.clear()
+    tickets_watchers: dict[str, AgentTicketsWatcher] = application.state.tickets_watchers
+    for tickets_watcher in tickets_watchers.values():
+        tickets_watcher.stop()
+    tickets_watchers.clear()
 
 
 def _get_or_create_watcher(request: Request, agent_info: AgentInfo) -> AgentSessionWatcher:
     """Get an existing watcher for an agent, or create one."""
     watchers: dict[str, AgentSessionWatcher] = request.app.state.watchers
     event_queues: AgentEventQueues = request.app.state.event_queues
+    agent_manager: AgentManager = request.app.state.agent_manager
 
     if agent_info.id in watchers:
         return watchers[agent_info.id]
+
+    # Single-element holder so the ``on_events`` closure can reach the watcher
+    # we are about to construct. Capturing the watcher directly (rather than
+    # looking it up in ``watchers`` by id on every event) keeps the callback
+    # self-contained: it cannot KeyError if the dict entry has since been
+    # removed, and it does not depend on the implicit invariant that the
+    # entry was already inserted before the first event fires.
+    watcher_holder: list[AgentSessionWatcher] = []
 
     def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
         # IGNORE: session events are persisted in JSONL and recoverable via
         # the REST /events endpoint; storing them in the in-memory replay
         # buffer would grow unboundedly for the agent's lifetime.
-        for event in events:
-            event_queues.broadcast(agent_id, {**event, "buffer_behavior": BufferBehavior.IGNORE})
+        event_queues.broadcast_all_ignored(agent_id, events)
+        # Recompute the per-agent activity state from the full transcript.
+        # The session watcher's incremental ``events`` argument only contains
+        # the newest lines, but the activity tracker needs the full transcript
+        # to detect unmatched tool_uses across turns and to read the last
+        # event's type.
+        agent_manager.update_session_events(agent_id, watcher_holder[0].get_all_events())
 
     watcher = AgentSessionWatcher(
         agent_id=agent_info.id,
@@ -159,7 +196,40 @@ def _get_or_create_watcher(request: Request, agent_info: AgentInfo) -> AgentSess
         claude_config_dir=agent_info.claude_config_dir,
         on_events=on_events,
     )
+    watcher_holder.append(watcher)
     watchers[agent_info.id] = watcher
+    watcher.start()
+    # Seed transcript-derived activity signals once at watcher creation so the
+    # indicator does not lag a turn behind on first connect.
+    agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
+    return watcher
+
+
+def _get_or_create_tickets_watcher(request: Request, agent_info: AgentInfo) -> AgentTicketsWatcher | None:
+    """Get an existing tickets watcher for an agent, or create one. Returns
+    None if the agent has no resolvable working directory (in which case
+    there's no .tickets/ to watch)."""
+    if agent_info.work_dir is None:
+        return None
+
+    tickets_watchers: dict[str, AgentTicketsWatcher] = request.app.state.tickets_watchers
+    event_queues: AgentEventQueues = request.app.state.event_queues
+
+    if agent_info.id in tickets_watchers:
+        return tickets_watchers[agent_info.id]
+
+    # The tickets watcher emits a single `step_enrichment` snapshot message whenever
+    # ticket state changes. ``broadcast_all_ignored`` delivers it live without buffering:
+    # it is a full snapshot recomputed on every GET /events (via get_enrichment()), so
+    # buffering successive snapshots would grow unboundedly for no benefit. The frontend
+    # replaces its enrichment table each time one arrives.
+    watcher = AgentTicketsWatcher(
+        agent_id=agent_info.id,
+        agent_name=agent_info.name,
+        tickets_dir=read_tickets_dir_from_env_file(agent_info.agent_state_dir, Path(agent_info.work_dir)),
+        on_events=event_queues.broadcast_all_ignored,
+    )
+    tickets_watchers[agent_info.id] = watcher
     watcher.start()
     return watcher
 
@@ -234,11 +304,6 @@ def _list_agents_endpoint(request: Request) -> JSONResponse:
     return JSONResponse(content=AgentListResponse(agents=items).model_dump())
 
 
-def _get_host_dir() -> Path:
-    """Get the mngr host directory from the environment."""
-    return Path(os.environ.get("MNGR_HOST_DIR", str(Path.home() / ".mngr")))
-
-
 def _find_agent(agent_id: str, request: Request) -> AgentInfo | None:
     """Find a specific agent by ID.
 
@@ -251,7 +316,7 @@ def _find_agent(agent_id: str, request: Request) -> AgentInfo | None:
     if agent_state is None:
         return None
 
-    host_dir = _get_host_dir()
+    host_dir = get_host_dir()
     agent_state_dir = host_dir / "agents" / agent_id
     claude_config_dir = read_claude_config_dir_from_env_file(agent_state_dir)
 
@@ -277,9 +342,6 @@ def _get_events(agent_id: str, request: Request) -> Response:
     if agent_info is None:
         return _agent_not_found_response(agent_id)
 
-    watcher = _get_or_create_watcher(request, agent_info)
-
-    # Check for backfill parameters
     before_event_id = request.query_params.get("before")
     limit_str = request.query_params.get("limit", str(_DEFAULT_TAIL_COUNT))
     try:
@@ -291,6 +353,7 @@ def _get_events(agent_id: str, request: Request) -> Response:
     if limit <= 0:
         limit = _DEFAULT_TAIL_COUNT
 
+    watcher = _get_or_create_watcher(request, agent_info)
     if before_event_id:
         # Backfill: bounded indexed read of the `limit` events before the cursor.
         events = watcher.get_backfill_events(before_event_id, limit=limit)
@@ -304,7 +367,50 @@ def _get_events(agent_id: str, request: Request) -> Response:
     # `has_more` tells the client whether older history exists before the first
     # returned event, so it can page back on scroll without a probe request.
     has_more = bool(events) and watcher.has_events_before(events[0]["event_id"])
-    return JSONResponse(content={"events": events, "has_more": has_more})
+    # tk step enrichment ships as a separate, unpaginated snapshot (always
+    # complete regardless of where the transcript window is), joined to the
+    # transcript-derived steps by id on the frontend.
+    tickets_watcher = _get_or_create_tickets_watcher(request, agent_info)
+    step_enrichment = tickets_watcher.get_enrichment() if tickets_watcher is not None else {}
+    return JSONResponse(content={"events": events, "has_more": has_more, "step_enrichment": step_enrichment})
+
+
+def _stream_filtered_events(
+    agent_id: str,
+    event_queues: AgentEventQueues,
+    event_queue: "queue.Queue[dict[str, Any] | None]",
+    should_forward: Callable[[dict[str, Any]], bool],
+) -> Iterator[str]:
+    """Yield SSE frames for queued events that pass ``should_forward``.
+
+    Shared by the main agent stream and the per-subagent stream, which differ
+    only in which events they keep: the main stream drops subagent-session
+    events (they belong to the per-subagent stream, and would otherwise render
+    the subagent's own prompt and tool calls inline in the parent thread),
+    while the subagent stream keeps only its own session. Filtered-out events
+    do not reset the keepalive counter. A ``None`` from the queue (shutdown
+    sentinel) ends the stream.
+    """
+    keepalive_counter = 0
+    try:
+        while not event_queues.is_shutdown:
+            try:
+                event = event_queue.get(timeout=1)
+                if event is None:
+                    break
+                if not should_forward(event):
+                    continue
+                keepalive_counter = 0
+                yield f"data: {json.dumps(event)}\n\n"
+            except queue.Empty:
+                keepalive_counter += 1
+                if keepalive_counter >= 8:
+                    keepalive_counter = 0
+                    yield ": keepalive\n\n"
+    except GeneratorExit:
+        pass
+    finally:
+        event_queues.unregister(agent_id, event_queue)
 
 
 def _stream_events(agent_id: str, request: Request) -> Response:
@@ -313,33 +419,14 @@ def _stream_events(agent_id: str, request: Request) -> Response:
     if agent_info is None:
         return _agent_not_found_response(agent_id)
 
-    _get_or_create_watcher(request, agent_info)
+    watcher = _get_or_create_watcher(request, agent_info)
+    _get_or_create_tickets_watcher(request, agent_info)
 
     event_queues: AgentEventQueues = request.app.state.event_queues
     event_queue = event_queues.register(agent_id)
 
-    def event_generator() -> Iterator[str]:
-        keepalive_counter = 0
-        try:
-            while not event_queues.is_shutdown:
-                try:
-                    event = event_queue.get(timeout=1)
-                    keepalive_counter = 0
-                    if event is None:
-                        break
-                    yield f"data: {json.dumps(event)}\n\n"
-                except queue.Empty:
-                    keepalive_counter += 1
-                    if keepalive_counter >= 8:
-                        keepalive_counter = 0
-                        yield ": keepalive\n\n"
-        except GeneratorExit:
-            pass
-        finally:
-            event_queues.unregister(agent_id, event_queue)
-
     return StreamingResponse(
-        event_generator(),
+        _stream_filtered_events(agent_id, event_queues, event_queue, watcher.is_main_session_event),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -360,6 +447,62 @@ def _send_message_endpoint(agent_id: str, send_message_request: SendMessageReque
         return JSONResponse(content=error.model_dump(), status_code=500)
 
     return JSONResponse(content=SendMessageResponse(status="ok").model_dump())
+
+
+async def _interrupt_agent_endpoint(agent_id: str, request: Request) -> JSONResponse:
+    """Interrupt an agent's current turn by restarting it.
+
+    Runs ``mngr start <agent> --restart --no-resume``, which stops the agent
+    (ending any in-progress turn) and starts it fresh without sending a resume
+    message. Returns 404 if the agent is unknown, 400 if the agent carries the
+    ``is_primary=true`` label, 500 if the restart command fails, 200 otherwise.
+
+    Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
+    the services agent for the workspace, and restarting it would stop the
+    bootstrap, telegram, web, cloudflared, and runtime-backup services. The
+    frontend already hides ``is_primary=true`` agents from the visible agent
+    list; this is defense-in-depth for callers that hit the endpoint directly
+    (curl, scripted use, etc.).
+    """
+    agent_info = _find_agent(agent_id, request)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+
+    if agent_info.labels.get("is_primary") == "true":
+        error = ErrorResponse(
+            detail=(
+                f"Refusing to interrupt agent '{agent_info.name}': it carries "
+                "the is_primary=true label (services agent for this workspace)"
+            )
+        )
+        return JSONResponse(content=error.model_dump(), status_code=400)
+
+    agent_name = agent_info.name
+
+    def _run_restart() -> tuple[bool, str]:
+        result = run_local_command_modern_version(
+            command=["mngr", "start", agent_name, "--restart", "--no-resume"],
+            cwd=None,
+            is_checked=False,
+            timeout=60.0,
+        )
+        succeeded = result.returncode == 0
+        output = result.stdout.strip() if succeeded else result.stderr.strip()
+        return succeeded, output
+
+    success, output = await run_in_threadpool(_run_restart)
+    if not success:
+        error = ErrorResponse(detail=f"Failed to interrupt agent '{agent_name}': {output}")
+        return JSONResponse(content=error.model_dump(), status_code=500)
+
+    # The restart abandons the session transcript mid-turn, so the
+    # transcript-derived activity state would stay pinned at THINKING /
+    # TOOL_RUNNING until the user sends another message. Reset it to IDLE
+    # now so the activity indicator clears immediately after the stop.
+    agent_manager: AgentManager = request.app.state.agent_manager
+    agent_manager.reset_activity_state(agent_id)
+
+    return JSONResponse(content=InterruptAgentResponse(status="ok").model_dump())
 
 
 def _get_subagent_events(agent_id: str, subagent_session_id: str, request: Request) -> Response:
@@ -388,30 +531,13 @@ def _stream_subagent_events(agent_id: str, subagent_session_id: str, request: Re
     event_queues: AgentEventQueues = request.app.state.event_queues
     event_queue = event_queues.register(agent_id)
 
-    def event_generator() -> Iterator[str]:
-        keepalive_counter = 0
-        try:
-            while not event_queues.is_shutdown:
-                try:
-                    event = event_queue.get(timeout=1)
-                    if event is None:
-                        break
-                    # Only forward events from this subagent's session
-                    if event.get("session_id") == subagent_session_id:
-                        keepalive_counter = 0
-                        yield f"data: {json.dumps(event)}\n\n"
-                except queue.Empty:
-                    keepalive_counter += 1
-                    if keepalive_counter >= 8:
-                        keepalive_counter = 0
-                        yield ": keepalive\n\n"
-        except GeneratorExit:
-            pass
-        finally:
-            event_queues.unregister(agent_id, event_queue)
-
     return StreamingResponse(
-        event_generator(),
+        _stream_filtered_events(
+            agent_id,
+            event_queues,
+            event_queue,
+            lambda event: event.get("session_id") == subagent_session_id,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -434,7 +560,7 @@ def _primary_agent_layout_dir() -> Path | None:
     agent_id = os.environ.get("MNGR_AGENT_ID", "")
     if not agent_id:
         return None
-    return _get_host_dir() / "agents" / agent_id / "workspace_layout"
+    return get_host_dir() / "agents" / agent_id / "workspace_layout"
 
 
 def _get_layout() -> Response:
@@ -728,38 +854,156 @@ async def _destroy_agent(agent_id: str, request: Request) -> JSONResponse:
     return JSONResponse(content=DestroyAgentResponse(status="ok").model_dump())
 
 
-async def _refresh_service_request_endpoint(service_name: str) -> JSONResponse:
-    """Append a refresh-service event to the agent's refresh events file.
+async def _start_agent(agent_id: str, request: Request) -> JSONResponse:
+    """Ensure an agent is running so its terminal session is attachable.
 
-    Called by agents inside the container to tell the minds desktop client
-    that an open web-service tab should reload. The desktop client picks the
-    event up via ``mngr event --follow`` and POSTs back to the broadcast
-    endpoint below.
+    Opening an agent's terminal attaches to that agent's tmux session; while
+    the agent is STOPPED that session does not exist, so the attach fails
+    immediately. The frontend calls this endpoint before opening a terminal
+    tab -- both for the chat-page "Open agent terminal" link and for terminal
+    tabs restored from a saved dockview layout.
+
+    This goes through the exact same in-process mngr start path that sending a
+    message to the agent uses (see ``agent_discovery.start_agent``), so opening
+    a terminal and messaging the agent succeed or fail together rather than
+    diverging. mngr's own lifecycle check makes the start a no-op for an
+    already-running agent, so this is cheap in the common case.
     """
-    try:
-        await run_in_threadpool(write_refresh_request, service_name)
-        return JSONResponse(content={"ok": True})
-    except (RuntimeError, OSError) as e:
-        error = ErrorResponse(detail=str(e))
+    agent_info = _find_agent(agent_id, request)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+
+    def _run_start() -> str | None:
+        try:
+            start_agent(agent_info.name)
+            return None
+        except MngrError as e:
+            return str(e)
+
+    error_message = await run_in_threadpool(_run_start)
+    if error_message is not None:
+        error = ErrorResponse(detail=f"Failed to start agent '{agent_info.name}': {error_message}")
         return JSONResponse(content=error.model_dump(), status_code=500)
 
+    return JSONResponse(content=StartAgentResponse(status="ok").model_dump())
 
-async def _refresh_service_broadcast_endpoint(service_name: str, request: Request) -> JSONResponse:
-    """Broadcast a refresh_service WebSocket message for the given service_name.
 
-    Called by the desktop client after it observes a refresh event on the
-    mngr event stream. Locked to loopback clients since no authentication
-    exists between the desktop client and the system_interface inside the
-    container.
+async def _layout_broadcast_endpoint(request: Request) -> JSONResponse:
+    """Unified loopback endpoint for the agent-facing ``scripts/layout.py`` helper.
+
+    Body: ``{op, args, agent_id}``.
+
+    Dispatch:
+
+    - ``list`` / ``inspect``: pure server-side queries that read the
+      ``agent_manager``'s in-memory service/agent registry plus the
+      persisted ``layout.json`` (for ``is_open`` flags / tree layout)
+      and return a structured payload. Bypass the mutex.
+    - ``refresh``: a state-preserving broadcast that doesn't mutate
+      serialized layout. Bypass the mutex.
+    - All other ops (``open``, ``focus``, ``split``, ``close``, ``move``,
+      ``rename``, ``maximize``, ``restore``, ``replace-url``): acquire
+      the advisory mutex first; on contention return HTTP 409 with the
+      holder's metadata so the caller can decide whether to retry. On
+      success, broadcast the ``layout_op`` WS message and return.
+
+    The endpoint is locked to loopback clients (no authentication exists
+    between callers and the system interface inside the container).
     """
     client_host = request.client.host if request.client is not None else ""
     if client_host not in _LOOPBACK_CLIENT_HOSTS:
-        error = ErrorResponse(detail="refresh-service broadcast is only callable from loopback")
+        error = ErrorResponse(detail="layout broadcast is only callable from loopback")
         return JSONResponse(content=error.model_dump(), status_code=403)
 
-    broadcaster: WebSocketBroadcaster = request.app.state.broadcaster
-    broadcaster.broadcast_refresh_service(service_name)
-    return JSONResponse(content={"ok": True})
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        _loguru_logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
+        error = ErrorResponse(detail="Invalid JSON in request body")
+        return JSONResponse(content=error.model_dump(), status_code=400)
+    if not isinstance(body, dict):
+        error = ErrorResponse(detail="Request body must be a JSON object")
+        return JSONResponse(content=error.model_dump(), status_code=400)
+
+    op = body.get("op")
+    args_raw = body.get("args", {})
+    agent_id = body.get("agent_id") or request.headers.get("X-Mngr-Agent-Id") or ""
+    if not isinstance(op, str) or not is_known_op(op):
+        error = ErrorResponse(detail=f"Unknown layout op: {op!r}")
+        return JSONResponse(content=error.model_dump(), status_code=400)
+    if not isinstance(args_raw, dict):
+        error = ErrorResponse(detail="``args`` must be a JSON object")
+        return JSONResponse(content=error.model_dump(), status_code=400)
+
+    agent_manager: AgentManager = request.app.state.agent_manager
+    agent_name_by_id = {a["id"]: a["name"] for a in agent_manager.get_agents_serialized()}
+
+    if op == "list":
+        layout_dir = _primary_agent_layout_dir()
+        layout_path = (layout_dir / _LAYOUT_FILENAME) if layout_dir is not None else None
+        entries = layout_list(
+            agent_manager.list_service_names(),
+            agent_manager.get_agents_serialized(),
+            layout_path,
+            agent_name_by_id,
+        )
+        # Log the caller for telemetry; v1 has no enforcement.
+        logger.info("layout op={} agent_id={} entries={}", op, agent_id, len(entries))
+        return JSONResponse(content={"ok": True, "entries": entries})
+
+    if op == "inspect":
+        layout_dir = _primary_agent_layout_dir()
+        layout_path = (layout_dir / _LAYOUT_FILENAME) if layout_dir is not None else None
+        summary = layout_inspect(layout_path, agent_name_by_id)
+        logger.info("layout op={} agent_id={} panels={}", op, agent_id, len(summary.get("panels", [])))
+        return JSONResponse(content={"ok": True, "layout": summary})
+
+    if not is_broadcasting_op(op):
+        # Defensive: every non-list/inspect op should broadcast. Catch
+        # drift in the op-set definitions.
+        error = ErrorResponse(detail=f"Op {op!r} has no broadcast handler")
+        return JSONResponse(content=error.model_dump(), status_code=500)
+
+    # Terminal creation is the one path where the script returns a ref
+    # synchronously: the frontend's "New terminal" button gives each
+    # terminal a freshly-minted iframe panel id, so the server pre-mints
+    # one here, injects it into the broadcast args (the frontend uses it
+    # verbatim), and reports the resulting ``terminal:<hash>`` ref back
+    # in the HTTP response. Every other ref kind either dedups against
+    # the existing panel set or is discoverable via a subsequent
+    # ``inspect``.
+    allocated_ref: str | None = None
+    if op in {"open", "split"} and args_raw.get("ref") == "service:terminal":
+        panel_id, allocated_ref = allocate_terminal_panel_id()
+        args_raw = {**args_raw, "panel_id": panel_id}
+
+    layout_mutex: LayoutMutex = request.app.state.layout_mutex
+    if is_mutating_op(op):
+        holder = layout_mutex.try_acquire(agent_id, op, args_raw)
+        if holder is not None:
+            error_body = {
+                "detail": (
+                    f"Another layout op is in flight: agent_id={holder['agent_id']} "
+                    f"op={holder['operation']}. Retry after the mutex TTL elapses."
+                ),
+                "retry_after_ms": layout_mutex.retry_after_ms(),
+                "in_flight": holder,
+            }
+            return JSONResponse(content=error_body, status_code=409)
+        try:
+            broadcaster: WebSocketBroadcaster = request.app.state.broadcaster
+            broadcaster.broadcast_layout_op(op, args_raw, requester_agent_id=agent_id)
+        finally:
+            layout_mutex.release(agent_id, op)
+    else:
+        broadcaster = request.app.state.broadcaster
+        broadcaster.broadcast_layout_op(op, args_raw, requester_agent_id=agent_id)
+
+    logger.info("layout op={} agent_id={} args={}", op, agent_id, args_raw)
+    response_body: dict[str, Any] = {"ok": True}
+    if allocated_ref is not None:
+        response_body["ref"] = allocated_ref
+    return JSONResponse(content=response_body)
 
 
 def _inject_agent_id_meta_tag(html_content: str) -> str:
@@ -775,6 +1019,8 @@ def create_application(
     include_filters: tuple[str, ...] = (),
     exclude_filters: tuple[str, ...] = (),
     agent_manager: AgentManager | None = None,
+    claude_auth_service: ClaudeAuthService | None = None,
+    welcome_resender: WelcomeResender | None = None,
 ) -> FastAPI:
     application = FastAPI(lifespan=_lifespan)
 
@@ -792,6 +1038,16 @@ def create_application(
     application.state.provider_names = provider_names
     application.state.include_filters = include_filters
     application.state.exclude_filters = exclude_filters
+    # One long-lived ClaudeAuthService per app so the in-flight OAuth
+    # subprocess survives between the /start and /submit-code requests.
+    application.state.claude_auth_service = claude_auth_service or ClaudeAuthService()
+    application.state.welcome_resender = welcome_resender or WelcomeResender()
+    # Per-agent watcher registries. Seeded here (not only in ``_lifespan``) so the
+    # attributes always exist on ``app.state`` -- ``_stop_all_watchers`` runs in test
+    # paths that construct the app without driving the lifespan, and would otherwise
+    # have to defensively probe for these attributes.
+    application.state.watchers = {}
+    application.state.tickets_watchers = {}
 
     plugin_manager = get_plugin_manager()
     plugin_manager.hook.endpoint(app=application)
@@ -805,16 +1061,14 @@ def create_application(
     application.add_api_route("/api/agents/{agent_id}/events", _get_events, methods=["GET"])
     application.add_api_route("/api/agents/{agent_id}/stream", _stream_events, methods=["GET"])
     application.add_api_route("/api/agents/{agent_id}/message", _send_message_endpoint, methods=["POST"])
+    application.add_api_route("/api/agents/{agent_id}/interrupt", _interrupt_agent_endpoint, methods=["POST"])
     application.add_api_route("/api/layout", _get_layout, methods=["GET"])
     application.add_api_route("/api/layout", _save_layout, methods=["POST"])
     application.add_api_route("/api/agents/{agent_id}/screen", _get_screen_capture, methods=["GET"])
     application.add_api_route("/api/agents/{agent_id}/destroy", _destroy_agent, methods=["POST"])
-    application.add_api_route(
-        "/api/refresh-service/{service_name}", _refresh_service_request_endpoint, methods=["POST"]
-    )
-    application.add_api_route(
-        "/api/refresh-service/{service_name}/broadcast", _refresh_service_broadcast_endpoint, methods=["POST"]
-    )
+    application.add_api_route("/api/agents/{agent_id}/start", _start_agent, methods=["POST"])
+    claude_auth_endpoints.register_routes(application)
+    application.add_api_route("/api/layout/broadcast", _layout_broadcast_endpoint, methods=["POST"])
     application.add_api_route(
         "/api/agents/{agent_id}/subagents/{subagent_session_id}/events", _get_subagent_events, methods=["GET"]
     )

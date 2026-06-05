@@ -13,14 +13,30 @@ from typing import Any
 
 from loguru import logger as _loguru_logger
 
+from imbue.system_interface.claude_auth_patterns import is_auth_error_text
+
 logger = _loguru_logger
 
 _MAX_INPUT_PREVIEW_LENGTH = 200
 _MAX_OUTPUT_LENGTH = 2000
 
+# tk lifecycle commands print `Updated <id> -> <status>` on each transition; the
+# chat progress view reads these from tool output to position a step's
+# open/close. They must survive output truncation (e.g. when a tk command is
+# batched after a verbose one whose output pushes the line past the limit), so a
+# step transition is never lost to truncation -- see `_truncate_tool_output`.
+_TK_TRANSITION_PATTERN = re.compile(r"Updated \S+ -> (?:open|in_progress|closed)")
+
 _SOURCE = "claude/common_transcript"
 
 _AGENT_ID_PATTERN = re.compile(r"agentId:\s*(\S+)")
+
+# Sentinel text Claude writes to the user channel when the user interrupts a
+# turn (e.g. presses Esc mid-tool-use). It is a control marker, not real user
+# input -- emitting it as a ``user_message`` event would pin the activity
+# indicator on "Thinking..." after every interrupt, since the transcript-tail
+# heuristic would treat it as "user just spoke, Claude hasn't replied yet."
+_INTERRUPT_SENTINEL_TEXT = "[Request interrupted by user]"
 
 # Claude Code's resume bookkeeping. Whenever ``claude --resume`` reloads a
 # session whose previous turn did not finish cleanly (the turn was interrupted,
@@ -77,9 +93,41 @@ def _has_tool_results_only(content: str | list[Any] | Any) -> bool:
     return True
 
 
+def _extract_subagent_id(structured_agent_id: str | None, result_content: str) -> str | None:
+    """Resolve the subagent id for an Agent tool_result.
+
+    Prefers the structured toolUseResult.agentId field, falling back to the
+    `agentId: <id>` text trailer in the tool result content. Newer Claude Code
+    versions may emit only the structured field; older versions or nested
+    subagents may emit only the trailer.
+    """
+    if structured_agent_id:
+        return structured_agent_id
+    if not result_content:
+        return None
+    agent_id_match = _AGENT_ID_PATTERN.search(result_content)
+    if agent_id_match:
+        return agent_id_match.group(1)
+    return None
+
+
 def _make_event_id(uuid: str, suffix: str) -> str:
     """Derive a deterministic event_id from the source UUID and a suffix."""
     return f"{uuid}-{suffix}"
+
+
+def _truncate_tool_output(content: str) -> str:
+    """Truncate a tool result to the head limit, but keep any tk transition
+    lines (`Updated <id> -> <status>`) that fall past the cut, appended after
+    the truncation marker. This preserves the progress view's step-transition
+    signal even when a tk command's output is pushed past the limit."""
+    if len(content) <= _MAX_OUTPUT_LENGTH:
+        return content
+    head = content[:_MAX_OUTPUT_LENGTH]
+    preserved = [m.group(0) for m in _TK_TRANSITION_PATTERN.finditer(content) if m.end() > _MAX_OUTPUT_LENGTH]
+    if preserved:
+        return head + "...\n" + "\n".join(preserved)
+    return head + "..."
 
 
 def _is_resume_continuation_marker(raw: dict[str, Any]) -> bool:
@@ -213,13 +261,24 @@ def _parse_assistant_message(
             if call_id and tool_name:
                 tool_name_by_call_id[call_id] = tool_name
 
-            tool_calls.append(
-                {
-                    "tool_call_id": call_id,
-                    "tool_name": tool_name,
-                    "input_preview": input_preview,
-                }
-            )
+            tool_call: dict[str, str] = {
+                "tool_call_id": call_id,
+                "tool_name": tool_name,
+                "input_preview": input_preview,
+            }
+            # For Agent tool calls, surface the description and subagent_type from the
+            # tool input directly. These let the frontend render the rich subagent card
+            # (label + agent-type badge) the instant the call appears, before the subagent
+            # is linked to its session.
+            if tool_name == "Agent" and isinstance(tool_input, dict):
+                description = tool_input.get("description")
+                subagent_type = tool_input.get("subagent_type")
+                if isinstance(description, str) and description:
+                    tool_call["description"] = description
+                if isinstance(subagent_type, str) and subagent_type:
+                    tool_call["subagent_type"] = subagent_type
+
+            tool_calls.append(tool_call)
 
     usage: dict[str, Any] | None = None
     if usage_raw:
@@ -230,6 +289,7 @@ def _parse_assistant_message(
             "cache_write_tokens": usage_raw.get("cache_creation_input_tokens"),
         }
 
+    joined_text = "\n".join(text_parts)
     event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "assistant_message",
@@ -237,11 +297,12 @@ def _parse_assistant_message(
         "source": _SOURCE,
         "role": "assistant",
         "model": model,
-        "text": "\n".join(text_parts),
+        "text": joined_text,
         "tool_calls": tool_calls,
         "stop_reason": stop_reason,
         "usage": usage,
         "message_uuid": uuid,
+        "is_auth_error": is_auth_error_text(joined_text),
     }
     if session_id is not None:
         event["session_id"] = session_id
@@ -261,13 +322,19 @@ def _parse_user_message(
     message: dict[str, Any] = raw.get("message", {})
     content = message.get("content")
 
+    tool_use_result = raw.get("toolUseResult")
+    structured_agent_id: str | None = None
+    if isinstance(tool_use_result, dict):
+        agent_id_value = tool_use_result.get("agentId")
+        if isinstance(agent_id_value, str) and agent_id_value:
+            structured_agent_id = agent_id_value
+
     # Emit user text message if there is actual user text
     if not _has_tool_results_only(content):
         event_id = _make_event_id(uuid, "user")
         if event_id not in existing_event_ids:
             text = _extract_text_content(content)
-            # Drop Claude Code's resume bookkeeping -- its own UI hides it, so do we.
-            if text and not _is_resume_continuation_marker(raw):
+            if text and text.strip() != _INTERRUPT_SENTINEL_TEXT and not _is_resume_continuation_marker(raw):
                 event: dict[str, Any] = {
                     "timestamp": timestamp,
                     "type": "user_message",
@@ -312,15 +379,12 @@ def _parse_user_message(
 
             tool_name = tool_name_by_call_id.get(tool_call_id, "unknown")
 
-            # Extract subagent ID BEFORE truncation (it may be at the end)
+            # Extract subagent ID BEFORE truncation (the trailer may be at the end).
             extracted_subagent_id: str | None = None
-            if tool_name == "Agent" and result_content:
-                agent_id_match = _AGENT_ID_PATTERN.search(result_content)
-                if agent_id_match:
-                    extracted_subagent_id = agent_id_match.group(1)
+            if tool_name == "Agent":
+                extracted_subagent_id = _extract_subagent_id(structured_agent_id, result_content)
 
-            if len(result_content) > _MAX_OUTPUT_LENGTH:
-                result_content = result_content[:_MAX_OUTPUT_LENGTH] + "..."
+            result_content = _truncate_tool_output(result_content)
 
             event = {
                 "timestamp": timestamp,

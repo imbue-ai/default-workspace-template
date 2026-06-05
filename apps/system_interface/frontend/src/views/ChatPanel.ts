@@ -12,36 +12,42 @@ import { isSlotClaimed } from "../slots";
 import {
   fetchBackfillEvents,
   getEventsForAgent,
-  getEventCount,
-  evictOldEvents,
-  hasMoreToBackfill,
+  getEnrichmentForAgent,
+  getFirstEventId,
   isConversationNotFound,
-  MAX_HELD_EVENTS,
-  type TranscriptEvent,
+  isBackfillComplete,
 } from "../models/Response";
-import { computeVisibleWindow } from "../models/virtualWindow";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
+import { openLoginModal } from "../models/ClaudeAuth";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { MessageInput } from "./MessageInput";
-import { renderUserMessage, renderAssistantMessage, isHiddenUserMessage } from "./message-renderers";
-import { getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
+import {
+  renderUserMessage,
+  renderAssistantMessage,
+  buildToolResultsWithSkillExpansions,
+  computeAuthErrorHiddenEventIds,
+} from "./message-renderers";
+import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
+import { buildSections } from "./turn-grouping";
+import { ProgressBlock } from "./ProgressBlock";
+import { ActivityIndicator } from "./ActivityIndicator";
 
 function getAgentTerminalUrl(agentId: string): string {
-  const baseUrl = getTerminalUrl();
-  const separator = baseUrl.includes("?") ? "&" : "?";
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
-  // the first trailing arg becomes $0 (not $1). The dispatch reads KEY="$1",
-  // so we prepend a dummy "_" to land the real key in $1. That matches the
-  // pattern used by the existing workdir deep-link in DockviewWorkspace.ts.
-  // Passing the agent name as $2 lets agent.sh attach to that agent's tmux
-  // session ("${MNGR_PREFIX}<name>") rather than the primary agent's. If the
-  // agent isn't in the local cache yet, fall back to no name arg and let
-  // agent.sh attach to the ambient session.
+  // the first trailing arg becomes $0 (not $1). ``buildAgentTerminalUrl``
+  // emits ``arg=_&arg=agent&arg=<name>`` so the dispatch lands ``agent`` in
+  // ``$1`` and the name in ``$2``, mirroring the workdir deep-link pattern.
+  // When the agent isn't in the local cache yet, fall back to the bare
+  // base URL and let agent.sh attach to the ambient session.
   const agent = getAgentById(agentId);
-  const args = agent?.name ? `arg=_&arg=agent&arg=${encodeURIComponent(agent.name)}` : "arg=_&arg=agent";
-  return `${baseUrl}${separator}${args}`;
+  if (!agent?.name) {
+    const baseUrl = getTerminalUrl();
+    const separator = baseUrl.includes("?") ? "&" : "?";
+    return `${baseUrl}${separator}arg=_&arg=agent`;
+  }
+  return buildAgentTerminalUrl(agent.name);
 }
 
 function openAgentTerminalTab(agentId: string): void {
@@ -51,24 +57,6 @@ function openAgentTerminalTab(agentId: string): void {
 }
 
 const SCROLL_BOTTOM_THRESHOLD_PX = 40;
-
-// Pixels rendered above/below the viewport so scrolling does not flash blank
-// before the next redraw fills the window.
-const OVERSCAN_PX = 800;
-// Scroll-up backfill fires when the viewport top is within this many pixels of
-// the top of the held content (and the server reports more history).
-const BACKFILL_TRIGGER_PX = 600;
-// Per-type fallback row heights, used until a row has been measured. Rough is
-// fine: they only affect spacer sizing for off-screen rows, which is corrected
-// as rows scroll into view and are measured.
-const ESTIMATED_USER_HEIGHT_PX = 90;
-const ESTIMATED_ASSISTANT_HEIGHT_PX = 240;
-
-interface RowDescriptor {
-  key: string;
-  estimate: number;
-  render: () => m.Vnode;
-}
 
 function isNearBottom(element: HTMLElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight < SCROLL_BOTTOM_THRESHOLD_PX;
@@ -82,64 +70,35 @@ function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
 }
 
-/**
- * Build the renderable row list (user + assistant messages) from the held
- * events. tool_result events are not rows -- they are folded into the assistant
- * message that issued the call -- and hidden user messages are dropped. Render
- * closures are invoked lazily so only windowed rows actually build their vnodes.
- */
-function buildRows(agentId: string, events: TranscriptEvent[]): RowDescriptor[] {
-  const toolResults = new Map<string, TranscriptEvent>();
-  for (const event of events) {
-    if (event.type === "tool_result" && event.tool_call_id) {
-      toolResults.set(event.tool_call_id, event);
-    }
-  }
-
-  const rows: RowDescriptor[] = [];
-  for (const event of events) {
-    if (event.type === "user_message") {
-      if (isHiddenUserMessage(event.content || "")) {
-        continue;
-      }
-      rows.push({
-        key: event.event_id,
-        estimate: ESTIMATED_USER_HEIGHT_PX,
-        render: () => renderUserMessage(event) as m.Vnode,
-      });
-    } else if (event.type === "assistant_message") {
-      rows.push({
-        key: event.event_id,
-        estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
-        render: () => renderAssistantMessage(event, toolResults, agentId),
-      });
-    }
-  }
-  return rows;
-}
-
 export function ChatPanel(): m.Component<{ agentId: string }> {
   let loading = false;
   let loadingError: string | null = null;
   let currentAgentId: string | null = null;
   let userScrolledUp = false;
   let previousScrollTop = 0;
+  let backfillStarted = false;
 
-  // Virtualization state.
-  let scrollEl: HTMLElement | null = null;
-  let viewportHeight = 0;
-  let scrollTop = 0;
-  let rowHeights = new Map<string, number>();
-  let viewportResizeObserver: ResizeObserver | null = null;
-  let measureScheduled = false;
-  // Backfill (scroll-up paging) state.
-  let backfillInFlight = false;
-  // After a backfill prepend, compensate scrollTop by the height the content
-  // grew so the user's viewport stays anchored instead of jumping. The pending
-  // flag is only raised once the backfill resolves, so unrelated redraws in the
-  // meantime do not consume (and discard) the captured pre-prepend height.
-  let scrollHeightBeforePrepend = 0;
-  let prependCompensationPending = false;
+  // Snapshot-load path: SSE only carries events emitted after subscription,
+  // so an auth-error that happened before the user opened the panel (e.g.
+  // the auto-`/welcome` failing during fresh mind creation) wouldn't open
+  // the modal otherwise. Walking back to the last assistant_message means
+  // an already-recovered agent (whose history contains old auth errors
+  // but has since produced healthy replies) does not open it on reload --
+  // only an agent whose current state is broken does. The modal itself is
+  // a single app-level instance driven by global auth state (see
+  // models/ClaudeAuth.ts), so this just flips that shared flag.
+  function checkLatestAssistantForAuthError(agentId: string): void {
+    const events = getEventsForAgent(agentId);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i];
+      if (event.type === "assistant_message") {
+        if (event.is_auth_error === true) {
+          openLoginModal();
+        }
+        return;
+      }
+    }
+  }
 
   // Screen capture state (shown when agent has no conversation)
   let screenContent: string | null = null;
@@ -271,6 +230,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       if (agentId === currentAgentId) {
         loading = false;
         loadingError = null;
+        checkLatestAssistantForAuthError(agentId);
       }
     } catch (error) {
       if (agentId === currentAgentId) {
@@ -295,57 +255,51 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
 
     currentAgentId = agentId;
     previousScrollTop = 0;
-    scrollTop = 0;
     userScrolledUp = false;
-    backfillInFlight = false;
-    scrollHeightBeforePrepend = 0;
-    prependCompensationPending = false;
-    rowHeights = new Map<string, number>();
+    backfillStarted = false;
     loadAgent(agentId);
   }
 
-  /**
-   * Fetch one older page when the user scrolls near the top and the server has
-   * more history. Replaces the old drain-to-completion loop: history is paged in
-   * on demand, one viewport-worth at a time, so opening a long transcript no
-   * longer pulls the entire backlog to the client.
-   */
-  function maybeBackfill(agentId: string, element: HTMLElement): void {
-    if (backfillInFlight || !hasMoreToBackfill(agentId)) {
-      return;
-    }
-    if (element.scrollTop > BACKFILL_TRIGGER_PX) {
-      return;
-    }
-    backfillInFlight = true;
-    scrollHeightBeforePrepend = element.scrollHeight;
-    fetchBackfillEvents(agentId).finally(() => {
-      backfillInFlight = false;
-      // Only now (older events prepended) is compensation due; raising the flag
-      // here keeps interim redraws from consuming the captured height early.
-      prependCompensationPending = true;
+  async function runBackfillLoop(agentId: string): Promise<void> {
+    const MAX_STALLED_RETRIES = 5;
+    const BACKOFF_BASE_MS = 1000;
+    const BACKOFF_CAP_MS = 30000;
+    let stalledCount = 0;
+
+    while (!isBackfillComplete(agentId) && agentId === currentAgentId) {
+      const firstIdBefore = getFirstEventId(agentId);
+      await fetchBackfillEvents(agentId);
       m.redraw();
-    });
+
+      if (isBackfillComplete(agentId)) {
+        break;
+      }
+
+      const firstIdAfter = getFirstEventId(agentId);
+      if (firstIdAfter === firstIdBefore) {
+        stalledCount++;
+        if (stalledCount >= MAX_STALLED_RETRIES) {
+          break;
+        }
+        const delayMs = Math.min(BACKOFF_BASE_MS * 2 ** (stalledCount - 1), BACKOFF_CAP_MS);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      } else {
+        stalledCount = 0;
+      }
+    }
+  }
+
+  function startBackfill(agentId: string): void {
+    if (backfillStarted || isBackfillComplete(agentId)) {
+      return;
+    }
+    backfillStarted = true;
+    runBackfillLoop(agentId);
   }
 
   function applyScrollPosition(element: HTMLElement): void {
-    // Compensate for content prepended by a just-completed backfill so the
-    // viewport stays anchored on what the user was reading rather than jumping
-    // to the new top. Done before the scroll-to-bottom check below; the two are
-    // mutually exclusive in practice (a prepend only happens while scrolled up).
-    if (prependCompensationPending) {
-      prependCompensationPending = false;
-      const delta = element.scrollHeight - scrollHeightBeforePrepend;
-      if (delta > 0) {
-        element.scrollTop += delta;
-        scrollTop = element.scrollTop;
-        previousScrollTop = element.scrollTop;
-      }
-    }
-
     if (!userScrolledUp) {
       scrollToBottom(element);
-      scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
     }
   }
@@ -356,73 +310,14 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     const didScrollUp = currentScrollTop < previousScrollTop;
 
     previousScrollTop = currentScrollTop;
-    scrollTop = currentScrollTop;
 
     if (didScrollUp) {
       userScrolledUp = true;
-      if (currentAgentId !== null) {
-        maybeBackfill(currentAgentId, element);
-      }
       return;
     }
 
     if (isNearBottom(element)) {
       userScrolledUp = false;
-    }
-  }
-
-  // Read each rendered row's height from the DOM and cache it by event id, so
-  // the window math and spacer sizes converge on real heights. Returns whether
-  // any height changed (so the caller can schedule one more redraw to settle
-  // the spacers). Also refreshes the viewport height.
-  function measureRows(): boolean {
-    if (scrollEl === null) {
-      return false;
-    }
-    viewportHeight = scrollEl.clientHeight;
-    const list = scrollEl.querySelector(".message-list");
-    if (list === null) {
-      return false;
-    }
-    let changed = false;
-    for (const child of Array.from(list.children)) {
-      const element = child as HTMLElement;
-      const key = element.id;
-      if (key === "") {
-        continue; // spacer
-      }
-      const height = element.offsetHeight;
-      if (height > 0 && rowHeights.get(key) !== height) {
-        rowHeights.set(key, height);
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
-  function scheduleMeasure(): void {
-    if (measureScheduled) {
-      return;
-    }
-    measureScheduled = true;
-    requestAnimationFrame(() => {
-      measureScheduled = false;
-      if (measureRows()) {
-        m.redraw();
-      }
-    });
-  }
-
-  // Keep the height cache from growing without bound as rows are evicted: drop
-  // entries for keys no longer present once it drifts well past the row count.
-  function pruneHeights(keys: Set<string>): void {
-    if (rowHeights.size <= keys.size + 256) {
-      return;
-    }
-    for (const key of rowHeights.keys()) {
-      if (!keys.has(key)) {
-        rowHeights.delete(key);
-      }
     }
   }
 
@@ -490,15 +385,6 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       );
     }
 
-    // Bound client memory while following the live tail: trim the oldest held
-    // events once well over the cap. Only when at the bottom, so a scrolled-up
-    // reader's rendered history is never yanked out from under them; the dropped
-    // history is re-fetched via backfill on scroll-up (evictOldEvents sets
-    // has_more). Re-pinned to the bottom by applyScrollPosition afterwards.
-    if (!userScrolledUp && getEventCount(agentId) > MAX_HELD_EVENTS) {
-      evictOldEvents(agentId);
-    }
-
     const events = getEventsForAgent(agentId);
 
     if (events.length === 0) {
@@ -509,33 +395,67 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       );
     }
 
-    const rows = buildRows(agentId, events);
-    pruneHeights(new Set(rows.map((row) => row.key)));
+    startBackfill(agentId);
 
-    const getHeight = (index: number): number => rowHeights.get(rows[index].key) ?? rows[index].estimate;
-    const windowResult = computeVisibleWindow({
-      count: rows.length,
-      getHeight,
-      scrollTop,
-      // Before the first measure viewportHeight is 0; fall back to the live
-      // clientHeight (or a large value) so the initial render is not a 1-row
-      // sliver that the post-mount measure then has to expand.
-      viewportHeight: viewportHeight > 0 ? viewportHeight : (scrollEl?.clientHeight ?? 2000),
-      overscanPx: OVERSCAN_PX,
-    });
+    const toolResults = buildToolResultsWithSkillExpansions(events);
 
-    const visibleRows: m.Vnode[] = [];
-    visibleRows.push(m("div", { key: "__spacer_top", style: `height: ${windowResult.topPad}px` }));
-    for (let i = windowResult.startIndex; i < windowResult.endIndex; i++) {
-      visibleRows.push(rows[i].render());
+    const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
+    const visibleEvents = events.filter((e) => !hiddenEventIds.has(e.event_id));
+
+    // tk is an enrichment side-table (titles, summaries, pending roster),
+    // joined onto the transcript-derived structure by id. It arrives as a
+    // separate snapshot (GET /events + the step_enrichment SSE message), kept
+    // current in the Response model; structure -- which steps exist, their
+    // order, grouping -- comes purely from the transcript walk.
+    const enrichment = getEnrichmentForAgent(agentId);
+    const agent = getAgentById(agentId);
+    const agentIsIdle = agent?.activity_state === "IDLE";
+
+    // A single in-order walk of the transcript produces the turn sections:
+    // each carries its timeline items (steps, ungrouped runs, chips) and its
+    // wrap-up reply. There is no timestamp-based grouping or sorting.
+    const sections = buildSections(visibleEvents, toolResults, enrichment, agentIsIdle);
+
+    const messageNodes: m.Children[] = [];
+    for (const section of sections) {
+      if (section.user_event !== null) {
+        const userNode = renderUserMessage(section.user_event);
+        if (userNode !== null) messageNodes.push(userNode);
+      }
+
+      const hasSteps = section.items.some((i) => i.kind === "step");
+      if (hasSteps) {
+        messageNodes.push(
+          m(ProgressBlock, {
+            key: `progress-${section.key}`,
+            items: section.items,
+            trailing_reply: section.trailing_reply,
+            toolResults,
+            agentId,
+          }),
+        );
+        continue;
+      }
+
+      // No steps this turn: render the body as plain chat -- prose and
+      // tool-call blocks inline, the same as assistant messages outside a
+      // progress section. Items are already in transcript order.
+      for (const item of section.items) {
+        if (item.kind === "ungrouped") {
+          for (const e of item.events) messageNodes.push(renderAssistantMessage(e, toolResults, agentId));
+        } else if (item.kind === "chip") {
+          const chipNode = renderUserMessage(item.event);
+          if (chipNode !== null) messageNodes.push(chipNode);
+        }
+      }
+      for (const e of section.trailing_reply) messageNodes.push(renderAssistantMessage(e, toolResults, agentId));
     }
-    visibleRows.push(m("div", { key: "__spacer_bottom", style: `height: ${windowResult.bottomPad}px` }));
 
     return m("div", { class: "message-list-wrapper" }, [
       m(
         "div",
         { class: "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6" },
-        visibleRows,
+        messageNodes,
       ),
     ]);
   }
@@ -543,11 +463,6 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   return {
     onremove() {
       disconnectLogWs();
-      if (viewportResizeObserver !== null) {
-        viewportResizeObserver.disconnect();
-        viewportResizeObserver = null;
-      }
-      scrollEl = null;
       if (currentAgentId !== null) {
         disconnectFromStream(currentAgentId);
       }
@@ -556,31 +471,17 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     view(vnode) {
       const agentId = vnode.attrs.agentId;
 
-      return m("div", { class: "chat-panel flex flex-col h-full" }, [
+      return m("div", { class: "chat-panel flex flex-col h-full relative" }, [
         m(
           "main",
           {
             class: "app-content flex-1 overflow-y-auto px-8 py-6",
             onscroll: handleScrollEvent,
             oncreate: (mainVnode: m.VnodeDOM) => {
-              scrollEl = mainVnode.dom as HTMLElement;
-              viewportHeight = scrollEl.clientHeight;
-              // Recompute the window when the panel itself resizes (dockview
-              // splits, window resize) since that changes the visible range.
-              viewportResizeObserver = new ResizeObserver(() => {
-                if (scrollEl !== null && scrollEl.clientHeight !== viewportHeight) {
-                  viewportHeight = scrollEl.clientHeight;
-                  m.redraw();
-                }
-              });
-              viewportResizeObserver.observe(scrollEl);
-              applyScrollPosition(scrollEl);
-              scheduleMeasure();
+              applyScrollPosition(mainVnode.dom as HTMLElement);
             },
             onupdate: (mainVnode: m.VnodeDOM) => {
-              scrollEl = mainVnode.dom as HTMLElement;
-              applyScrollPosition(scrollEl);
-              scheduleMeasure();
+              applyScrollPosition(mainVnode.dom as HTMLElement);
             },
           },
           isSlotClaimed("conversation-content") ? null : renderMessages(agentId),
@@ -590,6 +491,9 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
           ? null
           : m("footer", { class: "app-footer" }, [
               m(EmptySlot, { name: "conversation-before-input" }),
+              isConversationNotFound(agentId)
+                ? null
+                : m(ActivityIndicator, { agentId, events: getEventsForAgent(agentId) }),
               m(MessageInput, { agentId }),
               m("div", { class: "chat-agent-terminal-link" }, [
                 m(
