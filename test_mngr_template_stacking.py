@@ -99,12 +99,12 @@ def test_main_extra_provision_command_stacks_with_lima() -> None:
     assert any(_TMUX_MARKER in cmd for cmd in commands)
     # Spot-check several distinct lima provisioning commands to confirm the
     # entire list (not just the first entry) is concatenated. The bulk of the
-    # provisioning (apt, latchkey, uv tool install, uv sync, playwright, the
-    # cred-bridge watcher) is now collapsed into a single base64-encoded
-    # parallel script, so spot-check that command plus an early and a late
-    # plain entry to confirm the whole list survives.
+    # provisioning (apt, latchkey, uv tool install, uv sync, playwright) is
+    # collapsed into a single heredoc-fed bash script, so spot-check that
+    # command plus an early and a late plain entry to confirm the whole list
+    # survives.
     assert any("sudo mkdir -p /mngr/worktree" in cmd for cmd in commands)
-    assert any("base64 -d | bash" in cmd for cmd in commands)
+    assert any("bash <<'EOSCRIPT'" in cmd for cmd in commands)
     assert any("vendor/tk/ticket" in cmd for cmd in commands)
 
 
