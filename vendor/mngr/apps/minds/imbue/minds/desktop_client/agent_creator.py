@@ -263,20 +263,6 @@ def _is_local_path(repo_source: str) -> bool:
     return repo_source.startswith(("/", "./", "../", "~"))
 
 
-def _may_shallow_clone_remote_repo(launch_mode: LaunchMode) -> bool:
-    """Whether a remote-URL clone for ``launch_mode`` may be shallow (``--depth 1``).
-
-    Shallow is fine for modes that rsync the workspace into place, but the
-    imbue_cloud *slow path* transfers the clone to the leased host via mngr's
-    git-mirror PUSH (``host.py:_git_push_to_target``), which git rejects for
-    shallow history (``shallow update not allowed``). So imbue_cloud requires a
-    full clone -- otherwise a slow-path fallback (no fast/adopt match) fails
-    outright. Shared tiers (staging / production) hit this because their create
-    form defaults to the remote FCT URL rather than a local worktree.
-    """
-    return launch_mode is not LaunchMode.IMBUE_CLOUD
-
-
 def _redact_url_credentials(url: str) -> str:
     """Strip any ``user[:password]@`` userinfo from a URL's netloc for logging.
 
@@ -345,19 +331,35 @@ def clone_git_repo(
     clone_dir: Path,
     on_output: OutputCallback | None = None,
     *,
-    is_shallow: bool = False,
+    branch: GitBranch | None = None,
     parent_cg: ConcurrencyGroup | None = None,
+    reference_repo: Path | None = None,
 ) -> None:
     """Clone a git repository into the specified directory.
 
     The clone_dir must not already exist -- git clone will create it.
-    When is_shallow is True, clones with --depth 1 to skip history.
-    Raises GitCloneError if the clone fails.
+
+    When ``branch`` is given, only that branch is fetched (``--single-branch
+    --branch``), which avoids downloading every other branch's history. This is
+    still a *complete* (non-shallow) clone of that branch -- its full ancestry is
+    present. We deliberately do NOT offer a shallow (``--depth 1``) clone: this
+    clone is the source ``mngr create`` mirror-pushes into the agent container's
+    bare repo, and git rejects pushes from a shallow source with "shallow update
+    not allowed" (the pushed tip's parent is missing from the pack).
+
+    When ``reference_repo`` points at a local pre-fetched clone of the same repo
+    (e.g. the first-launch FCT prefetch), ``--reference-if-able`` reuses its
+    objects so the network fetch shrinks to the delta from the prefetch point.
+
+    Raises GitCloneError if the clone fails (including when ``branch`` does not
+    exist on the remote).
     """
     logger.debug("Cloning {} to {}", _redact_url_credentials(str(git_url)), clone_dir)
     command = ["git", "clone"]
-    if is_shallow:
-        command.extend(["--depth", "1"])
+    if branch is not None:
+        command.extend(["--single-branch", "--branch", str(branch)])
+    if reference_repo is not None and (reference_repo / ".git").is_dir():
+        command.extend(["--reference-if-able", str(reference_repo)])
     command.extend([str(git_url), str(clone_dir)])
 
     # Wrap the caller's on_output so git's per-line stdout/stderr is scrubbed
@@ -579,7 +581,12 @@ def _build_mngr_create_command(
             # transfer + provisioning round the bake already paid for.
             mngr_command.append("--reuse")
         case _:
-            mngr_command.extend(["--reuse", "--update"])
+            # Non-IMBUE_CLOUD modes pass neither ``--reuse`` nor ``--update``:
+            # the create form is "give me a new agent on a new host", and
+            # ``--reuse`` matches only on agent name (``system-services``)
+            # without scoping to host, so it collides across hosts. The
+            # ``--new-host`` flag below already covers fresh-host intent.
+            pass
 
     # Per-mode template + per-mode runtime flags. All modes use
     # ``--template main --template <mode>``; the per-mode template provides
@@ -1249,12 +1256,14 @@ class AgentCreator(MutableModel):
                         # .git/worktrees/ dir, which breaks when copied into Docker.
                         # Clone locally to get a standalone repo.
                         #
-                        # Full clone (no --depth=1): mngr's downstream mirror push
-                        # to the agent container's bare `.git` rejects shallow
-                        # updates with "shallow update not allowed" whenever the
-                        # source's tip has a parent not in the pack. Cloning
-                        # deeply avoids that failure mode. Local file:// clones
-                        # are cheap regardless.
+                        # Full clone (no --depth=1): a shallow clone only pulls
+                        # the default branch (e.g. main) and not the user's
+                        # target branch (e.g. pilot), so the subsequent
+                        # `git checkout <branch>` fails with `pathspec did not
+                        # match`. mngr's downstream mirror push into the agent
+                        # container's bare receiver also rejects shallow source
+                        # packs with "shallow update not allowed". Cloning
+                        # deeply avoids both. Local file:// clones are cheap.
                         # Use a stable path based on repo name so Docker layer caching works.
                         log_queue.put("[minds] Cloning local worktree: {}".format(resolved_path))
                         repo_name = extract_repo_name(repo_source)
@@ -1287,16 +1296,29 @@ class AgentCreator(MutableModel):
                     if clone_target.exists():
                         shutil.rmtree(clone_target)
                     log_queue.put("[minds] Cloning {}...".format(_redact_url_credentials(repo_source)))
-                    # See _may_shallow_clone_remote_repo: imbue_cloud's slow-path
-                    # git-mirror push rejects shallow history, so it needs a full
-                    # clone (the remote-URL twin of the local-worktree branch
-                    # above, which full-clones for the same reason).
+                    # Clone only the requested branch (non-shallow) when one is
+                    # given: cheaper than a full clone, yet keeps the complete
+                    # ancestry that the downstream mirror-push into the agent
+                    # container requires (a shallow clone would be rejected with
+                    # "shallow update not allowed"). Every launch mode reaches
+                    # mngr create's git-mirror push (a cloned-repo source + a
+                    # new host always resolves to TransferMode.GIT_MIRROR), so a
+                    # shallow clone is never safe here regardless of mode. The
+                    # checkout below is then a no-op for this path, but still
+                    # does the work when the source is a pre-existing local
+                    # directory.
+                    # When the first-launch prefetch left a warm copy of FCT
+                    # under ``data_dir/template-cache/forever-claude-template``,
+                    # pass it as ``--reference-if-able`` so we reuse those
+                    # objects and the network fetch shrinks to the delta.
+                    ref_repo = self.paths.data_dir / "template-cache" / "forever-claude-template"
                     clone_git_repo(
                         GitUrl(repo_source),
                         clone_target,
                         on_output=emit_log,
-                        is_shallow=_may_shallow_clone_remote_repo(launch_mode),
+                        branch=GitBranch(branch) if branch else None,
                         parent_cg=self.root_concurrency_group,
+                        reference_repo=ref_repo,
                     )
                     workspace_dir = clone_target
 

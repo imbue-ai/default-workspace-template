@@ -36,6 +36,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import socketserver
 import subprocess
@@ -80,23 +81,25 @@ LAUNCH_BACKEND_TIMEOUT = 120
 # Canned slack-mock body the agent should quote back.
 CANNED_BODY = "CI MOCK: greetings from the localhost slack mock."
 
-NONCE = secrets.token_urlsafe(6)
 SLACK_PROMPT = (
-    "Read-only Slack task. DO NOT post, send, or write any message anywhere. "
-    "Use only read-style Slack tool calls. Read one message from any channel "
-    "and respond ONLY here in this chat panel (no Slack post) with the prefix "
-    f'"TOK {NONCE}:" followed by the EXACT text of the message you read, '
-    "character-for-character."
+    "Please read the most recent message from any Slack channel using a "
+    "read-only Slack tool. Don't post anything. Then tell me here in chat "
+    "what the message says -- you can quote it inline or summarise; "
+    "either is fine, but I need to see the message text. Thanks!"
 )
 
 SKIP_FIRST_MESSAGE = os.environ.get("SKIP_FIRST_MESSAGE", "0") == "1"
 SKIP_SLACK_FLOW = os.environ.get("SKIP_SLACK_FLOW", "0") == "1"
-# Treat slack-flow timeout (canned body never arrives) as a soft pass
-# instead of a hard fail. We always take the 07-07d UI screenshots that
-# show the latchkey approval flow; defaulting to soft means the user
-# can still see the visual evidence without CI going red on the deep
-# latchkey-gateway "credentials INVALID" issue.
-SLACK_BEST_EFFORT = os.environ.get("SLACK_BEST_EFFORT", "1") == "1"
+# Slack-flow timeout (canned body never arrives) is a hard fail by
+# default. CI run 26872452227 was reported as success because the old
+# default (SLACK_BEST_EFFORT=1) swallowed an actual "Authorization
+# failed: No browser configured" error -- the broken state was clearly
+# visible in 07d-stage2-post-approve.win.png but the script chose to
+# warn-and-pass instead of raise. The CI workflow now pre-installs the
+# latchkey browser, so this code path should not fire in CI; if it
+# does, that itself is the signal worth surfacing. Opt-in soft-pass
+# remains available via SLACK_BEST_EFFORT=1 for interactive debugging.
+SLACK_BEST_EFFORT = os.environ.get("SLACK_BEST_EFFORT", "0") == "1"
 
 # --- snap helpers ---
 
@@ -295,12 +298,16 @@ def start_mock() -> _ThreadedHTTP:
 
 
 def ensure_cert() -> Path:
-    """Generate self-signed cert for slack.com + files.slack.com once."""
+    """Generate a fresh self-signed cert for slack.com + files.slack.com every run.
+
+    A stale cert (from a prior run, possibly expired) would still pass the
+    ``exists()`` check; regenerate unconditionally so the keychain-trust
+    step below operates on the cert socat actually serves."""
     SLACK_MOCK_STATE.mkdir(parents=True, exist_ok=True)
     cert = SLACK_MOCK_STATE / "cert.pem"
     key = SLACK_MOCK_STATE / "key.pem"
-    if cert.exists() and key.exists():
-        return cert
+    cert.unlink(missing_ok=True)
+    key.unlink(missing_ok=True)
     logger.info("generating self-signed cert for slack.com")
     subprocess.run(
         [
@@ -325,6 +332,23 @@ def ensure_cert() -> Path:
         capture_output=True,
     )
     return cert
+
+
+def ensure_combined_cert_bundle(cert: Path) -> Path:
+    """Concatenate the self-signed slack cert with the system root CAs.
+
+    Setting ``CURL_CA_BUNDLE`` to a single self-signed cert makes curl
+    distrust everything else (anthropic.com, github.com, ...). Combining
+    with the system roots keeps non-slack calls working while still
+    adding our cert for the /etc/hosts-mapped slack.com hits."""
+    bundle = SLACK_MOCK_STATE / "ca_bundle.pem"
+    parts = [cert.read_text()]
+    for sys_bundle in ("/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"):
+        if Path(sys_bundle).exists():
+            parts.append(Path(sys_bundle).read_text())
+            break
+    bundle.write_text("".join(parts))
+    return bundle
 
 
 def ensure_brew_curl() -> Path:
@@ -503,7 +527,127 @@ async def find_chat_window(ctx: BrowserContext) -> Page | None:
 # --- main flow ---
 
 
+def _kill_named_processes(pgrep_pattern: str, label: str, *, argv0_must_start_with: str | None = None) -> None:
+    """Kill processes whose argv matches ``pgrep_pattern``, by exact PID.
+
+    Per CLAUDE.md, ``pkill -f`` / ``killall`` with broad patterns can hit
+    unrelated processes (including this Claude Code session). Resolve PIDs
+    with ``pgrep -f`` first, log each one, then ``kill`` by exact PID.
+
+    ``argv0_must_start_with`` is a second-pass guard against false positives.
+    pgrep -f matches anywhere in argv -- a shell command line containing the
+    literal string ``/Applications/Minds.app/Contents/MacOS/Minds`` (e.g.
+    this very docstring in a script being inspected) would match without it.
+    Resolve each candidate's argv via ps and verify argv[0] starts with the
+    expected absolute path before killing.
+    """
+    try:
+        out = subprocess.run(
+            ["pgrep", "-lf", pgrep_pattern],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid_str, _, argv = line.partition(" ")
+        if not pid_str.isdigit():
+            continue
+        if argv0_must_start_with is not None:
+            ps_out = subprocess.run(
+                ["ps", "-p", pid_str, "-o", "command="],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            real_argv = ps_out.stdout.strip()
+            if not real_argv.startswith(argv0_must_start_with):
+                continue
+        logger.info("[runner-sweep] killing {} pid={} ({})", label, pid_str, argv)
+        subprocess.run(["kill", pid_str], check=False)
+
+
+def _kill_sudo_named_processes(pgrep_pattern: str, label: str) -> None:
+    """Same as ``_kill_named_processes`` but for sudo-owned processes."""
+    try:
+        out = subprocess.run(
+            ["sudo", "pgrep", "-lf", pgrep_pattern],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid_str, _, argv = line.partition(" ")
+        if not pid_str.isdigit():
+            continue
+        logger.info("[runner-sweep] killing {} pid={} ({})", label, pid_str, argv)
+        subprocess.run(["sudo", "kill", pid_str], check=False)
+
+
+def pre_run_sweep() -> None:
+    """Reset the self-hosted runner to a known-clean state before the run.
+
+    Pairs with the teardown block: every state mutation this script makes
+    is either reverted on teardown or wiped here on the next run's startup,
+    so a crash mid-run never leaves residue that biases the following run.
+    The sweep is idempotent and safe to call when there's nothing to clean.
+    """
+    logger.info("=== pre-run runner sweep ===")
+    # 1. Drop any stale slack-mock /etc/hosts line from a prior crashed run.
+    revert_etc_hosts()
+    # 2. Kill stale socat that was holding :443 from a prior run.
+    _kill_sudo_named_processes("OPENSSL-LISTEN:443", "stale socat")
+    # 3. Kill stale Minds-spawned subprocesses (mngr forward / mngr event) BEFORE
+    # the Electron parent, so they exit cleanly rather than being orphaned. Then
+    # Minds.app itself -- prior runs that didn't reach the finally block leave
+    # backend on :8421 and CDP holding a port.
+    _kill_named_processes("mngr event", "stale mngr event")
+    _kill_named_processes("mngr forward", "stale mngr forward")
+    _kill_named_processes(
+        "/Applications/Minds.app/Contents/MacOS/Minds",
+        "stale Minds.app",
+        argv0_must_start_with="/Applications/Minds.app/Contents/MacOS/Minds",
+    )
+    # 4. Stale caffeinate -- this script always spawns its own, multiple
+    # surviving instances are wasteful.
+    _kill_named_processes("caffeinate -dimsu", "stale caffeinate")
+    # 5. Wipe per-run /tmp state. The cert + log files in /tmp/slack-mock/
+    # are regenerated by ensure_cert() / start_socat() / start_mock(); the
+    # screenshot dir is recreated by the first snap_page(). Leaving them
+    # behind means a later run that crashes early ships stale screenshots
+    # as its artifact.
+    for stale in (
+        SLACK_MOCK_STATE,
+        SCREENSHOT_DIR,
+        Path("/tmp/minds-electron.log"),
+    ):
+        if stale.is_dir():
+            shutil.rmtree(stale, ignore_errors=True)
+        elif stale.exists():
+            with contextlib.suppress(OSError):
+                stale.unlink()
+    # 6. Clear any latchkey slack creds left over from a prior crashed run.
+    with contextlib.suppress(Exception):
+        latchkey_clear_slack()
+
+
 async def amain() -> int:
+    # Idempotent reset before any state mutation. Anything we leak (socat
+    # holding :443, /etc/hosts entry, orphan Minds.app/mngr children,
+    # latchkey creds, /tmp scratch dirs) is reverted here on the *next*
+    # run's startup, so a mid-run crash never biases the following run.
+    # The post-run teardown blocks below still handle the success path.
+    pre_run_sweep()
+
     # 0. Keep the runner display awake + dismiss any active screensaver
     # for the whole run. -d=display awake, -i=idle sleep off, -m=disk
     # sleep off, -s=system sleep off, -u=declare user active (this is
@@ -518,15 +662,22 @@ async def amain() -> int:
 
     brew_curl = ensure_brew_curl()
     cert = ensure_cert()
-    logger.info("brew curl: {}", brew_curl)
+    ca_bundle = ensure_combined_cert_bundle(cert)
+    logger.info("brew curl: {}; ca_bundle: {}", brew_curl, ca_bundle)
 
     # 1. Launch minds.app ourselves with --remote-debugging-port so Playwright
     # can attach via CDP. Use a free port to avoid clashes.
     cdp_port = _free_port()
     env = {
         **os.environ,
+        # ``LATCHKEY_CURL`` (read by latchkey's config.ts) pins the curl
+        # binary to brew curl (OpenSSL) so checkApiCredentials never falls
+        # back to /usr/bin/curl (SecureTransport, ignores CURL_CA_BUNDLE).
+        # Otherwise services_info would report INVALID, grant() would
+        # invoke auth_browser, and the request would resolve DENIED.
+        "LATCHKEY_CURL": str(brew_curl),
         "PATH": f"{brew_curl.parent}:" + os.environ.get("PATH", ""),
-        "CURL_CA_BUNDLE": str(cert),
+        "CURL_CA_BUNDLE": str(ca_bundle),
     }
     env.pop("ELECTRON_RUN_AS_NODE", None)
     logger.info("launching {} --remote-debugging-port={}", MINDS_APP_PATH, cdp_port)
@@ -558,7 +709,13 @@ async def amain() -> int:
         base = await asyncio.get_event_loop().run_in_executor(None, wait_backend_url)
         logger.info("backend up at {}", base)
         code = await asyncio.get_event_loop().run_in_executor(None, mint_one_time_code)
-        origin = await win.evaluate("location.origin")
+        # ``win`` here is ``ctx.pages[0]``, which can be the file:// splash
+        # depending on Electron startup order. ``location.origin`` on the
+        # splash returns ``"file://"``, so navigation to ``origin + "/..."``
+        # would resolve to ``file:///...`` and fail. Use the known backend
+        # base URL instead; ``win.goto`` happily redirects any window
+        # (splash or http-served) to it.
+        origin = base
         await win.goto(origin + "/authenticate?one_time_code=" + code)
         await snap_page(win, "01-after-auth")
 
@@ -567,44 +724,67 @@ async def amain() -> int:
         await snap_page(win, "02-home-after-auth")
 
         if not SKIP_FIRST_MESSAGE:
-            # 4. Create agent via API (not the form): the prod-tier form
-            # defaults to compute=DOCKER without an Imbue Cloud account,
-            # which a vanilla mac runner can't provision. POSTing /api
-            # /create-agent directly with launch_mode=LIMA mirrors the
-            # old bash flow (first-message-verify.sh) and is deterministic.
-            # fetch() runs inside the auth'd page so the session cookie is
-            # attached automatically.
+            # 4. Create agent via UI click. Mirrors what a user does:
+            #     - expand the "Configure..." panel (otherwise
+            #       launch_mode/ai_provider/api_key inputs are
+            #       display:none and Playwright can't fill them)
+            #     - set launch_mode=LIMA + ai_provider per MINDS_AI_PROVIDER
+            #       (default API_KEY: CI runners have no Claude.ai OAuth
+            #       in the host keychain. Local dev sets SUBSCRIPTION to
+            #       use the user's already-synced Claude.ai credential
+            #       without exposing an API key.)
+            #     - when API_KEY, paste ANTHROPIC_API_KEY into
+            #       anthropic_api_key (the api-key-row is .hidden until
+            #       the provider select fires its change event)
+            #     - when SUBSCRIPTION, skip the api-key fill entirely
+            #       and rely on mngr_claude's host-keychain credential
+            #       sync at agent-create time
+            #     - fill host_name, submit the form, follow the server
+            #       redirect to /creating/<id> which renders the
+            #       "Setting up your workspace" progress UI
+            # The script previously POSTed /api/create-agent directly,
+            # which left the form on screen unchanged -- 03 and 04b
+            # screenshots ended up visually identical to 02. Driving
+            # the click sequence makes those screenshots match their
+            # phase claims AND exercises the same code path a real
+            # user hits (more representative of UI regressions).
+            ai_provider = os.environ.get("MINDS_AI_PROVIDER", "API_KEY").upper()
+            if ai_provider not in ("API_KEY", "SUBSCRIPTION"):
+                raise RuntimeError(f"MINDS_AI_PROVIDER={ai_provider!r} -- must be API_KEY or SUBSCRIPTION")
             anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            if not anthropic_key:
-                raise RuntimeError("ANTHROPIC_API_KEY not set; can't create LIMA agent")
-            create_body = {
-                "agent_name": HOST_NAME,
-                "host_name": HOST_NAME,
-                "git_url": GIT_URL,
-                "branch": GIT_BRANCH,
-                "launch_mode": "LIMA",
-                "ai_provider": "API_KEY",
-                "anthropic_api_key": anthropic_key,
-                "include_env_file": False,
-            }
-            resp = await win.evaluate(
-                """async (body) => {
-                    const r = await fetch('/api/create-agent', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(body),
-                    });
-                    return {status: r.status, body: await r.text()};
-                }""",
-                create_body,
-            )
-            if resp["status"] != 200:
-                raise RuntimeError(f"create-agent HTTP {resp['status']}: {resp['body']}")
-            creation_id = json.loads(resp["body"]).get("agent_id", "")
-            if not creation_id:
-                raise RuntimeError(f"no agent_id in create-agent response: {resp['body']}")
-            logger.info("creation_id={}", creation_id)
+            if ai_provider == "API_KEY" and not anthropic_key:
+                raise RuntimeError(
+                    "MINDS_AI_PROVIDER=API_KEY but ANTHROPIC_API_KEY not set; "
+                    "either set ANTHROPIC_API_KEY or pass MINDS_AI_PROVIDER=SUBSCRIPTION."
+                )
+            # /create is the form's action target; landing page is `/`.
+            await win.goto(origin + "/create")
+            await win.wait_for_selector("#create-form", timeout=10_000)
+            await win.click("#configure-toggle")
+            await win.wait_for_selector("#configure-panel:not(.hidden)", timeout=5_000)
+            await win.select_option("#launch_mode", value="LIMA")
+            await win.select_option("#ai_provider", value=ai_provider)
+            if ai_provider == "API_KEY":
+                await win.wait_for_selector("#api-key-row:not(.hidden)", timeout=5_000)
+                await win.fill("#anthropic_api_key", anthropic_key)
+            await win.fill("#host_name", HOST_NAME)
+            # Submit triggers a POST /create -> server redirects to
+            # /creating/<id>. wait_for_url scopes to that path so we
+            # also extract the creation_id from the URL afterwards.
+            async with win.expect_navigation(url=re.compile(r"/creating/[a-z0-9-]+")):
+                await win.click("#create-submit")
+            # Pull creation_id out of the post-submit URL.
+            with contextlib.suppress(Exception):
+                await win.wait_for_function(
+                    "document.body.innerText.includes('Setting up your workspace')",
+                    timeout=15_000,
+                )
             await snap_page(win, "03-create-agent-submitted")
+            m = re.search(r"/creating/([a-z0-9-]+)", win.url)
+            if not m:
+                raise RuntimeError(f"expected /creating/<id> after submit, got url={win.url}")
+            creation_id = m.group(1)
+            logger.info("creation_id={}", creation_id)
 
             # 5. Poll /api/create-agent/<id>/status until DONE. The chat
             # panel does NOT auto-open when creation completes -- the
@@ -618,6 +798,11 @@ async def amain() -> int:
             phase_started_at = time.monotonic()
             phase_durations: dict[str, float] = {}
             done = False
+            # Captured at DONE; absolute or relative "/goto/<agent_id>/" URL
+            # whose redirect lands on the agent's "agent-<hex>.localhost" chat
+            # page. The minds backend assembles it from the canonical AgentId
+            # the inner `mngr create` emits + the configured mngr_forward port.
+            done_redirect_url = ""
             while time.time() < deadline and not done:
                 stat = await win.evaluate(
                     """async (id) => {
@@ -646,6 +831,7 @@ async def amain() -> int:
                     phase_started_at = now
                 if state == "DONE":
                     phase_durations[state] = round(time.monotonic() - phase_started_at, 2)
+                    done_redirect_url = payload.get("redirect_url", "")
                     done = True
                     break
                 if state == "FAILED":
@@ -681,32 +867,29 @@ async def amain() -> int:
                     tail = EVENTS_LOG.read_text(errors="ignore").splitlines()[-60:]
                     logger.error("minds-events.jsonl tail:\n{}", "\n".join(tail))
                 raise RuntimeError(f"creation didn't reach DONE in {CREATE_TIMEOUT}s (last={last_status})")
-            logger.info("creation DONE; opening chat panel by clicking the tile")
-            await win.goto(origin + "/")
-            with contextlib.suppress(Exception):
-                await win.click(f"text={HOST_NAME}", timeout=15_000)
-            # Tile click may navigate `win` to the chat URL OR open a new
-            # WebContentsView. Look at both.
-            chat_win: Page | None = None
-            chat_deadline = time.time() + 60
+            # creation DONE: minds' status API also returns ``redirect_url``,
+            # the absolute (or "/goto/..."-relative) URL whose redirect lands
+            # on the agent's "agent-<hex>.localhost" chat page. Navigate ``win``
+            # straight there rather than clicking the home-page tile -- the
+            # tile only renders once the landing page's discovery refresh has
+            # caught up with creation completion, and on local macOS the
+            # discovery lag routinely exceeds the click window's 15s.
+            if not done_redirect_url:
+                raise RuntimeError(
+                    "creation DONE without redirect_url; check the /api/create-agent/<id>/status contract"
+                )
+            target = done_redirect_url if done_redirect_url.startswith("http") else base + done_redirect_url
+            logger.info("creation DONE; navigating directly to {}", target)
+            await win.goto(target)
             chat_url_re = re.compile(r"agent-[a-f0-9]+\.localhost")
-            while time.time() < chat_deadline:
-                if chat_url_re.search(win.url):
-                    chat_win = win
-                    break
-                cand = await find_chat_window(ctx)
-                if cand is not None:
-                    chat_win = cand
-                    break
-                await asyncio.sleep(1)
-            if chat_win is None:
+            chat_deadline = time.time() + 30
+            while time.time() < chat_deadline and not chat_url_re.search(win.url):
+                await asyncio.sleep(0.5)
+            if not chat_url_re.search(win.url):
                 for p in all_pages(ctx):
                     with contextlib.suppress(Exception):
                         await snap_page(p, f"99-no-chat-{p.url.split('/')[-1] or 'root'}")
-                raise RuntimeError(
-                    f"agent DONE but no chat-URL page opened after tile click (pages={[p.url for p in all_pages(ctx)]})"
-                )
-            win = chat_win
+                raise RuntimeError(f"goto({target}) didn't redirect to chat URL within 30s (win.url={win.url})")
             logger.info("agent DONE; chat URL={}", win.url)
             await snap_page(win, "04-agent-DONE")
 
@@ -714,6 +897,15 @@ async def amain() -> int:
             inp = await win.wait_for_selector('textarea, [contenteditable="true"]', timeout=60_000)
             await inp.fill(FIRST_PROMPT)
             await inp.press("Enter")
+            # Wait for the user's prompt to render before snapping so
+            # `05-first-message-sent` actually shows the prompt bubble.
+            # Without this the screenshot misses the bubble (as in run
+            # 26872452227 where 05 was visually identical to 04).
+            with contextlib.suppress(Exception):
+                await win.wait_for_function(
+                    f"document.body.innerText.includes({FIRST_PROMPT!r})",
+                    timeout=10_000,
+                )
             await snap_page(win, "05-first-message-sent")
             # Wait for the AGENT's reply, not the user prompt echo. The
             # prompt itself contains "pong" so a naive `includes('pong')`
@@ -802,9 +994,9 @@ async def amain() -> int:
                             target = await find_chat_window(ctx)
                             if target is not None:
                                 kick_msg = (
-                                    "Slack permission approved. Please retry the read-only Slack "
-                                    f'read now and respond with the prefix "TOK {NONCE}:" '
-                                    "followed by the message text."
+                                    "Slack permission is now granted -- please retry the "
+                                    "read-only Slack read and then quote the message you read "
+                                    "back to me here in chat."
                                 )
                                 try:
                                     inp = await target.wait_for_selector(
@@ -949,6 +1141,18 @@ async def _advance_approval(ctx: BrowserContext, win: Page, stage: int, state: d
                     await asyncio.sleep(2)
                     with contextlib.suppress(Exception):
                         await snap_page(w, "07d-stage2-post-approve")
+                    # Surface latchkey-side authorisation failures
+                    # immediately rather than waiting DRIVE_SLACK_TIMEOUT
+                    # seconds (then masking with SLACK_BEST_EFFORT). The
+                    # post-approve page renders the error banner verbatim;
+                    # parse the visible text and raise so CI fails on the
+                    # actual signal, not a timeout that happens to coincide.
+                    with contextlib.suppress(Exception):
+                        body_text = await w.evaluate("document.body.innerText")
+                        if "Authorization failed" in body_text or "No browser configured" in body_text:
+                            raise RuntimeError(
+                                "07d shows authorization failure: " + body_text.replace("\n", " | ")[:400]
+                            )
                     # Kicks are sent from the main poll loop after a
                     # KICK_DELAY settle period; see slack-flow loop.
                     return
