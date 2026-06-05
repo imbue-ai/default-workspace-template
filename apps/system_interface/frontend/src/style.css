@@ -891,9 +891,8 @@ body {
 
 /* ── Permission request card ──
    An agent permission request, rendered as a standalone card (not a generic
-   tool block): the service it touches, the agent's rationale, the specific
-   request, a button that opens the modal, and a disclosure preserving the raw
-   request/response. */
+   tool block): the service it touches, the specific request, a button that
+   opens the modal, and a disclosure preserving the raw request/response. */
 .permission-request {
   border: 1px solid var(--color-border);
   border-radius: 10px;
