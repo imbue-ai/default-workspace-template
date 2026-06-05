@@ -23,14 +23,14 @@ steps, or argparse surfaces; surface decisions belong to the worker.
 
 The task file's YAML frontmatter follows the schema documented in
 `.agents/shared/references/worker-reporting.md` -- `lead_agent` and
-`lead_report_dir`, both required.
+`finish_report_path`, both required.
 
 ```bash
 mkdir -p runtime/update/$TARGET
 cat > runtime/update/$TARGET/task.md << TASK_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-lead_report_dir: runtime/update/$TARGET/reports/
+finish_report_path: runtime/update/$TARGET/reports/report.md
 ---
 
 # Task: update the \`$TARGET\` skill (or split a new one)
@@ -51,12 +51,6 @@ The worker will use these to locate the incident in your transcript via
 - 1-2 quotes showing the manual follow-up you did or the final result.
 <paste quotes here, one per bullet.>
 
-## How to read the transcript
-Use \`mngr transcript <lead_agent>\` (with \`--role user --role assistant\`
-to strip tool noise, or \`--tail N\` to scope in) to find the turns above.
-The update-skill invocation is the *most recent* turn; the incident and
-manual follow-up are *prior* to that invocation.
-
 ## What the updated skill must do
 <state the contract the updated skill must honor after this change --
 what inputs it should now accept, what outputs it should now produce.
@@ -70,7 +64,7 @@ Gate 2.
 
 When you reach a gate or terminal status, write a report file and
 push it to the lead per the sub-skill's reporting protocol; the
-destination is given by \`lead_agent\` / \`lead_report_dir\` in
+destination is given by \`lead_agent\` / \`finish_report_path\` in
 frontmatter.
 
 ## Success criteria
@@ -88,14 +82,8 @@ content drawn from your conversation -- do not leave the placeholders.
 
 ## 2b: Launch the worker
 
-The shared `launch-task` dispatcher runs `mngr create`, pushes the runtime
-dir (task file) into the worker's worktree, and sends the task as a
-follow-up message so the worker sees the runtime dir first. The worker's
-`parse_task_frontmatter.py` helper needs `task.md` on disk to validate the
-schema, which is why the push is part of the lifecycle.
-
 ```bash
-uv run .agents/skills/launch-task/scripts/dispatch.py \
+uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-$TARGET \
     --template crystallize-worker \
     --runtime-dir runtime/update/$TARGET/ \

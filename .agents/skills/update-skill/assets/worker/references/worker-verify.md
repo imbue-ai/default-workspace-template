@@ -17,11 +17,9 @@ Only Gate 2 (final-artifact) applies.
    lead's branch, the committed change is already present in your worktree
    -- this is the post-change state, and it is what scenarios will exercise.
 4. If the rationale alludes to conversational context (e.g. an alternative
-   the user rejected, a constraint the user named), use the `## Anchors`
-   quotes in the task file with `mngr transcript $LEAD_AGENT` to locate
-   those turns. Start with `--role user --role assistant` to strip
-   tool-call noise. The update-skill invocation is the most recent turn
-   in the lead's transcript; the design conversation is *prior* to it.
+   the user rejected, a constraint the user named), locate those turns in
+   the lead's transcript -- follow
+   `.agents/shared/references/transcript-exploration.md`.
 
 If the diff references `references/*.md` files or other supporting files,
 read those too.

@@ -7,45 +7,27 @@ enum of allowed `name:` values.
 ## Task-file inputs
 
 Your task file has been synced to your worktree at `<RUNTIME_DIR>/task.md`.
-The `verify` flow also stages `commit.diff` / `commit.log` alongside it; the
-`absorb`, `crystallize`, and `heal` flows expect you to read the lead's
-transcript directly via `mngr transcript <lead_agent>` (see each worker
-SKILL.md for the locate-the-incident procedure). At the start of your run,
-validate the task-file frontmatter and extract the required fields with:
+Your worker SKILL.md lists any additional inputs the calling flow stages
+alongside it. At the start of your run, extract the lead's address with:
 
 ```bash
-uv run .agents/shared/scripts/parse_task_frontmatter.py '<TASK_FILE_GLOB>'
+eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py '<TASK_FILE_GLOB>')"
 ```
 
-Quote the glob pattern so the shell passes the literal to the helper; the
-helper expands it internally and fails loudly if zero or more than one task
-file matches (each worker handles a single task -- either condition means the
-runtime layout drifted). On success it prints two shell-evalable `KEY=value`
-lines on stdout: `LEAD_AGENT=` and `LEAD_REPORT_DIR=`. It exits non-zero with
-a stderr message on any failure, including a missing or misspelled field or a
-non-string / empty value.
-
-Both fields address reports back to the lead: `LEAD_AGENT` is the `mngr`
-agent name you push reports to (and whose transcript you read), and
-`LEAD_REPORT_DIR` is the destination directory on the lead's worktree.
-
-## Task-file frontmatter schema
-
-```yaml
----
-lead_agent: <main agent name>
-lead_report_dir: runtime/<flow>/<name>/reports/
----
-```
-
-Both fields are required non-empty strings. `parse_task_frontmatter.py`
-enforces this.
+Quote the pattern. `LEAD_AGENT` is the `mngr` agent you push reports to
+(and whose transcript you read); `FINISH_REPORT_PATH` is the destination
+path on the lead's worktree where your report file must land -- the lead
+polls for exactly this file. Any additional string fields the lead
+set in the frontmatter also become shell variables -- see your worker
+SKILL.md for which extras (if any) the calling flow stages.
 
 ## Reporting procedure
 
 At each gate or terminal status:
 
-1. Write `<RUNTIME_REPORTS_DIR>/report.md` (create the directory if missing):
+1. Write your report to `<RUNTIME_REPORTS_DIR>/report.md` (create the directory
+   if missing). `report.md` is the basename of `FINISH_REPORT_PATH`, so pushing
+   the directory in step 2 lands it at the lead's `FINISH_REPORT_PATH`.
 
    ```
    ---
@@ -56,25 +38,28 @@ At each gate or terminal status:
    <body: the message the user needs to see, addressing the user directly>
    ```
 
-2. Push the report directory to the lead:
+2. Sync the report directory to the lead:
 
    ```bash
-   mngr push <lead_agent>:<lead_report_dir> \
-       --source <RUNTIME_REPORTS_DIR>/ \
+   mngr rsync <RUNTIME_REPORTS_DIR>/ \
+       "$LEAD_AGENT:$(dirname "$FINISH_REPORT_PATH")/" \
        --uncommitted-changes=merge
    ```
 
-   Substitute the actual values from your task file's frontmatter for
-   `<lead_agent>` and `<lead_report_dir>`. The trailing slashes matter (rsync
-   directory semantics). `--uncommitted-changes=merge` is required because the
-   lead's worktree usually has uncommitted local state.
+   `mngr rsync` takes `SOURCE DESTINATION`: your local `<RUNTIME_REPORTS_DIR>/`
+   first, then the lead endpoint. `LEAD_AGENT` / `FINISH_REPORT_PATH` come from
+   the `eval` above; `<RUNTIME_REPORTS_DIR>` is your worker SKILL.md's local
+   reports dir. You sync the report's *parent directory* (`dirname`) rather than
+   the file itself: the trailing slashes matter (rsync directory semantics) and
+   rsync cannot transfer a single file. `--uncommitted-changes=merge` is
+   required because the lead's worktree usually has uncommitted local state.
 
 3. Stop your turn. For gate reports, the lead sends the user's reply via
    `mngr message` and you resume; for terminal reports, the lead acts on the
    report and the run ends.
 
-The push is the ready signal -- it only happens once you are finished writing.
-Do not push a partial report.
+The sync is the ready signal -- it only happens once you are finished writing.
+Do not sync a partial report.
 
 ## Terminal status report bodies
 

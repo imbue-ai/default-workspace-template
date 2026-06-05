@@ -161,6 +161,38 @@ def test_tool_result_only_user_message_not_emitted_as_user_message() -> None:
     assert events[0]["type"] == "tool_result"
 
 
+def test_interrupt_sentinel_user_message_not_emitted() -> None:
+    """The ``[Request interrupted by user]`` sentinel must not surface as a user_message.
+
+    Claude writes this control text to the user channel when the user interrupts
+    a turn. Treating it as a real prompt would leave the activity indicator
+    pinned on "Thinking..." after every interrupt, since the indicator's tail-
+    event heuristic equates "tail = user_message" with "Claude is about to
+    reply." Verify both string content and array content forms.
+    """
+    string_form = json.dumps(
+        {
+            "type": "user",
+            "uuid": "uuid-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "[Request interrupted by user]"},
+        }
+    )
+    array_form = json.dumps(
+        {
+            "type": "user",
+            "uuid": "uuid-2",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "[Request interrupted by user]"}],
+            },
+        }
+    )
+    events = parse_session_lines([string_form, array_form])
+    assert events == []
+
+
 def test_events_sorted_by_timestamp() -> None:
     lines = [
         _make_assistant_line("uuid-2", "2026-01-01T00:00:02Z", "Second"),
@@ -194,6 +226,119 @@ def test_tool_output_truncation() -> None:
     events = parse_session_lines(lines, tool_name_by_call_id=tool_name_by_call_id)
     assert events[0]["output"].endswith("...")
     assert len(events[0]["output"]) <= 2003
+
+
+def test_agent_tool_use_exposes_description_and_subagent_type() -> None:
+    lines = [
+        _make_assistant_line(
+            "uuid-1",
+            "2026-01-01T00:00:00Z",
+            "spawning",
+            tool_calls=[
+                {
+                    "id": "toolu_agent",
+                    "name": "Agent",
+                    "input": {"description": "explore foo", "subagent_type": "Explore", "prompt": "do it"},
+                }
+            ],
+        ),
+    ]
+    events = parse_session_lines(lines)
+    tc = events[0]["tool_calls"][0]
+    assert tc["description"] == "explore foo"
+    assert tc["subagent_type"] == "Explore"
+
+
+def test_non_agent_tool_use_has_no_description_or_subagent_type() -> None:
+    lines = [
+        _make_assistant_line(
+            "uuid-1",
+            "2026-01-01T00:00:00Z",
+            "reading",
+            tool_calls=[{"id": "toolu_read", "name": "Read", "input": {"file_path": "/x", "description": "nope"}}],
+        ),
+    ]
+    events = parse_session_lines(lines)
+    tc = events[0]["tool_calls"][0]
+    assert "description" not in tc
+    assert "subagent_type" not in tc
+
+
+def _make_agent_tool_result_line(
+    uuid: str,
+    timestamp: str,
+    tool_use_id: str,
+    output: str,
+    structured_agent_id: str | None = None,
+) -> str:
+    raw: dict[str, Any] = json.loads(_make_tool_result_line(uuid, timestamp, tool_use_id, output))
+    if structured_agent_id is not None:
+        raw["toolUseResult"] = {"status": "completed", "agentId": structured_agent_id}
+    return json.dumps(raw)
+
+
+def test_agent_tool_result_uses_structured_agent_id() -> None:
+    tool_name_by_call_id: dict[str, str] = {"toolu_agent": "Agent"}
+    lines = [
+        _make_agent_tool_result_line(
+            "uuid-a",
+            "2026-01-01T00:00:00Z",
+            "toolu_agent",
+            "Exploration complete.",
+            structured_agent_id="abc123",
+        ),
+    ]
+    events = parse_session_lines(lines, tool_name_by_call_id=tool_name_by_call_id)
+    assert len(events) == 1
+    assert events[0]["type"] == "tool_result"
+    assert events[0]["subagent_id"] == "abc123"
+
+
+def test_agent_tool_result_falls_back_to_text_trailer() -> None:
+    tool_name_by_call_id: dict[str, str] = {"toolu_agent": "Agent"}
+    lines = [
+        _make_agent_tool_result_line(
+            "uuid-a",
+            "2026-01-01T00:00:00Z",
+            "toolu_agent",
+            "Exploration complete.\nagentId: legacy999",
+            structured_agent_id=None,
+        ),
+    ]
+    events = parse_session_lines(lines, tool_name_by_call_id=tool_name_by_call_id)
+    assert len(events) == 1
+    assert events[0]["subagent_id"] == "legacy999"
+
+
+def test_agent_tool_result_without_any_agent_id_omits_field() -> None:
+    tool_name_by_call_id: dict[str, str] = {"toolu_agent": "Agent"}
+    lines = [
+        _make_agent_tool_result_line(
+            "uuid-a",
+            "2026-01-01T00:00:00Z",
+            "toolu_agent",
+            "Exploration complete with no link info.",
+            structured_agent_id=None,
+        ),
+    ]
+    events = parse_session_lines(lines, tool_name_by_call_id=tool_name_by_call_id)
+    assert len(events) == 1
+    assert "subagent_id" not in events[0]
+
+
+def test_agent_tool_result_prefers_structured_over_trailer() -> None:
+    tool_name_by_call_id: dict[str, str] = {"toolu_agent": "Agent"}
+    lines = [
+        _make_agent_tool_result_line(
+            "uuid-a",
+            "2026-01-01T00:00:00Z",
+            "toolu_agent",
+            "Done.\nagentId: trailerWins",
+            structured_agent_id="structuredWins",
+        ),
+    ]
+    events = parse_session_lines(lines, tool_name_by_call_id=tool_name_by_call_id)
+    assert events[0]["subagent_id"] == "structuredWins"
 
 
 @pytest.mark.parametrize(
@@ -344,3 +489,16 @@ def test_synthetic_api_error_message_is_still_shown() -> None:
     events = parse_session_lines([line])
     assert [e["type"] for e in events] == ["assistant_message"]
     assert events[0]["text"] == error_text
+
+
+def test_tool_output_preserves_tk_transition_past_truncation() -> None:
+    """A tk transition line (`Updated <id> -> <status>`) that falls past the
+    output truncation limit is preserved, so the progress view never loses a
+    step transition when a tk command is batched after verbose output."""
+    output = ("x" * 5000) + "\nUpdated s1 -> closed\n"
+    lines = [_make_tool_result_line("uuid-trunc", "2026-01-01T00:00:02Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert events[0]["type"] == "tool_result"
+    assert "Updated s1 -> closed" in events[0]["output"]
+    # Still truncated overall (not the full verbose output).
+    assert len(events[0]["output"]) < len(output)

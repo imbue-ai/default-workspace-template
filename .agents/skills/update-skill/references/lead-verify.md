@@ -47,7 +47,7 @@ The task file's YAML frontmatter follows the schema documented in
 cat > runtime/update/$TARGET/task.md << TASK_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-lead_report_dir: runtime/update/$TARGET/reports/
+finish_report_path: runtime/update/$TARGET/reports/report.md
 ---
 
 # Task: verify the live update to \`$TARGET\`
@@ -84,7 +84,7 @@ path), run \`/autofix\`, present Gate 2 with verification findings.
 
 When you reach a gate or terminal status, write a report file and
 push it to the lead per the sub-skill's reporting protocol; the
-destination is given by \`lead_agent\` / \`lead_report_dir\` in
+destination is given by \`lead_agent\` / \`finish_report_path\` in
 frontmatter.
 
 ## Success criteria
@@ -98,15 +98,13 @@ frontmatter.
 TASK_EOF
 ```
 
-## 2c: Launch the worker and push the commit artifacts
+## 2c: Launch the worker
 
-The shared `launch-task` dispatcher runs `mngr create`, pushes the
-`runtime/update/$TARGET/` dir (so the worker has `task.md`, `commit.log`,
-and `commit.diff` under its worktree), and sends the task as a follow-up
-message so the worker sees the runtime dir first.
+The `runtime/update/$TARGET/` push carries `task.md`, `commit.log`, and
+`commit.diff` into the worker's worktree.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/dispatch.py \
+uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-$TARGET \
     --template crystallize-worker \
     --runtime-dir runtime/update/$TARGET/ \

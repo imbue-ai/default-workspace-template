@@ -29,6 +29,15 @@ specs/login-modal-reshape/
 # clones, separate from the read-only vendor/ subtrees. See CLAUDE.md.
 **/.external_worktrees/
 
+# Worker sub-skills installed into a worker's tree at provision time by
+# install_worker_skills.sh (from each lifecycle skill's assets/worker/). They
+# are scratch copies that must never be committed -- otherwise a worker's
+# broad `git add` would carry them onto its branch and the post-crystallize
+# merge would leak them into main. The source assets at
+# .agents/skills/<parent>/assets/worker/ are deeper than this glob and stay
+# tracked.
+.agents/skills/*-worker/
+
 # Byte-compiled / optimized / DLL files
 **/__pycache__/
 **/*.py[codz]
@@ -257,6 +266,9 @@ apps/system_interface/frontend/src/assets/*.png
 # Claude Code local settings (session-specific permissions)
 .claude/settings.local.json
 
+# Ephemeral git worktrees created for isolated subagent runs
+.claude/worktrees/
+
 # PR status and URL files written by main_claude_stop_hook.sh for status line display
 .claude/pr_url
 .claude/pr_status
@@ -315,3 +327,6 @@ scripts/notify_user.local.sh
 
 # make sure we don't check in reviewer logs
 .reviewer/logs/
+
+# Reviewer plugin scratch output
+.reviewer/tmp/

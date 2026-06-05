@@ -31,15 +31,14 @@
           {
             "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_prevent_commit_rewrite.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "TodoWrite",
-        "hooks": [
+          },
           {
             "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_block_todowrite.sh"
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_require_steps_pretool.sh"
+          },
+          {
+            "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_tk_close_reoutput_nudge.sh"
           }
         ]
       }
@@ -50,6 +49,15 @@
           {
             "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_open_tickets_reminder.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "TodoWrite",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_block_todowrite.sh"
           }
         ]
       }

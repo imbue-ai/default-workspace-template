@@ -51,12 +51,12 @@ include__extend = ["""has(labels.workspace)"""]
 [agent_types.claude]
 auto_dismiss_dialogs = true
 auto_allow_permissions = true
-cli_args = """--dangerously-skip-permissions --disallowed-tools AskUserQuestion,ExitPlanMode"""
+cli_args = """--dangerously-skip-permissions --disallowed-tools AskUserQuestion,ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
 settings_overrides__extend = {model = "opus[1m]", fastMode = false}
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with CLAUDE_CODE_VERSION in the Dockerfile.
-version = "2.1.141"
+version = "2.1.160"
 # Share the services agent's CLAUDE_CONFIG_DIR across every other agent so
 # auth, plugins, marketplaces, and settings are configured exactly once
 # (inside the services agent) and inherited via the host env file the
@@ -65,9 +65,12 @@ version = "2.1.141"
 use_env_config_dir = true
 
 # The "main" (services) agent type -- inherits everything from claude, then
-# disables every path that pulls user-local content into the workspace. The
-# repo at the requested git ref is the canonical workspace definition;
-# nothing from the invoking user's ~/.claude/ or ~/.mngr/ should leak in.
+# disables the bulky user-local sync paths that pull content into the
+# workspace. The repo at the requested git ref is the canonical workspace
+# definition; nothing from the invoking user's ~/.claude/ or ~/.mngr/ should
+# leak in. Claude credentials are the deliberate exception:
+# sync_claude_credentials is on so a workspace is authenticated out of the box
+# (on macOS, converted from the host keychain).
 [agent_types.main]
 parent_type = "claude"
 sync_home_settings = false
@@ -184,8 +187,8 @@ extra_provision_command__extend = [
     # despite the multi-line content. See [agent_types.main]'s sync_claude_credentials.
     "echo IyEvYmluL2Jhc2gKc2V0IC1ldW8gcGlwZWZhaWwKCiMgLS0tIFBoYXNlIEE6IGFwdCBzb3VyY2Ugc2V0dXAgKyBiaWcgaW5zdGFsbCBpbiBwYXJhbGxlbCB3aXRoIHV2IGluc3RhbGxlciAtLS0KKAogIHNldCAtZQogIGN1cmwgLWZzU0wgaHR0cHM6Ly9kZWIubm9kZXNvdXJjZS5jb20vc2V0dXBfMjAueCB8IHN1ZG8gYmFzaCAtCiAgc3VkbyBta2RpciAtcCAtbSA3NTUgL2V0Yy9hcHQva2V5cmluZ3MKICB3Z2V0IC1udiAtTy0gaHR0cHM6Ly9jbGkuZ2l0aHViLmNvbS9wYWNrYWdlcy9naXRodWJjbGktYXJjaGl2ZS1rZXlyaW5nLmdwZyB8IHN1ZG8gdGVlIC9ldGMvYXB0L2tleXJpbmdzL2dpdGh1YmNsaS1hcmNoaXZlLWtleXJpbmcuZ3BnID4gL2Rldi9udWxsCiAgZWNobyAiZGViIFthcmNoPSQoZHBrZyAtLXByaW50LWFyY2hpdGVjdHVyZSkgc2lnbmVkLWJ5PS9ldGMvYXB0L2tleXJpbmdzL2dpdGh1YmNsaS1hcmNoaXZlLWtleXJpbmcuZ3BnXSBodHRwczovL2NsaS5naXRodWIuY29tL3BhY2thZ2VzIHN0YWJsZSBtYWluIiB8IHN1ZG8gdGVlIC9ldGMvYXB0L3NvdXJjZXMubGlzdC5kL2dpdGh1Yi1jbGkubGlzdCA+IC9kZXYvbnVsbAogIHN1ZG8gYXB0LWdldCB1cGRhdGUKICBzdWRvIGFwdC1nZXQgaW5zdGFsbCAteSAtLW5vLWluc3RhbGwtcmVjb21tZW5kcyBidWlsZC1lc3NlbnRpYWwgZmQtZmluZCBnaXQtbGZzIHJlc3RpYyByaXBncmVwIHNxbGl0ZTMgdW5pc29uIG5vZGVqcyBnaAopID4gL3RtcC9wcm92LWFwdC5sb2cgMj4mMSAmCkFQVF9QSUQ9JCEKCigKICBzZXQgLWUKICBjdXJsIC1Mc1NmIGh0dHBzOi8vYXN0cmFsLnNoL3V2L2luc3RhbGwuc2ggfCBzaAopID4gL3RtcC9wcm92LXV2LmxvZyAyPiYxICYKVVZfUElEPSQhCgooCiAgc2V0IC1lCiAgQVJDSD0kKHVuYW1lIC1tKQogIHN1ZG8gY3VybCAtZnNTTCAiaHR0cHM6Ly9naXRodWIuY29tL3RzbDA5MjIvdHR5ZC9yZWxlYXNlcy9kb3dubG9hZC8xLjcuNy90dHlkLiR7QVJDSH0iIC1vIC91c3IvbG9jYWwvYmluL3R0eWQKICBzdWRvIGNobW9kICt4IC91c3IvbG9jYWwvYmluL3R0eWQKKSA+IC90bXAvcHJvdi10dHlkLmxvZyAyPiYxICYKVFRZRF9QSUQ9JCEKCgp3YWl0ICRBUFRfUElEIHx8IHsgZWNobyAiW3Byb3Zpc2lvbl0gYXB0IHBoYXNlIGZhaWxlZCIgPiYyOyBjYXQgL3RtcC9wcm92LWFwdC5sb2cgPiYyOyBleGl0IDE7IH0Kd2FpdCAkVVZfUElEICB8fCB7IGVjaG8gIltwcm92aXNpb25dIHV2IGluc3RhbGxlciBmYWlsZWQiID4mMjsgY2F0IC90bXAvcHJvdi11di5sb2cgID4mMjsgZXhpdCAxOyB9CndhaXQgJFRUWURfUElEIHx8IHsgZWNobyAiW3Byb3Zpc2lvbl0gdHR5ZCBkb3dubG9hZCBmYWlsZWQiID4mMjsgY2F0IC90bXAvcHJvdi10dHlkLmxvZyA+JjI7IGV4aXQgMTsgfQoKIyAtLS0gUGhhc2UgQjogbGF0Y2hrZXkgZ2xvYmFsIHx8IHV2IHRvb2wgaW5zdGFsbCAtLS0KIyAoZnJvbnRlbmQgbnBtIGNpICsgYnVpbGQgZHJvcHBlZDogYXBwcy9zeXN0ZW1faW50ZXJmYWNlL2ltYnVlL3N5c3RlbV9pbnRlcmZhY2Uvc3RhdGljLwojICBpcyBub3cgY29tbWl0dGVkIGluIEZDVCwgc28gdGhlIGJ1aWxkIG91dHB1dCByc3luY3MgaW50byB0aGUgVk0gd2l0aCBldmVyeXRoaW5nIGVsc2UuKQooCiAgc2V0IC1lCiAgc3VkbyBucG0gaW5zdGFsbCAtZyBsYXRjaGtleUAyLjE0LjAKKSA+IC90bXAvcHJvdi1sYXRjaGtleS5sb2cgMj4mMSAmCkxBVENIS0VZX1BJRD0kIQoKKAogIHNldCAtZQogIGV4cG9ydCBQQVRIPSRIT01FLy5sb2NhbC9iaW46JFBBVEgKICB1diB0b29sIGluc3RhbGwgLWUgdmVuZG9yL21uZ3IvbGlicy9tbmdyCiAgdXYgdG9vbCBpbnN0YWxsIC1lIGFwcHMvc3lzdGVtX2ludGVyZmFjZSAtLXdpdGgtZWRpdGFibGUgdmVuZG9yL21uZ3IvbGlicy9tbmdyIC0td2l0aC1lZGl0YWJsZSB2ZW5kb3IvbW5nci9saWJzL21uZ3JfY2xhdWRlIC0td2l0aC1lZGl0YWJsZSB2ZW5kb3IvbW5nci9saWJzL21uZ3JfbW9kYWwKICBQQVRIPSIke1VWX1RPT0xfQklOX0RJUjotfTokUEFUSCIgbW5nciBwbHVnaW4gYWRkIC0tcGF0aCB2ZW5kb3IvbW5nci9saWJzL21uZ3JfbW9kYWwvIC0tcGF0aCB2ZW5kb3IvbW5nci9saWJzL21uZ3JfY2xhdWRlCikgPiAvdG1wL3Byb3YtdXZ0b29sLmxvZyAyPiYxICYKVVZUT09MX1BJRD0kIQoKd2FpdCAkTEFUQ0hLRVlfUElEIHx8IHsgZWNobyAiW3Byb3Zpc2lvbl0gbGF0Y2hrZXkgaW5zdGFsbCBmYWlsZWQiID4mMjsgY2F0IC90bXAvcHJvdi1sYXRjaGtleS5sb2cgPiYyOyBleGl0IDE7IH0Kd2FpdCAkVVZUT09MX1BJRCAgIHx8IHsgZWNobyAiW3Byb3Zpc2lvbl0gdXYgdG9vbCBpbnN0YWxsIGZhaWxlZCIgID4mMjsgY2F0IC90bXAvcHJvdi11dnRvb2wubG9nICAgPiYyOyBleGl0IDE7IH0KCiMgLS0tIFBoYXNlIEM6IHV2IHN5bmMgKyBwbGF5d3JpZ2h0IGluc3RhbGwgKGRlcGVuZHMgb24gUGhhc2UgQidzIHV2IHRvb2xzKSAtLS0KZXhwb3J0IFBBVEg9JEhPTUUvLmxvY2FsL2JpbjokUEFUSAp1diBzeW5jIC0tYWxsLXBhY2thZ2VzCnN1ZG8gZW52IFBBVEg9IiRQQVRIIiBIT01FPSIkSE9NRSIgdXYgcnVuIHBsYXl3cmlnaHQgaW5zdGFsbCAtLXdpdGgtZGVwcyBjaHJvbWl1bQoKIyAtLS0gUGhhc2UgRDogY3JlZC1icmlkZ2Ugd2F0Y2hlciAoZmlyZS1hbmQtZm9yZ2V0KSAtLS0KIyBTeW1saW5rIH4vLmNsYXVkZS8uY3JlZGVudGlhbHMuanNvbiAtPiAvbW5nci9hZ2VudHMvPGFnZW50X2lkPi8uLi4vY3JlZGVudGlhbHMuanNvbgojIGFzIHNvb24gYXMgbW5ncl9jbGF1ZGUgc3RhZ2VzIGl0LiBSdW5zIGFzIGEgYmFja2dyb3VuZGVkIHN1YnNoZWxsIHNvIHRoZQojIG1haW4gZXh0cmFfcHJvdmlzaW9uX2NvbW1hbmQgY2FuIHJldHVybiBjbGVhbmx5LiBCZWx0LWFuZC1icmFjZXMgZm9yIDAuMi4zNAojIC5hcHAgYnVuZGxlcyB3aG9zZSBidW5kbGVkIG1uZ3JfY2xhdWRlIHByZWRhdGVzIHRoZSBQUiAjMTg2OSBzeW1saW5rIHBhdGNoLgooCiAgc2xlZXAgNQogIGZvciBpIGluIDEgMiAzIDQgNSA2IDcgOCA5IDEwIDExIDEyIDEzIDE0IDE1OyBkbwogICAgc3JjPSQoZmluZCAvbW5nci9hZ2VudHMgLW1heGRlcHRoIDUgLW5hbWUgLmNyZWRlbnRpYWxzLmpzb24gLXR5cGUgZiAyPi9kZXYvbnVsbCB8IGhlYWQgLTEpCiAgICBpZiBbIC1uICIkc3JjIiBdOyB0aGVuCiAgICAgIG1rZGlyIC1wIH4vLmNsYXVkZQogICAgICBsbiAtc2ZuICIkc3JjIiB+Ly5jbGF1ZGUvLmNyZWRlbnRpYWxzLmpzb24KICAgICAgZWNobyAiW2NyZWQtYnJpZGdlXSBzeW1saW5rZWQgJHNyYyAtPiB+Ly5jbGF1ZGUvLmNyZWRlbnRpYWxzLmpzb24gYXQgJChkYXRlKSIKICAgICAgYnJlYWsKICAgIGZpCiAgICBzbGVlcCA0CiAgZG9uZQopID4gL3RtcC9jcmVkLWJyaWRnZS5sb2cgMj4mMSA8IC9kZXYvbnVsbCAmCg== | base64 -d | bash",
     # Expose the vendored tk ticket tracker on PATH (mirrors the Dockerfile
-    # symlink at /root/.local/bin/tk). $HOME/.local/bin is already on PATH
-    # because the uv installer prepends it.
+    # symlinks at /usr/local/bin/tk and /usr/local/bin/ticket).
+    # $HOME/.local/bin is already on PATH because the uv installer prepends it.
     "mkdir -p $HOME/.local/bin && ln -sf /mngr/code/vendor/tk/ticket $HOME/.local/bin/tk",
     # Source /mngr/env (the host env file, when present) for interactive bash
     # sessions, so a shell opened via `limactl shell <instance>` inherits the
@@ -250,6 +253,18 @@ post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 # Leased pool hosts must never auto-shutdown -- the host is borrowed for a
 # whole user session, not a one-shot job.
 idle_mode = "disabled"
+# The agent workspace lives on the persistent volume at /mngr/code/. The fast
+# (adopt) path ignores this -- it reuses the pre-baked agent's recorded
+# work_dir -- but the slow (rebuild) path rebuilds the container from scratch
+# and needs the standard target_path so the FCT workspace lands in the right
+# place, exactly like the vultr/ovh templates.
+target_path = "/mngr/code/"
+# Docker build args forwarded verbatim to the delegated vps_docker build that
+# the imbue_cloud SLOW path runs (it tears down the leased pool host's baked
+# container and rebuilds it from this Dockerfile). The FAST path adopts the
+# pre-baked image and ignores these (the imbue_cloud provider treats them as
+# pass-through and only the slow path consumes them). Mirrors the ovh template.
+build_arg__extend = ["--file=Dockerfile", "."]
 # Forward the LiteLLM-minted ANTHROPIC creds + the minds-side MNGR_PREFIX
 # + an optional GH_TOKEN from minds' subprocess env onto the host's
 # ``/mngr/env``. minds writes these into the subprocess env it hands
@@ -257,6 +272,11 @@ idle_mode = "disabled"
 # ``vendor/mngr/apps/minds/imbue/minds/desktop_client/agent_creator.py``)
 # so the host actually has them at the moment ``--pass-host-env`` reads.
 pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "MNGR_PREFIX", "GH_TOKEN"]
+# Seed /mngr/code from the baked image on first boot (idempotent warm-boot
+# fast path). Runs after create_host for both paths; on the fast path the
+# code is already present so fct-seed is a no-op. Same as the vultr/ovh
+# templates.
+post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 
 ## and these templates are for sub-agents created within the sandbox
 
