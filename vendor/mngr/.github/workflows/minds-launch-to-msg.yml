@@ -300,40 +300,13 @@ jobs:
         # boot fails with "no space left on device" 15 min into the test --
         # surface that here so the operator gets a fast, actionable error.
         # See runs 27060995662, 27061606544, 27062222443 for the symptom.
-        #
-        # When precheck would block, also dump the top disk consumers so the
-        # operator knows exactly what to clean (vs guessing at ToDesktop work
-        # dirs vs npm caches vs etc.).
         run: |
-          df -h "$HOME" /
           AVAIL_KB=$(df -k "$HOME" | awk 'NR==2 {print $4}')
           AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
           echo "Available on $HOME: ${AVAIL_GB}GB"
+          df -h "$HOME" /
           if [[ "$AVAIL_GB" -lt 200 ]]; then
-            # ---- disk audit ----
-            # macOS BSD du: -d for depth, -h for human, -s for summary. Combined
-            # via sort | head to surface top consumers without enumerating
-            # millions of small files.
-            echo "::group::top directories under \$HOME (depth 1)"
-            du -hsd 1 "$HOME"/* "$HOME"/.[!.]* 2>/dev/null | sort -hr | head -25 || true
-            echo "::endgroup::"
-            echo "::group::actions-runner work dirs"
-            du -hsd 2 "$HOME/actions-runner/_work" 2>/dev/null | sort -hr | head -20 || true
-            echo "::endgroup::"
-            echo "::group::Library/Caches breakdown"
-            du -hsd 1 "$HOME/Library/Caches"/* 2>/dev/null | sort -hr | head -25 || true
-            echo "::endgroup::"
-            echo "::group::Library/Application Support breakdown"
-            du -hsd 1 "$HOME/Library/Application Support"/* 2>/dev/null | sort -hr | head -25 || true
-            echo "::endgroup::"
-            echo "::group::Lima caches + instances"
-            du -hsd 2 "$HOME/.lima" "$HOME/Library/Caches/lima" 2>/dev/null || true
-            echo "::endgroup::"
-            echo "::group::/tmp + /var/folders top consumers"
-            du -hsd 1 /tmp/* 2>/dev/null | sort -hr | head -10 || true
-            sudo du -hsd 2 /var/folders 2>/dev/null | sort -hr | head -10 || true
-            echo "::endgroup::"
-            echo "::error::runner disk has only ${AVAIL_GB}GB free; Lima diffdisks need ~100GB each. See the disk-audit groups above for exact culprits."
+            echo "::error::runner disk has only ${AVAIL_GB}GB free; Lima diffdisks need ~100GB each. Free space (ToDesktop builds in ~/actions-runner/_work, npm/uv caches, etc.) before retrying."
             exit 1
           fi
 
