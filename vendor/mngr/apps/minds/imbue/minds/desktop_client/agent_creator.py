@@ -393,22 +393,33 @@ def checkout_branch(
     *,
     parent_cg: ConcurrencyGroup | None = None,
 ) -> None:
-    """Check out a specific branch in a cloned repository.
+    """Check out a ref in a cloned repository, materializing it as a named local branch.
 
-    Raises GitOperationError if the checkout fails (e.g. branch does not exist).
+    Uses ``git checkout -B <branch> <branch>`` rather than plain
+    ``git checkout <branch>`` so an annotated-tag input (e.g. the
+    ``FALLBACK_BRANCH = "v0.2.35"`` pin in templates.py) lands the worktree
+    on a real local branch named after the tag instead of in detached-HEAD
+    state. Downstream mngr.create's source-base autodetection (``git
+    rev-parse --abbrev-ref HEAD``) then returns that branch name and the
+    mirror-pushed ``refs/tags/<branch>`` makes the target's ``checkout -B
+    new <branch>`` resolve cleanly. Plain ``git checkout`` on a tag would
+    leave HEAD detached, returning the literal string ``HEAD`` to
+    autodetection, which is not a valid ref in the bare-init target.
+
+    Raises GitOperationError if the ref does not exist.
     """
-    logger.debug("Checking out branch {} in {}", branch, repo_dir)
+    logger.debug("Checking out {} in {}", branch, repo_dir)
     cg = _make_child_cg("git-checkout", parent_cg)
     with cg:
         result = cg.run_process_to_completion(
-            command=["git", "checkout", str(branch)],
+            command=["git", "checkout", "-B", str(branch), str(branch)],
             cwd=repo_dir,
             is_checked_after=False,
             on_output=on_output,
         )
     if result.returncode != 0:
         raise GitOperationError(
-            "git checkout failed for branch '{}' (exit code {}):\n{}".format(
+            "git checkout failed for ref '{}' (exit code {}):\n{}".format(
                 branch,
                 result.returncode,
                 result.stderr.strip() if result.stderr.strip() else result.stdout.strip(),
@@ -487,11 +498,11 @@ def _build_mngr_create_command(
     Every mode creates a separate host, so the agent address uses
     ``system-services@<host_name>`` -- the agent name is constant across
     every minds workspace; the host name (the user's input from the
-    create-project form) is the workspace identifier. ``--reuse`` and
-    ``--update`` are passed for the non-IMBUE_CLOUD modes so re-deploying
-    resets the agent on the same host instead of failing on a duplicate
-    name (IMBUE_CLOUD's lease flow is one-shot per pool host, so reuse
-    is not meaningful there).
+    create-project form) is the workspace identifier. Only IMBUE_CLOUD
+    passes ``--reuse`` (to satisfy the pre-baked services-agent on the
+    pool host); the other modes rely on ``--new-host`` for fresh-host
+    intent and pass neither ``--reuse`` nor ``--update`` because
+    mngr's ``--reuse`` matches on agent name without host scope.
 
     Secrets (``ANTHROPIC_API_KEY``, ``ANTHROPIC_BASE_URL``) are forwarded by
     the FCT template's own ``pass_(host_)env`` declarations, not by inline

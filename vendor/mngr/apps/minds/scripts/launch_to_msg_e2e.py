@@ -12,17 +12,35 @@ Invoked from .github/workflows/minds-launch-to-msg.yml as the single
 test step. NOT a pytest test (no markers, no collection).
 
 Flow:
-  1. Launch minds.app via Playwright Electron
-  2. UI auth via /authenticate?one_time_code=... (minted on disk)
-  3. Click Create, fill form, wait for agent DONE
-  4. Send first message ("pong"), wait for reply
-  5. (if slack flow enabled) stand up local slack mock HTTPS server on
-     :443 via sudo socat TLS-terminator, patch /etc/hosts, pre-seed
-     latchkey slack credential, send slack prompt
-  6. Click Requests -> entry -> Approve, kick agent to retry
-  7. Verify canned MESSAGE_BODY appears in chat
-  8. Teardown: destroy agent, revert /etc/hosts, clear latchkey, kill
-     mock + socat
+  1. Launch minds.app via Playwright Electron, UI auth via
+     /authenticate?one_time_code=... (minted on disk)
+  2. Workspace 1 (W1): click Create, fill form with HOST_NAME, wait for
+     agent DONE, send first message ("pong"), wait for reply (screenshots
+     03-06)
+  3. Slack flow on W1 (if enabled): stand up local slack mock HTTPS
+     server on :443 via sudo socat TLS-terminator, patch /etc/hosts,
+     pre-seed latchkey slack credential, send slack prompt; click
+     Requests -> entry -> Approve, kick agent to retry; verify canned
+     MESSAGE_BODY appears (screenshots 07-08)
+  4. (if WORKSPACE_COUNT >= 2) Workspace 2 (W2): same create-form
+     flow with HOST_NAME_2, send first message, wait for reply
+     (screenshots 09-12)
+  5. Cross-workspace follow-up: navigate back to W1's chat URL, send
+     a unique-token prompt (bing), wait for reply; then to W2's
+     (bong) (screenshots 13-16)
+  6. Home-page tiles check: navigate to /, assert BOTH tiles render
+     (screenshot 17)
+  7. Destroy W2 via /api/destroy-agent, poll until done, assert home
+     drops W2 tile; send a unique-token follow-up to W1 (bink), verify
+     reply (screenshots 18-22)
+  8. mngr CLI from host: run `mngr list --format json` against the
+     bundled host_dir, assert W1's host is listed AND W2's is gone
+     -- cross-checks the destroy lifecycle from a different angle
+     than the UI's home-page tile state.
+  9. Duplicate-name conflict: POST /api/create-agent with HOST_NAME
+     already owned by W1; assert 409 with "already exists". Proves
+     the duplicate-name guard added on this branch works.
+  10. Teardown: revert /etc/hosts, clear latchkey, kill mock + socat
 
 Takes a `screencapture -x` whole-desktop shot at every milestone.
 Files land in /tmp/launch-to-msg-screenshots/ and the workflow
@@ -44,6 +62,8 @@ import sys
 import threading
 import time
 import urllib.parse
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 from typing import Any
 
@@ -81,11 +101,24 @@ SLACK_MOCK_STATE = Path("/tmp/slack-mock")
 SLACK_MOCK_PORT = 8443  # plain HTTP; socat terminates TLS on :443
 LATCHKEY_DIR = MINDS_HOME / "latchkey"
 
-GIT_URL = os.environ.get("GIT_URL") or "https://github.com/imbue-ai/forever-claude-template"
-GIT_BRANCH = os.environ.get("GIT_BRANCH") or "pilot"
 HOST_NAME = os.environ.get("HOST_NAME") or f"e2e{time.strftime('%H%M%S')}"
+HOST_NAME_2 = os.environ.get("HOST_NAME_2") or f"{HOST_NAME}-b"
+# WORKSPACE_COUNT=1 (default) preserves the single-workspace flow for local
+# repro; CI sets =2 to drive the second workspace + cross-workspace follow-up
+# pings as an end-to-end isolation check on the same minds.app session.
+WORKSPACE_COUNT = int(os.environ.get("WORKSPACE_COUNT", "1"))
+
 FIRST_PROMPT = "Reply with exactly the four characters: pong"
 FIRST_EXPECT = "pong"
+# Cross-workspace follow-up prompts use tokens that the chat body does NOT
+# contain before the prompt fires, so the >=2-occurrence check (prompt echo
+# + reply bubble) proves the agent responded to the NEW message rather than
+# counting carryover from earlier slack/first-message bubbles.
+FOLLOWUP_W1_PROMPT = "Reply with exactly the four characters: bing"
+FOLLOWUP_W1_EXPECT = "bing"
+FOLLOWUP_W2_PROMPT = "Reply with exactly the four characters: bong"
+FOLLOWUP_W2_EXPECT = "bong"
+
 CREATE_TIMEOUT = 900
 REPLY_TIMEOUT = 480
 DRIVE_SLACK_TIMEOUT = 360
@@ -101,18 +134,11 @@ SLACK_PROMPT = (
     "either is fine, but I need to see the message text. Thanks!"
 )
 
-SKIP_FIRST_MESSAGE = os.environ.get("SKIP_FIRST_MESSAGE", "0") == "1"
 SKIP_SLACK_FLOW = os.environ.get("SKIP_SLACK_FLOW", "0") == "1"
-# Slack-flow timeout (canned body never arrives) is a hard fail by
-# default. CI run 26872452227 was reported as success because the old
-# default (SLACK_BEST_EFFORT=1) swallowed an actual "Authorization
-# failed: No browser configured" error -- the broken state was clearly
-# visible in 07d-stage2-post-approve.win.png but the script chose to
-# warn-and-pass instead of raise. The CI workflow now pre-installs the
-# latchkey browser, so this code path should not fire in CI; if it
-# does, that itself is the signal worth surfacing. Opt-in soft-pass
-# remains available via SLACK_BEST_EFFORT=1 for interactive debugging.
-SLACK_BEST_EFFORT = os.environ.get("SLACK_BEST_EFFORT", "0") == "1"
+# Dev-only escape hatch (no CI workflow exposes this). Lets a local repro
+# stop after install + launch + backend-ready without driving the create
+# form -- useful when the failure is upstream of the form.
+SKIP_FIRST_MESSAGE = os.environ.get("SKIP_FIRST_MESSAGE", "0") == "1"
 
 # --- snap helpers ---
 
@@ -419,8 +445,8 @@ def start_socat(cert: Path) -> subprocess.Popen:
 
 
 def stop_socat() -> None:
-    # The launched socat ran under sudo so kill via sudo pkill.
-    subprocess.run(["sudo", "pkill", "-f", "OPENSSL-LISTEN:443"], check=False)
+    # The launched socat ran under sudo so kill via sudo.
+    _kill_pgrep("OPENSSL-LISTEN:443", "stale socat", sudo=True)
 
 
 def latchkey_shim() -> Path:
@@ -537,58 +563,252 @@ async def find_chat_window(ctx: BrowserContext) -> Page | None:
     return None
 
 
+# --- per-workspace helpers ---
+
+
+@dataclass(frozen=True)
+class _SnapPrefixes:
+    """Per-workspace screenshot name prefixes.
+
+    Held in separate constants per workspace so the original W1 names
+    predating W2 stay stable; alphabetic sort of the screenshot dir
+    still reflects chronological execution (W1 03-06, slack 07-08,
+    W2 09-12, cross-workspace 13-16).
+    """
+
+    submitted: str
+    done: str
+    creating_mid: str
+    msg_sent: str
+    msg_reply: str
+
+
+_W1_SNAPS = _SnapPrefixes(
+    submitted="03-create-agent-submitted",
+    done="04-agent-DONE",
+    creating_mid="04b-creating-workspace-mid",
+    msg_sent="05-first-message-sent",
+    msg_reply="06-first-message-reply",
+)
+_W2_SNAPS = _SnapPrefixes(
+    submitted="09-create-agent-submitted-w2",
+    done="10-agent-DONE-w2",
+    creating_mid="10b-creating-workspace-mid-w2",
+    msg_sent="11-first-message-sent-w2",
+    msg_reply="12-first-message-reply-w2",
+)
+
+
+@dataclass
+class _WorkspaceResult:
+    chat_url: str
+    creation_id: str
+    phase_durations: dict[str, float] = field(default_factory=dict)
+    total_create_s: float = 0.0
+
+
+async def _create_workspace_and_first_message(
+    ctx: BrowserContext,
+    win: Page,
+    *,
+    origin: str,
+    host_name: str,
+    ai_provider: str,
+    anthropic_key: str,
+    snaps: _SnapPrefixes,
+    label: str,
+) -> _WorkspaceResult:
+    """Drive create-form -> first-message for one workspace; navigate `win` to its chat.
+
+    Steps: navigate to /create, fill the form for `host_name`, submit,
+    poll /api/create-agent/<id>/status until DONE, follow the
+    redirect_url to the agent chat URL on `win`, send FIRST_PROMPT,
+    wait for a >=2-occurrence reply of FIRST_EXPECT. Snaps each
+    milestone with names from `snaps`.
+
+    The same `win` Page is reused across calls; for a second workspace
+    the caller passes the (now-W1-chat-URL) `win` in, and this function
+    overwrites it via ``win.goto(origin + "/create")``. The W1 chat
+    URL is preserved on the underlying BrowserWindow's history; the
+    caller can navigate back via the URL it captured before this call.
+
+    `label` appears in log lines so two sequential workspaces are
+    distinguishable in CI logs (e.g. "w1" vs "w2").
+    """
+    await win.goto(origin + "/create")
+    await win.wait_for_selector("#create-form", timeout=10_000)
+    await win.click("#configure-toggle")
+    await win.wait_for_selector("#configure-panel:not(.hidden)", timeout=5_000)
+    await win.select_option("#launch_mode", value="LIMA")
+    await win.select_option("#ai_provider", value=ai_provider)
+    if ai_provider == "API_KEY":
+        await win.wait_for_selector("#api-key-row:not(.hidden)", timeout=5_000)
+        await win.fill("#anthropic_api_key", anthropic_key)
+    await win.fill("#host_name", host_name)
+    async with win.expect_navigation(url=re.compile(r"/creating/[a-z0-9-]+")):
+        await win.click("#create-submit")
+    with contextlib.suppress(Exception):
+        await win.wait_for_function(
+            "document.body.innerText.includes('Setting up your workspace')",
+            timeout=15_000,
+        )
+    await snap_page(win, snaps.submitted)
+    m = re.search(r"/creating/([a-z0-9-]+)", win.url)
+    if not m:
+        raise RuntimeError(f"[{label}] expected /creating/<id> after submit, got url={win.url}")
+    creation_id = m.group(1)
+    logger.info("[{}] creation_id={}", label, creation_id)
+
+    deadline = time.time() + CREATE_TIMEOUT
+    last_status = ""
+    phase_started_at = time.monotonic()
+    phase_durations: dict[str, float] = {}
+    done = False
+    done_redirect_url = ""
+    while time.time() < deadline and not done:
+        stat = await win.evaluate(
+            """async (id) => {
+                const r = await fetch('/api/create-agent/' + id + '/status');
+                return {status: r.status, body: await r.text()};
+            }""",
+            creation_id,
+        )
+        payload = {}
+        with contextlib.suppress(Exception):
+            payload = json.loads(stat["body"])
+        state = payload.get("status", "")
+        if state != last_status:
+            now = time.monotonic()
+            if last_status:
+                phase_durations[last_status] = round(now - phase_started_at, 2)
+                logger.info(
+                    "[{}] creation status: {} -> {} (prev took {:.1f}s)",
+                    label,
+                    last_status,
+                    state,
+                    phase_durations[last_status],
+                )
+            else:
+                logger.info("[{}] creation status: (none) -> {}", label, state)
+            last_status = state
+            phase_started_at = now
+        if state == "DONE":
+            phase_durations[state] = round(time.monotonic() - phase_started_at, 2)
+            done_redirect_url = payload.get("redirect_url", "")
+            done = True
+            break
+        if state == "FAILED":
+            raise RuntimeError(f"[{label}] creation FAILED: {payload.get('error', stat['body'])}")
+        if (
+            state == "CREATING_WORKSPACE"
+            and not any(SCREENSHOT_DIR.glob(f"{snaps.creating_mid}.*"))
+            and time.monotonic() - phase_started_at >= 60
+        ):
+            await snap_page(win, snaps.creating_mid)
+        await asyncio.sleep(5)
+    total_create_s = sum(phase_durations.values())
+    logger.info("[{}] creation phase timings: {} (total={:.1f}s)", label, phase_durations, total_create_s)
+    if not done:
+        if EVENTS_LOG.exists():
+            tail = EVENTS_LOG.read_text(errors="ignore").splitlines()[-60:]
+            logger.error("[{}] minds-events.jsonl tail:\n{}", label, "\n".join(tail))
+        raise RuntimeError(f"[{label}] creation didn't reach DONE in {CREATE_TIMEOUT}s (last={last_status})")
+    if not done_redirect_url:
+        raise E2EFailure(
+            f"[{label}] creation DONE without redirect_url; check the /api/create-agent/<id>/status contract"
+        )
+    target = done_redirect_url if done_redirect_url.startswith("http") else origin + done_redirect_url
+    logger.info("[{}] creation DONE; navigating directly to {}", label, target)
+    await win.goto(target)
+    chat_url_re = re.compile(r"agent-[a-f0-9]+\.localhost")
+    chat_deadline = time.time() + 30
+    while time.time() < chat_deadline and not chat_url_re.search(win.url):
+        await asyncio.sleep(0.5)
+    if not chat_url_re.search(win.url):
+        for p in all_pages(ctx):
+            with contextlib.suppress(Exception):
+                await snap_page(p, f"99-{label}-no-chat-{p.url.split('/')[-1] or 'root'}")
+        raise E2EFailure(f"[{label}] goto({target}) didn't redirect to chat URL within 30s (win.url={win.url})")
+    logger.info("[{}] agent DONE; chat URL={}", label, win.url)
+    await snap_page(win, snaps.done)
+
+    inp = await win.wait_for_selector('textarea, [contenteditable="true"]', timeout=60_000)
+    await inp.fill(FIRST_PROMPT)
+    await inp.press("Enter")
+    with contextlib.suppress(Exception):
+        await win.wait_for_function(
+            f"document.body.innerText.includes({FIRST_PROMPT!r})",
+            timeout=10_000,
+        )
+    await snap_page(win, snaps.msg_sent)
+    await win.wait_for_function(
+        f"(document.body.innerText.toLowerCase().match(/{FIRST_EXPECT}/g) || []).length >= 2",
+        timeout=REPLY_TIMEOUT * 1000,
+    )
+    await asyncio.sleep(1)
+    await snap_page(win, snaps.msg_reply)
+
+    return _WorkspaceResult(
+        chat_url=win.url,
+        creation_id=creation_id,
+        phase_durations=phase_durations,
+        total_create_s=total_create_s,
+    )
+
+
+async def _send_followup_and_verify(
+    win: Page,
+    *,
+    chat_url: str,
+    prompt: str,
+    expect_token: str,
+    snap_sent: str,
+    snap_reply: str,
+    label: str,
+) -> None:
+    """Navigate `win` to `chat_url`, send `prompt`, wait for >=2 occurrences of `expect_token`.
+
+    Proves the workspace's chat panel + agent backend stays responsive
+    after the BrowserWindow has been navigated away and back. Caller
+    picks a token that isn't already in the chat body so the count
+    check actually proves a NEW reply landed (not carryover from
+    earlier turns).
+    """
+    logger.info("[{}] navigating back to {}", label, chat_url)
+    await win.goto(chat_url)
+    inp = await win.wait_for_selector('textarea, [contenteditable="true"]', timeout=30_000)
+    await inp.fill(prompt)
+    await inp.press("Enter")
+    with contextlib.suppress(Exception):
+        await win.wait_for_function(
+            f"document.body.innerText.includes({prompt!r})",
+            timeout=10_000,
+        )
+    await snap_page(win, snap_sent)
+    await win.wait_for_function(
+        f"(document.body.innerText.toLowerCase().match(/{expect_token}/g) || []).length >= 2",
+        timeout=REPLY_TIMEOUT * 1000,
+    )
+    await asyncio.sleep(1)
+    await snap_page(win, snap_reply)
+    logger.info("[{}] follow-up reply confirmed", label)
+
+
 # --- main flow ---
 
 
-def _kill_named_processes(pgrep_pattern: str, label: str, *, argv0_must_start_with: str | None = None) -> None:
+def _kill_pgrep(pgrep_pattern: str, label: str, *, sudo: bool = False) -> None:
     """Kill processes whose argv matches ``pgrep_pattern``, by exact PID.
 
     Per CLAUDE.md, ``pkill -f`` / ``killall`` with broad patterns can hit
     unrelated processes (including this Claude Code session). Resolve PIDs
     with ``pgrep -f`` first, log each one, then ``kill`` by exact PID.
-
-    ``argv0_must_start_with`` is a second-pass guard against false positives.
-    pgrep -f matches anywhere in argv -- a shell command line containing the
-    literal string ``/Applications/Minds.app/Contents/MacOS/Minds`` (e.g.
-    this very docstring in a script being inspected) would match without it.
-    Resolve each candidate's argv via ps and verify argv[0] starts with the
-    expected absolute path before killing.
+    ``sudo=True`` runs both pgrep and kill under sudo for root-owned processes.
     """
+    prefix = ["sudo"] if sudo else []
     try:
         out = subprocess.run(
-            ["pgrep", "-lf", pgrep_pattern],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return
-    for line in out.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        pid_str, _, argv = line.partition(" ")
-        if not pid_str.isdigit():
-            continue
-        if argv0_must_start_with is not None:
-            ps_out = subprocess.run(
-                ["ps", "-p", pid_str, "-o", "command="],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            real_argv = ps_out.stdout.strip()
-            if not real_argv.startswith(argv0_must_start_with):
-                continue
-        logger.info("[runner-sweep] killing {} pid={} ({})", label, pid_str, argv)
-        subprocess.run(["kill", pid_str], check=False)
-
-
-def _kill_sudo_named_processes(pgrep_pattern: str, label: str) -> None:
-    """Same as ``_kill_named_processes`` but for sudo-owned processes."""
-    try:
-        out = subprocess.run(
-            ["sudo", "pgrep", "-lf", pgrep_pattern],
+            [*prefix, "pgrep", "-lf", pgrep_pattern],
             capture_output=True,
             text=True,
             check=False,
@@ -603,7 +823,7 @@ def _kill_sudo_named_processes(pgrep_pattern: str, label: str) -> None:
         if not pid_str.isdigit():
             continue
         logger.info("[runner-sweep] killing {} pid={} ({})", label, pid_str, argv)
-        subprocess.run(["sudo", "kill", pid_str], check=False)
+        subprocess.run([*prefix, "kill", pid_str], check=False)
 
 
 def pre_run_sweep() -> None:
@@ -615,29 +835,17 @@ def pre_run_sweep() -> None:
     The sweep is idempotent and safe to call when there's nothing to clean.
     """
     logger.info("=== pre-run runner sweep ===")
-    # 1. Drop any stale slack-mock /etc/hosts line from a prior crashed run.
+    # mac-runner-reset.sh already kills every /Applications/Minds.app/...
+    # process, wipes ~/.minds, and removes the .app entirely BEFORE we run.
+    # So orphan mngr forward / mngr event / Minds.app processes can't exist
+    # by the time we get here. The state below is what mac-runner-reset.sh
+    # does NOT cover: host-side mocking residue and a stray caffeinate.
     revert_etc_hosts()
-    # 2. Kill stale socat that was holding :443 from a prior run.
-    _kill_sudo_named_processes("OPENSSL-LISTEN:443", "stale socat")
-    # 3. Kill stale Minds-spawned subprocesses (mngr forward / mngr event) BEFORE
-    # the Electron parent, so they exit cleanly rather than being orphaned. Then
-    # Minds.app itself -- prior runs that didn't reach the finally block leave
-    # backend on :8421 and CDP holding a port.
-    _kill_named_processes("mngr event", "stale mngr event")
-    _kill_named_processes("mngr forward", "stale mngr forward")
-    _kill_named_processes(
-        "/Applications/Minds.app/Contents/MacOS/Minds",
-        "stale Minds.app",
-        argv0_must_start_with="/Applications/Minds.app/Contents/MacOS/Minds",
-    )
-    # 4. Stale caffeinate -- this script always spawns its own, multiple
-    # surviving instances are wasteful.
-    _kill_named_processes("caffeinate -dimsu", "stale caffeinate")
-    # 5. Wipe per-run /tmp state. The cert + log files in /tmp/slack-mock/
-    # are regenerated by ensure_cert() / start_socat() / start_mock(); the
-    # screenshot dir is recreated by the first snap_page(). Leaving them
-    # behind means a later run that crashes early ships stale screenshots
-    # as its artifact.
+    _kill_pgrep("OPENSSL-LISTEN:443", "stale socat", sudo=True)
+    _kill_pgrep("caffeinate -dimsu", "stale caffeinate")
+    # Per-run /tmp state. cert + log files in /tmp/slack-mock/ are regenerated
+    # by ensure_cert() / start_socat() / start_mock(); the screenshot dir is
+    # recreated by the first snap_page().
     for stale in (
         SLACK_MOCK_STATE,
         SCREENSHOT_DIR,
@@ -648,7 +856,9 @@ def pre_run_sweep() -> None:
         elif stale.exists():
             with contextlib.suppress(OSError):
                 stale.unlink()
-    # 6. Clear any latchkey slack creds left over from a prior crashed run.
+    # Stale latchkey slack creds. mac-runner-reset.sh wiped ~/.minds so the
+    # latchkey dir is also gone -- this is belt-and-braces for the dev case
+    # where someone runs the script outside CI without resetting first.
     with contextlib.suppress(Exception):
         latchkey_clear_slack()
 
@@ -736,202 +946,40 @@ async def amain() -> int:
         await win.goto(origin + "/")
         await snap_page(win, "02-home-after-auth")
 
-        if not SKIP_FIRST_MESSAGE:
-            # 4. Create agent via UI click. Mirrors what a user does:
-            #     - expand the "Configure..." panel (otherwise
-            #       launch_mode/ai_provider/api_key inputs are
-            #       display:none and Playwright can't fill them)
-            #     - set launch_mode=LIMA + ai_provider per MINDS_AI_PROVIDER
-            #       (default API_KEY: CI runners have no Claude.ai OAuth
-            #       in the host keychain. Local dev sets SUBSCRIPTION to
-            #       use the user's already-synced Claude.ai credential
-            #       without exposing an API key.)
-            #     - when API_KEY, paste ANTHROPIC_API_KEY into
-            #       anthropic_api_key (the api-key-row is .hidden until
-            #       the provider select fires its change event)
-            #     - when SUBSCRIPTION, skip the api-key fill entirely
-            #       and rely on mngr_claude's host-keychain credential
-            #       sync at agent-create time
-            #     - fill host_name, submit the form, follow the server
-            #       redirect to /creating/<id> which renders the
-            #       "Setting up your workspace" progress UI
-            # The script previously POSTed /api/create-agent directly,
-            # which left the form on screen unchanged -- 03 and 04b
-            # screenshots ended up visually identical to 02. Driving
-            # the click sequence makes those screenshots match their
-            # phase claims AND exercises the same code path a real
-            # user hits (more representative of UI regressions).
-            ai_provider = os.environ.get("MINDS_AI_PROVIDER", "API_KEY").upper()
-            if ai_provider not in ("API_KEY", "SUBSCRIPTION"):
-                raise RuntimeError(f"MINDS_AI_PROVIDER={ai_provider!r} -- must be API_KEY or SUBSCRIPTION")
-            anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            if ai_provider == "API_KEY" and not anthropic_key:
-                raise RuntimeError(
-                    "MINDS_AI_PROVIDER=API_KEY but ANTHROPIC_API_KEY not set; "
-                    "either set ANTHROPIC_API_KEY or pass MINDS_AI_PROVIDER=SUBSCRIPTION."
-                )
-            # /create is the form's action target; landing page is `/`.
-            await win.goto(origin + "/create")
-            await win.wait_for_selector("#create-form", timeout=10_000)
-            await win.click("#configure-toggle")
-            await win.wait_for_selector("#configure-panel:not(.hidden)", timeout=5_000)
-            await win.select_option("#launch_mode", value="LIMA")
-            await win.select_option("#ai_provider", value=ai_provider)
-            if ai_provider == "API_KEY":
-                await win.wait_for_selector("#api-key-row:not(.hidden)", timeout=5_000)
-                await win.fill("#anthropic_api_key", anthropic_key)
-            await win.fill("#host_name", HOST_NAME)
-            # Submit triggers a POST /create -> server redirects to
-            # /creating/<id>. wait_for_url scopes to that path so we
-            # also extract the creation_id from the URL afterwards.
-            async with win.expect_navigation(url=re.compile(r"/creating/[a-z0-9-]+")):
-                await win.click("#create-submit")
-            # Pull creation_id out of the post-submit URL.
-            with contextlib.suppress(Exception):
-                await win.wait_for_function(
-                    "document.body.innerText.includes('Setting up your workspace')",
-                    timeout=15_000,
-                )
-            await snap_page(win, "03-create-agent-submitted")
-            m = re.search(r"/creating/([a-z0-9-]+)", win.url)
-            if not m:
-                raise RuntimeError(f"expected /creating/<id> after submit, got url={win.url}")
-            creation_id = m.group(1)
-            logger.info("creation_id={}", creation_id)
-
-            # 5. Poll /api/create-agent/<id>/status until DONE. The chat
-            # panel does NOT auto-open when creation completes -- the
-            # user normally clicks the tile on the home page. Once
-            # status=DONE we do the same: navigate home, click the
-            # tile, then wait for the chat-URL page to materialise.
-            # Wall-clock per phase transition gets stitched into the
-            # /tmp/launch-to-msg-timings.json artifact at end of script.
-            deadline = time.time() + CREATE_TIMEOUT
-            last_status = ""
-            phase_started_at = time.monotonic()
-            phase_durations: dict[str, float] = {}
-            done = False
-            # Captured at DONE; absolute or relative "/goto/<agent_id>/" URL
-            # whose redirect lands on the agent's "agent-<hex>.localhost" chat
-            # page. The minds backend assembles it from the canonical AgentId
-            # the inner `mngr create` emits + the configured mngr_forward port.
-            done_redirect_url = ""
-            while time.time() < deadline and not done:
-                stat = await win.evaluate(
-                    """async (id) => {
-                        const r = await fetch('/api/create-agent/' + id + '/status');
-                        return {status: r.status, body: await r.text()};
-                    }""",
-                    creation_id,
-                )
-                payload = {}
-                with contextlib.suppress(Exception):
-                    payload = json.loads(stat["body"])
-                state = payload.get("status", "")
-                if state != last_status:
-                    now = time.monotonic()
-                    if last_status:
-                        phase_durations[last_status] = round(now - phase_started_at, 2)
-                        logger.info(
-                            "creation status: {} -> {} (prev took {:.1f}s)",
-                            last_status,
-                            state,
-                            phase_durations[last_status],
-                        )
-                    else:
-                        logger.info("creation status: (none) -> {}", state)
-                    last_status = state
-                    phase_started_at = now
-                if state == "DONE":
-                    phase_durations[state] = round(time.monotonic() - phase_started_at, 2)
-                    done_redirect_url = payload.get("redirect_url", "")
-                    done = True
-                    break
-                if state == "FAILED":
-                    raise RuntimeError(f"creation FAILED: {payload.get('error', stat['body'])}")
-                # Mid-creation snapshot so the "creating" UI is captured
-                # in CI -- fires once when CREATING_WORKSPACE has been
-                # running for ~60s so the progress dialog is on-screen.
-                if (
-                    state == "CREATING_WORKSPACE"
-                    and not any(SCREENSHOT_DIR.glob("04b-*"))
-                    and time.monotonic() - phase_started_at >= 60
-                ):
-                    # Snap `win` as-is. Previously tried ctx.new_page() +
-                    # navigate to /creating/<id> but Electron leaves the
-                    # transient BrowserWindow on screen even after close(),
-                    # and that stray /welcome window then sits in front of
-                    # the chat panel for every subsequent screencapture
-                    # (06 / 07 / 07a-d ended up showing the Welcome page).
-                    # The cost of just snapping win here is that 04b shows
-                    # the projects/form view instead of the progress UI.
-                    await snap_page(win, "04b-creating-workspace-mid")
-                await asyncio.sleep(5)
-            # Emit a per-phase summary line + persist to artifact JSON.
-            total_create_s = sum(phase_durations.values())
-            logger.info("creation phase timings: {} (total={:.1f}s)", phase_durations, total_create_s)
-            timings_artifact = SCREENSHOT_DIR / "launch-to-msg-timings.json"
-            with contextlib.suppress(Exception):
-                timings_artifact.write_text(
-                    json.dumps({"phase_durations_s": phase_durations, "total_create_s": total_create_s}, indent=2)
-                )
-            if not done:
-                if EVENTS_LOG.exists():
-                    tail = EVENTS_LOG.read_text(errors="ignore").splitlines()[-60:]
-                    logger.error("minds-events.jsonl tail:\n{}", "\n".join(tail))
-                raise RuntimeError(f"creation didn't reach DONE in {CREATE_TIMEOUT}s (last={last_status})")
-            # creation DONE: minds' status API also returns ``redirect_url``,
-            # the absolute (or "/goto/..."-relative) URL whose redirect lands
-            # on the agent's "agent-<hex>.localhost" chat page. Navigate ``win``
-            # straight there rather than clicking the home-page tile -- the
-            # tile only renders once the landing page's discovery refresh has
-            # caught up with creation completion, and on local macOS the
-            # discovery lag routinely exceeds the click window's 15s.
-            if not done_redirect_url:
-                raise E2EFailure(
-                    "creation DONE without redirect_url; check the /api/create-agent/<id>/status contract"
-                )
-            target = done_redirect_url if done_redirect_url.startswith("http") else base + done_redirect_url
-            logger.info("creation DONE; navigating directly to {}", target)
-            await win.goto(target)
-            chat_url_re = re.compile(r"agent-[a-f0-9]+\.localhost")
-            chat_deadline = time.time() + 30
-            while time.time() < chat_deadline and not chat_url_re.search(win.url):
-                await asyncio.sleep(0.5)
-            if not chat_url_re.search(win.url):
-                for p in all_pages(ctx):
-                    with contextlib.suppress(Exception):
-                        await snap_page(p, f"99-no-chat-{p.url.split('/')[-1] or 'root'}")
-                raise E2EFailure(f"goto({target}) didn't redirect to chat URL within 30s (win.url={win.url})")
-            logger.info("agent DONE; chat URL={}", win.url)
-            await snap_page(win, "04-agent-DONE")
-
-            # 6. Send first message, wait for "pong" reply
-            inp = await win.wait_for_selector('textarea, [contenteditable="true"]', timeout=60_000)
-            await inp.fill(FIRST_PROMPT)
-            await inp.press("Enter")
-            # Wait for the user's prompt to render before snapping so
-            # `05-first-message-sent` actually shows the prompt bubble.
-            # Without this the screenshot misses the bubble (as in run
-            # 26872452227 where 05 was visually identical to 04).
-            with contextlib.suppress(Exception):
-                await win.wait_for_function(
-                    f"document.body.innerText.includes({FIRST_PROMPT!r})",
-                    timeout=10_000,
-                )
-            await snap_page(win, "05-first-message-sent")
-            # Wait for the AGENT's reply, not the user prompt echo. The
-            # prompt itself contains "pong" so a naive `includes('pong')`
-            # check returns true the moment we send -- before any agent
-            # reply paints. Count occurrences instead: 1 (prompt only)
-            # vs 2+ (prompt + reply).
-            await win.wait_for_function(
-                f"(document.body.innerText.toLowerCase().match(/{FIRST_EXPECT}/g) || []).length >= 2",
-                timeout=REPLY_TIMEOUT * 1000,
+        # 4-6. Create agent via UI click and drive to first message. Mirrors
+        # what a user does (Configure panel, launch_mode/ai_provider/api_key
+        # fields, host_name fill, submit, poll until DONE, navigate to chat,
+        # send FIRST_PROMPT, wait for >=2 occurrences of FIRST_EXPECT in body).
+        # See _create_workspace_and_first_message for the exact step list.
+        ai_provider = os.environ.get("MINDS_AI_PROVIDER", "API_KEY").upper()
+        if ai_provider not in ("API_KEY", "SUBSCRIPTION"):
+            raise RuntimeError(f"MINDS_AI_PROVIDER={ai_provider!r} -- must be API_KEY or SUBSCRIPTION")
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if ai_provider == "API_KEY" and not anthropic_key:
+            raise RuntimeError(
+                "MINDS_AI_PROVIDER=API_KEY but ANTHROPIC_API_KEY not set; "
+                "either set ANTHROPIC_API_KEY or pass MINDS_AI_PROVIDER=SUBSCRIPTION."
             )
-            # Brief settle for the reply bubble to paint, then snap.
-            await asyncio.sleep(1)
-            await snap_page(win, "06-first-message-reply")
+
+        all_timings: dict[str, Any] = {}
+
+        w1_result: _WorkspaceResult | None = None
+        if not SKIP_FIRST_MESSAGE:
+            w1_result = await _create_workspace_and_first_message(
+                ctx,
+                win,
+                origin=origin,
+                host_name=HOST_NAME,
+                ai_provider=ai_provider,
+                anthropic_key=anthropic_key,
+                snaps=_W1_SNAPS,
+                label="w1",
+            )
+            all_timings["w1"] = {
+                "host_name": HOST_NAME,
+                "phase_durations_s": w1_result.phase_durations,
+                "total_create_s": w1_result.total_create_s,
+            }
 
         if not SKIP_SLACK_FLOW:
             # 7. Slack mock setup
@@ -1031,26 +1079,9 @@ async def amain() -> int:
                         with contextlib.suppress(Exception):
                             preview = (await p.evaluate("document.body.innerText"))[:200].replace("\n", " ")
                             logger.error("  page url={} body=...{!r}", p.url, preview)
-                    if SLACK_BEST_EFFORT:
-                        # Soft-pass mode: the slack-flow screenshots (07,
-                        # 07a/b/c/d) are taken regardless of whether the
-                        # latchkey gateway actually proxies the slack call
-                        # through. The gateway sometimes rejects our
-                        # pre-seeded creds as INVALID even though we use the
-                        # same xoxc-ci-mock token that's worked historically
-                        # -- a deeper latchkey investigation. Don't fail CI
-                        # on this; the visual evidence is in the published
-                        # 07/07a/07b/07c/07d shots.
-                        logger.warning(
-                            "canned body not in chat after {}s (approval_stage={}) -- "
-                            "SLACK_BEST_EFFORT=1 set, treating as soft-pass",
-                            DRIVE_SLACK_TIMEOUT,
-                            approval_stage,
-                        )
-                    else:
-                        raise RuntimeError(
-                            f"canned body not in chat after {DRIVE_SLACK_TIMEOUT}s (approval_stage={approval_stage})"
-                        )
+                    raise RuntimeError(
+                        f"canned body not in chat after {DRIVE_SLACK_TIMEOUT}s (approval_stage={approval_stage})"
+                    )
             finally:
                 logger.info("=== slack teardown ===")
                 with contextlib.suppress(Exception):
@@ -1058,6 +1089,237 @@ async def amain() -> int:
                 revert_etc_hosts()
                 stop_socat()
                 mock.shutdown()
+
+        # 10-14. Second workspace + cross-workspace follow-up. Drives a
+        # FRESH host (HOST_NAME_2) through create + first-message on the
+        # same minds.app session, then navigates back to W1's chat URL and
+        # to W2's chat URL in turn, sending a unique-token follow-up to
+        # each. Proves: state isolation between workspaces, both agents
+        # survive cross-workspace navigation, mngr_forward + latchkey
+        # gateway don't collide on shared host-side state.
+        if WORKSPACE_COUNT >= 2 and not SKIP_FIRST_MESSAGE:
+            if w1_result is None:
+                raise E2EFailure("WORKSPACE_COUNT>=2 but W1 was skipped; cross-workspace check is meaningless")
+            w1_chat_url = w1_result.chat_url
+            logger.info("=== workspace 2 create + first message (host={}) ===", HOST_NAME_2)
+            w2_result = await _create_workspace_and_first_message(
+                ctx,
+                win,
+                origin=origin,
+                host_name=HOST_NAME_2,
+                ai_provider=ai_provider,
+                anthropic_key=anthropic_key,
+                snaps=_W2_SNAPS,
+                label="w2",
+            )
+            all_timings["w2"] = {
+                "host_name": HOST_NAME_2,
+                "phase_durations_s": w2_result.phase_durations,
+                "total_create_s": w2_result.total_create_s,
+            }
+            w2_chat_url = w2_result.chat_url
+
+            logger.info("=== cross-workspace: ping W1 chat ({}) ===", w1_chat_url)
+            await _send_followup_and_verify(
+                win,
+                chat_url=w1_chat_url,
+                prompt=FOLLOWUP_W1_PROMPT,
+                expect_token=FOLLOWUP_W1_EXPECT,
+                snap_sent="13-w1-followup-sent",
+                snap_reply="14-w1-followup-reply",
+                label="w1-followup",
+            )
+            logger.info("=== cross-workspace: ping W2 chat ({}) ===", w2_chat_url)
+            await _send_followup_and_verify(
+                win,
+                chat_url=w2_chat_url,
+                prompt=FOLLOWUP_W2_PROMPT,
+                expect_token=FOLLOWUP_W2_EXPECT,
+                snap_sent="15-w2-followup-sent",
+                snap_reply="16-w2-followup-reply",
+                label="w2-followup",
+            )
+
+            # Navigate back to the landing page and assert BOTH workspace
+            # tiles render. The chat-URL-direct checks above bypass discovery,
+            # so they would still pass even if a regression hid one tile from
+            # the landing page; this catches that.
+            logger.info("=== home page: verify both workspace tiles render ===")
+            await win.goto(origin + "/")
+            await win.wait_for_function(
+                f"document.body.innerText.includes({HOST_NAME!r}) && "
+                f"document.body.innerText.includes({HOST_NAME_2!r})",
+                timeout=30_000,
+            )
+            await snap_page(win, "17-home-both-tiles")
+            logger.info("home page shows both tiles: {} and {}", HOST_NAME, HOST_NAME_2)
+
+            # 18-22. Destroy W2 via /api/destroy-agent, poll status to
+            # completion, then assert (a) the landing page drops W2's tile
+            # while keeping W1's, and (b) W1 stays responsive afterward.
+            # Exercises the destroy lifecycle end-to-end and proves a
+            # destroy of one workspace doesn't cascade into another.
+            logger.info("=== destroy W2 via /api/destroy-agent ===")
+            m = re.search(r"//(agent-[a-f0-9]+)\.localhost", w2_chat_url)
+            if not m:
+                raise E2EFailure(f"[w2-destroy] could not extract agent_id from {w2_chat_url!r}")
+            w2_agent_id = m.group(1)
+            logger.info("[w2-destroy] agent_id={}", w2_agent_id)
+
+            destroy_resp = await win.evaluate(
+                """async (aid) => {
+                    const r = await fetch('/api/destroy-agent/' + aid, {method: 'POST'});
+                    return {status: r.status, body: await r.text()};
+                }""",
+                w2_agent_id,
+            )
+            if destroy_resp["status"] not in (200, 202):
+                raise E2EFailure(f"[w2-destroy] POST returned {destroy_resp['status']}: {destroy_resp['body']!r}")
+            await snap_page(win, "18-w2-destroy-initiated")
+
+            # Poll /api/destroying/<id>/status until the record either
+            # moves past 'running' or returns 404 (cleanup). Lima VM
+            # stop+delete typically takes 30-90s; 4-min budget gives
+            # comfortable headroom.
+            destroy_deadline = time.time() + 240
+            while time.time() < destroy_deadline:
+                resp = await win.evaluate(
+                    """async (aid) => {
+                        const r = await fetch('/api/destroying/' + aid + '/status');
+                        return {status: r.status, body: await r.text()};
+                    }""",
+                    w2_agent_id,
+                )
+                if resp["status"] == 404:
+                    logger.info("[w2-destroy] DONE (record cleaned up)")
+                    break
+                body = {}
+                with contextlib.suppress(Exception):
+                    body = json.loads(resp["body"])
+                state = body.get("status", "")
+                if state == "failed":
+                    raise E2EFailure(f"[w2-destroy] destroy reported FAILED: {body}")
+                if state and state != "running":
+                    logger.info("[w2-destroy] state={}", state)
+                    break
+                await asyncio.sleep(3)
+            else:
+                raise E2EFailure("[w2-destroy] did not complete within 240s")
+            await snap_page(win, "19-w2-destroy-done")
+
+            logger.info("=== home page after W2 destroyed ===")
+            await win.goto(origin + "/")
+            await win.wait_for_function(
+                f"document.body.innerText.includes({HOST_NAME!r}) && "
+                f"!document.body.innerText.includes({HOST_NAME_2!r})",
+                timeout=60_000,
+            )
+            await snap_page(win, "20-home-only-w1")
+            logger.info("home page after destroy shows only W1: {}", HOST_NAME)
+
+            logger.info("=== W1 still alive after W2 destroyed ===")
+            await _send_followup_and_verify(
+                win,
+                chat_url=w1_chat_url,
+                prompt="Reply with exactly the four characters: bink",
+                expect_token="bink",
+                snap_sent="21-w1-after-w2-destroy-sent",
+                snap_reply="22-w1-after-w2-destroy-reply",
+                label="w1-after-w2-destroy",
+            )
+
+            # 23. Cross-check with mngr CLI from the host: confirms W1 is in
+            # mngr's canonical agent set and W2 is gone. A regression where
+            # /api/destroy-agent returns 200 but mngr's host_dir still
+            # records the agent would slip past the UI-driven home-page
+            # tile check above (which scrapes the same discovery layer the
+            # destroy handler does).
+            logger.info("=== mngr CLI list: cross-check W1 present, W2 removed ===")
+            bundled_mngr = MINDS_HOME / ".venv" / "bin" / "mngr"
+            if bundled_mngr.exists():
+                # mngr's lima provider shells out to ``limactl list --json``
+                # without going through the bundled-binary env vars (those
+                # are minds-side ergonomics). The packaged binary's PATH
+                # doesn't include /Applications/Minds.app/.../Resources/lima/bin,
+                # so we prepend it here -- otherwise the discovery hits
+                # "No such file or directory: 'limactl'" and the agents
+                # array comes back empty even though the host_dir has W1.
+                minds_resources = MINDS_APP_PATH.parent.parent / "Resources"
+                bundled_lima_bin = minds_resources / "lima" / "bin"
+                mngr_env = {
+                    **os.environ,
+                    "MNGR_HOST_DIR": str(MINDS_HOME / "mngr"),
+                    "PATH": f"{bundled_lima_bin}:{os.environ.get('PATH', '')}",
+                }
+                # ``--on-error continue`` puts each provider's discovery error
+                # into the JSON payload's ``errors`` array. mngr STILL exits 1
+                # when any provider failed (per error_handling.md spec) -- on
+                # the CI runner this is normal because the modal provider has
+                # no token -- but the ``agents`` array still lists every agent
+                # discovered by providers that DID work, which is what we
+                # actually check. So: parse stdout regardless of exit code;
+                # only fail if the JSON itself is unusable.
+                cli_result = subprocess.run(
+                    [str(bundled_mngr), "list", "--format", "json", "--quiet", "--on-error", "continue"],
+                    capture_output=True,
+                    text=True,
+                    env=mngr_env,
+                    timeout=30,
+                )
+                (SCREENSHOT_DIR / "mngr-list-output.json").write_text(cli_result.stdout or "")
+                (SCREENSHOT_DIR / "mngr-list-stderr.txt").write_text(cli_result.stderr or "")
+                try:
+                    listing = json.loads(cli_result.stdout or "{}")
+                except json.JSONDecodeError as exc:
+                    raise E2EFailure(
+                        f"[mngr-list] non-JSON output (returncode={cli_result.returncode}): "
+                        f"{exc}\nstdout={cli_result.stdout[:500]!r}\nstderr={cli_result.stderr[:500]!r}"
+                    ) from exc
+                agents = listing.get("agents", []) if isinstance(listing, dict) else []
+                host_names = {a.get("host", {}).get("name", "") for a in agents if isinstance(a, dict)}
+                logger.info("[mngr-list] {} agents; hosts: {}", len(agents), host_names)
+                if HOST_NAME not in host_names:
+                    raise E2EFailure(f"[mngr-list] W1 ({HOST_NAME!r}) absent from {host_names}")
+                if HOST_NAME_2 in host_names:
+                    raise E2EFailure(f"[mngr-list] W2 ({HOST_NAME_2!r}) still present after destroy: {host_names}")
+                logger.info("[mngr-list] PASS: W1 present, W2 cleanly removed from mngr")
+            else:
+                logger.warning("[mngr-list] {} not found; skipping CLI cross-check", bundled_mngr)
+
+            # 24. Duplicate-name conflict: POST /api/create-agent with
+            # HOST_NAME (still owned by W1) should return 409 with an
+            # "already exists" message. Proves the duplicate-name guard
+            # in _handle_create_agent_api (added on this branch) works,
+            # and that the canonical name set is correctly populated by
+            # backend_resolver.list_known_workspace_ids().
+            logger.info("=== conflict 409: re-create with HOST_NAME already taken ===")
+            conflict_resp = await win.evaluate(
+                """async (host_name) => {
+                    const r = await fetch('/api/create-agent', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: 'host_name=' + encodeURIComponent(host_name),
+                    });
+                    return {status: r.status, body: await r.text()};
+                }""",
+                HOST_NAME,
+            )
+            if conflict_resp["status"] != 409:
+                raise E2EFailure(
+                    f"[conflict-409] expected 409 for duplicate name {HOST_NAME!r}, "
+                    f"got {conflict_resp['status']}: {conflict_resp['body']!r}"
+                )
+            if "already exists" not in conflict_resp["body"]:
+                raise E2EFailure(f"[conflict-409] 409 body missing 'already exists' text: {conflict_resp['body']!r}")
+            logger.info("[conflict-409] PASS: duplicate-name guard returned 409")
+
+        # Persist combined per-workspace timings as one artifact JSON
+        # rather than two -- one file is easier to embed in the run
+        # summary and to diff across runs.
+        if all_timings:
+            timings_artifact = SCREENSHOT_DIR / "launch-to-msg-timings.json"
+            with contextlib.suppress(Exception):
+                timings_artifact.write_text(json.dumps(all_timings, indent=2))
 
         await browser.close()
         minds_proc.terminate()
@@ -1156,10 +1418,10 @@ async def _advance_approval(ctx: BrowserContext, win: Page, stage: int, state: d
                         await snap_page(w, "07d-stage2-post-approve")
                     # Surface latchkey-side authorisation failures
                     # immediately rather than waiting DRIVE_SLACK_TIMEOUT
-                    # seconds (then masking with SLACK_BEST_EFFORT). The
-                    # post-approve page renders the error banner verbatim;
-                    # parse the visible text and raise so CI fails on the
-                    # actual signal, not a timeout that happens to coincide.
+                    # seconds for a timeout. The post-approve page renders
+                    # the error banner verbatim; parse the visible text and
+                    # raise so CI fails on the actual signal, not a timeout
+                    # that happens to coincide.
                     with contextlib.suppress(Exception):
                         body_text = await w.evaluate("document.body.innerText")
                         if "Authorization failed" in body_text or "No browser configured" in body_text:

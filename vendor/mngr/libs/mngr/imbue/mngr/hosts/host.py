@@ -86,6 +86,7 @@ from imbue.mngr.primitives import DiscoveredAgent
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import TransferMode
+from imbue.mngr.utils.deps import SSH
 from imbue.mngr.utils.env_utils import build_source_env_shell_commands
 from imbue.mngr.utils.env_utils import parse_env_file
 from imbue.mngr.utils.git_utils import GIT_MIRROR_PUSH_REFSPECS
@@ -1196,20 +1197,9 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         if options.git and options.git.base_branch:
             base_branch_name = options.git.base_branch
         else:
-            head_name = _git_command_stdout(source_host, "git rev-parse --abbrev-ref HEAD", source_path)
-            # ``git rev-parse --abbrev-ref HEAD`` returns the literal "HEAD" when
-            # the source is in detached-HEAD state (e.g. ``git clone --branch
-            # <annotated-tag>`` leaves the worktree detached at the tag's commit).
-            # Passing "HEAD" through as the base would land us at line 1287
-            # below with the target-side error
-            # ``fatal: 'HEAD' is not a commit and a branch '...' cannot be
-            # created from it`` -- the just-initialized bare repo has no HEAD
-            # yet, only the tag refs pushed in. Resolve to the commit SHA so the
-            # checkout finds the actual commit by its sha pushed in via
-            # ``+refs/heads/*:refs/heads/*`` / ``+refs/tags/*:refs/tags/*``.
-            if head_name == "HEAD":
-                head_name = _git_command_stdout(source_host, "git rev-parse HEAD", source_path)
-            base_branch_name = head_name or "main"
+            base_branch_name = (
+                _git_command_stdout(source_host, "git rev-parse --abbrev-ref HEAD", source_path) or "main"
+            )
 
         # Get git author info and origin remote URL from source repo
         git_author_name = _git_command_stdout(source_host, "git config user.name", source_path)
@@ -1342,6 +1332,11 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         self._warn_if_submodules_detected(source_host, source_path)
         same_machine = _is_same_machine(source_host, self)
         target_ssh_info = self.get_ssh_connection_info()
+
+        # Cross-machine git transfer shells out to the ssh binary (via
+        # GIT_SSH_COMMAND); ssh is optional, so surface a clear error if it's absent.
+        if not same_machine:
+            SSH.require()
 
         # Same-machine push uses a bare local-on-host URL with no SSH
         # transport (covers both local-laptop-to-itself and
@@ -1748,6 +1743,10 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                             f"rm -f {shlex.quote(str(host_files_from))}", timeout_seconds=5.0
                         )
             return
+
+        # Every remaining branch transfers to/from a remote host and uses the ssh
+        # binary as rsync's transport (-e ssh); ssh is optional, so require it here.
+        SSH.require()
 
         if source_host.is_local and not self.is_local:
             # Local to remote
