@@ -14,7 +14,12 @@
 import m from "mithril";
 import { MarkdownContent, renderMarkdown } from "../markdown";
 import type { ToolResultEvent, AssistantMessageEvent } from "../models/Response";
-import { renderAssistantMessage, renderAssistantMessageChildren, renderUserMessage } from "./message-renderers";
+import {
+  renderAssistantMessage,
+  renderAssistantMessageChildren,
+  renderPermissionItem,
+  renderUserMessage,
+} from "./message-renderers";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
 
 interface ProgressBlockAttrs {
@@ -178,11 +183,12 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
         if (item.kind === "permission") {
           // A permission request lifted out of its step: rendered inline as a
           // thread-breaking block so it is always visible, as the
-          // permission-request card the renderer produces (with its review button).
+          // permission-request card the renderer produces (with its review button
+          // or, once the user decides, a granted/denied verdict).
           return m(
             "div.pv-permission",
             { key: `perm-${item.event.event_id}` },
-            renderAssistantMessage(item.event, toolResults, agentId),
+            renderPermissionItem(item.event, toolResults, agentId, item.resolution),
           );
         }
         // chip

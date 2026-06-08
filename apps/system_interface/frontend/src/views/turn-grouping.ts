@@ -30,6 +30,11 @@
  * is lifted out into a dedicated inline break (the `permission` timeline item)
  * so the user always sees it and can respond without expanding a step. The step
  * it interrupted stays open, so work resumed afterwards keeps grouping under it.
+ * When the user later grants or denies the request, the app injects a plain
+ * notification user message; the walk reads its verdict, drops the message, and
+ * records the outcome on the request's card. That notification carries no
+ * request id, so it resolves the oldest still-open request (the agent blocks on
+ * a request until answered, so in practice only one is open at a time).
  *
  * The ONLY timestamp this module reads is tk's own `created` (from the
  * enrichment table), used solely to order pending placeholders among
@@ -45,7 +50,13 @@ import type {
   ToolCall,
   StepEnrichment,
 } from "../models/Response";
-import { isNonBoundaryUserMessage, isPermissionRequestCall, isStopHookFeedback } from "./message-classification";
+import type { PermissionResolution } from "./message-classification";
+import {
+  isNonBoundaryUserMessage,
+  isPermissionRequestCall,
+  isStopHookFeedback,
+  parsePermissionResolution,
+} from "./message-classification";
 
 export type StepStatus = "pending" | "active" | "done";
 
@@ -86,8 +97,10 @@ export type TimelineItem =
   | { kind: "ungrouped"; key: string; events: AssistantMessageEvent[] }
   /** An agent permission request, lifted out of any open step so it always
    *  renders inline as a thread-breaking block. The user must be able to see and
-   *  act on it without expanding a step. */
-  | { kind: "permission"; event: AssistantMessageEvent }
+   *  act on it without expanding a step. `resolution` is set once a later
+   *  granted/denied notification is correlated to this request (see
+   *  buildSections); null while still awaiting a decision. */
+  | { kind: "permission"; event: AssistantMessageEvent; resolution: PermissionResolution | null }
   /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
   | { kind: "chip"; event: UserMessageEvent };
 
@@ -252,6 +265,13 @@ export function buildSections(
   let current: SectionBuilder | null = null;
   // Steps open at the end of the prior section, to re-open as carryover.
   let carryover: string[] = [];
+  // Permission requests awaiting a decision, in transcript (creation) order, by
+  // the event id of the message that issued each. A granted/denied notification
+  // carries no request id, so it resolves the oldest still-open request -- the
+  // agent blocks on a request until it is answered, so in practice only one is
+  // open at a time. Resolutions are keyed by the resolved request's event id.
+  const unresolvedPermissions: string[] = [];
+  const resolutions = new Map<string, PermissionResolution>();
 
   const ensureSection = (user_event: UserMessageEvent | null, key: string): SectionBuilder => {
     const section = newSection(user_event, key);
@@ -266,6 +286,17 @@ export function buildSections(
 
   for (const e of events) {
     if (e.type === "user_message") {
+      // A granted/denied notification for an earlier permission request: record
+      // the verdict against the oldest open request and drop the message, so it
+      // reflects on that request's card rather than rendering as a user prompt.
+      // If no request is open to claim it (e.g. the request scrolled out of the
+      // visible transcript), fall through and let it render normally.
+      const resolution = parsePermissionResolution(e.content ?? "");
+      if (resolution !== null && unresolvedPermissions.length > 0) {
+        const resolvedEventId = unresolvedPermissions.shift() as string;
+        resolutions.set(resolvedEventId, resolution);
+        continue;
+      }
       if (isNonBoundaryUserMessage(e.content ?? "")) {
         // Stop-hook feedback and the like: a chip inside the current section.
         if (current !== null && isStopHookFeedback(e.content ?? "")) {
@@ -319,6 +350,9 @@ export function buildSections(
           // open (current_step_id is untouched), so work resumed after the user
           // responds keeps grouping under it.
           current.entries.push({ kind: "permission", event: parsed.render });
+          // Track it as awaiting a decision so a later granted/denied
+          // notification can be correlated back to this card by order.
+          unresolvedPermissions.push(parsed.render.event_id);
         } else {
           routeMessage(current, parsed.render, lastOpened ?? stepBefore);
         }
@@ -328,7 +362,9 @@ export function buildSections(
     // tool_result events are resolved by id via toolResults; no routing needed.
   }
 
-  return builders.map((b) => finalizeSection(b, enrichment, agentIsIdle, b === builders[builders.length - 1]));
+  return builders.map((b) =>
+    finalizeSection(b, enrichment, resolutions, agentIsIdle, b === builders[builders.length - 1]),
+  );
 }
 
 /** Open (or re-open) a step node as the current step. */
@@ -404,6 +440,7 @@ function openStepsAtEnd(section: SectionBuilder): string[] {
 function finalizeSection(
   section: SectionBuilder,
   enrichment: Map<string, StepEnrichment>,
+  resolutions: Map<string, PermissionResolution>,
   agentIsIdle: boolean,
   is_tail: boolean,
 ): SectionView {
@@ -514,9 +551,14 @@ function finalizeSection(
       }
     } else if (entry.kind === "permission") {
       // A permission break ends any in-flight ungrouped run and stands as its
-      // own always-visible item at its transcript position.
+      // own always-visible item at its transcript position. Attach the verdict
+      // if a later notification resolved this request.
       flushUngrouped();
-      items.push({ kind: "permission", event: entry.event });
+      items.push({
+        kind: "permission",
+        event: entry.event,
+        resolution: resolutions.get(entry.event.event_id) ?? null,
+      });
     } else if (!trailingIds.has(entry.event.event_id) && entry.step_id === null) {
       // An ungrouped event (no step open): coalesce into an inline run.
       // In-step events render inside the step node; trailing prose renders

@@ -7,7 +7,7 @@ import {
   openPermissionRequest,
   renderSubagentCard,
 } from "./message-renderers";
-import { isSkillExpansionUserMessage } from "./message-classification";
+import { isSkillExpansionUserMessage, parsePermissionResolution } from "./message-classification";
 
 // Avoid importing the heavy/DOM-dependent module graph (dockview, dompurify) at test time;
 // renderSubagentCard only needs openSubagentTab, and the card path never calls MarkdownContent.
@@ -58,6 +58,36 @@ describe("isSkillExpansionUserMessage", () => {
     expect(isSkillExpansionUserMessage("Base directory for this skill: /x")).toBe(true);
     expect(isSkillExpansionUserMessage("hello")).toBe(false);
     expect(isSkillExpansionUserMessage("Stop hook feedback:\n...")).toBe(false);
+  });
+});
+
+describe("parsePermissionResolution", () => {
+  it("reads the verdict from the injected granted/denied notifications", () => {
+    expect(
+      parsePermissionResolution(
+        "Your permission request for Slack was granted with the following permissions: slack-read-all. Please retry the call that was blocked.",
+      ),
+    ).toBe("granted");
+    expect(
+      parsePermissionResolution("Your permission request for Slack was denied. Do not retry the blocked call."),
+    ).toBe("denied");
+    expect(
+      parsePermissionResolution(
+        "Your read & write file-sharing permission request for '/Users/you/Documents/report' was granted. Please retry the call that was blocked.",
+      ),
+    ).toBe("granted");
+    // A failed sign-in is reported as a denial.
+    expect(
+      parsePermissionResolution(
+        "Your permission request for Google Drive could not be completed because the user's sign-in flow did not finish. Do not retry yet; report this to the user.",
+      ),
+    ).toBe("denied");
+  });
+
+  it("ignores ordinary user messages", () => {
+    expect(parsePermissionResolution("can you grant me access to slack?")).toBeNull();
+    expect(parsePermissionResolution("Your permission request looks good")).toBeNull();
+    expect(parsePermissionResolution("")).toBeNull();
   });
 });
 
@@ -415,6 +445,31 @@ describe("renderPermissionRequestBlock", () => {
         v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-title",
     );
     expect(textOf(title)).toBe("Permission request");
+    expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
+  });
+
+  it("shows a Granted verdict and no review button once granted", () => {
+    const vnode = renderPermissionRequestBlock(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(PERMISSION_OUTPUT),
+      "granted",
+    );
+    expect(
+      findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "Granted"),
+    ).not.toBeNull();
+    // The action button is replaced by the verdict.
+    expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
+  });
+
+  it("shows a Denied verdict once denied", () => {
+    const vnode = renderPermissionRequestBlock(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(PERMISSION_OUTPUT),
+      "denied",
+    );
+    expect(
+      findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "Denied"),
+    ).not.toBeNull();
     expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
   });
 });

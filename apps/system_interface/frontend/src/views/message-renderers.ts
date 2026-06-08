@@ -13,6 +13,7 @@ import type {
   ToolCall,
 } from "../models/Response";
 import { openSubagentTab } from "./DockviewWorkspace";
+import type { PermissionResolution } from "./message-classification";
 import {
   isCollapsibleUserMessage,
   isHiddenUserMessage,
@@ -410,6 +411,37 @@ function permissionRequesting(details: PermissionRequestDetails | null): string 
   return null;
 }
 
+/** A small check/cross glyph for the resolved-request verdict. */
+function renderVerdictIcon(granted: boolean): m.Vnode {
+  const path = granted ? "M4.5 8.5L7 11L11.5 5.5" : "M5 5l6 6M11 5l-6 6";
+  return m(
+    "svg",
+    {
+      class: "permission-request-verdict-icon",
+      width: "14",
+      height: "14",
+      viewBox: "0 0 16 16",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      "aria-hidden": "true",
+    },
+    m("path", { d: path }),
+  );
+}
+
+/** The resolved verdict badge shown in place of the action button once the user
+ *  has granted or denied the request. */
+function renderPermissionVerdict(resolution: PermissionResolution): m.Vnode {
+  const granted = resolution === "granted";
+  return m("div", { class: `permission-request-verdict permission-request-verdict--${resolution}` }, [
+    renderVerdictIcon(granted),
+    m("span", granted ? "Granted" : "Denied"),
+  ]);
+}
+
 /**
  * Render an agent permission request as a card: what's being requested (the
  * permissions on a scope, or an access mode on a path), a button that opens the
@@ -417,11 +449,17 @@ function permissionRequesting(details: PermissionRequestDetails | null): string 
  * generic "Tool: Bash" block so the request reads as what it is. The agent's
  * rationale is left to its surrounding prose rather than repeated in the card.
  *
- * Before the result lands (still pending) the details are null: the card shows
- * a waiting state with no button. The button appears once the result carries a
- * request_id.
+ * `resolution` reflects the user's decision once it lands: the action button is
+ * replaced by a Granted/Denied verdict. Before the result lands (still pending)
+ * the details are null: the card shows a waiting state with no button. The
+ * button appears once the result carries a request_id and the request is still
+ * awaiting a decision.
  */
-export function renderPermissionRequestBlock(toolCall: ToolCall, toolResult: ToolResultEvent | null): m.Vnode {
+export function renderPermissionRequestBlock(
+  toolCall: ToolCall,
+  toolResult: ToolResultEvent | null,
+  resolution: PermissionResolution | null = null,
+): m.Vnode {
   const details = parsePermissionRequest(toolCall, toolResult);
   const requesting = permissionRequesting(details);
   const rawInput = toolCall.input_preview || "";
@@ -433,30 +471,34 @@ export function renderPermissionRequestBlock(toolCall: ToolCall, toolResult: Too
       renderLockIcon(),
       m("span", { class: "permission-request-title" }, permissionHeading(details)),
     ]),
-    details === null ? m("div", { class: "permission-request-status" }, "Waiting for the request to register…") : null,
+    resolution === null && details === null
+      ? m("div", { class: "permission-request-status" }, "Waiting for the request to register…")
+      : null,
     requesting
       ? m("div", { class: "permission-request-detail" }, [
           m("span", { class: "permission-request-detail-label" }, "Requesting"),
           m("code", { class: "permission-request-detail-value" }, requesting),
         ])
       : null,
-    details !== null
-      ? m("div", { class: "permission-request-actions" }, [
-          m(
-            "button",
-            {
-              class: "permission-request-button",
-              type: "button",
-              onclick(e: Event) {
-                e.preventDefault();
-                e.stopPropagation();
-                openPermissionRequest(details.requestId);
+    resolution !== null
+      ? m("div", { class: "permission-request-actions" }, renderPermissionVerdict(resolution))
+      : details !== null
+        ? m("div", { class: "permission-request-actions" }, [
+            m(
+              "button",
+              {
+                class: "permission-request-button",
+                type: "button",
+                onclick(e: Event) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openPermissionRequest(details.requestId);
+                },
               },
-            },
-            [renderLockIcon(), m("span", "Review & respond")],
-          ),
-        ])
-      : null,
+              [renderLockIcon(), m("span", "Review & respond")],
+            ),
+          ])
+        : null,
     rawText
       ? m("details", { class: "permission-request-raw" }, [
           m("summary", "Show raw request"),
@@ -505,6 +547,7 @@ export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
   agentId: string,
+  permissionResolution: PermissionResolution | null = null,
 ): m.Children[] {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
@@ -522,16 +565,36 @@ export function renderAssistantMessageChildren(
       continue;
     }
     const result = toolResults.get(toolCall.tool_call_id) ?? null;
-    // A permission request renders as its own card (the request, a button, and
-    // the raw call) rather than a generic tool block.
+    // A permission request renders as its own card (the request, a verdict or
+    // button, and the raw call) rather than a generic tool block.
     // Gated on the input-only predicate so the card shows even while the request
     // is still pending -- the same signal the timeline walk uses to lift it out
-    // of its step.
+    // of its step. The resolution (once the user decides) comes from the walk.
     if (isPermissionRequestCall(toolCall)) {
-      children.push(renderPermissionRequestBlock(toolCall, result));
+      children.push(renderPermissionRequestBlock(toolCall, result, permissionResolution));
       continue;
     }
     children.push(renderToolCallBlock(toolCall, result));
   }
   return children;
+}
+
+/**
+ * Render a permission-break timeline item: the issuing assistant message (its
+ * prose plus the permission card), with the user's granted/denied verdict
+ * threaded into the card. Used by the timeline renderers for the `permission`
+ * item; goes direct (not via the memoized StableAssistantMessage) so the
+ * resolution reaches the card.
+ */
+export function renderPermissionItem(
+  event: AssistantMessageEvent,
+  toolResults: Map<string, ToolResultEvent>,
+  agentId: string,
+  resolution: PermissionResolution | null,
+): m.Vnode {
+  return m(
+    "div",
+    { id: event.event_id, class: "message message-assistant", key: event.event_id },
+    renderAssistantMessageChildren(event, toolResults, agentId, resolution),
+  );
 }

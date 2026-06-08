@@ -722,3 +722,72 @@ describe("permission request breaks", () => {
     expect(sections[0].items.map((i) => i.kind)).toEqual(["step", "permission"]);
   });
 });
+
+type PermissionItem = { kind: "permission"; resolution: "granted" | "denied" | null };
+
+describe("permission resolutions", () => {
+  // When the user grants/denies, the app injects a plain user message; the walk
+  // reads its verdict, drops the message, and records the outcome on the card.
+
+  it("marks the card granted and drops the notification message", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "go"),
+      permissionMsg("2026-05-01T01:00:01Z", "perm"),
+      result("2026-05-01T01:00:01Z", "perm", '{"request_id":"r1"}'),
+      userMsg(
+        "2026-05-01T01:00:02Z",
+        "Your permission request for Slack was granted with the following permissions: slack-read-all. Please retry the call that was blocked.",
+        "u-res",
+      ),
+    ];
+    const sections = run(events);
+    // The notification did not open a new turn; it resolved the card instead.
+    expect(sections).toHaveLength(1);
+    const items = sections[0].items;
+    expect(items.map((i) => i.kind)).toEqual(["permission"]);
+    expect((items[0] as PermissionItem).resolution).toBe("granted");
+  });
+
+  it("marks the card denied", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "go"),
+      permissionMsg("2026-05-01T01:00:01Z", "perm"),
+      result("2026-05-01T01:00:01Z", "perm", '{"request_id":"r1"}'),
+      userMsg(
+        "2026-05-01T01:00:02Z",
+        "Your permission request for Slack was denied. Do not retry the blocked call.",
+        "u-res",
+      ),
+    ];
+    const sections = run(events);
+    expect((sections[0].items[0] as PermissionItem).resolution).toBe("denied");
+  });
+
+  it("resolves the oldest open request first when several are outstanding", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "go"),
+      permissionMsg("2026-05-01T01:00:01Z", "perm1"),
+      result("2026-05-01T01:00:01Z", "perm1", '{"request_id":"r1"}'),
+      permissionMsg("2026-05-01T01:00:02Z", "perm2"),
+      result("2026-05-01T01:00:02Z", "perm2", '{"request_id":"r2"}'),
+      userMsg("2026-05-01T01:00:03Z", "Your permission request for Slack was granted. Retry.", "u-res1"),
+      userMsg("2026-05-01T01:00:04Z", "Your permission request for GitHub was denied. Do not retry.", "u-res2"),
+    ];
+    const sections = run(events);
+    const perms = sections[0].items.filter((i) => i.kind === "permission") as PermissionItem[];
+    expect(perms).toHaveLength(2);
+    expect(perms[0].resolution).toBe("granted"); // first request -> first verdict
+    expect(perms[1].resolution).toBe("denied");
+  });
+
+  it("leaves a notification with no open request to render as a normal turn", () => {
+    const events = [
+      userMsg("2026-05-01T01:00:00Z", "go"),
+      userMsg("2026-05-01T01:00:01Z", "Your permission request for Slack was granted. Retry.", "u-orphan"),
+    ];
+    const sections = run(events);
+    // No card to claim it, so it falls through and opens its own turn.
+    expect(sections).toHaveLength(2);
+    expect(sections[1].user_event?.event_id).toBe("u-orphan");
+  });
+});

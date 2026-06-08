@@ -993,6 +993,29 @@ body {
   flex-shrink: 0;
 }
 
+/* The granted/denied verdict shown in place of the action button once the user
+   has decided. Granted reads in the accent green; denied in the same red the
+   tool-call error output uses. */
+.permission-request-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.permission-request-verdict--granted {
+  color: var(--color-accent);
+}
+
+.permission-request-verdict--denied {
+  color: #dc2626;
+}
+
+.permission-request-verdict-icon {
+  flex-shrink: 0;
+}
+
 /* ── Dockview workspace ── */
 .dockview-workspace {
   position: relative;

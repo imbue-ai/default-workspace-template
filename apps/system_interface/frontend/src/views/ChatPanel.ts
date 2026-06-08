@@ -26,6 +26,7 @@ import { MessageInput } from "./MessageInput";
 import {
   renderUserMessage,
   renderAssistantMessage,
+  renderPermissionItem,
   buildToolResultsWithSkillExpansions,
   computeAuthErrorHiddenEventIds,
 } from "./message-renderers";
@@ -444,7 +445,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
         if (item.kind === "ungrouped") {
           for (const e of item.events) messageNodes.push(renderAssistantMessage(e, toolResults, agentId));
         } else if (item.kind === "permission") {
-          messageNodes.push(renderAssistantMessage(item.event, toolResults, agentId));
+          messageNodes.push(renderPermissionItem(item.event, toolResults, agentId, item.resolution));
         } else if (item.kind === "chip") {
           const chipNode = renderUserMessage(item.event);
           if (chipNode !== null) messageNodes.push(chipNode);
