@@ -5,6 +5,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import { reconcilePendingMessages } from "./PendingMessages";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -232,6 +233,9 @@ export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): voi
   }
   if (brandNewEvents.length > 0) {
     eventsByAgent[agentId] = [...existing, ...brandNewEvents];
+    // A live transcript event may be the real counterpart of an optimistic
+    // message the user just sent; drop any such bubble now that it has landed.
+    reconcilePendingMessages(agentId, eventsByAgent[agentId]);
     m.redraw();
   } else if (didMerge) {
     m.redraw();
@@ -261,6 +265,9 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
     });
     eventsByAgent[agentId] = result.events;
     applyEnrichmentSnapshot(agentId, result.step_enrichment);
+    // A snapshot reload (initial load or reconnect) may already contain the
+    // real counterpart of an optimistic message; reconcile against it too.
+    reconcilePendingMessages(agentId, result.events);
     return result.events;
   } catch (error) {
     const requestError = error as { code?: number; message?: string };

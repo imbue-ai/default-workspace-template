@@ -1,6 +1,6 @@
 import m from "mithril";
-import { interruptAgent, sendMessage } from "../models/Response";
-import { getAgentById } from "../models/AgentManager";
+import { interruptAgent, sendMessage, getEventsForAgent } from "../models/Response";
+import { addPendingMessage, getEffectiveActivityState } from "../models/PendingMessages";
 import { isWorkingActivityState } from "./ActivityIndicator";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
@@ -52,6 +52,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         const text = messageText;
         messageText = "";
         localStorage.removeItem(messageTextKey(agentId));
+        // Show the message immediately (and force "Thinking..." if the agent is
+        // idle) instead of waiting for it to round-trip through the transcript.
+        addPendingMessage(agentId, text, getEventsForAgent(agentId));
         m.redraw();
 
         try {
@@ -100,9 +103,10 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       // The stop button is only meaningful while the agent has an interruptible
       // turn in progress -- the same condition that drives the activity
-      // indicator above the input. Hide it whenever the agent is idle.
-      const agent = getAgentById(agentId);
-      const isAgentWorking = isWorkingActivityState(agent?.activity_state);
+      // indicator above the input. Use the effective state so a just-sent
+      // message that forced "Thinking..." also surfaces the stop button, keeping
+      // the two in lockstep. Hide it whenever the agent is idle.
+      const isAgentWorking = isWorkingActivityState(getEffectiveActivityState(agentId));
       const isStopButtonVisible = isAgentWorking && !isInterruptInFlight;
 
       return m("div", { class: "message-input mx-auto w-full" }, [
