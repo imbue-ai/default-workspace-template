@@ -69,6 +69,21 @@ _PRICE_TABLE: dict[str, ModelPrice] = {
         cache_read_per_mtok=1.5,
         cache_write_5m_per_mtok=18.75,
     ),
+    # Opus 4.0 (original Claude 4 Opus, May 2025) -- same list price as 4.1. Both the
+    # dated id and the ``-4-0`` alias are listed because neither matches a shorter
+    # prefix above (``claude-opus-4-2...`` / ``-4-0`` vs the ``-4-1``/``-4-5`` keys).
+    "claude-opus-4-20250514": ModelPrice(
+        input_per_mtok=15.0,
+        output_per_mtok=75.0,
+        cache_read_per_mtok=1.5,
+        cache_write_5m_per_mtok=18.75,
+    ),
+    "claude-opus-4-0": ModelPrice(
+        input_per_mtok=15.0,
+        output_per_mtok=75.0,
+        cache_read_per_mtok=1.5,
+        cache_write_5m_per_mtok=18.75,
+    ),
     "claude-sonnet-4-6": ModelPrice(
         input_per_mtok=3.0,
         output_per_mtok=15.0,
@@ -76,6 +91,21 @@ _PRICE_TABLE: dict[str, ModelPrice] = {
         cache_write_5m_per_mtok=3.75,
     ),
     "claude-sonnet-4-5": ModelPrice(
+        input_per_mtok=3.0,
+        output_per_mtok=15.0,
+        cache_read_per_mtok=0.3,
+        cache_write_5m_per_mtok=3.75,
+    ),
+    # Sonnet 4.0 (original Claude 4 Sonnet, May 2025) -- same list price as 4.5/4.6.
+    # Dated id and ``-4-0`` alias both listed (neither matches the ``-4-5``/``-4-6``
+    # prefixes).
+    "claude-sonnet-4-20250514": ModelPrice(
+        input_per_mtok=3.0,
+        output_per_mtok=15.0,
+        cache_read_per_mtok=0.3,
+        cache_write_5m_per_mtok=3.75,
+    ),
+    "claude-sonnet-4-0": ModelPrice(
         input_per_mtok=3.0,
         output_per_mtok=15.0,
         cache_read_per_mtok=0.3,

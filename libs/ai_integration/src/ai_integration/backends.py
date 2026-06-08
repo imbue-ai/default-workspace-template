@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from anthropic import AsyncAnthropic
 from anyio import to_thread
 
-from ai_integration.data_types import BillingPath, CompletionResult, Usage
+from ai_integration.data_types import BillingPath, CompletionResult, ToolCall, Usage
 from ai_integration.errors import ClaudeCLIError
 from ai_integration.pricing import estimate_cost_usd
 
@@ -46,11 +46,7 @@ async def complete_via_api(
     # connections across a high-volume completion flow.
     async with AsyncAnthropic(api_key=api_key) as client:
         response = await client.messages.create(**kwargs)  # type: ignore[arg-type]
-    text = "".join(
-        getattr(block, "text", "")
-        for block in response.content
-        if getattr(block, "type", None) == "text"
-    )
+    text, tool_calls = parse_api_content(response.content)
     usage = Usage(
         input_tokens=getattr(response.usage, "input_tokens", 0) or 0,
         output_tokens=getattr(response.usage, "output_tokens", 0) or 0,
@@ -62,6 +58,7 @@ async def complete_via_api(
         text=text,
         billing_path=BillingPath.DIRECT_API,
         model=model,
+        tool_calls=tool_calls,
         usage=usage,
         cost_usd=estimate_cost_usd(model, usage),
     )
@@ -82,6 +79,33 @@ def _str_keyed(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
     return {str(key): item for key, item in value.items()}
+
+
+def parse_api_content(content: Sequence[object]) -> tuple[str, tuple[ToolCall, ...]]:
+    """Split an Anthropic ``messages.create`` response into text and tool calls.
+
+    Concatenates ``text`` blocks into the plain completion text and collects
+    ``tool_use`` blocks (the structured-output channel) into ``ToolCall``s. Pure and
+    duck-typed (reads ``.type`` / ``.text`` / ``.id`` / ``.name`` / ``.input``) so it
+    is unit-testable without the SDK. A forced tool call yields empty text and a
+    populated tuple -- previously the ``tool_use`` block was dropped and the caller
+    got an empty string with the structured data lost.
+    """
+    text_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    for block in content:
+        block_type = getattr(block, "type", None)
+        if block_type == "text":
+            text_parts.append(getattr(block, "text", "") or "")
+        elif block_type == "tool_use":
+            tool_calls.append(
+                ToolCall(
+                    id=str(getattr(block, "id", "") or ""),
+                    name=str(getattr(block, "name", "") or ""),
+                    input=_str_keyed(getattr(block, "input", {})),
+                )
+            )
+    return "".join(text_parts), tuple(tool_calls)
 
 
 def parse_cli_result(data: object, model: str) -> CompletionResult:
@@ -114,6 +138,7 @@ def build_claude_cli_argv(
     system: str | None,
     append_system: str | None,
     tools: str | None,
+    permission_mode: str | None,
     extra_args: Sequence[str] | None,
 ) -> list[str]:
     """Build the ``claude -p`` argv. Pure, so flag emission is unit-testable.
@@ -123,6 +148,11 @@ def build_claude_cli_argv(
     ``tools`` is checked against ``None`` (not falsiness) because the empty string
     is the meaningful "disable every tool" value, distinct from "leave the flag off
     and inherit the default tool set".
+
+    ``permission_mode`` maps to ``--permission-mode``. Headless ``claude -p`` cannot
+    prompt a human, so a tool that would need approval is otherwise auto-denied --
+    which is why an agentic ``run_task`` defaults this to ``bypassPermissions`` (no
+    flag is emitted when it is ``None``).
     """
     argv = ["claude", "-p", prompt, "--output-format", "json"]
     if model:
@@ -133,6 +163,8 @@ def build_claude_cli_argv(
         argv += ["--append-system-prompt", append_system]
     if tools is not None:
         argv += ["--tools", tools]
+    if permission_mode is not None:
+        argv += ["--permission-mode", permission_mode]
     argv += list(extra_args or [])
     return argv
 
@@ -145,6 +177,8 @@ def _run_claude_cli_blocking(
     system: str | None,
     append_system: str | None,
     tools: str | None,
+    permission_mode: str | None,
+    cwd: str | None,
     extra_args: Sequence[str] | None,
 ) -> object:
     argv = build_claude_cli_argv(
@@ -153,10 +187,11 @@ def _run_claude_cli_blocking(
         system=system,
         append_system=append_system,
         tools=tools,
+        permission_mode=permission_mode,
         extra_args=extra_args,
     )
     proc = subprocess.run(
-        argv, capture_output=True, text=True, env=dict(env), check=False
+        argv, capture_output=True, text=True, env=dict(env), check=False, cwd=cwd
     )
     if proc.returncode != 0:
         raise ClaudeCLIError(
@@ -176,6 +211,8 @@ async def complete_via_cli(
     system: str | None = None,
     append_system: str | None = None,
     tools: str | None = None,
+    permission_mode: str | None = None,
+    cwd: str | None = None,
     extra_args: Sequence[str] | None = None,
 ) -> CompletionResult:
     """One completion/agentic run through headless ``claude -p``.
@@ -183,6 +220,12 @@ async def complete_via_cli(
     Runs the CLI in a worker thread (so the async caller isn't blocked) and parses
     its JSON usage/cost. ``env`` should be built via
     ``credentials.build_claude_cli_env`` so ``MAIN_CLAUDE_SESSION_ID`` is unset.
+
+    ``cwd`` sets the subprocess working directory. ``claude -p`` auto-discovers the
+    project ``CLAUDE.md`` and ``.claude`` hooks from the working directory, so the
+    non-agentic completion path passes an isolated temp dir to keep that ambient
+    project context (and its hook-injected reminders) out of the prompt. ``None``
+    inherits the caller's cwd, which is what the agentic ``run_task`` path wants.
 
     ``system`` maps to ``--system-prompt`` (replacing Claude Code's default agent
     system prompt) and ``append_system`` to ``--append-system-prompt``. ``tools``
@@ -201,6 +244,8 @@ async def complete_via_cli(
             system=system,
             append_system=append_system,
             tools=tools,
+            permission_mode=permission_mode,
+            cwd=cwd,
             extra_args=extra_args,
         )
     )

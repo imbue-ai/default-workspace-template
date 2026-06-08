@@ -4,8 +4,18 @@ from ai_integration.errors import SpendCeilingExceededError
 from ai_integration.spend import (
     DEFAULT_WINDOW_SECONDS,
     SpendTracker,
+    format_window,
     load_spend_tracker,
 )
+
+
+def test_format_window_is_unit_aware() -> None:
+    # A sub-hour window must not render as a misleading "0h".
+    assert format_window(30) == "30s"
+    assert format_window(1000) == "17min"
+    assert format_window(3600) == "1h"
+    assert format_window(86400) == "24h"
+    assert format_window(43200) == "12h"
 
 
 def _write_toml(tmp_path, body: str):
