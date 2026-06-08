@@ -404,7 +404,7 @@ describe("renderPermissionRequestBlock", () => {
       ),
     ).not.toBeNull();
 
-    // The rationale is NOT repeated in the card -- it belongs to the surrounding prose.
+    // The agent's reason for the request is surfaced on the card.
     expect(
       findVnode(
         vnode,
@@ -412,7 +412,7 @@ describe("renderPermissionRequestBlock", () => {
           v.tag === "#" &&
           (v as { children?: unknown }).children === "I need to read #eng-releases to summarize the deploy thread.",
       ),
-    ).toBeNull();
+    ).not.toBeNull();
 
     const button = findVnode(vnode, (v) => v.tag === "button");
     expect(button).not.toBeNull();
