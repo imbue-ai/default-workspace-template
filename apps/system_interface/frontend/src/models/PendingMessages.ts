@@ -46,9 +46,9 @@ export interface PendingMessage {
   prior_user_event_ids: Set<string>;
 }
 
-let _next_id = 0;
+let nextPendingId = 0;
 
-const _pending_by_agent: Record<string, PendingMessage[]> = {};
+const pendingByAgent: Record<string, PendingMessage[]> = {};
 
 function userEventIds(events: readonly TranscriptEvent[]): Set<string> {
   const ids = new Set<string>();
@@ -75,20 +75,20 @@ export function addPendingMessage(agentId: string, content: string, currentEvent
   // surfaces its own activity, and a null state means activity isn't tracked
   // for this agent at all, so neither should be overridden.
   const sentWhileIdle = getAgentById(agentId)?.activity_state === "IDLE";
-  const list = _pending_by_agent[agentId] ?? [];
+  const list = pendingByAgent[agentId] ?? [];
   list.push({
-    id: `pending-${_next_id++}`,
+    id: `pending-${nextPendingId++}`,
     content: trimmed,
     sent_while_idle: sentWhileIdle,
     prior_user_event_ids: userEventIds(currentEvents),
   });
-  _pending_by_agent[agentId] = list;
+  pendingByAgent[agentId] = list;
   m.redraw();
 }
 
 /** The still-unreconciled optimistic messages for an agent, in send order. */
 export function getPendingMessages(agentId: string): PendingMessage[] {
-  return _pending_by_agent[agentId] ?? [];
+  return pendingByAgent[agentId] ?? [];
 }
 
 /**
@@ -113,7 +113,7 @@ export function getPendingMessages(agentId: string): PendingMessage[] {
  * never content-match one.
  */
 export function reconcilePendingMessages(agentId: string, events: readonly TranscriptEvent[]): void {
-  const list = _pending_by_agent[agentId];
+  const list = pendingByAgent[agentId];
   if (list === undefined || list.length === 0) {
     return;
   }
@@ -134,7 +134,7 @@ export function reconcilePendingMessages(agentId: string, events: readonly Trans
     }
   }
   if (remaining.length !== list.length) {
-    _pending_by_agent[agentId] = remaining;
+    pendingByAgent[agentId] = remaining;
   }
 }
 
