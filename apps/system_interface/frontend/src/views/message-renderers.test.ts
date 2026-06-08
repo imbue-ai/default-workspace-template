@@ -4,7 +4,6 @@ import {
   buildToolResultsWithSkillExpansions,
   parsePermissionRequest,
   renderPermissionRequestBlock,
-  serviceDisplayName,
   openPermissionRequest,
   renderSubagentCard,
 } from "./message-renderers";
@@ -328,16 +327,6 @@ describe("parsePermissionRequest", () => {
   });
 });
 
-describe("serviceDisplayName", () => {
-  it("maps a known scope to its catalog name", () => {
-    expect(serviceDisplayName("google-gmail-api")).toBe("Gmail");
-  });
-
-  it("title-cases an unknown scope as a fallback", () => {
-    expect(serviceDisplayName("acme-widgets-api")).toBe("Acme Widgets");
-  });
-});
-
 // Depth-first search for the first vnode matching a predicate.
 function findVnode(
   node: unknown,
@@ -365,7 +354,7 @@ function textOf(node: unknown): string | null {
 }
 
 describe("renderPermissionRequestBlock", () => {
-  it("heads the card with the service name and shows the request and a button", () => {
+  it("heads the card and shows the request and a button", () => {
     const vnode = renderPermissionRequestBlock(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT));
 
     const title = findVnode(
@@ -373,7 +362,9 @@ describe("renderPermissionRequestBlock", () => {
       (v) =>
         v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-title",
     );
-    expect(textOf(title)).toBe("Permission request: Slack");
+    // The predefined service name is conveyed by the scope on the "Requesting"
+    // line, not the heading (friendly names are a gateway-sourced follow-up).
+    expect(textOf(title)).toBe("Permission request");
 
     // The "Requesting" value is shown.
     expect(

@@ -292,54 +292,6 @@ export interface PermissionRequestDetails {
   access: string | null;
 }
 
-/** Human-readable service names keyed by latchkey scope, mirroring the latchkey
- *  services catalog (libs/mngr_latchkey .../services.json). The catalog lives in
- *  the gateway, not the frontend, so this is a display-only copy; an unknown
- *  scope falls back to a title-cased form via {@link serviceDisplayName}. */
-const SERVICE_DISPLAY_NAMES: Record<string, string> = {
-  aws: "AWS",
-  "calendly-api": "Calendly",
-  "coolify-api": "Coolify",
-  "discord-api": "Discord",
-  "dropbox-api": "Dropbox",
-  "figma-api": "Figma",
-  "github-git": "GitHub (git)",
-  "github-rest-api": "GitHub (REST API)",
-  "gitlab-api": "GitLab (REST API)",
-  "gitlab-git": "GitLab (git)",
-  "google-analytics-api": "Google Analytics",
-  "google-calendar-api": "Google Calendar",
-  "google-directions-api": "Google Directions",
-  "google-docs-api": "Google Docs",
-  "google-drive-api": "Google Drive",
-  "google-gmail-api": "Gmail",
-  "google-people-api": "Google Contacts",
-  "google-sheets-api": "Google Sheets",
-  "linear-api": "Linear",
-  "mailchimp-api": "Mailchimp",
-  "notion-api": "Notion",
-  "sentry-api": "Sentry",
-  "slack-api": "Slack",
-  "stripe-api": "Stripe",
-  "telegram-api": "Telegram",
-  "umami-api": "Umami",
-  "yelp-api": "Yelp",
-  "zoom-api": "Zoom",
-};
-
-/** The display name for a latchkey scope: the catalog name, or a title-cased
- *  fallback (strip a trailing `-api`/`-git`, capitalize words) so a scope the
- *  catalog copy doesn't know still reads reasonably. */
-export function serviceDisplayName(scope: string): string {
-  const known = SERVICE_DISPLAY_NAMES[scope];
-  if (known) return known;
-  return scope
-    .replace(/-(api|git)$/, "")
-    .split("-")
-    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
-    .join(" ");
-}
-
 /**
  * Parse the rich details of a *successful* latchkey permission-request creation
  * call out of its tool result.
@@ -433,13 +385,13 @@ function renderLockIcon(): m.Vnode {
   );
 }
 
-/** The card heading: "Permission request: <service>" for a predefined request,
- *  "Permission request: File access" for a file-sharing one, or plain
- *  "Permission request" when the subject isn't known (e.g. still pending). */
+/** The card heading: "Permission request: File access" for a file-sharing
+ *  request, otherwise plain "Permission request". A predefined request's service
+ *  is conveyed by the scope on the "Requesting" line; turning that scope into a
+ *  friendly service name is left to a follow-up that sources the names from the
+ *  latchkey gateway catalog rather than a hardcoded copy. */
 function permissionHeading(details: PermissionRequestDetails | null): string {
-  if (details === null) return "Permission request";
-  if (details.requestType === "file-sharing") return "Permission request: File access";
-  if (details.scope) return `Permission request: ${serviceDisplayName(details.scope)}`;
+  if (details?.requestType === "file-sharing") return "Permission request: File access";
   return "Permission request";
 }
 
@@ -459,11 +411,11 @@ function permissionRequesting(details: PermissionRequestDetails | null): string 
 }
 
 /**
- * Render an agent permission request as a card: the service it touches (in the
- * heading), what's being requested, a button that opens the modal, and a
- * disclosure preserving the raw request/response. Replaces the generic
- * "Tool: Bash" block so the request reads as what it is. The agent's rationale
- * is left to its surrounding prose rather than repeated in the card.
+ * Render an agent permission request as a card: what's being requested (the
+ * permissions on a scope, or an access mode on a path), a button that opens the
+ * modal, and a disclosure preserving the raw request/response. Replaces the
+ * generic "Tool: Bash" block so the request reads as what it is. The agent's
+ * rationale is left to its surrounding prose rather than repeated in the card.
  *
  * Before the result lands (still pending) the details are null: the card shows
  * a waiting state with no button. The button appears once the result carries a
