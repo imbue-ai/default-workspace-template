@@ -21,6 +21,12 @@ import {
   type ToolResultEvent,
 } from "../models/Response";
 import { computeVisibleWindow } from "../models/virtualWindow";
+import {
+  createRowMeasurer,
+  OVERSCAN_PX,
+  ESTIMATED_USER_HEIGHT_PX,
+  ESTIMATED_ASSISTANT_HEIGHT_PX,
+} from "./row-measurement";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
 import { openLoginModal } from "../models/ClaudeAuth";
@@ -63,17 +69,11 @@ function openAgentTerminalTab(agentId: string): void {
 
 const SCROLL_BOTTOM_THRESHOLD_PX = 40;
 
-// Pixels rendered above/below the viewport so scrolling does not flash blank
-// before the next redraw fills the window.
-const OVERSCAN_PX = 800;
 // Scroll-up backfill fires when the viewport top is within this many pixels of
 // the top of the held content (and the server reports more history).
 const BACKFILL_TRIGGER_PX = 600;
-// Per-type fallback row heights, used until a row has been measured. Rough is
-// fine: they only affect spacer sizing for off-screen rows, which is corrected
-// as rows scroll into view and are measured.
-const ESTIMATED_USER_HEIGHT_PX = 90;
-const ESTIMATED_ASSISTANT_HEIGHT_PX = 240;
+// Fallback height for a progress block until it has been measured. The user and
+// assistant estimates are shared with the subagent view (see row-measurement).
 const ESTIMATED_PROGRESS_HEIGHT_PX = 360;
 
 interface RowDescriptor {
@@ -188,9 +188,8 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   let scrollEl: HTMLElement | null = null;
   let viewportHeight = 0;
   let scrollTop = 0;
-  let rowHeights = new Map<string, number>();
+  const rowMeasurer = createRowMeasurer();
   let viewportResizeObserver: ResizeObserver | null = null;
-  let measureScheduled = false;
   // Backfill (scroll-up paging) state.
   let backfillInFlight = false;
   // After a backfill prepend, compensate scrollTop by the height the content
@@ -382,7 +381,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     backfillInFlight = false;
     scrollHeightBeforePrepend = 0;
     prependCompensationPending = false;
-    rowHeights = new Map<string, number>();
+    rowMeasurer.reset();
     loadAgent(agentId);
   }
 
@@ -453,59 +452,14 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     }
   }
 
-  // Read each rendered row's height from the DOM and cache it by event id, so
-  // the window math and spacer sizes converge on real heights. Returns whether
-  // any height changed (so the caller can schedule one more redraw to settle
-  // the spacers). Also refreshes the viewport height.
-  function measureRows(): boolean {
-    if (scrollEl === null) {
-      return false;
-    }
-    viewportHeight = scrollEl.clientHeight;
-    const list = scrollEl.querySelector(".message-list");
-    if (list === null) {
-      return false;
-    }
-    let changed = false;
-    for (const child of Array.from(list.children)) {
-      const element = child as HTMLElement;
-      const key = element.id;
-      if (key === "") {
-        continue; // spacer
-      }
-      const height = element.offsetHeight;
-      if (height > 0 && rowHeights.get(key) !== height) {
-        rowHeights.set(key, height);
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
+  // Refresh the cached viewport height and schedule a measure pass. Kept local
+  // so the viewport height (used by the window math below) stays current; the
+  // measure/cache mechanics themselves live in the shared row measurer.
   function scheduleMeasure(): void {
-    if (measureScheduled) {
-      return;
+    if (scrollEl !== null) {
+      viewportHeight = scrollEl.clientHeight;
     }
-    measureScheduled = true;
-    requestAnimationFrame(() => {
-      measureScheduled = false;
-      if (measureRows()) {
-        m.redraw();
-      }
-    });
-  }
-
-  // Keep the height cache from growing without bound as rows are evicted: drop
-  // entries for keys no longer present once it drifts well past the row count.
-  function pruneHeights(keys: Set<string>): void {
-    if (rowHeights.size <= keys.size + 256) {
-      return;
-    }
-    for (const key of rowHeights.keys()) {
-      if (!keys.has(key)) {
-        rowHeights.delete(key);
-      }
-    }
+    rowMeasurer.scheduleMeasure(() => scrollEl);
   }
 
   function renderMessages(agentId: string): m.Vnode {
@@ -614,9 +568,9 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     // whose estimated extent intersects the viewport (plus overscan); off-window
     // rows are stood in for by the top/bottom spacers.
     const rows = buildRows(agentId, sections, toolResults);
-    pruneHeights(new Set(rows.map((row) => row.key)));
+    rowMeasurer.prune(new Set(rows.map((row) => row.key)));
 
-    const getHeight = (index: number): number => rowHeights.get(rows[index].key) ?? rows[index].estimate;
+    const getHeight = (index: number): number => rowMeasurer.getHeight(rows[index].key) ?? rows[index].estimate;
     const windowResult = computeVisibleWindow({
       count: rows.length,
       getHeight,

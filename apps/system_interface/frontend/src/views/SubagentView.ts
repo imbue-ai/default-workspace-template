@@ -9,6 +9,12 @@ import type {
 } from "../models/Response";
 import { parseJsonMessage } from "../models/ws-json";
 import { computeVisibleWindow } from "../models/virtualWindow";
+import {
+  createRowMeasurer,
+  OVERSCAN_PX,
+  ESTIMATED_USER_HEIGHT_PX,
+  ESTIMATED_ASSISTANT_HEIGHT_PX,
+} from "./row-measurement";
 import { buildToolResultsWithSkillExpansions, renderAssistantMessageChildren } from "./message-renderers";
 
 interface SubagentViewAttrs {
@@ -20,10 +26,6 @@ interface SubagentEventsResponse {
   events: TranscriptEvent[];
   metadata: SubagentMetadata | null;
 }
-
-const OVERSCAN_PX = 800;
-const ESTIMATED_USER_HEIGHT_PX = 90;
-const ESTIMATED_ASSISTANT_HEIGHT_PX = 240;
 
 interface RowDescriptor {
   key: string;
@@ -89,10 +91,9 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   let scrollEl: HTMLElement | null = null;
   let viewportHeight = 0;
   let scrollTop = 0;
-  const rowHeights = new Map<string, number>();
+  const rowMeasurer = createRowMeasurer();
   let userScrolledUp = false;
   let previousScrollTop = 0;
-  let measureScheduled = false;
   let viewportResizeObserver: ResizeObserver | null = null;
 
   function addEvents(incoming: TranscriptEvent[]): boolean {
@@ -187,47 +188,18 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     }
   }
 
-  function measureRows(): boolean {
-    if (scrollEl === null) {
-      return false;
-    }
-    viewportHeight = scrollEl.clientHeight;
-    const list = scrollEl.querySelector(".message-list");
-    if (list === null) {
-      return false;
-    }
-    let changed = false;
-    for (const child of Array.from(list.children)) {
-      const element = child as HTMLElement;
-      const key = element.id;
-      if (key === "") {
-        continue;
-      }
-      const height = element.offsetHeight;
-      if (height > 0 && rowHeights.get(key) !== height) {
-        rowHeights.set(key, height);
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
+  // Refresh the cached viewport height and schedule a measure pass; the
+  // measure/cache mechanics live in the shared row measurer.
   function scheduleMeasure(): void {
-    if (measureScheduled) {
-      return;
+    if (scrollEl !== null) {
+      viewportHeight = scrollEl.clientHeight;
     }
-    measureScheduled = true;
-    requestAnimationFrame(() => {
-      measureScheduled = false;
-      if (measureRows()) {
-        m.redraw();
-      }
-    });
+    rowMeasurer.scheduleMeasure(() => scrollEl);
   }
 
   function renderWindowedList(agentId: string): m.Vnode {
     const rows = buildRows(agentId, events);
-    const getHeight = (index: number): number => rowHeights.get(rows[index].key) ?? rows[index].estimate;
+    const getHeight = (index: number): number => rowMeasurer.getHeight(rows[index].key) ?? rows[index].estimate;
     const windowResult = computeVisibleWindow({
       count: rows.length,
       getHeight,
