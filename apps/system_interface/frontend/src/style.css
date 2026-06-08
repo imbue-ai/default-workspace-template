@@ -128,6 +128,15 @@ body {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  /* Own the inter-message spacing here, and zero out the inner bubble's own
+     margin (below), so the "Sending…" caption hugs its own bubble rather than
+     being pushed 20px down by the bubble's margin and ending up flush against
+     the next message. */
+  margin-bottom: 20px;
+}
+
+.pending-message .message {
+  margin-bottom: 0;
 }
 
 .pending-message .message-user-bubble {
