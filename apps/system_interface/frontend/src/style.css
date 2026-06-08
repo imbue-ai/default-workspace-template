@@ -1012,6 +1012,10 @@ body {
   color: #dc2626;
 }
 
+.permission-request-verdict--error {
+  color: #b45309;
+}
+
 .permission-request-verdict-icon {
   flex-shrink: 0;
 }

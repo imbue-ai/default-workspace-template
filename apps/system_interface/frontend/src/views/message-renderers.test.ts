@@ -76,12 +76,12 @@ describe("parsePermissionResolution", () => {
         "Your read & write file-sharing permission request for '/Users/you/Documents/report' was granted. Please retry the call that was blocked.",
       ),
     ).toBe("granted");
-    // A failed sign-in is reported as a denial.
+    // A request that could not be completed is an "error", not a deny decision.
     expect(
       parsePermissionResolution(
         "Your permission request for Google Drive could not be completed because the user's sign-in flow did not finish. Do not retry yet; report this to the user.",
       ),
-    ).toBe("denied");
+    ).toBe("error");
   });
 
   it("ignores ordinary user messages", () => {
@@ -469,6 +469,14 @@ describe("renderPermissionRequestBlock", () => {
     );
     expect(
       findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "Denied"),
+    ).not.toBeNull();
+    expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
+  });
+
+  it("shows a couldn't-complete verdict for an error outcome", () => {
+    const vnode = renderPermissionRequestBlock(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT), "error");
+    expect(
+      findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "Couldn't complete"),
     ).not.toBeNull();
     expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
   });

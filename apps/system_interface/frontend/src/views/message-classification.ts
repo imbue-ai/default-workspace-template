@@ -97,23 +97,27 @@ export function isPermissionRequestCall(tc: ToolCall): boolean {
   return input.includes(PERMISSION_REQUEST_HOST) && PERMISSION_REQUEST_POST_RE.test(input);
 }
 
-/** The outcome of a permission request, once the user has acted on it. */
-export type PermissionResolution = "granted" | "denied";
+/** The outcome of a permission request, once it has been resolved:
+ *   - "granted"/"denied": the user made a decision.
+ *   - "error": the request could not be completed (e.g. the user's sign-in flow
+ *     did not finish) -- not a decision, so it reads distinctly on the card. */
+export type PermissionResolution = "granted" | "denied" | "error";
 
-/** When the user approves or denies a permission request, the app injects a
- *  plain user message into the agent's transcript announcing the outcome (see
- *  the latchkey handlers in mngr). The message carries no request id -- only the
- *  service display name (predefined) or the file path (file-sharing) and the
- *  literal "was granted"/"was denied" verdict -- so the timeline walk correlates
- *  it to a request by order, and only the verdict is read here.
+/** When a permission request is resolved, the app injects a plain user message
+ *  into the agent's transcript announcing the outcome (see the latchkey handlers
+ *  in mngr). The message carries no request id -- only the service display name
+ *  (predefined) or the file path (file-sharing) and the literal verdict -- so the
+ *  timeline walk correlates it to a request by order, and only the verdict is
+ *  read here.
  *
  *  Recognised forms (anchored to the start so a normal user prompt that merely
  *  quotes one of these isn't misread):
- *   - "Your permission request for <service> was granted ..."
- *   - "Your permission request for <service> was denied ..."
+ *   - "Your permission request for <service> was granted ..." -> granted
+ *   - "Your permission request for <service> was denied ..." -> denied
  *   - "Your <access> file-sharing permission request for '<path>' was granted/denied ..."
  *   - "Your permission request for <service> could not be completed because the
- *      user's sign-in flow did not finish ..." (a denial). */
+ *      user's sign-in flow did not finish ..." -> error (the request didn't
+ *      complete; it is not a user decision). */
 export function parsePermissionResolution(content: string): PermissionResolution | null {
   if (/^Your\b.*\bpermission request for\b.*\bwas granted\b/.test(content)) {
     return "granted";
@@ -122,7 +126,7 @@ export function parsePermissionResolution(content: string): PermissionResolution
     return "denied";
   }
   if (/^Your\b.*\bpermission request for\b.*\bcould not be completed\b/.test(content)) {
-    return "denied";
+    return "error";
   }
   return null;
 }
