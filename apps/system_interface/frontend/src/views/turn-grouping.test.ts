@@ -8,6 +8,7 @@ import type {
 } from "../models/Response";
 import type { StepNode, TimelineItem } from "./turn-grouping";
 import { buildSections } from "./turn-grouping";
+import type { PermissionResolution } from "./message-classification";
 
 // --- Event builders ---
 
@@ -723,7 +724,7 @@ describe("permission request breaks", () => {
   });
 });
 
-type PermissionItem = { kind: "permission"; resolution: "granted" | "denied" | null };
+type PermissionItem = { kind: "permission"; resolution: PermissionResolution | null };
 
 describe("permission resolutions", () => {
   // When the user grants/denies, the app injects a plain user message; the walk
