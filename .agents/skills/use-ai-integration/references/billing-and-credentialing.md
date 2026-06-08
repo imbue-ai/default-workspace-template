@@ -59,7 +59,8 @@ repo, Haiku, a one-line prompt):
 | Config | Turns | Context | Cost | Notes |
 |---|---|---|---|---|
 | Default `claude -p` | ~7 | ~238k | ~$0.086 | Wandered off-task (tried to `git commit` an unrelated dirty file) |
-| `--system-prompt <s>` + `--tools ""` | 1 | ~13k | ~$0.016 | What `run_completion`'s keyless fallback uses; on-task |
+| `--system-prompt <s>` + `--tools ""` | 1 | ~13k | ~$0.016 | The flags `run_completion` uses; the ~13k is CLAUDE.md + skills |
+| above **+ isolated cwd** | 1 | ~0.2k | ~$0.012 | What `run_completion`'s keyless fallback actually does now; CLAUDE.md not loaded |
 | `--bare` (+ replace) | -- | -- | -- | Strips CLAUDE.md/skills too, but **fails to auth keyless** |
 
 Takeaways:
@@ -67,16 +68,22 @@ Takeaways:
 - **`--tools ""` is a correctness fix, not just cost.** The default agent given a
   "just answer this" prompt will use tools and act -- in the measurement it tried
   to commit files. The non-agentic `run_completion` fallback always disables tools.
-- **The residual ~13k is CLAUDE.md + skills.** Only `--bare` removes them, and
-  `--bare` does **not** read OAuth/keychain -- it requires `ANTHROPIC_API_KEY` or
-  an `apiKeyHelper` (verified: bare returns "Not logged in" with no key). So bare
-  is unavailable on the keyless subscription path, and once a key exists
-  `run_completion` routes to the direct API anyway. **The library never uses bare.**
-- **A required `system` on `run_completion` is load-bearing.** Because the keyless
-  fallback is non-bare, CLAUDE.md is always loaded; an empty/absent system prompt
-  lets that ambient text become the de-facto instruction set (measured: the model
-  answered the repo's CLAUDE.md guidance instead of the user's prompt). Requiring
-  `system` -- passed as `--system-prompt` -- guarantees a neutralizing prompt.
+- **The residual ~13k was CLAUDE.md + skills; `run_completion` now sheds it via an
+  isolated cwd.** `claude -p` auto-discovers CLAUDE.md / `.claude` hooks from the
+  *working directory*, so the keyless completion path runs the CLI from a throwaway
+  temp dir -- no project context is loaded, dropping that residual to ~0 (measured:
+  the cached-context tokens fell from ~9.6k to 0). This needs no key and no `--bare`
+  (which can't authenticate keyless anyway: it requires `ANTHROPIC_API_KEY` or an
+  `apiKeyHelper`; verified it returns "Not logged in" with no key). `run_task` does
+  *not* isolate cwd -- it needs the repo context for file access. **The library
+  never uses bare.**
+- **A required `system` on `run_completion` is still load-bearing.** Before the cwd
+  isolation, the non-bare fallback always loaded CLAUDE.md and an empty/absent
+  system prompt let that ambient text hijack the answer (measured: the model
+  answered the repo's CLAUDE.md guidance, intermittently -- ~1 in 5 trivial-prompt
+  runs). The isolated cwd removes that source structurally; `system` remains
+  required because it frames the task and is the system block on the direct-API
+  path.
 - **The savings nudge is honest.** `result.cost_usd` on the fallback already
   reflects the stripped config, so the "set a key to save ~$Z" figure compares the
   *stripped* `claude -p` cost against the direct-API counterfactual, not the
