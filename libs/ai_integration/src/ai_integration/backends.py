@@ -46,14 +46,29 @@ async def complete_via_api(
     # connections across a high-volume completion flow.
     async with AsyncAnthropic(api_key=api_key) as client:
         response = await client.messages.create(**kwargs)  # type: ignore[arg-type]
-    text, tool_calls = parse_api_content(response.content)
+    return build_api_result(response, model)
+
+
+def build_api_result(response: object, requested_model: str) -> CompletionResult:
+    """Assemble a ``CompletionResult`` from an Anthropic ``messages.create`` response.
+
+    Pure and duck-typed (reads ``.content`` / ``.usage`` / ``.model``) so it is
+    unit-testable without a live ``AsyncAnthropic`` client. The reported ``model`` is
+    the *served* model (``response.model``) -- which honors ``CompletionResult.model``'s
+    "served by" contract, since an alias can resolve to a dated snapshot -- falling
+    back to ``requested_model`` only if the response omits it. Cost is estimated from
+    the served model's price so the figure matches what was actually billed.
+    """
+    text, tool_calls = parse_api_content(getattr(response, "content", []))
+    usage_obj = getattr(response, "usage", None)
     usage = Usage(
-        input_tokens=getattr(response.usage, "input_tokens", 0) or 0,
-        output_tokens=getattr(response.usage, "output_tokens", 0) or 0,
-        cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
-        cache_write_tokens=getattr(response.usage, "cache_creation_input_tokens", 0)
-        or 0,
+        input_tokens=getattr(usage_obj, "input_tokens", 0) or 0,
+        output_tokens=getattr(usage_obj, "output_tokens", 0) or 0,
+        cache_read_tokens=getattr(usage_obj, "cache_read_input_tokens", 0) or 0,
+        cache_write_tokens=getattr(usage_obj, "cache_creation_input_tokens", 0) or 0,
     )
+    served_model = getattr(response, "model", None)
+    model = served_model if isinstance(served_model, str) and served_model else requested_model
     return CompletionResult(
         text=text,
         billing_path=BillingPath.DIRECT_API,
@@ -88,8 +103,7 @@ def parse_api_content(content: Sequence[object]) -> tuple[str, tuple[ToolCall, .
     ``tool_use`` blocks (the structured-output channel) into ``ToolCall``s. Pure and
     duck-typed (reads ``.type`` / ``.text`` / ``.id`` / ``.name`` / ``.input``) so it
     is unit-testable without the SDK. A forced tool call yields empty text and a
-    populated tuple -- previously the ``tool_use`` block was dropped and the caller
-    got an empty string with the structured data lost.
+    populated tuple, so the structured-output data is surfaced rather than lost.
     """
     text_parts: list[str] = []
     tool_calls: list[ToolCall] = []

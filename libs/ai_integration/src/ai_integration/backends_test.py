@@ -1,6 +1,7 @@
 import pytest
 
 from ai_integration.backends import (
+    build_api_result,
     build_claude_cli_argv,
     parse_api_content,
     parse_cli_result,
@@ -81,8 +82,7 @@ def test_parse_api_content_concatenates_text() -> None:
 
 
 def test_parse_api_content_surfaces_tool_use_blocks() -> None:
-    # A forced tool call yields empty text and the structured input in tool_calls --
-    # previously the tool_use block was dropped and the caller got an empty string.
+    # A forced tool call yields empty text and the structured input in tool_calls.
     text, tool_calls = parse_api_content(
         [
             _Block(
@@ -98,6 +98,40 @@ def test_parse_api_content_surfaces_tool_use_blocks() -> None:
     assert tool_calls[0].name == "record_sentiment"
     assert tool_calls[0].id == "tu_1"
     assert tool_calls[0].input == {"sentiment": "positive"}
+
+
+def _api_response(**attrs: object) -> _Block:
+    """Duck-typed stand-in for an Anthropic messages.create response."""
+    return _Block(**attrs)
+
+
+def test_build_api_result_uses_served_model() -> None:
+    # The served model id (response.model) can differ from the requested alias; the
+    # result must report the served id to honor CompletionResult.model ("served by").
+    response = _api_response(
+        content=[_Block(type="text", text="hi")],
+        usage=_Block(input_tokens=10, output_tokens=5),
+        model="claude-haiku-4-5-20251001",
+    )
+    result = build_api_result(response, requested_model="claude-haiku-4-5")
+    assert result.model == "claude-haiku-4-5-20251001"
+    assert result.text == "hi"
+    assert result.usage is not None
+    assert result.usage.input_tokens == 10
+    # Cost is estimated from the (priced) served model, not left None.
+    assert result.cost_usd is not None
+
+
+def test_build_api_result_falls_back_to_requested_model() -> None:
+    # A response that omits/empties model falls back to the requested model so the
+    # field is never blank.
+    response = _api_response(
+        content=[_Block(type="text", text="x")],
+        usage=_Block(input_tokens=1, output_tokens=1),
+        model="",
+    )
+    result = build_api_result(response, requested_model="claude-haiku-4-5")
+    assert result.model == "claude-haiku-4-5"
 
 
 def test_parse_cli_result_extracts_text_usage_cost() -> None:
