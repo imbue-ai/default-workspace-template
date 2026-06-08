@@ -21,6 +21,23 @@ def test_price_for_prefix_matching() -> None:
     assert price_for("some-unknown-model") is None
 
 
+def test_price_for_covers_4_0_series_models() -> None:
+    # The original Claude 4 models (May 2025) are still served by the API but match
+    # neither the -4-1 nor -4-5/-4-6 prefixes, so they need their own entries.
+    for sonnet_id in ("claude-sonnet-4-20250514", "claude-sonnet-4-0"):
+        price = price_for(sonnet_id)
+        assert price is not None and price.input_per_mtok == 3.0
+        assert price.output_per_mtok == 15.0
+    for opus_id in ("claude-opus-4-20250514", "claude-opus-4-0"):
+        price = price_for(opus_id)
+        assert price is not None and price.input_per_mtok == 15.0
+        assert price.output_per_mtok == 75.0
+    # The new entries must not shadow the existing, differently-priced ones.
+    assert price_for("claude-sonnet-4-5").input_per_mtok == 3.0
+    assert price_for("claude-opus-4-1").input_per_mtok == 15.0
+    assert price_for("claude-opus-4-5").input_per_mtok == 5.0
+
+
 def test_estimate_cost_usd_haiku() -> None:
     usage = Usage(input_tokens=1_000_000, output_tokens=1_000_000)
     # Haiku 4.5: $1/MTok input + $5/MTok output.

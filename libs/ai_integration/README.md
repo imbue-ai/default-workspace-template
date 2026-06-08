@@ -8,10 +8,15 @@ bug fix), billing-path logging, and per-service spend control handled for you.
   `ANTHROPIC_API_KEY` is set (always cheaper for non-agentic work), else `claude -p`.
   Routing is implicit by key presence; the keyless path logs the calculated savings
   a key would unlock. `system` is **required** -- on the keyless `claude -p`
-  fallback it is passed as `--system-prompt` (with `--tools ""`) so the call stays
-  lean and isn't hijacked by the auto-loaded CLAUDE.md.
+  fallback it is passed as `--system-prompt` (with `--tools ""`) and the CLI runs
+  from an isolated working directory so the auto-discovered CLAUDE.md / `.claude`
+  hooks can't bleed into (or hijack) the answer. `anthropic_options` (tools,
+  `tool_choice`, etc.) are honored only on the keyed direct-API path; structured
+  output arrives in `result.tool_calls` (keyless ignores them and warns).
 - `run_task(...)` -- one-shot agentic task (tools / file access) via `claude -p`;
   tools stay enabled, with optional `system` / `append_system` to shape the agent.
+  Defaults `permission_mode="bypassPermissions"` so the headless agent can actually
+  use its tools (no human is present to approve them).
 - `run_agent(...)` -- a full agent via the `launch-task` synchronous
   launch -> await -> collect -> destroy path.
 

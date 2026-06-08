@@ -73,6 +73,33 @@ def _log_keyless_savings(result: CompletionResult, prompt: str, model: str) -> N
     )
 
 
+def _record_spend(
+    spend_tracker: SpendTracker | None,
+    result: CompletionResult,
+    *,
+    model: str,
+    service_name: str,
+) -> None:
+    """Record a paid call's cost, or loudly warn when the cost is unknown.
+
+    A call whose ``cost_usd`` is ``None`` (e.g. a direct-API model missing from the
+    price table) would otherwise be skipped silently, letting real spend escape the
+    ceiling. We can't record an unknown cost, but we must make the gap observable.
+    """
+    if spend_tracker is None:
+        return
+    if result.cost_usd is not None:
+        spend_tracker.record(result.cost_usd)
+        return
+    logger.warning(
+        "ai_integration: spend NOT recorded for service={} model={} -- the call's "
+        "cost could not be determined (model likely missing from the price table), so "
+        "it does not count against the ceiling. Add the model to ai_integration.pricing.",
+        service_name,
+        model,
+    )
+
+
 async def run_completion(
     prompt: str,
     *,
@@ -124,16 +151,30 @@ async def run_completion(
             options=anthropic_options,
         )
     else:
+        if anthropic_options:
+            logger.warning(
+                "ai_integration: anthropic_options were passed but are IGNORED on the "
+                "keyless claude -p fallback (service={}); they only apply on the direct "
+                "Anthropic API path. Structured output / tools need ANTHROPIC_API_KEY, "
+                "or pass equivalent flags via claude_cli_args.",
+                service_name,
+            )
         require_credentials(resolved_env)
         cli_env = build_claude_cli_env(resolved_env, strip_mngr_agent_vars)
-        result = await cli_backend(
-            model=model,
-            prompt=prompt,
-            env=cli_env,
-            system=system,
-            tools="",
-            extra_args=claude_cli_args,
-        )
+        # Run from an isolated working directory so claude -p does not auto-load this
+        # repo's CLAUDE.md / .claude hooks (which otherwise leak into -- and can hijack
+        # -- a non-agentic completion's answer). Credentials come from the env, not the
+        # cwd, so auth is unaffected.
+        with tempfile.TemporaryDirectory(prefix="ai_integration_completion_") as cwd:
+            result = await cli_backend(
+                model=model,
+                prompt=prompt,
+                env=cli_env,
+                system=system,
+                tools="",
+                cwd=cwd,
+                extra_args=claude_cli_args,
+            )
         _log_keyless_savings(result, prompt, model)
 
     logger.info(
@@ -143,8 +184,7 @@ async def run_completion(
         result.billing_path.value,
         result.cost_usd,
     )
-    if spend_tracker is not None and result.cost_usd is not None:
-        spend_tracker.record(result.cost_usd)
+    _record_spend(spend_tracker, result, model=model, service_name=service_name)
     return result
 
 
@@ -155,6 +195,7 @@ async def run_task(
     model: str = DEFAULT_MODEL,
     system: str | None = None,
     append_system: str | None = None,
+    permission_mode: str | None = "bypassPermissions",
     env: Mapping[str, str] | None = None,
     strip_mngr_agent_vars: bool = False,
     claude_cli_args: Sequence[str] | None = None,
@@ -169,6 +210,16 @@ async def run_task(
     (``--append-system-prompt``) layers task instructions on top of that default;
     pass ``system`` (``--system-prompt``) only to fully replace it. ``--bare`` is
     not used -- it would strip the agent and, keyless, can't authenticate.
+
+    ``permission_mode`` maps to ``--permission-mode`` and defaults to
+    ``"bypassPermissions"``. This default is **load-bearing**: headless ``claude -p``
+    has no human to approve tool use, so under the normal mode the agent's Read /
+    Write / Bash calls are auto-denied and the "agentic" task can't actually touch
+    files (it just replies that it needs permission). Tighten it (e.g. ``acceptEdits``)
+    or set it to ``None`` to omit the flag and drive permissions yourself via
+    ``claude_cli_args`` (e.g. an ``--allowedTools`` list). Safety here comes from the
+    tight task scope and the spend ceiling, not from per-tool prompts that can't be
+    answered headlessly.
 
     Spend tracking is automatic and opt-in via ``services.toml`` (resolved from
     ``[services.<service_name>.ai_spend]``), the same as ``run_completion``.
@@ -185,6 +236,7 @@ async def run_task(
         env=cli_env,
         system=system,
         append_system=append_system,
+        permission_mode=permission_mode,
         extra_args=claude_cli_args,
     )
     logger.info(
@@ -194,8 +246,7 @@ async def run_task(
         result.billing_path.value,
         result.cost_usd,
     )
-    if spend_tracker is not None and result.cost_usd is not None:
-        spend_tracker.record(result.cost_usd)
+    _record_spend(spend_tracker, result, model=model, service_name=service_name)
     return result
 
 
