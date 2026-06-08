@@ -93,15 +93,16 @@ def test_main_template_writes_default_tmux_conf() -> None:
 
 
 def test_main_extra_provision_command_stacks_with_lima() -> None:
-    """`main` + `lima`: lima's many provisioning commands all survive alongside main's."""
+    """`main` + `lima`: lima (docker-in-VM mode) has no `extra_provision_command` of its own, so only main's runs.
+
+    Lima now builds the project image inside the VM and runs the agent in a
+    container (mirroring the docker template), so its old in-VM provisioning
+    commands (mkdir worktree, npm install latchkey, playwright install) are gone.
+    Stacking with lima must still preserve main's command.
+    """
     result = _apply(("main", "lima"))
     commands = result["extra_provision_command"]
     assert any(_TMUX_MARKER in cmd for cmd in commands)
-    # Spot-check several distinct lima provisioning commands to confirm the
-    # entire list (not just the first entry) is concatenated.
-    assert any("sudo mkdir -p /mngr/worktree" in cmd for cmd in commands)
-    assert any("npm install -g latchkey" in cmd for cmd in commands)
-    assert any("playwright install" in cmd for cmd in commands)
 
 
 def test_main_extra_provision_command_present_for_docker_mode() -> None:
