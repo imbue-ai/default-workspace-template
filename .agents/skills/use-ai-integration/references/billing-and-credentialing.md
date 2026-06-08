@@ -13,8 +13,7 @@ Claude heavily without ever blocking the user's interactive chat.
 
 As of the **2026-06-15 subscription split**, `claude -p` / Agent-SDK usage draws
 a *separate* pool from interactive usage. So neither the direct API nor `claude -p`
-competes with the user's chat quota. (Before that cutover they shared a pool; the
-library's design targets the post-cutover model.)
+competes with the user's chat quota.
 
 Consequence: **the live concern is cost, not chat availability.** That is why the
 library logs the billing path and supports a spend ceiling, rather than gating
@@ -53,37 +52,35 @@ the spend loader still finds the budget by name.
 `claude -p` is pricier than a direct API call not because of the model but because
 of the **default agent context it reloads per call**: the Claude Code system
 prompt, all tool definitions, and the auto-discovered CLAUDE.md / skills -- plus it
-runs a multi-turn tool loop. Three levers control this (numbers measured on this
-repo, Haiku, a one-line prompt):
+runs a multi-turn tool loop. Three levers control this (on this repo, Haiku, a
+one-line prompt):
 
 | Config | Turns | Context | Cost | Notes |
 |---|---|---|---|---|
-| Default `claude -p` | ~7 | ~238k | ~$0.086 | Wandered off-task (tried to `git commit` an unrelated dirty file) |
+| Default `claude -p` | ~7 | ~238k | ~$0.086 | May wander off-task (e.g. try to `git commit` an unrelated file) |
 | `--system-prompt <s>` + `--tools ""` | 1 | ~13k | ~$0.016 | The flags `run_completion` uses; the ~13k is CLAUDE.md + skills |
-| above **+ isolated cwd** | 1 | ~0.2k | ~$0.012 | What `run_completion`'s keyless fallback actually does now; CLAUDE.md not loaded |
+| above **+ isolated cwd** | 1 | ~0.2k | ~$0.012 | What `run_completion`'s keyless fallback does; CLAUDE.md not loaded |
 | `--bare` (+ replace) | -- | -- | -- | Strips CLAUDE.md/skills too, but **fails to auth keyless** |
 
 Takeaways:
 
 - **`--tools ""` is a correctness fix, not just cost.** The default agent given a
-  "just answer this" prompt will use tools and act -- in the measurement it tried
-  to commit files. The non-agentic `run_completion` fallback always disables tools.
-- **The residual ~13k was CLAUDE.md + skills; `run_completion` now sheds it via an
+  "just answer this" prompt will use tools and act -- it may try to do unrelated
+  work like committing files. The non-agentic `run_completion` fallback always
+  disables tools.
+- **The residual ~13k is CLAUDE.md + skills; `run_completion` sheds it via an
   isolated cwd.** `claude -p` auto-discovers CLAUDE.md / `.claude` hooks from the
   *working directory*, so the keyless completion path runs the CLI from a throwaway
-  temp dir -- no project context is loaded, dropping that residual to ~0 (measured:
-  the cached-context tokens fell from ~9.6k to 0). This needs no key and no `--bare`
-  (which can't authenticate keyless anyway: it requires `ANTHROPIC_API_KEY` or an
-  `apiKeyHelper`; verified it returns "Not logged in" with no key). `run_task` does
-  *not* isolate cwd -- it needs the repo context for file access. **The library
-  never uses bare.**
-- **A required `system` on `run_completion` is still load-bearing.** Before the cwd
-  isolation, the non-bare fallback always loaded CLAUDE.md and an empty/absent
-  system prompt let that ambient text hijack the answer (measured: the model
-  answered the repo's CLAUDE.md guidance, intermittently -- ~1 in 5 trivial-prompt
-  runs). The isolated cwd removes that source structurally; `system` remains
-  required because it frames the task and is the system block on the direct-API
-  path.
+  temp dir -- no project context is loaded, dropping that residual to ~0. This needs
+  no key and no `--bare` (which can't authenticate keyless anyway: it requires
+  `ANTHROPIC_API_KEY` or an `apiKeyHelper`, returning "Not logged in" with no key).
+  `run_task` does *not* isolate cwd -- it needs the repo context for file access.
+  **The library never uses bare.**
+- **A required `system` on `run_completion` is load-bearing.** With a non-bare
+  fallback, an empty or absent system prompt lets ambient CLAUDE.md text hijack the
+  answer -- the model responds to the repo's guidance instead of the prompt. The
+  isolated cwd removes that source structurally; `system` is required regardless
+  because it frames the task and is the system block on the direct-API path.
 - **The savings nudge is honest.** `result.cost_usd` on the fallback already
   reflects the stripped config, so the "set a key to save ~$Z" figure compares the
   *stripped* `claude -p` cost against the direct-API counterfactual, not the

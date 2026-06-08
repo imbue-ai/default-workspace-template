@@ -483,10 +483,9 @@ def _emit_run_result(
 ) -> None:
     """Write the run-result JSON to stdout and, if given, to a dedicated file.
 
-    The file is the machine contract for programmatic callers (e.g.
-    ``ai_integration.run_agent``): they read the exact payload from a path they
-    chose, rather than guessing which stdout line is the result. Stdout still
-    carries the JSON for humans / shell callers and back-compat.
+    The file is the machine contract for programmatic callers: they read the exact
+    payload from a path they chose, rather than guessing which stdout line is the
+    result. Stdout still carries the JSON for humans and shell callers.
     """
     line = json.dumps(payload)
     stream.write(line + "\n")

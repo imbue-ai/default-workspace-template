@@ -68,13 +68,13 @@ rather than text -- read it from **`result.tool_calls`** (a tuple of
 **`system` is required here** (unlike `run_task`). On the keyless `claude -p`
 fallback the library passes it as `--system-prompt`, disables tools (`--tools ""`),
 and runs the CLI from an **isolated working directory** so `claude -p` does not
-auto-discover this repo's CLAUDE.md / `.claude` hooks. That last part is the real
+auto-discover this repo's CLAUDE.md / `.claude` hooks. The isolated cwd is the real
 fix for context bleed: the keyless fallback is *non-bare* (bare can't authenticate
-without an API key), so historically CLAUDE.md was always loaded and -- with a weak
-system prompt -- could hijack the answer (the model would respond to the ambient
-repo text). Running from an isolated cwd keeps that project context out of the call
-entirely. `system` is still required: it frames the task and is the system block on
-the direct-API path. Make it a genuine instruction ("You are an email triage
+without an API key), so without it CLAUDE.md would load and -- with a weak system
+prompt -- could hijack the answer (the model responding to the ambient repo text).
+Running from an isolated cwd keeps that project context out of the call entirely.
+`system` is required regardless: it frames the task and is the system block on the
+direct-API path. Make it a genuine instruction ("You are an email triage
 classifier."), not a placeholder.
 
 ### The onramp is automatic -- do not make the user set up a key first
@@ -154,7 +154,7 @@ The live concern is **cost**, so:
   fallback sheds nearly all of this (`--system-prompt` + `--tools ""` + an isolated
   working dir so CLAUDE.md/skills aren't loaded at all), but the direct API carries
   none of it -- which is why a key is cheaper and why the
-  library nudges you toward one once volume justifies it. (The deeper measured
+  library nudges you toward one once volume justifies it. (The deeper cost
   breakdown and the `--bare`-vs-keyless-auth constraint are in
   [references/billing-and-credentialing.md](references/billing-and-credentialing.md).)
 - **Confirm the billing path with the user at setup.** When wiring up a service
