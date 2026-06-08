@@ -804,6 +804,15 @@ async def _run_proto_agent_logs_loop(
         pass
 
 
+def _build_destroy_command(agent_name: str) -> list[str]:
+    """Build the ``mngr destroy --force`` argv for one agent.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
+    against the live CLI without a subprocess (see ``server_test.py``).
+    """
+    return ["mngr", "destroy", agent_name, "--force"]
+
+
 async def _destroy_agent(agent_id: str, request: Request) -> JSONResponse:
     """Destroy an agent by running mngr destroy --force.
 
@@ -833,7 +842,7 @@ async def _destroy_agent(agent_id: str, request: Request) -> JSONResponse:
 
     def _run_destroy() -> tuple[bool, str]:
         result = run_local_command_modern_version(
-            command=["mngr", "destroy", agent_name, "--force"],
+            command=_build_destroy_command(agent_name),
             cwd=None,
             is_checked=False,
             timeout=30.0,
