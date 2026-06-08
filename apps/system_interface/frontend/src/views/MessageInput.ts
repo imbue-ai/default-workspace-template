@@ -1,6 +1,11 @@
 import m from "mithril";
 import { interruptAgent, sendMessage, getEventsForAgent } from "../models/Response";
-import { addPendingMessage, getEffectiveActivityState, removePendingMessage } from "../models/PendingMessages";
+import {
+  addPendingMessage,
+  getEffectiveActivityState,
+  markPendingMessageDelivered,
+  removePendingMessage,
+} from "../models/PendingMessages";
 import { isWorkingActivityState } from "./ActivityIndicator";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
@@ -59,6 +64,13 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
         try {
           await sendMessage(agentId, text);
+          // The POST blocks until the agent confirms submission (Claude's
+          // UserPromptSubmit hook), so a resolved request means the message was
+          // genuinely delivered. Drop the bubble's "sending" affordance; it stays
+          // up until the real transcript event reconciles it away.
+          if (pendingId !== null) {
+            markPendingMessageDelivered(agentId, pendingId);
+          }
         } catch (err) {
           // The send failed, so no transcript event will ever arrive to
           // reconcile the optimistic bubble. Roll it back (clearing the bubble

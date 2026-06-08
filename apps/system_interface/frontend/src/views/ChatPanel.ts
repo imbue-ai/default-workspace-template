@@ -80,10 +80,13 @@ function isProtoAgent(agentId: string): boolean {
 // reconciled against a real transcript event. Rendered with the same renderer
 // as real user turns so they are visually indistinguishable, and appended after
 // the transcript so they sit at the bottom where the user expects their message.
+// While the send request is still in flight the bubble carries a subtle
+// "sending" affordance (dimmed, with a small caption); once the request resolves
+// it settles to a normal bubble, until the real transcript event reconciles it.
 function renderPendingMessages(agentId: string): m.Vnode[] {
   const nodes: m.Vnode[] = [];
   for (const pending of getPendingMessages(agentId)) {
-    const node = renderUserMessage({
+    const bubble = renderUserMessage({
       type: "user_message",
       event_id: pending.id,
       content: pending.content,
@@ -91,7 +94,18 @@ function renderPendingMessages(agentId: string): m.Vnode[] {
       source: "pending",
       timestamp: "",
     });
-    if (node !== null) nodes.push(node);
+    if (bubble === null) continue;
+    const isSending = pending.status === "sending";
+    nodes.push(
+      m(
+        "div",
+        {
+          key: `pending-wrap-${pending.id}`,
+          class: isSending ? "pending-message pending-message--sending" : "pending-message",
+        },
+        [bubble, isSending ? m("div", { class: "pending-message-status" }, "Sending…") : null],
+      ),
+    );
   }
   return nodes;
 }

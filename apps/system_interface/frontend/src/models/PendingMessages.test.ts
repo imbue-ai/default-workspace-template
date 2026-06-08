@@ -22,6 +22,7 @@ import {
   getPendingMessages,
   reconcilePendingMessages,
   removePendingMessage,
+  markPendingMessageDelivered,
   getEffectiveActivityState,
 } from "./PendingMessages";
 
@@ -222,5 +223,53 @@ describe("rolling back a failed send", () => {
     addPendingMessage(agentId, "still here", []);
     removePendingMessage(agentId, "pending-does-not-exist");
     expect(getPendingMessages(agentId)).toHaveLength(1);
+  });
+});
+
+describe("delivery status", () => {
+  it("starts a sent message in the sending state", () => {
+    const agentId = freshAgentId();
+    addPendingMessage(agentId, "hello", []);
+    expect(getPendingMessages(agentId)[0].status).toBe("sending");
+  });
+
+  it("flips to delivered when the send request resolves", () => {
+    const agentId = freshAgentId();
+    const id = addPendingMessage(agentId, "hello", []);
+    markPendingMessageDelivered(agentId, id as string);
+    expect(getPendingMessages(agentId)[0].status).toBe("delivered");
+  });
+
+  it("marks only the named message delivered among identical sends", () => {
+    const agentId = freshAgentId();
+    const first = addPendingMessage(agentId, "dup", []);
+    addPendingMessage(agentId, "dup", []);
+
+    markPendingMessageDelivered(agentId, first as string);
+
+    const pending = getPendingMessages(agentId);
+    expect(pending.find((p) => p.id === first)?.status).toBe("delivered");
+    expect(pending.find((p) => p.id !== first)?.status).toBe("sending");
+  });
+
+  it("is a no-op for an unknown id", () => {
+    const agentId = freshAgentId();
+    addPendingMessage(agentId, "hello", []);
+    markPendingMessageDelivered(agentId, "pending-does-not-exist");
+    expect(getPendingMessages(agentId)[0].status).toBe("sending");
+  });
+
+  it("keeps showing the bubble until reconciliation, even once delivered", () => {
+    const agentId = freshAgentId();
+    const id = addPendingMessage(agentId, "queued while running", []);
+    markPendingMessageDelivered(agentId, id as string);
+
+    // Delivered, but the real transcript event has not arrived yet -- the bubble
+    // must stay up (this is the mid-run case where the queued message is only
+    // written to the transcript at turn end).
+    expect(getPendingMessages(agentId)).toHaveLength(1);
+
+    reconcilePendingMessages(agentId, [userMsg("u1", "queued while running")]);
+    expect(getPendingMessages(agentId)).toHaveLength(0);
   });
 });

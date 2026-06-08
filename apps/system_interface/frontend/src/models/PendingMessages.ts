@@ -31,11 +31,24 @@ import m from "mithril";
 import { getAgentById } from "./AgentManager";
 import type { TranscriptEvent } from "./Response";
 
+/**
+ * Delivery status of an optimistic message, driven by the send POST's lifecycle.
+ * "sending" while the POST is in flight (delivery to the agent not yet
+ * confirmed); "delivered" once it resolves successfully -- the POST blocks until
+ * Claude's UserPromptSubmit hook fires, so a success means the agent actually
+ * accepted the prompt. A failed send never reaches "delivered"; it is rolled
+ * back via removePendingMessage instead.
+ */
+export type PendingMessageStatus = "sending" | "delivered";
+
 export interface PendingMessage {
   /** Stable id for keying the rendered bubble. */
   id: string;
   /** Trimmed message text, matched against transcript user_message content. */
   content: string;
+  /** Delivery status, used to render a subtle "sending" affordance until the
+   *  send request confirms the agent received the message. */
+  status: PendingMessageStatus;
   /** True when the agent was IDLE at send time, so this message should force a
    *  "Thinking..." indicator until it reconciles. False for a message sent to an
    *  already-working agent (its real activity is shown unchanged). */
@@ -90,12 +103,28 @@ export function addPendingMessage(
   list.push({
     id,
     content: trimmed,
+    status: "sending",
     sent_while_idle: sentWhileIdle,
     prior_user_event_ids: userEventIds(currentEvents),
   });
   pendingByAgent[agentId] = list;
   m.redraw();
   return id;
+}
+
+/**
+ * Mark a pending message as delivered once its send request resolves
+ * successfully. The request blocks until the agent confirms submission, so this
+ * is the point at which the optimistic bubble stops showing its "sending"
+ * affordance (it stays up until the real transcript event reconciles it away).
+ * Marking an unknown id is a no-op.
+ */
+export function markPendingMessageDelivered(agentId: string, id: string): void {
+  const pending = pendingByAgent[agentId]?.find((p) => p.id === id);
+  if (pending !== undefined && pending.status !== "delivered") {
+    pending.status = "delivered";
+    m.redraw();
+  }
 }
 
 /**
@@ -129,9 +158,9 @@ export function getPendingMessages(agentId: string): PendingMessage[] {
  * claimed by an earlier pending message, so two identical sends reconcile
  * against two distinct transcript events rather than collapsing into one.
  *
- * Matching is by trimmed content: the POST that sends the message is
- * fire-and-forget (no server-assigned id to correlate on), and the backend
- * persists the user's text verbatim into the transcript, so equality holds
+ * Matching is by trimmed content: the send POST confirms delivery but returns
+ * no server-assigned id to correlate on, and the backend persists the user's
+ * text verbatim into the transcript, so equality holds
  * modulo the surrounding whitespace both sides trim. That verbatim-persistence
  * is the contract this relies on; if the backend ever rewrote user text the
  * bubble would not reconcile. (A server-returned correlation id would remove
