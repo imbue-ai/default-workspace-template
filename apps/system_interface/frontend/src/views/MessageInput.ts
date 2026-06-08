@@ -1,6 +1,6 @@
 import m from "mithril";
 import { interruptAgent, sendMessage, getEventsForAgent } from "../models/Response";
-import { addPendingMessage, getEffectiveActivityState } from "../models/PendingMessages";
+import { addPendingMessage, getEffectiveActivityState, removePendingMessage } from "../models/PendingMessages";
 import { isWorkingActivityState } from "./ActivityIndicator";
 
 const MAX_TEXTAREA_HEIGHT_PX = 200;
@@ -54,13 +54,25 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         localStorage.removeItem(messageTextKey(agentId));
         // Show the message immediately (and force "Thinking..." if the agent is
         // idle) instead of waiting for it to round-trip through the transcript.
-        addPendingMessage(agentId, text, getEventsForAgent(agentId));
+        const pendingId = addPendingMessage(agentId, text, getEventsForAgent(agentId));
         m.redraw();
 
         try {
           await sendMessage(agentId, text);
-        } catch {
-          // Fire-and-forget: response comes via SSE
+        } catch (err) {
+          // The send failed, so no transcript event will ever arrive to
+          // reconcile the optimistic bubble. Roll it back (clearing the bubble
+          // and any forced-"Thinking..." override) so the UI does not get stuck
+          // showing a message that was never delivered, and surface the error.
+          const reqErr = err as { response?: { detail?: string }; message?: string };
+          const detail = reqErr.response?.detail ?? reqErr.message ?? String(err);
+          console.error(`Failed to send message to agent ${agentId}: ${detail}`);
+          if (pendingId !== null) {
+            removePendingMessage(agentId, pendingId);
+          }
+          // Restore the user's text so the send is not silently lost.
+          messageText = text;
+          m.redraw();
         }
 
         requestAnimationFrame(() => {

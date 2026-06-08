@@ -65,25 +65,55 @@ function userEventIds(events: readonly TranscriptEvent[]): Set<string> {
  * agent's transcript at send time, used both to snapshot which user messages
  * already exist and (via the live agent state) to decide whether to force a
  * "Thinking..." indicator while the send is in flight.
+ *
+ * Returns the id of the created pending message so the caller can roll it back
+ * (via ``removePendingMessage``) if the send ultimately fails -- otherwise the
+ * optimistic bubble, and any forced-THINKING override it triggered, would stay
+ * up forever since no real transcript event will ever arrive to reconcile it.
+ * Returns ``null`` when the trimmed content is blank and nothing was added.
  */
-export function addPendingMessage(agentId: string, content: string, currentEvents: readonly TranscriptEvent[]): void {
+export function addPendingMessage(
+  agentId: string,
+  content: string,
+  currentEvents: readonly TranscriptEvent[],
+): string | null {
   const trimmed = content.trim();
   if (!trimmed) {
-    return;
+    return null;
   }
   // "force ... if (and ONLY IF) it's totally idle": a working agent already
   // surfaces its own activity, and a null state means activity isn't tracked
   // for this agent at all, so neither should be overridden.
   const sentWhileIdle = getAgentById(agentId)?.activity_state === "IDLE";
+  const id = `pending-${nextPendingId++}`;
   const list = pendingByAgent[agentId] ?? [];
   list.push({
-    id: `pending-${nextPendingId++}`,
+    id,
     content: trimmed,
     sent_while_idle: sentWhileIdle,
     prior_user_event_ids: userEventIds(currentEvents),
   });
   pendingByAgent[agentId] = list;
   m.redraw();
+  return id;
+}
+
+/**
+ * Remove a single optimistic message by id, clearing its bubble and any
+ * forced-THINKING override it triggered. Used to roll back a pending message
+ * whose send failed (so no real transcript event will ever reconcile it).
+ * Removing an unknown id is a no-op.
+ */
+export function removePendingMessage(agentId: string, id: string): void {
+  const list = pendingByAgent[agentId];
+  if (list === undefined) {
+    return;
+  }
+  const remaining = list.filter((pending) => pending.id !== id);
+  if (remaining.length !== list.length) {
+    pendingByAgent[agentId] = remaining;
+    m.redraw();
+  }
 }
 
 /** The still-unreconciled optimistic messages for an agent, in send order. */
