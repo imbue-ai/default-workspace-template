@@ -37,6 +37,23 @@ class Usage(FrozenModel):
     )
 
 
+class ToolCall(FrozenModel):
+    """One ``tool_use`` block the model returned -- the structured-output channel.
+
+    When a completion is steered to produce structured output (by passing ``tools``
+    + ``tool_choice`` through ``anthropic_options``), the model answers with a
+    ``tool_use`` block rather than text. ``input`` is the structured argument object
+    the model produced (this is the JSON you actually want); ``text`` on the
+    ``CompletionResult`` is typically empty in that case.
+    """
+
+    id: str = Field(description="The provider's id for this tool-use block")
+    name: str = Field(description="The tool the model chose to call")
+    input: dict[str, object] = Field(
+        description="The structured arguments the model produced for the tool"
+    )
+
+
 class CompletionResult(FrozenModel):
     """The result of a non-agentic completion (``run_completion``)."""
 
@@ -45,6 +62,14 @@ class CompletionResult(FrozenModel):
         description="Which backend/billing bucket served the call"
     )
     model: str = Field(description="The model id the call was served by")
+    tool_calls: tuple[ToolCall, ...] = Field(
+        default=(),
+        description=(
+            "Structured-output tool_use blocks the model returned, in order; empty "
+            "for an ordinary text completion. Read these (not ``text``) when you "
+            "steered the call with tools/tool_choice via ``anthropic_options``."
+        ),
+    )
     usage: Usage | None = Field(
         default=None, description="Token counts, when the backend reported them"
     )

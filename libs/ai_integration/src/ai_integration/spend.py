@@ -36,6 +36,19 @@ def _default_escalate(message: str) -> None:
     logger.warning("ai_integration spend ceiling: {}", message)
 
 
+def format_window(seconds: float) -> str:
+    """Render a window length in a unit-aware way (s / min / h).
+
+    Avoids the old ``{seconds/3600:.0f}h``, which printed a misleading "0h" for any
+    sub-hour window (e.g. a 1000s window).
+    """
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}min"
+    return f"{seconds / 3600:g}h"
+
+
 class SpendTracker(MutableModel):
     """Tracks per-service spend against a rolling-window ceiling.
 
@@ -132,8 +145,8 @@ class SpendTracker(MutableModel):
         if spent >= self.ceiling_usd:
             message = (
                 f"service '{self.service_name}' has spent ~${spent:.2f} in the last "
-                f"{self.window_seconds / 3600:.0f}h, at or over its ${self.ceiling_usd:.2f} "
-                f"ceiling; pausing paid AI calls"
+                f"{format_window(self.window_seconds)}, at or over its "
+                f"${self.ceiling_usd:.2f} ceiling; pausing paid AI calls"
             )
             self.escalate(message)
             raise SpendCeilingExceededError(message)

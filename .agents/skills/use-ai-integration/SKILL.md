@@ -54,18 +54,28 @@ print(result.text, result.billing_path, result.cost_usd)
 
 The library routes this for you: **direct Anthropic API when `ANTHROPIC_API_KEY`
 is set** (always cheaper for non-agentic work), otherwise it falls back to
-headless `claude -p`. You do not choose -- routing is by key presence. Any
-Anthropic API option can be passed through `anthropic_options=...` (tools,
-response formats, temperature, etc.), and structured output works the same way.
+headless `claude -p`. You do not choose -- routing is by key presence.
+
+**`anthropic_options` and structured output are direct-API-only.** Any Anthropic
+API parameter (tools, `tool_choice`, temperature, etc.) can be passed through
+`anthropic_options=...`, but it is honored **only on the keyed direct-API path**.
+On the keyless `claude -p` fallback these options are ignored (the library logs a
+warning). So if your service relies on structured output, it needs a key. When you
+steer a call with `tools` + `tool_choice`, the model answers with a tool call
+rather than text -- read it from **`result.tool_calls`** (a tuple of
+`ToolCall(name, input, id)`); `result.text` is empty in that case.
 
 **`system` is required here** (unlike `run_task`). On the keyless `claude -p`
-fallback the library passes it as `--system-prompt` and disables tools
-(`--tools ""`). This is not just a cost optimization: the keyless fallback is
-*non-bare* (bare can't authenticate without an API key), so it always auto-loads
-this repo's CLAUDE.md -- and with an empty system prompt the model answers *that*
-ambient text instead of your prompt. A real `system` neutralizes it. Make it a
-genuine instruction for the task ("You are an email triage classifier."), not a
-placeholder.
+fallback the library passes it as `--system-prompt`, disables tools (`--tools ""`),
+and runs the CLI from an **isolated working directory** so `claude -p` does not
+auto-discover this repo's CLAUDE.md / `.claude` hooks. That last part is the real
+fix for context bleed: the keyless fallback is *non-bare* (bare can't authenticate
+without an API key), so historically CLAUDE.md was always loaded and -- with a weak
+system prompt -- could hijack the answer (the model would respond to the ambient
+repo text). Running from an isolated cwd keeps that project context out of the call
+entirely. `system` is still required: it frames the task and is the system block on
+the direct-API path. Make it a genuine instruction ("You are an email triage
+classifier."), not a placeholder.
 
 ### The onramp is automatic -- do not make the user set up a key first
 
@@ -93,6 +103,14 @@ does not). Direct API is not an option here. Tools stay enabled -- the point is 
 ride the default agent. Pass `append_system="..."` to layer task instructions on
 top of the default agent prompt (`--append-system-prompt`), or `system="..."` to
 replace it outright (rare; you usually want the default agent here).
+
+`run_task` defaults `permission_mode="bypassPermissions"` (`--permission-mode`).
+This is required, not incidental: headless `claude -p` has no human to approve tool
+use, so under the normal mode the agent's Read / Write / Bash calls are auto-denied
+and the task can't actually touch files. Tighten it (e.g. `"acceptEdits"`) or set
+it to `None` and supply your own `--allowedTools` via `claude_cli_args` when you
+want a narrower grant. Safety comes from the tight task scope and the spend ceiling,
+not from per-tool prompts that can't be answered headlessly.
 
 ## Pattern 1 -- `run_agent` (full agent)
 
@@ -133,8 +151,9 @@ The live concern is **cost**, so:
 - **Know why `claude -p` costs more than the direct API.** It's the default
   agent's per-call context: system prompt + tool definitions + auto-loaded
   CLAUDE.md/skills, plus a multi-turn tool loop. `run_completion`'s keyless
-  fallback already sheds most of this (`--system-prompt` + `--tools ""`), but the
-  direct API carries none of it -- which is why a key is cheaper and why the
+  fallback sheds nearly all of this (`--system-prompt` + `--tools ""` + an isolated
+  working dir so CLAUDE.md/skills aren't loaded at all), but the direct API carries
+  none of it -- which is why a key is cheaper and why the
   library nudges you toward one once volume justifies it. (The deeper measured
   breakdown and the `--bare`-vs-keyless-auth constraint are in
   [references/billing-and-credentialing.md](references/billing-and-credentialing.md).)
@@ -172,6 +191,11 @@ The live concern is **cost**, so:
   stop/readiness hooks. This is the main reason to call `claude -p` *through* the
   library rather than shelling out yourself.
 - **Billing-path logging** on every call, and the keyless savings nudge.
+- **Context isolation** on the keyless completion path: `claude -p` runs from a
+  throwaway working dir so the repo's CLAUDE.md / `.claude` hooks can't leak into a
+  non-agentic answer.
+- **Structured output is reachable**: forced tool calls on the direct-API path are
+  surfaced in `result.tool_calls` rather than silently dropped.
 
 Details and the footgun (a stray `ANTHROPIC_API_KEY` silently switches `claude -p`
 to full-API billing) are in
