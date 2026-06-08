@@ -411,9 +411,15 @@ function permissionRequesting(details: PermissionRequestDetails | null): string 
   return null;
 }
 
-/** A small check/cross glyph for the resolved-request verdict. */
-function renderVerdictIcon(granted: boolean): m.Vnode {
-  const path = granted ? "M4.5 8.5L7 11L11.5 5.5" : "M5 5l6 6M11 5l-6 6";
+/** A small glyph for the resolved-request verdict: a check (granted), a cross
+ *  (denied), or an exclamation (error / couldn't complete). */
+function renderVerdictIcon(resolution: PermissionResolution): m.Vnode {
+  const path =
+    resolution === "granted"
+      ? "M4.5 8.5L7 11L11.5 5.5"
+      : resolution === "denied"
+        ? "M5 5l6 6M11 5l-6 6"
+        : "M8 4v5M8 11.5h0";
   return m(
     "svg",
     {
@@ -432,13 +438,20 @@ function renderVerdictIcon(granted: boolean): m.Vnode {
   );
 }
 
-/** The resolved verdict badge shown in place of the action button once the user
- *  has granted or denied the request. */
+/** The label shown beside the verdict icon. "error" reads as "Couldn't
+ *  complete" -- the request didn't finish, distinct from a deny decision. */
+function verdictLabel(resolution: PermissionResolution): string {
+  if (resolution === "granted") return "Granted";
+  if (resolution === "denied") return "Denied";
+  return "Couldn't complete";
+}
+
+/** The resolved verdict badge shown in place of the action button once the
+ *  request is resolved (granted, denied, or could-not-complete). */
 function renderPermissionVerdict(resolution: PermissionResolution): m.Vnode {
-  const granted = resolution === "granted";
   return m("div", { class: `permission-request-verdict permission-request-verdict--${resolution}` }, [
-    renderVerdictIcon(granted),
-    m("span", granted ? "Granted" : "Denied"),
+    renderVerdictIcon(resolution),
+    m("span", verdictLabel(resolution)),
   ]);
 }
 
