@@ -57,7 +57,7 @@ function renderStatusRow(agentId: string, id: string, status: "sending" | "queue
     return m("div", { key: `pending-status-${id}`, class: "pending-message-status" }, "Sending…");
   }
   // queued: accepted into the agent's queue, awaiting processing -- offer an
-  // icon action to interrupt the agent and send it now (native title tooltip).
+  // icon action to interrupt the agent and send it now.
   return m("div", { key: `pending-status-${id}`, class: "pending-message-status" }, [
     m("span", "Queued"),
     m(
