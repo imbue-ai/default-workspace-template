@@ -70,17 +70,26 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           if (pendingId !== null) {
             removePendingMessage(agentId, pendingId);
           }
-          // Restore the user's text so the send is not silently lost. Persist
-          // it to localStorage (keyed to this agent) unconditionally so the
-          // recovered draft survives a reload or agent switch. Only touch the
-          // live input if the user is still on this agent -- otherwise we would
-          // clobber whatever they have typed for the agent they switched to
-          // while the send was in flight (the failed draft is still recoverable
-          // from this agent's localStorage when they return to it).
-          localStorage.setItem(messageTextKey(agentId), text);
-          if (currentAgentId === agentId) {
-            messageText = text;
-            m.redraw();
+          // Restore the user's text so the send is not silently lost -- but only
+          // if they have not already started a new draft for this agent. The
+          // input was cleared at send time, so during the in-flight request the
+          // user may have typed a fresh message; blindly restoring the failed
+          // text would clobber that newer draft. The agent's current draft is
+          // the live input when the user is still on this agent, otherwise its
+          // persisted localStorage value.
+          const currentDraft =
+            currentAgentId === agentId ? messageText : (localStorage.getItem(messageTextKey(agentId)) ?? "");
+          if (currentDraft.trim().length === 0) {
+            // No newer draft to protect: recover the failed text. Persist it to
+            // localStorage (keyed to this agent) so the recovered draft survives
+            // a reload or agent switch, and only touch the live input if the user
+            // is still on this agent (otherwise we would write into the input of
+            // the agent they switched to; the draft stays recoverable here).
+            localStorage.setItem(messageTextKey(agentId), text);
+            if (currentAgentId === agentId) {
+              messageText = text;
+              m.redraw();
+            }
           }
         }
 
