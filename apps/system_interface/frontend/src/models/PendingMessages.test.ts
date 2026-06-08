@@ -21,6 +21,7 @@ import {
   addPendingMessage,
   getPendingMessages,
   reconcilePendingMessages,
+  removePendingMessage,
   getEffectiveActivityState,
 } from "./PendingMessages";
 
@@ -183,5 +184,43 @@ describe("reconciliation against the transcript", () => {
     // The second event lands: both are now reconciled.
     reconcilePendingMessages(agentId, [userMsg("u1", "again"), userMsg("u2", "again")]);
     expect(getPendingMessages(agentId)).toHaveLength(0);
+  });
+});
+
+describe("rolling back a failed send", () => {
+  it("drops the bubble and clears the forced THINKING override on removal", () => {
+    const agentId = freshAgentId();
+    mockActivityState = "IDLE";
+    const id = addPendingMessage(agentId, "never delivered", []);
+    expect(id).not.toBeNull();
+    // The optimistic bubble is up and forcing THINKING while the send is in flight.
+    expect(getPendingMessages(agentId)).toHaveLength(1);
+    expect(getEffectiveActivityState(agentId)).toBe("THINKING");
+
+    // The send fails: rolling the message back must clear both the bubble and
+    // the override so the idle agent no longer looks busy forever.
+    removePendingMessage(agentId, id as string);
+    expect(getPendingMessages(agentId)).toHaveLength(0);
+    expect(getEffectiveActivityState(agentId)).toBe("IDLE");
+  });
+
+  it("removes only the named message when identical sends are pending", () => {
+    const agentId = freshAgentId();
+    const first = addPendingMessage(agentId, "again", []);
+    addPendingMessage(agentId, "again", []);
+    expect(getPendingMessages(agentId)).toHaveLength(2);
+
+    removePendingMessage(agentId, first as string);
+
+    const remaining = getPendingMessages(agentId);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].id).not.toBe(first);
+  });
+
+  it("is a no-op for an unknown id", () => {
+    const agentId = freshAgentId();
+    addPendingMessage(agentId, "still here", []);
+    removePendingMessage(agentId, "pending-does-not-exist");
+    expect(getPendingMessages(agentId)).toHaveLength(1);
   });
 });
