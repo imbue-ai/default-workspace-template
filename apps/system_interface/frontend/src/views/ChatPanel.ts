@@ -19,6 +19,7 @@ import {
 } from "../models/Response";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
+import { getPendingMessages } from "../models/PendingMessages";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
@@ -68,6 +69,26 @@ function scrollToBottom(element: HTMLElement): void {
 
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
+}
+
+// Optimistic bubbles for messages the user just sent that have not yet been
+// reconciled against a real transcript event. Rendered with the same renderer
+// as real user turns so they are visually indistinguishable, and appended after
+// the transcript so they sit at the bottom where the user expects their message.
+function renderPendingMessages(agentId: string): m.Vnode[] {
+  const nodes: m.Vnode[] = [];
+  for (const pending of getPendingMessages(agentId)) {
+    const node = renderUserMessage({
+      type: "user_message",
+      event_id: pending.id,
+      content: pending.content,
+      role: "user",
+      source: "pending",
+      timestamp: "",
+    });
+    if (node !== null) nodes.push(node);
+  }
+  return nodes;
 }
 
 export function ChatPanel(): m.Component<{ agentId: string }> {
@@ -388,11 +409,24 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     const events = getEventsForAgent(agentId);
 
     if (events.length === 0) {
-      return m(
-        "div",
-        { class: "message-list-empty flex items-center justify-center h-full" },
-        m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
-      );
+      // No transcript yet -- but the user may have just sent their first
+      // message, which should still show immediately as an optimistic bubble
+      // rather than be hidden behind the empty-state placeholder.
+      const pendingNodes = renderPendingMessages(agentId);
+      if (pendingNodes.length === 0) {
+        return m(
+          "div",
+          { class: "message-list-empty flex items-center justify-center h-full" },
+          m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
+        );
+      }
+      return m("div", { class: "message-list-wrapper" }, [
+        m(
+          "div",
+          { class: "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6" },
+          pendingNodes,
+        ),
+      ]);
     }
 
     startBackfill(agentId);
@@ -452,11 +486,10 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     }
 
     return m("div", { class: "message-list-wrapper" }, [
-      m(
-        "div",
-        { class: "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6" },
-        messageNodes,
-      ),
+      m("div", { class: "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6" }, [
+        ...messageNodes,
+        ...renderPendingMessages(agentId),
+      ]),
     ]);
   }
 

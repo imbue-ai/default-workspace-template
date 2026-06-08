@@ -1,0 +1,187 @@
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { TranscriptEvent, UserMessageEvent, AssistantMessageEvent } from "./Response";
+
+// Mithril captures `requestAnimationFrame` at import time to schedule redraws;
+// the node test env has no such global, so addPendingMessage's `m.redraw()`
+// would throw without this polyfill (see Response.test.ts for the same dance).
+vi.hoisted(() => {
+  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
+    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
+});
+
+// The activity state the mocked AgentManager reports for any agent. Mutated per
+// test (and across the lifetime of a single send) to drive the idle/working
+// branches of the forced-THINKING logic.
+let mockActivityState: string | null = null;
+vi.mock("./AgentManager", () => ({
+  getAgentById: (id: string) => ({ id, activity_state: mockActivityState }),
+}));
+
+import {
+  addPendingMessage,
+  getPendingMessages,
+  reconcilePendingMessages,
+  getEffectiveActivityState,
+} from "./PendingMessages";
+
+function userMsg(id: string, content: string): UserMessageEvent {
+  return {
+    type: "user_message",
+    event_id: id,
+    source: "claude/common_transcript",
+    role: "user",
+    content,
+    timestamp: "2026-01-01T00:00:00Z",
+  };
+}
+
+function assistantMsg(id: string, text: string): AssistantMessageEvent {
+  return {
+    type: "assistant_message",
+    event_id: id,
+    source: "claude/common_transcript",
+    model: "m",
+    text,
+    tool_calls: [],
+    stop_reason: null,
+    usage: null,
+    is_auth_error: false,
+    timestamp: "2026-01-01T00:00:00Z",
+  };
+}
+
+// The module store persists across tests; a fresh agent id per test keeps them
+// isolated without needing a reset hook.
+let counter = 0;
+function freshAgentId(): string {
+  return `agent-${counter++}`;
+}
+
+beforeEach(() => {
+  mockActivityState = "IDLE";
+});
+
+describe("optimistic message display", () => {
+  it("shows a sent message immediately as a pending bubble", () => {
+    const agentId = freshAgentId();
+    addPendingMessage(agentId, "hello there", []);
+
+    const pending = getPendingMessages(agentId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].content).toBe("hello there");
+  });
+
+  it("trims the message and ignores a blank send", () => {
+    const agentId = freshAgentId();
+    addPendingMessage(agentId, "  spaced  ", []);
+    addPendingMessage(agentId, "   ", []);
+
+    const pending = getPendingMessages(agentId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].content).toBe("spaced");
+  });
+});
+
+describe("forced Thinking indicator", () => {
+  it("forces THINKING when the agent was idle at send time", () => {
+    const agentId = freshAgentId();
+    mockActivityState = "IDLE";
+    addPendingMessage(agentId, "do the thing", []);
+
+    expect(getEffectiveActivityState(agentId)).toBe("THINKING");
+  });
+
+  it("leaves a working agent's real state untouched (does not force)", () => {
+    const agentId = freshAgentId();
+    mockActivityState = "TOOL_RUNNING";
+    addPendingMessage(agentId, "sent mid-run", []);
+
+    // Real work is shown as-is...
+    expect(getEffectiveActivityState(agentId)).toBe("TOOL_RUNNING");
+
+    // ...and even after the running turn settles to IDLE, a message that was
+    // sent while working must NOT retroactively force THINKING.
+    mockActivityState = "IDLE";
+    expect(getEffectiveActivityState(agentId)).toBe("IDLE");
+  });
+
+  it("does not force THINKING for an agent with no activity tracking", () => {
+    const agentId = freshAgentId();
+    mockActivityState = null;
+    addPendingMessage(agentId, "remote agent", []);
+
+    expect(getEffectiveActivityState(agentId)).toBeNull();
+  });
+
+  it("stops forcing THINKING once the message reconciles", () => {
+    const agentId = freshAgentId();
+    mockActivityState = "IDLE";
+    addPendingMessage(agentId, "hi", []);
+    expect(getEffectiveActivityState(agentId)).toBe("THINKING");
+
+    // The real transcript event lands; the agent is (still) idle afterwards.
+    reconcilePendingMessages(agentId, [userMsg("u1", "hi")]);
+    expect(getPendingMessages(agentId)).toHaveLength(0);
+    expect(getEffectiveActivityState(agentId)).toBe("IDLE");
+  });
+});
+
+describe("reconciliation against the transcript", () => {
+  it("drops the bubble when its real event arrives", () => {
+    const agentId = freshAgentId();
+    addPendingMessage(agentId, "fix the bug", []);
+
+    reconcilePendingMessages(agentId, [assistantMsg("a1", "ok"), userMsg("u1", "fix the bug")]);
+
+    expect(getPendingMessages(agentId)).toHaveLength(0);
+  });
+
+  it("keeps a mid-run message visible until its real event finally lands", () => {
+    const agentId = freshAgentId();
+    mockActivityState = "TOOL_RUNNING";
+    addPendingMessage(agentId, "queued while running", []);
+
+    // The running turn keeps producing output; the queued message is not in the
+    // transcript yet, so the bubble must persist.
+    reconcilePendingMessages(agentId, [assistantMsg("a1", "still working"), assistantMsg("a2", "more work")]);
+    expect(getPendingMessages(agentId)).toHaveLength(1);
+
+    // The turn finally ends and Claude writes the queued message; now it reconciles.
+    reconcilePendingMessages(agentId, [
+      assistantMsg("a1", "still working"),
+      assistantMsg("a2", "more work"),
+      userMsg("u1", "queued while running"),
+    ]);
+    expect(getPendingMessages(agentId)).toHaveLength(0);
+  });
+
+  it("does not reconcile against an identical message that predates the send", () => {
+    const agentId = freshAgentId();
+    // The transcript already contains an identical earlier turn.
+    const priorEvents: TranscriptEvent[] = [userMsg("old", "ship it")];
+    addPendingMessage(agentId, "ship it", priorEvents);
+
+    // A reconcile pass that still only sees the old message must not claim it.
+    reconcilePendingMessages(agentId, priorEvents);
+    expect(getPendingMessages(agentId)).toHaveLength(1);
+
+    // Once the genuinely new event appears, the bubble reconciles.
+    reconcilePendingMessages(agentId, [userMsg("old", "ship it"), userMsg("new", "ship it")]);
+    expect(getPendingMessages(agentId)).toHaveLength(0);
+  });
+
+  it("matches two identical sends to two distinct transcript events", () => {
+    const agentId = freshAgentId();
+    addPendingMessage(agentId, "again", []);
+    addPendingMessage(agentId, "again", []);
+    expect(getPendingMessages(agentId)).toHaveLength(2);
+
+    // Only one matching event so far: exactly one bubble should remain.
+    reconcilePendingMessages(agentId, [userMsg("u1", "again")]);
+    expect(getPendingMessages(agentId)).toHaveLength(1);
+
+    // The second event lands: both are now reconciled.
+    reconcilePendingMessages(agentId, [userMsg("u1", "again"), userMsg("u2", "again")]);
+    expect(getPendingMessages(agentId)).toHaveLength(0);
+  });
+});
