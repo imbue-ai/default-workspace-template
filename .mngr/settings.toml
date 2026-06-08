@@ -124,18 +124,16 @@ is_enabled = false
 # because template `--setting` entries don't reach provider config (imbue-ai/mngr#1914).
 is_host_in_docker = true
 is_host_data_volume_exposed = false
-# Run the in-VM agent container under the gVisor (`runsc`) runtime, matching the
-# local docker provider. install_gvisor_runtime installs+registers runsc with the
-# in-VM Docker daemon at provisioning time (idempotent); docker_runtime selects it
-# for the agent `docker run`. default_container_run_args carries the same runsc
-# workarounds the docker template applies via start_arg: `--workdir=/` (runsc aborts
-# when the image WORKDIR /mngr/code -- which lives in the mounted /mngr volume --
-# already exists as the process cwd) and `--security-opt=no-new-privileges`. These
-# can't be injected via the lima template's start_arg (that maps to limactl VM args),
-# so they live on the provider block.
-install_gvisor_runtime = true
-docker_runtime = "runsc"
-default_container_run_args = ["--workdir=/", "--security-opt=no-new-privileges"]
+# Run the in-VM agent container under the stock `runc` runtime (NOT gVisor/runsc).
+# The Lima VM already provides a hardware-virtualization boundary, so layering runsc
+# inside it adds download size + provisioning complexity for no extra isolation that
+# matters here. install_gvisor_runtime=false skips the runsc install at provisioning
+# time, and docker_runtime="runc" selects the default runtime for the agent
+# `docker run`. The runsc-specific `default_container_run_args` workarounds
+# (`--workdir=/`, `--security-opt=no-new-privileges`) are unnecessary under runc, so
+# they are omitted. (docker/vultr/ovh still run under runsc; only lima opts out.)
+install_gvisor_runtime = false
+docker_runtime = "runc"
 
 # vultr VPS provider (cloud mode). is_enabled=false mirrors the lima/docker blocks:
 # the vps_docker backend plugin is not installed in the agent container, so a parsed
