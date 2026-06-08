@@ -941,6 +941,12 @@ body {
   padding: 2px 7px;
 }
 
+.permission-request-reason-value {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-primary);
+}
+
 .permission-request-actions {
   margin-top: 12px;
 }

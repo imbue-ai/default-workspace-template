@@ -457,10 +457,10 @@ function renderPermissionVerdict(resolution: PermissionResolution): m.Vnode {
 
 /**
  * Render an agent permission request as a card: what's being requested (the
- * permissions on a scope, or an access mode on a path), a button that opens the
- * modal, and a disclosure preserving the raw request/response. Replaces the
- * generic "Tool: Bash" block so the request reads as what it is. The agent's
- * rationale is left to its surrounding prose rather than repeated in the card.
+ * permissions on a scope, or an access mode on a path), the agent's reason for
+ * asking, a button that opens the modal, and a disclosure preserving the raw
+ * request/response. Replaces the generic "Tool: Bash" block so the request reads
+ * as what it is.
  *
  * `resolution` reflects the user's decision once it lands: the action button is
  * replaced by a Granted/Denied verdict. Before the result lands (still pending)
@@ -491,6 +491,12 @@ export function renderPermissionRequestBlock(
       ? m("div", { class: "permission-request-detail" }, [
           m("span", { class: "permission-request-detail-label" }, "Requesting"),
           m("code", { class: "permission-request-detail-value" }, requesting),
+        ])
+      : null,
+    details?.rationale
+      ? m("div", { class: "permission-request-detail permission-request-reason" }, [
+          m("span", { class: "permission-request-detail-label" }, "Reason"),
+          m("span", { class: "permission-request-reason-value" }, details.rationale),
         ])
       : null,
     resolution !== null
