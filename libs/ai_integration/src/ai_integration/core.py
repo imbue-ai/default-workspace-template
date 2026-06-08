@@ -32,7 +32,7 @@ from ai_integration.credentials import (
 from ai_integration.data_types import AgentOutcome, AgentResult, CompletionResult
 from ai_integration.errors import AgentRunError
 from ai_integration.pricing import DEFAULT_MODEL, counterfactual_direct_api_cost_usd
-from ai_integration.spend import SpendTracker, load_spend_tracker
+from ai_integration.spend import SpendTracker, format_usd, load_spend_tracker
 
 _CREATE_WORKER_REL = ".agents/skills/launch-task/scripts/create_worker.py"
 
@@ -64,12 +64,12 @@ def _log_keyless_savings(result: CompletionResult, prompt: str, model: str) -> N
     if counterfactual is None or counterfactual >= result.cost_usd:
         return
     logger.info(
-        "ai_integration: this claude -p call cost ~${:.4f}; the same call via the "
-        "direct Anthropic API would cost ~${:.4f} (estimate). Set ANTHROPIC_API_KEY "
-        "to save ~${:.4f} per call.",
-        result.cost_usd,
-        counterfactual,
-        result.cost_usd - counterfactual,
+        "ai_integration: this claude -p call cost ~{}; the same call via the "
+        "direct Anthropic API would cost ~{} (estimate). Set ANTHROPIC_API_KEY "
+        "to save ~{} per call.",
+        format_usd(result.cost_usd),
+        format_usd(counterfactual),
+        format_usd(result.cost_usd - counterfactual),
     )
 
 
