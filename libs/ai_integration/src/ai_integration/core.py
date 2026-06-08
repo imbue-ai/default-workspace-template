@@ -372,7 +372,7 @@ async def run_agent(
     Thin wrapper over ``create_worker.py run``. The caller writes the task file
     (with ``lead_agent`` / ``finish_report_path`` frontmatter) under ``runtime_dir``
     first. Returns the structured terminal result; what to do with the worker's
-    branch (merge / review) is the caller's concern (a separate future skill).
+    branch (merge / review) is the caller's concern.
 
     ``repo_root`` locates ``create_worker.py``; it defaults to the current working
     directory, which matches this repo's "cwd = repo root" convention (services
