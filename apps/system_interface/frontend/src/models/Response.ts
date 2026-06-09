@@ -160,112 +160,273 @@ export const MAX_HELD_EVENTS = 1500;
 // than on every appended event once at the cap.
 export const EVICT_TARGET_EVENTS = 1000;
 
-// All per-agent transcript state lives in one record per agent. The held events
-// are a single contiguous window of the full transcript: `firstOffset` is the
-// global index of events[0] and `total` the full length; whether more history
-// exists above/below and the scrollbar size are derived from those two. The
-// window can sit anywhere (the live tail is just the case where it ends at
-// `total`), so it pages in both directions and can be replaced wholesale by a
-// jump to an arbitrary offset.
+// All per-agent transcript state is owned by one TranscriptStore instance per
+// agent (see storeByAgent below). The held events are a single contiguous window
+// of the full transcript: `firstOffset` is the global index of events[0] and
+// `total` the full length; whether more history exists above/below and the
+// scrollbar size are derived from those two. The window can sit anywhere (the live
+// tail is just the case where it ends at `total`), so it pages in both directions
+// and can be replaced wholesale by a jump to an arbitrary offset.
 //
 // `renderVersion` is a monotonic counter the chat view memoizes its (expensive)
 // turn-grouping on, so a scroll-only redraw -- which changes no data -- reuses the
 // cached rows instead of re-walking the whole held transcript every frame (the
-// dominant scroll cost on a long conversation). Its one invariant: it must bump on
-// every mutation that changes what renders and never on a no-op. To make that
-// impossible to get wrong, the state is private to this module and every write
-// goes through commit() below -- the single place renderVersion is touched --
-// rather than scattered field writes each having to remember a manual bump.
-interface AgentTranscript {
-  events: TranscriptEvent[];
-  // event_id -> stored event, mirroring `events`: O(1) dedup on append/prepend and
-  // O(1) lookup so a re-broadcast can upgrade an event in place (see appendEvents).
-  byId: Map<string, TranscriptEvent>;
-  firstOffset: number;
-  // Total events in the full server-side transcript (see EventsResponse.total),
-  // not just the held window -- sizes the scrollbar for the whole conversation.
-  total: number;
-  // Step enrichment keyed by ticket id. Replaced wholesale on each snapshot
-  // (GET /events and the `step_enrichment` SSE message), never merged.
-  enrichment: Map<string, StepEnrichment>;
-  renderVersion: number;
+// dominant scroll cost on a long conversation). Its invariant: it must bump on
+// every mutation that changes what renders and never on a no-op. The fields are
+// #private and the only writer of renderVersion is the private #commit funnel, so
+// no mutation -- here or in a future method -- can change the store without going
+// through the one place the version is bumped. The store is a pure data holder: a
+// mutation returns whether anything changed so the module-level wrappers can decide
+// redraws, but the store never touches the view layer itself.
+class TranscriptStore {
+  #events: TranscriptEvent[] = [];
+  // event_id -> stored event, mirroring #events: O(1) dedup on append/prepend and
+  // O(1) lookup so a re-broadcast can upgrade an event in place (see append).
+  #byId = new Map<string, TranscriptEvent>();
+  #firstOffset = 0;
+  // Total events in the full server-side transcript (see EventsResponse.total).
+  #total = 0;
+  #enrichment = new Map<string, StepEnrichment>();
+  #renderVersion = 0;
+
+  get events(): TranscriptEvent[] {
+    return this.#events;
+  }
+
+  get eventCount(): number {
+    return this.#events.length;
+  }
+
+  get firstOffset(): number {
+    return this.#firstOffset;
+  }
+
+  /** Total events in the full transcript, for scrollbar sizing. Never less than
+   *  the loaded window's end, so the window always fits inside it. */
+  get total(): number {
+    return Math.max(this.#total, this.#firstOffset + this.#events.length);
+  }
+
+  get renderVersion(): number {
+    return this.#renderVersion;
+  }
+
+  get enrichment(): Map<string, StepEnrichment> {
+    return this.#enrichment;
+  }
+
+  /** Older history exists before the window (it doesn't start at 0). */
+  get hasMoreBefore(): boolean {
+    return this.#firstOffset > 0;
+  }
+
+  /** Newer history exists after the window (it doesn't reach the live tail) --
+   *  true only after a jump/scroll moved the window off the end. */
+  get hasMoreAfter(): boolean {
+    return this.#firstOffset + this.#events.length < this.total;
+  }
+
+  get firstEventId(): string | null {
+    return this.#events.length > 0 ? this.#events[0].event_id : null;
+  }
+
+  get lastEventId(): string | null {
+    return this.#events.length > 0 ? this.#events[this.#events.length - 1].event_id : null;
+  }
+
+  /**
+   * The single mutation funnel and the ONLY writer of #renderVersion. Each mutator
+   * expresses its change as `mutate` and returns whether anything that renders
+   * changed; the version bumps iff it did, and #commit returns that flag so the
+   * caller can skip a redraw on a no-op. Private alongside the #private fields, this
+   * is what makes the bump impossible to forget -- there is no other way to change
+   * the store.
+   */
+  #commit(mutate: () => boolean): boolean {
+    const changed = mutate();
+    if (changed) {
+      this.#renderVersion += 1;
+    }
+    return changed;
+  }
+
+  /**
+   * Append live tail events. They only belong in the window when it is
+   * tail-anchored (reaches the live end); if the user has jumped to an earlier
+   * position, appending would break contiguity, so brand-new events are dropped
+   * (re-fetched via forward paging on return to the tail). A late re-broadcast that
+   * upgrades an already-held event in place is applied regardless of position.
+   */
+  append(newEvents: TranscriptEvent[]): boolean {
+    const tailAnchored = !this.hasMoreAfter;
+    return this.#commit(() => {
+      let added = false;
+      let merged = false;
+      for (const event of newEvents) {
+        const prior = this.#byId.get(event.event_id);
+        if (prior === undefined) {
+          if (tailAnchored) {
+            this.#events.push(event);
+            this.#byId.set(event.event_id, event);
+            added = true;
+          }
+        } else if (mergeLateSubagentMetadata(prior, event)) {
+          merged = true;
+        }
+      }
+      if (added) {
+        // Tail-anchored, so the window still reaches the end: total grows with it.
+        this.#total = this.#firstOffset + this.#events.length;
+      }
+      return added || merged;
+    });
+  }
+
+  /**
+   * Prepend an older page. When `offset` is given (the global index of the page's
+   * first event, from the server) it becomes the window's new start; otherwise the
+   * start shifts back by the number of events added (used by tests that prepend
+   * without a server round-trip).
+   */
+  prepend(olderEvents: TranscriptEvent[], offset?: number, total?: number): boolean {
+    return this.#commit(() => {
+      const deduped = olderEvents.filter((e) => !this.#byId.has(e.event_id));
+      if (deduped.length === 0) {
+        return false;
+      }
+      for (const event of deduped) {
+        this.#byId.set(event.event_id, event);
+      }
+      this.#events = [...deduped, ...this.#events];
+      this.#firstOffset = offset !== undefined ? offset : Math.max(0, this.#firstOffset - deduped.length);
+      if (total !== undefined) {
+        this.#total = total;
+      }
+      return true;
+    });
+  }
+
+  /** Append a newer page (paging toward the tail from a window moved off the end
+   *  by a jump). The window start is unchanged. */
+  appendForward(newerEvents: TranscriptEvent[], total?: number): boolean {
+    return this.#commit(() => {
+      const deduped = newerEvents.filter((e) => !this.#byId.has(e.event_id));
+      if (deduped.length === 0) {
+        return false;
+      }
+      for (const event of deduped) {
+        this.#byId.set(event.event_id, event);
+      }
+      this.#events = [...this.#events, ...deduped];
+      if (total !== undefined) {
+        this.#total = total;
+      }
+      return true;
+    });
+  }
+
+  /**
+   * Drop the oldest events beyond EVICT_TARGET_EVENTS to bound client memory,
+   * returning the number removed (0 if under the cap). The window start advances by
+   * that count, so the dropped history (still on the server) is re-fetched via
+   * backfill on a later scroll-up. Callers evict only while following the live tail,
+   * since removing already-rendered older rows would shift a scrolled-up viewport.
+   */
+  evict(): number {
+    let removeCount = 0;
+    this.#commit(() => {
+      if (this.#events.length <= MAX_HELD_EVENTS) {
+        return false;
+      }
+      removeCount = this.#events.length - EVICT_TARGET_EVENTS;
+      const removed = this.#events.slice(0, removeCount);
+      for (const event of removed) {
+        this.#byId.delete(event.event_id);
+      }
+      this.#events = this.#events.slice(removeCount);
+      this.#firstOffset += removeCount;
+      return true;
+    });
+    return removeCount;
+  }
+
+  /** Replace the held window wholesale (initial load, or a jump to an offset). */
+  reset(events: TranscriptEvent[], offset: number, total: number): void {
+    this.#commit(() => {
+      this.#events = events;
+      this.#byId = new Map(events.map((e) => [e.event_id, e]));
+      this.#firstOffset = offset;
+      this.#total = total;
+      return true;
+    });
+  }
+
+  /** Replace the enrichment table from a snapshot (GET /events or the
+   *  `step_enrichment` SSE message); never merged. */
+  applyEnrichment(snapshot: Record<string, StepEnrichment> | undefined): void {
+    this.#commit(() => {
+      this.#enrichment = new Map(Object.entries(snapshot ?? {}));
+      return true;
+    });
+  }
+
+  /** An older page came back empty: the window already starts at the beginning. */
+  markReachedStart(total?: number): void {
+    this.#commit(() => {
+      this.#firstOffset = 0;
+      if (total !== undefined) {
+        this.#total = total;
+      }
+      return true;
+    });
+  }
+
+  /** A newer page came back empty: the window reaches the live tail; reconcile the
+   *  total the server now reports. */
+  reconcileTotalAtTail(total: number): void {
+    this.#commit(() => {
+      this.#total = total;
+      return true;
+    });
+  }
 }
 
-const transcriptByAgent: Record<string, AgentTranscript> = {};
+const storeByAgent: Record<string, TranscriptStore> = {};
 const notFoundAgentIds = new Set<string>();
 
-function transcriptFor(agentId: string): AgentTranscript {
-  let transcript = transcriptByAgent[agentId];
-  if (transcript === undefined) {
-    transcript = { events: [], byId: new Map(), firstOffset: 0, total: 0, enrichment: new Map(), renderVersion: 0 };
-    transcriptByAgent[agentId] = transcript;
+function storeFor(agentId: string): TranscriptStore {
+  let store = storeByAgent[agentId];
+  if (store === undefined) {
+    store = new TranscriptStore();
+    storeByAgent[agentId] = store;
   }
-  return transcript;
+  return store;
 }
 
-/**
- * The single mutation funnel, and the ONLY writer of renderVersion.
- *
- * Every state change that affects what the transcript renders must go through
- * here, so a new mutation path cannot silently skip the version bump (which would
- * leave the memoized turn-grouping stale) or bump spuriously (which would defeat
- * the scroll-time caching). `mutate` edits the store in place and returns whether
- * it changed anything that renders; the version bumps iff it did. Returns that same
- * flag so callers can redraw only when something actually changed.
- */
-function commit(agentId: string, mutate: (transcript: AgentTranscript) => boolean): boolean {
-  const transcript = transcriptFor(agentId);
-  const changed = mutate(transcript);
-  if (changed) {
-    transcript.renderVersion += 1;
-  }
-  return changed;
-}
-
+// Read accessors. These never create a store, so an unknown agent reads as empty
+// defaults rather than allocating one on a mere read.
 export function getRenderVersion(agentId: string): number {
-  return transcriptByAgent[agentId]?.renderVersion ?? 0;
+  return storeByAgent[agentId]?.renderVersion ?? 0;
 }
 
-/** Global index of the first held event within the full transcript. */
 export function getFirstOffset(agentId: string): number {
-  return transcriptByAgent[agentId]?.firstOffset ?? 0;
+  return storeByAgent[agentId]?.firstOffset ?? 0;
 }
 
-/** Total number of events in the full transcript, for scrollbar sizing. Never
- *  less than the loaded window's end, so the window always fits inside it. */
 export function getTotalEventCount(agentId: string): number {
-  const transcript = transcriptByAgent[agentId];
-  if (transcript === undefined) {
-    return 0;
-  }
-  const windowEnd = transcript.firstOffset + transcript.events.length;
-  return Math.max(transcript.total, windowEnd);
+  return storeByAgent[agentId]?.total ?? 0;
 }
 
-/** Older history exists before the loaded window (the window doesn't start at 0). */
 export function hasMoreBefore(agentId: string): boolean {
-  return getFirstOffset(agentId) > 0;
+  return storeByAgent[agentId]?.hasMoreBefore ?? false;
 }
 
-/** Newer history exists after the loaded window (the window doesn't reach the
- *  live tail) -- true only after a jump/scroll moved the window off the end. */
 export function hasMoreAfter(agentId: string): boolean {
-  const windowEnd = getFirstOffset(agentId) + (transcriptByAgent[agentId]?.events.length ?? 0);
-  return windowEnd < getTotalEventCount(agentId);
+  return storeByAgent[agentId]?.hasMoreAfter ?? false;
 }
 
 export function getEnrichmentForAgent(agentId: string): Map<string, StepEnrichment> {
-  return transcriptByAgent[agentId]?.enrichment ?? new Map();
-}
-
-/** Replace an agent's enrichment table from a snapshot. Does not redraw --
- *  callers in a fetch/redraw flow already trigger one; the SSE path redraws
- *  explicitly. */
-export function applyEnrichmentSnapshot(agentId: string, snapshot: Record<string, StepEnrichment> | undefined): void {
-  commit(agentId, (transcript) => {
-    transcript.enrichment = new Map(Object.entries(snapshot ?? {}));
-    return true;
-  });
+  return storeByAgent[agentId]?.enrichment ?? new Map();
 }
 
 export function isConversationNotFound(agentId: string): boolean {
@@ -273,27 +434,19 @@ export function isConversationNotFound(agentId: string): boolean {
 }
 
 export function getEventsForAgent(agentId: string): TranscriptEvent[] {
-  return transcriptByAgent[agentId]?.events ?? [];
+  return storeByAgent[agentId]?.events ?? [];
 }
 
 export function getEventCount(agentId: string): number {
-  return transcriptByAgent[agentId]?.events.length ?? 0;
+  return storeByAgent[agentId]?.eventCount ?? 0;
 }
 
 export function getFirstEventId(agentId: string): string | null {
-  const events = transcriptByAgent[agentId]?.events;
-  if (!events || events.length === 0) {
-    return null;
-  }
-  return events[0].event_id;
+  return storeByAgent[agentId]?.firstEventId ?? null;
 }
 
 export function getLastEventId(agentId: string): string | null {
-  const events = transcriptByAgent[agentId]?.events;
-  if (!events || events.length === 0) {
-    return null;
-  }
-  return events[events.length - 1].event_id;
+  return storeByAgent[agentId]?.lastEventId ?? null;
 }
 
 /**
@@ -332,131 +485,39 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
 }
 
 export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): void {
-  // Live SSE deltas are new tail events. They only belong in the window when it
-  // is tail-anchored (reaches the live end). If the user has jumped to an earlier
-  // position (window not at the tail), appending them would break contiguity, so
-  // we drop them here -- they are re-fetched via forward paging when the user
-  // returns to the tail. A late re-broadcast that upgrades an already-held event
-  // in place is still applied regardless of where the window sits.
-  const tailAnchored = !hasMoreAfter(agentId);
-  const bumped = commit(agentId, (transcript) => {
-    let added = false;
-    let merged = false;
-    for (const event of newEvents) {
-      const prior = transcript.byId.get(event.event_id);
-      if (prior === undefined) {
-        if (tailAnchored) {
-          transcript.events.push(event);
-          transcript.byId.set(event.event_id, event);
-          added = true;
-        }
-      } else if (mergeLateSubagentMetadata(prior, event)) {
-        merged = true;
-      }
-    }
-    if (added) {
-      // Tail-anchored, so the window still reaches the end: total grows with it.
-      transcript.total = transcript.firstOffset + transcript.events.length;
-    }
-    return added || merged;
-  });
-  if (bumped) {
+  if (storeFor(agentId).append(newEvents)) {
     m.redraw();
   }
 }
 
-/**
- * Prepend an older page to the window. When `offset` is given (the global index
- * of the page's first event, from the server) it becomes the window's new start;
- * otherwise the start is shifted back by the number of events actually added
- * (used by tests that prepend without a server round-trip).
- */
 export function prependEvents(agentId: string, olderEvents: TranscriptEvent[], offset?: number, total?: number): void {
-  const bumped = commit(agentId, (transcript) => {
-    const deduped = olderEvents.filter((e) => !transcript.byId.has(e.event_id));
-    if (deduped.length === 0) {
-      return false;
-    }
-    for (const event of deduped) {
-      transcript.byId.set(event.event_id, event);
-    }
-    transcript.events = [...deduped, ...transcript.events];
-    transcript.firstOffset = offset !== undefined ? offset : Math.max(0, transcript.firstOffset - deduped.length);
-    if (total !== undefined) {
-      transcript.total = total;
-    }
-    return true;
-  });
-  if (bumped) {
+  if (storeFor(agentId).prepend(olderEvents, offset, total)) {
     m.redraw();
   }
 }
 
-/** Append a newer page to the window (paging toward the tail from a window that
- *  was moved off the end by a jump). The window start is unchanged. */
 export function appendForwardEvents(agentId: string, newerEvents: TranscriptEvent[], total?: number): void {
-  const bumped = commit(agentId, (transcript) => {
-    const deduped = newerEvents.filter((e) => !transcript.byId.has(e.event_id));
-    if (deduped.length === 0) {
-      return false;
-    }
-    for (const event of deduped) {
-      transcript.byId.set(event.event_id, event);
-    }
-    transcript.events = [...transcript.events, ...deduped];
-    if (total !== undefined) {
-      transcript.total = total;
-    }
-    return true;
-  });
-  if (bumped) {
+  if (storeFor(agentId).appendForward(newerEvents, total)) {
     m.redraw();
   }
 }
 
-/**
- * Drop the oldest events beyond EVICT_TARGET_EVENTS to bound client memory.
- *
- * Returns the number of events removed (0 if under the cap). Callers should
- * only evict while the user is following the live tail, because removing
- * already-rendered older rows would shift a scrolled-up viewport. The window
- * start advances by the number removed, so the dropped history (still on the
- * server) is re-fetched via backfill on a later scroll-up.
- */
 export function evictOldEvents(agentId: string): number {
-  let removeCount = 0;
-  commit(agentId, (transcript) => {
-    if (transcript.events.length <= MAX_HELD_EVENTS) {
-      return false;
-    }
-    removeCount = transcript.events.length - EVICT_TARGET_EVENTS;
-    const removed = transcript.events.slice(0, removeCount);
-    for (const event of removed) {
-      transcript.byId.delete(event.event_id);
-    }
-    transcript.events = transcript.events.slice(removeCount);
-    transcript.firstOffset += removeCount;
-    return true;
-  });
-  return removeCount;
+  return storeFor(agentId).evict();
 }
 
-/** Replace the held window wholesale (initial load, or a jump to an offset). */
-function resetEvents(agentId: string, events: TranscriptEvent[], offset: number, total: number): void {
-  commit(agentId, (transcript) => {
-    transcript.events = events;
-    transcript.byId = new Map(events.map((e) => [e.event_id, e]));
-    transcript.firstOffset = offset;
-    transcript.total = total;
-    return true;
-  });
+/** Replace an agent's enrichment table from a snapshot. Does not redraw -- callers
+ *  in a fetch/redraw flow already trigger one; the SSE path redraws explicitly. */
+export function applyEnrichmentSnapshot(agentId: string, snapshot: Record<string, StepEnrichment> | undefined): void {
+  storeFor(agentId).applyEnrichment(snapshot);
 }
 
 function placeWindow(agentId: string, result: EventsResponse): void {
   const offset = result.offset ?? 0;
   const total = result.total ?? offset + result.events.length;
-  resetEvents(agentId, result.events, offset, total);
-  applyEnrichmentSnapshot(agentId, result.step_enrichment);
+  const store = storeFor(agentId);
+  store.reset(result.events, offset, total);
+  store.applyEnrichment(result.step_enrichment);
 }
 
 export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
@@ -513,14 +574,7 @@ export async function fetchBackfillEvents(agentId: string): Promise<void> {
       prependEvents(agentId, result.events, result.offset, result.total);
     } else {
       // Nothing before the cursor: the window already starts at the beginning.
-      const newTotal = result.total;
-      commit(agentId, (transcript) => {
-        transcript.firstOffset = 0;
-        if (newTotal !== undefined) {
-          transcript.total = newTotal;
-        }
-        return true;
-      });
+      storeFor(agentId).markReachedStart(result.total);
     }
   } catch (error) {
     // Backfill failure is non-fatal: the older history just isn't loaded, and
@@ -549,11 +603,7 @@ export async function fetchForwardEvents(agentId: string): Promise<void> {
       appendForwardEvents(agentId, result.events, result.total);
     } else if (result.total !== undefined) {
       // Nothing after the cursor: the window reaches the live tail.
-      const newTotal = result.total;
-      commit(agentId, (transcript) => {
-        transcript.total = newTotal;
-        return true;
-      });
+      storeFor(agentId).reconcileTotalAtTail(result.total);
     }
   } catch (error) {
     console.warn(`Failed to load newer events for agent ${agentId}`, error);
