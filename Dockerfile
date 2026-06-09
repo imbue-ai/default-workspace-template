@@ -196,6 +196,7 @@ RUN cd /mngr/code/apps/system_interface/frontend && npm run build
 # Python version mngr/system_interface get at runtime (they were resolving
 # to the same minor anyway via uv's default version selection).
 ENV UV_PYTHON=/usr/local/bin/python3.12
+ENV UV_PYTHON_DOWNLOADS=never
 RUN uv tool install -e /mngr/code/vendor/mngr/libs/mngr && \
     uv tool install -e /mngr/code/apps/system_interface \
         --with-editable /mngr/code/vendor/mngr/libs/mngr_claude && \
