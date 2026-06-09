@@ -83,12 +83,21 @@ const BACKFILL_TRIGGER_PX = 600;
 // there incrementally. Small enough that ordinary scrolling keeps paging; large
 // enough that a couple of pages' overshoot doesn't trigger a disruptive reload.
 const JUMP_GAP_EVENTS = 120;
-// How long after an offset jump to hold the viewport at the new window's top
-// while its rows measure and the reserved heights converge (ms).
-const JUMP_SETTLE_MS = 350;
 // Fallback height for a progress block until it has been measured. The user and
 // assistant estimates are shared with the subagent view (see row-measurement).
 const ESTIMATED_PROGRESS_HEIGHT_PX = 360;
+// Stable per-event height used to size the reserved (phantom) regions for history
+// that exists on the server but isn't loaded yet. It is deliberately a constant
+// rather than the measured average of the loaded window: the loaded window is a
+// tiny fraction of a long transcript (e.g. 50 of 5000+ events), so its measured
+// average -- which shifts every frame as rows measure -- would be amplified by the
+// large unloaded count into wild scrollbar jumps. A constant keeps the total
+// scroll height (~ total * this) stable, so the scrollbar thumb doesn't churn and
+// an offset jump lands at a fixed position. Its exact value isn't UX-critical:
+// the drag fraction -> event index mapping and the post-jump thumb position both
+// scale with it and so are independent of it; only the loaded window's small
+// residual (measured height vs count * this) is affected.
+const ESTIMATED_EVENT_HEIGHT_PX = 160;
 
 interface RowDescriptor {
   key: string;
@@ -217,11 +226,12 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   // Paging (scroll-driven fetch) in-flight guard. Covers older/newer pages and
   // offset jumps -- only one is outstanding at a time.
   let backfillInFlight = false;
-  // After an offset jump replaces the window, pin the viewport to the top of the
-  // freshly loaded rows until this timestamp (performance.now() ms). Holding it
-  // briefly lets the new rows measure and the reserved heights settle without the
-  // viewport drifting into a reserved region or firing an edge page mid-settle.
-  let jumpAnchorUntil = 0;
+  // After an offset jump replaces the window, pin the viewport once to the top of
+  // the freshly loaded rows (just below the top reserved spacer) so the user lands
+  // on the jumped-to content rather than in the reserved region above it. With the
+  // reserved heights now sized by a stable constant, the top of the loaded window
+  // doesn't drift as rows measure, so a single pin suffices -- no timed settle.
+  let pendingPinToWindowTop = false;
   // After a backfill prepend, compensate scrollTop by the height the content
   // grew so the user's viewport stays anchored instead of jumping. The pending
   // flag is only raised once the backfill resolves, so unrelated redraws in the
@@ -427,9 +437,10 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
    *     after a jump moved the window off the live tail): page one newer worth.
    */
   function maybePage(agentId: string, element: HTMLElement): void {
-    // While a just-completed jump is settling, the viewport is being held at the
-    // window top; don't page off the transient scroll positions during that.
-    if (backfillInFlight || performance.now() < jumpAnchorUntil) {
+    // A fetch is already outstanding (only one at a time), or a just-completed jump
+    // still needs its one-shot pin applied -- in both cases the window is about to
+    // change, so don't act on the current (transient) scroll position.
+    if (backfillInFlight || pendingPinToWindowTop) {
       return;
     }
     const total = getTotalEventCount(agentId);
@@ -446,18 +457,11 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       backfillInFlight = true;
       fetchWindowAtOffset(agentId, targetIndex - Math.floor(JUMP_GAP_EVENTS / 2)).finally(() => {
         backfillInFlight = false;
-        // Pin the viewport to the new window's top while it settles, and drive a
-        // few redraws over that window so the rows measure and the reserved
-        // heights converge before normal scrolling/paging resumes.
-        jumpAnchorUntil = performance.now() + JUMP_SETTLE_MS;
+        // The window now sits off the live tail, so stop following it, and pin the
+        // viewport once to the new window's top on the next redraw (applyScrollPosition).
+        userScrolledUp = true;
+        pendingPinToWindowTop = true;
         m.redraw();
-        const settle = (): void => {
-          if (performance.now() < jumpAnchorUntil) {
-            m.redraw();
-            requestAnimationFrame(settle);
-          }
-        };
-        requestAnimationFrame(settle);
       });
       return;
     }
@@ -488,11 +492,13 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   }
 
   function applyScrollPosition(element: HTMLElement): void {
-    // After an offset jump, hold the viewport at the top of the freshly loaded
-    // rows (just below the top reserved spacer) while they measure, so the user
-    // lands on the jumped-to content rather than in a reserved (blank) region and
-    // the position doesn't drift as heights settle.
-    if (performance.now() < jumpAnchorUntil) {
+    // After an offset jump, pin the viewport once to the top of the freshly loaded
+    // rows (just below the top reserved spacer) so the user lands on the jumped-to
+    // content rather than in the reserved (blank) region above it. The reserved
+    // top height is a stable constant * offset, so it doesn't drift as the loaded
+    // rows measure -- a single pin lands correctly without a timed settle.
+    if (pendingPinToWindowTop) {
+      pendingPinToWindowTop = false;
       element.scrollTop = phantomTopHeight;
       scrollTop = element.scrollTop;
       return;
@@ -664,16 +670,18 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     // the server but isn't loaded yet, so the scrollbar reflects the whole
     // conversation rather than just the loaded window -- and so paging more in
     // doesn't make it jump. Each reserve is the count of not-yet-loaded events on
-    // that side times the average height per loaded event; as events load a
-    // reserve shrinks by roughly the height they add, keeping the total ~stable.
-    const loadedContentHeight = rows.reduce((sum, _row, i) => sum + getHeight(i), 0);
+    // that side times a stable per-event constant (see ESTIMATED_EVENT_HEIGHT_PX).
+    // Using a constant (not the loaded window's measured average) is what keeps the
+    // total scroll height stable: deriving it from the small loaded window would
+    // make every row measurement, amplified by the large unloaded count, jolt the
+    // scrollbar. As events page in, the reserve shrinks by ~the height they add, so
+    // existing content stays put.
     const total = getTotalEventCount(agentId);
     const firstOffset = getFirstOffset(agentId);
     const olderUnloaded = Math.max(0, firstOffset);
     const newerUnloaded = Math.max(0, total - (firstOffset + events.length));
-    const perEventHeight = events.length > 0 ? loadedContentHeight / events.length : 0;
-    phantomTopHeight = Math.round(olderUnloaded * perEventHeight);
-    phantomBottomHeight = Math.round(newerUnloaded * perEventHeight);
+    phantomTopHeight = Math.round(olderUnloaded * ESTIMATED_EVENT_HEIGHT_PX);
+    phantomBottomHeight = Math.round(newerUnloaded * ESTIMATED_EVENT_HEIGHT_PX);
 
     const windowResult = computeVisibleWindow({
       count: rows.length,
@@ -754,11 +762,23 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
               viewportResizeObserver.observe(scrollEl);
               applyScrollPosition(scrollEl);
               scheduleMeasure();
+              if (currentAgentId !== null) {
+                maybePage(currentAgentId, scrollEl);
+              }
             },
             onupdate: (mainVnode: m.VnodeDOM) => {
               scrollEl = mainVnode.dom as HTMLElement;
               applyScrollPosition(scrollEl);
               scheduleMeasure();
+              // Drive paging from the render loop, not only from scroll events, so
+              // the viewport sitting over a reserved region always triggers (or
+              // already has in flight) the fetch to cover it. Without this a drag
+              // that ends in a reserved region -- with the triggering scroll event
+              // suppressed by an in-flight fetch -- could strand the loading overlay
+              // with nothing actually loading.
+              if (currentAgentId !== null) {
+                maybePage(currentAgentId, scrollEl);
+              }
             },
           },
           content,
