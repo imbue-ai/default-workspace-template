@@ -29,6 +29,7 @@ from starlette.websockets import WebSocketDisconnect
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.mngr.errors import MngrError
 from imbue.system_interface import claude_auth_endpoints
+from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
@@ -111,8 +112,10 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
     # agent along with the in-flight holder's metadata.
     application.state.layout_mutex = LayoutMutex()
 
-    # Single shared httpx client for the /service/<name>/ forwarding layer.
-    application.state.http_client = httpx.AsyncClient(
+    # Single shared httpx client for the /service/<name>/ forwarding layer and the
+    # latchkey catalog proxy. Tests can inject one (with a mock transport) via
+    # create_application; otherwise build a real one here.
+    application.state.http_client = application.state.preconfigured_http_client or httpx.AsyncClient(
         follow_redirects=False,
         timeout=30.0,
     )
@@ -1026,6 +1029,7 @@ def create_application(
     agent_manager: AgentManager | None = None,
     claude_auth_service: ClaudeAuthService | None = None,
     welcome_resender: WelcomeResender | None = None,
+    http_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     application = FastAPI(lifespan=_lifespan)
 
@@ -1053,6 +1057,12 @@ def create_application(
     # have to defensively probe for these attributes.
     application.state.watchers = {}
     application.state.tickets_watchers = {}
+    # An optional pre-built httpx client (used by tests to inject a mock gateway
+    # transport); the lifespan falls back to a real client when this is None.
+    application.state.preconfigured_http_client = http_client
+    # Per-service latchkey catalog cache, seeded here (like the watcher registries
+    # above) so the attribute always exists on ``app.state``.
+    application.state.latchkey_catalog_cache = {}
 
     plugin_manager = get_plugin_manager()
     plugin_manager.hook.endpoint(app=application)
@@ -1073,6 +1083,7 @@ def create_application(
     application.add_api_route("/api/agents/{agent_id}/destroy", _destroy_agent, methods=["POST"])
     application.add_api_route("/api/agents/{agent_id}/start", _start_agent, methods=["POST"])
     claude_auth_endpoints.register_routes(application)
+    latchkey_endpoints.register_routes(application)
     application.add_api_route("/api/layout/broadcast", _layout_broadcast_endpoint, methods=["POST"])
     application.add_api_route(
         "/api/agents/{agent_id}/subagents/{subagent_session_id}/events", _get_subagent_events, methods=["GET"]

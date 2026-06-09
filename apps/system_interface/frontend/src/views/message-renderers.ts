@@ -13,6 +13,8 @@ import type {
   ToolCall,
 } from "../models/Response";
 import { openSubagentTab } from "./DockviewWorkspace";
+import type { ScopeInfo } from "./latchkey-scope-info";
+import { getScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
 import {
   isCollapsibleUserMessage,
@@ -387,23 +389,46 @@ function renderLockIcon(): m.Vnode {
 }
 
 /** The card heading: "Permission request: File access" for a file-sharing
- *  request, otherwise plain "Permission request". A predefined request's service
- *  is conveyed by the scope on the "Requesting" line; turning that scope into a
- *  friendly service name is left to a follow-up that sources the names from the
- *  latchkey gateway catalog rather than a hardcoded copy. */
-function permissionHeading(details: PermissionRequestDetails | null): string {
+ *  request; "Permission request: <service>" for a predefined request once the
+ *  gateway catalog has resolved the scope to a friendly service name; otherwise
+ *  plain "Permission request" (the scope still shows on the "Requesting" line). */
+function permissionHeading(details: PermissionRequestDetails | null, scopeInfo: ScopeInfo | null): string {
   if (details?.requestType === "file-sharing") return "Permission request: File access";
+  if (details?.scope && scopeInfo) return `Permission request: ${scopeInfo.display_name}`;
   return "Permission request";
 }
 
-/** The concise "what is being requested" line: the permissions on a service
- *  scope, or an access mode on a path. Null when there's nothing specific to
- *  show. */
-function permissionRequesting(details: PermissionRequestDetails | null): string | null {
+/** A requested permission name that reveals its description in a CSS tooltip
+ *  centered over the name on hover/focus. `data-tooltip` carries the description
+ *  (the bubble is `::after content: attr(data-tooltip)`) and doubles as the
+ *  accessible label. */
+function renderPermissionName(name: string, description: string): m.Vnode {
+  return m("span", { class: "permission-request-perm", "data-tooltip": description, tabindex: "0" }, name);
+}
+
+/** The value for the "Requesting" line: the permissions on a service scope, or
+ *  an access mode on a path. When the gateway catalog has resolved the scope,
+ *  each permission becomes a hoverable span carrying its description; until then
+ *  (or with no catalog) it's the plain joined string. Null when there's nothing
+ *  specific to show. */
+function permissionRequestingValue(
+  details: PermissionRequestDetails | null,
+  scopeInfo: ScopeInfo | null,
+): m.Children | null {
   if (details === null) return null;
   if (details.scope) {
-    const perms = details.permissions.join(", ");
-    return perms ? `${perms} on ${details.scope}` : details.scope;
+    if (details.permissions.length === 0) return details.scope;
+    if (scopeInfo === null) {
+      return `${details.permissions.join(", ")} on ${details.scope}`;
+    }
+    const nodes: m.Children[] = [];
+    details.permissions.forEach((name, index) => {
+      if (index > 0) nodes.push(", ");
+      const description = scopeInfo.permissions.find((permission) => permission.name === name)?.description ?? null;
+      nodes.push(description ? renderPermissionName(name, description) : name);
+    });
+    nodes.push(` on ${details.scope}`);
+    return nodes;
   }
   if (details.path) {
     return `${details.access ?? "access"} on ${details.path}`;
@@ -472,9 +497,10 @@ export function renderPermissionRequestBlock(
   toolCall: ToolCall,
   toolResult: ToolResultEvent | null,
   resolution: PermissionResolution | null = null,
+  scopeInfo: ScopeInfo | null = null,
 ): m.Vnode {
   const details = parsePermissionRequest(toolCall, toolResult);
-  const requesting = permissionRequesting(details);
+  const requesting = permissionRequestingValue(details, scopeInfo);
   const rawInput = toolCall.input_preview || "";
   const rawOutput = toolResult?.output || "";
   const rawText = rawOutput ? `${rawInput}\n\n${rawOutput}` : rawInput;
@@ -482,7 +508,7 @@ export function renderPermissionRequestBlock(
   return m("div", { class: "permission-request" }, [
     m("div", { class: "permission-request-heading" }, [
       renderLockIcon(),
-      m("span", { class: "permission-request-title" }, permissionHeading(details)),
+      m("span", { class: "permission-request-title" }, permissionHeading(details, scopeInfo)),
     ]),
     resolution === null && details === null
       ? m("div", { class: "permission-request-status" }, "Waiting for the request to register…")
@@ -525,6 +551,28 @@ export function renderPermissionRequestBlock(
         ])
       : null,
   ]);
+}
+
+/**
+ * Stateful wrapper around the permission card that resolves the request's
+ * service scope to its catalog info (service display name + permission
+ * descriptions) from the backend. The lookup is async and cache-guarded, so the
+ * card first renders with the raw scope and updates once the catalog resolves.
+ * Predefined requests have a scope to resolve; file-sharing requests don't.
+ */
+export function PermissionCard(): m.Component<{
+  toolCall: ToolCall;
+  toolResult: ToolResultEvent | null;
+  resolution: PermissionResolution | null;
+}> {
+  return {
+    view(vnode) {
+      const { toolCall, toolResult, resolution } = vnode.attrs;
+      const details = parsePermissionRequest(toolCall, toolResult);
+      const scopeInfo = details?.scope ? getScopeInfo(details.scope) : null;
+      return renderPermissionRequestBlock(toolCall, toolResult, resolution, scopeInfo);
+    },
+  };
 }
 
 export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEvent | null): m.Vnode {
@@ -590,7 +638,7 @@ export function renderAssistantMessageChildren(
     // is still pending -- the same signal the timeline walk uses to lift it out
     // of its step. The resolution (once the user decides) comes from the walk.
     if (isPermissionRequestCall(toolCall)) {
-      children.push(renderPermissionRequestBlock(toolCall, result, permissionResolution));
+      children.push(m(PermissionCard, { toolCall, toolResult: result, resolution: permissionResolution }));
       continue;
     }
     children.push(renderToolCallBlock(toolCall, result));

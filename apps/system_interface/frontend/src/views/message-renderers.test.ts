@@ -480,6 +480,63 @@ describe("renderPermissionRequestBlock", () => {
     ).not.toBeNull();
     expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
   });
+
+  it("uses the gateway service name in the title and adds a permission tooltip", () => {
+    const scopeInfo = {
+      scope: "slack-api",
+      display_name: "Slack",
+      description: "Any interaction with the Slack API.",
+      permissions: [{ name: "slack-read-all", description: "All read operations across the Slack API." }],
+    };
+    const vnode = renderPermissionRequestBlock(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(PERMISSION_OUTPUT),
+      null,
+      scopeInfo,
+    );
+
+    const title = findVnode(
+      vnode,
+      (v) =>
+        v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-title",
+    );
+    expect(textOf(title)).toBe("Permission request: Slack");
+
+    // The requested permission is a hoverable span carrying its description.
+    const perm = findVnode(
+      vnode,
+      (v) =>
+        v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-perm",
+    ) as { attrs?: Record<string, unknown> } | null;
+    expect(perm).not.toBeNull();
+    expect(perm?.attrs?.["data-tooltip"]).toBe("All read operations across the Slack API.");
+    expect(textOf(perm)).toBe("slack-read-all");
+  });
+
+  it("falls back to the plain scope title and text before the catalog resolves", () => {
+    // No scopeInfo (e.g. the lookup hasn't landed): title stays generic and the
+    // requesting line is plain text with no tooltip span.
+    const vnode = renderPermissionRequestBlock(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT));
+    const title = findVnode(
+      vnode,
+      (v) =>
+        v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-title",
+    );
+    expect(textOf(title)).toBe("Permission request");
+    expect(
+      findVnode(
+        vnode,
+        (v) =>
+          v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-perm",
+      ),
+    ).toBeNull();
+    expect(
+      findVnode(
+        vnode,
+        (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-read-all on slack-api",
+      ),
+    ).not.toBeNull();
+  });
 });
 
 describe("openPermissionRequest", () => {
