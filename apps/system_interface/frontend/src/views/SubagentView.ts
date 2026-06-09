@@ -95,6 +95,12 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   let userScrolledUp = false;
   let previousScrollTop = 0;
   let viewportResizeObserver: ResizeObserver | null = null;
+  // Memoized rows. buildRows walks the whole subagent transcript, so it is
+  // recomputed only when the event set changes -- not on every scroll redraw.
+  // The transcript is append-only here (no in-place upgrades, no eviction), so
+  // the event count is a sufficient cache key.
+  let rowsCacheKey = "";
+  let cachedRows: RowDescriptor[] = [];
 
   function addEvents(incoming: TranscriptEvent[]): boolean {
     let added = false;
@@ -198,7 +204,12 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   }
 
   function renderWindowedList(agentId: string): m.Vnode {
-    const rows = buildRows(agentId, events);
+    const renderKey = `${agentId}|${events.length}`;
+    if (renderKey !== rowsCacheKey) {
+      cachedRows = buildRows(agentId, events);
+      rowsCacheKey = renderKey;
+    }
+    const rows = cachedRows;
     const getHeight = (index: number): number => rowMeasurer.getHeight(rows[index].key) ?? rows[index].estimate;
     const windowResult = computeVisibleWindow({
       count: rows.length,

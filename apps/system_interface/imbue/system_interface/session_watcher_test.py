@@ -1091,15 +1091,55 @@ def test_tail_and_backfill_match_oracle_across_files(tmp_path: Path) -> None:
     assert watcher.get_backfill_events(oracle_ids[0], limit=30) == []
 
 
-def test_has_events_before_reflects_position(tmp_path: Path) -> None:
+def test_get_event_offset_reflects_position(tmp_path: Path) -> None:
+    """get_event_offset is the global index of an event across resumed files; the
+    endpoint returns it so the client can place the loaded window and derive
+    whether more history exists above (offset > 0) and below (offset + len < total)."""
     agent_state_dir, claude_config_dir = _build_two_file_agent(tmp_path, file1_lines=40, file2_lines=40)
     watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=10_000)
     oracle_ids = _ids(watcher.get_all_events())
 
-    assert watcher.has_events_before(oracle_ids[0]) is False
-    assert watcher.has_events_before(oracle_ids[1]) is True
-    assert watcher.has_events_before(oracle_ids[-1]) is True
-    assert watcher.has_events_before("does-not-exist") is False
+    assert watcher.get_event_offset(oracle_ids[0]) == 0
+    assert watcher.get_event_offset(oracle_ids[1]) == 1
+    # An event in the second file is indexed past the whole first file.
+    assert watcher.get_event_offset(oracle_ids[-1]) == len(oracle_ids) - 1
+    assert watcher.get_event_offset("does-not-exist") == -1
+
+
+def test_offset_and_forward_fetch_match_oracle(tmp_path: Path) -> None:
+    """get_events_at_offset (jump) and get_forward_events (page newer) equal the
+    oracle slices, including across the file-1/file-2 boundary."""
+    agent_state_dir, claude_config_dir = _build_two_file_agent(tmp_path, file1_lines=120, file2_lines=80)
+    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=10)
+    oracle_ids = _ids(watcher.get_all_events())
+
+    # Jump to an arbitrary offset that straddles the file boundary.
+    for offset in (0, 5, 115, len(oracle_ids) - 3):
+        expected = oracle_ids[offset : offset + 30]
+        assert _ids(watcher.get_events_at_offset(offset, 30)) == expected
+    # Offset past the end yields nothing.
+    assert watcher.get_events_at_offset(len(oracle_ids), 30) == []
+
+    # Forward paging after a cursor, including across the boundary and at the end.
+    for cursor_idx in (0, 100, 130, len(oracle_ids) - 1):
+        before_id = oracle_ids[cursor_idx]
+        expected = oracle_ids[cursor_idx + 1 : cursor_idx + 1 + 30]
+        assert _ids(watcher.get_forward_events(before_id, limit=30)) == expected
+
+
+def test_get_total_event_count_spans_all_files_and_is_window_independent(tmp_path: Path) -> None:
+    """The total count covers the whole transcript (across resumed files) and does
+    not change with which tail/backfill window has been read -- the client relies
+    on it to size the scrollbar for the full conversation, not the loaded slice."""
+    agent_state_dir, claude_config_dir = _build_two_file_agent(tmp_path, file1_lines=120, file2_lines=80)
+    watcher = _make_oracle_watcher(agent_state_dir, claude_config_dir, capacity=10)
+    total = len(watcher.get_all_events())
+
+    assert watcher.get_total_event_count() == total
+    # Reading a bounded tail (far smaller than total, and below the body-cache
+    # capacity) must not change the reported total.
+    watcher.get_tail_events(5)
+    assert watcher.get_total_event_count() == total
 
 
 def test_backfill_of_evicted_history_is_correct(tmp_path: Path) -> None:

@@ -141,10 +141,12 @@ interface EventsResponse {
   // id. Always complete regardless of where the transcript window is, so a
   // freshly-loaded tail still has titles/summaries for every visible step.
   step_enrichment?: Record<string, StepEnrichment>;
-  // Whether older history exists before the first returned event, so the client
-  // can page back on scroll without a probe request. Absent on an older backend
-  // response -> treated as false.
-  has_more?: boolean;
+  // Global index of the first returned event within the full transcript, and the
+  // transcript's total length. Together they place the loaded window in the whole
+  // conversation: the client sizes the scrollbar for `total` and derives whether
+  // more history exists above (offset > 0) and below (offset + events < total).
+  offset?: number;
+  total?: number;
 }
 
 const BACKFILL_PAGE_SIZE = 50;
@@ -158,6 +160,13 @@ export const MAX_HELD_EVENTS = 1500;
 // than on every appended event once at the cap.
 export const EVICT_TARGET_EVENTS = 1000;
 
+// The held events are a single contiguous window of the full transcript. Its
+// position is tracked by `firstOffsetByAgent` (the global index of events[0]) and
+// the full length by `totalEventCountByAgent`; everything else -- whether more
+// history exists above/below, the scrollbar size -- is derived from those two.
+// The window can sit anywhere (the live tail is just the case where it ends at
+// `total`), so it pages in both directions and can be replaced wholesale by a
+// jump to an arbitrary offset.
 const eventsByAgent: Record<string, TranscriptEvent[]> = {};
 // Persistent per-agent index from event_id to the stored event object,
 // mirroring eventsByAgent. Gives O(1) dedup on append/prepend (instead of
@@ -165,12 +174,58 @@ const eventsByAgent: Record<string, TranscriptEvent[]> = {};
 // event so a re-broadcast can upgrade it in place (see appendEvents).
 const eventByIdByAgent: Record<string, Map<string, TranscriptEvent>> = {};
 const notFoundAgentIds = new Set<string>();
-// Whether older history exists before the first held event (server has_more, or
-// set when we evict local history). Drives scroll-up backfill.
-const hasMoreByAgent: Record<string, boolean> = {};
+// Global index of the first held event within the full transcript (0 when the
+// window starts at the beginning). beforeCount == firstOffset; afterCount ==
+// total - (firstOffset + held).
+const firstOffsetByAgent: Record<string, number> = {};
 // Per-agent step enrichment, keyed by ticket id. Replaced wholesale on each
 // snapshot (GET /events and the `step_enrichment` SSE message), never merged.
 const enrichmentByAgent: Record<string, Map<string, StepEnrichment>> = {};
+
+// Monotonic per-agent counter bumped on every mutation that changes what the
+// transcript renders (events added, removed, or upgraded in place; enrichment
+// replaced). The chat view memoizes its turn-grouping on this, so a scroll-only
+// redraw -- which changes no data -- reuses the cached sections/rows instead of
+// re-walking the whole held transcript every frame (the dominant scroll cost on
+// a long conversation).
+const renderVersionByAgent: Record<string, number> = {};
+
+function bumpRenderVersion(agentId: string): void {
+  renderVersionByAgent[agentId] = (renderVersionByAgent[agentId] ?? 0) + 1;
+}
+
+export function getRenderVersion(agentId: string): number {
+  return renderVersionByAgent[agentId] ?? 0;
+}
+
+// Total events in the full server-side transcript (see EventsResponse.total),
+// not just the held window. Used to size the scrollbar for the whole
+// conversation while only a window is loaded.
+const totalEventCountByAgent: Record<string, number> = {};
+
+/** Global index of the first held event within the full transcript. */
+export function getFirstOffset(agentId: string): number {
+  return firstOffsetByAgent[agentId] ?? 0;
+}
+
+/** Total number of events in the full transcript, for scrollbar sizing. Never
+ *  less than the loaded window's end, so the window always fits inside it. */
+export function getTotalEventCount(agentId: string): number {
+  const windowEnd = getFirstOffset(agentId) + (eventsByAgent[agentId]?.length ?? 0);
+  return Math.max(totalEventCountByAgent[agentId] ?? 0, windowEnd);
+}
+
+/** Older history exists before the loaded window (the window doesn't start at 0). */
+export function hasMoreBefore(agentId: string): boolean {
+  return getFirstOffset(agentId) > 0;
+}
+
+/** Newer history exists after the loaded window (the window doesn't reach the
+ *  live tail) -- true only after a jump/scroll moved the window off the end. */
+export function hasMoreAfter(agentId: string): boolean {
+  const windowEnd = getFirstOffset(agentId) + (eventsByAgent[agentId]?.length ?? 0);
+  return windowEnd < getTotalEventCount(agentId);
+}
 
 function idMap(agentId: string): Map<string, TranscriptEvent> {
   let map = eventByIdByAgent[agentId];
@@ -190,6 +245,7 @@ export function getEnrichmentForAgent(agentId: string): Map<string, StepEnrichme
  *  explicitly. */
 export function applyEnrichmentSnapshot(agentId: string, snapshot: Record<string, StepEnrichment> | undefined): void {
   enrichmentByAgent[agentId] = new Map(Object.entries(snapshot ?? {}));
+  bumpRenderVersion(agentId);
 }
 
 export function isConversationNotFound(agentId: string): boolean {
@@ -212,12 +268,12 @@ export function getFirstEventId(agentId: string): string | null {
   return events[0].event_id;
 }
 
-export function hasMoreToBackfill(agentId: string): boolean {
-  return hasMoreByAgent[agentId] === true;
-}
-
-export function isBackfillComplete(agentId: string): boolean {
-  return !hasMoreToBackfill(agentId);
+export function getLastEventId(agentId: string): string | null {
+  const events = eventsByAgent[agentId];
+  if (!events || events.length === 0) {
+    return null;
+  }
+  return events[events.length - 1].event_id;
 }
 
 /**
@@ -256,32 +312,47 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
 }
 
 export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): void {
-  const existing = eventsByAgent[agentId] ?? [];
-  // The persistent index gives O(1) dedup, and -- because it stores the event
-  // object, not just its id -- O(1) lookup of an already-held event so a
-  // re-broadcast (same event_id) can upgrade it in place rather than being
-  // dropped as a duplicate.
+  // Live SSE deltas are new tail events. They only belong in the window when it
+  // is tail-anchored (reaches the live end). If the user has jumped to an earlier
+  // position (window not at the tail), appending them would break contiguity, so
+  // we drop them here -- they are re-fetched via forward paging when the user
+  // returns to the tail. A late re-broadcast that upgrades an already-held event
+  // in place is still applied regardless of where the window sits.
   const byId = idMap(agentId);
+  const existing = eventsByAgent[agentId] ?? [];
+  const tailAnchored = !hasMoreAfter(agentId);
   const brandNewEvents: TranscriptEvent[] = [];
   let didMerge = false;
   for (const event of newEvents) {
     const prior = byId.get(event.event_id);
     if (prior === undefined) {
-      brandNewEvents.push(event);
-      byId.set(event.event_id, event);
+      if (tailAnchored) {
+        brandNewEvents.push(event);
+        byId.set(event.event_id, event);
+      }
     } else if (mergeLateSubagentMetadata(prior, event)) {
       didMerge = true;
     }
   }
   if (brandNewEvents.length > 0) {
     eventsByAgent[agentId] = [...existing, ...brandNewEvents];
+    // Tail-anchored, so the window still reaches the end: total grows with it.
+    totalEventCountByAgent[agentId] = getFirstOffset(agentId) + eventsByAgent[agentId].length;
+    bumpRenderVersion(agentId);
     m.redraw();
   } else if (didMerge) {
+    bumpRenderVersion(agentId);
     m.redraw();
   }
 }
 
-export function prependEvents(agentId: string, olderEvents: TranscriptEvent[]): void {
+/**
+ * Prepend an older page to the window. When `offset` is given (the global index
+ * of the page's first event, from the server) it becomes the window's new start;
+ * otherwise the start is shifted back by the number of events actually added
+ * (used by tests that prepend without a server round-trip).
+ */
+export function prependEvents(agentId: string, olderEvents: TranscriptEvent[], offset?: number, total?: number): void {
   const existing = eventsByAgent[agentId] ?? [];
   const byId = idMap(agentId);
   const deduped = olderEvents.filter((e) => !byId.has(e.event_id));
@@ -290,6 +361,31 @@ export function prependEvents(agentId: string, olderEvents: TranscriptEvent[]): 
       byId.set(event.event_id, event);
     }
     eventsByAgent[agentId] = [...deduped, ...existing];
+    firstOffsetByAgent[agentId] =
+      offset !== undefined ? offset : Math.max(0, getFirstOffset(agentId) - deduped.length);
+    if (total !== undefined) {
+      totalEventCountByAgent[agentId] = total;
+    }
+    bumpRenderVersion(agentId);
+    m.redraw();
+  }
+}
+
+/** Append a newer page to the window (paging toward the tail from a window that
+ *  was moved off the end by a jump). The window start is unchanged. */
+export function appendForwardEvents(agentId: string, newerEvents: TranscriptEvent[], total?: number): void {
+  const existing = eventsByAgent[agentId] ?? [];
+  const byId = idMap(agentId);
+  const deduped = newerEvents.filter((e) => !byId.has(e.event_id));
+  if (deduped.length > 0) {
+    for (const event of deduped) {
+      byId.set(event.event_id, event);
+    }
+    eventsByAgent[agentId] = [...existing, ...deduped];
+    if (total !== undefined) {
+      totalEventCountByAgent[agentId] = total;
+    }
+    bumpRenderVersion(agentId);
     m.redraw();
   }
 }
@@ -299,9 +395,9 @@ export function prependEvents(agentId: string, olderEvents: TranscriptEvent[]): 
  *
  * Returns the number of events removed (0 if under the cap). Callers should
  * only evict while the user is following the live tail, because removing
- * already-rendered older rows would shift a scrolled-up viewport. Since the
- * dropped history still exists on the server, `has_more` is forced true so a
- * later scroll-up re-fetches it via backfill.
+ * already-rendered older rows would shift a scrolled-up viewport. The window
+ * start advances by the number removed, so the dropped history (still on the
+ * server) is re-fetched via backfill on a later scroll-up.
  */
 export function evictOldEvents(agentId: string): number {
   const existing = eventsByAgent[agentId];
@@ -315,14 +411,25 @@ export function evictOldEvents(agentId: string): number {
     byId.delete(event.event_id);
   }
   eventsByAgent[agentId] = existing.slice(removeCount);
-  hasMoreByAgent[agentId] = true;
+  firstOffsetByAgent[agentId] = getFirstOffset(agentId) + removeCount;
+  bumpRenderVersion(agentId);
   return removeCount;
 }
 
-function resetEvents(agentId: string, events: TranscriptEvent[], hasMore: boolean): void {
+/** Replace the held window wholesale (initial load, or a jump to an offset). */
+function resetEvents(agentId: string, events: TranscriptEvent[], offset: number, total: number): void {
   eventsByAgent[agentId] = events;
   eventByIdByAgent[agentId] = new Map(events.map((e) => [e.event_id, e]));
-  hasMoreByAgent[agentId] = hasMore;
+  firstOffsetByAgent[agentId] = offset;
+  totalEventCountByAgent[agentId] = total;
+  bumpRenderVersion(agentId);
+}
+
+function placeWindow(agentId: string, result: EventsResponse): void {
+  const offset = result.offset ?? 0;
+  const total = result.total ?? offset + result.events.length;
+  resetEvents(agentId, result.events, offset, total);
+  applyEnrichmentSnapshot(agentId, result.step_enrichment);
 }
 
 export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
@@ -334,8 +441,7 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
       url: apiUrl("/api/agents/:agentId/events"),
       params: { agentId },
     });
-    resetEvents(agentId, result.events, result.has_more === true);
-    applyEnrichmentSnapshot(agentId, result.step_enrichment);
+    placeWindow(agentId, result);
     return result.events;
   } catch (error) {
     const requestError = error as { code?: number; message?: string };
@@ -346,14 +452,27 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
   }
 }
 
+/** Jump the window to an arbitrary global offset in one request (e.g. a scrollbar
+ *  drag far from the loaded window), replacing the held events. */
+export async function fetchWindowAtOffset(agentId: string, offset: number): Promise<void> {
+  try {
+    const result = await m.request<EventsResponse>({
+      method: "GET",
+      url: apiUrl("/api/agents/:agentId/events"),
+      params: { agentId, offset: String(Math.max(0, offset)), limit: String(BACKFILL_PAGE_SIZE) },
+    });
+    placeWindow(agentId, result);
+  } catch (error) {
+    console.warn(`Failed to load events at offset ${offset} for agent ${agentId}`, error);
+  }
+}
+
 export async function fetchBackfillEvents(agentId: string): Promise<void> {
-  if (!hasMoreToBackfill(agentId)) {
+  if (!hasMoreBefore(agentId)) {
     return;
   }
-
   const firstEventId = getFirstEventId(agentId);
   if (!firstEventId) {
-    hasMoreByAgent[agentId] = false;
     return;
   }
 
@@ -364,15 +483,47 @@ export async function fetchBackfillEvents(agentId: string): Promise<void> {
       params: { agentId, before: firstEventId, limit: String(BACKFILL_PAGE_SIZE) },
     });
     if (result.events.length > 0) {
-      prependEvents(agentId, result.events);
+      prependEvents(agentId, result.events, result.offset, result.total);
+    } else {
+      // Nothing before the cursor: the window already starts at the beginning.
+      firstOffsetByAgent[agentId] = 0;
+      if (result.total !== undefined) {
+        totalEventCountByAgent[agentId] = result.total;
+      }
+      bumpRenderVersion(agentId);
     }
-    // Trust the server's has_more: an empty page or has_more=false ends paging.
-    hasMoreByAgent[agentId] = result.has_more === true && result.events.length > 0;
   } catch (error) {
     // Backfill failure is non-fatal: the older history just isn't loaded, and
-    // has_more stays set so the next scroll retries. Log it so a persistent
-    // failure is diagnosable instead of vanishing silently.
+    // the window start is unchanged so the next scroll retries. Log it so a
+    // persistent failure is diagnosable instead of vanishing silently.
     console.warn(`Failed to backfill older events for agent ${agentId}`, error);
+  }
+}
+
+export async function fetchForwardEvents(agentId: string): Promise<void> {
+  if (!hasMoreAfter(agentId)) {
+    return;
+  }
+  const lastEventId = getLastEventId(agentId);
+  if (!lastEventId) {
+    return;
+  }
+
+  try {
+    const result = await m.request<EventsResponse>({
+      method: "GET",
+      url: apiUrl("/api/agents/:agentId/events"),
+      params: { agentId, after: lastEventId, limit: String(BACKFILL_PAGE_SIZE) },
+    });
+    if (result.events.length > 0) {
+      appendForwardEvents(agentId, result.events, result.total);
+    } else if (result.total !== undefined) {
+      // Nothing after the cursor: the window reaches the live tail.
+      totalEventCountByAgent[agentId] = result.total;
+      bumpRenderVersion(agentId);
+    }
+  } catch (error) {
+    console.warn(`Failed to load newer events for agent ${agentId}`, error);
   }
 }
 

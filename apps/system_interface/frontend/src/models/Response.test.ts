@@ -16,11 +16,16 @@ import {
   evictOldEvents,
   fetchEvents,
   fetchBackfillEvents,
+  fetchForwardEvents,
+  fetchWindowAtOffset,
   getEventsForAgent,
   getEventCount,
   getFirstEventId,
-  hasMoreToBackfill,
-  isBackfillComplete,
+  getFirstOffset,
+  getRenderVersion,
+  getTotalEventCount,
+  hasMoreBefore,
+  hasMoreAfter,
   MAX_HELD_EVENTS,
   EVICT_TARGET_EVENTS,
   type AssistantMessageEvent,
@@ -151,32 +156,42 @@ describe("dedup", () => {
   });
 });
 
-describe("has_more", () => {
-  it("fetchEvents records the server has_more flag", async () => {
+// The loaded window's position in the full transcript is tracked by offset (the
+// global index of its first event) + total. "More above" is offset > 0, "more
+// below" is offset + held < total -- the client derives both, replacing has_more.
+describe("window position (offset / total)", () => {
+  it("fetchEvents records offset and total from the server", async () => {
     const agent = freshAgent();
-    mockRequest.mockResolvedValueOnce({ events: [makeEvent("x")], has_more: true });
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("x")], offset: 5, total: 10 });
     await fetchEvents(agent);
-    expect(hasMoreToBackfill(agent)).toBe(true);
-    expect(isBackfillComplete(agent)).toBe(false);
+    expect(getFirstOffset(agent)).toBe(5);
+    expect(getTotalEventCount(agent)).toBe(10);
+    expect(hasMoreBefore(agent)).toBe(true); // offset 5 > 0
+    expect(hasMoreAfter(agent)).toBe(true); // 5 + 1 < 10
   });
 
-  it("treats a response without has_more as no more history", async () => {
+  it("treats a response without offset/total as a complete window", async () => {
     const agent = freshAgent();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("x")] });
     await fetchEvents(agent);
-    expect(hasMoreToBackfill(agent)).toBe(false);
+    expect(getFirstOffset(agent)).toBe(0);
+    expect(hasMoreBefore(agent)).toBe(false);
+    expect(hasMoreAfter(agent)).toBe(false);
   });
 
-  it("backfill is a no-op once the server reports no more history", async () => {
+  it("backfill stops once the window reaches the start", async () => {
     const agent = freshAgent();
-    mockRequest.mockResolvedValueOnce({ events: [makeEvent("b"), makeEvent("c")], has_more: true });
+    // Window holds [b, c] starting at index 1, so one older event (a) exists.
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("b"), makeEvent("c")], offset: 1, total: 3 });
     await fetchEvents(agent);
+    expect(hasMoreBefore(agent)).toBe(true);
 
-    // First backfill page returns the remaining history with has_more=false.
-    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")], has_more: false });
+    // The older page brings the window start to 0.
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")], offset: 0, total: 3 });
     await fetchBackfillEvents(agent);
     expect(ids(agent)).toEqual(["a", "b", "c"]);
-    expect(hasMoreToBackfill(agent)).toBe(false);
+    expect(getFirstOffset(agent)).toBe(0);
+    expect(hasMoreBefore(agent)).toBe(false);
 
     // A subsequent backfill must not hit the network at all.
     mockRequest.mockClear();
@@ -186,15 +201,53 @@ describe("has_more", () => {
 
   it("backfill pages before the first held event", async () => {
     const agent = freshAgent();
-    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e5")], has_more: true });
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e5")], offset: 5, total: 8 });
     await fetchEvents(agent);
 
-    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e3"), makeEvent("e4")], has_more: true });
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e3"), makeEvent("e4")], offset: 3, total: 8 });
     await fetchBackfillEvents(agent);
 
     const call = mockRequest.mock.calls[mockRequest.mock.calls.length - 1][0];
     expect(call.params.before).toBe("e5");
     expect(ids(agent)).toEqual(["e3", "e4", "e5"]);
+    expect(getFirstOffset(agent)).toBe(3);
+  });
+
+  it("forward-pages newer events after a window moved off the tail", async () => {
+    const agent = freshAgent();
+    // A window in the middle: holds [m2, m3] at offset 2 of 6, so newer exist.
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("m2"), makeEvent("m3")], offset: 2, total: 6 });
+    await fetchEvents(agent);
+    expect(hasMoreAfter(agent)).toBe(true);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("m4"), makeEvent("m5")], offset: 4, total: 6 });
+    await fetchForwardEvents(agent);
+
+    const call = mockRequest.mock.calls[mockRequest.mock.calls.length - 1][0];
+    expect(call.params.after).toBe("m3"); // cursor is the last held event
+    expect(ids(agent)).toEqual(["m2", "m3", "m4", "m5"]);
+    expect(hasMoreAfter(agent)).toBe(false); // window now reaches the tail
+
+    // No newer history left, so a further forward page makes no request.
+    mockRequest.mockClear();
+    await fetchForwardEvents(agent);
+    expect(mockRequest).not.toHaveBeenCalled();
+  });
+
+  it("jumps the window to an arbitrary offset, replacing held events", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("tail")], offset: 99, total: 100 });
+    await fetchEvents(agent);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("mid")], offset: 40, total: 100 });
+    await fetchWindowAtOffset(agent, 40);
+
+    const call = mockRequest.mock.calls[mockRequest.mock.calls.length - 1][0];
+    expect(call.params.offset).toBe("40");
+    expect(ids(agent)).toEqual(["mid"]); // window replaced, not appended
+    expect(getFirstOffset(agent)).toBe(40);
+    expect(hasMoreBefore(agent)).toBe(true);
+    expect(hasMoreAfter(agent)).toBe(true);
   });
 });
 
@@ -219,8 +272,10 @@ describe("evictOldEvents", () => {
     expect(getEventCount(agent)).toBe(EVICT_TARGET_EVENTS);
     // The oldest are gone; the newest are kept.
     expect(getFirstEventId(agent)).toBe(`e${removed}`);
-    // Evicted history is still on the server, so backfill is re-enabled.
-    expect(hasMoreToBackfill(agent)).toBe(true);
+    // The window start advanced past the dropped events, so older history is once
+    // again reachable above -- the evicted events can be paged back in.
+    expect(getFirstOffset(agent)).toBe(removed);
+    expect(hasMoreBefore(agent)).toBe(true);
   });
 
   it("re-admits evicted ids on a later prepend (dedup index was pruned)", () => {
@@ -233,5 +288,79 @@ describe("evictOldEvents", () => {
     prependEvents(agent, [reFetched]);
     expect(getFirstEventId(agent)).toBe("e0");
     expect(removed).toBeGreaterThan(0);
+  });
+});
+
+// The chat view memoizes its (expensive) turn-grouping keyed on this version, so
+// the contract that matters is: every mutation that changes what renders bumps
+// it, and a no-op mutation does not. A missed bump would leave the view showing
+// stale grouping; a spurious bump would defeat the scroll-time caching.
+describe("render version", () => {
+  it("bumps on a real append but not on a duplicate", () => {
+    const agent = freshAgent();
+    const v0 = getRenderVersion(agent);
+    appendEvents(agent, [makeEvent("a")]);
+    const v1 = getRenderVersion(agent);
+    expect(v1).toBeGreaterThan(v0);
+    // Re-appending the same event is a no-op and must not bump.
+    appendEvents(agent, [makeEvent("a")]);
+    expect(getRenderVersion(agent)).toBe(v1);
+  });
+
+  it("bumps when a re-broadcast upgrades a held event in place", () => {
+    const agent = freshAgent();
+    appendEvents(agent, [assistantWithAgentToolCall("e", "call-1")]);
+    const v1 = getRenderVersion(agent);
+    // Same event_id, now carrying subagent metadata: merged in place, so the
+    // array reference is unchanged but the version must still bump.
+    appendEvents(agent, [
+      assistantWithAgentToolCall("e", "call-1", {
+        agent_type: "Explore",
+        description: "look",
+        session_id: "sub-1",
+      }),
+    ]);
+    expect(getRenderVersion(agent)).toBeGreaterThan(v1);
+  });
+
+  it("bumps on prepend and on eviction", () => {
+    const agent = freshAgent();
+    appendEvents(
+      agent,
+      Array.from({ length: MAX_HELD_EVENTS + 50 }, (_v, i) => makeEvent(`e${i}`)),
+    );
+    const vBeforePrepend = getRenderVersion(agent);
+    prependEvents(agent, [makeEvent("older")]);
+    const vAfterPrepend = getRenderVersion(agent);
+    expect(vAfterPrepend).toBeGreaterThan(vBeforePrepend);
+    evictOldEvents(agent);
+    expect(getRenderVersion(agent)).toBeGreaterThan(vAfterPrepend);
+  });
+
+  it("bumps on a fetch (reset + enrichment snapshot)", async () => {
+    const agent = freshAgent();
+    const v0 = getRenderVersion(agent);
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("x")], offset: 0, total: 1 });
+    await fetchEvents(agent);
+    expect(getRenderVersion(agent)).toBeGreaterThan(v0);
+  });
+});
+
+// `total` lets the chat view size the scrollbar for the whole conversation while
+// only a window is held. It reflects the server's count, and never drops below
+// the loaded window's end so the window always fits inside it.
+describe("total event count", () => {
+  it("reports the server total when it exceeds the held window", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("x")], offset: 100, total: 500 });
+    await fetchEvents(agent);
+    expect(getTotalEventCount(agent)).toBe(500);
+  });
+
+  it("falls back to the held count when the server omits total", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a"), makeEvent("b")] });
+    await fetchEvents(agent);
+    expect(getTotalEventCount(agent)).toBe(2);
   });
 });

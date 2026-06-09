@@ -359,25 +359,77 @@ class AgentSessionWatcher:
         self._enrich_subagent_metadata(events)
         return events
 
-    def has_events_before(self, event_id: str, session_id: str | None = None) -> bool:
-        """Whether any event precedes ``event_id`` in the selected timeline.
+    def get_forward_events(self, after_event_id: str, limit: int = 50, session_id: str | None = None) -> list[dict[str, Any]]:
+        """Return up to ``limit`` events immediately AFTER ``after_event_id``.
 
-        Used to populate the ``has_more`` flag for tail/backfill responses
-        without resolving any bodies.
+        The mirror of :meth:`get_backfill_events`, for paging newer when the loaded
+        window is not at the live tail (e.g. after a jump to an earlier position).
+        Bounded: the cursor is located via ``_locator_ref_by_id`` (O(1)) and at most
+        ``limit`` bodies are resolved, so a page costs O(limit).
+        """
+        if limit <= 0:
+            return []
+        states = self._selected_states_current(session_id)
+
+        with self._lock:
+            page = self._collect_after_locked(states, after_event_id, limit)
+            events = self._resolve_bodies_locked(page)
+
+        self._enrich_subagent_metadata(events)
+        return events
+
+    def get_events_at_offset(self, offset: int, limit: int, session_id: str | None = None) -> list[dict[str, Any]]:
+        """Return up to ``limit`` events starting at global index ``offset``.
+
+        Lets the client jump straight to an arbitrary scroll position (mapped to an
+        event index) in a single bounded read, instead of paging through every
+        event in between. Bounded: skips whole files by length and resolves at most
+        ``limit`` bodies, so it never reads the full transcript. ``offset`` is
+        clamped to ``[0, total]``.
+        """
+        if limit <= 0:
+            return []
+        states = self._selected_states_current(session_id)
+
+        with self._lock:
+            page = self._collect_at_offset_locked(states, max(0, offset), limit)
+            events = self._resolve_bodies_locked(page)
+
+        self._enrich_subagent_metadata(events)
+        return events
+
+    def get_event_offset(self, event_id: str, session_id: str | None = None) -> int:
+        """Global index of ``event_id`` in the selected timeline, or -1 if unknown.
+
+        Each ``/events`` response reports the offset of its first event so the
+        client knows where the loaded window sits in the whole conversation -- it
+        derives both the scrollbar size and whether more history exists above and
+        below from this plus :meth:`get_total_event_count`. O(sessions); resolves
+        no bodies.
         """
         states = self._selected_states_current(session_id)
         with self._lock:
             ref = self._locator_ref_by_id.get(event_id)
             if ref is None:
-                return False
+                return -1
             ref_state, ref_idx = ref
-            if ref_idx > 0:
-                return True
             try:
                 state_pos = states.index(ref_state)
             except ValueError:
-                return False
-            return any(states[pos].locators for pos in range(state_pos))
+                return -1
+            return sum(len(states[pos].locators) for pos in range(state_pos)) + ref_idx
+
+    def get_total_event_count(self, session_id: str | None = None) -> int:
+        """Total number of events in the selected timeline.
+
+        Counts locators only -- no body resolution -- so it is O(sessions),
+        regardless of transcript length. Lets the client size the scrollbar for
+        the whole conversation while only a tail window is loaded, so paging
+        older history in does not make the scrollbar jump.
+        """
+        states = self._selected_states_current(session_id)
+        with self._lock:
+            return sum(len(state.locators) for state in states)
 
     def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
         """Get metadata for a subagent by its session ID."""
@@ -482,6 +534,61 @@ class AgentSessionWatcher:
             collected = chunk + collected
             needed -= end - start
             pos -= 1
+        return collected
+
+    def _collect_after_locked(
+        self, states: list[SessionFileState], after_event_id: str, limit: int
+    ) -> list[tuple[SessionFileState, EventLocator]]:
+        """Collect up to ``limit`` locators immediately after ``after_event_id`` (lock held).
+
+        Mirror of :meth:`_collect_before_locked`: locates the cursor via
+        ``_locator_ref_by_id`` (O(1)) then walks forward across the selected files.
+        Returns [] if the cursor is unknown or not in the selected sessions.
+        """
+        ref = self._locator_ref_by_id.get(after_event_id)
+        if ref is None:
+            return []
+        ref_state, ref_idx = ref
+        try:
+            state_pos = states.index(ref_state)
+        except ValueError:
+            return []
+
+        collected: list[tuple[SessionFileState, EventLocator]] = []
+        needed = limit
+        pos = state_pos
+        while needed > 0 and pos < len(states):
+            state = states[pos]
+            start = ref_idx + 1 if state is ref_state else 0
+            end = min(len(state.locators), start + needed)
+            collected.extend((state, locator) for locator in state.locators[start:end])
+            needed -= end - start
+            pos += 1
+        return collected
+
+    def _collect_at_offset_locked(
+        self, states: list[SessionFileState], offset: int, limit: int
+    ) -> list[tuple[SessionFileState, EventLocator]]:
+        """Collect ``limit`` locators starting at global index ``offset`` (lock held).
+
+        Skips whole files by length until reaching the offset, then takes locators
+        across file boundaries -- O(limit + file count), never O(total events).
+        """
+        collected: list[tuple[SessionFileState, EventLocator]] = []
+        skip = offset
+        needed = limit
+        for state in states:
+            count = len(state.locators)
+            if skip >= count:
+                skip -= count
+                continue
+            start = skip
+            skip = 0
+            end = min(count, start + needed)
+            collected.extend((state, locator) for locator in state.locators[start:end])
+            needed -= end - start
+            if needed <= 0:
+                break
         return collected
 
     def _cache_put_locked(self, event: dict[str, Any]) -> None:
