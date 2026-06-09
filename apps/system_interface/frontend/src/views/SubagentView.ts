@@ -7,6 +7,7 @@ import {
   type StepEnrichment,
   type SubagentMetadata,
 } from "../models/Response";
+import { parseJsonMessage } from "../models/ws-json";
 import { renderConversation, isSubagentRunning } from "./conversation-render";
 
 interface SubagentViewAttrs {
@@ -61,7 +62,11 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     eventSource = new EventSource(url);
 
     eventSource.onmessage = (messageEvent: MessageEvent) => {
-      const raw = JSON.parse(messageEvent.data) as { type?: string };
+      // A malformed frame must not throw out of the handler -- drop it and keep listening.
+      const raw = parseJsonMessage<{ type?: string }>(messageEvent.data);
+      if (raw === null) {
+        return;
+      }
       // A step_enrichment message (tagged with this subagent's session id by
       // the backend) is a full enrichment snapshot, not a transcript event --
       // replace this subagent's table and redraw.
