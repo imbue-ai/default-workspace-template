@@ -583,9 +583,6 @@ _SYNOPSIS_OPTOUT_FLAGS: dict[str, frozenset[str]] = {
             "--reconnect",
             "--session-command",
             "--connect-command",
-            "--tmux-width",
-            "--tmux-height",
-            "--tmux-window-size",
         }
     ),
     "start": frozenset({"--connect-command"}),

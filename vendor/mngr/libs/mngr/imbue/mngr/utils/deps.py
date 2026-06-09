@@ -77,14 +77,10 @@ class SystemDependency(FrozenModel):
 
 SSH = SystemDependency(
     binary="ssh",
-    # Remote host connectivity itself goes through paramiko (pure-Python, no ssh
-    # binary). The ssh binary is only needed to attach an interactive session to a
-    # remote agent and as the transport for rsync/git over SSH -- all remote-only
-    # features -- so it is optional, like rsync and unison.
-    purpose="interactive connect to remote agents; transport for rsync and git over SSH",
+    purpose="remote host connections and git over SSH",
     macos_hint="ssh is included with macOS",
     linux_hint="sudo apt-get install openssh-client",
-    category=DependencyCategory.OPTIONAL,
+    category=DependencyCategory.CORE,
     install_method=InstallMethod(apt_package="openssh-client"),
 )
 
@@ -142,8 +138,8 @@ CLAUDE = SystemDependency(
     install_method=InstallMethod(custom_install_script="https://claude.ai/install.sh"),
 )
 
-CORE_DEPS: tuple[SystemDependency, ...] = (GIT, TMUX, JQ)
-OPTIONAL_DEPS: tuple[SystemDependency, ...] = (SSH, CLAUDE, RSYNC, UNISON)
+CORE_DEPS: tuple[SystemDependency, ...] = (SSH, GIT, TMUX, JQ)
+OPTIONAL_DEPS: tuple[SystemDependency, ...] = (CLAUDE, RSYNC, UNISON)
 ALL_DEPS: tuple[SystemDependency, ...] = CORE_DEPS + OPTIONAL_DEPS
 
 

@@ -206,8 +206,7 @@ def test_send_message_to_agents_starts_stopped_agent_when_start_desired(
 
 
 @pytest.mark.tmux
-# real agent setup/teardown occasionally exceeds the 10s default.
-@pytest.mark.timeout(30)
+@pytest.mark.flaky
 def test_send_message_to_agents_with_include_filter(
     temp_work_dir: Path,
     temp_mngr_ctx: MngrContext,

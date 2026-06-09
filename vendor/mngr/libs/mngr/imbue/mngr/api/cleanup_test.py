@@ -315,8 +315,7 @@ def test_execute_cleanup_destroy_on_online_host(
 
 
 @pytest.mark.tmux
-# real agent setup/teardown occasionally exceeds the 10s default.
-@pytest.mark.timeout(30)
+@pytest.mark.flaky
 def test_execute_cleanup_stop_on_online_host(
     temp_work_dir: Path,
     temp_mngr_ctx: MngrContext,

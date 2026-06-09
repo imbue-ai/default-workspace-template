@@ -35,8 +35,7 @@ from imbue.mngr.utils.testing import wait_for_agent_session
 
 
 @pytest.mark.tmux
-# real agent setup/teardown occasionally exceeds the 10s default.
-@pytest.mark.timeout(30)
+@pytest.mark.flaky
 def test_cli_create_via_subprocess(
     temp_work_dir: Path,
     temp_host_dir: Path,

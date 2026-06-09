@@ -51,7 +51,6 @@ class StartCliOptions(CommonCliOptions):
     connect_command: str | None
     restart: bool
     no_resume: bool
-    dry_run: bool
     # Planned features (not yet implemented)
     host: tuple[HostAddress, ...]
 
@@ -138,11 +137,6 @@ def _send_resume_message_if_configured(agent: AgentInterface, output_opts: Outpu
     help="Skip sending the resume message after starting.",
 )
 @optgroup.option(
-    "--dry-run",
-    is_flag=True,
-    help="Show what would be started without actually starting anything",
-)
-@optgroup.option(
     "--connect/--no-connect",
     default=False,
     help="Connect to the agent after starting (only valid for single agent)",
@@ -204,14 +198,6 @@ def _start_agents(
             _output("No agents found matching the given addresses", output_opts)
         else:
             _output("No stopped agents found to start", output_opts)
-        return
-
-    # Handle dry-run mode: report what would be started without touching any hosts.
-    if opts.dry_run:
-        verb = "restarted" if is_restart else "started"
-        _output(f"Would be {verb}:", output_opts)
-        for match in matched_agents:
-            _output(f"  - {match.agent_name} (on host {match.host_id})", output_opts)
         return
 
     started_agents: list[str] = []
@@ -304,7 +290,7 @@ def _maybe_connect(
 CommandHelpMetadata(
     key="start",
     one_line_description="Start stopped agent(s)",
-    synopsis="mngr start [AGENTS...|-] [--agent <AGENT>] [--host <HOST>] [--restart] [--no-resume] [--connect] [--dry-run]",
+    synopsis="mngr start [AGENTS...|-] [--agent <AGENT>] [--host <HOST>] [--restart] [--no-resume] [--connect]",
     description="""For remote hosts, this restores from the most recent snapshot and starts
 the container/instance. For local agents, this starts the agent's tmux
 session.
@@ -325,7 +311,6 @@ Supports custom format templates via --format. Available fields: name.""",
         ("Restart a running agent cleanly", "mngr start my-agent --restart"),
         ("Start and connect", "mngr start my-agent --connect"),
         ("Start all stopped agents", "mngr list --ids | mngr start -"),
-        ("Preview what would be started", "mngr list --ids | mngr start - --dry-run"),
         ("Custom format template output", "mngr start agent1 agent2 --format '{name}'"),
     ),
     see_also=(

@@ -1064,8 +1064,7 @@ def test_create_rejects_duplicate_agent_name_on_same_host(
 
 
 @pytest.mark.tmux
-# real agent setup/teardown occasionally exceeds the 10s default.
-@pytest.mark.timeout(30)
+@pytest.mark.flaky
 def test_create_with_update_flag_updates_existing_agent(
     temp_mngr_ctx: MngrContext,
     temp_work_dir: Path,
