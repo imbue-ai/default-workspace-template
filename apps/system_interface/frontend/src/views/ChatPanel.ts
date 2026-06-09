@@ -504,15 +504,28 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       return;
     }
 
-    // Compensate for content prepended by a just-completed older-page load so the
-    // viewport stays anchored on what the user was reading rather than jumping
-    // to the new top. Done before the scroll-to-bottom check below; the two are
-    // mutually exclusive in practice (a prepend only happens while scrolled up).
+    // Compensate for the change in document height above the viewport caused by a
+    // just-completed older-page load, so the viewport stays anchored on what the
+    // user was reading rather than the thumb jumping. Done before the
+    // scroll-to-bottom check below; the two are mutually exclusive in practice (a
+    // prepend only happens while scrolled up).
+    //
+    // The delta is signed and BOTH signs must be applied. The top phantom shrinks
+    // by exactly (page events * ESTIMATED_EVENT_HEIGHT_PX), but the events render
+    // as grouped rows (a whole turn can be one row) whose real height rarely equals
+    // that, so the net document height above the viewport usually *shrinks*
+    // (delta < 0). Only compensating positive deltas left those shrinks
+    // uncompensated: scrollTop stayed put while scrollHeight dropped, nudging the
+    // thumb down a few px on every page -- the "scroll up, jump down, scroll up,
+    // jump down" seen on a fast mouse-wheel scroll. Clamp to phantomTopHeight so a
+    // negative delta keeps the viewport within the freshly loaded content (we just
+    // loaded older events, so it belongs there) rather than slipping back into the
+    // reserved region above.
     if (prependCompensationPending) {
       prependCompensationPending = false;
       const delta = element.scrollHeight - scrollHeightBeforePrepend;
-      if (delta > 0) {
-        element.scrollTop += delta;
+      if (delta !== 0) {
+        element.scrollTop = Math.max(phantomTopHeight, element.scrollTop + delta);
         scrollTop = element.scrollTop;
       }
     }
