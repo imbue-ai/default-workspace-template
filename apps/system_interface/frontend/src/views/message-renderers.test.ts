@@ -396,12 +396,13 @@ describe("renderPermissionRequestBlock", () => {
     // line, not the heading (friendly names are a gateway-sourced follow-up).
     expect(textOf(title)).toBe("Permission request");
 
-    // The "Requesting" value is shown.
+    // The "Requesting" value is shown: the permission and scope as separate
+    // no-wrap tokens (so a long name can't break mid-name).
     expect(
-      findVnode(
-        vnode,
-        (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-read-all on slack-api",
-      ),
+      findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-read-all"),
+    ).not.toBeNull();
+    expect(
+      findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-api"),
     ).not.toBeNull();
 
     // The agent's reason for the request is surfaced on the card.
@@ -515,7 +516,7 @@ describe("renderPermissionRequestBlock", () => {
 
   it("falls back to the plain scope title and text before the catalog resolves", () => {
     // No scopeInfo (e.g. the lookup hasn't landed): title stays generic and the
-    // requesting line is plain text with no tooltip span.
+    // permission shows as a plain no-wrap token with no hoverable tooltip span.
     const vnode = renderPermissionRequestBlock(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT));
     const title = findVnode(
       vnode,
@@ -531,10 +532,7 @@ describe("renderPermissionRequestBlock", () => {
       ),
     ).toBeNull();
     expect(
-      findVnode(
-        vnode,
-        (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-read-all on slack-api",
-      ),
+      findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-read-all"),
     ).not.toBeNull();
   });
 });

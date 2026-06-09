@@ -398,40 +398,44 @@ function permissionHeading(details: PermissionRequestDetails | null, scopeInfo: 
   return "Permission request";
 }
 
+/** A hyphenated token (a permission name, scope, or path) wrapped so it never
+ *  breaks mid-name -- line breaks fall between tokens, not inside them. */
+function renderRequestToken(text: string): m.Vnode {
+  return m("span", { class: "permission-request-token" }, text);
+}
+
 /** A requested permission name that reveals its description in a CSS tooltip
  *  centered over the name on hover/focus. `data-tooltip` carries the description
  *  (the bubble is `::after content: attr(data-tooltip)`) and doubles as the
- *  accessible label. */
+ *  accessible label. Also a no-break token (see `.permission-request-perm`). */
 function renderPermissionName(name: string, description: string): m.Vnode {
   return m("span", { class: "permission-request-perm", "data-tooltip": description, tabindex: "0" }, name);
 }
 
 /** The value for the "Requesting" line: the permissions on a service scope, or
- *  an access mode on a path. When the gateway catalog has resolved the scope,
- *  each permission becomes a hoverable span carrying its description; until then
- *  (or with no catalog) it's the plain joined string. Null when there's nothing
- *  specific to show. */
+ *  an access mode on a path. Each permission name and the scope/path render as
+ *  no-break tokens so a long hyphenated name never wraps mid-name; once the
+ *  gateway catalog resolves, a described permission also becomes hoverable for
+ *  its description. Null when there's nothing specific to show. */
 function permissionRequestingValue(
   details: PermissionRequestDetails | null,
   scopeInfo: ScopeInfo | null,
 ): m.Children | null {
   if (details === null) return null;
   if (details.scope) {
-    if (details.permissions.length === 0) return details.scope;
-    if (scopeInfo === null) {
-      return `${details.permissions.join(", ")} on ${details.scope}`;
-    }
+    if (details.permissions.length === 0) return renderRequestToken(details.scope);
     const nodes: m.Children[] = [];
     details.permissions.forEach((name, index) => {
       if (index > 0) nodes.push(", ");
-      const description = scopeInfo.permissions.find((permission) => permission.name === name)?.description ?? null;
-      nodes.push(description ? renderPermissionName(name, description) : name);
+      const description = scopeInfo?.permissions.find((permission) => permission.name === name)?.description ?? null;
+      nodes.push(description ? renderPermissionName(name, description) : renderRequestToken(name));
     });
-    nodes.push(` on ${details.scope}`);
+    nodes.push(" on ");
+    nodes.push(renderRequestToken(details.scope));
     return nodes;
   }
   if (details.path) {
-    return `${details.access ?? "access"} on ${details.path}`;
+    return [`${details.access ?? "access"} on `, renderRequestToken(details.path)];
   }
   return null;
 }

@@ -1026,6 +1026,14 @@ body {
   flex-shrink: 0;
 }
 
+/* A hyphenated token in the "Requesting" line (permission name, scope, or path).
+   `nowrap` keeps each on one line so a long name never breaks mid-name; the line
+   wraps between tokens instead. */
+.permission-request-token,
+.permission-request-perm {
+  white-space: nowrap;
+}
+
 /* A requested permission name, hoverable for its plain-English description. The
    dotted underline signals it's interactive; the tooltip bubble is centered over
    the name (mirrors the .pv-tl-missing CSS-tooltip pattern -- native `title` is
