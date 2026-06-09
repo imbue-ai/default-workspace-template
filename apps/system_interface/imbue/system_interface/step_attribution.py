@@ -31,7 +31,11 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Any
 
+from loguru import logger as _loguru_logger
+
 from imbue.imbue_common.frozen_model import FrozenModel
+
+logger = _loguru_logger
 
 # A ``tk``/``ticket`` create invocation (``super`` is the plugin-bypassing form).
 _STEP_CREATE_DETECT = re.compile(r"\b(?:tk|ticket)\s+(?:super\s+)?create\b")
@@ -87,7 +91,10 @@ def extract_step_signals(lines: Sequence[str]) -> TranscriptStepSignals:
             continue
         try:
             raw = json.loads(line)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            # The reader only ever hands us complete lines, so a parse failure
+            # means real corruption -- surface it rather than dropping silently.
+            logger.warning("Skipping malformed JSONL line in step attribution scan: {}", e)
             continue
         message = raw.get("message")
         if not isinstance(message, dict):
