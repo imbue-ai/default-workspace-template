@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Decide whether a Bash command is a non-standalone `tk start`/`tk close`.
 
-Reads the command from the TK_CMD env var (set by claude_tk_standalone.sh).
-Exits 0 to allow; exits 2 with a guiding stderr message to BLOCK. Only `start`
-and `close` are in scope -- `create` is exempt. See the wrapper for the why.
+Takes the command as its single positional argument (passed by
+claude_tk_standalone.sh). Exits 0 to allow; exits 2 with a guiding stderr
+message to BLOCK. Only `start` and `close` are in scope -- `create` is exempt.
+See the wrapper for the why.
 """
 
-import os
 import re
 import sys
 
@@ -48,8 +48,10 @@ def classify(cmd: str) -> str | None:
     return None
 
 
-def main() -> int:
-    violation = classify(os.environ.get("TK_CMD", ""))
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv if argv is None else argv
+    command = args[1] if len(args) > 1 else ""
+    violation = classify(command)
     if violation is None:
         return 0
 

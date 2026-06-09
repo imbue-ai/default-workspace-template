@@ -55,9 +55,7 @@ def test_blocks_chained_or_redirected_start_close() -> None:
         assert checker.classify(cmd) is not None, f"should be blocked: {cmd!r}"
 
 
-def test_main_exit_codes(monkeypatch) -> None:
+def test_main_exit_codes() -> None:
     """main() exits 0 for a clean close, 2 for a redirected one."""
-    monkeypatch.setenv("TK_CMD", 'tk close cod-step-x "done"')
-    assert checker.main() == 0
-    monkeypatch.setenv("TK_CMD", "tk close cod-step-x >/dev/null")
-    assert checker.main() == 2
+    assert checker.main(["check", 'tk close cod-step-x "done"']) == 0
+    assert checker.main(["check", "tk close cod-step-x >/dev/null"]) == 2
