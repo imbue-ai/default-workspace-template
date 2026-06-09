@@ -128,7 +128,7 @@ if result.outcome is AgentOutcome.DONE:
     ...  # the worker's branch is result.branch
 ```
 
-This wraps the `launch-task` synchronous `create_worker.py run` path
+This wraps the `launch-task` synchronous `create_worker.py launch-sync` path
 (launch -> await the finish report -> structured result -> destroy). You write
 the task file first (with `lead_agent` / `finish_report_path` frontmatter; see the
 `launch-task` skill). **Triggering**: only on explicit user feedback or an error

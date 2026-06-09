@@ -10,7 +10,7 @@ calculated savings a key would unlock.
 tools / read files, which the plain API call cannot).
 
 ``run_agent`` -- pattern 1, full agent: a thin wrapper over the synchronous
-``create_worker.py run`` launch -> await -> collect -> destroy path.
+``create_worker.py launch-sync`` launch -> await -> collect -> destroy path.
 """
 
 import json
@@ -297,16 +297,16 @@ def _run_create_worker_blocking(
     subprocess_run: _SubprocessRun = subprocess.run,
 ) -> Mapping[str, object]:
     # Collect the result from a dedicated ``--result-json`` file rather than
-    # scraping stdout: create_worker's ``run`` interleaves human-readable launch
-    # messages (and the worker's mngr-destroy output) on stdout, so picking "the
-    # last line" is fragile. A file the caller names is the unambiguous contract.
+    # scraping stdout: create_worker's ``launch-sync`` interleaves human-readable
+    # launch messages (and the worker's mngr-destroy output) on stdout, so picking
+    # "the last line" is fragile. A file the caller names is the unambiguous contract.
     with tempfile.TemporaryDirectory(prefix="ai_integration_run_") as tmp:
         result_path = Path(tmp) / "result.json"
         argv = [
             "uv",
             "run",
             str(repo_root / _CREATE_WORKER_REL),
-            "run",
+            "launch-sync",
             "--name",
             name,
             "--template",
@@ -337,20 +337,23 @@ def _run_create_worker_blocking(
         # exit code means it failed before producing a result.
         if proc.returncode not in (0, 124):
             raise AgentRunError(
-                f"create_worker run exited {proc.returncode}: {proc.stderr.strip()[:500]}"
+                f"create_worker launch-sync exited {proc.returncode}: "
+                f"{proc.stderr.strip()[:500]}"
             )
         if not result_path.is_file():
             raise AgentRunError(
-                "create_worker run produced no result-json file "
+                "create_worker launch-sync produced no result-json file "
                 f"(exit {proc.returncode}): {proc.stderr.strip()[:500]}"
             )
         raw = result_path.read_text(encoding="utf-8")
     try:
         payload = json.loads(raw)
     except ValueError as exc:
-        raise AgentRunError(f"create_worker run result was not JSON: {exc}") from exc
+        raise AgentRunError(
+            f"create_worker launch-sync result was not JSON: {exc}"
+        ) from exc
     if not isinstance(payload, dict):
-        raise AgentRunError("create_worker run result was not a JSON object")
+        raise AgentRunError("create_worker launch-sync result was not a JSON object")
     return payload
 
 
@@ -369,7 +372,7 @@ async def run_agent(
 ) -> AgentResult:
     """Pattern 1: launch a tightly-scoped full agent, wait, collect, destroy.
 
-    Thin wrapper over ``create_worker.py run``. The caller writes the task file
+    Thin wrapper over ``create_worker.py launch-sync``. The caller writes the task file
     (with ``lead_agent`` / ``finish_report_path`` frontmatter) under ``runtime_dir``
     first. Returns the structured terminal result; what to do with the worker's
     branch (merge / review) is the caller's concern.
