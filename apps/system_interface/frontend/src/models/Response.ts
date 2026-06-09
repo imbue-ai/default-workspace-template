@@ -160,59 +160,86 @@ export const MAX_HELD_EVENTS = 1500;
 // than on every appended event once at the cap.
 export const EVICT_TARGET_EVENTS = 1000;
 
-// The held events are a single contiguous window of the full transcript. Its
-// position is tracked by `firstOffsetByAgent` (the global index of events[0]) and
-// the full length by `totalEventCountByAgent`; everything else -- whether more
-// history exists above/below, the scrollbar size -- is derived from those two.
-// The window can sit anywhere (the live tail is just the case where it ends at
+// All per-agent transcript state lives in one record per agent. The held events
+// are a single contiguous window of the full transcript: `firstOffset` is the
+// global index of events[0] and `total` the full length; whether more history
+// exists above/below and the scrollbar size are derived from those two. The
+// window can sit anywhere (the live tail is just the case where it ends at
 // `total`), so it pages in both directions and can be replaced wholesale by a
 // jump to an arbitrary offset.
-const eventsByAgent: Record<string, TranscriptEvent[]> = {};
-// Persistent per-agent index from event_id to the stored event object,
-// mirroring eventsByAgent. Gives O(1) dedup on append/prepend (instead of
-// rebuilding a Set on every SSE delivery) and O(1) lookup of an already-stored
-// event so a re-broadcast can upgrade it in place (see appendEvents).
-const eventByIdByAgent: Record<string, Map<string, TranscriptEvent>> = {};
+//
+// `renderVersion` is a monotonic counter the chat view memoizes its (expensive)
+// turn-grouping on, so a scroll-only redraw -- which changes no data -- reuses the
+// cached rows instead of re-walking the whole held transcript every frame (the
+// dominant scroll cost on a long conversation). Its one invariant: it must bump on
+// every mutation that changes what renders and never on a no-op. To make that
+// impossible to get wrong, the state is private to this module and every write
+// goes through commit() below -- the single place renderVersion is touched --
+// rather than scattered field writes each having to remember a manual bump.
+interface AgentTranscript {
+  events: TranscriptEvent[];
+  // event_id -> stored event, mirroring `events`: O(1) dedup on append/prepend and
+  // O(1) lookup so a re-broadcast can upgrade an event in place (see appendEvents).
+  byId: Map<string, TranscriptEvent>;
+  firstOffset: number;
+  // Total events in the full server-side transcript (see EventsResponse.total),
+  // not just the held window -- sizes the scrollbar for the whole conversation.
+  total: number;
+  // Step enrichment keyed by ticket id. Replaced wholesale on each snapshot
+  // (GET /events and the `step_enrichment` SSE message), never merged.
+  enrichment: Map<string, StepEnrichment>;
+  renderVersion: number;
+}
+
+const transcriptByAgent: Record<string, AgentTranscript> = {};
 const notFoundAgentIds = new Set<string>();
-// Global index of the first held event within the full transcript (0 when the
-// window starts at the beginning). beforeCount == firstOffset; afterCount ==
-// total - (firstOffset + held).
-const firstOffsetByAgent: Record<string, number> = {};
-// Per-agent step enrichment, keyed by ticket id. Replaced wholesale on each
-// snapshot (GET /events and the `step_enrichment` SSE message), never merged.
-const enrichmentByAgent: Record<string, Map<string, StepEnrichment>> = {};
 
-// Monotonic per-agent counter bumped on every mutation that changes what the
-// transcript renders (events added, removed, or upgraded in place; enrichment
-// replaced). The chat view memoizes its turn-grouping on this, so a scroll-only
-// redraw -- which changes no data -- reuses the cached sections/rows instead of
-// re-walking the whole held transcript every frame (the dominant scroll cost on
-// a long conversation).
-const renderVersionByAgent: Record<string, number> = {};
+function transcriptFor(agentId: string): AgentTranscript {
+  let transcript = transcriptByAgent[agentId];
+  if (transcript === undefined) {
+    transcript = { events: [], byId: new Map(), firstOffset: 0, total: 0, enrichment: new Map(), renderVersion: 0 };
+    transcriptByAgent[agentId] = transcript;
+  }
+  return transcript;
+}
 
-function bumpRenderVersion(agentId: string): void {
-  renderVersionByAgent[agentId] = (renderVersionByAgent[agentId] ?? 0) + 1;
+/**
+ * The single mutation funnel, and the ONLY writer of renderVersion.
+ *
+ * Every state change that affects what the transcript renders must go through
+ * here, so a new mutation path cannot silently skip the version bump (which would
+ * leave the memoized turn-grouping stale) or bump spuriously (which would defeat
+ * the scroll-time caching). `mutate` edits the store in place and returns whether
+ * it changed anything that renders; the version bumps iff it did. Returns that same
+ * flag so callers can redraw only when something actually changed.
+ */
+function commit(agentId: string, mutate: (transcript: AgentTranscript) => boolean): boolean {
+  const transcript = transcriptFor(agentId);
+  const changed = mutate(transcript);
+  if (changed) {
+    transcript.renderVersion += 1;
+  }
+  return changed;
 }
 
 export function getRenderVersion(agentId: string): number {
-  return renderVersionByAgent[agentId] ?? 0;
+  return transcriptByAgent[agentId]?.renderVersion ?? 0;
 }
-
-// Total events in the full server-side transcript (see EventsResponse.total),
-// not just the held window. Used to size the scrollbar for the whole
-// conversation while only a window is loaded.
-const totalEventCountByAgent: Record<string, number> = {};
 
 /** Global index of the first held event within the full transcript. */
 export function getFirstOffset(agentId: string): number {
-  return firstOffsetByAgent[agentId] ?? 0;
+  return transcriptByAgent[agentId]?.firstOffset ?? 0;
 }
 
 /** Total number of events in the full transcript, for scrollbar sizing. Never
  *  less than the loaded window's end, so the window always fits inside it. */
 export function getTotalEventCount(agentId: string): number {
-  const windowEnd = getFirstOffset(agentId) + (eventsByAgent[agentId]?.length ?? 0);
-  return Math.max(totalEventCountByAgent[agentId] ?? 0, windowEnd);
+  const transcript = transcriptByAgent[agentId];
+  if (transcript === undefined) {
+    return 0;
+  }
+  const windowEnd = transcript.firstOffset + transcript.events.length;
+  return Math.max(transcript.total, windowEnd);
 }
 
 /** Older history exists before the loaded window (the window doesn't start at 0). */
@@ -223,29 +250,22 @@ export function hasMoreBefore(agentId: string): boolean {
 /** Newer history exists after the loaded window (the window doesn't reach the
  *  live tail) -- true only after a jump/scroll moved the window off the end. */
 export function hasMoreAfter(agentId: string): boolean {
-  const windowEnd = getFirstOffset(agentId) + (eventsByAgent[agentId]?.length ?? 0);
+  const windowEnd = getFirstOffset(agentId) + (transcriptByAgent[agentId]?.events.length ?? 0);
   return windowEnd < getTotalEventCount(agentId);
 }
 
-function idMap(agentId: string): Map<string, TranscriptEvent> {
-  let map = eventByIdByAgent[agentId];
-  if (map === undefined) {
-    map = new Map<string, TranscriptEvent>();
-    eventByIdByAgent[agentId] = map;
-  }
-  return map;
-}
-
 export function getEnrichmentForAgent(agentId: string): Map<string, StepEnrichment> {
-  return enrichmentByAgent[agentId] ?? new Map();
+  return transcriptByAgent[agentId]?.enrichment ?? new Map();
 }
 
 /** Replace an agent's enrichment table from a snapshot. Does not redraw --
  *  callers in a fetch/redraw flow already trigger one; the SSE path redraws
  *  explicitly. */
 export function applyEnrichmentSnapshot(agentId: string, snapshot: Record<string, StepEnrichment> | undefined): void {
-  enrichmentByAgent[agentId] = new Map(Object.entries(snapshot ?? {}));
-  bumpRenderVersion(agentId);
+  commit(agentId, (transcript) => {
+    transcript.enrichment = new Map(Object.entries(snapshot ?? {}));
+    return true;
+  });
 }
 
 export function isConversationNotFound(agentId: string): boolean {
@@ -253,15 +273,15 @@ export function isConversationNotFound(agentId: string): boolean {
 }
 
 export function getEventsForAgent(agentId: string): TranscriptEvent[] {
-  return eventsByAgent[agentId] ?? [];
+  return transcriptByAgent[agentId]?.events ?? [];
 }
 
 export function getEventCount(agentId: string): number {
-  return eventsByAgent[agentId]?.length ?? 0;
+  return transcriptByAgent[agentId]?.events.length ?? 0;
 }
 
 export function getFirstEventId(agentId: string): string | null {
-  const events = eventsByAgent[agentId];
+  const events = transcriptByAgent[agentId]?.events;
   if (!events || events.length === 0) {
     return null;
   }
@@ -269,7 +289,7 @@ export function getFirstEventId(agentId: string): string | null {
 }
 
 export function getLastEventId(agentId: string): string | null {
-  const events = eventsByAgent[agentId];
+  const events = transcriptByAgent[agentId]?.events;
   if (!events || events.length === 0) {
     return null;
   }
@@ -318,30 +338,29 @@ export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): voi
   // we drop them here -- they are re-fetched via forward paging when the user
   // returns to the tail. A late re-broadcast that upgrades an already-held event
   // in place is still applied regardless of where the window sits.
-  const byId = idMap(agentId);
-  const existing = eventsByAgent[agentId] ?? [];
   const tailAnchored = !hasMoreAfter(agentId);
-  const brandNewEvents: TranscriptEvent[] = [];
-  let didMerge = false;
-  for (const event of newEvents) {
-    const prior = byId.get(event.event_id);
-    if (prior === undefined) {
-      if (tailAnchored) {
-        brandNewEvents.push(event);
-        byId.set(event.event_id, event);
+  const bumped = commit(agentId, (transcript) => {
+    let added = false;
+    let merged = false;
+    for (const event of newEvents) {
+      const prior = transcript.byId.get(event.event_id);
+      if (prior === undefined) {
+        if (tailAnchored) {
+          transcript.events.push(event);
+          transcript.byId.set(event.event_id, event);
+          added = true;
+        }
+      } else if (mergeLateSubagentMetadata(prior, event)) {
+        merged = true;
       }
-    } else if (mergeLateSubagentMetadata(prior, event)) {
-      didMerge = true;
     }
-  }
-  if (brandNewEvents.length > 0) {
-    eventsByAgent[agentId] = [...existing, ...brandNewEvents];
-    // Tail-anchored, so the window still reaches the end: total grows with it.
-    totalEventCountByAgent[agentId] = getFirstOffset(agentId) + eventsByAgent[agentId].length;
-    bumpRenderVersion(agentId);
-    m.redraw();
-  } else if (didMerge) {
-    bumpRenderVersion(agentId);
+    if (added) {
+      // Tail-anchored, so the window still reaches the end: total grows with it.
+      transcript.total = transcript.firstOffset + transcript.events.length;
+    }
+    return added || merged;
+  });
+  if (bumped) {
     m.redraw();
   }
 }
@@ -353,20 +372,22 @@ export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): voi
  * (used by tests that prepend without a server round-trip).
  */
 export function prependEvents(agentId: string, olderEvents: TranscriptEvent[], offset?: number, total?: number): void {
-  const existing = eventsByAgent[agentId] ?? [];
-  const byId = idMap(agentId);
-  const deduped = olderEvents.filter((e) => !byId.has(e.event_id));
-  if (deduped.length > 0) {
+  const bumped = commit(agentId, (transcript) => {
+    const deduped = olderEvents.filter((e) => !transcript.byId.has(e.event_id));
+    if (deduped.length === 0) {
+      return false;
+    }
     for (const event of deduped) {
-      byId.set(event.event_id, event);
+      transcript.byId.set(event.event_id, event);
     }
-    eventsByAgent[agentId] = [...deduped, ...existing];
-    firstOffsetByAgent[agentId] =
-      offset !== undefined ? offset : Math.max(0, getFirstOffset(agentId) - deduped.length);
+    transcript.events = [...deduped, ...transcript.events];
+    transcript.firstOffset = offset !== undefined ? offset : Math.max(0, transcript.firstOffset - deduped.length);
     if (total !== undefined) {
-      totalEventCountByAgent[agentId] = total;
+      transcript.total = total;
     }
-    bumpRenderVersion(agentId);
+    return true;
+  });
+  if (bumped) {
     m.redraw();
   }
 }
@@ -374,18 +395,21 @@ export function prependEvents(agentId: string, olderEvents: TranscriptEvent[], o
 /** Append a newer page to the window (paging toward the tail from a window that
  *  was moved off the end by a jump). The window start is unchanged. */
 export function appendForwardEvents(agentId: string, newerEvents: TranscriptEvent[], total?: number): void {
-  const existing = eventsByAgent[agentId] ?? [];
-  const byId = idMap(agentId);
-  const deduped = newerEvents.filter((e) => !byId.has(e.event_id));
-  if (deduped.length > 0) {
+  const bumped = commit(agentId, (transcript) => {
+    const deduped = newerEvents.filter((e) => !transcript.byId.has(e.event_id));
+    if (deduped.length === 0) {
+      return false;
+    }
     for (const event of deduped) {
-      byId.set(event.event_id, event);
+      transcript.byId.set(event.event_id, event);
     }
-    eventsByAgent[agentId] = [...existing, ...deduped];
+    transcript.events = [...transcript.events, ...deduped];
     if (total !== undefined) {
-      totalEventCountByAgent[agentId] = total;
+      transcript.total = total;
     }
-    bumpRenderVersion(agentId);
+    return true;
+  });
+  if (bumped) {
     m.redraw();
   }
 }
@@ -400,29 +424,32 @@ export function appendForwardEvents(agentId: string, newerEvents: TranscriptEven
  * server) is re-fetched via backfill on a later scroll-up.
  */
 export function evictOldEvents(agentId: string): number {
-  const existing = eventsByAgent[agentId];
-  if (existing === undefined || existing.length <= MAX_HELD_EVENTS) {
-    return 0;
-  }
-  const removeCount = existing.length - EVICT_TARGET_EVENTS;
-  const removed = existing.slice(0, removeCount);
-  const byId = idMap(agentId);
-  for (const event of removed) {
-    byId.delete(event.event_id);
-  }
-  eventsByAgent[agentId] = existing.slice(removeCount);
-  firstOffsetByAgent[agentId] = getFirstOffset(agentId) + removeCount;
-  bumpRenderVersion(agentId);
+  let removeCount = 0;
+  commit(agentId, (transcript) => {
+    if (transcript.events.length <= MAX_HELD_EVENTS) {
+      return false;
+    }
+    removeCount = transcript.events.length - EVICT_TARGET_EVENTS;
+    const removed = transcript.events.slice(0, removeCount);
+    for (const event of removed) {
+      transcript.byId.delete(event.event_id);
+    }
+    transcript.events = transcript.events.slice(removeCount);
+    transcript.firstOffset += removeCount;
+    return true;
+  });
   return removeCount;
 }
 
 /** Replace the held window wholesale (initial load, or a jump to an offset). */
 function resetEvents(agentId: string, events: TranscriptEvent[], offset: number, total: number): void {
-  eventsByAgent[agentId] = events;
-  eventByIdByAgent[agentId] = new Map(events.map((e) => [e.event_id, e]));
-  firstOffsetByAgent[agentId] = offset;
-  totalEventCountByAgent[agentId] = total;
-  bumpRenderVersion(agentId);
+  commit(agentId, (transcript) => {
+    transcript.events = events;
+    transcript.byId = new Map(events.map((e) => [e.event_id, e]));
+    transcript.firstOffset = offset;
+    transcript.total = total;
+    return true;
+  });
 }
 
 function placeWindow(agentId: string, result: EventsResponse): void {
@@ -486,11 +513,14 @@ export async function fetchBackfillEvents(agentId: string): Promise<void> {
       prependEvents(agentId, result.events, result.offset, result.total);
     } else {
       // Nothing before the cursor: the window already starts at the beginning.
-      firstOffsetByAgent[agentId] = 0;
-      if (result.total !== undefined) {
-        totalEventCountByAgent[agentId] = result.total;
-      }
-      bumpRenderVersion(agentId);
+      const newTotal = result.total;
+      commit(agentId, (transcript) => {
+        transcript.firstOffset = 0;
+        if (newTotal !== undefined) {
+          transcript.total = newTotal;
+        }
+        return true;
+      });
     }
   } catch (error) {
     // Backfill failure is non-fatal: the older history just isn't loaded, and
@@ -519,8 +549,11 @@ export async function fetchForwardEvents(agentId: string): Promise<void> {
       appendForwardEvents(agentId, result.events, result.total);
     } else if (result.total !== undefined) {
       // Nothing after the cursor: the window reaches the live tail.
-      totalEventCountByAgent[agentId] = result.total;
-      bumpRenderVersion(agentId);
+      const newTotal = result.total;
+      commit(agentId, (transcript) => {
+        transcript.total = newTotal;
+        return true;
+      });
     }
   } catch (error) {
     console.warn(`Failed to load newer events for agent ${agentId}`, error);

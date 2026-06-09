@@ -344,6 +344,44 @@ describe("render version", () => {
     await fetchEvents(agent);
     expect(getRenderVersion(agent)).toBeGreaterThan(v0);
   });
+
+  // An older/newer page that comes back empty does not change the held events but
+  // does reconcile the window bounds (the server reports the window already sits at
+  // an edge), so it must still bump -- the scrollbar geometry the view derives from
+  // those bounds has changed. These edge-reconciliation paths write the store
+  // directly (no event delta), so they are the easiest place to forget the bump.
+  it("bumps when an empty backfill page snaps the window start to the beginning", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e2")], offset: 2, total: 5 });
+    await fetchEvents(agent);
+    expect(hasMoreBefore(agent)).toBe(true);
+    const vBefore = getRenderVersion(agent);
+
+    // Server reports nothing before the cursor: the window already starts at 0.
+    mockRequest.mockResolvedValueOnce({ events: [], total: 5 });
+    await fetchBackfillEvents(agent);
+
+    expect(getFirstOffset(agent)).toBe(0);
+    expect(hasMoreBefore(agent)).toBe(false);
+    expect(getRenderVersion(agent)).toBeGreaterThan(vBefore);
+  });
+
+  it("bumps when an empty forward page corrects total down to the tail", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("m2"), makeEvent("m3")], offset: 2, total: 6 });
+    await fetchEvents(agent);
+    expect(hasMoreAfter(agent)).toBe(true);
+    const vBefore = getRenderVersion(agent);
+
+    // Server reports nothing after the cursor and a smaller total: the window now
+    // reaches the live tail.
+    mockRequest.mockResolvedValueOnce({ events: [], total: 4 });
+    await fetchForwardEvents(agent);
+
+    expect(getTotalEventCount(agent)).toBe(4);
+    expect(hasMoreAfter(agent)).toBe(false);
+    expect(getRenderVersion(agent)).toBeGreaterThan(vBefore);
+  });
 });
 
 // `total` lets the chat view size the scrollbar for the whole conversation while
