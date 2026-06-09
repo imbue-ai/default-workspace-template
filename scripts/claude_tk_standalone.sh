@@ -41,4 +41,4 @@ command=$(echo "$input" | jq -r '.tool_input.command // empty')
 [[ -n "$command" ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
-TK_CMD="$command" exec python3 "$script_dir/claude_tk_standalone_check.py"
+exec python3 "$script_dir/claude_tk_standalone_check.py" "$command"
