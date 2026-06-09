@@ -112,7 +112,7 @@ body {
   color: var(--color-text-primary);
   /* Break long unbreakable tokens (e.g. API keys, URLs) so they wrap inside
      the bubble instead of overflowing past its edge. */
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .message-user-bubble code {
