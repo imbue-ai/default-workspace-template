@@ -148,9 +148,9 @@ there's no markup to design.
 
 If your service needs to call Claude (classify/summarize content, run a one-shot
 agentic task, or launch a full agent), use the `use-ai-integration` skill and the
-`ai_integration` library rather than hand-rolling API or `claude -p` calls. It
+`ai_integration` library rather than hand-rolling API or `claude -p` calls -- it
 handles credentialing, the `claude -p` environment fix, billing-path selection,
-and spend control for you.
+and spend control.
 
 ### Always surface the raw data and its source
 
