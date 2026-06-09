@@ -841,6 +841,24 @@ body {
   flex: 1;
 }
 
+/* Live status dot: pulsing green while the sub-agent works, static and muted once done.
+   Reuses the agent-activity-pulse keyframes so it matches the main chat's activity dot. */
+.subagent-card-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.subagent-card-status-dot--running {
+  background: var(--color-accent);
+  animation: agent-activity-pulse 1.4s ease-in-out infinite;
+}
+
+.subagent-card-status-dot--done {
+  background: var(--color-text-faint);
+}
+
 .subagent-card-description {
   font-size: 13px;
   font-weight: 500;

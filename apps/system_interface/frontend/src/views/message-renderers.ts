@@ -239,7 +239,7 @@ export function renderAssistantMessage(
   );
 }
 
-export function renderSubagentCard(toolCall: ToolCall, agentId: string): m.Vnode {
+export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunning: boolean): m.Vnode {
   const metadata = toolCall.subagent_metadata;
   // Description and agent type come from the tool call itself, so the card renders fully
   // even before the subagent session is linked; fall back to metadata if the tool input
@@ -248,8 +248,20 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string): m.Vnode
   const agentType = toolCall.subagent_type || metadata?.agent_type || "";
   const sessionId = metadata?.session_id;
 
+  // A small status dot communicates whether the sub-agent is still working. It pulses green
+  // while the Agent call is in flight (no tool result yet) and settles to a static dot once
+  // the sub-agent finishes. The slot is always present so the card doesn't shift on completion.
+  const statusDot = m("span", {
+    class: `subagent-card-status-dot ${
+      isRunning ? "subagent-card-status-dot--running" : "subagent-card-status-dot--done"
+    }`,
+    title: isRunning ? "Working" : "Finished",
+    "aria-label": isRunning ? "Sub-agent is working" : "Sub-agent finished",
+  });
+
   return m("div", { class: "subagent-card" }, [
     m("div", { class: "subagent-card-header" }, [
+      statusDot,
       m("span", { class: "subagent-card-description" }, description),
       agentType ? m("span", { class: "subagent-card-type-badge" }, agentType) : null,
     ]),
@@ -422,7 +434,10 @@ export function renderAssistantMessageChildren(
     // input), even before its subagent session is linked; the card shows a non-clickable
     // "Running…" state until subagent_metadata.session_id arrives.
     if (toolCall.tool_name === "Agent" && (toolCall.subagent_metadata || toolCall.description)) {
-      children.push(renderSubagentCard(toolCall, agentId));
+      // The Agent call's tool result arrives only when the sub-agent finishes, so its
+      // absence is our signal that the sub-agent is still actively working.
+      const subagentRunning = !toolResults.has(toolCall.tool_call_id);
+      children.push(renderSubagentCard(toolCall, agentId, subagentRunning));
       continue;
     }
     const result = toolResults.get(toolCall.tool_call_id) ?? null;
