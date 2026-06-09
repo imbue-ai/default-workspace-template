@@ -11,9 +11,22 @@ import subprocess
 from collections.abc import Mapping, Sequence
 
 from anthropic import AsyncAnthropic
+from anthropic.types import (
+    ContentBlock,
+    Message,
+    TextBlock,
+    ToolUseBlock,
+    message_create_params,
+)
 from anyio import to_thread
 
-from ai_integration.data_types import BillingPath, CompletionResult, ToolCall, Usage
+from ai_integration.data_types import (
+    AnthropicCompletionOptions,
+    BillingPath,
+    CompletionResult,
+    ToolCall,
+    Usage,
+)
 from ai_integration.errors import ClaudeCLIError
 from ai_integration.pricing import estimate_cost_usd
 
@@ -25,50 +38,55 @@ async def complete_via_api(
     prompt: str,
     system: str | None = None,
     max_tokens: int = 1024,
-    options: Mapping[str, object] | None = None,
+    options: AnthropicCompletionOptions | None = None,
 ) -> CompletionResult:
     """One non-agentic completion through the direct Anthropic API.
 
-    ``options`` is passed straight through to ``messages.create`` so any Anthropic
-    API parameter (tools, response formats, temperature, etc.) is usable. The
-    system prompt is sent as a cache-controlled block to enable prompt caching.
+    ``options`` (an ``AnthropicCompletionOptions``) is merged straight into
+    ``messages.create`` so any overridable Anthropic API parameter (tools, tool_choice,
+    temperature, etc.) is usable, with full type-checking on the values -- it mirrors
+    the SDK's optional message params, reusing the SDK's own value types. The system
+    prompt is sent as a cache-controlled block to enable prompt caching. Caller-supplied
+    ``options`` win over the defaults below.
     """
-    kwargs: dict[str, object] = dict(options or {})
-    kwargs.setdefault("model", model)
-    kwargs.setdefault("max_tokens", max_tokens)
-    kwargs.setdefault("messages", [{"role": "user", "content": prompt}])
-    if system is not None and "system" not in kwargs:
-        kwargs["system"] = [
+    params: message_create_params.MessageCreateParamsNonStreaming = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system is not None:
+        params["system"] = [
             {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
         ]
+    if options:
+        params = {**params, **options}
     # ``async with`` so the client's httpx connection pool is always released --
     # a new client is built per call, and leaking the pool would accumulate open
     # connections across a high-volume completion flow.
     async with AsyncAnthropic(api_key=api_key) as client:
-        response = await client.messages.create(**kwargs)  # type: ignore[arg-type]
+        response = await client.messages.create(**params)
     return build_api_result(response, model)
 
 
-def build_api_result(response: object, requested_model: str) -> CompletionResult:
+def build_api_result(response: Message, requested_model: str) -> CompletionResult:
     """Assemble a ``CompletionResult`` from an Anthropic ``messages.create`` response.
 
-    Pure and duck-typed (reads ``.content`` / ``.usage`` / ``.model``) so it is
-    unit-testable without a live ``AsyncAnthropic`` client. The reported ``model`` is
-    the *served* model (``response.model``) -- which honors ``CompletionResult.model``'s
-    "served by" contract, since an alias can resolve to a dated snapshot -- falling
-    back to ``requested_model`` only if the response omits it. Cost is estimated from
-    the served model's price so the figure matches what was actually billed.
+    Pure (reads only ``response.content`` / ``.usage`` / ``.model``) so it is
+    unit-testable by constructing a ``Message`` directly, without a live
+    ``AsyncAnthropic`` client. The reported ``model`` is the *served* model
+    (``response.model``) -- which honors ``CompletionResult.model``'s "served by"
+    contract, since an alias can resolve to a dated snapshot -- falling back to
+    ``requested_model`` only if the response omits it. Cost is estimated from the
+    served model's price so the figure matches what was actually billed.
     """
-    text, tool_calls = parse_api_content(getattr(response, "content", []))
-    usage_obj = getattr(response, "usage", None)
+    text, tool_calls = parse_api_content(response.content)
     usage = Usage(
-        input_tokens=getattr(usage_obj, "input_tokens", 0) or 0,
-        output_tokens=getattr(usage_obj, "output_tokens", 0) or 0,
-        cache_read_tokens=getattr(usage_obj, "cache_read_input_tokens", 0) or 0,
-        cache_write_tokens=getattr(usage_obj, "cache_creation_input_tokens", 0) or 0,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+        cache_read_tokens=response.usage.cache_read_input_tokens or 0,
+        cache_write_tokens=response.usage.cache_creation_input_tokens or 0,
     )
-    served_model = getattr(response, "model", None)
-    model = served_model if isinstance(served_model, str) and served_model else requested_model
+    model = response.model or requested_model
     return CompletionResult(
         text=text,
         billing_path=BillingPath.DIRECT_API,
@@ -96,29 +114,25 @@ def _str_keyed(value: object) -> dict[str, object]:
     return {str(key): item for key, item in value.items()}
 
 
-def parse_api_content(content: Sequence[object]) -> tuple[str, tuple[ToolCall, ...]]:
+def parse_api_content(
+    content: Sequence[ContentBlock],
+) -> tuple[str, tuple[ToolCall, ...]]:
     """Split an Anthropic ``messages.create`` response into text and tool calls.
 
-    Concatenates ``text`` blocks into the plain completion text and collects
-    ``tool_use`` blocks (the structured-output channel) into ``ToolCall``s. Pure and
-    duck-typed (reads ``.type`` / ``.text`` / ``.id`` / ``.name`` / ``.input``) so it
-    is unit-testable without the SDK. A forced tool call yields empty text and a
-    populated tuple, so the structured-output data is surfaced rather than lost.
+    Concatenates ``TextBlock`` content into the plain completion text and collects
+    ``ToolUseBlock``s (the structured-output channel) into ``ToolCall``s, narrowing
+    the SDK's ``ContentBlock`` union with ``isinstance``. A forced tool call yields
+    empty text and a populated tuple, so the structured-output data is surfaced
+    rather than lost. Other block kinds (thinking, server-tool results, etc.) are
+    ignored. Pure, so it is unit-testable by constructing blocks directly.
     """
     text_parts: list[str] = []
     tool_calls: list[ToolCall] = []
     for block in content:
-        block_type = getattr(block, "type", None)
-        if block_type == "text":
-            text_parts.append(getattr(block, "text", "") or "")
-        elif block_type == "tool_use":
-            tool_calls.append(
-                ToolCall(
-                    id=str(getattr(block, "id", "") or ""),
-                    name=str(getattr(block, "name", "") or ""),
-                    input=_str_keyed(getattr(block, "input", {})),
-                )
-            )
+        if isinstance(block, TextBlock):
+            text_parts.append(block.text)
+        elif isinstance(block, ToolUseBlock):
+            tool_calls.append(ToolCall(id=block.id, name=block.name, input=block.input))
     return "".join(text_parts), tuple(tool_calls)
 
 

@@ -1,4 +1,6 @@
 import pytest
+from anthropic.types import ContentBlock, Message, TextBlock, ToolUseBlock
+from anthropic.types import Usage as ApiUsage
 
 from ai_integration.backends import (
     build_api_result,
@@ -65,18 +67,27 @@ def test_build_argv_emits_permission_mode() -> None:
     assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
 
 
-class _Block:
-    """Duck-typed stand-in for an Anthropic content block."""
+def _text(text: str) -> TextBlock:
+    return TextBlock(type="text", text=text, citations=None)
 
-    def __init__(self, **attrs: object) -> None:
-        for key, value in attrs.items():
-            setattr(self, key, value)
+
+def _api_message(
+    *, content: list[ContentBlock], model: str, input_tokens: int, output_tokens: int
+) -> Message:
+    return Message(
+        id="msg_1",
+        type="message",
+        role="assistant",
+        model=model,
+        content=content,
+        stop_reason="end_turn",
+        stop_sequence=None,
+        usage=ApiUsage(input_tokens=input_tokens, output_tokens=output_tokens),
+    )
 
 
 def test_parse_api_content_concatenates_text() -> None:
-    text, tool_calls = parse_api_content(
-        [_Block(type="text", text="Hello, "), _Block(type="text", text="world")]
-    )
+    text, tool_calls = parse_api_content([_text("Hello, "), _text("world")])
     assert text == "Hello, world"
     assert tool_calls == ()
 
@@ -85,7 +96,7 @@ def test_parse_api_content_surfaces_tool_use_blocks() -> None:
     # A forced tool call yields empty text and the structured input in tool_calls.
     text, tool_calls = parse_api_content(
         [
-            _Block(
+            ToolUseBlock(
                 type="tool_use",
                 id="tu_1",
                 name="record_sentiment",
@@ -100,18 +111,14 @@ def test_parse_api_content_surfaces_tool_use_blocks() -> None:
     assert tool_calls[0].input == {"sentiment": "positive"}
 
 
-def _api_response(**attrs: object) -> _Block:
-    """Duck-typed stand-in for an Anthropic messages.create response."""
-    return _Block(**attrs)
-
-
 def test_build_api_result_uses_served_model() -> None:
     # The served model id (response.model) can differ from the requested alias; the
     # result must report the served id to honor CompletionResult.model ("served by").
-    response = _api_response(
-        content=[_Block(type="text", text="hi")],
-        usage=_Block(input_tokens=10, output_tokens=5),
+    response = _api_message(
+        content=[_text("hi")],
         model="claude-haiku-4-5-20251001",
+        input_tokens=10,
+        output_tokens=5,
     )
     result = build_api_result(response, requested_model="claude-haiku-4-5")
     assert result.model == "claude-haiku-4-5-20251001"
@@ -125,10 +132,8 @@ def test_build_api_result_uses_served_model() -> None:
 def test_build_api_result_falls_back_to_requested_model() -> None:
     # A response that omits/empties model falls back to the requested model so the
     # field is never blank.
-    response = _api_response(
-        content=[_Block(type="text", text="x")],
-        usage=_Block(input_tokens=1, output_tokens=1),
-        model="",
+    response = _api_message(
+        content=[_text("x")], model="", input_tokens=1, output_tokens=1
     )
     result = build_api_result(response, requested_model="claude-haiku-4-5")
     assert result.model == "claude-haiku-4-5"
