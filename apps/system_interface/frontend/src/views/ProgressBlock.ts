@@ -3,9 +3,10 @@
  *
  * The section is a flat, ordered list of timeline items produced by the
  * transcript walk (see turn-grouping): step nodes, ungrouped work/prose runs
- * (rendered inline, thread-breaking), and chips. Step nodes carry their own
- * grouped events; expanding a step reveals that grouped work. The wrap-up
- * reply renders below the timeline.
+ * (rendered inline, thread-breaking), inter-step interjections (a step's
+ * closing prose, promoted to break the thread between two steps), and chips.
+ * Step nodes carry their own grouped events; expanding a step reveals that
+ * grouped work. The wrap-up reply renders below the timeline.
  *
  * This component renders structure it is given; it does no grouping or
  * ordering itself.
@@ -174,6 +175,21 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             { key: item.key },
             item.events.map((e) => renderAssistantMessage(e, toolResults, agentId)),
           );
+        }
+        if (item.kind === "interjection") {
+          // A step's closing prose, promoted to break the timeline thread
+          // between the closing step and the next (top/bottom hairlines mark
+          // the break -- see .pv-interstep). Interjection events are always
+          // pure prose (no tool calls), so render the text directly like the
+          // trailing reply does -- NOT via renderAssistantMessage, whose
+          // `.message-assistant` wrapper carries a 20px bottom margin that
+          // would sit inside the bordered block and leave a lopsided gap below
+          // the text.
+          const interText = item.events
+            .map((e) => e.text ?? "")
+            .filter(Boolean)
+            .join("\n\n");
+          return m("div.pv-interstep", { key: item.key }, m(MarkdownContent, { content: interText }));
         }
         // chip
         return m("div.pv-stophook", { key: `chip-${item.event.event_id}` }, renderUserMessage(item.event));
