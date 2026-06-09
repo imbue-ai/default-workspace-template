@@ -32,35 +32,16 @@ from collections.abc import Sequence
 from typing import Any
 
 from loguru import logger as _loguru_logger
+from tk_command_parsing.parser import extract_create_titles
 
 from imbue.imbue_common.frozen_model import FrozenModel
 
 logger = _loguru_logger
 
-# A ``tk``/``ticket`` create invocation (``super`` is the plugin-bypassing form).
-_STEP_CREATE_DETECT = re.compile(r"\b(?:tk|ticket)\s+(?:super\s+)?create\b")
-
-# The quoted title argument of a ``--step`` create. Global so a batched command
-# (several ``tk create --step`` joined by ``&&`` / ``;``) yields every title,
-# and tolerant of titles containing shell metacharacters such as parentheses
-# because it reads only up to the matching closing quote.
-_STEP_TITLE_RE = re.compile(r"--step\s+(?:\"([^\"]*)\"|'([^']*)')")
-
 # ``Updated <id> -> <status>`` printed by tk on every transition (see
 # vendor/tk/ticket). Captures the id; the status only needs to be one of the
 # three valid values for the line to count as a transition.
 _TRANSITION_RE = re.compile(r"Updated\s+(\S+)\s+->\s+(?:open|in_progress|closed)")
-
-
-def extract_create_titles(command: str) -> list[str]:
-    """Titles created by ``tk create --step "<title>"`` invocations in a full
-    Bash command, in order. Returns ``[]`` when the command is not a step
-    create. The caller must pass the FULL command (not the 200-char
-    ``input_preview``), so a batch of creates is captured whole rather than cut
-    mid-title."""
-    if "--step" not in command or _STEP_CREATE_DETECT.search(command) is None:
-        return []
-    return [double or single for double, single in _STEP_TITLE_RE.findall(command)]
 
 
 class TranscriptStepSignals(FrozenModel):
