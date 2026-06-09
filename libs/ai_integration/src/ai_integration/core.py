@@ -29,7 +29,12 @@ from ai_integration.credentials import (
     get_api_key,
     require_credentials,
 )
-from ai_integration.data_types import AgentOutcome, AgentResult, CompletionResult
+from ai_integration.data_types import (
+    AgentOutcome,
+    AgentResult,
+    AnthropicCompletionOptions,
+    CompletionResult,
+)
 from ai_integration.errors import AgentRunError
 from ai_integration.pricing import DEFAULT_MODEL, counterfactual_direct_api_cost_usd
 from ai_integration.spend import SpendTracker, format_usd, load_spend_tracker
@@ -108,7 +113,7 @@ async def run_completion(
     model: str = DEFAULT_MODEL,
     max_tokens: int = 1024,
     env: Mapping[str, str] | None = None,
-    anthropic_options: Mapping[str, object] | None = None,
+    anthropic_options: AnthropicCompletionOptions | None = None,
     strip_mngr_agent_vars: bool = False,
     claude_cli_args: Sequence[str] | None = None,
     api_backend: _ApiBackend = backends.complete_via_api,

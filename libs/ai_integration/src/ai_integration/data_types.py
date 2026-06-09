@@ -1,10 +1,52 @@
 """Frozen data types shared across the ai_integration library."""
 
+from collections.abc import Iterable, Sequence
 from enum import auto
+from typing import Literal
 
+from anthropic.types.cache_control_ephemeral_param import CacheControlEphemeralParam
+from anthropic.types.metadata_param import MetadataParam
+from anthropic.types.output_config_param import OutputConfigParam
+from anthropic.types.text_block_param import TextBlockParam
+from anthropic.types.thinking_config_param import ThinkingConfigParam
+from anthropic.types.tool_choice_param import ToolChoiceParam
+from anthropic.types.tool_union_param import ToolUnionParam
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import Field
+from typing_extensions import TypedDict
+
+
+class AnthropicCompletionOptions(TypedDict, total=False):
+    """The Anthropic ``messages.create`` params a completion caller may override.
+
+    Mirrors the optional fields of the SDK's ``MessageCreateParamsNonStreaming``,
+    reusing the SDK's own value types so a caller building (e.g.) ``tools`` /
+    ``tool_choice`` for structured output keeps full type-checking on them. The
+    required ``model`` / ``messages`` / ``max_tokens`` are deliberately omitted:
+    the completion call owns those (from its own ``model`` / ``prompt`` /
+    ``max_tokens`` arguments), so they are not part of the override surface.
+
+    The SDK's params type can't be reused directly here because it marks that trio
+    ``Required`` -- a caller would then be forced to supply the very fields the call
+    fills in. New SDK params won't appear until added here; that is a deliberate,
+    curated override surface, not an oversight.
+    """
+
+    cache_control: CacheControlEphemeralParam | None
+    container: str | None
+    inference_geo: str | None
+    metadata: MetadataParam
+    output_config: OutputConfigParam
+    service_tier: Literal["auto", "standard_only"]
+    stop_sequences: Sequence[str]
+    system: str | Iterable[TextBlockParam]
+    temperature: float
+    thinking: ThinkingConfigParam
+    tool_choice: ToolChoiceParam
+    tools: Iterable[ToolUnionParam]
+    top_k: int
+    top_p: float
 
 
 class BillingPath(UpperCaseStrEnum):
