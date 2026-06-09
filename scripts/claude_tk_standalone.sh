@@ -25,9 +25,10 @@
 # Blocks via exit 2 with a stderr message the agent sees (mirrors
 # claude_prevent_commit_rewrite.sh). Skipped for subagents (they manage their
 # own progress view). The command parsing lives in the sibling
-# claude_tk_standalone_check.py -- it must strip quoted substrings first (so a
-# close summary, or a string that merely mentions "tk close", cannot trip the
-# checks), which bash regex cannot do reliably.
+# claude_tk_standalone_check.py -- it shell-tokenizes the command with `shlex`
+# (so a close summary, or a string that merely mentions "tk close", stays
+# inside one quoted token and cannot trip the checks), which bash regex cannot
+# do reliably.
 set -euo pipefail
 
 input=$(cat)

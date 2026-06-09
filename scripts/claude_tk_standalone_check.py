@@ -5,10 +5,106 @@ Takes the command as its single positional argument (passed by
 claude_tk_standalone.sh). Exits 0 to allow; exits 2 with a guiding stderr
 message to BLOCK. Only `start` and `close` are in scope -- `create` is exempt.
 See the wrapper for the why.
+
+The command is tokenized with `shlex` (a real shell-aware lexer) rather than
+matched with regexes, so quoting, comments, env-var prefixes, and operators are
+all interpreted the way a shell would: a `tk close` summary in quotes, or any
+string that merely mentions `tk close`, stays inside a single token and never
+trips the operator checks. `shlex` treats a bare newline as ordinary
+whitespace, so unquoted newlines (which a shell would honour as command
+separators) are normalised to `;` before tokenizing -- that is the lexer's one
+blind spot for our purposes, and the only place we still scan the raw string.
 """
 
 import re
+import shlex
 import sys
+
+# Characters shlex returns as runs of "punctuation" tokens (operators).
+_PUNCT = "();<>|&"
+# A leading `VAR=value` assignment -- benign before a tk command (the
+# `Updated ... -> ...` line still prints at its normal position), so allowed.
+_ENV_ASSIGN = re.compile(r"^[A-Za-z_]\w*=")
+
+_BEFORE = "another command runs before it (for example a leading `cd`)"
+_REDIRECT = "its output is redirected (`>`, `>>`, `2>`, `&>`, `</dev/null`, ...)"
+_CHAIN = "it is chained with or backgrounded by another command (`&&`, `||`, `;`, `|`, `&`, or a newline)"
+
+
+def _newlines_to_semicolons(cmd: str) -> str:
+    """Replace unquoted newlines with `;` so they read as command separators.
+
+    A newline inside quotes (e.g. a multi-line close summary) is preserved.
+    Backslash escapes the next char outside single quotes, matching the shell.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for ch in cmd:
+        if escaped:
+            out.append(ch)
+            escaped = False
+            continue
+        if quote != "'" and ch == "\\":
+            out.append(ch)
+            escaped = True
+            continue
+        if quote is not None:
+            out.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            continue
+        out.append(";" if ch == "\n" else ch)
+    return "".join(out)
+
+
+def _tokenize(cmd: str) -> list[str] | None:
+    """Shell-tokenize `cmd`, or None if it cannot be parsed (unbalanced quotes)."""
+    lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        return list(lexer)
+    except ValueError:
+        return None
+
+
+def _is_punct(tok: str) -> bool:
+    return bool(tok) and all(ch in _PUNCT for ch in tok)
+
+
+def _is_redirect(tok: str) -> bool:
+    return _is_punct(tok) and ("<" in tok or ">" in tok)
+
+
+def _is_control(tok: str) -> bool:
+    # A control operator (`;`, `|`, `||`, `&`, `&&`, `(`, `)`) separates
+    # commands. Redirects (`>`, `>&`, ...) are NOT separators -- they belong to
+    # the command they decorate -- so they are excluded here.
+    return _is_punct(tok) and not _is_redirect(tok)
+
+
+def _is_tk_lifecycle(segment: list[str]) -> bool:
+    """True if `segment` is a `tk`/`ticket` `start`/`close` command.
+
+    Skips a leading run of `VAR=value` env assignments, accepts an explicit
+    path prefix (`vendor/tk/ticket`) and the `super` plugin-bypass form.
+    """
+    i = 0
+    while i < len(segment) and _ENV_ASSIGN.match(segment[i]):
+        i += 1
+    if i >= len(segment):
+        return False
+    base = segment[i].rsplit("/", 1)[-1]
+    if base not in ("tk", "ticket"):
+        return False
+    j = i + 1
+    if j < len(segment) and segment[j] == "super":
+        j += 1
+    return j < len(segment) and segment[j] in ("start", "close")
 
 
 def classify(cmd: str) -> str | None:
@@ -18,33 +114,30 @@ def classify(cmd: str) -> str | None:
     at all (including `tk create`, or a non-tk command that merely mentions a tk
     verb inside a quoted string), or it is a clean standalone start/close.
     """
-    # 1. Strip quoted substrings (double- then single-quoted) so their contents
-    #    are invisible to every check below. A close summary lives in quotes, so
-    #    any operators or the literal words "tk close" inside it are neutralised
-    #    (e.g. `git commit -m "tk close ..."` is left as plain work).
-    dq = re.sub(r'"(?:\\.|[^"\\])*"', " ", cmd)
-    dq = re.sub(r"'[^']*'", " ", dq)
-
-    # 2. Is this actually a tk/ticket start or close? `super` is the
-    #    plugin-bypass form. A leading non-word char (or string start) keeps
-    #    `mytk`/`ticketing` from matching while still catching a path-prefixed
-    #    `vendor/tk/ticket close`.
-    if not re.search(r"(?:^|[^\w])(?:tk|ticket)\s+(?:super\s+)?(?:start|close)(?:\s|$)", dq):
+    tokens = _tokenize(_newlines_to_semicolons(cmd.strip()))
+    if tokens is None:
         return None
 
-    trimmed = dq.lstrip()
+    # Split the token stream into commands at control operators.
+    segments: list[list[str]] = [[]]
+    for tok in tokens:
+        if _is_control(tok):
+            segments.append([])
+        else:
+            segments[-1].append(tok)
 
-    # 3a. Must be the first/only command: the (de-quoted) command begins with
-    #     the tk/ticket verb, optionally via an explicit path.
-    if not re.match(r"(?:\S*/)?(?:tk|ticket)\s", trimmed):
-        return "another command runs before it (for example a leading `cd`)"
-    # 3b. No output redirection.
-    if re.search(r"[<>]", dq):
-        return "its output is redirected (`>`, `>>`, `2>`, `&>`, `</dev/null`, ...)"
-    # 3c. No chaining/backgrounding with another command.
-    if re.search(r"[&;|]|\n", dq):
-        return "it is chained with or backgrounded by another command (`&&`, `||`, `;`, `|`, `&`, or a newline)"
+    if not any(_is_tk_lifecycle(seg) for seg in segments):
+        return None
 
+    if not _is_tk_lifecycle(segments[0]):
+        # A tk start/close exists, but something else is the first command.
+        return _BEFORE
+    if any(_is_redirect(tok) for tok in segments[0]):
+        return _REDIRECT
+    if len(segments) > 1:
+        # A control operator split the stream, so another command runs
+        # alongside the tk start/close (or it is backgrounded with `&`).
+        return _CHAIN
     return None
 
 
@@ -57,7 +150,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sys.stderr.write(
         "Blocked: run `tk start` / `tk close` as the ONLY command in the tool call -- "
-        + violation + ".\n\n"
+        + violation
+        + ".\n\n"
         "The chat progress view reads each step's structure and grouping from this "
         "command's visible output (the `Updated <id> -> <status>` line) and its position "
         "in the transcript. Chaining the command, prefixing a `cd`, or redirecting its "
