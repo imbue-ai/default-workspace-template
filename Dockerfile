@@ -227,10 +227,26 @@ RUN MNGR_PY=$(head -1 "$(which mngr)" | sed 's|^#!||') && \
     "$MNGR_PY" -c "import cryptography; print('cryptography OK')" && \
     "$MNGR_PY" -c "import imbue.imbue_common; print('imbue.imbue_common OK')" && \
     "$MNGR_PY" -c "import imbue.mngr; print('imbue.mngr OK')" && \
+    echo "--- bisecting imbue.mngr.main top-level deps ---" && \
+    "$MNGR_PY" -c "import pluggy; print('pluggy OK')" && \
+    "$MNGR_PY" -c "import setproctitle; print('setproctitle OK')" && \
+    "$MNGR_PY" -c "from click_option_group import OptionGroup; print('click_option_group OK')" && \
+    "$MNGR_PY" -c "from imbue.imbue_common.model_update import to_update; print('model_update OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.errors import MngrError; print('mngr.errors OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.plugins import hookspecs; print('mngr.plugins.hookspecs OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.config.loader import block_disabled_plugins; print('mngr.config.loader OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.utils.click_utils import detect_aliases_by_command; print('mngr.utils.click_utils OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.utils.env_utils import parse_bool_env; print('mngr.utils.env_utils OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.agents.agent_registry import load_agents_from_plugins; print('mngr.agents.agent_registry OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.providers.registry import load_all_registries; print('mngr.providers.registry OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.cli.create import create; print('mngr.cli.create OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.cli.snapshot import snapshot; print('mngr.cli.snapshot OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.cli.events import events; print('mngr.cli.events OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.cli.observe import observe; print('mngr.cli.observe OK')" && \
+    "$MNGR_PY" -c "from imbue.mngr.cli.transcript import transcript; print('mngr.cli.transcript OK')" && \
     "$MNGR_PY" -c "import imbue.mngr.main; print('imbue.mngr.main OK')" && \
-    "$MNGR_PY" -c "from imbue.mngr.main import cli; print('imbue.mngr.main.cli OK')" && \
     echo "--- now running mngr --version directly ---" && \
-    mngr --version || echo "mngr --version FAILED with rc=$?"
+    ( mngr --version || echo "mngr --version FAILED with rc=$?" )
 RUN mngr plugin add \
     --path vendor/mngr/libs/mngr_claude \
     --path vendor/mngr/libs/mngr_wait
