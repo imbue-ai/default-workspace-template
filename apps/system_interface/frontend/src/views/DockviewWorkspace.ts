@@ -68,6 +68,15 @@ export function buildAgentTerminalUrl(agentName: string): string {
   return `${baseUrl}${separator}arg=_&arg=agent&arg=${encodeURIComponent(agentName)}`;
 }
 
+/** True when ``url`` is an agent-terminal iframe URL produced by
+ *  ``buildAgentTerminalUrl``: the terminal service URL plus the ttyd
+ *  ``arg=agent`` dispatch key, a shape no other iframe URL uses. Callers
+ *  pass the terminal-URL prefix (``getTerminalUrl()``) so this predicate
+ *  stays pure and unit-testable. */
+export function isAgentTerminalUrl(url: string, terminalUrlPrefix: string): boolean {
+  return url.startsWith(terminalUrlPrefix) && url.includes("arg=agent");
+}
+
 type PanelType = "chat" | "iframe" | "subagent";
 
 export interface PanelParams {
@@ -307,7 +316,7 @@ function getPanelBackingAgentId(params: PanelParams, terminalUrlPrefix: string):
   }
   if (params.panelType === "iframe") {
     const url = params.url ?? "";
-    if (url.startsWith(terminalUrlPrefix) && url.includes("arg=agent")) {
+    if (isAgentTerminalUrl(url, terminalUrlPrefix)) {
       return params.agentId;
     }
   }
@@ -1773,7 +1782,7 @@ function initializeDockview(parentElement: HTMLElement): void {
           // target of an agent-driven ``replace-url``, so they don't need the
           // reactive renderer below.
           const iframeUrl = params?.url ?? "";
-          const isAgentTerminal = iframeUrl.startsWith(getTerminalUrl()) && iframeUrl.includes("arg=agent");
+          const isAgentTerminal = isAgentTerminalUrl(iframeUrl, getTerminalUrl());
           if (isAgentTerminal) {
             return createMithrilRenderer(AgentTerminalPanel, {
               agentId: params?.agentId ?? "",
