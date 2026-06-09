@@ -102,6 +102,28 @@ def _split_at_last_complete_line(data: bytes) -> tuple[bytes, bytes]:
     return data[: newline_index + 1], fragment
 
 
+def read_complete_lines_since_offset(file_path: Path, offset: int) -> tuple[int, list[str]]:
+    """Read the complete lines appended to ``file_path`` since byte ``offset``.
+
+    Returns ``(new_offset, lines)`` where ``new_offset`` advances past only the
+    bytes consumed (the complete lines) so a partial trailing line is left to be
+    re-read once the writer finishes it, and ``lines`` is the decoded text split
+    into individual lines (the raw JSONL the attribution scanner expects).
+
+    Reuses ``_split_at_last_complete_line`` so the boundary never falls inside an
+    in-progress record or a multi-byte UTF-8 sequence -- the same guarantee the
+    event-stream reader relies on. ``OSError`` is allowed to propagate; the
+    caller decides how to handle a missing or unreadable file.
+    """
+    with open(file_path, "rb") as f:
+        f.seek(offset)
+        new_data = f.read()
+    complete, _fragment = _split_at_last_complete_line(new_data)
+    if not complete:
+        return offset, []
+    return offset + len(complete), complete.decode("utf-8").splitlines()
+
+
 class SessionFileState:
     """Tracks reading and parsed-events cache state for a single session JSONL file.
 
