@@ -219,16 +219,20 @@ provider = "lima"
 target_path = "/mngr/code/"
 idle_mode = "disabled"
 start_arg__extend = ["--cpus=2", "--memory=4", "--disk=20"]
-# Flip the (default-disabled) lima provider on for this create, and skip the
-# claude install/version check. The agent toolchain -- including the pinned
-# claude binary -- is installed at create time by setup_system.sh (below), which
-# runs *after* the repo is synced in, i.e. after the point the version check
-# would otherwise run. setup_system.sh installs the pinned version, so the pin is
-# still enforced. (Docker-in-Lima mode and its is_host_in_docker provider config
-# are gone; the agent now runs directly in the VM as root -- see [providers.lima].
-# Offline reads via `mngr event` / `mngr transcript` against a stopped Lima host
-# do not work in the btrfs layout until the host is started.)
-setting__extend = ["providers.lima.is_enabled=true", "agent_types.claude.check_installation=false"]
+# Mirror the docker template: flip the (default-disabled) lima provider on for
+# this create. Redundant in practice -- `@<name>.lima` resolves the provider by
+# name regardless of is_enabled -- but kept for parity/intent with docker.
+# (Docker-in-Lima mode and its is_host_in_docker provider config are gone; the
+# agent now runs directly in the VM as root -- see [providers.lima]. Offline
+# reads via `mngr event` / `mngr transcript` against a stopped Lima host do not
+# work in the btrfs layout until the host is started.)
+#
+# The pinned claude binary is installed on the fresh VM during provisioning by
+# the claude plugin itself (is_remote_agent_installation_allowed defaults to
+# True, so a missing remote claude is auto-installed at the pinned version);
+# setup_system.sh below then re-installs it as part of the full toolchain. No
+# version-check disable is needed.
+setting__extend = ["providers.lima.is_enabled=true"]
 # Same forwarding as the docker template; see comment there.
 pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
 # Run the SAME setup as a Dockerfile-built workspace, directly in the VM as root.
