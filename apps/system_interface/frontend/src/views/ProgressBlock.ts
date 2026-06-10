@@ -28,6 +28,9 @@ interface ProgressBlockAttrs {
    *  only references a subset. */
   toolResults: Map<string, ToolResultEvent>;
   agentId: string;
+  /** Optional DOM id for the root, so a virtualized list can measure this
+   *  block's height by querying ``.message-list > [id]``. */
+  id?: string;
 }
 
 function statusIcon(status: StepStatus, is_frontier: boolean): m.Vnode {
@@ -157,7 +160,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
 
   return {
     view(vnode) {
-      const { items, trailing_reply, toolResults, agentId } = vnode.attrs;
+      const { items, trailing_reply, toolResults, agentId, id } = vnode.attrs;
 
       // Index of the last step item, so only it gets the `--last` thread cap.
       let lastStepIdx = -1;
@@ -195,7 +198,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
         return m("div.pv-stophook", { key: `chip-${item.event.event_id}` }, renderUserMessage(item.event));
       });
 
-      return m("div.progress-block", [
+      return m("div.progress-block", { id }, [
         m("div.pv.pv--timeline", [
           m("div.pv-timeline-thread", { "aria-hidden": "true" }),
           m("div.pv-timeline-nodes", timelineNodes),

@@ -7,7 +7,6 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-import type m from "mithril";
 import type {
   TranscriptEvent,
   AssistantMessageEvent,
@@ -15,7 +14,7 @@ import type {
   ToolResultEvent,
   StepEnrichment,
 } from "../models/Response";
-import { renderConversation, isSubagentRunning } from "./conversation-render";
+import { buildConversationRows, isSubagentRunning } from "./conversation-rows";
 import { ProgressBlock } from "./ProgressBlock";
 import type { StepNode, TimelineItem } from "./turn-grouping";
 
@@ -88,19 +87,12 @@ function enrich(entries: Record<string, Partial<StepEnrichment>>): Map<string, S
 // `tag` may be a string or a component reference, so type it loosely.
 type VNodeLike = { tag?: unknown; attrs?: unknown; children?: unknown };
 
-/** Pull the message nodes out of the wrapper renderConversation returns. */
-function messageNodes(vnode: m.Vnode): VNodeLike[] {
-  const wrapper = vnode as unknown as VNodeLike;
-  const inner = (wrapper.children as VNodeLike[])[0];
-  return inner.children as VNodeLike[];
-}
-
-describe("renderConversation (shared by main chat and subagent view)", () => {
+describe("buildConversationRows (shared by main chat and subagent view)", () => {
   it("renders a subagent's own steps as a progress timeline, not raw tk Bash calls", () => {
     // A subagent transcript: it created, started, did work in, and closed its
     // own step. Its `Updated <id> ->` transitions live in this (subagent)
-    // stream, and its enrichment is scoped to the subagent. The same renderer
-    // the main chat uses must surface this as a step timeline.
+    // stream, and its enrichment is scoped to the subagent. The same pipeline
+    // the main chat uses must surface this as a step timeline row.
     const events: TranscriptEvent[] = [
       userMsg("2026-04-28T01:00:00Z", "the prompt"),
       tkMsg("2026-04-28T01:00:01Z", "tk start cod-sub1", "c-start"),
@@ -111,13 +103,15 @@ describe("renderConversation (shared by main chat and subagent view)", () => {
     ];
     const enrichment = enrich({ "cod-sub1": { title: "Explore the code", status: "closed", summary: "explored it" } });
 
-    const nodes = messageNodes(renderConversation(events, enrichment, "agent-x", /* agentIsIdle */ true));
+    const rows = buildConversationRows("agent-x", events, enrichment, /* agentIsIdle */ true);
 
-    // A ProgressBlock (the timeline) is present, carrying the subagent's step
+    // A ProgressBlock row (the timeline) is present, carrying the subagent's step
     // with its enriched title/summary -- not a bare Bash tool-call block.
-    const progress = nodes.find((n) => n.tag === ProgressBlock);
-    expect(progress).toBeDefined();
-    const items = (progress?.attrs as { items: TimelineItem[] }).items;
+    const progressRow = rows.find((r) => r.key.startsWith("progress-"));
+    expect(progressRow).toBeDefined();
+    const vnode = progressRow?.render() as VNodeLike;
+    expect(vnode.tag).toBe(ProgressBlock);
+    const items = (vnode.attrs as { items: TimelineItem[] }).items;
     const steps = items.filter((i): i is { kind: "step"; step: StepNode } => i.kind === "step").map((i) => i.step);
     expect(steps).toHaveLength(1);
     expect(steps[0].ticket_id).toBe("cod-sub1");
@@ -131,8 +125,8 @@ describe("renderConversation (shared by main chat and subagent view)", () => {
       userMsg("2026-04-28T01:00:00Z", "hi"),
       assistantText("2026-04-28T01:00:01Z", "hello"),
     ];
-    const nodes = messageNodes(renderConversation(events, new Map(), "agent-x", true));
-    expect(nodes.find((n) => n.tag === ProgressBlock)).toBeUndefined();
+    const rows = buildConversationRows("agent-x", events, new Map(), true);
+    expect(rows.some((r) => r.key.startsWith("progress-"))).toBe(false);
   });
 });
 
