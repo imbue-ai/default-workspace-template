@@ -28,7 +28,8 @@
  */
 
 import m from "mithril";
-import { getAgentById } from "./AgentManager";
+import { addAgentsUpdatedListener, getAgentById } from "./AgentManager";
+import type { AgentState } from "./AgentManager";
 import type { TranscriptEvent } from "./Response";
 
 /**
@@ -65,6 +66,15 @@ export interface PendingMessage {
 let nextPendingId = 0;
 
 const pendingByAgent: Record<string, PendingMessage[]> = {};
+
+/** Raw (not effective) activity_state last seen per agent, so we can detect a
+ *  working->IDLE transition. Keyed by agent id; absent until the first update. */
+const lastSeenActivityByAgent: Record<string, string | null> = {};
+
+/** Activity states that mean the agent is mid-turn (and therefore may still
+ *  dequeue a queued message). A transition out of one of these into IDLE is the
+ *  signal that the queue has drained. */
+const WORKING_ACTIVITY_STATES = new Set<string>(["THINKING", "TOOL_RUNNING"]);
 
 function userEventIds(events: readonly TranscriptEvent[]): Set<string> {
   const ids = new Set<string>();
@@ -201,6 +211,14 @@ export function reconcilePendingMessages(agentId: string, events: readonly Trans
   const claimed = new Set<string>();
   const remaining: PendingMessage[] = [];
   for (const pending of list) {
+    // FIXME: exact trimmed-content equality is brittle. It strands the bubble
+    // whenever the persisted text diverges from what we sent -- e.g. the user
+    // edits a queued message in the Claude terminal before it is submitted, so
+    // the real user_message arrives with different text and never matches. The
+    // working->IDLE safeguard (clearQueuedMessagesOnIdle) is the backstop that
+    // keeps such a bubble from lasting forever; if these strandings turn out to
+    // be common we should move to fuzzier matching (normalized/prefix/edit-
+    // distance) or a server-returned correlation id rather than exact equality.
     const match = events.find(
       (event) =>
         event.type === "user_message" &&
@@ -234,4 +252,67 @@ export function getEffectiveActivityState(agentId: string): string | null {
     return "THINKING";
   }
   return realState;
+}
+
+/**
+ * Safeguard against an optimistic "queued" bubble that can never reconcile.
+ *
+ * Reconciliation matches a bubble to its real transcript event by content
+ * (see ``reconcilePendingMessages``); that fails whenever the delivered text
+ * diverges from what we sent (the user edits a queued message in the Claude
+ * terminal before submitting it) or the message is never delivered at all (the
+ * agent is restarted, dropping its queue). Either way the bubble would stay up
+ * forever.
+ *
+ * The agent going from a working state to IDLE is the unambiguous signal that
+ * its turn -- and its queue -- are fully drained: at a genuine IDLE there is no
+ * outstanding work that could still surface a queued message, so any bubble
+ * still marked ``queued`` provably will not reconcile and is dropped.
+ *
+ * Scoped deliberately:
+ *  - Only the working->IDLE *transition* clears (not merely "currently IDLE"),
+ *    so a fresh send to an already-idle agent -- briefly ``queued`` while the
+ *    agent's raw state is still IDLE, before it flips to THINKING -- is left
+ *    alone.
+ *  - Only ``queued`` messages are dropped, never ``sending`` ones. A ``sending``
+ *    message's lifetime is owned by its in-flight send (resolve -> queued, fail
+ *    -> rollback); notably "interrupt and send" marks its message back to
+ *    ``sending`` *before* interrupting, so the transient IDLE the interrupt
+ *    produces does not clear the message it is resending.
+ *
+ * Driven off the raw ``agents_updated`` activity_state (not the effective state,
+ * which can mask IDLE as THINKING for an idle-send). Wired up via
+ * ``initQueuedMessageIdleClearing`` so it runs for every agent update.
+ */
+function clearQueuedMessagesOnIdle(agents: readonly AgentState[]): void {
+  let changed = false;
+  for (const agent of agents) {
+    const previous = lastSeenActivityByAgent[agent.id];
+    const current = agent.activity_state ?? null;
+    lastSeenActivityByAgent[agent.id] = current;
+    const wasWorking = previous != null && WORKING_ACTIVITY_STATES.has(previous);
+    if (current !== "IDLE" || !wasWorking) {
+      continue;
+    }
+    const list = pendingByAgent[agent.id];
+    if (list === undefined) {
+      continue;
+    }
+    const remaining = list.filter((pending) => pending.status !== "queued");
+    if (remaining.length !== list.length) {
+      pendingByAgent[agent.id] = remaining;
+      changed = true;
+    }
+  }
+  if (changed) {
+    m.redraw();
+  }
+}
+
+/**
+ * Register the working->IDLE queue-clearing safeguard against the agent-state
+ * stream. Call once at app startup, after the agent manager is initialized.
+ */
+export function initQueuedMessageIdleClearing(): void {
+  addAgentsUpdatedListener(clearQueuedMessagesOnIdle);
 }
