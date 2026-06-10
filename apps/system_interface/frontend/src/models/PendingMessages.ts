@@ -28,8 +28,7 @@
  */
 
 import m from "mithril";
-import { addAgentsUpdatedListener, getAgentById } from "./AgentManager";
-import type { AgentState } from "./AgentManager";
+import { addAgentActivityListener, getAgentById } from "./AgentManager";
 import type { TranscriptEvent } from "./Response";
 
 /**
@@ -66,10 +65,6 @@ export interface PendingMessage {
 let nextPendingId = 0;
 
 const pendingByAgent: Record<string, PendingMessage[]> = {};
-
-/** Raw (not effective) activity_state last seen per agent, so we can detect a
- *  working->IDLE transition. Keyed by agent id; absent until the first update. */
-const lastSeenActivityByAgent: Record<string, string | null> = {};
 
 /** Activity states that mean the agent is mid-turn (and therefore may still
  *  dequeue a queued message). A transition out of one of these into IDLE is the
@@ -255,7 +250,8 @@ export function getEffectiveActivityState(agentId: string): string | null {
 }
 
 /**
- * Safeguard against an optimistic "queued" bubble that can never reconcile.
+ * Safeguard against an optimistic "queued" bubble that can never reconcile,
+ * driven by an agent's activity transition (see ``addAgentActivityListener``).
  *
  * Reconciliation matches a bubble to its real transcript event by content
  * (see ``reconcilePendingMessages``); that fails whenever the delivered text
@@ -273,46 +269,38 @@ export function getEffectiveActivityState(agentId: string): string | null {
  *  - Only the working->IDLE *transition* clears (not merely "currently IDLE"),
  *    so a fresh send to an already-idle agent -- briefly ``queued`` while the
  *    agent's raw state is still IDLE, before it flips to THINKING -- is left
- *    alone.
+ *    alone. (The transition itself is detected by the agent-state manager; this
+ *    only decides what to do with it.)
  *  - Only ``queued`` messages are dropped, never ``sending`` ones. A ``sending``
  *    message's lifetime is owned by its in-flight send (resolve -> queued, fail
  *    -> rollback); notably "interrupt and send" marks its message back to
  *    ``sending`` *before* interrupting, so the transient IDLE the interrupt
  *    produces does not clear the message it is resending.
  *
- * Driven off the raw ``agents_updated`` activity_state (not the effective state,
- * which can mask IDLE as THINKING for an idle-send). Wired up via
- * ``initQueuedMessageIdleClearing`` so it runs for every agent update.
+ * ``previous``/``current`` are the raw activity_state (not the effective state,
+ * which can mask IDLE as THINKING for an idle-send).
  */
-function clearQueuedMessagesOnIdle(agents: readonly AgentState[]): void {
-  let changed = false;
-  for (const agent of agents) {
-    const previous = lastSeenActivityByAgent[agent.id];
-    const current = agent.activity_state ?? null;
-    lastSeenActivityByAgent[agent.id] = current;
-    const wasWorking = previous != null && WORKING_ACTIVITY_STATES.has(previous);
-    if (current !== "IDLE" || !wasWorking) {
-      continue;
-    }
-    const list = pendingByAgent[agent.id];
-    if (list === undefined) {
-      continue;
-    }
-    const remaining = list.filter((pending) => pending.status !== "queued");
-    if (remaining.length !== list.length) {
-      pendingByAgent[agent.id] = remaining;
-      changed = true;
-    }
+function clearQueuedMessagesOnIdle(agentId: string, previous: string | null, current: string | null): void {
+  const wasWorking = previous != null && WORKING_ACTIVITY_STATES.has(previous);
+  if (current !== "IDLE" || !wasWorking) {
+    return;
   }
-  if (changed) {
+  const list = pendingByAgent[agentId];
+  if (list === undefined) {
+    return;
+  }
+  const remaining = list.filter((pending) => pending.status !== "queued");
+  if (remaining.length !== list.length) {
+    pendingByAgent[agentId] = remaining;
     m.redraw();
   }
 }
 
 /**
  * Register the working->IDLE queue-clearing safeguard against the agent-state
- * stream. Call once at app startup, after the agent manager is initialized.
+ * manager's activity-transition signal. Call once at app startup, after the
+ * agent manager is initialized.
  */
 export function initQueuedMessageIdleClearing(): void {
-  addAgentsUpdatedListener(clearQueuedMessagesOnIdle);
+  addAgentActivityListener(clearQueuedMessagesOnIdle);
 }
