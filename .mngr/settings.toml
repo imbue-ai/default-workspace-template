@@ -26,6 +26,21 @@ host_env__extend = [
     # subdirs too. /mngr/code/ is the container WORKDIR (set by the Dockerfile);
     # a /code -> /mngr/code symlink is kept in the image as a safety net.
     "TICKETS_DIR=/mngr/code/runtime/tickets",
+    # Workaround for an Apple M5 lima-VZ guest CPU mismatch: the Debian 12
+    # guest kernel advertises SVE / SVE2 in /proc/cpuinfo, but lima-VZ on M5
+    # traps the `cntb` SVE instruction emitted by OpenSSL's
+    # `_armv8_sve_get_vl_bytes` during CPU-cap init -- so cryptography>=47's
+    # Rust openssl binding SIGILLs on import (rc=132), taking down any tool
+    # that transitively imports paramiko (mngr CLI, system-interface, etc.).
+    # OPENSSL_armcap=0 disables OpenSSL's CPU-cap detection so it falls back
+    # to NEON-only paths; runs cleanly on both real M-series silicon and
+    # lima-VZ. Performance impact is negligible for this workload (TLS / SSH
+    # session setup only). Drop when lima-VZ on M5 correctly virtualizes SVE
+    # or when upstream OpenSSL guards `cntb` behind hwcap2. Empirically
+    # bisected to `_armv8_sve_get_vl_bytes+0: cntb x0` via gdb on a fresh
+    # Debian 12 lima VM on the launch-to-msg M5 runner; Ubuntu 24.04 lima
+    # guests don't advertise SVE so they don't hit this.
+    "OPENSSL_armcap=0",
 ]
 worktree_base_folder = "/mngr/worktree/"
 # claude_subagent_proxy is upstream mngr's experimental Claude-Code-Task ->

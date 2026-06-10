@@ -11,6 +11,16 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export PATH="/root/.local/bin:$PATH"
 
+# Disable OpenSSL CPU-cap detection. lima-VZ on Apple M5 advertises SVE in
+# /proc/cpuinfo but traps the `cntb` SVE instruction OpenSSL emits during
+# CPU-cap init -- so any cryptography>=47 import (mngr CLI, system-interface)
+# SIGILLs in `_armv8_sve_get_vl_bytes`. OPENSSL_armcap=0 falls back to
+# NEON-only paths, which run on both real M-series silicon and the VZ guest.
+# The same env var rides the agent's runtime env via .mngr/settings.toml
+# `host_env__extend`; this export covers the build-time `mngr plugin add`
+# below, which runs before /mngr/env is sourced.
+export OPENSSL_armcap=0
+
 # Pin uv to a Python that satisfies the lockfile (>=3.12). The Docker base ships
 # 3.12; on other bases setup_system.sh fetched a uv-managed 3.12, so point uv at
 # it. No-op when system Python is already >=3.12 (Docker build unchanged).
