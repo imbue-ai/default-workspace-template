@@ -36,6 +36,30 @@ def _default_escalate(message: str) -> None:
     logger.warning("ai_integration spend ceiling: {}", message)
 
 
+def format_window(seconds: float) -> str:
+    """Render a window length in a unit-aware way (s / min / h).
+
+    Avoids the old ``{seconds/3600:.0f}h``, which printed a misleading "0h" for any
+    sub-hour window (e.g. a 1000s window).
+    """
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}min"
+    return f"{seconds / 3600:g}h"
+
+
+def format_usd(amount: float) -> str:
+    """Render a USD amount at full precision (no rounding to cents).
+
+    Token-level AI costs are routinely sub-cent (e.g. $0.000596), so the old
+    ``${:.2f}`` rounded them to a useless "$0.00". This shows the real figure while
+    trimming trailing zeros and float-arithmetic noise (a summed ledger value like
+    ``0.0005960000000000001`` renders as ``$0.000596``; ``5.0`` renders as ``$5``).
+    """
+    return "$" + f"{amount:.10f}".rstrip("0").rstrip(".")
+
+
 class SpendTracker(MutableModel):
     """Tracks per-service spend against a rolling-window ceiling.
 
@@ -131,9 +155,9 @@ class SpendTracker(MutableModel):
         spent = self.spent_in_window()
         if spent >= self.ceiling_usd:
             message = (
-                f"service '{self.service_name}' has spent ~${spent:.2f} in the last "
-                f"{self.window_seconds / 3600:.0f}h, at or over its ${self.ceiling_usd:.2f} "
-                f"ceiling; pausing paid AI calls"
+                f"service '{self.service_name}' has spent ~{format_usd(spent)} in the "
+                f"last {format_window(self.window_seconds)}, at or over its "
+                f"{format_usd(self.ceiling_usd)} ceiling; pausing paid AI calls"
             )
             self.escalate(message)
             raise SpendCeilingExceededError(message)

@@ -6,37 +6,27 @@ description: Use when building a service that calls Claude -- AI-driven services
 # Use an AI integration in a service
 
 A service can call Claude in three ways, at escalating levels of agency. Pick the
-weakest one that does the job -- it is cheaper, faster, and simpler. All three
-are implemented in the `ai_integration` library so you do not hand-roll
-credentialing, the `claude -p` environment fix, billing-path logging, or spend
-control.
-
-Import what you need:
+weakest one that does the job -- it is cheaper, faster, and simpler. All three live
+in the `ai_integration` library, so you don't hand-roll credentialing, the
+`claude -p` environment fix, billing-path logging, or spend control.
 
 ```python
 from ai_integration.core import run_completion, run_task, run_agent
 ```
 
-The functions are `async` (services here are async FastAPI). The `claude -p`
-work is offloaded to a thread internally; the direct-API path uses the async
-Anthropic client.
+The functions are `async` (services here are async FastAPI).
 
-## Decision tree -- pick the pattern
+## Pick the pattern
 
-Ask, in order:
-
-1. **Does the work need agency at all** -- i.e. tool use, reading files, multiple
-   reasoning/acting steps? If **no** (classify, summarize, extract, rewrite,
-   answer-from-context), use **`run_completion`** (pattern 3). This is the common
-   case and the cheapest.
-2. **Does it need agency, but as a single self-contained run** -- "read this
-   email and file a ticket", "look at this diff and write a summary with the repo
-   open"? Use **`run_task`** (pattern 2): one headless `claude -p` agentic run.
-3. **Does it need a full, potentially long-running agent** -- e.g. the service
-   edits itself in response to user feedback, or spins up an agent to fix an
-   error? Use **`run_agent`** (pattern 1). This must be **user-triggered or
-   error-triggered**, never an autonomous loop, and the launched agent must carry
-   a **tightly-scoped** task.
+1. **No agency** -- classify, summarize, extract, rewrite, answer-from-context?
+   Use **`run_completion`**. The common case, and the cheapest.
+2. **Agency, one self-contained run** -- "read this email and file a ticket",
+   "summarize this diff with the repo open"? Use **`run_task`** (one headless
+   `claude -p` run).
+3. **A full, possibly long-running agent** -- the service edits itself on user
+   feedback, or spins up an agent to fix an error? Use **`run_agent`**. Must be
+   **user- or error-triggered, never an autonomous loop**, with a tightly-scoped
+   task.
 
 See [references/patterns.md](references/patterns.md) for a worked sketch of each.
 
@@ -45,37 +35,29 @@ See [references/patterns.md](references/patterns.md) for a worked sketch of each
 ```python
 result = await run_completion(
     "Classify this email's intent:\n\n" + email_body,
-    service_name="email-triage",       # used to resolve the spend ceiling, if any
+    service_name="email-triage",       # resolves the spend ceiling, if any
     model="claude-haiku-4-5",          # cheap default; override as needed
     system="You are an email triage classifier.",
 )
 print(result.text, result.billing_path, result.cost_usd)
 ```
 
-The library routes this for you: **direct Anthropic API when `ANTHROPIC_API_KEY`
-is set** (always cheaper for non-agentic work), otherwise it falls back to
-headless `claude -p`. You do not choose -- routing is by key presence. Any
-Anthropic API option can be passed through `anthropic_options=...` (tools,
-response formats, temperature, etc.), and structured output works the same way.
+- **Routing is implicit by key presence**: direct Anthropic API when
+  `ANTHROPIC_API_KEY` is set (cheaper for non-agentic work), else headless
+  `claude -p`. You don't choose.
+- **`system` is required.** Make it a real instruction, not a placeholder.
+- **`anthropic_options` and structured output are direct-API-only.** Any Messages
+  API param (`tools`, `tool_choice`, `temperature`, ...) passes through
+  `anthropic_options=...` but is honored only on the keyed path (the keyless
+  fallback ignores them and warns). With `tools` + `tool_choice` the model answers
+  with a tool call -- read it from **`result.tool_calls`** (`ToolCall(name, input,
+  id)`); `result.text` is empty then.
 
-**`system` is required here** (unlike `run_task`). On the keyless `claude -p`
-fallback the library passes it as `--system-prompt` and disables tools
-(`--tools ""`). This is not just a cost optimization: the keyless fallback is
-*non-bare* (bare can't authenticate without an API key), so it always auto-loads
-this repo's CLAUDE.md -- and with an empty system prompt the model answers *that*
-ambient text instead of your prompt. A real `system` neutralizes it. Make it a
-genuine instruction for the task ("You are an email triage classifier."), not a
-placeholder.
-
-### The onramp is automatic -- do not make the user set up a key first
-
-A user with no API key can build and test the whole flow on the `claude -p`
-fallback immediately. When they later set `ANTHROPIC_API_KEY`, every
-`run_completion` call transparently upgrades to the cheaper direct API -- no code
-change. While running keyless, the library **logs the calculated savings a key
-would unlock** (it prices the actual call against the direct-API counterfactual).
-So: do not push the user to set up a key up front; let the implicit onramp do its
-job and surface the savings figure once volume makes it worthwhile.
+A user with no API key builds and tests on the `claude -p` fallback immediately;
+setting `ANTHROPIC_API_KEY` later upgrades every call to the cheaper direct API
+with no code change. The keyless path logs the savings a key would unlock, so
+don't push the user to set one up front -- surface the figure once volume
+justifies it.
 
 ## Pattern 2 -- `run_task` (one-shot agentic)
 
@@ -84,15 +66,17 @@ result = await run_task(
     "Read runtime/email-triage/latest.json and draft a reply; "
     "use the repo's templates in templates/.",
     service_name="email-triage",
-    spend_tracker=tracker,
 )
 ```
 
-Always headless `claude -p` (it has tools and file access, which a plain API call
-does not). Direct API is not an option here. Tools stay enabled -- the point is to
-ride the default agent. Pass `append_system="..."` to layer task instructions on
-top of the default agent prompt (`--append-system-prompt`), or `system="..."` to
-replace it outright (rare; you usually want the default agent here).
+- Always `claude -p` (it has tools and file access; direct API does not). Tools
+  stay enabled -- the point is to ride the default agent.
+- `append_system="..."` layers task instructions on the default agent prompt;
+  `system="..."` replaces it (rare).
+- Defaults `permission_mode="bypassPermissions"` because a headless agent has no
+  human to approve tool use -- without it, Read/Write/Bash are auto-denied. Tighten
+  it (e.g. `"acceptEdits"`) or set `None` and pass your own `--allowedTools` via
+  `claude_cli_args` for a narrower grant.
 
 ## Pattern 1 -- `run_agent` (full agent)
 
@@ -110,43 +94,29 @@ if result.outcome is AgentOutcome.DONE:
     ...  # the worker's branch is result.branch
 ```
 
-This wraps the `launch-task` synchronous `create_worker.py run` path
-(launch -> await the finish report -> structured result -> destroy). You write
-the task file first (with `lead_agent` / `finish_report_path` frontmatter; see the
-`launch-task` skill). **Triggering**: only on explicit user feedback or an error
--- never an autonomous loop. **Scope**: give the agent a tightly-scoped task; a
-broad task in an unattended launch is how cost and time run away. What to *do*
-with the returned branch (merge, hand back for review) is out of scope here and
-belongs to a dedicated future skill.
+Wraps the `launch-task` synchronous path (`create_worker.py launch-sync`: launch
+-> await finish report -> structured result -> destroy). Write the task file first
+with `lead_agent` / `finish_report_path` frontmatter (see the `launch-task`
+skill). **User- or error-triggered only**, with a **tightly-scoped** task -- a
+broad unattended launch is how cost and time run away. What to do with the
+returned branch (merge, review) is out of scope here.
 
 ## Cost control
 
-You never have to worry about blocking the user's interactive chat: `claude -p`
-and the direct API draw separate pools from interactive usage (see
+`claude -p` and the direct API draw separate pools from interactive usage, so
+service calls never block the user's chat (see
 [references/billing-and-credentialing.md](references/billing-and-credentialing.md)).
-The live concern is **cost**, so:
+The live concern is **cost**:
 
-- **Measure on a small sample before scaling.** Before wiring up a high-volume
-  flow, run the pattern on a handful of items, look at `result.cost_usd`, and tell
-  the user the projected cost ("this batch of N will cost ~$X"). For `run_task`,
-  remember `claude -p` cost is dominated by per-call overhead (each invocation
-  reloads the agent), so **batch rather than parallelize** (fewer, larger calls).
-- **Know why `claude -p` costs more than the direct API.** It's the default
-  agent's per-call context: system prompt + tool definitions + auto-loaded
-  CLAUDE.md/skills, plus a multi-turn tool loop. `run_completion`'s keyless
-  fallback already sheds most of this (`--system-prompt` + `--tools ""`), but the
-  direct API carries none of it -- which is why a key is cheaper and why the
-  library nudges you toward one once volume justifies it. (The deeper measured
-  breakdown and the `--bare`-vs-keyless-auth constraint are in
-  [references/billing-and-credentialing.md](references/billing-and-credentialing.md).)
-- **Confirm the billing path with the user at setup.** When wiring up a service
-  that will do volume, surface which path it will use and roughly what it will
-  cost, and get their OK before turning it on.
-- **Offer the user a spend ceiling (optional, set in `services.toml`).** There is
-  no tracker to construct or pass -- spend tracking is resolved automatically from
-  the service's config and keyed by `service_name`, so spend aggregates across
-  *every* call for that service (persisted under `runtime/<service>/`). To enable
-  it, add an `[services.<name>.ai_spend]` table:
+- **Measure on a small sample before scaling.** Run the pattern on a handful of
+  items, check `result.cost_usd`, and tell the user the projected cost. For
+  `run_task`, cost is dominated by per-call overhead, so **batch rather than
+  parallelize** (fewer, larger calls).
+- **Confirm the billing path and rough cost with the user before turning on a
+  volume flow.**
+- **Offer a spend ceiling (optional, `services.toml`).** No tracker to construct
+  or pass -- it's resolved automatically and keyed by `service_name`, aggregating
+  across every call for that service (persisted under `runtime/<service>/`):
 
   ```toml
   [services.email-triage.ai_spend]
@@ -154,26 +124,18 @@ The live concern is **cost**, so:
   window_seconds = 86400     # optional; default 24h
   ```
 
-  With this set, each call checks the ceiling first and records its cost after;
-  once the window's spend reaches the ceiling, the next call raises
-  `SpendCeilingExceededError` (and logs) instead of spending silently -- the
-  service can catch that to notify the user (e.g. via `send-user-message`). With
-  no `ai_spend` table the calls run unbounded. **This is opt-in: tell the user a
-  spend ceiling is available and let them decide whether to set one** (it does not
-  require the service to be a running background process -- a spend-tracking-only
-  `[services.<name>.ai_spend]` table with no `command` works too).
+  Each call then checks the ceiling first and records its cost after; once the
+  window's spend hits the ceiling, the next call raises
+  `SpendCeilingExceededError` instead of spending silently (catch it to notify the
+  user via `send-user-message`). No `ai_spend` table -> unbounded. It's opt-in:
+  tell the user it's available and let them decide. The table works with no
+  `command` too (spend-tracking-only service).
 
-## What the library guarantees (so you don't have to)
+## What the library handles for you
 
-- **Credentialing.** Prefers `ANTHROPIC_API_KEY`, else the inherited
-  `CLAUDE_CONFIG_DIR`; raises `CredentialsUnavailableError` *loudly* if neither
-  resolves, rather than failing opaquely inside `claude`.
-- **The mngr `claude -p` bug.** Every spawned `claude -p` runs with
-  `MAIN_CLAUDE_SESSION_ID` unset, so it does not trip mngr's session-guarded
-  stop/readiness hooks. This is the main reason to call `claude -p` *through* the
-  library rather than shelling out yourself.
-- **Billing-path logging** on every call, and the keyless savings nudge.
-
-Details and the footgun (a stray `ANTHROPIC_API_KEY` silently switches `claude -p`
-to full-API billing) are in
-[references/billing-and-credentialing.md](references/billing-and-credentialing.md).
+Credentialing (raises `CredentialsUnavailableError` loudly if no credential
+resolves), the mngr `claude -p` session-hook fix, billing-path logging plus the
+keyless savings nudge, context isolation on the keyless completion path, and
+surfacing forced tool calls in `result.tool_calls`. Details, and the footgun (a
+stray `ANTHROPIC_API_KEY` silently switches `claude -p` to full-API billing), are
+in [references/billing-and-credentialing.md](references/billing-and-credentialing.md).

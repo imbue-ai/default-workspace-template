@@ -1,9 +1,12 @@
 import functools
+import io
+import os
 import subprocess
 from pathlib import Path
 
 import anyio
 import pytest
+from loguru import logger
 
 from ai_integration.core import (
     _run_create_worker_blocking,
@@ -12,7 +15,7 @@ from ai_integration.core import (
     run_task,
 )
 from ai_integration.data_types import AgentOutcome, BillingPath, CompletionResult, Usage
-from ai_integration.errors import CredentialsUnavailableError
+from ai_integration.errors import AgentRunError, CredentialsUnavailableError
 from ai_integration.spend import SpendTracker
 
 
@@ -147,6 +150,117 @@ def test_run_completion_records_spend(tmp_path) -> None:
     assert tracker.spent_in_window() == 0.001
 
 
+def test_run_completion_keyless_runs_in_isolated_cwd(tmp_path) -> None:
+    (tmp_path / ".credentials.json").write_text("{}")
+    env = {"CLAUDE_CONFIG_DIR": str(tmp_path), "HOME": str(tmp_path / "home")}
+    seen: dict[str, object] = {}
+
+    async def fake_cli(**kwargs: object) -> CompletionResult:
+        # The cwd must be a real, existing directory at call time (so claude -p has
+        # somewhere to run) and must NOT be the repo root (so CLAUDE.md isn't loaded).
+        cwd = kwargs["cwd"]
+        assert isinstance(cwd, str)
+        assert os.path.isdir(cwd)
+        assert Path(cwd).resolve() != Path.cwd().resolve()
+        seen.update(kwargs)
+        return _result(BillingPath.CLAUDE_CLI)
+
+    async def fake_api(**kwargs: object) -> CompletionResult:
+        raise AssertionError("api backend must not run without a key")
+
+    anyio.run(
+        functools.partial(
+            run_completion,
+            "hi",
+            system="You are terse.",
+            service_name="svc",
+            env=env,
+            api_backend=fake_api,
+            cli_backend=fake_cli,
+            spend_loader=lambda _name: None,
+        )
+    )
+    assert seen["cwd"] is not None
+
+
+def test_run_completion_keyless_warns_on_anthropic_options(tmp_path) -> None:
+    (tmp_path / ".credentials.json").write_text("{}")
+    env = {"CLAUDE_CONFIG_DIR": str(tmp_path), "HOME": str(tmp_path / "home")}
+
+    async def fake_cli(**kwargs: object) -> CompletionResult:
+        return _result(BillingPath.CLAUDE_CLI)
+
+    async def fake_api(**kwargs: object) -> CompletionResult:
+        raise AssertionError
+
+    buffer = io.StringIO()
+    sink_id = logger.add(buffer, level="WARNING")
+    try:
+        anyio.run(
+            functools.partial(
+                run_completion,
+                "hi",
+                system="You are terse.",
+                service_name="svc",
+                env=env,
+                anthropic_options={"temperature": 0.0},
+                api_backend=fake_api,
+                cli_backend=fake_cli,
+                spend_loader=lambda _name: None,
+            )
+        )
+    finally:
+        logger.remove(sink_id)
+    # anthropic_options are ignored on the keyless path; the user must be warned
+    # rather than silently surprised.
+    assert "IGNORED on the keyless" in buffer.getvalue()
+
+
+def test_run_completion_warns_and_skips_spend_when_cost_unknown(tmp_path) -> None:
+    tracker = SpendTracker(
+        service_name="svc",
+        ceiling_usd=10.0,
+        state_root=tmp_path,
+        window_seconds=1000,
+        clock=lambda: 1000.0,
+    )
+
+    async def fake_api(**kwargs: object) -> CompletionResult:
+        # cost_usd None mimics a direct-API model missing from the price table.
+        return CompletionResult(
+            text="x",
+            billing_path=BillingPath.DIRECT_API,
+            model="mystery",
+            usage=Usage(input_tokens=1, output_tokens=1),
+            cost_usd=None,
+        )
+
+    async def fake_cli(**kwargs: object) -> CompletionResult:
+        raise AssertionError
+
+    buffer = io.StringIO()
+    sink_id = logger.add(buffer, level="WARNING")
+    try:
+        anyio.run(
+            functools.partial(
+                run_completion,
+                "hi",
+                system="You are terse.",
+                service_name="svc",
+                env={"ANTHROPIC_API_KEY": "sk"},
+                spend_loader=lambda _name: tracker,
+                api_backend=fake_api,
+                cli_backend=fake_cli,
+            )
+        )
+    finally:
+        logger.remove(sink_id)
+    # An unpriced call spends real money but can't be recorded; the gap must be
+    # logged, and nothing recorded against the ceiling.
+    assert "spend NOT recorded" in buffer.getvalue()
+    assert tracker.spent_in_window() == 0.0
+
+
 def test_run_task_forwards_append_system_and_keeps_tools_enabled(tmp_path) -> None:
     (tmp_path / ".credentials.json").write_text("{}")
     env = {"CLAUDE_CONFIG_DIR": str(tmp_path), "HOME": str(tmp_path / "home")}
@@ -172,6 +286,9 @@ def test_run_task_forwards_append_system_and_keeps_tools_enabled(tmp_path) -> No
     # no replacement system prompt is forced.
     assert "tools" not in seen
     assert seen["system"] is None
+    # Headless tool use is auto-denied without a permission mode, so run_task
+    # defaults to bypassPermissions.
+    assert seen["permission_mode"] == "bypassPermissions"
 
 
 @pytest.mark.parametrize(
@@ -191,7 +308,14 @@ def test_run_agent_maps_report_name_to_outcome(
 
     def fake_runner(**kwargs: object) -> dict[str, object]:
         captured.update(kwargs)
-        return {**payload, "branch": "mngr/demo", "body": "hi", "raw_report": "raw"}
+        # timed_out defaults to False; the timeout parametrization overrides it.
+        return {
+            "timed_out": False,
+            **payload,
+            "branch": "mngr/demo",
+            "body": "hi",
+            "raw_report": "raw",
+        }
 
     result = anyio.run(
         functools.partial(
@@ -209,6 +333,27 @@ def test_run_agent_maps_report_name_to_outcome(
     assert result.branch == "mngr/demo"
     # The injected runner is handed the resolved repo_root, not the process cwd.
     assert captured["repo_root"] == Path("/repo")
+
+
+def test_run_agent_raises_on_malformed_payload() -> None:
+    # A create_worker result missing a required field (here, branch) is a contract
+    # breakage and must fail loudly rather than yield a blank/wrong AgentResult.
+    def fake_runner(**kwargs: object) -> dict[str, object]:
+        return {"timed_out": False, "name": "done", "body": "hi"}  # no branch
+
+    with pytest.raises(AgentRunError):
+        anyio.run(
+            functools.partial(
+                run_agent,
+                name="demo",
+                template="worker",
+                runtime_dir=Path("/tmp/runtime"),
+                task_file=Path("/tmp/runtime/task.md"),
+                service_name="svc",
+                repo_root=Path("/repo"),
+                runner=fake_runner,
+            )
+        )
 
 
 def test_create_worker_subprocess_runs_in_repo_root(tmp_path) -> None:

@@ -5,13 +5,13 @@
 # ///
 """Worker-creation driver for the launch-task family of skills.
 
-Two subcommands cover the two halves of the lead-side lifecycle:
+Four subcommands cover the lead-side lifecycle:
 
 ``launch``
-    Runs the worker-creation lifecycle synchronously (``mngr create`` + the
-    runtime-dir sync + the task message) and returns. Callers run this in the
-    *foreground* so a failed launch surfaces immediately rather than as a
-    delayed background notification.
+    Runs the worker-creation lifecycle (``mngr create`` + the runtime-dir sync +
+    the task message) and returns while the worker keeps running. Callers run
+    this in the *foreground* so a failed launch surfaces immediately rather than
+    as a delayed background notification.
 
 ``await``
     A generic *poll-until-file-exists* primitive. It reads the
@@ -28,10 +28,11 @@ Two subcommands cover the two halves of the lead-side lifecycle:
     e.g. a service that launches a tightly-scoped agent and waits for its single
     finish report -- uses the same primitive with no gate handling at all.
 
-``run``
-    The synchronous convenience path for non-interactive callers (services):
-    ``launch`` + a *foreground* ``await`` + structured-result extraction +
-    (optionally) ``destroy``, in one blocking call. It prints a single JSON
+``launch-sync``
+    The blocking, wait-for-completion counterpart to ``launch``, for
+    non-interactive callers (services): ``launch`` + a *foreground* ``await`` +
+    structured-result extraction + (optionally) ``destroy``, in one blocking
+    call that returns only once the worker reports. It prints a single JSON
     object describing the terminal report (``type``/``name``/``body``/``branch``,
     or ``timed_out``) so the calling process can act on it programmatically
     without re-parsing markdown frontmatter. On timeout it does NOT destroy the
@@ -43,9 +44,9 @@ Two subcommands cover the two halves of the lead-side lifecycle:
     (``mngr/<name>``) survives the agent's removal, so a caller can still merge
     or inspect the work afterwards.
 
-The subcommands share the same ``--task-file``: ``launch``/``run`` send it to
-the worker, and ``await``/``run`` read its ``finish_report_path`` to learn what
-to wait for. Putting the wait target in frontmatter (rather than deriving a
+The subcommands share the same ``--task-file``: ``launch``/``launch-sync`` send
+it to the worker, and ``await``/``launch-sync`` read its ``finish_report_path``
+to learn what to wait for. Putting the wait target in frontmatter (rather than deriving a
 fixed path) keeps the contract data-driven, so future flows can point ``await``
 at a different report without a code change.
 
@@ -445,7 +446,7 @@ def parse_report(text: str) -> ReportResult:
     raises on a malformed *task file* (a lead-authored, deterministic input
     where bad YAML is an authoring bug). A report is *agent-authored runtime
     output*: an unparseable one yields ``report_type=None``/``name=None`` with
-    the whole text preserved as the body, so the caller (``run_sync``) surfaces
+    the whole text preserved as the body, so the caller (``launch_sync``) surfaces
     the raw report as structured data for the calling process to handle, rather
     than crashing the collection path and losing the worker's output. No data is
     discarded -- ``raw`` always holds the verbatim text.
@@ -483,10 +484,9 @@ def _emit_run_result(
 ) -> None:
     """Write the run-result JSON to stdout and, if given, to a dedicated file.
 
-    The file is the machine contract for programmatic callers (e.g.
-    ``ai_integration.run_agent``): they read the exact payload from a path they
-    chose, rather than guessing which stdout line is the result. Stdout still
-    carries the JSON for humans / shell callers and back-compat.
+    The file is the machine contract for programmatic callers: they read the exact
+    payload from a path they chose, rather than guessing which stdout line is the
+    result. Stdout still carries the JSON for humans and shell callers.
     """
     line = json.dumps(payload)
     stream.write(line + "\n")
@@ -495,7 +495,7 @@ def _emit_run_result(
         result_path.write_text(line, encoding="utf-8")
 
 
-def run_sync(
+def launch_sync(
     name: str,
     template: str,
     runtime_dir: Path,
@@ -513,7 +513,7 @@ def run_sync(
 ) -> int:
     """Launch a worker, wait for its report in the *foreground*, emit JSON, destroy.
 
-    The synchronous path for non-interactive callers (services). Returns the
+    The blocking path for non-interactive callers (services). Returns the
     launch exit code if launch fails, the await timeout code if the report never
     appears (without destroying -- the report may still be coming), or 0 once a
     report is collected. Writes a single JSON object to ``out`` (default stdout)
@@ -607,7 +607,7 @@ def _run_await(args: argparse.Namespace) -> int:
     )
 
 
-def _run_run(args: argparse.Namespace, runner: Runner | None) -> int:
+def _run_launch_sync(args: argparse.Namespace, runner: Runner | None) -> int:
     # Validate the wait target up front so a missing/malformed field fails like
     # await -- a ValueError here is an authoring bug, so let it raise with a full
     # traceback rather than swallowing it.
@@ -615,7 +615,7 @@ def _run_run(args: argparse.Namespace, runner: Runner | None) -> int:
     workspace = os.environ.get("MINDS_WORKSPACE_NAME", "default")
     state_dir_env = os.environ.get("MNGR_AGENT_STATE_DIR")
     state_dir = Path(state_dir_env) if state_dir_env else None
-    return run_sync(
+    return launch_sync(
         name=args.name,
         template=args.template,
         runtime_dir=args.runtime_dir,
@@ -692,51 +692,51 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         help=f"How often to check for the report (default {_DEFAULT_POLL_INTERVAL}).",
     )
 
-    run_parser = subparsers.add_parser(
-        "run",
-        help="Synchronous launch + foreground await + structured-result JSON + "
-        "destroy, in one blocking call. For non-interactive callers (services).",
+    launch_sync_parser = subparsers.add_parser(
+        "launch-sync",
+        help="Blocking launch + foreground await + structured-result JSON + "
+        "destroy, in one call. For non-interactive callers (services).",
     )
-    run_parser.add_argument(
+    launch_sync_parser.add_argument(
         "--name", required=True, help="Worker name; becomes the mngr/<name> branch."
     )
-    run_parser.add_argument(
+    launch_sync_parser.add_argument(
         "--template",
         required=True,
         help="mngr create template (e.g. 'worker', 'crystallize-worker').",
     )
-    run_parser.add_argument(
+    launch_sync_parser.add_argument(
         "--runtime-dir",
         required=True,
         type=Path,
         help="Existing runtime directory synced verbatim into the worker's worktree.",
     )
-    run_parser.add_argument(
+    launch_sync_parser.add_argument(
         "--task-file",
         required=True,
         type=Path,
         help="Markdown task file; its frontmatter `finish_report_path` names the "
         "report to wait for.",
     )
-    run_parser.add_argument(
+    launch_sync_parser.add_argument(
         "--timeout",
         default=_DEFAULT_TIMEOUT,
         type=_parse_duration,
         help=f"Max wait for the report (default {_DEFAULT_TIMEOUT}).",
     )
-    run_parser.add_argument(
+    launch_sync_parser.add_argument(
         "--poll-interval",
         default=_DEFAULT_POLL_INTERVAL,
         type=_parse_duration,
         help=f"How often to check for the report (default {_DEFAULT_POLL_INTERVAL}).",
     )
-    run_parser.add_argument(
+    launch_sync_parser.add_argument(
         "--keep-agent",
         action="store_true",
         help="Do not destroy the worker after a report is collected "
         "(default: destroy). A timeout never destroys regardless.",
     )
-    run_parser.add_argument(
+    launch_sync_parser.add_argument(
         "--result-json",
         type=Path,
         default=None,
@@ -755,8 +755,8 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
 
     if args.command == "launch":
         return _run_launch(args, runner)
-    if args.command == "run":
-        return _run_run(args, runner)
+    if args.command == "launch-sync":
+        return _run_launch_sync(args, runner)
     if args.command == "destroy":
         return _run_destroy(args, runner)
     return _run_await(args)

@@ -4,8 +4,31 @@ from ai_integration.errors import SpendCeilingExceededError
 from ai_integration.spend import (
     DEFAULT_WINDOW_SECONDS,
     SpendTracker,
+    format_usd,
+    format_window,
     load_spend_tracker,
 )
+
+
+def test_format_window_is_unit_aware() -> None:
+    # A sub-hour window must not render as a misleading "0h".
+    assert format_window(30) == "30s"
+    assert format_window(1000) == "17min"
+    assert format_window(3600) == "1h"
+    assert format_window(86400) == "24h"
+    assert format_window(43200) == "12h"
+
+
+def test_format_usd_shows_full_precision() -> None:
+    # Sub-cent token costs must not round to "$0.00".
+    assert format_usd(0.000596) == "$0.000596"
+    # Float-arithmetic noise from summing a ledger is trimmed.
+    assert format_usd(0.0005960000000000001) == "$0.000596"
+    # Trailing zeros are trimmed; whole/half dollars stay readable.
+    assert format_usd(5.0) == "$5"
+    assert format_usd(2.5) == "$2.5"
+    assert format_usd(0.0) == "$0"
+    assert format_usd(12.34) == "$12.34"
 
 
 def _write_toml(tmp_path, body: str):

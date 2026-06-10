@@ -12,11 +12,10 @@ file appears, prints its contents, and exits 0; on timeout it exits non-zero
 (code 124). Run it with Bash's `run_in_background: true` so it returns the
 instant the report lands.
 
-`await` itself is just a generic poll-until-file primitive -- the gate cycle
-below is this flow's *use* of it, not part of the primitive. (Non-interactive
-callers that launch a tightly-scoped agent and wait for a single finish report
-use the same `await`, or the synchronous `create_worker.py run` wrapper, with no
-gate handling.)
+`await` is a generic poll-until-file primitive; the gate cycle below is this
+flow's *use* of it. Non-interactive callers that launch a tightly-scoped agent
+and wait for one finish report use the same `await` (or the synchronous
+`create_worker.py launch-sync` wrapper) with no gate handling.
 
 ```bash
 # Run with Bash run_in_background: true

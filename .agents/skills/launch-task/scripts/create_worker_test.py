@@ -766,15 +766,21 @@ def test_parse_report_without_frontmatter_is_none_typed() -> None:
 def test_destroy_invokes_mngr_destroy_force() -> None:
     runner = _RecordingRunner()
     create_worker_mod.destroy("demo-worker", runner=runner)
-    assert [c.argv for c in runner.calls] == [
-        ["mngr", "destroy", "demo-worker", "--force"]
-    ]
+    argvs = [c.argv for c in runner.calls]
+    assert argvs == [["mngr", "destroy", "demo-worker", "--force"]]
+    # Confront the emitted destroy argv with the live mngr CLI surface so a
+    # vendor/mngr rename of the ``destroy`` subcommand or its ``--force`` flag
+    # fails here rather than at runtime -- the same guarantee
+    # test_emitted_mngr_argv_accepted_by_live_cli gives the launch path. The
+    # launch-sync lifecycle reuses launch() + destroy(), so validating those two
+    # surfaces covers every mngr argv that path emits.
+    assert_mngr_argv_valid(argvs[0])
 
 
-# --- run_sync -------------------------------------------------------------
+# --- launch_sync ----------------------------------------------------------
 
 
-def _make_run_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _make_launch_sync_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     """runtime_dir + task_file (with finish_report_path) + the report path."""
     runtime = tmp_path / "runtime" / "launch-task" / "demo"
     (runtime / "reports").mkdir(parents=True)
@@ -787,16 +793,16 @@ def _make_run_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 
 def _boom_sleeper(_seconds: float) -> None:
-    raise AssertionError("run_sync must not sleep when the report already exists")
+    raise AssertionError("launch_sync must not sleep when the report already exists")
 
 
-def test_run_sync_collects_report_and_destroys(tmp_path: Path) -> None:
-    runtime, task, report = _make_run_layout(tmp_path)
+def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
+    runtime, task, report = _make_launch_sync_layout(tmp_path)
     report.write_text("---\ntype: status\nname: done\n---\n\nReady to merge.\n")
     runner = _RecordingRunner()
     out = io.StringIO()
 
-    rc = create_worker_mod.run_sync(
+    rc = create_worker_mod.launch_sync(
         name="demo-worker",
         template="worker",
         runtime_dir=runtime,
@@ -827,16 +833,16 @@ def test_run_sync_collects_report_and_destroys(tmp_path: Path) -> None:
     ]
 
 
-def test_run_sync_writes_result_json_file(tmp_path: Path) -> None:
+def test_launch_sync_writes_result_json_file(tmp_path: Path) -> None:
     """``result_path`` receives the same JSON payload as stdout, so a programmatic
     caller reads an unambiguous file instead of scraping the last stdout line."""
-    runtime, task, report = _make_run_layout(tmp_path)
+    runtime, task, report = _make_launch_sync_layout(tmp_path)
     report.write_text("---\ntype: status\nname: done\n---\n\nReady to merge.\n")
     runner = _RecordingRunner()
     out = io.StringIO()
     result_path = tmp_path / "out" / "result.json"
 
-    rc = create_worker_mod.run_sync(
+    rc = create_worker_mod.launch_sync(
         name="demo-worker",
         template="worker",
         runtime_dir=runtime,
@@ -858,14 +864,14 @@ def test_run_sync_writes_result_json_file(tmp_path: Path) -> None:
     assert json.loads(result_path.read_text())["name"] == "done"
 
 
-def test_run_sync_timeout_does_not_destroy(tmp_path: Path) -> None:
+def test_launch_sync_timeout_does_not_destroy(tmp_path: Path) -> None:
     """A timeout returns the timeout code, emits timed_out JSON, and leaves the
     worker alive for liveness diagnosis."""
-    runtime, task, _ = _make_run_layout(tmp_path)  # report never written
+    runtime, task, _ = _make_launch_sync_layout(tmp_path)  # report never written
     runner = _RecordingRunner()
     out = io.StringIO()
 
-    rc = create_worker_mod.run_sync(
+    rc = create_worker_mod.launch_sync(
         name="demo-worker",
         template="worker",
         runtime_dir=runtime,
@@ -885,13 +891,13 @@ def test_run_sync_timeout_does_not_destroy(tmp_path: Path) -> None:
     assert not any(c.argv[:2] == ["mngr", "destroy"] for c in runner.calls)
 
 
-def test_run_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
-    runtime, task, report = _make_run_layout(tmp_path)
+def test_launch_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
+    runtime, task, report = _make_launch_sync_layout(tmp_path)
     report.write_text("---\ntype: status\nname: done\n---\n\nReady to merge.\n")
     runner = _RecordingRunner()
     out = io.StringIO()
 
-    rc = create_worker_mod.run_sync(
+    rc = create_worker_mod.launch_sync(
         name="demo-worker",
         template="worker",
         runtime_dir=runtime,
@@ -919,8 +925,8 @@ def test_main_destroy_dispatch() -> None:
     ]
 
 
-def test_main_run_missing_finish_report_path_raises(tmp_path: Path) -> None:
-    """run validates finish_report_path up front and raises (full traceback)
+def test_main_launch_sync_missing_finish_report_path_raises(tmp_path: Path) -> None:
+    """launch-sync validates finish_report_path up front and raises (full traceback)
     rather than launching without it -- a missing required field is an
     authoring bug, not a recoverable exit-2 condition."""
     runtime = tmp_path / "runtime" / "launch-task" / "demo"
@@ -932,7 +938,7 @@ def test_main_run_missing_finish_report_path_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="finish_report_path"):
         create_worker_mod.main(
             [
-                "run",
+                "launch-sync",
                 "--name",
                 "x",
                 "--template",
