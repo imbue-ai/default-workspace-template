@@ -13,8 +13,15 @@ vi.hoisted(() => {
 // test (and across the lifetime of a single send) to drive the idle/working
 // branches of the forced-THINKING logic.
 let mockActivityState: string | null = null;
+// Captures the listener registered via addAgentsUpdatedListener so a test can
+// drive the working->IDLE safeguard through its real wiring (no test-only
+// export of the internal handler).
+let capturedAgentsListener: ((agents: { id: string; activity_state?: string | null }[]) => void) | null = null;
 vi.mock("./AgentManager", () => ({
   getAgentById: (id: string) => ({ id, activity_state: mockActivityState }),
+  addAgentsUpdatedListener: (listener: (agents: { id: string; activity_state?: string | null }[]) => void) => {
+    capturedAgentsListener = listener;
+  },
 }));
 
 import {
@@ -26,7 +33,20 @@ import {
   markPendingMessageQueued,
   markPendingMessageSending,
   getEffectiveActivityState,
+  initQueuedMessageIdleClearing,
 } from "./PendingMessages";
+
+// Register the safeguard once and drive it via the captured listener. Calling a
+// real registration path (rather than exporting the internal handler) keeps the
+// wiring under test. The id-per-test convention keeps the per-agent last-seen
+// activity state isolated across cases.
+initQueuedMessageIdleClearing();
+function emitActivity(agentId: string, activityState: string | null): void {
+  if (capturedAgentsListener === null) {
+    throw new Error("agents-updated listener was not registered");
+  }
+  capturedAgentsListener([{ id: agentId, activity_state: activityState }]);
+}
 
 function userMsg(id: string, content: string): UserMessageEvent {
   return {
@@ -284,5 +304,75 @@ describe("lifecycle status", () => {
 
     reconcilePendingMessages(agentId, [userMsg("u1", "queued while running")]);
     expect(getPendingMessages(agentId)).toHaveLength(0);
+  });
+});
+
+describe("clearing a stuck queued bubble when the agent goes idle", () => {
+  // Queue a message while the agent is working: mark it queued and seed the
+  // safeguard's last-seen activity with a working state so the later IDLE reads
+  // as a working->IDLE transition.
+  function queueWhileWorking(agentId: string, content: string): string {
+    mockActivityState = "THINKING";
+    emitActivity(agentId, "THINKING");
+    const id = addPendingMessage(agentId, content, []) as string;
+    markPendingMessageQueued(agentId, id);
+    return id;
+  }
+
+  it("drops a queued bubble that can never reconcile once the agent returns to idle", () => {
+    const agentId = freshAgentId();
+    // The user queued "deploy the staging build" but edited it in the terminal
+    // before submitting, so the real transcript event carries different text and
+    // never content-matches the bubble.
+    queueWhileWorking(agentId, "deploy the staging build");
+    reconcilePendingMessages(agentId, [userMsg("u1", "deploy the prod build")]);
+    expect(getPendingMessages(agentId)).toHaveLength(1);
+
+    // The agent finishes the (edited) turn and goes idle -- the backstop now
+    // clears the orphaned bubble instead of leaving it up forever.
+    emitActivity(agentId, "IDLE");
+    expect(getPendingMessages(agentId)).toHaveLength(0);
+  });
+
+  it("clears a queued bubble whose message was dropped by an agent restart", () => {
+    const agentId = freshAgentId();
+    // No transcript event ever arrives (the restart dropped the queue); the
+    // restart drives activity to IDLE, which is the working->IDLE transition.
+    queueWhileWorking(agentId, "summarize the diff");
+    emitActivity(agentId, "IDLE");
+    expect(getPendingMessages(agentId)).toHaveLength(0);
+  });
+
+  it("does not clear a fresh send to an already-idle agent (no working->IDLE transition)", () => {
+    const agentId = freshAgentId();
+    mockActivityState = "IDLE";
+    // The agent was already idle; sending to it briefly leaves a queued bubble
+    // while its raw state is still IDLE (before it flips to THINKING). An
+    // IDLE->IDLE update must not clear that just-sent message.
+    emitActivity(agentId, "IDLE");
+    const id = addPendingMessage(agentId, "hi there", []) as string;
+    markPendingMessageQueued(agentId, id);
+    emitActivity(agentId, "IDLE");
+    expect(getPendingMessages(agentId)).toHaveLength(1);
+  });
+
+  it("leaves a still-sending message alone (protects interrupt-and-send)", () => {
+    const agentId = freshAgentId();
+    // "interrupt and send" marks the message back to sending, then interrupts --
+    // which produces a transient IDLE. A sending (not queued) message must
+    // survive that transition so the in-flight resend is not clobbered.
+    mockActivityState = "THINKING";
+    emitActivity(agentId, "THINKING");
+    addPendingMessage(agentId, "resend me", []);
+    emitActivity(agentId, "IDLE");
+    expect(getPendingMessages(agentId)).toHaveLength(1);
+    expect(getPendingMessages(agentId)[0].status).toBe("sending");
+  });
+
+  it("does not clear while the agent merely moves between working states", () => {
+    const agentId = freshAgentId();
+    queueWhileWorking(agentId, "keep going");
+    emitActivity(agentId, "TOOL_RUNNING");
+    expect(getPendingMessages(agentId)).toHaveLength(1);
   });
 });
