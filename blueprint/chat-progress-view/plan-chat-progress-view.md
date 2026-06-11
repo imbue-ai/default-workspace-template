@@ -116,10 +116,15 @@
   "prose with no step open is ungrouped."
 - Chips render at their chronological position but are not reply boundaries.
 - This removes the three-way (leading / inter-step interjection / trailing)
-  boundary computation and the chip-boundary interactions. The
-  `claude_tk_close_reoutput_nudge.sh` hook remains as a best-effort steer toward
-  the ideal "close, then speak" ordering; the ejection rule is the renderer-side
-  backstop.
+  boundary computation and the chip-boundary interactions.
+- **The `claude_tk_close_reoutput_nudge.sh` hook is removed**, not kept. Its
+  premise is the *old* backward-scan reply rule — that prose written before a
+  `tk close` stays buried inside the step, so the agent should re-output it after
+  the close. Ejection inverts that premise: the pre-close prose is now
+  automatically promoted out of the step and shown. Keeping the nudge would tell
+  the agent to re-output text the renderer already displays, producing duplicate
+  visible prose. So the ejection rule is the *complete* fix; no steering backstop
+  is needed for this case.
 
 ### Unfinished steps at turn boundary (target — carryover removed)
 
@@ -248,7 +253,10 @@
   (no `$(...)` capture) style; keep the standalone-command rule and the
   close-before-reply guidance.
 - Keep `claude_tk_standalone*` (the standalone-command enforcement, which buys
-  clean hiding of pure tk calls) and `claude_tk_close_reoutput_nudge.sh`.
+  clean hiding of pure tk calls).
+- **Remove `claude_tk_close_reoutput_nudge.sh`** and its single
+  `.claude/settings.json` PreToolUse wiring. Under close-time ejection its advice
+  would cause duplicate visible prose (see Expected behavior → end-of-turn).
 
 ## Implementation phases
 
