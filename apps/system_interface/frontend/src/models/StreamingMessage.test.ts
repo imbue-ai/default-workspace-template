@@ -10,7 +10,12 @@ vi.mock("mithril", () => ({
   default: { request: mockRequest, redraw: mockRedraw },
 }));
 
-import { loadSnapshotWithStream } from "./StreamingMessage";
+import {
+  connectToStream,
+  disconnectFromStream,
+  getStreamingPreview,
+  loadSnapshotWithStream,
+} from "./StreamingMessage";
 import { getEventsForAgent, type TranscriptEvent } from "./Response";
 
 interface Deferred<T> {
@@ -90,5 +95,95 @@ describe("loadSnapshotWithStream", () => {
     const ids = getEventsForAgent(agentId).map((event) => event.event_id);
     expect(ids).toContain("snap-1");
     expect(ids).toContain("delta-1");
+  });
+});
+
+function makeAssistantEvent(id: string, text: string): TranscriptEvent {
+  return {
+    timestamp: "2026-01-01T00:00:00Z",
+    type: "assistant_message",
+    event_id: id,
+    source: "test",
+    message_uuid: id,
+    model: "test-model",
+    text,
+    tool_calls: [],
+    stop_reason: null,
+    usage: null,
+    is_auth_error: false,
+  };
+}
+
+function lastEventSource(): FakeEventSource {
+  const source = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+  expect(source).toBeDefined();
+  return source as FakeEventSource;
+}
+
+describe("assistant_streaming preview", () => {
+  it("sets and updates the preview from streaming frames", () => {
+    const agentId = `agent-${agentCounter++}`;
+    connectToStream(agentId);
+    const source = lastEventSource();
+
+    source.onmessage?.({
+      data: JSON.stringify({ type: "assistant_streaming", last_complete_id: "p", text: "Thinking" }),
+    });
+    expect(getStreamingPreview(agentId)).toBe("Thinking");
+
+    source.onmessage?.({
+      data: JSON.stringify({ type: "assistant_streaming", last_complete_id: "p", text: "Thinking harder" }),
+    });
+    expect(getStreamingPreview(agentId)).toBe("Thinking harder");
+
+    disconnectFromStream(agentId);
+  });
+
+  it("clears the preview on an empty streaming frame (agent went idle)", () => {
+    const agentId = `agent-${agentCounter++}`;
+    connectToStream(agentId);
+    const source = lastEventSource();
+
+    source.onmessage?.({
+      data: JSON.stringify({ type: "assistant_streaming", last_complete_id: "p", text: "partial" }),
+    });
+    expect(getStreamingPreview(agentId)).toBe("partial");
+
+    source.onmessage?.({ data: JSON.stringify({ type: "assistant_streaming", last_complete_id: "q", text: "" }) });
+    expect(getStreamingPreview(agentId)).toBeNull();
+
+    disconnectFromStream(agentId);
+  });
+
+  it("clears the preview when the finalized assistant_message lands", () => {
+    const agentId = `agent-${agentCounter++}`;
+    connectToStream(agentId);
+    const source = lastEventSource();
+
+    source.onmessage?.({
+      data: JSON.stringify({ type: "assistant_streaming", last_complete_id: "p", text: "almost done" }),
+    });
+    expect(getStreamingPreview(agentId)).toBe("almost done");
+
+    // The durable transcript event arrives and supersedes the live preview.
+    source.onmessage?.({ data: JSON.stringify(makeAssistantEvent("final-1", "almost done, now complete")) });
+    expect(getStreamingPreview(agentId)).toBeNull();
+    expect(getEventsForAgent(agentId).map((e) => e.event_id)).toContain("final-1");
+
+    disconnectFromStream(agentId);
+  });
+
+  it("drops the preview when the stream is intentionally disconnected", () => {
+    const agentId = `agent-${agentCounter++}`;
+    connectToStream(agentId);
+    const source = lastEventSource();
+
+    source.onmessage?.({
+      data: JSON.stringify({ type: "assistant_streaming", last_complete_id: "p", text: "in progress" }),
+    });
+    expect(getStreamingPreview(agentId)).toBe("in progress");
+
+    disconnectFromStream(agentId);
+    expect(getStreamingPreview(agentId)).toBeNull();
   });
 });

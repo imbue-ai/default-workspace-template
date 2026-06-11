@@ -63,6 +63,7 @@ from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.service_dispatcher import register_service_routes
 from imbue.system_interface.session_watcher import AgentSessionWatcher
+from imbue.system_interface.stream_watcher import AgentStreamWatcher
 from imbue.system_interface.tickets_watcher import AgentTicketsWatcher
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -159,6 +160,10 @@ def _stop_all_watchers(application: FastAPI) -> None:
     for tickets_watcher in tickets_watchers.values():
         tickets_watcher.stop()
     tickets_watchers.clear()
+    stream_watchers: dict[str, AgentStreamWatcher] = application.state.stream_watchers
+    for stream_watcher in stream_watchers.values():
+        stream_watcher.stop()
+    stream_watchers.clear()
 
 
 def _get_or_create_watcher(request: Request, agent_info: AgentInfo) -> AgentSessionWatcher:
@@ -230,6 +235,30 @@ def _get_or_create_tickets_watcher(request: Request, agent_info: AgentInfo) -> A
         on_events=event_queues.broadcast_all_ignored,
     )
     tickets_watchers[agent_info.id] = watcher
+    watcher.start()
+    return watcher
+
+
+def _get_or_create_stream_watcher(request: Request, agent_info: AgentInfo) -> AgentStreamWatcher:
+    """Get an existing response-streaming watcher for an agent, or create one.
+
+    Tails the agent's ``stream_buffer`` and broadcasts ``assistant_streaming``
+    snapshots (in-progress assistant text) via ``broadcast_all_ignored`` -- live
+    only, never buffered, since each is a transient preview superseded by the
+    durable transcript event. No-op silently when mngr response streaming is
+    disabled (the buffer file simply never appears)."""
+    stream_watchers: dict[str, AgentStreamWatcher] = request.app.state.stream_watchers
+    event_queues: AgentEventQueues = request.app.state.event_queues
+
+    if agent_info.id in stream_watchers:
+        return stream_watchers[agent_info.id]
+
+    watcher = AgentStreamWatcher(
+        agent_id=agent_info.id,
+        agent_state_dir=agent_info.agent_state_dir,
+        on_events=event_queues.broadcast_all_ignored,
+    )
+    stream_watchers[agent_info.id] = watcher
     watcher.start()
     return watcher
 
@@ -439,6 +468,7 @@ def _stream_events(agent_id: str, request: Request) -> Response:
 
     watcher = _get_or_create_watcher(request, agent_info)
     _get_or_create_tickets_watcher(request, agent_info)
+    _get_or_create_stream_watcher(request, agent_info)
 
     event_queues: AgentEventQueues = request.app.state.event_queues
     event_queue = event_queues.register(agent_id)
@@ -1075,6 +1105,7 @@ def create_application(
     # have to defensively probe for these attributes.
     application.state.watchers = {}
     application.state.tickets_watchers = {}
+    application.state.stream_watchers = {}
 
     plugin_manager = get_plugin_manager()
     plugin_manager.hook.endpoint(app=application)

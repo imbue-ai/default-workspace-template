@@ -40,6 +40,34 @@ function getBackoff(agentId: string): ReconnectBackoff {
 // eventsByAgent[agentId] does not drop them.
 const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
 
+// Latest in-progress assistant text per agent, from `assistant_streaming` SSE
+// frames (mngr's tmux-pane preview of the response being typed). Purely
+// transient: never stored in the transcript window, cleared the moment the
+// finalized assistant_message lands. An agent with no entry (or an empty one)
+// has nothing streaming. See AgentStreamWatcher on the backend.
+const streamingPreviewByAgent = new Map<string, string>();
+
+/** The current in-progress assistant text for an agent, or null if nothing is
+ *  streaming. The chat view renders this as a provisional bubble at the tail. */
+export function getStreamingPreview(agentId: string): string | null {
+  const text = streamingPreviewByAgent.get(agentId);
+  return text !== undefined && text !== "" ? text : null;
+}
+
+/** Set (or clear, when empty) an agent's streaming preview, redrawing only when
+ *  it actually changed so idle no-op frames cost nothing. */
+function setStreamingPreview(agentId: string, text: string): void {
+  if ((streamingPreviewByAgent.get(agentId) ?? "") === text) {
+    return;
+  }
+  if (text === "") {
+    streamingPreviewByAgent.delete(agentId);
+  } else {
+    streamingPreviewByAgent.set(agentId, text);
+  }
+  m.redraw();
+}
+
 // Claude auth is mind-global, so an auth-error on any agent's stream
 // opens the single shared login modal (see models/ClaudeAuth.ts) -- no
 // per-agent routing needed.
@@ -86,7 +114,19 @@ export function connectToStream(agentId: string): void {
       m.redraw();
       return;
     }
+    // An assistant_streaming message is the live, in-progress response preview
+    // (not a transcript event); update the provisional bubble and stop.
+    if (raw.type === "assistant_streaming") {
+      setStreamingPreview(agentId, (raw as { text?: string }).text ?? "");
+      return;
+    }
     const event = raw as TranscriptEvent;
+    // The finalized assistant turn supersedes the live preview: clear it as soon
+    // as the durable assistant_message lands so the two never show as duplicates.
+    // (The agent's next turn re-populates the preview from fresh frames.)
+    if (event.type === "assistant_message") {
+      setStreamingPreview(agentId, "");
+    }
     const pending = inFlightSnapshotBuffersByAgent.get(agentId);
     if (pending !== undefined) {
       pending.push(event);
@@ -157,6 +197,9 @@ export function disconnectFromStream(agentId: string): void {
   // Drop the backoff so a later fresh connectToStream starts from the base
   // delay rather than inheriting a stale grown delay.
   backoffByAgent.delete(agentId);
+  // Drop any in-progress preview so a stale bubble doesn't linger after the
+  // stream is intentionally closed (e.g. switching away from this agent).
+  streamingPreviewByAgent.delete(agentId);
   const eventSource = activeStreams.get(agentId);
   if (eventSource !== undefined) {
     eventSource.close();
