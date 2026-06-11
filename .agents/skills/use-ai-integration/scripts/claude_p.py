@@ -125,8 +125,8 @@ class _UsageModel(BaseModel):
     """The ``usage`` block of a ``claude -p`` result, with token counts validated.
 
     Extra keys are ignored (the block carries fields we do not surface), and each
-    count defaults to 0 so an absent field is fine; a present-but-non-integer value
-    fails validation rather than silently reading as 0.
+    count defaults to 0 so an absent field is fine; a present value that cannot be
+    read as an integer fails validation rather than silently reading as 0.
     """
 
     model_config = ConfigDict(extra="ignore")
