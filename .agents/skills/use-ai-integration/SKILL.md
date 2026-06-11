@@ -19,7 +19,8 @@ command, and implement only the path that applies:
 ```
 
 If keyed, write only the litellm path; if keyless, write only the `claude -p`
-path. Branching on the key from inside the service is dead weight.
+path. Branching on the key from inside the service is dead weight. If the user
+decides to add an API key, you can do a simple migration.
 
 ## Pick the scenario (weakest that does the job)
 
