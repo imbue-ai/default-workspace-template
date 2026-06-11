@@ -550,6 +550,7 @@ def launch_sync(
                 "name": None,
                 "body": "",
                 "branch": branch,
+                "raw_report": "",
             },
             stream,
             result_path,

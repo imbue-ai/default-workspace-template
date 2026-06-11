@@ -894,6 +894,16 @@ def test_launch_sync_timeout_keeps_worker_alive(tmp_path: Path) -> None:
     payload = json.loads(result_json.read_text())
     assert payload["timed_out"] is True
     assert payload["branch"] == "mngr/demo-worker"
+    # The timeout arm carries the same key set as the success arm, so a consumer
+    # can read any field (e.g. raw_report) without a KeyError on the timeout path.
+    assert set(payload) == {
+        "timed_out",
+        "type",
+        "name",
+        "body",
+        "branch",
+        "raw_report",
+    }
 
 
 def test_launch_sync_surfaces_launch_failure(tmp_path: Path) -> None:
