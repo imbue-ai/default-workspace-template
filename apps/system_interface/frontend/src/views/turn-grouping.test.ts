@@ -281,6 +281,63 @@ describe("narration and close-time ejection", () => {
     expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
   });
 
+  // The live moment after the agent starts a step and speaks, but before it has
+  // issued any tool call: the prose is the step's in-flight narration (a caption
+  // under the still-spinning step), NOT the below-timeline wrap-up reply.
+  it("shows a live step's just-spoken prose as narration before any tool call", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      assistantText("t2", "Looking into it now.", "narr"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].is_frontier).toBe(true);
+    expect(steps[0].narration).toBe("Looking into it now.");
+    // Not ejected into an inline run, and not the below-timeline reply.
+    expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
+    expect(sections[0].trailing_reply).toHaveLength(0);
+  });
+
+  // Same live step, after it has done work and then spoken again: the caption
+  // tracks the LATEST line, not the earlier prose that happened to precede work.
+  it("updates a live step's narration to the latest prose after its work", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      assistantText("t2", "Patching now.", "narr1"),
+      workMsg("t3", "Edit", "w1"),
+      result("t3", "w1", "ok"),
+      assistantText("t4", "Checking the result.", "narr2"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const steps = stepItems(sections[0].items);
+    expect(steps[0].is_frontier).toBe(true);
+    expect(steps[0].narration).toBe("Checking the result.");
+    expect(sections[0].trailing_reply).toHaveLength(0);
+  });
+
+  // When the agent goes idle with a step still open, its trailing prose is the
+  // wrap-up reply (no spinner, so no in-flight narration to preserve).
+  it("treats trailing prose of an idle open step as the below-timeline reply", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "All done.", "reply"),
+    ];
+    const sections = run(events, /* idle */ true);
+    const steps = stepItems(sections[0].items);
+    expect(steps[0].is_frontier).toBe(false);
+    expect(steps[0].narration).toBeNull();
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+  });
+
   it("treats prose before the first step as an ungrouped (leading) item", () => {
     const events = [
       userMsg("t0", "go"),

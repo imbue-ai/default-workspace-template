@@ -511,14 +511,23 @@ function finalizeSection(
   agentIsIdle: boolean,
   is_tail: boolean,
 ): SectionView {
+  // The live frontier step (the open step the agent is actively on) -- the only
+  // one that may show a spinner. Computed up front because the live step is
+  // treated specially below: prose it just spoke is in-flight narration, not a
+  // closing remark, since the step has not closed.
+  const frontierId = is_tail && !agentIsIdle ? section.current_step_id : null;
+
   // 1. Ejection: prose spoken inside a step AFTER its last work (so it is NOT
   //    narration, which is prose *followed* by more work in the same step). It
   //    is the step's closing remark -- ejected from the step so it renders in
   //    the ungrouped inline stream right after the step node, rather than buried
   //    inside it. (If it is the last thing in the section it becomes the
-  //    trailing reply below; see step 2.)
+  //    trailing reply below; see step 2.) The live frontier step is exempt: it
+  //    has not closed, so its trailing prose is in-flight narration shown as a
+  //    caption under the step (see step 3), not a closing remark.
   const ejectedIds = new Set<string>();
   for (const id of section.step_order) {
+    if (id === frontierId) continue;
     const node = section.steps.get(id)!;
     let lastWorkIdx = -1;
     for (let i = 0; i < node.events.length; i++) if (isWork(node.events[i])) lastWorkIdx = i;
@@ -546,27 +555,30 @@ function finalizeSection(
   for (let i = replyBoundary + 1; i < section.entries.length; i++) {
     const en = section.entries[i];
     if (en.kind !== "event" || !isProse(en.event)) continue;
+    // Prose the agent just spoke inside the live frontier step is that step's
+    // in-flight narration (a caption under the still-spinning step), not the
+    // turn's wrap-up reply -- the step has not closed, so there is no reply yet.
+    if (en.step_id !== null && en.step_id === frontierId) continue;
     trailing_reply.push(en.event);
     trailingIds.add(en.event.event_id);
   }
 
-  // 3. Narration: latest in-step prose followed by more work in the same step.
+  // 3. Narration: the latest in-step prose -- the live caption under the step.
+  //    For a non-frontier step this is the latest prose followed by more work in
+  //    the same step (its trailing closing prose was already ejected in step 1).
+  //    For the live frontier step (not ejected) it is simply the last thing the
+  //    agent said, so a just-spoken line shows as a caption even before the next
+  //    tool call.
   for (const id of section.step_order) {
     const node = section.steps.get(id)!;
     let narration: string | null = null;
-    for (let i = 0; i < node.events.length; i++) {
-      const ev = node.events[i];
-      if (!isProse(ev)) continue;
-      if (node.events.slice(i + 1).some(isWork)) narration = ev.text;
+    for (const ev of node.events) {
+      if (isProse(ev)) narration = ev.text;
     }
     node.narration = narration;
   }
 
-  // 4. Frontier: the live step the agent is on -- only on the tail section,
-  //    only when not idle, only the current open step.
-  const frontierId = is_tail && !agentIsIdle ? section.current_step_id : null;
-
-  // 5. Join decoration onto each node. A node with no decoration entry keeps the
+  // 4. Join decoration onto each node. A node with no decoration entry keeps the
   //    raw id as its title and has no summary (its create/tk-step lines scrolled
   //    out of the loaded window -- an accepted loss for very old steps).
   for (const id of section.step_order) {
@@ -577,7 +589,7 @@ function finalizeSection(
     node.is_frontier = node.ticket_id === frontierId && node.status === "active";
   }
 
-  // 6. Build timeline items by walking the entry skeleton in transcript order.
+  // 5. Build timeline items by walking the entry skeleton in transcript order.
   //    Each step node is emitted at its first appearance (its transition), so a
   //    step renders at its transcript position even if it carried no work. An
   //    ungrouped event (no step open) or an ejected closing-prose event coalesces
@@ -630,7 +642,7 @@ function finalizeSection(
   }
   flushUngrouped();
 
-  // 7. Pending roster (tail section only): created steps that never started, as
+  // 6. Pending roster (tail section only): created steps that never started, as
   //    dashed placeholders at the tail, in transcript order.
   if (is_tail) {
     for (const p of pending) {
