@@ -120,17 +120,41 @@ def _build_argv(
     return argv
 
 
-def _parse_result(data: object) -> ClaudeResult:
-    """Build a ``ClaudeResult`` from parsed ``claude -p`` JSON, or raise.
+def _require_json_object(decoded: object) -> Mapping[str, object]:
+    """Narrow a decoded ``claude -p`` JSON value to an object mapping, or raise.
 
-    The result message has a **success arm** (``subtype == "success"`` with a
-    ``result`` string) and an **error arm** (``is_error`` true, e.g.
-    ``error_max_turns`` / ``error_during_execution``, carrying ``errors``). The
-    error arm and a missing ``result`` both raise, so a maxed-out or failed run
-    surfaces instead of looking like an empty-text success.
+    ``json.loads`` returns ``Any`` (the payload could be a list, number, or null),
+    so this is the one place the result is checked to be an object. Everything
+    downstream then works against a typed ``Mapping[str, object]`` -- the values
+    stay ``object`` because the payload is external and each field is validated by
+    ``_parse_result`` before use.
     """
-    if not isinstance(data, dict):
+    if not isinstance(decoded, dict):
         raise ClaudeCLIError("claude -p JSON output was not an object")
+    return decoded
+
+
+def _as_token_count(value: object) -> int:
+    """Coerce one external usage field to a non-negative int; non-numbers -> 0.
+
+    ``bool`` is excluded even though it is an ``int`` subclass: a ``true`` token
+    count is malformed, so it reads as 0 rather than 1.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return int(value)
+
+
+def _parse_result(data: Mapping[str, object]) -> ClaudeResult:
+    """Build a ``ClaudeResult`` from a parsed ``claude -p`` JSON object, or raise.
+
+    ``data`` is the already-validated result object (``_require_json_object``
+    rejects any non-object payload upstream). The result message has a **success
+    arm** (``subtype == "success"`` with a ``result`` string) and an **error arm**
+    (``is_error`` true, e.g. ``error_max_turns`` / ``error_during_execution``,
+    carrying ``errors``). The error arm and a missing ``result`` both raise, so a
+    maxed-out or failed run surfaces instead of looking like an empty-text success.
+    """
     if data.get("is_error") or data.get("subtype") != "success":
         errors = data.get("errors")
         # claude -p output is external JSON, so coerce each element to str: a
@@ -145,17 +169,23 @@ def _parse_result(data: object) -> ClaudeResult:
     if not isinstance(result_text, str):
         raise ClaudeCLIError("claude -p success result was missing the 'result' text")
     raw_usage = data.get("usage")
-    raw_usage = raw_usage if isinstance(raw_usage, dict) else {}
+    usage_fields: Mapping[str, object] = (
+        raw_usage if isinstance(raw_usage, Mapping) else {}
+    )
     usage = Usage(
-        input_tokens=int(raw_usage.get("input_tokens", 0) or 0),
-        output_tokens=int(raw_usage.get("output_tokens", 0) or 0),
-        cache_read_tokens=int(raw_usage.get("cache_read_input_tokens", 0) or 0),
-        cache_write_tokens=int(raw_usage.get("cache_creation_input_tokens", 0) or 0),
+        input_tokens=_as_token_count(usage_fields.get("input_tokens")),
+        output_tokens=_as_token_count(usage_fields.get("output_tokens")),
+        cache_read_tokens=_as_token_count(usage_fields.get("cache_read_input_tokens")),
+        cache_write_tokens=_as_token_count(
+            usage_fields.get("cache_creation_input_tokens")
+        ),
     )
     cost = data.get("total_cost_usd")
     if not isinstance(cost, (int, float)) or isinstance(cost, bool):
         raise ClaudeCLIError("claude -p result was missing a numeric 'total_cost_usd'")
-    return ClaudeResult(text=result_text, cost_usd=float(cost), usage=usage, raw=data)
+    return ClaudeResult(
+        text=result_text, cost_usd=float(cost), usage=usage, raw=dict(data)
+    )
 
 
 def _run_blocking(
@@ -175,10 +205,10 @@ def _run_blocking(
             f"claude -p exited {proc.returncode}: {proc.stderr.strip()[:500]}"
         )
     try:
-        data = json.loads(proc.stdout)
+        decoded = json.loads(proc.stdout)
     except ValueError as exc:
         raise ClaudeCLIError(f"claude -p output was not valid JSON: {exc}") from exc
-    return _parse_result(data)
+    return _parse_result(_require_json_object(decoded))
 
 
 async def claude_p_completion(
