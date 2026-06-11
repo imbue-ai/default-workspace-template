@@ -15,6 +15,8 @@ import {
   disconnectFromStream,
   getStreamingPreview,
   loadSnapshotWithStream,
+  normalizeStreamingText,
+  shouldShowStreamingPreview,
 } from "./StreamingMessage";
 import { getEventsForAgent, type TranscriptEvent } from "./Response";
 
@@ -185,5 +187,77 @@ describe("assistant_streaming preview", () => {
 
     disconnectFromStream(agentId);
     expect(getStreamingPreview(agentId)).toBeNull();
+  });
+});
+
+describe("shouldShowStreamingPreview", () => {
+  const base = {
+    previewText: "the agent is typing this",
+    latestAssistantText: "an earlier, finalized message",
+    activityState: "THINKING" as string | null | undefined,
+    hasMoreAfter: false,
+  };
+
+  it("shows while genuinely streaming new text", () => {
+    expect(shouldShowStreamingPreview(base)).toBe(true);
+  });
+
+  it("hides when there is no preview text", () => {
+    expect(shouldShowStreamingPreview({ ...base, previewText: null })).toBe(false);
+    expect(shouldShowStreamingPreview({ ...base, previewText: "" })).toBe(false);
+  });
+
+  it("hides when scrolled off the live tail", () => {
+    expect(shouldShowStreamingPreview({ ...base, hasMoreAfter: true })).toBe(false);
+  });
+
+  it("hides when the agent is idle (no response in flight)", () => {
+    expect(shouldShowStreamingPreview({ ...base, activityState: "IDLE" })).toBe(false);
+  });
+
+  it("hides when the preview already equals the latest finalized message", () => {
+    // The core bug: mngr keeps the just-finalized message as the buffer body, so
+    // the preview would otherwise double the rendered turn / re-appear next turn.
+    const finalized = "Here is my complete answer.";
+    expect(
+      shouldShowStreamingPreview({
+        previewText: finalized,
+        latestAssistantText: finalized,
+        activityState: "THINKING",
+        hasMoreAfter: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats cosmetic whitespace differences as a match (still hidden)", () => {
+    expect(
+      shouldShowStreamingPreview({
+        previewText: "Line one  \nLine two\n\n",
+        latestAssistantText: "Line one\nLine two",
+        activityState: "THINKING",
+        hasMoreAfter: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows a genuinely new message that differs from the last finalized one", () => {
+    expect(
+      shouldShowStreamingPreview({
+        previewText: "A brand new response, mid-stream",
+        latestAssistantText: "The previous, finished response",
+        activityState: "THINKING",
+        hasMoreAfter: false,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("normalizeStreamingText", () => {
+  it("strips trailing per-line whitespace and surrounding blank lines", () => {
+    expect(normalizeStreamingText("\n\nhello  \nworld\t\n\n")).toBe("hello\nworld");
+  });
+
+  it("leaves already-clean text unchanged", () => {
+    expect(normalizeStreamingText("hello\nworld")).toBe("hello\nworld");
   });
 });
