@@ -135,7 +135,7 @@ def _require_json_object(decoded: object) -> Mapping[str, object]:
 
 
 def _as_token_count(value: object) -> int:
-    """Coerce one external usage field to a non-negative int; non-numbers -> 0.
+    """Coerce one external usage field to an int; missing / non-numbers -> 0.
 
     ``bool`` is excluded even though it is an ``int`` subclass: a ``true`` token
     count is malformed, so it reads as 0 rather than 1.
