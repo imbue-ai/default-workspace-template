@@ -17,6 +17,7 @@ import {
   getEnrichmentForAgent,
   getEventCount,
   getFirstOffset,
+  getLatestAssistantText,
   getRenderVersion,
   getTotalEventCount,
   evictOldEvents,
@@ -38,6 +39,7 @@ import {
   disconnectFromStream,
   getStreamingPreview,
   loadSnapshotWithStream,
+  shouldShowStreamingPreview,
 } from "../models/StreamingMessage";
 import { MarkdownContent } from "../markdown";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
@@ -133,18 +135,22 @@ function isProtoAgent(agentId: string): boolean {
 /**
  * The provisional "response being typed" bubble, or null when nothing is
  * streaming. Rendered with the assistant message styling (plus a streaming
- * modifier class) from the live `assistant_streaming` preview, and shown only
- * at the live tail -- a preview pinned to the bottom would otherwise float in
- * the middle of scrolled-up history. It is replaced by the real assistant
- * message the instant that lands (see StreamingMessage.ts), so it never
- * double-renders alongside the finalized turn.
+ * modifier class) from the live `assistant_streaming` preview. It is shown only
+ * at the live tail and only while genuinely in-progress -- ``shouldShowStreamingPreview``
+ * suppresses it when the agent is idle or when its text already equals the
+ * latest finalized message (mngr keeps the last assistant block in the buffer
+ * after it commits, so without this it would double the just-rendered turn and
+ * re-appear at the start of the next one).
  */
 function renderStreamingPreview(agentId: string): m.Vnode | null {
-  if (hasMoreAfter(agentId)) {
-    return null;
-  }
   const text = getStreamingPreview(agentId);
-  if (text === null) {
+  const show = shouldShowStreamingPreview({
+    previewText: text,
+    latestAssistantText: getLatestAssistantText(agentId),
+    activityState: getAgentById(agentId)?.activity_state,
+    hasMoreAfter: hasMoreAfter(agentId),
+  });
+  if (!show || text === null) {
     return null;
   }
   return m(

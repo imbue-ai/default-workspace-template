@@ -54,6 +54,56 @@ export function getStreamingPreview(agentId: string): string | null {
   return text !== undefined && text !== "" ? text : null;
 }
 
+/** Normalize markdown for a stale-vs-live comparison: trim trailing whitespace
+ *  per line and drop leading/trailing blank lines, so mngr's reverse-mapped
+ *  body and the canonical transcript text compare equal despite cosmetic
+ *  differences (a trailing space, an extra blank line). */
+export function normalizeStreamingText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/\s+$/, ""))
+    .join("\n")
+    .replace(/^\n+/, "")
+    .replace(/\n+$/, "");
+}
+
+/**
+ * Decide whether the in-progress preview bubble should render.
+ *
+ * The preview must show only genuinely in-progress text. It is suppressed when:
+ *  - there is no preview text, or the window is scrolled off the live tail;
+ *  - the agent is IDLE -- a settled agent has no response in flight, so any
+ *    lingering buffer body is stale (mngr empties it only once the agent idles);
+ *  - the preview text already equals the latest finalized assistant message --
+ *    mngr keeps the last assistant block in the buffer after it commits, so
+ *    without this the just-rendered message would double as a pulsing preview,
+ *    and would re-appear next turn until new output streams.
+ */
+export function shouldShowStreamingPreview(args: {
+  previewText: string | null;
+  latestAssistantText: string | null;
+  activityState: string | null | undefined;
+  hasMoreAfter: boolean;
+}): boolean {
+  const { previewText, latestAssistantText, activityState, hasMoreAfter } = args;
+  if (previewText === null || previewText === "") {
+    return false;
+  }
+  if (hasMoreAfter) {
+    return false;
+  }
+  if (activityState === "IDLE") {
+    return false;
+  }
+  if (
+    latestAssistantText !== null &&
+    normalizeStreamingText(previewText) === normalizeStreamingText(latestAssistantText)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /** Set (or clear, when empty) an agent's streaming preview, redrawing only when
  *  it actually changed so idle no-op frames cost nothing. */
 function setStreamingPreview(agentId: string, text: string): void {
