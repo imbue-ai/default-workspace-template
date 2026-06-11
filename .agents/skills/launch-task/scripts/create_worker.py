@@ -518,6 +518,13 @@ def launch_sync(
     runner = runner or Runner()
     stream: TextIO = sys.stdout if out is None else out
 
+    # Resolve the wait target *before* creating the worker: a missing/malformed
+    # ``finish_report_path`` is an authoring bug, and reading it up front keeps it
+    # from half-creating a worker (matching ``launch``'s preflight contract). The
+    # field comes from the task file's frontmatter, which already exists, so this
+    # is safe to read this early.
+    report_path = _read_finish_report_path(task_file)
+
     launch_rc = launch(
         name=name,
         template=template,
@@ -530,7 +537,6 @@ def launch_sync(
     if launch_rc != 0:
         return launch_rc
 
-    report_path = _read_finish_report_path(task_file)
     buffer = io.StringIO()
     await_rc = await_report(
         report_path=report_path,

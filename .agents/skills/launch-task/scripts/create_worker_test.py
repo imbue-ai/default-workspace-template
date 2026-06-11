@@ -932,6 +932,33 @@ def test_launch_sync_surfaces_launch_failure(tmp_path: Path) -> None:
     assert runner.calls == []
 
 
+def test_launch_sync_missing_finish_report_path_raises_before_launch(
+    tmp_path: Path,
+) -> None:
+    # A task file lacking finish_report_path must fail BEFORE any worker is
+    # created, so a malformed task file can't orphan a half-launched worker.
+    runtime, task, _ = _make_layout(tmp_path)
+    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+    runner = _RecordingRunner()
+
+    with pytest.raises(ValueError, match="finish_report_path"):
+        create_worker_mod.launch_sync(
+            name="demo-worker",
+            template="worker",
+            runtime_dir=runtime,
+            task_file=task,
+            workspace="ws-1",
+            timeout_seconds=30,
+            poll_interval_seconds=5,
+            runner=runner,
+            sleeper=_no_sleep,
+            clock=lambda: 0.0,
+            out=io.StringIO(),
+        )
+
+    assert runner.calls == []
+
+
 def test_main_launch_sync_emits_result_json(tmp_path: Path) -> None:
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
