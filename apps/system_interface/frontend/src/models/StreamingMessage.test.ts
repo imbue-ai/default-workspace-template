@@ -15,7 +15,7 @@ import {
   disconnectFromStream,
   getStreamingPreview,
   loadSnapshotWithStream,
-  normalizeStreamingText,
+  previewHasNewContent,
   shouldShowStreamingPreview,
 } from "./StreamingMessage";
 import { getEventsForAgent, type TranscriptEvent } from "./Response";
@@ -175,6 +175,24 @@ describe("assistant_streaming preview", () => {
     disconnectFromStream(agentId);
   });
 
+  it("clears the preview when a new user message starts the next turn", () => {
+    const agentId = `agent-${agentCounter++}`;
+    connectToStream(agentId);
+    const source = lastEventSource();
+
+    source.onmessage?.({
+      data: JSON.stringify({ type: "assistant_streaming", last_complete_id: "p", text: "prior turn output" }),
+    });
+    expect(getStreamingPreview(agentId)).toBe("prior turn output");
+
+    // The user sends another message: the prior turn's in-progress text must not
+    // linger into the new turn.
+    source.onmessage?.({ data: JSON.stringify(makeEvent("user-2", "do the next thing")) });
+    expect(getStreamingPreview(agentId)).toBeNull();
+
+    disconnectFromStream(agentId);
+  });
+
   it("drops the preview when the stream is intentionally disconnected", () => {
     const agentId = `agent-${agentCounter++}`;
     connectToStream(agentId);
@@ -250,14 +268,37 @@ describe("shouldShowStreamingPreview", () => {
       }),
     ).toBe(true);
   });
+
+  it("still shows a follow-up message that extends the finalized one with new prose", () => {
+    // The finalized message lingers in the buffer, then the next turn streams in
+    // below it: the preview has genuinely new content past the finalized text.
+    expect(
+      shouldShowStreamingPreview({
+        previewText: "First answer.\n\nFirst answer.\n\nNow the follow-up is being typed",
+        latestAssistantText: "First answer.",
+        activityState: "THINKING",
+        hasMoreAfter: false,
+      }),
+    ).toBe(true);
+  });
 });
 
-describe("normalizeStreamingText", () => {
-  it("strips trailing per-line whitespace and surrounding blank lines", () => {
-    expect(normalizeStreamingText("\n\nhello  \nworld\t\n\n")).toBe("hello\nworld");
+describe("previewHasNewContent", () => {
+  it("is false when the preview only re-renders the finalized message", () => {
+    expect(previewHasNewContent("Here is the answer.", "Here is the answer.")).toBe(false);
   });
 
-  it("leaves already-clean text unchanged", () => {
-    expect(normalizeStreamingText("hello\nworld")).toBe("hello\nworld");
+  it("tolerates cosmetic whitespace/reflow differences in the rendering", () => {
+    // mngr's reverse-mapped pane differs from the transcript by trailing spaces
+    // and a collapsed blank line, but carries no new content.
+    expect(previewHasNewContent("Para one.  \n\n\nPara two.\n", "Para one.\n\nPara two.")).toBe(false);
+  });
+
+  it("is true when the preview adds non-whitespace content beyond the finalized message", () => {
+    expect(previewHasNewContent("Para one.\n\nPara two, still streaming", "Para one.")).toBe(true);
+  });
+
+  it("is true for a wholly different in-progress message", () => {
+    expect(previewHasNewContent("A completely different response", "The old finalized one")).toBe(true);
   });
 });

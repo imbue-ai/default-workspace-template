@@ -54,30 +54,72 @@ export function getStreamingPreview(agentId: string): string | null {
   return text !== undefined && text !== "" ? text : null;
 }
 
-/** Normalize markdown for a stale-vs-live comparison: trim trailing whitespace
- *  per line and drop leading/trailing blank lines, so mngr's reverse-mapped
- *  body and the canonical transcript text compare equal despite cosmetic
- *  differences (a trailing space, an extra blank line). */
-export function normalizeStreamingText(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => line.replace(/\s+$/, ""))
-    .join("\n")
-    .replace(/^\n+/, "")
-    .replace(/\n+$/, "");
+function isSpace(ch: string): boolean {
+  return /\s/.test(ch);
+}
+
+/**
+ * Index in ``candidate`` where content not already present (in order) in
+ * ``seen`` begins, walking the two together and treating any whitespace run in
+ * one as matching a whitespace run (or nothing) in the other.
+ *
+ * This is the whitespace-tolerant matcher from mngr's reference consumer
+ * (``mngr_robinhood``'s ``stream_buffer._unemitted_suffix_start``): mngr's
+ * stream buffer is an approximate reverse-map of the tmux pane, so its rendering
+ * of a message differs cosmetically (a trailing space, a collapsed blank line
+ * around a rule) from the canonical transcript text. Matching whitespace
+ * loosely lets us recognize an already-finalized message even when its preview
+ * rendering isn't byte-identical -- the bug class an exact compare would miss.
+ */
+function firstNovelIndex(seen: string, candidate: string): number {
+  let seenIndex = 0;
+  let candidateIndex = 0;
+  let matchedCandidateIndex = 0;
+  while (seenIndex < seen.length && candidateIndex < candidate.length) {
+    const seenIsSpace = isSpace(seen[seenIndex]);
+    const candidateIsSpace = isSpace(candidate[candidateIndex]);
+    if (seenIsSpace && candidateIsSpace) {
+      while (seenIndex < seen.length && isSpace(seen[seenIndex])) seenIndex++;
+      while (candidateIndex < candidate.length && isSpace(candidate[candidateIndex])) candidateIndex++;
+      matchedCandidateIndex = candidateIndex;
+    } else if (seenIsSpace) {
+      seenIndex++;
+    } else if (candidateIsSpace) {
+      candidateIndex++;
+      matchedCandidateIndex = candidateIndex;
+    } else if (seen[seenIndex] === candidate[candidateIndex]) {
+      seenIndex++;
+      candidateIndex++;
+      matchedCandidateIndex = candidateIndex;
+    } else {
+      break;
+    }
+  }
+  return matchedCandidateIndex;
+}
+
+/** Whether ``previewText`` carries non-whitespace content beyond what
+ *  ``finalizedText`` already covers -- i.e. it is a genuinely in-progress message
+ *  rather than the last finalized message lingering in mngr's buffer. */
+export function previewHasNewContent(previewText: string, finalizedText: string): boolean {
+  return previewText.slice(firstNovelIndex(finalizedText, previewText)).trim() !== "";
 }
 
 /**
  * Decide whether the in-progress preview bubble should render.
  *
- * The preview must show only genuinely in-progress text. It is suppressed when:
- *  - there is no preview text, or the window is scrolled off the live tail;
- *  - the agent is IDLE -- a settled agent has no response in flight, so any
- *    lingering buffer body is stale (mngr empties it only once the agent idles);
- *  - the preview text already equals the latest finalized assistant message --
- *    mngr keeps the last assistant block in the buffer after it commits, so
- *    without this the just-rendered message would double as a pulsing preview,
- *    and would re-appear next turn until new output streams.
+ * mngr's stream buffer is an approximate, raw view of the agent's tmux pane: it
+ * keeps showing the last assistant block until the agent idles, and re-shows it
+ * at the start of the next turn before new output streams. mngr hands the
+ * consumer the last-complete-id anchor and leaves reconciliation to it (its
+ * reference consumer, mngr_robinhood, does the same diffing). So we suppress the
+ * bubble when it isn't genuinely in-progress:
+ *  - no preview text, or the window is scrolled off the live tail;
+ *  - the agent is IDLE -- a settled agent has no response in flight, so nothing
+ *    streaming can be current (the hard idle guarantee);
+ *  - the preview adds nothing beyond the latest finalized assistant message --
+ *    that is the lingering / re-shown last message, compared whitespace-tolerantly
+ *    so mngr's cosmetic rendering differences don't defeat the check.
  */
 export function shouldShowStreamingPreview(args: {
   previewText: string | null;
@@ -95,10 +137,7 @@ export function shouldShowStreamingPreview(args: {
   if (activityState === "IDLE") {
     return false;
   }
-  if (
-    latestAssistantText !== null &&
-    normalizeStreamingText(previewText) === normalizeStreamingText(latestAssistantText)
-  ) {
+  if (latestAssistantText !== null && !previewHasNewContent(previewText, latestAssistantText)) {
     return false;
   }
   return true;
@@ -171,10 +210,12 @@ export function connectToStream(agentId: string): void {
       return;
     }
     const event = raw as TranscriptEvent;
-    // The finalized assistant turn supersedes the live preview: clear it as soon
-    // as the durable assistant_message lands so the two never show as duplicates.
-    // (The agent's next turn re-populates the preview from fresh frames.)
-    if (event.type === "assistant_message") {
+    // Reset the live preview at turn boundaries so prior-turn text can never
+    // linger: a finalized assistant_message supersedes the preview (the durable
+    // bubble takes over), and a new user_message starts a fresh turn (any body
+    // still in mngr's buffer belongs to the turn the user just ended). Fresh
+    // frames re-populate the preview once the new response actually streams.
+    if (event.type === "assistant_message" || event.type === "user_message") {
       setStreamingPreview(agentId, "");
     }
     const pending = inFlightSnapshotBuffersByAgent.get(agentId);
