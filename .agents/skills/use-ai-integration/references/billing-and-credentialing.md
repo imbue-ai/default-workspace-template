@@ -50,8 +50,8 @@ nearly all of it (measured on this repo, Haiku, a one-line prompt):
   `ClaudeCLIError`) rather than hanging.
 
 A service started from `services.toml` inherits the agent's environment, so in a
-deployed mngr agent both `CLAUDE_CONFIG_DIR` and (usually) `ANTHROPIC_API_KEY` are
-present and both paths just work.
+deployed mngr agent both `CLAUDE_CONFIG_DIR` and `ANTHROPIC_API_KEY` should be present
+present and both paths should work.
 
 ## The mngr `claude -p` session-hook bug
 
