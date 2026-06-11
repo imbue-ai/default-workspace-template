@@ -16,10 +16,13 @@ API key is present) or shells out to `claude -p` (when it isn't), and the
   `pyproject.toml` as a dependency; the agent reads litellm's docs as needed).
   Nothing is wrapped or abstracted on our side.
 - **Keyless:** the agent copies a small, self-contained `claude -p` -> JSON
-  helper that the skill ships as a reference snippet. The snippet handles the two
+  helper that the skill ships as a reference snippet. The snippet encodes the
   things that are easy to get wrong by hand: unsetting `MAIN_CLAUDE_SESSION_ID`
-  (so the spawned `claude -p` doesn't trip mngr's session hooks) and
-  distinguishing the success vs. error arms of the `claude -p` JSON result.
+  (so the spawned `claude -p` doesn't trip mngr's session hooks); distinguishing
+  the success vs. error arms of the JSON result; and, for the completion
+  scenario, disabling tools and running from an isolated working directory so the
+  repo's `CLAUDE.md` / `.claude` hooks can't hijack a non-agentic answer. The
+  details live in Changes.
 - A service's need falls into one of three scenarios, distinguished by how much
   agency Claude needs. The agent classifies which scenario it's building and
   implements accordingly; none of these is a library function:
@@ -110,9 +113,34 @@ API key is present) or shells out to `claude -p` (when it isn't), and the
   - the billing/credentialing guidance and the `ANTHROPIC_API_KEY` footgun.
 - **Ship the `claude -p` helper as a copyable reference snippet** under the skill
   -- a real, syntax-valid `.py` reference file the agent copies/adapts into its
-  service, not an importable package. It returns a small typed result (text,
-  `cost_usd`, `usage`, raw) and supports the completion vs. agentic-task flag
-  sets described above.
+  service, not an importable package. The completion and agentic-task scenarios
+  differ only in CLI flags and working directory, not in the subprocess/parsing
+  logic, so this is **one snippet** (not two): a shared core plus two thin
+  wrappers (completion, task) that bake the per-scenario gotchas in as defaults,
+  so a caller can't forget them.
+  - *Shared core (both scenarios):* unset `MAIN_CLAUDE_SESSION_ID` in the child
+    environment (optionally also the `MNGR_AGENT_*` identity vars); invoke
+    `claude -p <prompt> --output-format json --model <m>`; run the subprocess off
+    the event loop (a worker thread) so an async service isn't blocked; raise
+    with the captured stderr on a non-zero exit; parse the JSON result
+    distinguishing the **success arm** (`subtype == "success"`, has `result`)
+    from the **error arm** (`is_error` true -- e.g. `error_max_turns` -- carrying
+    `errors`), raising on the error arm or a missing `result` rather than
+    returning empty text; return a small typed result carrying `text`,
+    `cost_usd` (from `total_cost_usd`), `usage` (input/output plus cache-read and
+    cache-write tokens), and the raw JSON.
+  - *Completion wrapper:* disable tools (`--tools ""`) **and** run from an
+    isolated temporary working directory so `claude -p` doesn't auto-discover the
+    repo's `CLAUDE.md` / `.claude` hooks (which otherwise bleed into -- and
+    intermittently hijack -- a non-agentic answer); require a real `system`
+    (`--system-prompt`) as the neutralizing instruction. (`--bare` would strip
+    project context too, but it can't authenticate without a key, so the isolated
+    cwd is the keyless workaround.)
+  - *Task wrapper:* leave tools enabled and run in the repo working directory (it
+    needs file access); default `--permission-mode bypassPermissions`
+    (load-bearing -- a headless run has no human to approve tool use, so otherwise
+    Read/Write/Bash are auto-denied); accept `--append-system-prompt` to layer
+    instructions on the default agent, or `--system-prompt` to replace it.
 - **Add a synchronous launch path to the `launch-task` tooling** for the
   full-agent scenario: launch a worker, await its finish report, return a
   structured result (outcome, branch, report), and destroy the agent. The skill
