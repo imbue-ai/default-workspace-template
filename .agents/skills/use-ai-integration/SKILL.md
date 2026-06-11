@@ -5,19 +5,21 @@ description: Use when building a service that calls Claude -- an AI-driven servi
 
 # Calling Claude from a service
 
-A service reaches Claude in one of two ways, and **you choose when you write the
-service** -- there is no runtime router and no library to import. The choice is
-driven entirely by whether `ANTHROPIC_API_KEY` is set in the service's
-environment:
+A service reaches Claude in one of two ways, depending on whether
+`ANTHROPIC_API_KEY` is set in the service's environment: with a key, call
+`litellm` directly; without one, use the `claude -p` helper in
+`scripts/claude_p.py`.
 
-```python
-import os
+Which path applies is fixed for a deployment -- it does not change at runtime, so
+**do not write a service that handles both.** Check once, up front, with a shell
+command, and implement only the path that applies:
 
-if os.environ.get("ANTHROPIC_API_KEY"):
-    ...  # keyed path: call litellm directly (below)
-else:
-    ...  # keyless path: copy and use scripts/claude_p.py (below)
+```bash
+[ -n "$ANTHROPIC_API_KEY" ] && echo keyed || echo keyless
 ```
+
+If keyed, write only the litellm path; if keyless, write only the `claude -p`
+path. Branching on the key from inside the service is dead weight.
 
 ## Pick the scenario (weakest that does the job)
 
@@ -29,8 +31,10 @@ needs. Pick the weakest -- it is cheaper, faster, and simpler.
 2. **One-shot agentic task** -- a single self-contained job that needs tools or
    file access ("read this file and act", "summarize the diff with the repo
    open").
-3. **Full agent** -- a full, possibly long-running agent (the service edits
-   itself on feedback, or launches an agent to fix an error). **User- or
+3. **Full agent** -- a full, possibly long-running agent that runs in its **own
+   git worktree** (a `launch-task` worker). Reach for this over scenario 2 when
+   Claude edits code that must be tested and validated, or when several agents
+   work in the same repo and their changes must not collide. **User- or
    error-triggered only, never an autonomous loop**, with a tightly-scoped task.
 
 ## Scenario 1 -- one-shot completion
@@ -69,6 +73,11 @@ result = await claude_p_completion(
 print(result.text, result.cost_usd, result.usage)
 ```
 
+Both `acompletion` and `claude_p_completion` are async. Once you have confirmed
+the prompt + model combination works and produces good results on a few items,
+run a batch of items concurrently (an `anyio` task group) rather than awaiting
+them one at a time -- the throughput difference is large.
+
 ## Scenario 2 -- one-shot agentic task
 
 Always `claude -p` (it has tools and file access; a plain API call does not), so
@@ -87,13 +96,21 @@ result = await claude_p_task(
 ```
 
 `append_system` layers instructions on the default agent; pass `system` to
-replace it (rare). Cost is dominated by per-call overhead, so **batch** items into
-fewer, larger calls rather than one call per item.
+replace it outright. The default agent prompt is many tokens, but it is useful
+instruction for agentic work, so overwrite it only when you have a good reason.
+Cost is dominated by per-call overhead, so **batch** items into fewer, larger
+calls rather than one call per item.
 
 ## Scenario 3 -- full agent
 
-Launch a `launch-task` worker synchronously and collect its structured result --
-do not wrap it; call the script directly:
+Reach for this over scenario 2 when the work needs its **own git worktree**:
+Claude is editing code that has to be tested and validated, or other agents are
+working in the same repo and the changes must not collide. A `launch-task` worker
+gives the run an isolated branch and worktree; scenario 2 instead runs in the
+service's own working directory.
+
+Launch the worker synchronously and collect its structured result -- do not wrap
+it; call the script directly:
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch-sync \
@@ -135,7 +152,7 @@ so they can decide when volume justifies setting `ANTHROPIC_API_KEY`:
 
 - **Measure on a small sample before scaling.** Run the scenario on a handful of
   items, check the cost, and tell the user the projected cost before turning on a
-  volume flow. There is no spend ceiling -- if you want one, build it yourself.
+  volume flow.
 
 See [references/billing-and-credentialing.md](references/billing-and-credentialing.md)
 for the billing buckets, why `claude -p` costs more than the direct API, the
