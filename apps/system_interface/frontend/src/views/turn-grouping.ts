@@ -113,10 +113,12 @@ const TK_UPDATED_RE = /Updated\s+(\S+)\s+->\s+(open|in_progress|closed)/g;
  *  line) is never minted as a phantom timeline node. */
 const STEP_ID_RE = /-step-[a-z0-9]+$/;
 
-/** Decoration output lines tk prints on stdout (see vendor/tk/ticket). The id is
- *  required to carry the `-step-` segment so a stray "Created ..." line in other
- *  tool output (e.g. a scaffolder's "Created lib at ...") is never mistaken for
- *  a step. */
+/** Decoration output lines tk prints on stdout. The format is defined in
+ *  `vendor/tk/ticket` (cmd_create/start/close) and is also protected from
+ *  truncation by the backend parser (`session_parser.py`); keep all three in
+ *  sync. The id is required to carry the `-step-` segment so a stray
+ *  "Created ..." line in other tool output (e.g. a scaffolder's "Created lib
+ *  at ...") is never mistaken for a step. */
 const CREATED_RE = /^Created (\S+-step-[a-z0-9]+): (.*)$/gm;
 const TK_STEP_TITLE_RE = /^tk-step (\S+) title: (.*)$/gm;
 const TK_STEP_SUMMARY_RE = /^tk-step (\S+) summary: (.*)$/gm;

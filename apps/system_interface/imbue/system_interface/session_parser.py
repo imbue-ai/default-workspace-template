@@ -24,6 +24,8 @@ _MAX_OUTPUT_LENGTH = 2000
 # chat progress view reads back from the transcript: `Updated <id> -> <status>`
 # on every transition (positions a step's open/close) and, for steps,
 # `tk-step <id> title:`/`summary:` lines (carry the title and close summary).
+# The format is defined in `vendor/tk/ticket` (cmd_create/start/close) and also
+# parsed by the frontend (`turn-grouping.ts`); keep all three in sync.
 # These must survive output truncation (e.g. when a tk command is batched after
 # a verbose one whose output pushes the line past the limit), so a step's
 # structure and decoration are never lost to truncation -- see
