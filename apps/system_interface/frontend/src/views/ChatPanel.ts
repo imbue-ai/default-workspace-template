@@ -33,7 +33,13 @@ import {
   ESTIMATED_USER_HEIGHT_PX,
   ESTIMATED_ASSISTANT_HEIGHT_PX,
 } from "./row-measurement";
-import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
+import {
+  connectToStream,
+  disconnectFromStream,
+  getStreamingPreview,
+  loadSnapshotWithStream,
+} from "../models/StreamingMessage";
+import { MarkdownContent } from "../markdown";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { apiUrl } from "../base-path";
@@ -122,6 +128,34 @@ function scrollToBottom(element: HTMLElement): void {
 
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
+}
+
+/**
+ * The provisional "response being typed" bubble, or null when nothing is
+ * streaming. Rendered with the assistant message styling (plus a streaming
+ * modifier class) from the live `assistant_streaming` preview, and shown only
+ * at the live tail -- a preview pinned to the bottom would otherwise float in
+ * the middle of scrolled-up history. It is replaced by the real assistant
+ * message the instant that lands (see StreamingMessage.ts), so it never
+ * double-renders alongside the finalized turn.
+ */
+function renderStreamingPreview(agentId: string): m.Vnode | null {
+  if (hasMoreAfter(agentId)) {
+    return null;
+  }
+  const text = getStreamingPreview(agentId);
+  if (text === null) {
+    return null;
+  }
+  return m(
+    "div",
+    {
+      key: "__streaming_preview",
+      class: "message message-assistant message-assistant--streaming",
+      "aria-live": "polite",
+    },
+    m(MarkdownContent, { content: text }),
+  );
 }
 
 /**
@@ -652,14 +686,18 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       // message, which should still show immediately as an optimistic bubble
       // rather than be hidden behind the empty-state placeholder.
       const pendingNodes = renderPendingMessages(agentId);
-      if (pendingNodes.length === 0) {
+      // The agent can start streaming a response before its first transcript
+      // event lands, so show the preview here too (after any optimistic bubble).
+      const previewBubble = renderStreamingPreview(agentId);
+      const tailNodes: m.Children[] = previewBubble !== null ? [...pendingNodes, previewBubble] : [...pendingNodes];
+      if (tailNodes.length === 0) {
         return m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
           m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
         );
       }
-      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, pendingNodes)]);
+      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, tailNodes)]);
     }
 
     const agent = getAgentById(agentId);
@@ -730,11 +768,17 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       m("div", { key: "__spacer_bottom", style: `height: ${windowResult.bottomPad + phantomBottomHeight}px` }),
     );
 
-    return m("div", { class: "message-list-wrapper" }, [
-      // Pending (optimistic) messages render after the virtualized rows so a
-      // just-sent bubble shows at the live tail until its real event lands.
-      m("div", { class: MESSAGE_LIST_CLASS }, [...visibleRows, ...renderPendingMessages(agentId)]),
-    ]);
+    // Pending (optimistic) messages render after the virtualized rows so a
+    // just-sent bubble shows at the live tail until its real event lands; the
+    // in-progress assistant preview follows them. Built imperatively because
+    // every sibling here is keyed and a null hole alongside keyed vnodes throws.
+    const tailNodes: m.Children[] = [...visibleRows, ...renderPendingMessages(agentId)];
+    const previewBubble = renderStreamingPreview(agentId);
+    if (previewBubble !== null) {
+      tailNodes.push(previewBubble);
+    }
+
+    return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, tailNodes)]);
   }
 
   return {
