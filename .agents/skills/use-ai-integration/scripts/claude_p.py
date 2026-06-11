@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["anyio"]
+# dependencies = ["anyio", "pydantic>=2"]
 # ///
 """Copyable helper for calling headless ``claude -p`` from a service.
 
@@ -48,6 +48,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from anyio import to_thread
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 _MAIN_CLAUDE_SESSION_ID = "MAIN_CLAUDE_SESSION_ID"
 # mngr identity vars its own subagent proxy strips; dropping them is defense in
@@ -120,71 +121,80 @@ def _build_argv(
     return argv
 
 
-def _require_json_object(decoded: object) -> Mapping[str, object]:
-    """Narrow a decoded ``claude -p`` JSON value to an object mapping, or raise.
+class _UsageModel(BaseModel):
+    """The ``usage`` block of a ``claude -p`` result, with token counts validated.
 
-    ``json.loads`` returns ``Any`` (the payload could be a list, number, or null),
-    so this is the one place the result is checked to be an object. Everything
-    downstream then works against a typed ``Mapping[str, object]`` -- the values
-    stay ``object`` because the payload is external and each field is validated by
-    ``_parse_result`` before use.
+    Extra keys are ignored (the block carries fields we do not surface), and each
+    count defaults to 0 so an absent field is fine; a present-but-non-integer value
+    fails validation rather than silently reading as 0.
     """
-    if not isinstance(decoded, dict):
-        raise ClaudeCLIError("claude -p JSON output was not an object")
-    return decoded
+
+    model_config = ConfigDict(extra="ignore")
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
-def _as_token_count(value: object) -> int:
-    """Coerce one external usage field to an int; missing / non-numbers -> 0.
+class _ResultModel(BaseModel):
+    """A ``claude -p --output-format json`` result message, typed and validated.
 
-    ``bool`` is excluded even though it is an ``int`` subclass: a ``true`` token
-    count is malformed, so it reads as 0 rather than 1.
+    The fields are optional with defaults because the payload shape differs by arm:
+    the **success arm** (``subtype == "success"``) carries ``result`` and
+    ``total_cost_usd``, while the **error arm** (``is_error`` true, e.g.
+    ``error_max_turns`` / ``error_during_execution``) carries ``errors`` and no
+    ``result``. ``_parse_result`` decides the arm and rejects the error arm or a
+    success arm missing its text. pydantic enforces each field's *type*, so a
+    wrong-typed ``result`` or ``total_cost_usd`` (or a non-object payload) raises
+    instead of slipping through.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 0
-    return int(value)
+
+    model_config = ConfigDict(extra="ignore")
+
+    subtype: str | None = None
+    is_error: bool = False
+    result: str | None = None
+    total_cost_usd: float | None = None
+    usage: _UsageModel = Field(default_factory=_UsageModel)
+    errors: list[object] = Field(default_factory=list)
 
 
-def _parse_result(data: Mapping[str, object]) -> ClaudeResult:
-    """Build a ``ClaudeResult`` from a parsed ``claude -p`` JSON object, or raise.
+def _parse_result(data: object) -> ClaudeResult:
+    """Validate raw ``claude -p`` JSON into a ``ClaudeResult``, or raise.
 
-    ``data`` is the already-validated result object (``_require_json_object``
-    rejects any non-object payload upstream). The result message has a **success
-    arm** (``subtype == "success"`` with a ``result`` string) and an **error arm**
-    (``is_error`` true, e.g. ``error_max_turns`` / ``error_during_execution``,
-    carrying ``errors``). The error arm and a missing ``result`` both raise, so a
-    maxed-out or failed run surfaces instead of looking like an empty-text success.
+    ``data`` is the verbatim decoded JSON (any shape). It is validated into the
+    typed ``_ResultModel`` first -- a non-object payload or a wrong-typed field
+    raises ``ClaudeCLIError`` -- so the rest of this function reads typed
+    attributes rather than poking at an untyped object. The error arm and a
+    success arm with no ``result`` text both raise, so a maxed-out or failed run
+    surfaces instead of looking like an empty-text success.
     """
-    if data.get("is_error") or data.get("subtype") != "success":
-        errors = data.get("errors")
-        # claude -p output is external JSON, so coerce each element to str: a
-        # non-string entry would otherwise make str.join raise TypeError inside
-        # this error path, masking the ClaudeCLIError we are trying to raise.
-        detail = "; ".join(str(e) for e in errors) if isinstance(errors, list) else ""
+    try:
+        payload = _ResultModel.model_validate(data)
+    except ValidationError as exc:
         raise ClaudeCLIError(
-            f"claude -p returned an error result (subtype={data.get('subtype')!r}): "
+            f"claude -p JSON did not match the expected result shape: {exc}"
+        ) from exc
+    if payload.is_error or payload.subtype != "success":
+        detail = "; ".join(str(error) for error in payload.errors)
+        raise ClaudeCLIError(
+            f"claude -p returned an error result (subtype={payload.subtype!r}): "
             f"{detail or 'no error detail reported'}"
         )
-    result_text = data.get("result")
-    if not isinstance(result_text, str):
+    if payload.result is None:
         raise ClaudeCLIError("claude -p success result was missing the 'result' text")
-    raw_usage = data.get("usage")
-    usage_fields: Mapping[str, object] = (
-        raw_usage if isinstance(raw_usage, Mapping) else {}
-    )
-    usage = Usage(
-        input_tokens=_as_token_count(usage_fields.get("input_tokens")),
-        output_tokens=_as_token_count(usage_fields.get("output_tokens")),
-        cache_read_tokens=_as_token_count(usage_fields.get("cache_read_input_tokens")),
-        cache_write_tokens=_as_token_count(
-            usage_fields.get("cache_creation_input_tokens")
-        ),
-    )
-    cost = data.get("total_cost_usd")
-    if not isinstance(cost, (int, float)) or isinstance(cost, bool):
+    if payload.total_cost_usd is None:
         raise ClaudeCLIError("claude -p result was missing a numeric 'total_cost_usd'")
+    usage = Usage(
+        input_tokens=payload.usage.input_tokens,
+        output_tokens=payload.usage.output_tokens,
+        cache_read_tokens=payload.usage.cache_read_input_tokens,
+        cache_write_tokens=payload.usage.cache_creation_input_tokens,
+    )
+    raw = dict(data) if isinstance(data, dict) else {}
     return ClaudeResult(
-        text=result_text, cost_usd=float(cost), usage=usage, raw=dict(data)
+        text=payload.result, cost_usd=payload.total_cost_usd, usage=usage, raw=raw
     )
 
 
@@ -208,7 +218,7 @@ def _run_blocking(
         decoded = json.loads(proc.stdout)
     except ValueError as exc:
         raise ClaudeCLIError(f"claude -p output was not valid JSON: {exc}") from exc
-    return _parse_result(_require_json_object(decoded))
+    return _parse_result(decoded)
 
 
 async def claude_p_completion(

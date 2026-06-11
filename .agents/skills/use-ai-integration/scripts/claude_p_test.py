@@ -79,18 +79,22 @@ def _success_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
-def test_require_json_object_rejects_non_object_payloads() -> None:
+def test_parse_result_rejects_non_object_payloads() -> None:
     # claude -p is asked for --output-format json, but a list / number / null is
-    # still possible external output; it must surface as ClaudeCLIError, not slip
-    # into _parse_result as a non-mapping.
+    # still possible external output; validation must surface it as ClaudeCLIError
+    # rather than letting a non-object reach the field reads.
     for payload in ([1, 2, 3], "a string", 42, None):
-        with pytest.raises(claude_p.ClaudeCLIError, match="not an object"):
-            claude_p._require_json_object(payload)
+        with pytest.raises(claude_p.ClaudeCLIError, match="expected result shape"):
+            claude_p._parse_result(payload)
 
 
-def test_require_json_object_returns_mapping_unchanged() -> None:
-    payload = {"subtype": "success", "result": "ok"}
-    assert claude_p._require_json_object(payload) is payload
+def test_parse_result_rejects_wrong_typed_fields() -> None:
+    # A present-but-wrong-typed field is malformed output: a non-string result or
+    # a non-numeric cost fails validation rather than being silently accepted.
+    with pytest.raises(claude_p.ClaudeCLIError, match="expected result shape"):
+        claude_p._parse_result(_success_payload(result=123))
+    with pytest.raises(claude_p.ClaudeCLIError, match="expected result shape"):
+        claude_p._parse_result(_success_payload(total_cost_usd="free"))
 
 
 def test_parse_result_success_extracts_text_cost_and_usage() -> None:
@@ -160,22 +164,11 @@ def test_parse_result_defaults_cache_tokens_to_zero() -> None:
     assert result.usage.cache_write_tokens == 0
 
 
-def test_as_token_count_coerces_numbers_and_zeroes_out_junk() -> None:
-    assert claude_p._as_token_count(100) == 100
-    assert claude_p._as_token_count(12.0) == 12
-    # Anything that is not a real number reads as 0: missing fields (None),
-    # malformed strings, and bool (a stray ``true`` is not a count of 1).
-    assert claude_p._as_token_count(None) == 0
-    assert claude_p._as_token_count("100") == 0
-    assert claude_p._as_token_count(True) == 0
-
-
-def test_parse_result_zeroes_malformed_usage_values() -> None:
-    result = claude_p._parse_result(
-        _success_payload(usage={"input_tokens": "lots", "output_tokens": None})
-    )
-    assert result.usage.input_tokens == 0
-    assert result.usage.output_tokens == 0
+def test_parse_result_rejects_malformed_usage_tokens() -> None:
+    # The usage block is validated too: a non-integer token count is malformed
+    # output and raises rather than silently reading as some default.
+    with pytest.raises(claude_p.ClaudeCLIError, match="expected result shape"):
+        claude_p._parse_result(_success_payload(usage={"input_tokens": "lots"}))
 
 
 def test_child_env_unsets_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
