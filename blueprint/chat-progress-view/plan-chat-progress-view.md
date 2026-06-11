@@ -10,10 +10,12 @@
 > Those documents describe the evolution that produced the *current* code. This
 > spec describes both where the feature is today and the **target simplification**
 > agreed in design discussion. The target removes the tk enrichment watcher, the
-> carryover mechanism, the interjection/trailing-reply boundary machinery, and the
-> dead ticket-nesting machinery — collapsing five layers and ~4,000 lines into a
-> single transcript-driven path with a small set of decoration lines that tk
-> prints on stdout.
+> interjection/trailing-reply boundary machinery, and the dead ticket-nesting
+> machinery — collapsing five layers and ~4,000 lines into a single
+> transcript-driven path with a small set of decoration lines that tk prints on
+> stdout. **Carryover (a step left open at a turn boundary re-rendering at the top
+> of the next turn) is kept** — it is cheap (~35 lines), good UX, transcript-native,
+> and keeping it removes the need for any auto-close/redeclare machinery.
 
 ---
 
@@ -98,8 +100,9 @@
   place the step cleanly. `tk create --step` calls may be batched.
 - `tk close <id> "summary"` requires a one-line, user-facing summary of the
   *work done* in the step (not the outcome — the outcome goes in the final reply).
-- At turn start, a reminder lists any of the agent's steps left open from a prior
-  turn that were auto-closed, so the agent can redeclare what's still relevant.
+- At turn start, the existing reminder lists any of the agent's steps still open
+  from a prior turn, so the agent can decide to continue, replace, or close them.
+  Steps may be left open across turns (they carry over — see below).
 
 ### End-of-turn / reply placement (target — simplified)
 
@@ -126,19 +129,28 @@
   visible prose. So the ejection rule is the *complete* fix; no steering backstop
   is needed for this case.
 
-### Unfinished steps at turn boundary (target — carryover removed)
+### Unfinished steps at turn boundary (carryover — kept)
 
-- A step left open when the next user message arrives **freezes** in its own
-  turn: it renders with a static (settled) icon and does not retroactively flip
-  to done. It is **not** re-rendered at the top of the next turn.
-- The stop hook **auto-closes** any still-open steps at turn end with a canned
-  summary ("Not completed this turn.") and records their ids/titles. The
-  next-turn reminder reads and clears that record and tells the agent the steps
-  were auto-closed unfinished, so it can redeclare whatever remains relevant.
-- These hook-driven closes happen outside the transcript, so the view never sees
-  them; the frozen-in-place rendering is the entire view-side story. This removes
-  the carryover apparatus (re-opening at section top, duplicate nodes per id,
-  `is_carryover`, `openStepsAtEnd`).
+- A step left open (in_progress) when the next user message arrives **carries
+  over**: it re-renders as a fresh node at the top of the new turn and continues
+  to collect that turn's work. The prior turn's node **freezes** in place — it
+  keeps the state it had at that turn's end (active, static icon) and does not
+  retroactively flip to done when the step later closes. The same id renders as
+  two independent nodes across the two sections, each with its own state.
+- This is the existing behavior and is preserved unchanged. It is good UX: a user
+  who sends a small clarification mid-task does not force the agent to restart or
+  redeclare its steps; the work continues under the same step.
+- Carryover is transcript-native: a step carries over iff it is still on the
+  walk's open-stack when a user-message boundary is crossed. No timestamps, no
+  hook coordination, and no auto-close are involved.
+- This makes the design *simpler*, not just more capable: because steps carry
+  over on their own, there is **no auto-close/redeclare mechanism** — no
+  stop-hook auto-close, no runtime record file, no reminder rewrite. The existing
+  `UserPromptSubmit` open-steps reminder and the soft non-blocking stop nudge stay
+  as they are.
+- Edge case (user message arrives mid-work): handled for free. The new message is
+  just another boundary, so the open step carries over via the open-stack exactly
+  as in the normal case — it does not depend on any hook having fired at turn end.
 
 ### Historical transcripts
 
@@ -153,6 +165,10 @@
   **exempts tk lifecycle commands from the 200-char `input_preview` truncation**
   (see Implementation). Because transcripts are re-parsed on every load, this
   applies retroactively.
+- *Structure* (including carryover) is unaffected: old transcripts already carry
+  the `Updated <id> -> <status>` lines, and carryover is preserved, so a step
+  left open across turns in an old transcript still re-renders at the next turn's
+  top exactly as it does today. Only decoration relies on the fallback.
 
 ### Out of scope
 
@@ -197,8 +213,10 @@
 ### `apps/system_interface/frontend/src/views/turn-grouping.ts`
 
 - **Decoration source:** parse `Created <id>: ...` and `tk-step <id> title|summary: ...`
-  from tool outputs into a per-id decoration map built *during* the transcript
-  walk (no external enrichment argument).
+  from tool outputs into a per-id decoration map built in **one global pass over
+  all events** (not per-section), so a carried-over node can look up the title
+  parsed from its `tk start`/`create` line in an earlier turn. No external
+  enrichment argument.
 - **Input fallback:** when a decoration is missing, extract the quoted
   title/summary from the originating tk command's `input_preview` (best-effort).
 - **Membership:** a transition id is a step iff it matches `-step-` (or, for
@@ -209,9 +227,10 @@
 - **Prose:** keep narration; delete the `interjection` item kind,
   `trailingProseIds` / `interjectionIds`, and the three-way reply boundary.
   Implement close-time ejection + "trailing reply = final ungrouped prose run."
-- **Carryover removal:** delete `carryover`, `openStepsAtEnd`, `is_carryover`,
-  and section-top re-opening. An open step at a boundary freezes (existing
-  frontier logic already drops its spinner in a non-tail section).
+- **Carryover (kept):** `carryover`, `openStepsAtEnd`, `is_carryover`, and
+  section-top re-opening are **retained unchanged**. The only adjustment is that
+  the carried-over node's title/summary now come from the global decoration map
+  (above) instead of the deleted enrichment table.
 - **Deletions:** the `enrichment` parameter and all joins on it; `file_missing`
   handling.
 
@@ -243,15 +262,15 @@
 
 ### Hooks + CLAUDE.md (`scripts/`, `CLAUDE.md`)
 
-- `claude_open_tickets_stop_nudge.sh`: auto-close each still-open step with a
-  canned summary, record closed ids+titles to a runtime file, stay non-blocking.
-- `claude_open_tickets_reminder.sh`: read-and-clear that file and tell the agent
-  the steps were auto-closed unfinished — redeclare what's still relevant.
-- CLAUDE.md: replace carryover semantics with the auto-close/redeclare model;
-  remove the auto-nest / ticket-nesting-in-chat-view sections; rewrite the
-  plan-declaration examples and the `launch-task` example to the literal-id
-  (no `$(...)` capture) style; keep the standalone-command rule and the
-  close-before-reply guidance.
+- `claude_open_tickets_stop_nudge.sh` and `claude_open_tickets_reminder.sh`:
+  **unchanged.** Carryover means there is no auto-close to perform; the existing
+  reminder (lists this agent's still-open steps) and soft stop nudge keep working
+  as they do today.
+- CLAUDE.md: keep the carryover semantics (steps may stay open across turns; the
+  start-of-turn keep/replace/close triage); remove the auto-nest /
+  ticket-nesting-in-chat-view sections; rewrite the plan-declaration examples and
+  the `launch-task` example to the literal-id (no `$(...)` capture) style; keep
+  the standalone-command rule and the close-before-reply guidance.
 - Keep `claude_tk_standalone*` (the standalone-command enforcement, which buys
   clean hiding of pure tk calls).
 - **Remove `claude_tk_close_reoutput_nudge.sh`** and its single
@@ -265,18 +284,19 @@
    The current frontend ignores the new lines (the `Updated` regex is unanchored),
    so this lands without breaking anything.
 2. **Frontend rewrite + backend deletion (one change).** Switch
-   `turn-grouping.ts` to transcript-only decoration with input fallback; delete
-   the enrichment store/SSE/watcher/parser together so there is no half-state.
-   Includes prose simplification and carryover removal.
-3. **Protocol (independent, lands last).** Stop-hook auto-close + reminder
-   rewrite; CLAUDE.md and skill/example updates; remove tk auto-nest and dead CSS.
+   `turn-grouping.ts` to transcript-only decoration (global-by-id map) with input
+   fallback; delete the enrichment store/SSE/watcher/parser together so there is
+   no half-state. Includes prose simplification. Carryover is retained.
+3. **Protocol (independent, lands last).** CLAUDE.md and skill/example updates
+   (literal-id style); remove tk auto-nest and dead CSS. No hook behavior change.
 
 ## Testing strategy
 
 - **Unit (`turn-grouping.test.ts`):** rebuild the behavior matrix on
   new-format synthetic events — titles, summaries, pending roster (transcript
-  order), narration, close-time ejection, trailing reply, frozen unfinished
-  steps, ungrouped pre-step work, chips. No enrichment argument anywhere.
+  order), narration, close-time ejection, trailing reply, carryover (a step open
+  at a boundary re-renders at the next turn's top while the prior node freezes),
+  ungrouped pre-step work, chips. No enrichment argument anywhere.
 - **Historical fixture:** a section built from a real pre-redesign transcript
   (old tk output, a batched `>200`-char create command) renders titles and
   summaries via the input fallback.
@@ -285,8 +305,8 @@
 - **tk:** update/add coverage for the new `Created`/`tk-step` output lines and
   confirm regular-create stdout is unchanged.
 - **Manual (real app):** run a multi-step turn and confirm the rendered timeline
-  matches today's; leave a step open and confirm the auto-close + next-turn
-  reminder flow.
+  matches today's; leave a step open across a follow-up user message and confirm
+  it carries over to the next turn while the prior node freezes.
 - **Full suites before done:** `npm run lint`, `npm run test`, and
   `uv run pytest` for `apps/system_interface`.
 
