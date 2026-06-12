@@ -1,6 +1,7 @@
 {
     "stop_hook": {
-        "enabled_when": "test -n \"${MNGR_AGENT_STATE_DIR:-}\" || test -n \"${SCULPTOR_API_PORT:-}\""
+        "enabled_when": "test -n \"${MNGR_AGENT_STATE_DIR:-}\" || test -n \"${SCULPTOR_API_PORT:-}\"",
+        "fetch_and_merge": false
     },
     "autofix": {
         "is_enabled": true,
@@ -14,6 +15,6 @@
         "include_subagents": true
     },
     "ci": {
-        "is_enabled": true
+        "is_enabled": false
     }
 }
