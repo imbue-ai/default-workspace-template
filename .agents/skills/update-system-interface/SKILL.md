@@ -1,14 +1,14 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (FastAPI server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview. Enforces delegating the change to a tested worker and revealing it to the user only after it is verified.
+description: Canonical flow for changing the system interface (the web workspace UI at apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (FastAPI server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
 ---
 
 # Updating the system interface
 
 `apps/system_interface` is the live web UI the user is looking at right now
 (the dockview shell, the chat panels, the progress view). Because a broken
-build is served straight to the user, **every** change goes through a tested
-worker and is revealed only after it passes. This skill is the single canonical
+build is served straight to the user, **every** change must go through a tested
+worker and be revealed only after it passes. This skill is the single canonical
 path for that.
 
 ## The hard rule
