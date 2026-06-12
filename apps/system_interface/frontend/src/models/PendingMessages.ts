@@ -177,6 +177,10 @@ export function getPendingMessages(agentId: string): PendingMessage[] {
   return pendingByAgent[agentId] ?? [];
 }
 
+function normalizeContentForMatch(content: string): string {
+  return content.trim().replace(/\s+/g, " ");
+}
+
 /**
  * Drop optimistic messages whose real transcript event has now arrived.
  *
@@ -199,10 +203,6 @@ export function getPendingMessages(agentId: string): PendingMessage[] {
  * hook/system texts a human never types, so a user-authored pending message can
  * never content-match one.
  */
-function normalizeContentForMatch(content: string): string {
-  return content.trim().replace(/\s+/g, " ");
-}
-
 export function reconcilePendingMessages(agentId: string, events: readonly TranscriptEvent[]): void {
   const list = pendingByAgent[agentId];
   if (list === undefined || list.length === 0) {
