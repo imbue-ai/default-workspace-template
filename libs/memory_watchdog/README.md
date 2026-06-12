@@ -45,6 +45,29 @@ which closes the recovery loop.
 | WORKER_AGENT | 7 | agent-created agents (workers) | yes |
 | AGENT_CHILD | 8 | an agent's build/test/browser subprocesses | first |
 
+## Supervision interaction
+
+Supervision is mutual and split across two processes: bootstrap restarts this
+watchdog (via the services.toml `on-failure` policy), and this watchdog restarts
+the `bootstrap`/`telegram`/`terminal` windows if their process dies. These are
+independent state machines, so note one interaction: the watchdog relaunches a
+dead `bootstrap` window purely on liveness (an idle pane shell), independent of
+bootstrap's own per-service crash-loop cooldown -- the cooldown governs bootstrap
+restarting *its* services, not the watchdog restarting the bootstrap process
+itself. A genuinely wedged bootstrap is therefore always brought back; the
+cooldown only throttles the services bootstrap supervises.
+
+## Paths
+
+`memory_watchdog.ledger.shed_ledger_path()` / `status_path()` are the single
+source of truth for the on-disk layout, imported by the system interface (status
+reader) and bootstrap (block/unblock writer). The base resolves relative to
+`MNGR_AGENT_WORK_DIR` (the repo root) and is overridable via
+`MEMORY_WATCHDOG_RUNTIME_DIR`. The SessionStart notice hook
+(`scripts/claude_shed_notice_hook.py`) duplicates this layout because it runs in
+a plain claude environment that cannot import the package, but it honors the same
+work-dir base and override so it never resolves to a different file.
+
 ## CLI
 
 - `memory-watchdog` -- run the watchdog loop (started by bootstrap via
