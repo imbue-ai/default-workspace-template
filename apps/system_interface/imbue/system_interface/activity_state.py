@@ -64,6 +64,42 @@ def has_unmatched_tool_use(events: Sequence[dict[str, Any]]) -> bool:
 
 
 @pure
+def newest_unmatched_tool_use_timestamp(events: Sequence[dict[str, Any]]) -> str | None:
+    """ISO-8601 timestamp of the newest assistant message holding an unmatched ``tool_use``.
+
+    Returns ``None`` when every tool_use is matched, or when the newest pending
+    assistant message carries no usable timestamp. Feeds
+    :func:`is_pending_tool_use_stale` (see there): an unmatched tool_use is only
+    evidence of a *currently running* tool if the current Claude process issued
+    it. A tool_use abandoned by an interrupt/restart never gets a tool_result --
+    not even a later resume writes one -- so without the fence it would pin the
+    state at TOOL_RUNNING for the rest of the transcript's life.
+
+    The newest pending message is the right fence target: while a fresh turn has
+    a tool in flight, that newer tool_use governs (TOOL_RUNNING is correct); once
+    it resolves, only the abandoned one remains and the fence retires it.
+    """
+    matched: set[str] = set()
+    for event in events:
+        if event.get("type") == "tool_result":
+            tool_call_id = event.get("tool_call_id")
+            if tool_call_id:
+                matched.add(tool_call_id)
+    newest: str | None = None
+    for event in events:
+        if event.get("type") != "assistant_message":
+            continue
+        has_unmatched = any(
+            tool_call.get("tool_call_id") and tool_call.get("tool_call_id") not in matched
+            for tool_call in event.get("tool_calls") or ()
+        )
+        if has_unmatched:
+            timestamp = event.get("timestamp")
+            newest = timestamp if isinstance(timestamp, str) and timestamp else None
+    return newest
+
+
+@pure
 def last_event_type(events: Sequence[dict[str, Any]]) -> str | None:
     """Return the ``type`` of the final transcript event, or ``None`` if empty."""
     if not events:
@@ -133,6 +169,30 @@ def is_transcript_tail_stale(
 
 
 @pure
+def is_pending_tool_use_stale(
+    *,
+    pending_tool_use_at: float | None,
+    process_started_at: float | None,
+) -> bool:
+    """True iff the newest unmatched ``tool_use`` predates the current Claude process.
+
+    ``pending_tool_use_at`` is the epoch time of the newest assistant message with
+    an unmatched tool_use (see :func:`newest_unmatched_tool_use_timestamp`);
+    ``process_started_at`` is the ``claude_process_started`` marker mtime. A tool
+    call issued before the current process started cannot still be running -- the
+    process that issued it is dead. This covers a turn abandoned mid-tool by an
+    interrupt or restart, whose tool_use never receives a tool_result: unlike the
+    stale-*tail* guard, it keeps working after new turns land on the transcript.
+
+    Returns ``False`` when either input is missing: we only override on positive
+    evidence of staleness, otherwise the pending-tool signal stands.
+    """
+    if pending_tool_use_at is None or process_started_at is None:
+        return False
+    return pending_tool_use_at < process_started_at
+
+
+@pure
 def derive_activity_state(
     *,
     is_agent_running: bool,
@@ -140,6 +200,7 @@ def derive_activity_state(
     tail_event_type: str | None,
     tail_event_at: float | None = None,
     process_started_at: float | None = None,
+    pending_tool_use_at: float | None = None,
 ) -> ActivityState:
     """Derive an ``ActivityState`` from lifecycle state and transcript signals.
 
@@ -155,11 +216,16 @@ def derive_activity_state(
     :func:`is_transcript_tail_stale` (see there): together they detect a tail left
     over from before the current process started, which a running-but-idle agent
     would otherwise show as "Thinking..." indefinitely after a mid-turn restart.
+    ``pending_tool_use_at`` and ``process_started_at`` feed
+    :func:`is_pending_tool_use_stale` (see there): they retire an unmatched
+    ``tool_use`` abandoned by an interrupt/restart, which -- unlike a stale tail --
+    would otherwise pin TOOL_RUNNING even after new turns land.
 
     Priority:
       0. agent not running -> IDLE.
       1. transcript tail predates the current process (stale) -> IDLE.
-      2. unmatched ``tool_use`` -> TOOL_RUNNING.
+      2. unmatched ``tool_use``, unless it predates the current process
+         -> TOOL_RUNNING.
       3. last transcript event is ``user_message`` or ``tool_result`` -> THINKING
          (Claude has been handed input but hasn't replied yet).
       4. otherwise (last event is ``assistant_message`` or transcript is empty)
@@ -169,7 +235,9 @@ def derive_activity_state(
         return ActivityState.IDLE
     if is_transcript_tail_stale(tail_event_at=tail_event_at, process_started_at=process_started_at):
         return ActivityState.IDLE
-    if has_pending_tool_use:
+    if has_pending_tool_use and not is_pending_tool_use_stale(
+        pending_tool_use_at=pending_tool_use_at, process_started_at=process_started_at
+    ):
         return ActivityState.TOOL_RUNNING
     if tail_event_type in ("user_message", "tool_result"):
         return ActivityState.THINKING
