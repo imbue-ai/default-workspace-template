@@ -35,6 +35,20 @@ cd "$REPO_ROOT"
 # refuse on an ownership mismatch.
 git config --global --add safe.directory "$REPO_ROOT"
 
+# The code-guardian stop hook's docs-only detection diffs against
+# refs/remotes/origin/main, and with stop_hook.fetch_and_merge disabled (see
+# .reviewer/settings.json) nothing in the workspace ever fetches. The docker
+# image bake inherits the ref from the clone it was built from, but the lima
+# path gets the repo via mngr's git-mirror transfer, which pushes only
+# branches and tags -- no remote-tracking refs. When the ref is missing, the
+# hook's diff errors out silently and every session is treated as docs-only,
+# skipping all review gates. Pin the ref to local main so the detection
+# always has a baseline; any later real fetch simply overwrites it.
+if ! git rev-parse -q --verify refs/remotes/origin/main >/dev/null \
+        && git rev-parse -q --verify refs/heads/main >/dev/null; then
+    git update-ref refs/remotes/origin/main refs/heads/main
+fi
+
 # Build the system_interface frontend (deps installed by install_dependencies.sh).
 ( cd "$REPO_ROOT/apps/system_interface/frontend" && npm run build )
 
