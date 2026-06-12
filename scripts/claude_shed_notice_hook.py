@@ -17,16 +17,29 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-_LEDGER_RELATIVE_PATH = (
-    Path("runtime") / "memory_watchdog" / "events" / "shed" / "events.jsonl"
-)
+# This must stay in sync with memory_watchdog.ledger.shed_ledger_path(). The
+# hook runs in a plain claude environment that cannot import the workspace
+# package, so the layout is duplicated here -- but the same
+# MEMORY_WATCHDOG_RUNTIME_DIR override and work-dir base are honored, so the
+# writer and this reader resolve to the same file in every configuration.
+_RUNTIME_DIR_ENV_VAR = "MEMORY_WATCHDOG_RUNTIME_DIR"
+_RUNTIME_SUBDIR = Path("runtime") / "memory_watchdog"
+_LEDGER_RELATIVE_PARTS = ("events", "shed", "events.jsonl")
 _RECORD_TYPE_PROCESS_SHED = "process_shed"
 _RECORD_TYPE_NOTICE_DELIVERED = "notice_delivered"
 
 
+def _watchdog_runtime_dir() -> Path:
+    override = os.environ.get(_RUNTIME_DIR_ENV_VAR, "")
+    if override:
+        return Path(override)
+    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
+    base = Path(work_dir) if work_dir else Path.cwd()
+    return base / _RUNTIME_SUBDIR
+
+
 def _ledger_path() -> Path:
-    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", ".")
-    return Path(work_dir) / _LEDGER_RELATIVE_PATH
+    return _watchdog_runtime_dir().joinpath(*_LEDGER_RELATIVE_PARTS)
 
 
 def _read_ledger_records(ledger_path: Path) -> list[dict]:

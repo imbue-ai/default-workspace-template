@@ -12,16 +12,27 @@ from memory_watchdog.data_types import MemoryStatus, ShedRecord
 
 # Both files live under runtime/ so they ride the runtime-backup branch and
 # survive container loss. The ledger is the append-only history; the status file
-# is the current-state read API for the UI banner and for pressure checks. The
-# base directory is overridable via MEMORY_WATCHDOG_RUNTIME_DIR so tests can
-# redirect it without writing into the real runtime tree.
+# is the current-state read API for the UI banner and for pressure checks.
+#
+# These path helpers are the single source of truth for the layout: the watchdog
+# (writer), the system interface (status reader), and bootstrap (block/unblock
+# writer) all import them, so the schema location can't drift between producer
+# and consumers. The base resolves relative to the agent work dir (the repo
+# root, where every service runs), falling back to the current directory, and is
+# overridable in full via MEMORY_WATCHDOG_RUNTIME_DIR -- used by tests, and
+# honored uniformly so a production override can't make readers and the writer
+# diverge.
 _RUNTIME_DIR_ENV_VAR: Final[str] = "MEMORY_WATCHDOG_RUNTIME_DIR"
-_DEFAULT_WATCHDOG_RUNTIME_DIR: Final[Path] = Path("runtime") / "memory_watchdog"
+_RUNTIME_SUBDIR: Final[Path] = Path("runtime") / "memory_watchdog"
 
 
 def _watchdog_runtime_dir() -> Path:
     override = os.environ.get(_RUNTIME_DIR_ENV_VAR, "")
-    return Path(override) if override else _DEFAULT_WATCHDOG_RUNTIME_DIR
+    if override:
+        return Path(override)
+    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
+    base = Path(work_dir) if work_dir else Path.cwd()
+    return base / _RUNTIME_SUBDIR
 
 
 def shed_ledger_path() -> Path:

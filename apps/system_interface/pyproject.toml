@@ -10,6 +10,7 @@ dependencies = [
     "imbue-common",
     "imbue-mngr",
     "imbue-mngr-claude",
+    "memory-watchdog",
     "pexpect>=4.9",
     "pluggy>=1.5",
     "pydantic-settings>=2.13.1",

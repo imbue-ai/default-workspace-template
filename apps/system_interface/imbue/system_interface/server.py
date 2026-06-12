@@ -22,6 +22,7 @@ from fastapi.responses import Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger as _loguru_logger
+from memory_watchdog.ledger import status_path as memory_watchdog_status_path
 from starlette.concurrency import run_in_threadpool
 from starlette.websockets import WebSocket
 from starlette.websockets import WebSocketDisconnect
@@ -678,26 +679,22 @@ def _random_name_endpoint(request: Request) -> JSONResponse:
     return JSONResponse(content=RandomNameResponse(name=name).model_dump())
 
 
-# The memory watchdog publishes this file each poll; absence means the watchdog
-# has not started yet, which we report as "no pressure".
-_MEMORY_STATUS_RELATIVE_PATH = Path("runtime") / "memory_watchdog" / "status.json"
-
-
 def _read_memory_status() -> MemoryStatusResponse:
     """Project the watchdog's status file into the banner's response shape.
 
-    Returns a healthy (no-pressure) status when the file is missing or
-    unreadable, so the banner stays hidden rather than erroring.
+    Returns a healthy (no-pressure) status when the file is missing (the
+    watchdog has not started yet) or unreadable, so the banner stays hidden
+    rather than erroring. The status-file path comes from the watchdog's own
+    ``status_path`` helper so producer and reader can't drift. The fields are
+    read leniently (not validated against the writer's model) so a future status
+    schema addition can't break the banner.
     """
-    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
-    status_path = (Path(work_dir) if work_dir else Path.cwd()) / _MEMORY_STATUS_RELATIVE_PATH
-    healthy = MemoryStatusResponse(
-        is_under_pressure=False, used_fraction=0.0, recently_shed=[], blocked_services=[]
-    )
-    if not status_path.exists():
+    file_path = memory_watchdog_status_path()
+    healthy = MemoryStatusResponse(is_under_pressure=False, used_fraction=0.0, recently_shed=[], blocked_services=[])
+    if not file_path.exists():
         return healthy
     try:
-        raw = json.loads(status_path.read_text())
+        raw = json.loads(file_path.read_text())
     except (OSError, json.JSONDecodeError) as e:
         _loguru_logger.warning("Failed to read memory watchdog status file: {}", e)
         return healthy
