@@ -58,7 +58,11 @@ export interface StepNode {
   status: StepStatus;
   /** Close summary, shown when done. */
   summary: string | null;
-  /** Latest in-step prose that was followed by more work in the same step. */
+  /** Latest in-step prose, shown as the live caption under the step. For a
+   *  non-frontier step this is the latest prose followed by more work in the
+   *  same step (trailing closing prose having been ejected); for the live
+   *  frontier step it is the last thing the agent said, so a just-spoken line
+   *  shows even before the next tool call. */
   narration: string | null;
   /** True when this node carried over from a prior section (re-rendered at the
    *  top of this section because it was still open at the boundary). */
