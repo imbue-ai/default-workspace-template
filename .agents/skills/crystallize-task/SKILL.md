@@ -218,7 +218,7 @@ crystallize runtime dir.
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name crystallize-$NAME \
-    --template crystallize-worker \
+    --template subskill-worker \
     --runtime-dir runtime/crystallize/$NAME/ \
     --task-file runtime/crystallize/$NAME/task.md
 ```

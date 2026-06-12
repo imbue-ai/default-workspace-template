@@ -2,8 +2,14 @@
 # Each [services.<name>] entry runs in its own tmux window (named svc-<name>).
 # See the edit-services skill for details.
 
+# On startup, rebuild the frontend bundle if its sources changed since the last
+# build (a no-op for backend-only changes), then serve. This is the reveal step
+# of the update-system-interface flow: a single `mngr start --restart
+# system-services` picks up both merged backend (.py) and frontend changes. The
+# build helper is best-effort (exits 0 even on failure) so the server always
+# starts.
 [services.system_interface]
-command = "python3 scripts/forward_port.py --url http://localhost:8000 --name system_interface && system-interface"
+command = "python3 scripts/forward_port.py --url http://localhost:8000 --name system_interface && python3 scripts/build_frontend_if_changed.py && system-interface"
 restart = "on-failure"
 
 [services.web]

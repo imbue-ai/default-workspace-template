@@ -4,7 +4,8 @@
  */
 
 import m from "mithril";
-import { apiUrl } from "../base-path";
+import { apiUrl, getBuildId } from "../base-path";
+import { reloadInterface, shouldReloadForBuild } from "../reload";
 import { ReconnectBackoff } from "./backoff";
 import { parseJsonMessage } from "./ws-json";
 
@@ -45,8 +46,7 @@ export type LayoutOpName =
   | "maximize"
   | "restore"
   | "replace-url"
-  | "refresh"
-  | "reload_interface";
+  | "refresh";
 
 export interface LayoutOpEvent {
   op: LayoutOpName;
@@ -100,8 +100,37 @@ let agentActivityListeners: AgentActivityListener[] = [];
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
+// Whether we have ever had an open socket. Used to distinguish the first
+// connect (no build-id check needed) from a reconnect (a reveal may have
+// rebuilt the bundle while we were disconnected).
+let hasConnectedBefore = false;
 
 const reconnectBackoff = new ReconnectBackoff();
+
+/**
+ * On reconnect, ask the server for its current frontend build id and compare it
+ * with the one this page booted with. If a reveal rebuilt the bundle while we
+ * were disconnected, the ids differ and we reload into the new build. Failures
+ * (network hiccup, missing endpoint) are ignored -- the next reconnect retries.
+ */
+async function reloadIfBuildChanged(): Promise<void> {
+  const loadedBuildId = getBuildId();
+  if (!loadedBuildId) {
+    return;
+  }
+  try {
+    const response = await fetch(apiUrl("/api/build-id"), { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const data = (await response.json()) as { build_id?: string };
+    if (shouldReloadForBuild(loadedBuildId, data.build_id ?? "")) {
+      reloadInterface();
+    }
+  } catch {
+    // Transient failure during reconnect; the next reconnect will retry.
+  }
+}
 
 function getWsUrl(): string {
   const base = apiUrl("/api/ws");
@@ -126,6 +155,12 @@ function connect(): void {
     // A successful connection resets the backoff so the next disconnect
     // starts from the base delay again.
     reconnectBackoff.reset();
+    // A reconnect (not the first connect) may follow a reveal that rebuilt the
+    // bundle; reload into it if the build id changed.
+    if (hasConnectedBefore) {
+      void reloadIfBuildChanged();
+    }
+    hasConnectedBefore = true;
     m.redraw();
   };
 

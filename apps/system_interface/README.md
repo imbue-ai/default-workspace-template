@@ -35,24 +35,35 @@ in isolation (including Playwright against an isolated instance) and run through
 the review gates, merged, and only then revealed. See
 `.agents/skills/update-system-interface/SKILL.md`.
 
-The two reveal commands (run by the lead, after merge):
+The reveal is a single command, after merge:
 
 ```bash
-# Backend (.py) change: restart the services agent so the editable-installed
-# server picks up the new source.
 mngr start --restart system-services
-
-# Frontend change: rebuild the (gitignored) static bundle, then tell the open
-# browser to reload the whole interface.
-cd apps/system_interface/frontend && npm run build
-python3 .agents/skills/update-system-interface/scripts/reload_interface.py
 ```
 
-`reload_interface.py` POSTs a `reload_interface` op to the loopback-only
-`/api/layout/broadcast` endpoint, which relays a `layout_op` WebSocket message;
-the frontend responds by reloading the top-level page (shell + all child chat
-iframes). This is distinct from `scripts/layout.py refresh`, which only reloads
-individual inner iframes/panels.
+This restarts the services agent. On startup the `system_interface` service runs
+the repo-root `scripts/build_frontend_if_changed.py`, which rebuilds the
+(gitignored) static bundle only when `frontend/src` (or the lockfile) changed
+since the last build
+-- a no-op for backend-only changes -- and the editable-installed backend picks
+up the merged `.py` source. The build helper is best-effort: if the build fails
+it logs and exits 0 so the server still starts and serves the existing bundle.
+
+Any browser the user has open reloads itself into the new bundle when its
+WebSocket reconnects after the restart:
+
+- The backend stamps each served page with a build id
+  (`<meta name="system-interface-build-id">`, a content hash of the built
+  `index.html`) and exposes the current build id at `GET /api/build-id`.
+- On reconnect the frontend (`AgentManager.ts`) fetches `/api/build-id` and
+  compares it to the id the page booted with; a mismatch means the bundle was
+  rebuilt, so it reloads the top-level page (shell + all child chat iframes).
+
+This in-app reload is the reliable, stack-independent path. In the desktop
+client there is also a health-driven recovery page that swaps in during the
+restart, but it can race a fast restart, and a plain browser has no such
+mechanism -- the build-id check covers both. It is distinct from
+`scripts/layout.py refresh`, which only reloads individual inner iframes/panels.
 
 ## Driving the workspace layout from an agent
 

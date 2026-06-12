@@ -6,84 +6,56 @@ description: Canonical flow for changing the system interface (the web workspace
 # Updating the system interface
 
 `apps/system_interface` is the live web UI the user is looking at right now
-(the dockview shell, the chat panels, the progress view). Because a broken
-build is served straight to the user, **every** change must go through a tested
-worker and be revealed only after it passes. This skill is the single canonical
-path for that.
+(the dockview shell, the chat panels, the progress view). A broken build here is
+served straight to the user, so you never edit the served copy directly: you
+make every change in an **isolated worktree clone**, verify it builds and passes
+there, and only merge it back into the served tree once it's known-good. This
+skill is the single canonical path for that.
 
 ## The hard rule
 
-**Never edit `apps/system_interface` directly as the lead agent.** Do not run
-`Edit`/`Write` on files under `apps/system_interface/` yourself, and do not
-rebuild or restart the live UI from uncommitted lead-side edits. All changes are
-made by a `launch-task` worker on its own branch, tested there, and merged back
-before anything reaches the user. The only things the lead does to
-`system_interface` are the post-merge reveal commands at the end of this skill.
+**Never edit the system-interface tree that is being served to the user.** Do
+not run `Edit`/`Write` on files under `apps/system_interface/` in this (the
+served) checkout, and do not rebuild or restart the live UI from uncommitted
+edits here. Every change is made in a separate, isolated clone of the source,
+built and tested there, and merged back only after it passes. The only things
+you do to the served tree are committing the merge and running the reveal
+command at the end of this skill.
+
+That isolated clone is a `launch-task` worker: it runs in its own git worktree
+with its own copy of the source, so a half-broken build can never reach what the
+user is looking at. The worker is just the mechanism for getting that safe,
+separate place to work.
 
 ## Flow overview
 
-1. **Delegate** the change to a worker via the `launch-task` skill.
+1. **Delegate** the change to a worker via the `launch-task` skill. The worker
+   follows the bundled `update-system-interface-worker` sub-skill, which owns all
+   the detail of how to build, test, and verify the change in isolation.
 2. The **worker** implements + builds + tests it on its own branch (`mngr/<name>`),
    then reports `done`.
-3. The lead **merges** the worker's branch on a clean `done`.
-4. The lead **reveals** the change: restart the backend (BE) and/or rebuild +
-   reload the frontend (FE), based on what the merged diff touched.
+3. You **merge** the worker's branch on a clean `done`.
+4. You **reveal** the change with a single restart.
 
 ## 1-2. Delegate to a worker
 
 Follow the `launch-task` skill for the mechanics (task file, `create_worker.py
-launch`, background-poll the report, handle `done`/`stuck`). This skill only
-specifies what to put in the task brief and how to handle the result.
+launch`, background-poll the report, handle `done`/`stuck`), with two
+specifics for this flow:
 
-The worker runs in its **own git worktree** (the `worker` template does not
-share the lead's work_dir), so it has its own copy of the source to edit and
-test in isolation. Put the following in the task file's `## What to do` /
-`## Context` / `## Success criteria`:
-
-### Where the source lives
-- Backend: `apps/system_interface/imbue/system_interface/` (FastAPI + uvicorn).
-- Frontend: `apps/system_interface/frontend/src/` (TypeScript + Vite + Tailwind
-  + mithril/dockview). Build output goes to the gitignored
-  `apps/system_interface/imbue/system_interface/static/`.
-
-### How the worker runs and tests it (in-process, never the live service)
-- The fresh worktree has no `.venv` (it is gitignored), so the worker runs
-  `uv sync --all-packages` once before any `uv run`.
-- Backend: the worker exercises the edited Python **in-process** -- it never
-  installs the global `system-interface` tool or touches the running
-  `svc-system_interface` service. `cd apps/system_interface && uv run pytest`
-  imports `create_application` and runs uvicorn in-process, so edits are picked
-  up with no reinstall and no restart.
-- Frontend: `cd apps/system_interface/frontend && npm run build` (the worker
-  must be able to produce a clean build) plus `npm run lint` and `npm run test`.
-- If the worker wants to drive the UI manually during development, it launches a
-  **throwaway** instance on an alternate port against fixture data, e.g.
-  `SYSTEM_INTERFACE_PORT=8137 uv run system-interface` from
-  `apps/system_interface/` -- a disposable instance, never the live one.
-
-### Testing contract (verify it actually works, then crystallize)
-- The worker must **verify the change really works**, driving the UI with
-  Playwright against an isolated instance. The existing harness in
-  `apps/system_interface/imbue/system_interface/test_e2e.py` already spins up an
-  isolated uvicorn instance on an alternate port (`Config(system_interface_port=...)`),
-  builds fake agent/session fixtures via `_make_agent_fixture`, and drives it
-  with Playwright (auto-skips when browsers aren't installed). Extend it.
-- For each kind of test, use **exactly one** of crystallized-vs-ad-hoc -- do not
-  duplicate the same coverage in both a committed test and a throwaway manual
-  check. Crystallize the behavior that is worth keeping (a Playwright assertion
-  in `test_e2e.py`, a backend unit test); use ad-hoc manual checks only for
-  things not worth a permanent test (e.g. eyeballing a purely visual tweak).
-- Run the suites that apply to the change: backend `pytest`
-  (`cd apps/system_interface && uv run pytest`), and for frontend changes
-  `npm run lint` + `npm run test`.
-- The worker runs the repo's review gates before reporting `done`. The `worker`
-  template already enables autofix + CI gates; the worker must report `done`
-  only when all tests and gates pass.
-
-### What the worker must NOT do
-- Must not run `npm run build` against the live tree, restart
-  `svc-system_interface`, or run `reload_interface.py` -- revealing the change is
-  the lead's job, after merge.
+- **Launch the worker with the `--template subskill-worker` template** (not the
+  default `worker`). That template installs the bundled
+  `update-system-interface-worker` sub-skill into the worker's `.agents/skills/`
+  tree so the worker can load it.
+- **Keep the task brief short and point it at the sub-skill.** You do not need to
+  restate how the worker builds or tests anything -- that all lives in the
+  sub-skill. The brief only needs:
+  - `## What to do`: the actual UI change the user asked for.
+  - `## Context`: any specifics (which panel, desired behavior, constraints).
+  - `## Success criteria`: what "done" looks like for this change, plus the
+    standing line: *follow the `update-system-interface-worker` sub-skill for
+    how to run, test, verify, and what not to touch; report `done` only when its
+    testing contract and the review gates all pass.*
 
 ## 3. Merge on a clean `done`
 
@@ -94,44 +66,36 @@ a dead worker, surface to the user per `launch-task`'s failure flow -- **do not*
 reveal anything and do not retry silently.
 
 Note: the built `static/` bundle is gitignored, so the merge brings only
-`frontend/src/` changes, not the worker's build output. The lead rebuilds in the
-next step.
+`frontend/src/` changes, not the worker's build output. The reveal step rebuilds
+it.
 
-## 4. Reveal the change (lead only, after merge)
+## 4. Reveal the change (after merge)
 
-Inspect the merged diff to classify what changed, then run the matching reveal
-command(s). Detect by path:
+Run a single command:
 
-- **Backend** -- any `apps/system_interface/imbue/system_interface/**/*.py`
-  changed:
-  ```bash
-  mngr start --restart system-services
-  ```
-  This cleanly restarts the services agent (its tmux session -> bootstrap -> all
-  services). The editable-installed `system-interface` picks up the merged `.py`
-  source. This does not kill the lead: the lead (a chat agent) and the services
-  agent are distinct agents sharing one work_dir.
+```bash
+mngr start --restart system-services
+```
 
-- **Frontend** -- any `apps/system_interface/frontend/**` changed:
-  ```bash
-  cd apps/system_interface/frontend && npm run build
-  python3 .agents/skills/update-system-interface/scripts/reload_interface.py
-  ```
-  `npm run build` regenerates the gitignored `static/` bundle in the live tree;
-  `reload_interface.py` broadcasts a full-UI reload so the user's open workspace
-  reloads the new bundle (shell + all child chat iframes). It is a no-op if no
-  browser is connected.
+This cleanly restarts the services agent (its tmux session -> bootstrap -> all
+services). On startup the system_interface service rebuilds the frontend bundle
+**if** `frontend/src` (or the lockfile) changed since the last build, and the
+editable-installed `system-interface` backend picks up the merged `.py` source.
+Any browser the user has open reloads itself into the new bundle once its
+connection re-establishes (an in-page build-id check, see the
+`update-system-interface-worker` sub-skill and `apps/system_interface/README.md`),
+so there is no separate build-or-reload step to run.
 
-- **Both** changed: restart first, then build + reload, so the reload lands
-  against the already-restarted backend.
+This does not kill you: you (a chat agent) and the services agent are distinct
+agents sharing one work_dir.
 
-`reload_interface.py` is distinct from `scripts/layout.py refresh` (which only
-reloads inner iframes/panels). Use `reload_interface.py` for a system-interface
-frontend change; `layout.py` remains for arranging panels.
+`scripts/layout.py refresh` (the `manage-layout` skill) is unrelated -- it only
+reloads inner iframes/panels for arranging the workspace, not for revealing a
+system-interface code change.
 
 ## Why this shape
 
 The UI is what the user is actively looking at, so the design goal is "never
 serve a half-broken UI," not "iterate in place fast." The worker's isolated
-worktree + in-process testing + Playwright verification + review gates are what
-make it safe for the lead to merge and reveal in one motion.
+worktree clone + in-process testing + Playwright verification + review gates are
+what make it safe for you to merge and reveal in one motion.

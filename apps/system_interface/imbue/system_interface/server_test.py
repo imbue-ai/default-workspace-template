@@ -2,6 +2,7 @@
 
 import json
 import queue
+import re
 from pathlib import Path
 from typing import Generator
 from unittest.mock import patch
@@ -446,6 +447,59 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
         assert "system-interface-hostname" in response.text
 
 
+def _extract_build_id_meta(html: str) -> str:
+    match = re.search(r'<meta name="system-interface-build-id" content="([^"]*)">', html)
+    assert match is not None, "build-id meta tag missing"
+    return match.group(1)
+
+
+def test_index_build_id_meta_matches_build_id_endpoint(tmp_path: Path) -> None:
+    """The build id injected into the page matches what /api/build-id reports.
+
+    This is the invariant the frontend relies on: the page boots with the build
+    id of the bundle it was served, and a later /api/build-id reporting a
+    different value means the bundle was rebuilt.
+    """
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>v1</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_app = create_application()
+        test_client = TestClient(test_app)
+        page_build_id = _extract_build_id_meta(test_client.get("/").text)
+        endpoint_build_id = test_client.get("/api/build-id").json()["build_id"]
+        assert page_build_id != ""
+        assert page_build_id == endpoint_build_id
+
+
+def test_build_id_endpoint_changes_when_bundle_changes(tmp_path: Path) -> None:
+    """Rebuilding the bundle (new index.html) changes the reported build id."""
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    index_path = static_dir / "index.html"
+    index_path.write_text("<html><head></head><body>v1</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_app = create_application()
+        test_client = TestClient(test_app)
+        before = test_client.get("/api/build-id").json()["build_id"]
+        index_path.write_text("<html><head></head><body>v2 (rebuilt)</body></html>")
+        after = test_client.get("/api/build-id").json()["build_id"]
+        assert before != after
+
+
+def test_build_id_endpoint_empty_when_no_bundle(tmp_path: Path) -> None:
+    """With no built index.html, the build id is empty (frontend then no-ops)."""
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_app = create_application()
+        test_client = TestClient(test_app)
+        assert test_client.get("/api/build-id").json()["build_id"] == ""
+
+
 def test_random_name_endpoint(client: TestClient) -> None:
     """The random name endpoint returns a non-empty name."""
     response = client.get("/api/random-name")
@@ -531,29 +585,6 @@ def test_layout_broadcast_refresh_bypasses_mutex(app: FastAPI) -> None:
                 "type": "layout_op",
                 "op": "refresh",
                 "args": {"ref": "service:web"},
-                "requester_agent_id": "agent-42",
-            }
-
-
-@pytest.mark.timeout(10)
-def test_layout_broadcast_reload_interface_emits_ws_message(app: FastAPI) -> None:
-    """``reload_interface`` broadcasts a full-page reload op (no args, no mutex)."""
-    with TestClient(app, client=("127.0.0.1", _TEST_CLIENT_PORT)) as loopback_client:
-        with loopback_client.websocket_connect("/api/ws") as ws:
-            json.loads(ws.receive_text())
-            json.loads(ws.receive_text())
-
-            response = loopback_client.post(
-                "/api/layout/broadcast",
-                json={"op": "reload_interface", "args": {}, "agent_id": "agent-42"},
-            )
-            assert response.status_code == 200
-            assert response.json() == {"ok": True}
-            msg = json.loads(ws.receive_text())
-            assert msg == {
-                "type": "layout_op",
-                "op": "reload_interface",
-                "args": {},
                 "requester_agent_id": "agent-42",
             }
 
