@@ -38,6 +38,7 @@ from imbue.system_interface.activity_state import derive_activity_state
 from imbue.system_interface.activity_state import has_unmatched_tool_use
 from imbue.system_interface.activity_state import last_event_timestamp
 from imbue.system_interface.activity_state import last_event_type
+from imbue.system_interface.activity_state import newest_unmatched_tool_use_timestamp
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
@@ -263,6 +264,7 @@ class AgentManager:
     _host_dir: Path
     _activity_tracked_agents: set[str]
     _has_unmatched_tool_use_by_agent: dict[str, bool]
+    _pending_tool_use_timestamp_by_agent: dict[str, str | None]
     _last_event_type_by_agent: dict[str, str | None]
     _last_event_timestamp_by_agent: dict[str, str | None]
     _activity_state_by_agent: dict[str, ActivityState]
@@ -293,6 +295,7 @@ class AgentManager:
         manager._host_dir = get_host_dir()
         manager._activity_tracked_agents = set()
         manager._has_unmatched_tool_use_by_agent = {}
+        manager._pending_tool_use_timestamp_by_agent = {}
         manager._last_event_type_by_agent = {}
         manager._last_event_timestamp_by_agent = {}
         manager._activity_state_by_agent = {}
@@ -327,7 +330,9 @@ class AgentManager:
         with self._lock:
             self._activity_tracked_agents.clear()
             self._has_unmatched_tool_use_by_agent.clear()
+            self._pending_tool_use_timestamp_by_agent.clear()
             self._last_event_type_by_agent.clear()
+            self._last_event_timestamp_by_agent.clear()
             self._activity_state_by_agent.clear()
 
     @property
@@ -960,6 +965,7 @@ class AgentManager:
         with self._lock:
             self._activity_tracked_agents.discard(agent_id)
             self._has_unmatched_tool_use_by_agent.pop(agent_id, None)
+            self._pending_tool_use_timestamp_by_agent.pop(agent_id, None)
             self._last_event_type_by_agent.pop(agent_id, None)
             self._last_event_timestamp_by_agent.pop(agent_id, None)
             self._activity_state_by_agent.pop(agent_id, None)
@@ -1001,6 +1007,7 @@ class AgentManager:
             if agent_state is None:
                 return
             has_pending_tool = self._has_unmatched_tool_use_by_agent.get(agent_id, False)
+            pending_tool_use_at = parse_iso_timestamp_to_epoch(self._pending_tool_use_timestamp_by_agent.get(agent_id))
             cached_last_event_type = self._last_event_type_by_agent.get(agent_id)
             tail_event_at = parse_iso_timestamp_to_epoch(self._last_event_timestamp_by_agent.get(agent_id))
             new_state = derive_activity_state(
@@ -1009,6 +1016,7 @@ class AgentManager:
                 tail_event_type=cached_last_event_type,
                 tail_event_at=tail_event_at,
                 process_started_at=process_started_at,
+                pending_tool_use_at=pending_tool_use_at,
             )
             old_state = self._activity_state_by_agent.get(agent_id)
             if old_state == new_state and agent_state.activity_state == new_state.value:
@@ -1031,23 +1039,26 @@ class AgentManager:
 
         Called by ``server._get_or_create_watcher`` whenever the
         :class:`AgentSessionWatcher` learns of new events. Cheap to call: short
-        circuits when both the unmatched-tool-use boolean and the last event
-        type are unchanged.
+        circuits when the unmatched-tool-use boolean, its newest pending
+        timestamp, and the last event type are all unchanged.
 
         No-op for agents not being tracked for activity (e.g. remote agents, or
         stale callbacks for an agent that was just destroyed).
         """
         new_pending = has_unmatched_tool_use(events)
+        new_pending_timestamp = newest_unmatched_tool_use_timestamp(events)
         new_last_type = last_event_type(events)
         new_last_timestamp = last_event_timestamp(events)
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
             old_pending = self._has_unmatched_tool_use_by_agent.get(agent_id, False)
+            old_pending_timestamp = self._pending_tool_use_timestamp_by_agent.get(agent_id)
             old_last_type = self._last_event_type_by_agent.get(agent_id)
-            if old_pending == new_pending and old_last_type == new_last_type:
+            if old_pending == new_pending and old_pending_timestamp == new_pending_timestamp and old_last_type == new_last_type:
                 return
             self._has_unmatched_tool_use_by_agent[agent_id] = new_pending
+            self._pending_tool_use_timestamp_by_agent[agent_id] = new_pending_timestamp
             self._last_event_type_by_agent[agent_id] = new_last_type
             # Refreshed alongside the type so the stale-tail check sees the
             # current tail's time. Kept out of the short-circuit above so a new
@@ -1063,11 +1074,12 @@ class AgentManager:
         Interrupting an agent restarts its Claude process. The restart abandons
         the session transcript mid-turn -- the last recorded event is still an
         unmatched ``tool_use`` or a ``tool_result`` -- so the transcript-derived
-        activity state stays pinned at TOOL_RUNNING / THINKING until the user
-        sends another message. The restart is a backend action that the
-        transcript never records, so the backend must reset the derived signals
-        explicitly: clearing the unmatched-tool-use flag and the cached last
-        event type makes :func:`derive_activity_state` settle on IDLE.
+        activity state stays pinned at TOOL_RUNNING / THINKING until mngr
+        touches the ``claude_process_started`` marker and a recompute fences
+        the abandoned signals out (see :func:`derive_activity_state`). The
+        restart is a backend action the transcript never records, so the
+        backend also resets the derived signals explicitly: clearing them makes
+        the state settle on IDLE immediately, without waiting on the marker.
 
         No-op for agents not being tracked for activity (remote agents, or a
         callback racing with destruction).
@@ -1076,6 +1088,7 @@ class AgentManager:
             if agent_id not in self._activity_tracked_agents:
                 return
             self._has_unmatched_tool_use_by_agent[agent_id] = False
+            self._pending_tool_use_timestamp_by_agent[agent_id] = None
             self._last_event_type_by_agent[agent_id] = None
             self._last_event_timestamp_by_agent[agent_id] = None
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
