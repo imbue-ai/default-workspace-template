@@ -86,8 +86,9 @@ _QUEUED_COMMAND_PROMPT_MODE = "prompt"
 # rather than positionally. We rebuild the original ``/foo bar`` text so (a) the
 # rendered user bubble shows what the user actually typed instead of the raw
 # expansion and (b) the frontend's optimistic-message reconciliation -- which
-# matches a pending bubble to its transcript event by exact trimmed content --
-# finds the match (otherwise the bubble is stranded; see PendingMessages.ts).
+# matches a pending bubble to its transcript event by whitespace-normalized
+# content -- finds the match (otherwise the bubble is stranded; see
+# PendingMessages.ts).
 _COMMAND_NAME_PATTERN = re.compile(r"<command-name>(.*?)</command-name>", re.DOTALL)
 _COMMAND_ARGS_PATTERN = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
 

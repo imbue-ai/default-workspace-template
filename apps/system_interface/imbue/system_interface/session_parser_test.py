@@ -231,8 +231,8 @@ def test_slash_command_expansion_normalized_to_typed_text() -> None:
     Claude Code does not store a slash command verbatim; it expands it into an
     XML-ish <command-name>/<command-args> block. The parser rebuilds the typed
     text so (a) the user bubble shows '/rebase-merge origin/main' rather than the
-    raw expansion and (b) it equals what the frontend's optimistic bubble stored,
-    so reconciliation (exact trimmed-content match) succeeds.
+    raw expansion and (b) it matches what the frontend's optimistic bubble stored,
+    so reconciliation (whitespace-normalized content match) succeeds.
     """
     lines = [_make_user_line("uuid-1", "2026-01-01T00:00:00Z", _CUSTOM_COMMAND_EXPANSION)]
     events = parse_session_lines(lines)
@@ -243,7 +243,8 @@ def test_slash_command_expansion_normalized_to_typed_text() -> None:
 
 def test_slash_command_expansion_with_empty_args_drops_trailing_space() -> None:
     """A no-argument command (built-in tag order, indented, empty args) yields
-    just '/compact' -- no dangling whitespace that would break the exact match."""
+    just '/compact' -- the rebuilt text carries no dangling whitespace around the
+    (absent) args."""
     lines = [_make_user_line("uuid-1", "2026-01-01T00:00:00Z", _BUILTIN_COMMAND_EXPANSION)]
     events = parse_session_lines(lines)
     assert len(events) == 1
