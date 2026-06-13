@@ -268,10 +268,15 @@ def _take_snapshot(*, state: _LoopState, config: BackupConfig) -> SnapshotResult
 def _cleanup_snapshot(
     *, state: _LoopState, config: BackupConfig, snapshot: SnapshotResult
 ) -> None:
-    """Delete the post-backup `current/` snapshot; emit SNAPSHOT_DELETED."""
+    """Reclaim snapshots after the backup; emit one SNAPSHOT_DELETED per deletion.
+
+    For outer_trigger this prunes old snapshots down to max_local_snapshots; for
+    btrfs_local it deletes the single `current` snapshot; for direct it is a
+    no-op (and emits nothing).
+    """
     try:
         taker = make_snapshot_taker(config.snapshot)
-        taker.delete_snapshot()
+        deleted_paths = taker.cleanup_after_backup()
     except SnapshotError as e:
         logger.warning("Snapshot cleanup failed: {}", e)
         write_event(
@@ -286,16 +291,17 @@ def _cleanup_snapshot(
             ),
         )
         return
-    write_event(
-        state.events_dir,
-        make_event(
-            BackupEventType.SNAPSHOT_DELETED,
-            tick_id=state.current_tick_id,
-            method=snapshot.method.value,
-            snapshot_path=snapshot.snapshot_path,
-            success=True,
-        ),
-    )
+    for deleted_path in deleted_paths:
+        write_event(
+            state.events_dir,
+            make_event(
+                BackupEventType.SNAPSHOT_DELETED,
+                tick_id=state.current_tick_id,
+                method=snapshot.method.value,
+                snapshot_path=deleted_path,
+                success=True,
+            ),
+        )
 
 
 def _run_restic_backup(

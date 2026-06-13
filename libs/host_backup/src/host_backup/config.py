@@ -95,6 +95,15 @@ class SnapshotSettings(FrozenModel):
         default=120.0,
         description="Hard cap on how long to wait for the outer helper's result.json",
     )
+    max_local_snapshots: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "outer_trigger only: how many on-host btrfs snapshots to retain. "
+            "Each tick creates a new timestamped snapshot and deletes the "
+            "oldest beyond this count. Ignored by btrfs_local and direct."
+        ),
+    )
 
 
 class RetentionSettings(FrozenModel):
@@ -328,6 +337,10 @@ def _snapshot_to_toml_table(snapshot: SnapshotSettings) -> tomlkit.items.Table:
     if snapshot.trigger_dir is not None:
         table["trigger_dir"] = str(snapshot.trigger_dir)
     table["outer_helper_timeout_seconds"] = snapshot.outer_helper_timeout_seconds
+    # max_local_snapshots only governs the outer_trigger retention loop; keep
+    # it out of btrfs_local / direct configs so those stay untouched.
+    if snapshot.method == SnapshotMethod.OUTER_TRIGGER:
+        table["max_local_snapshots"] = snapshot.max_local_snapshots
     return table
 
 
