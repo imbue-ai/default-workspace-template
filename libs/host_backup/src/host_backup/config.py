@@ -73,7 +73,9 @@ class SnapshotSettings(FrozenModel):
         description=(
             "Where the live snapshot's `current/` slot is created on the btrfs "
             "filesystem (the outer's perspective for outer_trigger, the in-VM "
-            "view for btrfs_local). Required for btrfs_local and outer_trigger."
+            "view for btrfs_local). Required for btrfs_local and outer_trigger. "
+            "For outer_trigger only the PARENT directory is used (snapshots get "
+            "unique per-tick names under it); the `current` basename is vestigial."
         ),
     )
     snapshot_read_path: Path | None = Field(
@@ -81,7 +83,10 @@ class SnapshotSettings(FrozenModel):
         description=(
             "Path the in-container restic actually reads from. For outer_trigger "
             "this is /mngr-snapshots/current (the bind mount of the outer's "
-            "snapshot dir); for btrfs_local it equals snapshot_current_path."
+            "snapshot dir); for btrfs_local it equals snapshot_current_path. "
+            "For outer_trigger only the PARENT directory is used (the per-tick "
+            "snapshot name is appended at runtime); the `current` basename is "
+            "vestigial."
         ),
     )
     trigger_dir: Path | None = Field(
