@@ -13,6 +13,7 @@ from host_backup.config import SnapshotMethod, SnapshotSettings
 from host_backup.snapshot import (
     DirectSnapshotTaker,
     OuterTriggerSnapshotTaker,
+    SnapshotCleanupError,
     SnapshotError,
     _list_snapshot_names,
     _parse_snapshot_timestamp,
@@ -77,15 +78,22 @@ def _start_fake_outer_helper(
     snapshot_path: str = "/mngr-btrfs/snapshots/current",
     exit_code: int = 0,
     error_message: str = "",
+    fail_after_requests: int | None = None,
     stop_event: threading.Event,
 ) -> threading.Thread:
-    """Background thread that watches `trigger_dir` and produces result.json files."""
+    """Background thread that watches `trigger_dir` and produces result.json files.
+
+    If `fail_after_requests` is set, the first N requests succeed (per
+    `exit_code`) and every request after that returns exit_code 2, to exercise
+    partial-failure handling in keep-N cleanup.
+    """
     trigger_dir.mkdir(parents=True, exist_ok=True)
     request_path = trigger_dir / "request.json"
     result_path = trigger_dir / "result.json"
 
     def _loop() -> None:
         last_request_mtime: float | None = None
+        handled = 0
         while not stop_event.is_set():
             try:
                 mtime = request_path.stat().st_mtime
@@ -97,13 +105,19 @@ def _start_fake_outer_helper(
                     payload = json.loads(request_path.read_text())
                 except (OSError, ValueError):
                     continue
+                handled += 1
+                effective_exit = exit_code
+                effective_error = error_message
+                if fail_after_requests is not None and handled > fail_after_requests:
+                    effective_exit = 2
+                    effective_error = "boom"
                 response = {
                     "request_id": payload.get("request_id", ""),
                     "operation": payload.get("operation", ""),
-                    "exit_code": exit_code,
-                    "stdout": "ok\n" if exit_code == 0 else "",
-                    "stderr": error_message,
-                    "snapshot_path": snapshot_path if exit_code == 0 else "",
+                    "exit_code": effective_exit,
+                    "stdout": "ok\n" if effective_exit == 0 else "",
+                    "stderr": effective_error,
+                    "snapshot_path": snapshot_path if effective_exit == 0 else "",
                 }
                 tmp = trigger_dir / "result.json.tmp"
                 tmp.write_text(json.dumps(response))
@@ -323,6 +337,34 @@ def test_cleanup_after_backup_raises_when_helper_fails(tmp_path: Path) -> None:
         with pytest.raises(SnapshotError) as excinfo:
             taker.cleanup_after_backup()
         assert "rc=2" in str(excinfo.value)
+    finally:
+        stop.set()
+        helper.join(timeout=2.0)
+
+
+def test_cleanup_after_backup_partial_failure_reports_deleted_and_failed(
+    tmp_path: Path,
+) -> None:
+    """A mid-way cleanup failure surfaces what was deleted and which target failed."""
+    settings = _gc_settings(tmp_path, max_local_snapshots=1)
+    names = (
+        "2026-06-12T00:00:00.000000Z",
+        "2026-06-12T01:00:00.000000Z",
+        "2026-06-12T02:00:00.000000Z",
+    )
+    _make_snapshot_dirs(tmp_path / "snapshots", names)
+    stop = threading.Event()
+    # First cleanup (oldest) succeeds; the second fails.
+    helper = _start_fake_outer_helper(
+        tmp_path / "trigger", fail_after_requests=1, stop_event=stop
+    )
+    try:
+        taker = OuterTriggerSnapshotTaker(settings=settings)
+        with pytest.raises(SnapshotCleanupError) as excinfo:
+            taker.cleanup_after_backup()
+        err = excinfo.value
+        assert err.deleted == ("/mngr-btrfs/snapshots/2026-06-12T00:00:00.000000Z",)
+        assert err.failed_target == "/mngr-btrfs/snapshots/2026-06-12T01:00:00.000000Z"
     finally:
         stop.set()
         helper.join(timeout=2.0)

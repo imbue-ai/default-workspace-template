@@ -35,6 +35,21 @@ class SnapshotError(RuntimeError):
     """Raised when a snapshot step fails (caught by the tick loop)."""
 
 
+class SnapshotCleanupError(SnapshotError):
+    """Raised when keep-N cleanup fails partway, carrying what was already deleted.
+
+    Lets the runner log the deletions that did succeed (and which target failed)
+    instead of losing that detail when the exception propagates.
+    """
+
+    def __init__(
+        self, message: str, *, deleted: tuple[str, ...], failed_target: str
+    ) -> None:
+        super().__init__(message)
+        self.deleted = deleted
+        self.failed_target = failed_target
+
+
 class SnapshotResult(FrozenModel):
     """Outcome of a successful `take_snapshot` call."""
 
@@ -239,9 +254,11 @@ class OuterTriggerSnapshotTaker(SnapshotTakerInterface):
         for name in names[:surplus_count]:
             result = self._do_request("cleanup", request_id=uuid4().hex, target=name)
             if result.exit_code != 0:
-                raise SnapshotError(
+                raise SnapshotCleanupError(
                     f"outer helper cleanup failed (rc={result.exit_code}): "
-                    f"stderr={result.stderr.strip()!r}"
+                    f"stderr={result.stderr.strip()!r}",
+                    deleted=tuple(deleted),
+                    failed_target=str(outer_dir / name),
                 )
             deleted.append(str(outer_dir / name))
         return tuple(deleted)
