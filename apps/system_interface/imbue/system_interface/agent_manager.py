@@ -358,7 +358,7 @@ class AgentManager:
         (:meth:`remove_agent`) and observe-driven removals
         (:meth:`_handle_agent_destroyed`, :meth:`_handle_host_destroyed`). Used
         by the server to release per-agent resources that live outside this
-        manager (the session/tickets watcher threads and the SSE event queues).
+        manager (the session-watcher thread and the SSE event queues).
 
         Listeners run on whatever thread performed the removal (a background
         observe-reader thread, or a threadpool worker for the REST path) and
