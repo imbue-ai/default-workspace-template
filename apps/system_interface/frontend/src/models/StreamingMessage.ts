@@ -9,13 +9,7 @@
 import m from "mithril";
 import { apiUrl } from "../base-path";
 import { ReconnectBackoff } from "./backoff";
-import {
-  appendEvents,
-  applyEnrichmentSnapshot,
-  fetchEvents,
-  type StepEnrichment,
-  type TranscriptEvent,
-} from "./Response";
+import { appendEvents, fetchEvents, type TranscriptEvent } from "./Response";
 import { parseJsonMessage } from "./ws-json";
 import { openLoginModal } from "./ClaudeAuth";
 
@@ -194,13 +188,6 @@ export function connectToStream(agentId: string): void {
   eventSource.onmessage = (messageEvent: MessageEvent) => {
     const raw = parseJsonMessage<{ type?: string }>(messageEvent.data);
     if (raw === null) {
-      return;
-    }
-    // A step_enrichment message is a full enrichment snapshot, not a
-    // transcript event -- replace the agent's table and redraw.
-    if (raw.type === "step_enrichment") {
-      applyEnrichmentSnapshot(agentId, (raw as { enrichment?: Record<string, StepEnrichment> }).enrichment);
-      m.redraw();
       return;
     }
     // An assistant_streaming message is the live, in-progress response preview

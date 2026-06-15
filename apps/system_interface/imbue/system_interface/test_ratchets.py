@@ -271,24 +271,18 @@ def test_prevent_underscore_imports() -> None:
 
 
 def test_prevent_init_methods_in_non_exception_classes() -> None:
-    # +1 since the introduction of the tickets pipeline:
-    # AgentTicketsWatcher.__init__ (stateful background watcher, mirroring
-    # AgentSessionWatcher's __init__ pattern -- a classmethod factory
-    # wouldn't help). The watchdog file-change handler's __init__ is
-    # already counted toward the project's existing total (it lived in
-    # session_watcher.py before the tickets pipeline arrived; it now
-    # lives in watcher_common.py as the shared WakeOnChangeHandler
-    # consumed by both watchers).
+    # The watchdog file-change handler's __init__ is counted toward the
+    # project's existing total: it lived in session_watcher.py and now lives
+    # in watcher_common.py as the shared WakeOnChangeHandler.
     # +1 for layout_ops.LayoutMutex.__init__. The mutex holds runtime state
     # (a ``threading.Lock`` and a holder dict mutated under that lock) that
     # is not a natural fit for a Pydantic model, matching the precedent
     # already set by session_watcher / event_queues entries here.
     # +1 for stream_watcher.AgentStreamWatcher.__init__ -- the in-progress
     # response-streaming watcher, the same stateful-background-watcher shape as
-    # AgentSessionWatcher / AgentTicketsWatcher above (a thread, a stop event,
-    # and an mtime-free poll cursor), so it carries a hand-written __init__ for
-    # the same reason they do.
-    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(7))
+    # AgentSessionWatcher above (a thread, a stop event, and an mtime-free poll
+    # cursor), so it carries a hand-written __init__ for the same reason it does.
+    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(6))
 
 
 def test_prevent_cast_usage() -> None:

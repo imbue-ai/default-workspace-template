@@ -14,7 +14,6 @@ import {
   fetchForwardEvents,
   fetchWindowAtOffset,
   getEventsForAgent,
-  getEnrichmentForAgent,
   getEventCount,
   getFirstOffset,
   getLatestAssistantText,
@@ -28,6 +27,7 @@ import {
   type ToolResultEvent,
 } from "../models/Response";
 import { computeVisibleWindow } from "../models/virtualWindow";
+import { nextUserScrolledUp } from "../models/scrollFollow";
 import {
   createRowMeasurer,
   OVERSCAN_PX,
@@ -255,6 +255,9 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   let scrollEl: HTMLElement | null = null;
   let viewportHeight = 0;
   let scrollTop = 0;
+  // Previous observed scroll position, for detecting scroll direction. Updated in
+  // lockstep with scrollTop at every programmatic scroll site (see handleScrollEvent).
+  let previousScrollTop = 0;
   const rowMeasurer = createRowMeasurer();
   let viewportResizeObserver: ResizeObserver | null = null;
   // Memoized turn-grouping output. buildSections walks the whole held
@@ -461,6 +464,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
 
     currentAgentId = agentId;
     scrollTop = 0;
+    previousScrollTop = 0;
     userScrolledUp = false;
     backfillInFlight = false;
     scrollHeightBeforePrepend = 0;
@@ -546,6 +550,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       pendingPinToWindowTop = false;
       element.scrollTop = phantomTopHeight;
       scrollTop = element.scrollTop;
+      previousScrollTop = element.scrollTop;
       return;
     }
 
@@ -572,23 +577,30 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       if (delta !== 0) {
         element.scrollTop = Math.max(phantomTopHeight, element.scrollTop + delta);
         scrollTop = element.scrollTop;
+        previousScrollTop = element.scrollTop;
       }
     }
 
     if (!userScrolledUp) {
       scrollToBottom(element);
       scrollTop = element.scrollTop;
+      previousScrollTop = element.scrollTop;
     }
   }
 
   function handleScrollEvent(event: Event): void {
     const element = event.target as HTMLElement;
+    // applyScrollPosition keeps previousScrollTop in lockstep with its own
+    // programmatic re-pins, so only a genuine user scroll registers as movement.
+    const didScrollUp = element.scrollTop < previousScrollTop;
+    previousScrollTop = element.scrollTop;
     scrollTop = element.scrollTop;
 
-    // Following the live tail only when truly at the end -- at the bottom of the
-    // loaded rows AND with no newer history still unloaded (a jump leaves newer
-    // history below, so being near the bottom of a jumped window is not the tail).
-    userScrolledUp = !(isNearBottom(element) && !hasMoreAfter(currentAgentId ?? ""));
+    userScrolledUp = nextUserScrolledUp({
+      didScrollUp,
+      isNearBottom: isNearBottom(element),
+      hasMoreAfter: hasMoreAfter(currentAgentId ?? ""),
+    });
 
     if (currentAgentId !== null) {
       maybePage(currentAgentId, element);
@@ -712,21 +724,19 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
     // dominant scroll cost on a long conversation. Its output depends only on the
-    // held events, the enrichment snapshot, and the idle flag -- all captured by
-    // the render version (bumped on any data mutation) plus the idle flag -- so a
-    // scroll-only redraw reuses the cached rows. The grouping (tk-step nesting,
-    // skill expansions, auth-error hiding) is produced by the same functions on
-    // the same inputs, so the rendered structure is identical to recomputing.
+    // held events and the idle flag -- captured by the render version (bumped on
+    // any data mutation) plus the idle flag -- so a scroll-only redraw reuses the
+    // cached rows. The grouping (steps, decoration, skill expansions, auth-error
+    // hiding) is produced by the same functions on the same inputs, so the
+    // rendered structure is identical to recomputing.
     const renderKey = `${agentId}|${getRenderVersion(agentId)}|${agentIsIdle ? 1 : 0}`;
     if (renderKey !== rowsCacheKey) {
       const toolResults = buildToolResultsWithSkillExpansions(events);
       const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
       const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
-      // tk is an enrichment side-table (titles, summaries, pending roster),
-      // joined onto the transcript-derived structure by id; structure -- which
-      // steps exist, their order, grouping -- comes purely from the transcript walk.
-      const enrichment = getEnrichmentForAgent(agentId);
-      const sections = buildSections(visibleEvents, toolResults, enrichment, agentIsIdle);
+      // Both structure and decoration come from the transcript walk; there is no
+      // side-channel enrichment.
+      const sections = buildSections(visibleEvents, toolResults, agentIsIdle);
       cachedRows = buildRows(agentId, sections, toolResults);
       rowMeasurer.prune(new Set(cachedRows.map((row) => row.key)));
       rowsCacheKey = renderKey;
