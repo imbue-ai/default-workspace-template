@@ -4,28 +4,152 @@ on:
   workflow_dispatch:
     inputs:
       commit_sha:
-        description: 'REQUIRED. Commit SHA (or branch / tag) to verify. The build job looks for an existing ToDesktop build for this SHA and reuses it; otherwise it packages a fresh one. Verify always runs against a bundle built from THIS SHA -- no implicit fallback to released or arbitrary URLs.'
-        required: true
+        description: 'Commit SHA (or branch / tag) to verify. Empty -> mngr main HEAD at trigger time (matches the scheduled-cron behavior). The build job looks for an existing ToDesktop build for this SHA and reuses it; otherwise it packages a fresh one. Verify always runs against a bundle built from THIS SHA -- no implicit fallback to released or arbitrary URLs.'
+        required: false
+        default: ''
       skip_slack_flow:
         description: 'Skip the slack-permission-flow Playwright step.'
         type: boolean
         required: false
         default: false
       template_ref:
-        description: "REQUIRED. forever-claude-template ref (branch / tag / SHA) the agent is created from. Required because agent runtime behavior is a function of (minds binary, FCT template); a moving default would make runs irreproducible the same way an unset commit_sha did. Pass the FALLBACK_BRANCH tag (e.g. `v0.2.35`) for the production path, `main` for the user-default path, or a specific SHA for replay."
-        required: true
+        description: "forever-claude-template ref (branch / tag / SHA) the agent is created from. Empty -> `main`. Pass the FALLBACK_BRANCH tag (e.g. `v0.3.0`) for the production path, `main` for the user-default path, or a specific SHA for replay. Agent runtime behavior is a function of (minds binary, FCT template); pin both for reproducible replays."
+        required: false
+        default: ''
       template_url:
         description: 'Override the FCT git URL (forks). Empty -> https://github.com/imbue-ai/forever-claude-template.'
         required: false
         default: ''
+      force:
+        description: 'Bypass the skip-if-unchanged check. Schedule-triggered runs skip when the (mngr main HEAD, FCT main HEAD) pair matches the last green run; dispatch-triggered runs ignore the check entirely.'
+        type: boolean
+        required: false
+        default: false
+  # Twice-daily health check against the heads of both repos: 09:00 PDT
+  # (16:00 UTC) so a morning failure surfaces at the start of the workday,
+  # and 21:00 PDT (04:00 UTC) so an evening failure is caught before the
+  # next workday opens. The cron only fires from the default branch --
+  # this file has to be merged to mngr `main` first for the schedule to
+  # activate (GitHub Actions ignores schedule triggers defined only on
+  # feature branches). The `check_should_run` job below skips the rest
+  # of the pipeline when neither mngr nor FCT main HEAD has moved since
+  # the last green run, so the worst-case "nothing changed" cost is one
+  # free Linux job emitting `should_run=false`.
+  schedule:
+    - cron: '0 16 * * *'  # 09:00 PDT / 08:00 PST
+    - cron: '0 4 * * *'   # 21:00 PDT / 20:00 PST
 
 concurrency:
   group: mac-runner
   cancel-in-progress: false
 
+# `contents: read` is the default; `actions: read` is needed by
+# `notify_slack` to fetch the run's `run_started_at` for the duration
+# field in the slack message. actions/cache uses its own injected
+# cache token, not GITHUB_TOKEN, so no write scope is needed.
+permissions:
+  contents: read
+  actions: read
+
 jobs:
+  # Free Linux job that decides whether the rest of the pipeline runs.
+  # Fingerprints the (mngr main HEAD, FCT main HEAD) pair and looks for
+  # an actions/cache entry keyed by that fingerprint. A cache hit means
+  # the last green run already verified this exact pair, so we skip the
+  # expensive jobs. The cache action only checks existence
+  # (`lookup-only: true`), so no download happens here.
+  check_should_run:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+      pair_key:   ${{ steps.compute.outputs.pair_key }}
+      mngr_sha:   ${{ steps.compute.outputs.mngr_sha }}
+      fct_sha:    ${{ steps.compute.outputs.fct_sha }}
+    steps:
+      - name: compute (mngr, FCT) pair key
+        id: compute
+        run: |
+          set -euo pipefail
+          # Resolve the mngr ref we're going to verify. workflow_dispatch
+          # passes inputs.commit_sha (possibly empty); fall back to
+          # github.sha which, for schedule, is the default branch HEAD.
+          MNGR_REF='${{ inputs.commit_sha }}'
+          if [[ -z "$MNGR_REF" ]]; then
+            MNGR_REF='${{ github.sha }}'
+          fi
+          # If the input is a branch or tag name (not a 40-char SHA),
+          # resolve it against the mngr repo so the pair key fingerprint
+          # is stable across reruns at the same HEAD.
+          if [[ ! "$MNGR_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            MNGR_SHA=$(git ls-remote 'https://github.com/${{ github.repository }}.git' \
+              "refs/heads/$MNGR_REF" "refs/tags/$MNGR_REF" | head -1 | awk '{print $1}')
+          else
+            MNGR_SHA="$MNGR_REF"
+          fi
+          # Same dance for FCT: dispatch lets you override the ref; cron
+          # falls through to `main`.
+          FCT_REF='${{ inputs.template_ref }}'
+          if [[ -z "$FCT_REF" ]]; then
+            FCT_REF='main'
+          fi
+          FCT_REPO_URL='${{ inputs.template_url }}'
+          if [[ -z "$FCT_REPO_URL" ]]; then
+            FCT_REPO_URL='https://github.com/imbue-ai/forever-claude-template'
+          fi
+          if [[ ! "$FCT_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            FCT_SHA=$(git ls-remote "$FCT_REPO_URL" \
+              "refs/heads/$FCT_REF" "refs/tags/$FCT_REF" | head -1 | awk '{print $1}')
+          else
+            FCT_SHA="$FCT_REF"
+          fi
+          if [[ -z "$MNGR_SHA" || -z "$FCT_SHA" ]]; then
+            echo "::error::failed to resolve refs -- MNGR_SHA='$MNGR_SHA' FCT_SHA='$FCT_SHA'"
+            exit 1
+          fi
+          PAIR_KEY=$(printf '%s:%s' "$MNGR_SHA" "$FCT_SHA" | shasum -a 256 | awk '{print $1}')
+          {
+            echo "mngr_sha=$MNGR_SHA"
+            echo "fct_sha=$FCT_SHA"
+            echo "pair_key=$PAIR_KEY"
+          } >> "$GITHUB_OUTPUT"
+      - name: look up marker cache
+        id: marker
+        uses: actions/cache/restore@v4
+        with:
+          # Path is required by the action even with lookup-only; the
+          # file never has to exist locally because we're not restoring.
+          path: /tmp/launch-to-msg-marker.txt
+          # Embed both SHAs directly in the key so `gh cache list`
+          # reveals the green pair without having to download the cache.
+          key: launch-to-msg-green-mngr-${{ steps.compute.outputs.mngr_sha }}-fct-${{ steps.compute.outputs.fct_sha }}
+          lookup-only: true
+      - name: decide
+        id: decide
+        run: |
+          set -euo pipefail
+          {
+            echo "## Pair-key fingerprint"
+            echo "- mngr: \`${{ steps.compute.outputs.mngr_sha }}\`"
+            echo "- FCT:  \`${{ steps.compute.outputs.fct_sha }}\`"
+            echo "- cache key: \`launch-to-msg-green-mngr-${{ steps.compute.outputs.mngr_sha }}-fct-${{ steps.compute.outputs.fct_sha }}\`"
+            echo "- marker cache-hit: \`${{ steps.marker.outputs.cache-hit }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Skip when the marker cache hit (pair already verified green)
+          # AND the caller didn't pass force=true. Applies to both schedule
+          # and dispatch -- dispatch on an already-green pair is wasted CI;
+          # force=true makes the bypass intent explicit.
+          if [[ '${{ steps.marker.outputs.cache-hit }}' == 'true' \
+             && '${{ inputs.force }}' != 'true' ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "- decision: **skip** (pair already green; set force=true to bypass)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "- decision: **run**" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   build:
-    # commit_sha is required at the dispatch level, so build always runs.
+    needs: [check_should_run]
+    if: needs.check_should_run.outputs.should_run == 'true'
     # The job's `check for existing ToDesktop build` step short-circuits
     # `pnpm dist` (the 15-min ToDesktop sign + notarize) when a clean
     # ready build for this SHA already exists; otherwise it packages
@@ -75,10 +199,10 @@ jobs:
             exit 1
           fi
           echo "TODESKTOP_ACCESS_TOKEN length=${#TODESKTOP_ACCESS_TOKEN}, TODESKTOP_EMAIL length=${#TODESKTOP_EMAIL}"
-      - name: checkout @ ${{ inputs.commit_sha }}
+      - name: checkout @ ${{ inputs.commit_sha || github.sha }}
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.commit_sha }}
+          ref: ${{ inputs.commit_sha || github.sha }}
       - name: setup node
         uses: actions/setup-node@v6
         with:
@@ -105,7 +229,7 @@ jobs:
         run: |
           FULL_SHA=$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)
           echo "full_sha=$FULL_SHA" >> "$GITHUB_OUTPUT"
-          echo "Resolved input ${{ inputs.commit_sha }} -> $FULL_SHA"
+          echo "Resolved input ${{ inputs.commit_sha || github.sha }} -> $FULL_SHA"
       - name: check for existing ToDesktop build matching this commit
         id: existing
         working-directory: apps/minds
@@ -172,6 +296,13 @@ jobs:
       - name: pnpm dist (build + upload to ToDesktop)
         id: dist
         if: steps.existing.outputs.url == ''
+        # 45 min covers a healthy cold build (~15-25 min observed) plus
+        # tail latency on Apple's notarization service. When ToDesktop's
+        # signing wedges (silent stall mid-notarize, e.g. run
+        # 27310529771), failing here at 45 surfaces the wedge instead of
+        # consuming the job-level 60-min budget and starving the cancel
+        # step of time to tear the build down.
+        timeout-minutes: 45
         working-directory: apps/minds
         # build.js::bundleLatchkey smoke-tests the bundled CLI via
         # `latchkey --version`. Latchkey tries to read/init an encryption
@@ -233,7 +364,7 @@ jobs:
           {
             echo "## Build result ($SRC)"
             echo ""
-            echo "- commit: \`${{ inputs.commit_sha }}\` (resolved \`${{ steps.sha.outputs.full_sha }}\`)"
+            echo "- commit: \`${{ inputs.commit_sha || github.sha }}\` (resolved \`${{ steps.sha.outputs.full_sha }}\`)"
             echo "- build_id: \`${BID:-<none>}\`"
             echo "- url: ${URL:-<none>}"
             echo "- dashboard: https://app.todesktop.com/apps/${APP_ID}/builds/${BID}"
@@ -265,15 +396,25 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  verify:
-    needs: [build]
-    # Build always runs (commit_sha is required); verify gates on it
-    # succeeding. On build failure verify is skipped; the build job's own
-    # `upload build log` step uses always() so the dist log artifact is
-    # preserved either way.
-    if: ${{ needs.build.result == 'success' }}
+  launch_to_msg:
+    needs: [check_should_run, build]
+    # Skip when `check_should_run` told us to short-circuit (pair
+    # unchanged) AND only run when build actually succeeded -- on build
+    # failure this job is skipped; the build job's own `upload build log`
+    # step uses always() so the dist log artifact is preserved either way.
+    if: needs.check_should_run.outputs.should_run == 'true' && needs.build.result == 'success'
     runs-on: [self-hosted, macOS, minds-runner]
     timeout-minutes: 40
+    outputs:
+      # Three per-run metrics surfaced to the slack notification. The
+      # e2e prints `[ci-metric] <key>=<float>` lines on stdout as each
+      # value becomes known; the `extract ci-metrics` step greps the
+      # tee'd log and emits whichever values were captured before the
+      # run finished (so a partial failure still surfaces the prefix
+      # it got to).
+      launch_to_ready: ${{ steps.timings.outputs.launch_to_ready }}
+      w1_create:       ${{ steps.timings.outputs.w1_create }}
+      w2_create:       ${{ steps.timings.outputs.w2_create }}
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
@@ -308,9 +449,9 @@ jobs:
             exit 1
           fi
           if [[ "$REUSED" == "true" ]]; then
-            SRC='reused build (commit ${{ inputs.commit_sha }}, build_id ${{ needs.build.outputs.build_id }})'
+            SRC='reused build (commit ${{ inputs.commit_sha || github.sha }}, build_id ${{ needs.build.outputs.build_id }})'
           else
-            SRC='fresh build (commit ${{ inputs.commit_sha }}, build_id ${{ needs.build.outputs.build_id }})'
+            SRC='fresh build (commit ${{ inputs.commit_sha || github.sha }}, build_id ${{ needs.build.outputs.build_id }})'
           fi
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "Verifying: $URL"
@@ -475,7 +616,7 @@ jobs:
         id: fct_sha
         env:
           FCT_REPO_URL: ${{ inputs.template_url || 'https://github.com/imbue-ai/forever-claude-template' }}
-          FCT_REF:      ${{ inputs.template_ref }}
+          FCT_REF:      ${{ inputs.template_ref || 'main' }}
         run: |
           set -euo pipefail
           # `git ls-remote` returns "<sha>\t<full-ref>"; first line for
@@ -522,7 +663,7 @@ jobs:
           # for audit. Moving refs (e.g. `main`) thus float between runs --
           # the trade-off is "must clone-able" vs "must be byte-identical".
           MINDS_USE_LOCAL_WORKSPACE_DEFAULTS: "1"
-          MINDS_WORKSPACE_BRANCH: ${{ inputs.template_ref }}
+          MINDS_WORKSPACE_BRANCH: ${{ inputs.template_ref || 'main' }}
         run: |
           # pipefail is REQUIRED: without it, the pipeline below exits
           # with tee's status (always 0), so an e2e failure (exit 1) is
@@ -539,6 +680,21 @@ jobs:
           mkdir -p /tmp/launch-to-msg-logs
           uv run --package minds python apps/minds/scripts/launch_to_msg_e2e.py 2>&1 \
             | tee /tmp/launch-to-msg-logs/e2e-stdout.log
+
+      - name: extract ci-metrics
+        id: timings
+        if: always()
+        # The e2e prints `[ci-metric] <key>=<float>` lines as each value
+        # becomes known: launch_to_ready_s right after backend ready,
+        # w1_create_s after W1's create flow lands DONE, w2_create_s after
+        # W2's. Grepping is robust to partial runs -- a failure mid-W2
+        # still emits launch_to_ready and w1_create.
+        run: |
+          log=/tmp/launch-to-msg-logs/e2e-stdout.log
+          for k in launch_to_ready_s w1_create_s w2_create_s; do
+            v=$(grep -oE "${k}=[0-9.]+" "$log" 2>/dev/null | tail -1 | cut -d= -f2 || true)
+            echo "${k%_s}=${v:-}" >> "$GITHUB_OUTPUT"
+          done
 
       - name: probe agent VM + container state on failure
         if: failure()
@@ -788,3 +944,251 @@ jobs:
           # Pre-test reset on the NEXT run also cleans, this is belt+braces.
           # All steps are best-effort; we never want cleanup to fail the job.
           bash apps/minds/scripts/mac-runner-reset.sh 2>&1 || true
+
+  # Vanilla `macos-latest` cold-launch smoke: the same binary the `build`
+  # job produced (or cache-hit) gets installed on a fresh GHA-hosted Mac
+  # and asserted via the macos-launch Playwright spec. Runs in parallel
+  # with `launch_to_msg` (both consume the build artifact, neither blocks
+  # the other); the workflow is red if either fails.
+  macos_launch:
+    needs: [check_should_run, build]
+    if: needs.check_should_run.outputs.should_run == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.commit_sha || github.sha }}
+      - name: install minds.app from the build job's artifact
+        run: |
+          TMP=$(mktemp -d)
+          curl -fSL --silent --show-error -o "$TMP/minds.zip" "${{ needs.build.outputs.app_zip_url }}"
+          unzip -q -d "$TMP" "$TMP/minds.zip"
+          sudo cp -R "$TMP/Minds.app" /Applications/Minds.app
+          sudo xattr -dr com.apple.quarantine /Applications/Minds.app || true
+          defaults read /Applications/Minds.app/Contents/Info.plist CFBundleVersion
+      - name: setup node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+      - name: setup pnpm
+        run: npm install -g pnpm@10.33.4 && pnpm --version
+      - name: pnpm install (apps/minds dev deps incl. playwright)
+        working-directory: apps/minds
+        run: pnpm install --frozen-lockfile
+      - name: run macos-launch spec
+        working-directory: apps/minds
+        run: |
+          # Headless on CI; the spec asserts DOM state and the chrome
+          # iframe sources -- no display dependency. `html` reporter writes
+          # a browsable report with embedded screenshots and traces;
+          # Playwright skips opening it when stdout isn't a TTY (CI is fine).
+          pnpm exec playwright test \
+            --config=test/e2e/playwright.config.js \
+            macos-launch.spec.js \
+            --reporter=list,html
+      - name: upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-launch-playwright-report-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            apps/minds/test-results/
+            apps/minds/playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Record the (mngr main HEAD, FCT main HEAD) pair we just verified
+  # green so the next run can skip if nothing has moved. Only runs when
+  # BOTH downstream jobs succeeded -- a partial green doesn't move the
+  # marker, so the next slot retries automatically.
+  update_marker:
+    needs: [check_should_run, launch_to_msg, macos_launch]
+    if: needs.launch_to_msg.result == 'success' && needs.macos_launch.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: write marker file
+        env:
+          PAIR_KEY: ${{ needs.check_should_run.outputs.pair_key }}
+          MNGR_SHA: ${{ needs.check_should_run.outputs.mngr_sha }}
+          FCT_SHA:  ${{ needs.check_should_run.outputs.fct_sha }}
+        run: |
+          set -euo pipefail
+          {
+            echo "pair_key: $PAIR_KEY"
+            echo "mngr: $MNGR_SHA"
+            echo "fct:  $FCT_SHA"
+            echo "saved_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } | tee /tmp/launch-to-msg-marker.txt
+      - name: save marker cache
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/launch-to-msg-marker.txt
+          key: launch-to-msg-green-mngr-${{ needs.check_should_run.outputs.mngr_sha }}-fct-${{ needs.check_should_run.outputs.fct_sha }}
+      - name: emit summary
+        run: |
+          {
+            echo "## Marker updated"
+            echo "- cache key: \`launch-to-msg-green-mngr-${{ needs.check_should_run.outputs.mngr_sha }}-fct-${{ needs.check_should_run.outputs.fct_sha }}\`"
+            echo "- mngr: \`${{ needs.check_should_run.outputs.mngr_sha }}\`"
+            echo "- FCT:  \`${{ needs.check_should_run.outputs.fct_sha }}\`"
+            echo ""
+            echo "**To inspect the latest green pair manually:**"
+            echo ""
+            echo "GitHub's Caches UI has no working key-prefix filter (the in-page"
+            echo "search box says 'will be ignored since log searching is not yet"
+            echo "available'). Use the CLI:"
+            echo ""
+            echo "\`\`\`"
+            echo "gh cache list --repo ${{ github.repository }} --key launch-to-msg-green-mngr-"
+            echo "\`\`\`"
+            echo ""
+            echo "Branch-scoped UI (eyeball-scroll only): ${{ github.server_url }}/${{ github.repository }}/actions/caches?ref=${{ github.ref }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Post a status summary to Slack for every run (cron + dispatch). No-ops
+  # when SLACK_LAUNCH_TO_MSG_WEBHOOK isn't configured. Uses the curl-the-
+  # webhook approach directly so we don't pull in a third-party action.
+  notify_slack:
+    needs: [check_should_run, build, launch_to_msg, macos_launch, update_marker]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: post status to slack
+        env:
+          WEBHOOK: ${{ secrets.SLACK_LAUNCH_TO_MSG_WEBHOOK }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHOULD_RUN: ${{ needs.check_should_run.outputs.should_run }}
+          MNGR_SHA: ${{ needs.check_should_run.outputs.mngr_sha }}
+          FCT_SHA:  ${{ needs.check_should_run.outputs.fct_sha }}
+          BUILD_RESULT:         ${{ needs.build.result }}
+          LAUNCH_TO_MSG_RESULT: ${{ needs.launch_to_msg.result }}
+          MACOS_LAUNCH_RESULT:  ${{ needs.macos_launch.result }}
+          UPDATE_MARKER_RESULT: ${{ needs.update_marker.result }}
+          CHECK_SHOULD_RUN_RESULT: ${{ needs.check_should_run.result }}
+          # Per-run metrics extracted from the e2e by launch_to_msg's
+          # `extract ci-metrics` step. Empty strings when launch_to_msg
+          # didn't run (skip path) or didn't reach the relevant point.
+          LAUNCH_TO_READY_S: ${{ needs.launch_to_msg.outputs.launch_to_ready }}
+          W1_CREATE_S: ${{ needs.launch_to_msg.outputs.w1_create }}
+          W2_CREATE_S: ${{ needs.launch_to_msg.outputs.w2_create }}
+          # ToDesktop .zip download URL emitted by the build job. Empty
+          # when build was skipped (cache-hit short-circuits don't apply
+          # here; build always runs when should_run=true).
+          APP_ZIP_URL: ${{ needs.build.outputs.app_zip_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$WEBHOOK" ]]; then
+            echo "::warning::SLACK_LAUNCH_TO_MSG_WEBHOOK not set -- skipping slack notification"
+            exit 0
+          fi
+          # Total wallclock from when the run was queued to now. GNU date
+          # parses ISO-8601 directly on Ubuntu runners.
+          start_iso=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq '.run_started_at')
+          start_s=$(date -d "$start_iso" +%s)
+          now_s=$(date +%s)
+          total_s=$((now_s - start_s))
+          fmt_duration() {
+            local s=$1
+            if (( s < 60 )); then
+              printf '%ds' "$s"
+            else
+              printf '%dm%02ds' $((s / 60)) $((s % 60))
+            fi
+          }
+          duration=$(fmt_duration "$total_s")
+          # Classify the outcome.
+          failed_jobs=""
+          cancelled_jobs=""
+          if [[ "$CHECK_SHOULD_RUN_RESULT" == "failure" ]]; then
+            failed_jobs="check_should_run"
+          else
+            for pair in "build:$BUILD_RESULT" \
+                        "launch_to_msg:$LAUNCH_TO_MSG_RESULT" \
+                        "macos_launch:$MACOS_LAUNCH_RESULT" \
+                        "update_marker:$UPDATE_MARKER_RESULT"; do
+              name="${pair%%:*}"
+              result="${pair##*:}"
+              case "$result" in
+                failure)   failed_jobs="$failed_jobs $name" ;;
+                cancelled) cancelled_jobs="$cancelled_jobs $name" ;;
+              esac
+            done
+          fi
+          if [[ -n "$failed_jobs" ]]; then
+            emoji=":x:"
+            verdict_word="failed"
+            detail=" (failed:$failed_jobs)"
+          elif [[ -n "$cancelled_jobs" ]]; then
+            emoji=":warning:"
+            verdict_word="cancelled"
+            detail=" (cancelled:$cancelled_jobs)"
+          elif [[ "$SHOULD_RUN" != "true" ]]; then
+            emoji=":fast_forward:"
+            verdict_word="skipped"
+            detail=""
+          else
+            emoji=":white_check_mark:"
+            verdict_word="succeeded"
+            detail=""
+          fi
+          MNGR_SHORT="${MNGR_SHA:0:12}"
+          FCT_SHORT="${FCT_SHA:0:12}"
+          # Format the e2e per-run metrics line. Each metric is the raw
+          # float in seconds; only include the ones we actually got, so a
+          # mid-W2 failure still shows launch->ready and w1.
+          fmt_float_s() {
+            local f=$1
+            [[ -z "$f" ]] && return
+            local s=${f%%.*}
+            fmt_duration "$s"
+          }
+          # Build metrics line: `[_label:_ *value* | _label:_ *value* | ...]`
+          metrics_inner=""
+          sep=""
+          for kv in "_launch to ready:_|$LAUNCH_TO_READY_S" \
+                    "_w1 create:_|$W1_CREATE_S" \
+                    "_w2 create:_|$W2_CREATE_S"; do
+            label="${kv%%|*}"
+            v="${kv##*|}"
+            [[ -z "$v" ]] && continue
+            metrics_inner+="${sep}${label} *$(fmt_float_s "$v")*"
+            sep=" | "
+          done
+          metrics_line=""
+          [[ -n "$metrics_inner" ]] && metrics_line="[${metrics_inner}]"
+          # Build links line: `[<binary> | <run logs> | <mngr commit> | <fct commit>]`.
+          # Derive the ToDesktop dashboard URL from the build's app_zip_url:
+          # https://dl.todesktop.com/<APP_ID>/builds/<BID>/mac/zip/arm64
+          dashboard_url=""
+          if [[ -n "$APP_ZIP_URL" && "$APP_ZIP_URL" =~ dl\.todesktop\.com/([^/]+)/builds/([^/]+)/ ]]; then
+            dashboard_url="https://app.todesktop.com/apps/${BASH_REMATCH[1]}/builds/${BASH_REMATCH[2]}"
+          fi
+          links_inner=""
+          sep=""
+          if [[ -n "$dashboard_url" ]]; then
+            links_inner+="<${dashboard_url}|binary>"
+            sep=" | "
+          fi
+          links_inner+="${sep}<${RUN_URL}|run logs>"
+          links_inner+=" | <https://github.com/imbue-ai/mngr/commit/${MNGR_SHA}|mngr commit>"
+          links_inner+=" | <https://github.com/imbue-ai/forever-claude-template/commit/${FCT_SHA}|fct commit>"
+          links_line="[${links_inner}]"
+          # Assemble the final message. Line 1 is always present. Line 2
+          # (SHAs) is always present. Line 3 (metrics) is omitted when we
+          # have no values. Line 4 (links) is always present, though
+          # `binary` falls out when build didn't produce one.
+          line1=$(printf '%s *launch-to-msg* — %s in %s%s, _trigger=_ `%s`' \
+            "$emoji" "$verdict_word" "$duration" "$detail" "$TRIGGER")
+          line2="[_mngr_ \`${MNGR_SHORT}\` | _FCT_ \`${FCT_SHORT}\`]"
+          if [[ -n "$metrics_line" ]]; then
+            text=$(printf '%s\n%s\n%s\n%s' "$line1" "$line2" "$metrics_line" "$links_line")
+          else
+            text=$(printf '%s\n%s\n%s' "$line1" "$line2" "$links_line")
+          fi
+          payload=$(printf '%s' "$text" | jq -Rs '{text: .}')
+          curl -sS -X POST -H 'Content-type: application/json' \
+            --data "$payload" "$WEBHOOK"

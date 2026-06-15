@@ -936,6 +936,7 @@ async def amain() -> int:
     }
     env.pop("ELECTRON_RUN_AS_NODE", None)
     logger.info("launching {} --remote-debugging-port={}", MINDS_APP_PATH, cdp_port)
+    launch_start_s = time.monotonic()
     minds_proc = subprocess.Popen(
         [str(MINDS_APP_PATH), f"--remote-debugging-port={cdp_port}"],
         env=env,
@@ -962,7 +963,9 @@ async def amain() -> int:
 
         # 2. Wait for backend, auth via OTC
         base = await asyncio.get_event_loop().run_in_executor(None, wait_backend_url)
-        logger.info("backend up at {}", base)
+        launch_to_ready_s = time.monotonic() - launch_start_s
+        logger.info("backend up at {} (launch->ready={:.1f}s)", base, launch_to_ready_s)
+        logger.info("[ci-metric] launch_to_ready_s={:.1f}", launch_to_ready_s)
         code = await asyncio.get_event_loop().run_in_executor(None, mint_one_time_code)
         # ``win`` here is ``ctx.pages[0]``, which can be the file:// splash
         # depending on Electron startup order. ``location.origin`` on the
@@ -1012,6 +1015,7 @@ async def amain() -> int:
                 "phase_durations_s": w1_result.phase_durations,
                 "total_create_s": w1_result.total_create_s,
             }
+            logger.info("[ci-metric] w1_create_s={:.1f}", w1_result.total_create_s)
 
             # Iter 15 (reload chat persists state): real users hit F5 / Cmd-R
             # in the chat tab. The chat must reattach to the agent's event
@@ -1272,6 +1276,7 @@ async def amain() -> int:
                 "phase_durations_s": w2_result.phase_durations,
                 "total_create_s": w2_result.total_create_s,
             }
+            logger.info("[ci-metric] w2_create_s={:.1f}", w2_result.total_create_s)
             w2_chat_url = w2_result.chat_url
 
             logger.info("=== cross-workspace: ping W1 chat ({}) ===", w1_chat_url)
@@ -1422,11 +1427,22 @@ async def amain() -> int:
             await win.wait_for_url(origin + "/", timeout=30_000)
             await snap_page(win, "18c-w2-destroy-initiated")
 
-            # Poll /api/destroying/<id>/status until the record either
-            # moves past 'running' or returns 404 (cleanup). Lima VM
-            # stop+delete typically takes 30-90s; 4-min budget gives
-            # comfortable headroom.
+            # Poll /api/destroying/<id>/status until the host is actually gone
+            # (status 'done', or 404 once the record is cleaned up). Lima VM
+            # stop+delete typically takes 30-90s; 4-min budget gives comfortable
+            # headroom.
+            #
+            # 'failed' here is NOT terminal: the status is derived fresh per poll
+            # as pid-dead + is_host_still_active (see destroying.read_destroying).
+            # The detached `mngr destroy` subprocess exits before the lima VM
+            # finishes dropping out of discovery, so on a slow runner the status
+            # reads 'failed' transiently (subprocess gone, host not yet) before
+            # flipping to 'done' once the host is actually torn down. Treat it as
+            # "not done yet" and keep polling; a host that never tears down stays
+            # 'failed' until the deadline, which still surfaces a real
+            # silent-orphan teardown as a failure.
             destroy_deadline = time.time() + 240
+            last_body: dict[str, Any] = {}
             while time.time() < destroy_deadline:
                 resp = await win.evaluate(
                     """async (aid) => {
@@ -1438,18 +1454,15 @@ async def amain() -> int:
                 if resp["status"] == 404:
                     logger.info("[w2-destroy] DONE (record cleaned up)")
                     break
-                body = {}
                 with contextlib.suppress(Exception):
-                    body = json.loads(resp["body"])
-                state = body.get("status", "")
-                if state == "failed":
-                    raise E2EFailure(f"[w2-destroy] destroy reported FAILED: {body}")
-                if state and state != "running":
-                    logger.info("[w2-destroy] state={}", state)
+                    last_body = json.loads(resp["body"])
+                state = last_body.get("status", "")
+                if state == "done":
+                    logger.info("[w2-destroy] DONE")
                     break
                 await asyncio.sleep(3)
             else:
-                raise E2EFailure("[w2-destroy] did not complete within 240s")
+                raise E2EFailure(f"[w2-destroy] host still active after 240s (last={last_body})")
             await snap_page(win, "19-w2-destroy-done")
 
             logger.info("=== home page after W2 destroyed ===")
@@ -1504,11 +1517,22 @@ async def amain() -> int:
                 # discovered by providers that DID work, which is what we
                 # actually check. So: parse stdout regardless of exit code;
                 # only fail if the JSON itself is unusable.
+                # Run from $HOME, exactly as minds.app spawns mngr (see
+                # forward_cli.py and laptop_agent_types_seed.py). mngr's project
+                # config is discovered by walking up from cwd to a git worktree
+                # root and reading `<root>/.mngr/settings.toml`. Without this the
+                # subprocess inherits the e2e's cwd -- the mngr monorepo checkout
+                # -- and loads the repo's own `[providers.aws]` image-build block,
+                # which the bundled subset-mngr (no aws plugin) rejects with
+                # "references unknown backend", aborting before any agent lists.
+                # $HOME is not a git worktree, so no project layer leaks in; the
+                # cross-check sees only the minds host profile, like production.
                 cli_result = subprocess.run(
                     [str(bundled_mngr), "list", "--format", "json", "--quiet", "--on-error", "continue"],
                     capture_output=True,
                     text=True,
                     env=mngr_env,
+                    cwd=str(Path.home()),
                     timeout=30,
                 )
                 (SCREENSHOT_DIR / "mngr-list-output.json").write_text(cli_result.stdout or "")
@@ -1587,8 +1611,22 @@ async def amain() -> int:
 
             await browser.close()
             minds_proc.terminate()
+            # The new "quitting" takeover (Electron app shows a quitting page
+            # and animates through backend teardown before exit) makes a
+            # graceful SIGTERM exit take longer than the previous splash-only
+            # path; 30s covers it. If the previous instance is still alive
+            # when we launch the new one, macOS's single-instance lock turns
+            # the second launch into a no-op (the new process immediately
+            # fires before-quit and exits without ever creating a window),
+            # leaving the e2e timing out at "no Electron windows 30s after
+            # relaunch". SIGKILL the holdout so the lock releases.
             with contextlib.suppress(Exception):
-                minds_proc.wait(timeout=15)
+                minds_proc.wait(timeout=30)
+            if minds_proc.poll() is None:
+                logger.info("[relaunch] minds_proc still alive after SIGTERM; SIGKILL")
+                with contextlib.suppress(Exception):
+                    minds_proc.kill()
+                    minds_proc.wait(timeout=10)
             # Sweep orphan mngr forward / latchkey gateway processes that
             # the Electron shutdown chain sometimes leaves alive holding
             # :8421. Without this, the new launch can land on a stale
@@ -1705,19 +1743,26 @@ async def _advance_approval(
     if decision not in ("approve", "deny"):
         raise E2EFailure(f"_advance_approval: decision must be approve|deny, got {decision!r}")
     snap_stage0, snap_stage1, snap_stage2_pre, snap_stage2_post = snap_prefix_pair
-    # Stage 0: click Requests button to open the panel (skipped if
-    # panel already auto-opened).
+    # The "permission panel" was refactored into an inbox modal whose
+    # WebContentsView serves /inbox; the master/detail split lives in
+    # one page (left list = .inbox-card, right detail loads via
+    # /inbox/detail/<id> fragment and contains the Approve/Deny form).
+    # Stage 0 waits for /inbox (it auto-opens on new pending requests by
+    # default, see MindsConfig.get_auto_open_requests_panel). Stage 1
+    # clicks the inbox card for the slack request to load the detail
+    # fragment. Stage 2 clicks Approve / Deny within the same page.
     if stage == 0:
-        # Check if requests-panel window already exists.
+        # Check if the inbox modal already auto-opened.
         panel = None
         for w in all_pages(ctx):
             with contextlib.suppress(Exception):
-                if "/_chrome/requests-panel" in w.url:
+                if "/inbox" in w.url:
                     panel = w
                     break
         if panel is not None:
-            logger.info("requests-panel auto-opened; advancing to stage 1")
+            logger.info("inbox modal auto-opened; advancing to stage 1")
             state["stage"] = 1
+            await snap_page(panel, snap_stage0)
             return
         # Wait for the agent to emit its request signal first. Case-fold
         # because Claude rephrases the message each run (eg "Waiting"
@@ -1735,12 +1780,15 @@ async def _advance_approval(
         ):
             # Not ready yet.
             return
-        # Find the Requests button on any window.
+        # Auto-open should fire on the SSE-pushed pending-set update; if
+        # it hasn't fired after a couple of polls, hit /inbox/toggle on
+        # the chrome titlebar as a fallback (the inbox icon's aria-label
+        # is "Inbox"; the old `button[title="Requests"]` is gone).
         for w in all_pages(ctx):
             try:
-                btn = w.locator('button[title="Requests"]')
+                btn = w.locator('button[aria-label="Inbox"], button[title="Inbox"]')
                 if await btn.count() > 0 and await btn.first.is_visible():
-                    logger.info("clicking Requests button")
+                    logger.info("clicking Inbox titlebar trigger")
                     await snap_page(w, snap_stage0)
                     await btn.first.click()
                     state["stage"] = 1
@@ -1748,24 +1796,27 @@ async def _advance_approval(
             except Exception:
                 pass
 
-    # Stage 1: click the slack entry in the requests-panel.
+    # Stage 1: click the slack entry in the inbox left list.
     elif stage == 1:
         panel = None
         for w in all_pages(ctx):
             with contextlib.suppress(Exception):
-                if "/_chrome/requests-panel" in w.url:
+                if "/inbox" in w.url:
                     panel = w
                     break
         if panel is None:
             return
-        for sel in ("text=/slack/i", "text=/permission/i", "li", "button"):
+        # Prefer the slack-named .inbox-card; fall back to the first
+        # selectable card if there's only one pending request.
+        for sel in (
+            '.inbox-card:has-text("slack")',
+            '.inbox-card:has-text("Slack")',
+            ".inbox-card",
+        ):
             try:
                 loc = panel.locator(sel).first
                 if await loc.count() > 0 and await loc.is_visible():
-                    txt = (await loc.inner_text()).strip().lower()
-                    if txt in ("close", "cancel", "back", "requests"):
-                        continue
-                    logger.info("clicking permission entry via {!r}", sel)
+                    logger.info("clicking inbox card via {!r}", sel)
                     await snap_page(panel, snap_stage1)
                     await loc.click()
                     state["stage"] = 2
@@ -1773,47 +1824,59 @@ async def _advance_approval(
             except Exception:
                 pass
 
-    # Stage 2: click Approve or Deny in the per-request detail window.
+    # Stage 2: click Approve or Deny in the inbox detail pane (same /inbox page).
     elif stage == 2:
-        button_text = "Approve" if decision == "approve" else "Deny"
+        if decision == "approve":
+            button_selectors = (
+                "#permissions-approve-btn:not([disabled])",
+                'button:has-text("Approve"):not([disabled])',
+            )
+        else:
+            button_selectors = ('button:has-text("Deny")',)
         for w in all_pages(ctx):
             try:
-                if "/requests/" not in w.url:
+                if "/inbox" not in w.url:
                     continue
-                btn = w.locator(f'button:has-text("{button_text}")').first
-                if await btn.count() > 0 and await btn.is_visible():
-                    logger.info("clicking {}", button_text)
-                    await snap_page(w, snap_stage2_pre)
-                    await btn.click()
-                    state["stage"] = 3
-                    # Snap a beat later. For approve the per-request page
-                    # stays open ("Approved"); for deny the window closes
-                    # so fall back to the chat window.
-                    await asyncio.sleep(2)
-                    snap_target = w
-                    if decision == "deny":
-                        chat_after = await find_chat_window(ctx)
-                        if chat_after is not None:
-                            snap_target = chat_after
+                btn = None
+                for bsel in button_selectors:
+                    candidate = w.locator(bsel).first
+                    if await candidate.count() > 0 and await candidate.is_visible():
+                        btn = candidate
+                        break
+                if btn is None:
+                    continue
+                logger.info("clicking {} button on inbox detail", decision)
+                await snap_page(w, snap_stage2_pre)
+                await btn.click()
+                state["stage"] = 3
+                # Snap a beat later. For approve the inbox shows the
+                # browser-launch / success notice; for deny the inbox
+                # closes back to the chat window.
+                await asyncio.sleep(2)
+                snap_target = w
+                if decision == "deny":
+                    chat_after = await find_chat_window(ctx)
+                    if chat_after is not None:
+                        snap_target = chat_after
+                with contextlib.suppress(Exception):
+                    await snap_page(snap_target, snap_stage2_post)
+                if decision == "approve":
+                    # Surface latchkey-side authorisation failures
+                    # immediately rather than waiting DRIVE_SLACK_TIMEOUT
+                    # seconds for a timeout. The post-approve page renders
+                    # the error banner verbatim; parse the visible text
+                    # and raise so CI fails on the actual signal, not a
+                    # timeout that happens to coincide.
                     with contextlib.suppress(Exception):
-                        await snap_page(snap_target, snap_stage2_post)
-                    if decision == "approve":
-                        # Surface latchkey-side authorisation failures
-                        # immediately rather than waiting DRIVE_SLACK_TIMEOUT
-                        # seconds for a timeout. The post-approve page renders
-                        # the error banner verbatim; parse the visible text
-                        # and raise so CI fails on the actual signal, not a
-                        # timeout that happens to coincide.
-                        with contextlib.suppress(Exception):
-                            body_text = await w.evaluate("document.body.innerText")
-                            if "Authorization failed" in body_text or "No browser configured" in body_text:
-                                raise E2EFailure(
-                                    f"{snap_stage2_post} shows authorization failure: "
-                                    + body_text.replace("\n", " | ")[:400]
-                                )
-                    # Kicks are sent from the main poll loop after a
-                    # KICK_DELAY settle period; see slack-flow loop.
-                    return
+                        body_text = await w.evaluate("document.body.innerText")
+                        if "Authorization failed" in body_text or "No browser configured" in body_text:
+                            raise E2EFailure(
+                                f"{snap_stage2_post} shows authorization failure: "
+                                + body_text.replace("\n", " | ")[:400]
+                            )
+                # Kicks are sent from the main poll loop after a
+                # KICK_DELAY settle period; see slack-flow loop.
+                return
             except Exception:
                 pass
 
