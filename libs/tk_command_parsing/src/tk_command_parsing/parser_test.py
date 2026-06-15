@@ -1,11 +1,11 @@
 """Unit tests for the shell-aware tk command parser.
 
-These pin the behaviour both consumers rely on: the PreToolUse gate
-(``scripts/claude_tk_standalone_check.py``) and step attribution
-(``apps/system_interface``). The cases that motivated moving off regexes --
-quoted operators, escaped quotes inside titles, a tk verb merely mentioned
-inside another command's argument, and the ``--flag=value`` form -- are covered
-explicitly.
+These pin the behaviour the gate hook (``scripts/claude_tk_standalone_check.py``)
+relies on, plus the ``extract_create_titles`` / ``flag_values`` surface the
+package exposes for callers that need step titles out of a ``tk create --step``
+command. The cases that motivated moving off regexes -- quoted operators, escaped
+quotes inside titles, a tk verb merely mentioned inside another command's
+argument, and the ``--flag=value`` form -- are covered explicitly.
 """
 
 from __future__ import annotations
