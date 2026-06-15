@@ -15,7 +15,7 @@ then Y, then Z." Each step of that process is one of three kinds:
   data varies. Lives in `scripts/`.
 - **`[ai-script]`** -- needs a model's judgement, but is a *fixed part of
   the flow* (the same prompt/criteria every run, only the data varies).
-  Script it as a model call via the copyable `claude_p.py` helper (see
+  Script it as an AI call following the `use-ai-integration` skill (see
   "Scripting a model step" below). This is the **default for any
   model-performed step** -- a step does not drop to prose just because it
   needs judgement.
@@ -30,7 +30,7 @@ when every flow step (deterministic or model-driven) is scripted, the skill
 can be refreshed or scheduled with no additional wiring. Prose is reserved
 for the work that genuinely needs the executor in the loop -- not for any
 step that happens to require a model. When you leave a model step as
-`[prose]`, you must be able to say *why* a scripted `claude -p` call
+`[prose]`, you must be able to say *why* a scripted model call
 cannot do it.
 
 A mixed flow of all three kinds is the norm for useful skills.
@@ -87,31 +87,24 @@ genuinely sits between two scripted sections.
 
 ### Scripting a model step (`[ai-script]`)
 
-A model-judgement step is scripted with the copyable `claude -p` helper,
-`claude_p.py`, from the `use-ai-integration` skill: copy that one file into
-the skill's own `scripts/` directory and call it from `run.py`. That skill
-covers the call surface and the cost model; the short version of the two
-entry points:
+Script the step as a Claude call following
+[calling-claude.md](calling-claude.md) -- don't default to one mechanism. It
+picks the path by agency and whether `ANTHROPIC_API_KEY` is set (keyed
+non-agentic -> `litellm`; keyless -> the copyable `claude_p.py` helper;
+agentic -> `claude_p_task`) and covers surfacing the cost to the user.
 
-- `claude_p_completion(prompt, *, system, model=...)` -- no agency
-  (classify / summarize / extract / rewrite / answer-from-context). The
-  common case for a model-judgement step.
-- `claude_p_task(prompt, *, append_system=None, model=...)` -- a one-shot
-  agentic step that needs tools or file access.
-
-Both are `async` and return a result carrying `.text`, `.cost_usd`, and
-`.usage`. `claude_p.py` is a self-contained PEP 723 snippet, so the copy
-sits beside `run.py` and `run.py` stays an ordinary self-contained script --
-just list `claude_p.py`'s own deps (`anyio`, `pydantic`) in `run.py`'s PEP
-723 header:
+Packaging: `run.py` stays an ordinary self-contained PEP 723 script. For the
+keyless / agentic paths, copy `claude_p.py` (from the `use-ai-integration`
+skill's `scripts/`) in beside `run.py` and list its deps (`anyio`,
+`pydantic`) in the header; the keyed `litellm` path needs only `litellm`:
 
 ```python
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["anyio", "pydantic>=2"]
+# dependencies = ["anyio", "pydantic>=2"]   # or ["litellm>=1.88.1"] for the keyed path
 # ///
 import anyio
-from claude_p import claude_p_completion   # the file you copied in
+from claude_p import claude_p_completion   # keyless path; the file you copied in
 
 async def main() -> None:
     result = await claude_p_completion(
@@ -119,16 +112,10 @@ async def main() -> None:
         system="<a real task instruction, not a placeholder>",
         model="claude-haiku-4-5",
     )
-    print(result.text)
+    print(result.text, result.cost_usd)
 
 anyio.run(main)
 ```
-
-Invoke it like any skill script -- `uv run
-.agents/skills/<name>/scripts/run.py <args>`. For `claude_p_completion`,
-`system` is required and must be a real instruction. When a deployment sets
-`ANTHROPIC_API_KEY`, a direct `litellm` call is cheaper for non-agentic
-work; see `use-ai-integration` for that path and the full cost model.
 
 - Begin every `run.py` with a PEP 723 header pinning its inline deps:
   ```python
@@ -137,8 +124,6 @@ work; see `use-ai-integration` for that path and the full cost model.
   # dependencies = ["rich>=13"]
   # ///
   ```
-  A `run.py` that drives a model step copies `claude_p.py` in beside it and
-  lists that helper's deps (`anyio`, `pydantic`) here.
 - `argparse` entry point; no interactive prompts.
 - Stateless by default. If persisted state is genuinely needed, flag it at
   Gate 2 -- don't invent a persistence scheme unilaterally.

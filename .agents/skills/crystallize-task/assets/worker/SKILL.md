@@ -61,15 +61,15 @@ Produce a short outline with:
   three kinds defined in `.agents/shared/references/spec-summary.md`:
   - `[script]` -- deterministic; lives in `scripts/`.
   - `[ai-script]` -- model judgement that is a fixed part of the flow;
-    scripted as a `claude_p.py` call (see spec-summary's "Scripting a
-    model step" and the `use-ai-integration` skill for picking the
-    pattern). **This is the default for any model-performed step** -- the
+    scripted as a model call (see spec-summary's "Scripting a model step"
+    and `.agents/shared/references/calling-claude.md` for picking the
+    path). **This is the default for any model-performed step** -- the
     re-run test puts a step here, not in prose, whenever the same
     prompt/criteria run every time with only the data varying.
   - `[prose]` -- executor meta-work only: steps that need the agent in the
     loop and are not part of an automated run.
 - Prose justification: for every step you tag `[prose]` that involves a
-  model's judgement, state *why* a scripted `claude_p.py` call cannot do
+  model's judgement, state *why* a scripted model call cannot do
   it (e.g. it needs the live conversation, it gates on user interaction, the
   inputs are chosen by the executor). A model step with no such reason
   belongs in `[ai-script]`. The aim is a flow that runs headless so refresh
@@ -143,9 +143,9 @@ Run each scenario:
 
 - For `[script]` and `[ai-script]` steps: invoke `scripts/run.py` (or the
   relevant helper) with real inputs and inspect the output. An `[ai-script]`
-  step makes a real `claude_p.py` call, so it needs credentials at run
-  time (`ANTHROPIC_API_KEY` or an inherited `CLAUDE_CONFIG_DIR`); run it on
-  a small input and note the `result.cost_usd` it reports.
+  step makes a real Claude call, so it needs credentials at run time
+  (`ANTHROPIC_API_KEY`, or an inherited `CLAUDE_CONFIG_DIR` for the keyless
+  path); run it on a small input and note the cost it reports.
 - For `[prose]` steps: walk through the SKILL.md instructions as if you were
   an agent using the skill, and confirm they produce the expected
   behavior on the scenario's data. Write out this walk-through process; don't just think through it.
@@ -231,8 +231,8 @@ Reasons that genuinely warrant giving up:
   unreachable, a file format you cannot parse).
 
 "Too judgement-heavy to script" is NOT a valid reason to give up. Model
-judgement that is a fixed part of the flow is scripted as `claude_p.py`
-calls (`[ai-script]`); only genuine executor meta-work stays as SKILL.md
+judgement that is a fixed part of the flow is scripted as `[ai-script]`
+calls; only genuine executor meta-work stays as SKILL.md
 prose. A skill can be pure prose with no scripts at all if every step is
 executor meta-work. Only give up if the *process* itself is unstable, not
 if parts of it happen to require judgement.
