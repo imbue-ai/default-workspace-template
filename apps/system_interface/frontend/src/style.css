@@ -1968,6 +1968,20 @@ body {
   margin: 0.5em 0;
 }
 
+/* The in-progress streaming preview at the tail of a frontier step's expanded
+   body: same content styling as the rest of the panel, dimmed with a soft pulse
+   so it reads as not-yet-final. Reuses the streaming-pulse keyframes defined for
+   the standalone preview bubble. */
+.pv-expanded-streaming {
+  opacity: 0.7;
+  animation: streaming-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pv-expanded-streaming {
+    animation: none;
+  }
+}
+
 /* Final (trailing) assistant reply under the progress timeline */
 .pv-final {
   margin-top: 16px;
