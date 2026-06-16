@@ -29,10 +29,12 @@ Include:
   `[ai-script]`, or `[prose]` per
   `.agents/shared/references/spec-summary.md`; model-judgement steps default
   to `[ai-script]` (a scripted model call).
-- Prose justification: for any model-judgement step you keep as `[prose]`,
-  apply the test in `spec-summary.md` -- could it be `f(data) -> result` with
-  a fixed prompt and no live conversation? If yes, it is `[ai-script]`. Keep
-  any justified prose at the edges of the flow, not between scripted sections.
+- Prose justification: apply the execution-mode test in `spec-summary.md`.
+  Neither model judgement nor needing the conversation justifies prose (a
+  script can fetch the transcript and run headless). Only keep a step `[prose]`
+  when the user must be in the loop while the skill runs -- live input/approval,
+  or interactive follow-along. Keep any such prose at the edges, not between
+  scripted sections.
 - Justification: for any subcommand or subflow in the planned flow, what
   invariant makes it separate vs. inlined? If no invariant demands
   separation, inline it.

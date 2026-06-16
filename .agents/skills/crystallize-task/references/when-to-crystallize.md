@@ -31,11 +31,13 @@ classify each step:
   deciding "is this result trustworthy," "does this belong in the output."
 
 The identical and structurally-same parts are the skill's deterministic
-substructure. The judgement parts are ALSO part of the skill -- when the
-same criteria run every time with only the data varying, they are scripted
-as `[ai-script]` model calls so the flow runs headless.
-Only judgement that needs the executor in the loop stays in SKILL.md as
-prose.
+substructure. The judgement parts are ALSO part of the skill -- they are
+scripted as `[ai-script]` model calls so the flow runs headless (a script can
+even fetch the transcript and feed it in, so "needs the conversation" is no
+excuse). A step stays `[prose]` only when the skill needs the *user* in the
+loop while it runs -- their live input/approval, or interactive
+follow-along -- per the execution-mode test in
+`.agents/shared/references/spec-summary.md`.
 
 If much of the re-run would be literally the same work, you have a
 candidate. Diff the original run against the hypothetical re-run; what's

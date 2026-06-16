@@ -19,11 +19,11 @@ then Y, then Z." Each step of that process is one of three kinds:
   "Scripting a model step" below). This is the **default for any
   model-performed step** -- a step does not drop to prose just because it
   needs judgement.
-- **`[prose]`** -- *executor meta-work* that is not part of an automated
-  run: choosing inputs, interpreting the final result and deciding what to
-  do next, user approval/interaction, anything that needs the live
-  conversation context. Written in SKILL.md as instructions the agent using
-  the skill follows.
+- **`[prose]`** -- *user-in-the-loop work*: steps that need the user present
+  while the skill runs, either for their live input (an approval, a decision,
+  an answer to a clarifying question) or because they invoke the skill
+  interactively to follow along and steer. Written in SKILL.md as
+  instructions the agent using the skill follows.
 
 The point of `[ai-script]` is that the whole flow stays runnable headless:
 when every flow step (deterministic or model-driven) is scripted, the skill
@@ -33,49 +33,54 @@ step that happens to require a model.
 
 ### The test: `[ai-script]` vs `[prose]`
 
-Needing a model's judgement is **never by itself** a reason to use prose.
-The decisive question is:
+Two things that feel like reasons for prose are not:
 
-> Could this step be written as a function `f(data) -> result` with a
-> *fixed* system prompt and no access to the live conversation?
+- **Needing a model's judgement** is not a reason -- that's exactly what
+  `[ai-script]` is for.
+- **Needing the current conversation** is not a reason -- a script can fetch
+  the transcript (or the relevant slice) and pass it into the prompt. This
+  skill's own crystallize/update workers run that way: they read the
+  transcript programmatically and do their judgement headless.
 
-If yes, it is `[ai-script]` -- even though it needs judgement -- because the
-same prompt runs every time and only the data varies. `[prose]` is justified
-*only* when the step needs something a headless `f(data)` cannot be handed.
-In practice that is a small, specific set:
+A script can always assemble its own inputs, so almost any step can run
+unattended. The decisive question is about the skill's **execution mode**,
+not any single step:
 
-1. **It reads the live conversation as input** -- it interprets the ongoing
-   chat, the user's phrasing this turn, or a decision made earlier in the
-   session. A scripted call doesn't have the transcript.
-2. **It gates on user interaction** -- present options and wait, get approval
-   before a destructive step, collect free-form feedback. A headless run has
-   no human to block on.
-3. **It chooses the inputs / frames the run** -- which file, which date range,
-   which parameters to feed the flow. The executor *deciding* the call, not
-   *making* it.
-4. **It interprets the final result and branches open-endedly** -- "decide
-   whether to rerun, escalate, or hand back." The decision space isn't a
-   fixed criterion.
-5. **It orchestrates the executor itself** -- invoking another skill,
-   delegating to a sub-agent, aborting.
+> Does this skill need the user *in the loop while it runs* -- either for
+> their live input (an approval, a decision, an answer to a clarifying
+> question), or because they invoke it interactively to follow along and
+> steer?
 
-When you leave a model step as `[prose]`, you must be able to name which of
-these (or an equally concrete reason) applies. A model step with no such
-reason belongs in `[ai-script]`.
+- **If no** -- the work runs the same whether or not anyone is watching (the
+  typical fetch / transform / judge skill, and the vast majority of cases) --
+  then every step is scriptable (`[script]` / `[ai-script]`). There is no
+  reason to run it interactively, so it has no `[prose]` steps.
+- **If yes** -- the steps that genuinely need the user are `[prose]`. That
+  means user-input or approval gates, and skills the user deliberately drives
+  interactively to watch and steer.
+
+So `[prose]` marks user-in-the-loop work -- not judgement work, and not
+transcript-dependent work. When you tag a step `[prose]`, you must be able to
+say which kind of user involvement it needs; if you can't, it belongs in
+`[ai-script]`.
+
+(Observability is not a counterexample: if the user just wants to *watch* an
+otherwise-automatable skill run, script it and stream its progress/output --
+don't move the logic into prose.)
 
 ### Push prose to the edges
 
-Notice that the justified cases fall at the *edges* of a flow -- input
-selection and framing at the front, result interpretation and next-step
-decisions at the back -- or are interaction gates. So the healthy shape is
-**prose at the edges, scripted steps in the middle**.
+When a skill is interactive, the user involvement usually lands at the
+*edges* -- an approval or input choice at the front, a decision about the
+result at the back. So the healthy shape is **prose at the edges, scripted
+steps in the middle**.
 
 A `[prose]` step wedged *between* two scripted sections is the expensive
 case: it splits the pipeline into two halves that can't compose, which is
 exactly what stops the flow from ever running unattended. Only accept
-prose-in-the-middle when the next action genuinely depends on live context
-that doesn't exist until runtime -- e.g. a human reading intermediate output
-and steering the next probe, or a mandatory sign-off gate. If you reach for
+prose-in-the-middle when the user must genuinely intervene mid-run -- e.g. a
+mandatory sign-off gate before a destructive step, or a human reading
+intermediate output and steering what runs next. If you reach for
 prose-in-the-middle for any other reason, there is almost certainly an
 `[ai-script]` you haven't written yet.
 

@@ -66,18 +66,17 @@ Produce a short outline with:
     default for any model-performed step** -- the
     re-run test puts a step here, not in prose, whenever the same
     prompt/criteria run every time with only the data varying.
-  - `[prose]` -- executor meta-work only: steps that need the agent in the
-    loop and are not part of an automated run.
-- Prose justification: for every step you tag `[prose]` that involves a
-  model's judgement, apply the test in `spec-summary.md` -- could the step be
-  `f(data) -> result` with a *fixed* prompt and no live conversation? If yes,
-  it is `[ai-script]`, not prose. Only tag `[prose]` when you can name a
-  concrete reason a scripted call can't do it (it reads the live
-  conversation, gates on user interaction, chooses the inputs, makes an
-  open-ended next-step decision, or orchestrates the executor). Keep such
-  prose at the edges of the flow, not wedged between two scripted sections.
-  The aim is a flow that runs headless so refresh and scheduling work with no
-  extra wiring.
+  - `[prose]` -- user-in-the-loop work: steps that need the user present
+    while the skill runs (live input/approval, or interactive follow-along).
+- Prose justification: apply the execution-mode test in `spec-summary.md`.
+  Neither needing a model's judgement nor needing the conversation justifies
+  prose -- a script can fetch the transcript and run headless. Only tag
+  `[prose]` when the user must be in the loop while the skill runs: it needs
+  their live input/approval, or they invoke it interactively to follow along
+  and steer. If no user involvement is required, every step is scriptable
+  (`[script]`/`[ai-script]`). Keep any genuine prose at the edges of the flow,
+  not wedged between two scripted sections. The aim is a flow that runs
+  headless so refresh and scheduling work with no extra wiring.
 - Subcommand justification: for any subcommand or subflow in the planned
   flow, what invariant makes it separate vs. inlined? If no invariant
   demands separation, inline it.
