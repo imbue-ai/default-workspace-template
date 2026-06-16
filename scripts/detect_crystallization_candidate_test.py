@@ -421,6 +421,27 @@ def test_lifecycle_skill_invocation_suppresses_until_commit(tmp_path: Path) -> N
     assert should_warn is False
 
 
+def test_build_web_service_suppresses_across_turns(tmp_path: Path) -> None:
+    """build-web-service mid-flow (mock loop, no commit yet) -> stay silent.
+
+    build-web-service is a live lifecycle flow that drives its own background
+    finalization, so a generic crystallize nudge while the user is still
+    iterating on the mock (a turn that doesn't itself re-invoke the skill) is
+    noise.
+    """
+    events = [
+        _user("build me a dashboard"),
+        _assistant(_tool_call("Skill", "skill-id", skill="build-web-service")),
+        _tool_result("skill-id"),
+        _user("tweak the layout"),
+        _assistant(*(_tool_call("Bash", f"u{i}") for i in range(8))),
+    ]
+    should_warn, _ = detect.evaluate(
+        events, _empty_skills_root(tmp_path), _workdir(tmp_path), _AGENT_ID
+    )
+    assert should_warn is False
+
+
 def test_lifecycle_skill_then_commit_re_arms_nudge(tmp_path: Path) -> None:
     """After do-something-new + a successful commit, the nudge is allowed to fire."""
     events = [
