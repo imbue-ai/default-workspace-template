@@ -268,16 +268,33 @@ def test_failed_preflight_never_restarts_live_service_and_rolls_back() -> None:
     code = _reveal(runner, http, _FakeSpawner())
 
     assert code == 2  # rolled back, UI healthy
-    # The live service must NOT have been restarted during the failed attempt...
-    # exactly one restart, in recovery, after the rollback commit.
-    restart_index = runner.calls.index(
-        ["mngr", "start", "--restart", "system-services"]
-    )
-    commit_calls = [i for i, c in enumerate(runner.calls) if c[:2] == ["git", "commit"]]
-    assert commit_calls and restart_index > commit_calls[0]
+    # The live service was never restarted -- pre-flight failed before the
+    # restart, so the running service is still healthy on known-good code and
+    # recovery must NOT restart it (doing so would needlessly blip a live UI).
+    assert not runner.ran("mngr", "start")
+    # Recovery still re-confirmed the untouched service via the health probe.
+    assert any(_is_live(u) for u in http.get_urls)
     # An added file is removed on rollback (not checked out).
     assert runner.ran("git", "rm", "--force", "--ignore-unmatch")
     assert not runner.ran("git", "checkout", _ROLLBACK)
+
+
+def test_failed_preflight_with_manifest_refreshes_deps_but_does_not_restart() -> None:
+    # A backend manifest change whose merged code fails pre-flight. Recovery must
+    # still reinstall deps back to known-good (to fix the on-disk venv) but must
+    # NOT restart the live service, which was never touched.
+    runner = _runner_with_diff(
+        "M\tapps/system_interface/pyproject.toml\nM\tapps/system_interface/imbue/system_interface/server.py\n"
+    )
+    http = _FakeHttp(lambda url: 200 if _is_live(url) else None)
+
+    code = _reveal(runner, http, _FakeSpawner())
+
+    assert code == 2
+    assert not runner.ran("mngr", "start")  # untouched live service is not restarted
+    # uv tool install ran twice: once in the failed reveal, once in recovery to
+    # restore the known-good dependency set on disk.
+    assert len(runner.argvs_starting("uv", "tool", "install")) == 2
 
 
 def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
