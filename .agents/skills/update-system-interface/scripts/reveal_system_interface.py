@@ -297,14 +297,28 @@ def _assert_clean_tree(repo_root: Path, runner: Runner) -> None:
         )
 
 
-def _run_checked(runner: Runner, argv: Sequence[str], cwd: Path, what: str) -> None:
-    """Run a reveal command; raise :class:`RevealFailed` on a non-zero exit."""
+def _run_checked(
+    runner: Runner,
+    argv: Sequence[str],
+    cwd: Path,
+    what: str,
+    *,
+    live_service_restarted: bool = False,
+) -> None:
+    """Run a reveal command; raise :class:`RevealFailed` on a non-zero exit.
+
+    ``live_service_restarted`` is forwarded onto the raised exception so callers
+    that run the live restart can record that recovery must restart (see
+    :class:`RevealFailed`)."""
     result = runner.run(
         list(argv), cwd=str(cwd), capture_output=True, text=True, check=False
     )
     if getattr(result, "returncode", 0) != 0:
         stderr = (getattr(result, "stderr", "") or "").strip()
-        raise RevealFailed(f"{what} failed (exit {result.returncode}): {stderr}")
+        raise RevealFailed(
+            f"{what} failed (exit {result.returncode}): {stderr}",
+            live_service_restarted=live_service_restarted,
+        )
 
 
 def wait_healthy(
@@ -402,19 +416,13 @@ def _apply_reveal(
             )
         # From here on the live service has been (or is being) restarted, so any
         # failure leaves it potentially running broken code: recovery must restart.
-        restart = runner.run(
+        _run_checked(
+            runner,
             ["mngr", "start", "--restart", "system-services"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
+            repo_root,
+            "mngr start --restart",
+            live_service_restarted=True,
         )
-        if getattr(restart, "returncode", 0) != 0:
-            raise RevealFailed(
-                f"mngr start --restart failed (exit {restart.returncode}): "
-                f"{(getattr(restart, 'stderr', '') or '').strip()}",
-                live_service_restarted=True,
-            )
         if not wait_healthy(
             http,
             f"{base_url}{HEALTH_PATH}",
