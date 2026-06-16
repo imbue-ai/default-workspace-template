@@ -28,3 +28,9 @@ each poll is reported once instead of triggering a fresh alert every 5 seconds.
 - The watcher's in-memory dedup state is now bounded: it forgets the state for
 windows that have closed and caps the keys kept per window, so the long-lived
 service does not grow its memory without limit.
+
+- More robust agent enumeration: if `mngr list` exits non-zero but still prints
+a valid agent list (for example when one provider failed), the watcher now uses
+that list instead of skipping the alert. Internally, commands that could not run
+at all (missing binary, timeout) are now distinguished from a command that
+genuinely exited with status 1.

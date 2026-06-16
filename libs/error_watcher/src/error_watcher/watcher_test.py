@@ -15,8 +15,10 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from error_watcher.watcher import (
     DEFAULT_ERROR_PATTERN,
     MAX_SEEN_KEYS_PER_WINDOW,
+    RUNNER_FAILURE_RETURNCODE,
     AgentSummary,
     CommandResult,
+    _default_command_runner,
     build_list_command,
     build_message_command,
     choose_recipient,
@@ -314,6 +316,34 @@ def test_compile_error_pattern_falls_back_on_invalid_regex() -> None:
     assert compile_error_pattern("[unclosed") is DEFAULT_ERROR_PATTERN
 
 
+def test_default_command_runner_returns_stdout_for_a_successful_command() -> None:
+    result = _default_command_runner(["printf", "hello"])
+    assert result.returncode == 0
+    assert result.stdout == "hello"
+
+
+def test_default_command_runner_never_raises_on_a_missing_binary() -> None:
+    # A spawn failure (binary not found) must surface as the runner-failure
+    # sentinel, never an exception, so the poll loop cannot crash (REQ-SPAWN-4).
+    result = _default_command_runner(["this-binary-does-not-exist-error-watcher"])
+    assert result.returncode == RUNNER_FAILURE_RETURNCODE
+    assert result.stdout == ""
+    assert result.stderr != ""
+
+
+def test_default_command_runner_times_out_with_the_failure_sentinel() -> None:
+    # A hung command must time out into the sentinel rather than wedging the loop.
+    result = _default_command_runner(["sleep", "5"], timeout=0.05)
+    assert result.returncode == RUNNER_FAILURE_RETURNCODE
+    assert result.returncode != 1  # distinct from a real exit-1
+
+
+def test_default_command_runner_failure_sentinel_is_not_a_real_exit_code() -> None:
+    # Guards the contract that the sentinel cannot collide with a process exit
+    # status (which is always >= 0).
+    assert RUNNER_FAILURE_RETURNCODE < 0
+
+
 # Two agents that can both receive a message; with random.Random(0) the chosen
 # recipient over ["agent-web", "agent-api"] is deterministically "agent-api".
 _TWO_MESSAGEABLE_AGENTS = json.dumps(
@@ -370,6 +400,7 @@ class _FakeCommandRunner(NamedTuple):
     failing_windows: frozenset[str] = frozenset()
     send_fails: bool = False
     failing_recipients: frozenset[str] = frozenset()
+    list_returncode: int = 0
 
     def __call__(self, command: Sequence[str]) -> CommandResult:
         argv = list(command)
@@ -383,7 +414,7 @@ class _FakeCommandRunner(NamedTuple):
                 return CommandResult(1, "", f"can't find window: {window}")
             return CommandResult(0, self.pane_text_by_window.get(window, ""), "")
         if argv == ["mngr", "list", "--format", "json"]:
-            return CommandResult(0, self.list_stdout, "")
+            return CommandResult(self.list_returncode, self.list_stdout, "")
         if argv[:2] == ["mngr", "message"]:
             self.message_sends.append(argv)
             recipient = argv[2]
@@ -652,6 +683,40 @@ def test_run_one_poll_never_messages_the_non_claude_system_agent() -> None:
         == "agent-claude"
     )
     assert [argv[2] for argv in sends] == ["agent-claude"]
+
+
+def test_run_one_poll_alerts_when_mngr_list_exits_nonzero_with_a_valid_payload() -> None:
+    # mngr can exit non-zero (e.g. one provider failed) while still printing a
+    # valid {"agents": [...]} body; the alert must not be skipped (finding #6).
+    sends: list[list[str]] = []
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web",),
+        pane_text_by_window={"svc-web": "Exception: boom"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+        list_returncode=1,
+    )
+    assert (
+        run_one_poll(runner, {}, random.Random(0), DEFAULT_ERROR_PATTERN)
+        == "agent-api"
+    )
+    assert len(sends) == 1
+
+
+def test_run_one_poll_skips_when_mngr_list_fails_without_a_payload() -> None:
+    # A non-zero list with no parseable agents is still treated as a failure.
+    sends: list[list[str]] = []
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web",),
+        pane_text_by_window={"svc-web": "Exception: boom"},
+        list_stdout="mngr: connection refused",
+        message_sends=sends,
+        list_returncode=1,
+    )
+    assert run_one_poll(runner, {}, random.Random(0), DEFAULT_ERROR_PATTERN) is None
+    assert sends == []
 
 
 def test_run_one_poll_tolerates_a_window_capture_failure() -> None:
