@@ -410,6 +410,17 @@ class ProviderInstanceInterface(MutableModel, ABC):
         """Handle actions to take when a connection error occurs with a host."""
         ...
 
+    def get_outer_ssh_port(self, host_id: HostId) -> int | None:
+        """Port of the host's outer/management sshd, when distinct from the agent connection.
+
+        Returns ``None`` by default (the agent connection from
+        ``get_ssh_connection_info`` is the only SSH endpoint, or the host is
+        local). Providers whose host has a separate outer/management sshd on a
+        non-obvious port (e.g. a slice's VM-root sshd reached via a box-forwarded
+        port) override this so ``mngr create --format json`` can report it.
+        """
+        return None
+
     @abstractmethod
     def get_max_destroyed_host_persisted_seconds(self) -> float:
         """
@@ -698,9 +709,27 @@ class ProviderInstanceInterface(MutableModel, ABC):
         only accessed by mngr and contains trusted metadata.
 
         Returns None if the provider does not support host volumes or if
-        no volume exists for the given host.
+        no volume exists for the given host. Providers whose volume lookup is a
+        lazy reference (e.g. Modal) confirm existence with a network probe here;
+        callers that only need a reference and want to skip that probe should use
+        :meth:`get_volume_reference_for_host`.
         """
         return None
+
+    def get_volume_reference_for_host(self, host: HostInterface | HostId) -> HostVolume | None:
+        """Return a host-volume *reference* without verifying it exists.
+
+        Like :meth:`get_volume_for_host`, but skips any network existence probe:
+        it returns a possibly-unverified reference (operations on a since-deleted
+        volume fail at access time). Used by ``make_readable_offline_host`` to
+        construct a readable offline host cheaply, with no per-host probe during
+        host discovery.
+
+        The default delegates to :meth:`get_volume_for_host` -- correct for
+        providers that have no existence probe (their lookup is already cheap).
+        Providers that *do* probe (Modal) override this to skip it.
+        """
+        return self.get_volume_for_host(host)
 
     # =========================================================================
     # Host Mutation Methods

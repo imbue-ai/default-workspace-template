@@ -865,9 +865,14 @@ class FakePoolRow:
     status: str
     version: str
     attributes: dict[str, Any] | None
+    region: str | None
     leased_to_user: str | None
     leased_at: str | None
     released_at: str | None
+    backend_kind: str
+    lima_instance_name: str | None
+    lima_disk_name: str | None
+    bare_metal_server_id: UUID | None
 
 
 def _row_attributes(row: "FakePoolRow") -> dict[str, Any]:
@@ -905,6 +910,7 @@ def _make_pool_row(
     leased_to_user: str | None = None,
     leased_at: str | None = None,
     host_name: str | None = None,
+    region: str | None = None,
 ) -> FakePoolRow:
     row = FakePoolRow()
     row.host_id = host_id
@@ -924,6 +930,12 @@ def _make_pool_row(
     row.leased_at = leased_at
     row.released_at = None
     row.attributes = None
+    row.region = region
+    # Default to a real OVH VPS; slice-specific tests set these explicitly.
+    row.backend_kind = "ovh_vps"
+    row.lima_instance_name = None
+    row.lima_disk_name = None
+    row.bare_metal_server_id = None
     return row
 
 
@@ -942,28 +954,36 @@ class FakeCursor:
         if "from pool_hosts" in query_lower and "status = 'available'" in query_lower:
             # The connector serialises the request attributes via json.dumps
             # before passing them to the SQL bind parameter, so we always get
-            # a JSON string here.
+            # a JSON string here. A hard ``region`` (WHERE clause), if present,
+            # follows it in the param tuple.
             raw = params[0]
             requested = json.loads(raw) if isinstance(raw, str) else dict(raw)
-            for row in self._backend.pool_rows:
-                if row.status != "available":
-                    continue
-                row_attrs = _row_attributes(row)
-                if not _attributes_contain(row_attrs, requested):
-                    continue
+            # A hard ``region`` bind param, when present, always immediately
+            # follows the attributes JSON param (index 0), so its index is 1.
+            hard_region: str | None = None
+            if "and region = %s" in query_lower:
+                hard_region = params[1]
+            candidate_rows = [
+                row
+                for row in self._backend.pool_rows
+                if row.status == "available"
+                and _attributes_contain(_row_attributes(row), requested)
+                and (hard_region is None or row.region == hard_region)
+            ]
+            if candidate_rows:
+                chosen = candidate_rows[0]
                 self._results = [
                     (
-                        row.host_id,
-                        row.vps_address,
-                        row.ssh_port,
-                        row.ssh_user,
-                        row.container_ssh_port,
-                        row.agent_id,
-                        row.host_id_str,
-                        row_attrs,
+                        chosen.host_id,
+                        chosen.vps_address,
+                        chosen.ssh_port,
+                        chosen.ssh_user,
+                        chosen.container_ssh_port,
+                        chosen.agent_id,
+                        chosen.host_id_str,
+                        _row_attributes(chosen),
                     )
                 ]
-                break
 
         elif "update pool_hosts set status = 'leased'" in query_lower:
             # Lease SQL now also writes the user-supplied host_name on the
@@ -993,14 +1013,33 @@ class FakeCursor:
             host_id = UUID(raw_host_id) if isinstance(raw_host_id, str) else raw_host_id
             for row in self._backend.pool_rows:
                 if row.host_id == host_id:
-                    self._results = [(row.leased_to_user, row.status, row.vps_instance_id)]
+                    self._results = [
+                        (
+                            row.leased_to_user,
+                            row.status,
+                            row.vps_instance_id,
+                            row.backend_kind,
+                            row.lima_instance_name,
+                            row.lima_disk_name,
+                            row.bare_metal_server_id,
+                        )
+                    ]
                     break
 
-        elif "select id, vps_instance_id from pool_hosts where status = 'removing'" in query_lower:
+        elif "select id, vps_instance_id" in query_lower and "status = 'removing'" in query_lower:
             # Cleanup sweep: every row still marked 'removing'.
             for row in self._backend.pool_rows:
                 if row.status == "removing":
-                    self._results.append((row.host_id, row.vps_instance_id))
+                    self._results.append(
+                        (
+                            row.host_id,
+                            row.vps_instance_id,
+                            row.backend_kind,
+                            row.lima_instance_name,
+                            row.lima_disk_name,
+                            row.bare_metal_server_id,
+                        )
+                    )
 
         elif (
             "from pool_hosts" in query_lower and "status = 'leased'" in query_lower and "leased_to_user" in query_lower
@@ -1243,6 +1282,7 @@ class FakePoolBackend:
         agent_id: str = "agent-abc123",
         host_id_str: str = "host-xyz",
         host_name: str | None = None,
+        region: str | None = None,
     ) -> FakePoolRow:
         """Add an available host to the in-memory pool."""
         row = _make_pool_row(
@@ -1255,6 +1295,7 @@ class FakePoolBackend:
             container_ssh_port=container_ssh_port,
             version=version,
             host_name=host_name,
+            region=region,
         )
         self.pool_rows.append(row)
         return row

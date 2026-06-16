@@ -9,6 +9,7 @@ from loguru import logger
 
 from imbue.concurrency_group.executor import ConcurrencyGroupExecutor
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.api.create import bootstrap_backend_for_host_creation
 from imbue.mngr.api.create import create as api_create
 from imbue.mngr.api.create import resolve_target_host
 from imbue.mngr.api.data_types import CreateAgentResult
@@ -177,10 +178,12 @@ def _create_agent(
     created from the snapshot then git-worktree off that path instead of
     re-uploading the source.
 
-    If the agent is being placed on an existing host built from a snapshot
-    (``existing_host`` is set and ``config.snapshot`` is set), source from
+    If the agent is being placed on a host built from a snapshot, source from
     that host's ``/code`` via git-worktree -- avoiding network roundtrips
-    to upload code that's already there.
+    to upload code that's already there. When no ``existing_host`` is passed
+    but ``config.snapshot`` is set, the host is pre-created here so the same
+    optimization applies (this is how the reducer benefits, since it doesn't
+    share a host pool with the mappers).
     """
     if existing_host is not None:
         target_host: OnlineHostInterface | NewHostOptions = existing_host
@@ -193,12 +196,21 @@ def _create_agent(
         target_host = config.source_host
     else:
         build = _resolve_build_options(config, mngr_ctx)
-        target_host = NewHostOptions(
+        new_host_options = NewHostOptions(
             provider=config.provider_name,
             name=host_name,
             build=build,
             environment=_build_host_environment(config),
         )
+        # When the host will be built from a snapshot, its /code already
+        # contains the source. Pre-create the host so the GIT_WORKTREE branch
+        # below sources from it instead of re-uploading from the laptop. The
+        # snapshotter is excluded since it's the agent that populates /code.
+        if config.snapshot is not None and kind is not AgentKind.SNAPSHOTTER:
+            existing_host = resolve_target_host(new_host_options, mngr_ctx)
+            target_host = existing_host
+        else:
+            target_host = new_host_options
 
     if kind is AgentKind.SNAPSHOTTER:
         source_location = HostLocation(host=config.source_host, path=config.source_dir)
@@ -387,13 +399,13 @@ def launch_all_mappers(
 
     launch_config = config
     if config.snapshot is None:
-        # Pass is_for_host_creation=True so a backend with one-time bootstrap
-        # (Modal's per-user environment) creates that resource here. The
-        # snapshotter and every test agent that follows is a host creation,
-        # so this is the moment to allow bootstrap; without it, snapshotting
-        # against a fresh Modal account aborts with ProviderEmptyError before
-        # any host is created.
-        provider = get_provider_instance(config.provider_name, mngr_ctx, is_for_host_creation=True)
+        # Bootstrap any one-time backend resources (Modal's per-user environment)
+        # before building the provider instance. The snapshotter and every test
+        # agent that follows is a host creation, so this is the moment to allow
+        # bootstrap; without it, snapshotting against a fresh Modal account
+        # aborts with ProviderEmptyError before any host is created.
+        bootstrap_backend_for_host_creation(config.provider_name, mngr_ctx)
+        provider = get_provider_instance(config.provider_name, mngr_ctx)
         if provider.supports_snapshots:
             try:
                 snapshot_name = _create_snapshot_host(recipe.name, config, mngr_ctx, run_name)
