@@ -8,9 +8,14 @@ formatting, mngr argv assembly, agent parsing, and recipient selection).
 """
 
 import json
+import os
 import random
 import re
-from collections.abc import Mapping, Sequence
+import signal
+import subprocess
+import sys
+import time
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final, NamedTuple
 
 from loguru import logger
@@ -26,6 +31,20 @@ DEFAULT_ERROR_PATTERN: Final[re.Pattern[str]] = re.compile(
 # traceback line cannot blow up the message sent to the agent.
 MAX_ALERT_LINE_LENGTH: Final[int] = 500
 
+# Poll cadence, matching the bootstrap service manager's interval (REQ-SPAWN-2).
+POLL_INTERVAL_SECONDS: Final[int] = 5
+
+# The watcher's own service window, skipped while scanning so its alert text
+# (which contains "error") does not re-trigger a match (REQ-SCAN-2).
+OWN_WINDOW: Final[str] = "svc-error-watcher"
+
+# mngr refuses to message an agent in this lifecycle state (REQ-NOTIFY-3).
+STOPPED_STATE: Final[str] = "STOPPED"
+
+# Hard timeout for any single tmux/mngr invocation so a hung command cannot
+# wedge the poll loop.
+_COMMAND_TIMEOUT_SECONDS: Final[float] = 30.0
+
 
 class AgentSummary(NamedTuple):
     """One agent from `mngr list --format json`, reduced to the fields we need.
@@ -36,6 +55,19 @@ class AgentSummary(NamedTuple):
 
     name: str
     state: str
+
+
+class CommandResult(NamedTuple):
+    """The outcome of running a single tmux or mngr command."""
+
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+# Runs an argv and returns its outcome. main() uses the subprocess-backed
+# default; tests inject a fake so a full poll is exercised without real tmux.
+CommandRunner = Callable[[Sequence[str]], CommandResult]
 
 
 def match_lines(text: str, pattern: re.Pattern[str]) -> list[str]:
@@ -142,6 +174,167 @@ def choose_recipient(names: Sequence[str], rng: random.Random) -> str | None:
     return rng.choice(list(names))
 
 
+def select_messageable_names(agents: Sequence[AgentSummary]) -> list[str]:
+    """Return the names of agents that can currently receive a message.
+
+    mngr refuses to message a STOPPED agent, so STOPPED agents are excluded
+    (REQ-NOTIFY-3); every other lifecycle state is treated as messageable. The
+    watcher never starts a stopped agent just to alert it.
+    """
+    return [agent.name for agent in agents if agent.state != STOPPED_STATE]
+
+
+def compile_error_pattern(override: str | None) -> re.Pattern[str]:
+    """Compile the match pattern, honoring an optional override (REQ-MATCH-4).
+
+    Falls back to DEFAULT_ERROR_PATTERN when `override` is empty or not a valid
+    regular expression, warning rather than crashing on a bad override.
+    """
+    if not override:
+        return DEFAULT_ERROR_PATTERN
+    try:
+        return re.compile(override, re.IGNORECASE)
+    except re.error as e:
+        logger.warning("Ignoring invalid ERROR_WATCHER_PATTERN {!r}: {}", override, e)
+        return DEFAULT_ERROR_PATTERN
+
+
+def _default_command_runner(command: Sequence[str]) -> CommandResult:
+    try:
+        completed = subprocess.run(
+            list(command),
+            capture_output=True,
+            text=True,
+            timeout=_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        # Never raise: a hung or missing tmux/mngr must surface as a non-zero
+        # result the caller logs and skips, not a crash of the poll loop.
+        return CommandResult(returncode=1, stdout="", stderr=str(e))
+    return CommandResult(
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
+def get_session_name(run: CommandRunner) -> str:
+    """Return the watcher's own tmux session name, or "" if it cannot be determined."""
+    result = run(["tmux", "display-message", "-p", "#S"])
+    if result.returncode != 0:
+        logger.warning(
+            "Could not determine tmux session name: {}", result.stderr.strip()
+        )
+        return ""
+    return result.stdout.strip()
+
+
+def list_windows(run: CommandRunner, session: str) -> list[str]:
+    """Return every window name in `session` (empty list on failure, REQ-SCAN-1)."""
+    result = run(["tmux", "list-windows", "-t", session, "-F", "#{window_name}"])
+    if result.returncode != 0:
+        logger.warning(
+            "Could not list windows for session {}: {}", session, result.stderr.strip()
+        )
+        return []
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def capture_window(run: CommandRunner, session: str, window: str) -> str:
+    """Return the visible pane text of `window` ("" if it could not be captured).
+
+    A window can be destroyed between enumeration and capture; that is tolerated
+    by returning empty text rather than raising (REQ-SCAN-3).
+    """
+    result = run(["tmux", "capture-pane", "-t", f"{session}:{window}", "-p"])
+    if result.returncode != 0:
+        logger.debug(
+            "Could not capture window {} (it may have closed): {}",
+            window,
+            result.stderr.strip(),
+        )
+        return ""
+    return result.stdout
+
+
+def _alert_random_agent(
+    run: CommandRunner, message: str, rng: random.Random
+) -> str | None:
+    """Enumerate messageable agents and send `message` to one chosen at random.
+
+    Returns the chosen recipient, or None when enumeration failed or no agent is
+    messageable (REQ-NOTIFY-4). A failed send is logged, not raised (REQ-SPAWN-4).
+    """
+    list_result = run(build_list_command())
+    if list_result.returncode != 0:
+        logger.warning(
+            "Could not enumerate agents to alert: {}", list_result.stderr.strip()
+        )
+        return None
+    messageable_names = select_messageable_names(
+        parse_agent_summaries(list_result.stdout)
+    )
+    recipient = choose_recipient(messageable_names, rng)
+    if recipient is None:
+        logger.warning(
+            "Detected new error output but found no messageable agent to alert"
+        )
+        return None
+    send_result = run(build_message_command(recipient, message))
+    if send_result.returncode != 0:
+        logger.warning(
+            "Failed to alert agent {}: {}", recipient, send_result.stderr.strip()
+        )
+    else:
+        logger.info("Alerted agent {} about new error output", recipient)
+    return recipient
+
+
+def run_one_poll(
+    run: CommandRunner,
+    seen: dict[str, set[str]],
+    rng: random.Random,
+    pattern: re.Pattern[str],
+) -> str | None:
+    """Scan every window once and, on new matches, alert one random agent.
+
+    Returns the alerted recipient, or None when nothing new matched or no alert
+    was sent. Every tmux/mngr call goes through `run`, which never raises, so a
+    single window's failure is logged and skipped without crashing the loop
+    (REQ-SPAWN-4, REQ-SCAN-3).
+    """
+    session = get_session_name(run)
+    if not session:
+        return None
+    matches_by_window: dict[str, list[str]] = {}
+    for window in list_windows(run, session):
+        if window == OWN_WINDOW:
+            continue
+        matched_lines = match_lines(capture_window(run, session, window), pattern)
+        if not matched_lines:
+            continue
+        fresh_lines = new_matches(window, matched_lines, seen)
+        if fresh_lines:
+            matches_by_window[window] = fresh_lines
+    if not matches_by_window:
+        return None
+    return _alert_random_agent(run, format_alert(session, matches_by_window), rng)
+
+
 def main() -> None:
-    """Console-script entry point. The polling loop is wired up separately."""
-    logger.info("Starting error watcher")
+    """Run the poll loop until terminated, alerting on newly-detected errors."""
+    logger.info("Starting error watcher (polling every {}s)", POLL_INTERVAL_SECONDS)
+    runner: CommandRunner = _default_command_runner
+    pattern = compile_error_pattern(os.environ.get("ERROR_WATCHER_PATTERN"))
+    seen: dict[str, set[str]] = {}
+    rng = random.Random()
+
+    def _handle_signal(signum: int, frame: object) -> None:
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    while True:
+        run_one_poll(runner, seen, rng, pattern)
+        time.sleep(POLL_INTERVAL_SECONDS)

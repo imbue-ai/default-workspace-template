@@ -7,19 +7,25 @@ of the `list`/`message` subcommand or one of its flags fails here at merge time.
 
 import json
 import random
+from collections.abc import Mapping, Sequence
+from typing import NamedTuple
 
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from error_watcher.watcher import (
     DEFAULT_ERROR_PATTERN,
     AgentSummary,
+    CommandResult,
     build_list_command,
     build_message_command,
     choose_recipient,
+    compile_error_pattern,
     format_alert,
     match_lines,
     new_matches,
     parse_agent_summaries,
+    run_one_poll,
+    select_messageable_names,
 )
 
 
@@ -181,3 +187,208 @@ def test_choose_recipient_is_deterministic_for_a_seeded_rng() -> None:
 
 def test_choose_recipient_returns_none_for_empty_pool() -> None:
     assert choose_recipient([], random.Random(0)) is None
+
+
+def test_select_messageable_names_excludes_only_stopped_agents() -> None:
+    agents = [
+        AgentSummary(name="run", state="RUNNING"),
+        AgentSummary(name="wait", state="WAITING"),
+        AgentSummary(name="stop", state="STOPPED"),
+    ]
+    assert select_messageable_names(agents) == ["run", "wait"]
+
+
+def test_select_messageable_names_empty_when_all_stopped() -> None:
+    assert select_messageable_names([AgentSummary(name="stop", state="STOPPED")]) == []
+
+
+def test_compile_error_pattern_defaults_when_no_override() -> None:
+    assert compile_error_pattern(None) is DEFAULT_ERROR_PATTERN
+    assert compile_error_pattern("") is DEFAULT_ERROR_PATTERN
+
+
+def test_compile_error_pattern_uses_case_insensitive_override() -> None:
+    pattern = compile_error_pattern("panic")
+    assert pattern.search("PANIC: kernel")
+    assert pattern.search("everything is fine") is None
+
+
+def test_compile_error_pattern_falls_back_on_invalid_regex() -> None:
+    assert compile_error_pattern("[unclosed") is DEFAULT_ERROR_PATTERN
+
+
+# Two agents that can both receive a message; with random.Random(0) the chosen
+# recipient over ["agent-web", "agent-api"] is deterministically "agent-api".
+_TWO_MESSAGEABLE_AGENTS = json.dumps(
+    {
+        "agents": [
+            {"name": "agent-web", "type": "claude", "state": "RUNNING"},
+            {"name": "agent-api", "type": "claude", "state": "WAITING"},
+        ],
+        "errors": [],
+    }
+)
+
+_ONLY_STOPPED_AGENT = json.dumps(
+    {
+        "agents": [{"name": "agent-web", "type": "claude", "state": "STOPPED"}],
+        "errors": [],
+    }
+)
+
+
+class _FakeCommandRunner(NamedTuple):
+    """Drives run_one_poll without real tmux/mngr by mapping each argv to a canned result.
+
+    Records every `mngr message` argv in `message_sends` so a test can assert
+    exactly one batched alert was sent and to whom. Windows named in
+    `failing_windows` return a non-zero capture, simulating a window that
+    vanished mid-poll.
+    """
+
+    session: str
+    windows: tuple[str, ...]
+    pane_text_by_window: Mapping[str, str]
+    list_stdout: str
+    message_sends: list[list[str]]
+    failing_windows: frozenset[str] = frozenset()
+
+    def __call__(self, command: Sequence[str]) -> CommandResult:
+        argv = list(command)
+        if argv == ["tmux", "display-message", "-p", "#S"]:
+            return CommandResult(0, self.session + "\n", "")
+        if argv[:3] == ["tmux", "list-windows", "-t"]:
+            return CommandResult(0, "\n".join(self.windows) + "\n", "")
+        if argv[:2] == ["tmux", "capture-pane"]:
+            window = argv[argv.index("-t") + 1].split(":", 1)[1]
+            if window in self.failing_windows:
+                return CommandResult(1, "", f"can't find window: {window}")
+            return CommandResult(0, self.pane_text_by_window.get(window, ""), "")
+        if argv == ["mngr", "list", "--format", "json"]:
+            return CommandResult(0, self.list_stdout, "")
+        if argv[:2] == ["mngr", "message"]:
+            self.message_sends.append(argv)
+            return CommandResult(0, "", "")
+        return CommandResult(127, "", f"unexpected command: {argv}")
+
+
+def test_run_one_poll_sends_one_alert_for_a_new_error() -> None:
+    sends: list[list[str]] = []
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web", "svc-api", "svc-error-watcher", "bootstrap"),
+        pane_text_by_window={
+            "svc-web": "Traceback (most recent call last):\n  File ...\nException: boom",
+            "svc-api": "all healthy",
+            # The watcher's own alert text contains "error"; it must be skipped.
+            "svc-error-watcher": "Possible error/exception detected by error-watcher ...",
+            "bootstrap": "services reconciled",
+        },
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+    )
+    recipient = run_one_poll(runner, {}, random.Random(0), DEFAULT_ERROR_PATTERN)
+    assert recipient == "agent-api"
+    # Batched: a single message even though only one window matched here.
+    assert len(sends) == 1
+    argv = sends[0]
+    assert argv[:3] == ["mngr", "message", "agent-api"]
+    body = argv[-1]
+    assert "svc-web" in body
+    assert "Exception: boom" in body
+    # The own-window match must not leak into the alert (REQ-SCAN-2).
+    assert "svc-error-watcher" not in body
+
+
+def test_run_one_poll_batches_multiple_windows_into_one_message() -> None:
+    sends: list[list[str]] = []
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web", "svc-api"),
+        pane_text_by_window={
+            "svc-web": "Exception: boom",
+            "svc-api": "ERROR: kaput",
+        },
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+    )
+    run_one_poll(runner, {}, random.Random(0), DEFAULT_ERROR_PATTERN)
+    assert len(sends) == 1
+    body = sends[0][-1]
+    assert "svc-web" in body
+    assert "svc-api" in body
+
+
+def test_run_one_poll_does_not_realert_on_a_static_error() -> None:
+    sends: list[list[str]] = []
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web",),
+        pane_text_by_window={"svc-web": "Exception: boom"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+    )
+    seen: dict[str, set[str]] = {}
+    assert (
+        run_one_poll(runner, seen, random.Random(0), DEFAULT_ERROR_PATTERN)
+        == "agent-api"
+    )
+    # Same error still on screen next poll: no second alert (REQ-MATCH-3).
+    assert run_one_poll(runner, seen, random.Random(0), DEFAULT_ERROR_PATTERN) is None
+    assert len(sends) == 1
+
+
+def test_run_one_poll_skips_when_no_messageable_agent() -> None:
+    sends: list[list[str]] = []
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web",),
+        pane_text_by_window={"svc-web": "Exception: boom"},
+        list_stdout=_ONLY_STOPPED_AGENT,
+        message_sends=sends,
+    )
+    assert run_one_poll(runner, {}, random.Random(0), DEFAULT_ERROR_PATTERN) is None
+    assert sends == []
+
+
+def test_run_one_poll_tolerates_a_window_capture_failure() -> None:
+    sends: list[list[str]] = []
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-broken", "svc-web"),
+        pane_text_by_window={"svc-web": "Exception: boom"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+        failing_windows=frozenset({"svc-broken"}),
+    )
+    recipient = run_one_poll(runner, {}, random.Random(0), DEFAULT_ERROR_PATTERN)
+    assert recipient == "agent-api"
+    assert len(sends) == 1
+    assert "svc-web" in sends[0][-1]
+    assert "svc-broken" not in sends[0][-1]
+
+
+def test_run_one_poll_ignores_errors_in_its_own_window() -> None:
+    sends: list[list[str]] = []
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-error-watcher",),
+        pane_text_by_window={"svc-error-watcher": "Exception: boom in my own alert"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+    )
+    assert run_one_poll(runner, {}, random.Random(0), DEFAULT_ERROR_PATTERN) is None
+    assert sends == []
+
+
+def test_run_one_poll_returns_none_when_session_cannot_be_determined() -> None:
+    sends: list[list[str]] = []
+    runner = _FakeCommandRunner(
+        session="",
+        windows=("svc-web",),
+        pane_text_by_window={"svc-web": "Exception: boom"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+    )
+    assert run_one_poll(runner, {}, random.Random(0), DEFAULT_ERROR_PATTERN) is None
+    assert sends == []
