@@ -62,8 +62,8 @@ Produce a short outline with:
   - `[script]` -- deterministic; lives in `scripts/`.
   - `[ai-script]` -- model judgement that is a fixed part of the flow;
     scripted as a model call (see spec-summary's "Scripting a model step"
-    and `.agents/shared/references/calling-claude.md` for picking the
-    path). **This is the default for any model-performed step** -- the
+    and the `use-ai-integration` skill for picking the path). **This is the
+    default for any model-performed step** -- the
     re-run test puts a step here, not in prose, whenever the same
     prompt/criteria run every time with only the data varying.
   - `[prose]` -- executor meta-work only: steps that need the agent in the

@@ -87,11 +87,11 @@ genuinely sits between two scripted sections.
 
 ### Scripting a model step (`[ai-script]`)
 
-Script the step as a Claude call following
-[calling-claude.md](calling-claude.md) -- don't default to one mechanism. It
-picks the path by agency and whether `ANTHROPIC_API_KEY` is set (keyed
-non-agentic -> `litellm`; keyless -> the copyable `claude_p.py` helper;
-agentic -> `claude_p_task`) and covers surfacing the cost to the user.
+Script the step as a Claude call following the **`use-ai-integration`** skill
+-- don't default to one mechanism. It picks the path by agency and whether
+`ANTHROPIC_API_KEY` is set (keyed non-agentic -> `litellm`; keyless -> the
+copyable `claude_p.py` helper; agentic -> `claude_p_task`) and covers
+surfacing the cost to the user.
 
 Packaging: `run.py` stays an ordinary self-contained PEP 723 script. For the
 keyless / agentic paths, copy `claude_p.py` (from the `use-ai-integration`
