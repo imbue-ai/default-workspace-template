@@ -75,6 +75,6 @@ replies via `mngr message` and you resume. For terminal statuses, the run ends.
 
 - Do not run `mngr start --restart system-services`, restart
   `svc-system_interface`, or `npm run build` against the served tree. Revealing
-  the change is the lead's job, after merge -- the lead's single restart rebuilds
-  the bundle and reloads any open browser. Your job ends at a committed,
-  verified branch.
+  the change is the lead's job, after merge -- the lead rebuilds the bundle and
+  reloads any open browser (frontend) or restarts the service (backend). Your job
+  ends at a committed, verified branch.

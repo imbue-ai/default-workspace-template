@@ -1,23 +1,13 @@
 /**
  * Reloading the whole system interface into a freshly-built bundle.
  *
- * The backend stamps each served page with a build id (`<meta
- * name="system-interface-build-id">`) and exposes the current build id at
- * `/api/build-id`. After a reveal restarts the service and rebuilds the bundle,
- * the websocket drops and reconnects; on reconnect the frontend compares the id
- * it booted with against the server's current id and, if they differ, reloads
- * the top-level page to pick up the new hashed assets. This is the in-app
- * backstop for the desktop client's health-driven recovery flow, and the only
- * reload path when the UI is viewed in a plain browser.
+ * The frontend-reveal step of the `update-system-interface` flow rebuilds the
+ * (gitignored) static bundle and then broadcasts a `reload_system_interface`
+ * layout op. The dockview shell handles that op by calling `reloadInterface()`,
+ * which reloads the top-level page so the browser picks up the new hashed
+ * assets (and any change to the shell chrome itself), transitively reloading
+ * every child chat iframe.
  */
-
-/** True iff the page should reload: both ids are known and they differ. */
-export function shouldReloadForBuild(loadedBuildId: string, currentBuildId: string): boolean {
-  if (!loadedBuildId || !currentBuildId) {
-    return false;
-  }
-  return loadedBuildId !== currentBuildId;
-}
 
 /** Reload the top-level page that hosts the system interface.
  *

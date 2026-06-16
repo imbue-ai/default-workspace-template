@@ -35,7 +35,8 @@ separate place to work.
 2. The **worker** implements + builds + tests it on its own branch (`mngr/<name>`),
    then reports `done`.
 3. You **merge** the worker's branch on a clean `done`.
-4. You **reveal** the change with a single restart.
+4. You **reveal** the change. A frontend change is rebuilt + reloaded in place;
+   a backend change is a service restart.
 
 ## 1-2. Delegate to a worker
 
@@ -71,27 +72,39 @@ it.
 
 ## 4. Reveal the change (after merge)
 
-Run a single command:
+Reveal depends on what changed. The running server serves the frontend bundle
+from `static/` on disk, so a frontend change needs no restart -- just a rebuild
+and a browser reload. A backend (`.py`) change needs the server process to
+restart.
+
+**Frontend change** (anything under `frontend/src`): rebuild the gitignored
+bundle, then tell open browsers to reload into it:
+
+```bash
+( cd apps/system_interface/frontend && npm run build )
+python3 .agents/skills/update-system-interface/scripts/reload_system_interface.py
+```
+
+The reload script broadcasts a `reload_system_interface` op over the websocket;
+the dockview shell responds by reloading the whole top-level page (picking up the
+new hashed assets and every child chat iframe). With no browser connected it's a
+harmless no-op.
+
+**Backend change** (anything under `imbue/`): restart the services agent so the
+editable-installed `system-interface` backend re-imports the merged `.py`:
 
 ```bash
 mngr start --restart system-services
 ```
 
-This cleanly restarts the services agent (its tmux session -> bootstrap -> all
-services). On startup the system_interface service rebuilds the frontend bundle
-**if** `frontend/src` (or the lockfile) changed since the last build, and the
-editable-installed `system-interface` backend picks up the merged `.py` source.
-Any browser the user has open reloads itself into the new bundle once its
-connection re-establishes (an in-page build-id check, see the
-`update-system-interface-worker` sub-skill and `apps/system_interface/README.md`),
-so there is no separate build-or-reload step to run.
-
 This does not kill you: you (a chat agent) and the services agent are distinct
-agents sharing one work_dir.
+agents sharing one work_dir. (If a change touches both, do both: rebuild + reload
+for the frontend, restart for the backend.)
 
 `scripts/layout.py refresh` (the `manage-layout` skill) is unrelated -- it only
-reloads inner iframes/panels for arranging the workspace, not for revealing a
-system-interface code change.
+reloads a single inner iframe/panel for arranging the workspace, not the
+top-level page, so it does **not** reveal a system-interface code change. Use the
+`reload_system_interface.py` script above for that.
 
 ## Why this shape
 

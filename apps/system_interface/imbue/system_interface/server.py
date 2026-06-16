@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 import queue
@@ -227,40 +226,6 @@ def _inject_hostname_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
-def _compute_build_id(index_html: str) -> str:
-    """A short content hash identifying the built frontend bundle.
-
-    The built ``index.html`` references the content-hashed asset filenames Vite
-    emits, so hashing its (pre-injection) bytes yields an id that changes iff the
-    bundle changed. The frontend reads this from the injected meta tag and, on
-    every websocket reconnect, compares it against ``/api/build-id``; a mismatch
-    means a reveal rebuilt the UI, so the page reloads itself into the new
-    bundle.
-    """
-    return hashlib.sha256(index_html.encode()).hexdigest()[:16]
-
-
-def _current_build_id() -> str:
-    index_path = STATIC_DIRECTORY / "index.html"
-    if not index_path.exists():
-        return ""
-    return _compute_build_id(index_path.read_text())
-
-
-def _inject_build_id_meta_tag(html_content: str, build_id: str) -> str:
-    meta_tag = f'<meta name="system-interface-build-id" content="{build_id}">'
-    return html_content.replace("</head>", f"{meta_tag}\n</head>")
-
-
-def _build_id_endpoint() -> JSONResponse:
-    """Return the build id of the currently-served frontend bundle.
-
-    Polled by the frontend on websocket reconnect to detect that a reveal
-    rebuilt the UI (see ``_compute_build_id``).
-    """
-    return JSONResponse({"build_id": _current_build_id()})
-
-
 def _inject_plugin_script_tags(html_content: str, plugin_basenames: list[str], root_path: str) -> str:
     script_tags = "\n".join(f'<script src="{root_path}/plugins/{basename}"></script>' for basename in plugin_basenames)
     return html_content.replace("</body>", f"{script_tags}\n</body>")
@@ -272,13 +237,9 @@ def _index(request: Request) -> Response:
         config: Config = request.app.state.config
         root_path = request.scope.get("root_path", "").rstrip("/")
         html_content = index_path.read_text()
-        # Compute the build id from the raw bundle html, before any per-request
-        # injection, so it identifies the build itself (not this response).
-        build_id = _compute_build_id(html_content)
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
-        html_content = _inject_build_id_meta_tag(html_content, build_id)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return HTMLResponse(html_content)
@@ -922,8 +883,11 @@ async def _layout_broadcast_endpoint(request: Request) -> JSONResponse:
       ``agent_manager``'s in-memory service/agent registry plus the
       persisted ``layout.json`` (for ``is_open`` flags / tree layout)
       and return a structured payload. Bypass the mutex.
-    - ``refresh``: a state-preserving broadcast that doesn't mutate
-      serialized layout. Bypasses the mutex.
+    - ``refresh`` / ``reload_system_interface``: state-preserving
+      broadcasts that don't mutate serialized layout. Bypass the mutex.
+      ``reload_system_interface`` tells connected browsers to reload the
+      whole top-level page (the frontend-reveal step of the
+      ``update-system-interface`` flow).
     - All other ops (``open``, ``focus``, ``split``, ``close``, ``move``,
       ``rename``, ``maximize``, ``restore``, ``replace-url``): acquire
       the advisory mutex first; on contention return HTTP 409 with the
@@ -1086,7 +1050,6 @@ def create_application(
     application.add_api_route("/api/agents/{agent_id}/interrupt", _interrupt_agent_endpoint, methods=["POST"])
     application.add_api_route("/api/layout", _get_layout, methods=["GET"])
     application.add_api_route("/api/layout", _save_layout, methods=["POST"])
-    application.add_api_route("/api/build-id", _build_id_endpoint, methods=["GET"])
     application.add_api_route("/api/agents/{agent_id}/screen", _get_screen_capture, methods=["GET"])
     application.add_api_route("/api/agents/{agent_id}/destroy", _destroy_agent, methods=["POST"])
     application.add_api_route("/api/agents/{agent_id}/start", _start_agent, methods=["POST"])

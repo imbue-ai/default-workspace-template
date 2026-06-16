@@ -35,35 +35,35 @@ in isolation (including Playwright against an isolated instance) and run through
 the review gates, merged, and only then revealed. See
 `.agents/skills/update-system-interface/SKILL.md`.
 
-The reveal is a single command, after merge:
+The reveal, after merge, depends on what changed. The running server serves the
+frontend bundle from `static/` on disk, so a frontend change needs no restart --
+just a rebuild and a browser reload. A backend (`.py`) change needs the server
+process to restart.
+
+**Frontend change:** rebuild the gitignored bundle, then tell open browsers to
+reload into it:
+
+```bash
+( cd apps/system_interface/frontend && npm run build )
+python3 .agents/skills/update-system-interface/scripts/reload_system_interface.py
+```
+
+The reload script POSTs a `reload_system_interface` op to the loopback-only
+`/api/layout/broadcast` endpoint, which relays a `layout_op` WebSocket message;
+the dockview shell (`DockviewWorkspace.ts`) responds by reloading the top-level
+page -- shell chrome plus every child chat iframe -- so the browser picks up the
+new hashed assets. With no browser connected it is a harmless no-op. This is
+distinct from `scripts/layout.py refresh`, which only reloads a single inner
+iframe/panel for arranging the workspace.
+
+**Backend change:** restart the services agent so the editable-installed backend
+re-imports the merged `.py` source:
 
 ```bash
 mngr start --restart system-services
 ```
 
-This restarts the services agent. On startup the `system_interface` service runs
-the repo-root `scripts/build_frontend_if_changed.py`, which rebuilds the
-(gitignored) static bundle only when `frontend/src` (or the lockfile) changed
-since the last build
--- a no-op for backend-only changes -- and the editable-installed backend picks
-up the merged `.py` source. The build helper is best-effort: if the build fails
-it logs and exits 0 so the server still starts and serves the existing bundle.
-
-Any browser the user has open reloads itself into the new bundle when its
-WebSocket reconnects after the restart:
-
-- The backend stamps each served page with a build id
-  (`<meta name="system-interface-build-id">`, a content hash of the built
-  `index.html`) and exposes the current build id at `GET /api/build-id`.
-- On reconnect the frontend (`AgentManager.ts`) fetches `/api/build-id` and
-  compares it to the id the page booted with; a mismatch means the bundle was
-  rebuilt, so it reloads the top-level page (shell + all child chat iframes).
-
-This in-app reload is the reliable, stack-independent path. In the desktop
-client there is also a health-driven recovery page that swaps in during the
-restart, but it can race a fast restart, and a plain browser has no such
-mechanism -- the build-id check covers both. It is distinct from
-`scripts/layout.py refresh`, which only reloads individual inner iframes/panels.
+(If a change touches both, do both.)
 
 ## Driving the workspace layout from an agent
 

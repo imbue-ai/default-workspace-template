@@ -45,19 +45,3 @@ export function getPrimaryAgentId(): string {
   cachedPrimaryAgentId = metaElement?.getAttribute("content") ?? "";
   return cachedPrimaryAgentId;
 }
-
-let cachedBuildId: string | null = null;
-
-/**
- * The build id of the bundle this page was served with, read from the
- * <meta name="system-interface-build-id"> tag the backend injects. Empty when
- * absent (e.g. the Vite dev server, which serves un-injected index.html).
- */
-export function getBuildId(): string {
-  if (cachedBuildId !== null) {
-    return cachedBuildId;
-  }
-  const metaElement = document.querySelector('meta[name="system-interface-build-id"]');
-  cachedBuildId = metaElement?.getAttribute("content") ?? "";
-  return cachedBuildId;
-}
