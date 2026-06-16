@@ -10,6 +10,7 @@ from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr.api.find import find_all_agents
 from imbue.mngr.api.find import find_one_agent
 from imbue.mngr.api.find import resolve_to_started_host_and_running_agent
 from imbue.mngr.api.list import ErrorBehavior
@@ -117,36 +118,6 @@ def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
     return Path.home() / ".claude"
 
 
-def read_tickets_dir_from_env_file(agent_state_dir: Path, work_dir: Path) -> Path:
-    """Resolve the TICKETS_DIR for an agent.
-
-    Priority:
-      1. ``TICKETS_DIR`` in the agent's env file at ``<agent_state_dir>/env``.
-      2. ``TICKETS_DIR`` in the system interface's own process environment.
-      3. ``<work_dir>/.tickets`` (tk's default).
-
-    Minds sets ``TICKETS_DIR=/code/runtime/tickets`` via ``host_env`` in
-    ``.mngr/settings.toml`` so tickets ride the runtime-backup branch.
-    ``host_env`` entries are forwarded to the container's process
-    environment but are *not* written into the per-agent env file, so the
-    env-file lookup alone misses them; the os.environ fallback catches
-    that case for the co-located system interface.
-    """
-    env_file = agent_state_dir / "env"
-    if env_file.exists():
-        try:
-            env_vars = parse_env_file(env_file.read_text())
-            tickets_dir = env_vars.get("TICKETS_DIR", "").strip()
-            if tickets_dir:
-                return Path(tickets_dir)
-        except OSError:
-            logger.debug("Failed to read env file: {}", env_file)
-    process_env_value = os.environ.get("TICKETS_DIR", "").strip()
-    if process_env_value:
-        return Path(process_env_value)
-    return work_dir / ".tickets"
-
-
 def discover_agents(
     provider_names: tuple[str, ...] | None = None,
     include_filters: tuple[str, ...] = (),
@@ -204,10 +175,16 @@ def send_message(agent_name: str, message: str) -> bool:
     """
     mngr_ctx, cg = _get_mngr_context()
     try:
+        matches = find_all_agents(
+            addresses=(AgentAddress(agent=AgentName(agent_name)),),
+            filter_all=False,
+            target_state=None,
+            mngr_ctx=mngr_ctx,
+        )
         result = send_message_to_agents(
             mngr_ctx=mngr_ctx,
             message_content=message,
-            include_filters=(f'(name == "{agent_name}" || id == "{agent_name}")',),
+            agents_to_message=matches,
             error_behavior=ErrorBehavior.CONTINUE,
             is_start_desired=True,
         )
