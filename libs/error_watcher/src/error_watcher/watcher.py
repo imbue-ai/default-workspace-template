@@ -281,12 +281,17 @@ def capture_window(run: CommandRunner, session: str, window: str) -> str:
 def _alert_random_agent(
     run: CommandRunner, message: str, rng: random.Random
 ) -> str | None:
-    """Enumerate messageable agents and send `message` to one chosen at random.
+    """Enumerate messageable agents and send `message` to one, with fallback.
 
-    Returns the recipient only when the message was actually delivered. Returns
-    None when enumeration failed, no agent is messageable (REQ-NOTIFY-4), or the
-    send itself failed -- so the caller does not record the error as alerted and
-    retries it on a later poll. A failed send is logged, not raised (REQ-SPAWN-4).
+    Recipients are tried in uniformly random order (REQ-NOTIFY-5): the first pick
+    is uniform across the pool, and on a failed send we fall back to the next
+    agent so one bad pick -- e.g. an agent that stopped between `mngr list` and
+    `mngr message` -- does not drop the alert while other agents are still
+    reachable. Returns the recipient that actually received the message, or None
+    when enumeration failed, no agent is messageable (REQ-NOTIFY-4), or every
+    candidate's send failed -- so the caller does not record the error as alerted
+    and retries it on a later poll. A failed send is logged, not raised
+    (REQ-SPAWN-4).
     """
     list_result = run(build_list_command())
     if list_result.returncode != 0:
@@ -294,23 +299,28 @@ def _alert_random_agent(
             "Could not enumerate agents to alert: {}", list_result.stderr.strip()
         )
         return None
-    messageable_names = select_messageable_names(
-        parse_agent_summaries(list_result.stdout)
-    )
-    recipient = choose_recipient(messageable_names, rng)
-    if recipient is None:
+    remaining = select_messageable_names(parse_agent_summaries(list_result.stdout))
+    if not remaining:
         logger.warning(
             "Detected new error output but found no messageable agent to alert"
         )
         return None
-    send_result = run(build_message_command(recipient, message))
-    if send_result.returncode != 0:
+    while remaining:
+        recipient = choose_recipient(remaining, rng)
+        if recipient is None:
+            break
+        remaining.remove(recipient)
+        send_result = run(build_message_command(recipient, message))
+        if send_result.returncode == 0:
+            logger.info("Alerted agent {} about new error output", recipient)
+            return recipient
         logger.warning(
             "Failed to alert agent {}: {}", recipient, send_result.stderr.strip()
         )
-        return None
-    logger.info("Alerted agent {} about new error output", recipient)
-    return recipient
+    logger.warning(
+        "Detected new error output but every messageable agent failed to receive the alert"
+    )
+    return None
 
 
 def run_one_poll(
