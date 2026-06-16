@@ -20,3 +20,7 @@ giving up after one failed send.
 - Alert recipients are now restricted to `type: claude` agents (in addition to
 excluding `STOPPED` ones), so the non-interactive system-services agent is never
 chosen as a recipient.
+
+- Dedup now ignores volatile numbers in a matched line (timestamps, counters,
+numeric ids collapse to `#`), so an error line that only changes its timestamp
+each poll is reported once instead of triggering a fresh alert every 5 seconds.
