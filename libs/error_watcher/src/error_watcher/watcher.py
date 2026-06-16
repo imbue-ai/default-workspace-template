@@ -42,8 +42,17 @@ POLL_INTERVAL_SECONDS: Final[int] = 5
 # re-enable the feedback loop.
 OWN_WINDOW: Final[str] = "svc-error-watcher"
 
-# mngr refuses to message an agent in this lifecycle state (REQ-NOTIFY-3).
+# mngr refuses to message an agent in this lifecycle state (REQ-NOTIFY-3): its
+# send path (vendor/mngr/.../api/message.py) rejects only STOPPED agents, since
+# only they lack a tmux session to receive the message.
 STOPPED_STATE: Final[str] = "STOPPED"
+
+# Only `type: claude` agents are messaged. This mirrors system_interface's
+# list_claude_agent_names (apps/system_interface/.../claude_auth.py), which
+# filters to claude agents to exclude the `main`-type system-services agent --
+# that agent has no interactive claude process and no human watching its inbox,
+# so alerting it would be a wasted nudge.
+CLAUDE_AGENT_TYPE: Final[str] = "claude"
 
 # Hard timeout for any single tmux/mngr invocation so a hung command cannot
 # wedge the poll loop.
@@ -54,11 +63,13 @@ class AgentSummary(NamedTuple):
     """One agent from `mngr list --format json`, reduced to the fields we need.
 
     `state` is the agent's lifecycle state string (e.g. RUNNING, WAITING,
-    STOPPED); the messageable filter keys off it.
+    STOPPED) and `agent_type` is its type (e.g. claude, main); the messageable
+    filter keys off both.
     """
 
     name: str
     state: str
+    agent_type: str
 
 
 class CommandResult(NamedTuple):
@@ -152,10 +163,11 @@ def build_message_command(agent_name: str, message: str) -> list[str]:
 def parse_agent_summaries(stdout: str) -> list[AgentSummary]:
     """Parse `mngr list --format json` output into name/state summaries.
 
-    The CLI emits `{"agents": [{"name": ..., "state": ..., ...}], "errors": [...]}`.
+    The CLI emits `{"agents": [{"name": ..., "state": ..., "type": ...}], ...}`.
     Tolerant by design (REQ-SPAWN-4): malformed or unexpected output yields an
     empty list plus a warning so the poll loop never crashes. Agents missing a
-    usable name or state are skipped, since the messageable filter needs both.
+    usable name or state are skipped; a missing or non-string `type` becomes ""
+    (and is later filtered out as non-claude rather than messaged blindly).
     """
     try:
         payload = json.loads(stdout)
@@ -183,8 +195,12 @@ def parse_agent_summaries(stdout: str) -> list[AgentSummary]:
             continue
         name = agent.get("name")
         state = agent.get("state")
+        agent_type = agent.get("type")
         if isinstance(name, str) and name and isinstance(state, str) and state:
-            summaries.append(AgentSummary(name=name, state=state))
+            type_str = agent_type if isinstance(agent_type, str) else ""
+            summaries.append(
+                AgentSummary(name=name, state=state, agent_type=type_str)
+            )
     return summaries
 
 
@@ -196,13 +212,26 @@ def choose_recipient(names: Sequence[str], rng: random.Random) -> str | None:
 
 
 def select_messageable_names(agents: Sequence[AgentSummary]) -> list[str]:
-    """Return the names of agents that can currently receive a message.
+    """Return the names of agents that can currently receive a useful message.
 
-    mngr refuses to message a STOPPED agent, so STOPPED agents are excluded
-    (REQ-NOTIFY-3); every other lifecycle state is treated as messageable. The
-    watcher never starts a stopped agent just to alert it.
+    Two filters, aligned with mngr's real deliverability and the cited
+    reference (REQ-NOTIFY-3):
+
+    - STOPPED agents are excluded -- mngr's send path refuses only STOPPED
+      agents (they have no tmux session), and the watcher never starts a
+      stopped agent just to alert it. Other lifecycle states are left in: mngr
+      itself attempts delivery to them, and a transient failure is now handled
+      by the in-poll fallback across the rest of the pool rather than by
+      pre-filtering states the spec does not call out.
+    - Only `type: claude` agents are kept, mirroring
+      list_claude_agent_names, so the non-interactive `main`-type
+      system-services agent is never picked as a recipient.
     """
-    return [agent.name for agent in agents if agent.state != STOPPED_STATE]
+    return [
+        agent.name
+        for agent in agents
+        if agent.state != STOPPED_STATE and agent.agent_type == CLAUDE_AGENT_TYPE
+    ]
 
 
 def compile_error_pattern(override: str | None) -> re.Pattern[str]:

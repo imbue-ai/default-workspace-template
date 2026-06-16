@@ -21,11 +21,17 @@ On a fixed 5-second cadence (matching the bootstrap manager) the watcher:
 4. For genuinely new matches only (it remembers what it has already alerted on,
    per window), sends a single batched message naming each offending window and
    its matching line(s) to one randomly selected messageable mngr agent
-   (`mngr list --format json` to enumerate, `mngr message` to send).
+   (`mngr list --format json` to enumerate, `mngr message` to send). Only
+   `type: claude` agents that are not `STOPPED` are eligible -- this mirrors
+   mngr's own deliverability rule and excludes the non-interactive
+   system-services agent. If the chosen agent cannot receive the message, the
+   watcher falls back to the other eligible agents within the same poll.
 
 If multiple windows error in the same poll, one batched message covers them
-all. If no agent can currently be messaged (every agent is `STOPPED`), the
-watcher logs the match and skips sending without erroring. The match pattern
+all. If no agent can currently be messaged, the watcher logs the match and
+skips sending without erroring -- and, because it only records an error as
+reported once an alert is actually delivered, the still-visible error is
+re-alerted on a later poll once an agent becomes reachable. The match pattern
 can be overridden via the `ERROR_WATCHER_PATTERN` environment variable.
 
 ## Non-goals

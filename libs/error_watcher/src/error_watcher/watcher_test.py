@@ -151,8 +151,8 @@ def test_parse_agent_summaries_reads_name_and_state() -> None:
         }
     )
     assert parse_agent_summaries(payload) == [
-        AgentSummary(name="agent-web", state="RUNNING"),
-        AgentSummary(name="agent-api", state="STOPPED"),
+        AgentSummary(name="agent-web", state="RUNNING", agent_type="claude"),
+        AgentSummary(name="agent-api", state="STOPPED", agent_type="claude"),
     ]
 
 
@@ -167,8 +167,25 @@ def test_parse_agent_summaries_skips_agents_missing_name_or_state() -> None:
             ]
         }
     )
+    # A missing `type` becomes "" rather than dropping the agent; the type
+    # filter is applied later by select_messageable_names.
     assert parse_agent_summaries(payload) == [
-        AgentSummary(name="agent-web", state="RUNNING")
+        AgentSummary(name="agent-web", state="RUNNING", agent_type="")
+    ]
+
+
+def test_parse_agent_summaries_reads_agent_type() -> None:
+    payload = json.dumps(
+        {
+            "agents": [
+                {"name": "agent-web", "type": "claude", "state": "RUNNING"},
+                {"name": "system-services", "type": "main", "state": "RUNNING"},
+            ]
+        }
+    )
+    assert parse_agent_summaries(payload) == [
+        AgentSummary(name="agent-web", state="RUNNING", agent_type="claude"),
+        AgentSummary(name="system-services", state="RUNNING", agent_type="main"),
     ]
 
 
@@ -193,17 +210,32 @@ def test_choose_recipient_returns_none_for_empty_pool() -> None:
     assert choose_recipient([], random.Random(0)) is None
 
 
-def test_select_messageable_names_excludes_only_stopped_agents() -> None:
+def test_select_messageable_names_excludes_stopped_claude_agents() -> None:
     agents = [
-        AgentSummary(name="run", state="RUNNING"),
-        AgentSummary(name="wait", state="WAITING"),
-        AgentSummary(name="stop", state="STOPPED"),
+        AgentSummary(name="run", state="RUNNING", agent_type="claude"),
+        AgentSummary(name="wait", state="WAITING", agent_type="claude"),
+        AgentSummary(name="stop", state="STOPPED", agent_type="claude"),
     ]
     assert select_messageable_names(agents) == ["run", "wait"]
 
 
+def test_select_messageable_names_excludes_non_claude_agents() -> None:
+    # The `main`-type system-services agent has no interactive claude inbox, so
+    # it must never be chosen even when running (REQ-NOTIFY-3).
+    agents = [
+        AgentSummary(name="agent-web", state="RUNNING", agent_type="claude"),
+        AgentSummary(name="system-services", state="RUNNING", agent_type="main"),
+    ]
+    assert select_messageable_names(agents) == ["agent-web"]
+
+
 def test_select_messageable_names_empty_when_all_stopped() -> None:
-    assert select_messageable_names([AgentSummary(name="stop", state="STOPPED")]) == []
+    assert (
+        select_messageable_names(
+            [AgentSummary(name="stop", state="STOPPED", agent_type="claude")]
+        )
+        == []
+    )
 
 
 def test_compile_error_pattern_defaults_when_no_override() -> None:
@@ -243,6 +275,18 @@ _ONE_MESSAGEABLE_AGENT = json.dumps(
 _ONLY_STOPPED_AGENT = json.dumps(
     {
         "agents": [{"name": "agent-web", "type": "claude", "state": "STOPPED"}],
+        "errors": [],
+    }
+)
+
+# One messageable claude agent plus a running `main`-type system-services agent
+# that must never be chosen as a recipient.
+_CLAUDE_AND_MAIN_AGENTS = json.dumps(
+    {
+        "agents": [
+            {"name": "system-services", "type": "main", "state": "RUNNING"},
+            {"name": "agent-claude", "type": "claude", "state": "RUNNING"},
+        ],
         "errors": [],
     }
 )
@@ -476,6 +520,24 @@ def test_run_one_poll_tries_every_agent_before_giving_up() -> None:
     assert run_one_poll(runner, seen, random.Random(0), DEFAULT_ERROR_PATTERN) is None
     assert sorted(argv[2] for argv in sends) == ["agent-api", "agent-web"]
     assert seen == {}
+
+
+def test_run_one_poll_never_messages_the_non_claude_system_agent() -> None:
+    # Only the claude agent is a valid recipient; the running `main`-type
+    # system-services agent must be skipped (REQ-NOTIFY-3).
+    sends: list[list[str]] = []
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web",),
+        pane_text_by_window={"svc-web": "Exception: boom"},
+        list_stdout=_CLAUDE_AND_MAIN_AGENTS,
+        message_sends=sends,
+    )
+    assert (
+        run_one_poll(runner, {}, random.Random(0), DEFAULT_ERROR_PATTERN)
+        == "agent-claude"
+    )
+    assert [argv[2] for argv in sends] == ["agent-claude"]
 
 
 def test_run_one_poll_tolerates_a_window_capture_failure() -> None:
