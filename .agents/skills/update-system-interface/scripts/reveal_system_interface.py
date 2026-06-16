@@ -309,7 +309,6 @@ def wait_healthy(
 
 def _preflight_ok(
     repo_root: Path,
-    base_url: str,
     http: HttpClient,
     spawner: Spawner,
     sleeper: Callable[[float], None],
@@ -379,7 +378,7 @@ def _apply_reveal(
             runner, ["npm", "run", "build"], repo_root / FRONTEND_DIR, "npm run build"
         )
     if changes.backend:
-        if not _preflight_ok(repo_root, base_url, http, spawner, sleeper):
+        if not _preflight_ok(repo_root, http, spawner, sleeper):
             raise RevealFailed(
                 "merged backend failed to boot in a pre-flight check; live service not restarted"
             )
