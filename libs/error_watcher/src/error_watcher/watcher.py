@@ -58,6 +58,15 @@ CLAUDE_AGENT_TYPE: Final[str] = "claude"
 # wedge the poll loop.
 _COMMAND_TIMEOUT_SECONDS: Final[float] = 30.0
 
+# Upper bound on the number of dedup keys retained per window. This is a memory
+# ceiling for the permanent process (finding #5): with number-insensitive dedup
+# keys (see `dedup_key`) a window rarely accumulates many distinct keys, so this
+# is reached only by a window emitting thousands of structurally-distinct error
+# lines. When exceeded, arbitrary excess keys are dropped; the worst case is
+# re-alerting a previously-seen error, never a crash. Window keys that no longer
+# exist are pruned separately (see `prune_seen_windows`).
+MAX_SEEN_KEYS_PER_WINDOW: Final[int] = 2048
+
 
 class AgentSummary(NamedTuple):
     """One agent from `mngr list --format json`, reduced to the fields we need.
@@ -141,6 +150,21 @@ def mark_alerted(
     for window, lines in matches_by_window.items():
         already_alerted = seen.setdefault(window, set())
         already_alerted.update(dedup_key(line) for line in lines)
+        while len(already_alerted) > MAX_SEEN_KEYS_PER_WINDOW:
+            already_alerted.pop()
+
+
+def prune_seen_windows(seen: dict[str, set[str]], live_windows: Sequence[str]) -> None:
+    """Drop dedup state for windows that no longer exist, bounding `seen` growth.
+
+    In a permanent process windows are created and destroyed over time; without
+    eviction their dedup sets would accumulate forever (finding #5). Keys absent
+    from `live_windows` are removed. The caller must skip this when window
+    enumeration failed (an empty list there would wrongly wipe all state), since
+    a real session always has at least the watcher's own window.
+    """
+    for gone in [window for window in seen if window not in set(live_windows)]:
+        del seen[gone]
 
 
 def _truncate_line(line: str) -> str:
@@ -384,8 +408,15 @@ def run_one_poll(
     session = get_session_name(run)
     if not session:
         return None
+    windows = list_windows(run, session)
+    # Forget dedup state for windows that have since closed, so `seen` does not
+    # grow without bound in this permanent process (finding #5). Skipped when
+    # enumeration came back empty, which signals a failed list rather than a
+    # genuinely window-less session (the watcher's own window always exists).
+    if windows:
+        prune_seen_windows(seen, windows)
     matches_by_window: dict[str, list[str]] = {}
-    for window in list_windows(run, session):
+    for window in windows:
         if window == OWN_WINDOW:
             continue
         matched_lines = match_lines(capture_window(run, session, window), pattern)

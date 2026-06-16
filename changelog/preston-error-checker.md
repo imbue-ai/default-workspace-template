@@ -24,3 +24,7 @@ chosen as a recipient.
 - Dedup now ignores volatile numbers in a matched line (timestamps, counters,
 numeric ids collapse to `#`), so an error line that only changes its timestamp
 each poll is reported once instead of triggering a fresh alert every 5 seconds.
+
+- The watcher's in-memory dedup state is now bounded: it forgets the state for
+windows that have closed and caps the keys kept per window, so the long-lived
+service does not grow its memory without limit.

@@ -14,6 +14,7 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from error_watcher.watcher import (
     DEFAULT_ERROR_PATTERN,
+    MAX_SEEN_KEYS_PER_WINDOW,
     AgentSummary,
     CommandResult,
     build_list_command,
@@ -25,6 +26,7 @@ from error_watcher.watcher import (
     mark_alerted,
     match_lines,
     parse_agent_summaries,
+    prune_seen_windows,
     run_one_poll,
     select_messageable_names,
     unseen_matches,
@@ -132,6 +134,30 @@ def test_unseen_matches_keeps_errors_that_differ_in_text() -> None:
     assert unseen_matches("svc-web", ["[12:00:10] ERROR kaboom"], seen) == [
         "[12:00:10] ERROR kaboom"
     ]
+
+
+def test_mark_alerted_caps_keys_per_window() -> None:
+    seen: dict[str, set[str]] = {}
+    # Each line normalizes to a distinct key ("err-#"), so the set would grow
+    # past the cap without bounding.
+    lines = [f"error {i}" for i in range(MAX_SEEN_KEYS_PER_WINDOW + 50)]
+    mark_alerted({"svc-web": lines}, seen)
+    assert len(seen["svc-web"]) <= MAX_SEEN_KEYS_PER_WINDOW
+
+
+def test_prune_seen_windows_drops_state_for_closed_windows() -> None:
+    seen: dict[str, set[str]] = {
+        "svc-web": {"error #"},
+        "svc-gone": {"error #"},
+    }
+    prune_seen_windows(seen, ["svc-web", "svc-error-watcher"])
+    assert set(seen) == {"svc-web"}
+
+
+def test_prune_seen_windows_keeps_all_when_nothing_closed() -> None:
+    seen: dict[str, set[str]] = {"svc-web": {"error #"}}
+    prune_seen_windows(seen, ["svc-web", "svc-api"])
+    assert set(seen) == {"svc-web"}
 
 
 def test_format_alert_includes_session_window_and_line() -> None:
@@ -582,6 +608,32 @@ def test_run_one_poll_does_not_realert_on_a_re_timestamped_error() -> None:
     )
     assert run_one_poll(second, seen, random.Random(0), DEFAULT_ERROR_PATTERN) is None
     assert len(sends) == 1
+
+
+def test_run_one_poll_forgets_dedup_state_for_closed_windows() -> None:
+    # A window that closes between polls must not leave its dedup set behind, so
+    # `seen` cannot grow without bound in the permanent process (finding #5).
+    sends: list[list[str]] = []
+    seen: dict[str, set[str]] = {}
+    first = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web", "svc-api"),
+        pane_text_by_window={"svc-web": "Exception: boom", "svc-api": "all good"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+    )
+    run_one_poll(first, seen, random.Random(0), DEFAULT_ERROR_PATTERN)
+    assert "svc-web" in seen
+    # svc-web is gone in the next poll; its dedup state must be pruned.
+    second = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-api",),
+        pane_text_by_window={"svc-api": "all good"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+    )
+    run_one_poll(second, seen, random.Random(0), DEFAULT_ERROR_PATTERN)
+    assert "svc-web" not in seen
 
 
 def test_run_one_poll_never_messages_the_non_claude_system_agent() -> None:
