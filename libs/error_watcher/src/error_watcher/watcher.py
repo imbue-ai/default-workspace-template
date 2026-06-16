@@ -58,6 +58,12 @@ CLAUDE_AGENT_TYPE: Final[str] = "claude"
 # wedge the poll loop.
 _COMMAND_TIMEOUT_SECONDS: Final[float] = 30.0
 
+# Synthetic returncode used when the command could not be run at all (missing
+# binary, timeout, OS error) -- i.e. no real process exit code exists. Kept
+# distinct from any real exit status (which are >= 0) so a runner-level failure
+# is never confused with a command that genuinely exited 1.
+RUNNER_FAILURE_RETURNCODE: Final[int] = -1
+
 # Upper bound on the number of dedup keys retained per window. This is a memory
 # ceiling for the permanent process (finding #5): with number-insensitive dedup
 # keys (see `dedup_key`) a window rarely accumulates many distinct keys, so this
@@ -289,18 +295,34 @@ def compile_error_pattern(override: str | None) -> re.Pattern[str]:
         return DEFAULT_ERROR_PATTERN
 
 
-def _default_command_runner(command: Sequence[str]) -> CommandResult:
+def _default_command_runner(
+    command: Sequence[str], timeout: float = _COMMAND_TIMEOUT_SECONDS
+) -> CommandResult:
     try:
         completed = subprocess.run(
             list(command),
             capture_output=True,
             text=True,
-            timeout=_COMMAND_TIMEOUT_SECONDS,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        # Never raise: a hung tmux/mngr must surface as a runner failure the
+        # caller logs and skips, not a crash of the poll loop. Preserve whatever
+        # the command managed to emit before the timeout so a caller that can
+        # use a partial payload is not robbed of it (finding #6).
+        partial_stdout = e.stdout if isinstance(e.stdout, str) else ""
+        partial_stderr = e.stderr if isinstance(e.stderr, str) else ""
+        return CommandResult(
+            returncode=RUNNER_FAILURE_RETURNCODE,
+            stdout=partial_stdout,
+            stderr=partial_stderr or f"timed out after {timeout}s",
         )
     except (subprocess.SubprocessError, OSError) as e:
-        # Never raise: a hung or missing tmux/mngr must surface as a non-zero
-        # result the caller logs and skips, not a crash of the poll loop.
-        return CommandResult(returncode=1, stdout="", stderr=str(e))
+        # Missing binary or other spawn failure: no exit code exists, so use the
+        # synthetic runner-failure sentinel rather than colliding with exit 1.
+        return CommandResult(
+            returncode=RUNNER_FAILURE_RETURNCODE, stdout="", stderr=str(e)
+        )
     return CommandResult(
         returncode=completed.returncode,
         stdout=completed.stdout,
@@ -363,12 +385,17 @@ def _alert_random_agent(
     (REQ-SPAWN-4).
     """
     list_result = run(build_list_command())
-    if list_result.returncode != 0:
+    # Parse the payload regardless of exit status: mngr can exit non-zero (e.g.
+    # one provider failed) while still emitting a valid {"agents": [...]} body,
+    # and dropping that would needlessly skip the alert (finding #6). Only treat
+    # a non-zero exit as fatal when it left us with no usable agents.
+    agents = parse_agent_summaries(list_result.stdout)
+    if list_result.returncode != 0 and not agents:
         logger.warning(
             "Could not enumerate agents to alert: {}", list_result.stderr.strip()
         )
         return None
-    remaining = select_messageable_names(parse_agent_summaries(list_result.stdout))
+    remaining = select_messageable_names(agents)
     if not remaining:
         logger.warning(
             "Detected new error output but found no messageable agent to alert"
