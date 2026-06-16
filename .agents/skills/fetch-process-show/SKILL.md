@@ -17,14 +17,10 @@ only binds that skeleton's task-specific hooks for data work. Where a phase belo
 says "(skeleton phase N)", the generic behavior lives in that reference; this
 file adds the data-specific filling.
 
-The non-negotiable data principle on top of the skeleton:
-
-- **Demonstrate, don't assert.** Every claim about how the data will be processed
-  must be *shown* in a sample, never just promised in prose.
-- **The confirmed sample is the single source of truth.** It gates
-  crystallization, seeds the first surface, and defines the shape the pipeline
-  must reproduce. Nothing downstream may invent a second, different way of
-  producing the data.
+The non-negotiable data principle on top of the skeleton: **the confirmed sample
+is the single source of truth.** It gates crystallization, seeds the first
+surface, and defines the shape the pipeline must reproduce. Nothing downstream may
+invent a second, different way of producing the data.
 
 ## Conventions
 
@@ -49,12 +45,11 @@ latchkey services list --viable
 latchkey services info <svc>   # REQUIRED for each obviously-involved service
 ```
 
-Running `info` on the involved service(s) is essential -- `list --viable` only
-shows services that *could* be authenticated (either credentials exist *or* a
-browser auth flow is available); it does not tell you whether the specific
-service the user needs is already set up. You must run `info` on each involved
-service to see the actual current credential state (and to know whether you'll
-need to trigger an auth flow next).
+Running `info` is essential: `list --viable` only shows services that *could* be
+authenticated (credentials exist *or* a browser auth flow is available); it
+doesn't tell you whether the specific service the user needs is already set up.
+Run `info` on each involved service to see its actual credential state and whether
+you'll need to trigger an auth flow next.
 
 For services not covered by latchkey, do 1-2 web/docs searches. Stop as soon as
 you can propose a plausible plan.
@@ -79,18 +74,16 @@ to run. Wait for approval before any further work.
 
 ## Validate auth/latchkey first (skeleton phase 4: validate-risky-dependency)
 
-The risky-dependency hook for data work is **the data source's auth**. Before any
-other work, validate the operations whose failure could prevent the whole task:
-external API calls, third-party fetches, auth flows.
+The risky-dependency hook for data work is **the data source's auth**.
 
 **If latchkey is involved in any component of the task, authenticate and test it
 first -- before anything else.** Even if the latchkey-backed piece is a small
 part of a larger pipeline, get it working end-to-end (auth flow completed, a real
-API call succeeds) before building any other component. Latchkey auth is the
-single most common source of late-stage failure in this flow; failing fast on it
-avoids wasted work on downstream components that would have to be discarded if
-auth turns out to be unavailable. For multi-service asks, validate each
-uncontrolled dependency independently first, then the combined operation.
+API call succeeds) before building anything else. Latchkey auth is the single most
+common source of late-stage failure in this flow; failing fast avoids wasted work
+on downstream components you'd have to discard if auth turns out unavailable. For
+multi-service asks, validate each uncontrolled dependency independently, then the
+combined operation.
 
 - Latchkey setup is part of the normal flow, NOT a failure. Follow the `latchkey`
   skill for auth/permission handling.
@@ -194,35 +187,27 @@ dispatched worker continues until that worker reports terminal status.
 ## Deliver surfaces -- one at a time, all from the single source of truth (skeleton phase 8)
 
 **Single source of truth.** Every surface renders the *confirmed sample data*
-(`sample.json`) and, once it lands, the crystallized pipeline's output -- never a
-parallel re-implementation of the processing. The first version of a surface is
-literally `render(sample.json)`: it shows exactly what the user approved, so
-there is structurally *no gap* to fill with a cheaper stand-in (heuristics,
-regex, a stub classifier). When the crystallized pipeline is ready, point the
-surface at its output. **The pipeline may have changed the shape** --
-crystallization is exactly the moment the worker rethinks how the task should be
-done, and improving the output schema there is allowed and expected. So when you
-swap it in, diff its output against the confirmed sample: if the shape changed,
-update the surface to match and **re-confirm the result with the user**. The rule
-that stays absolute is the *single source*: a surface renders the pipeline's
-output, or until it lands the confirmed sample -- never a third, parallel
-re-implementation. **If you ever feel the urge to write a second, different way
-of producing the data to feed a surface, stop** -- that divergence is the exact
-bug this rule exists to prevent.
+(`sample.json`), and once it lands, the crystallized pipeline's output -- never a
+parallel re-implementation. The first surface is literally `render(sample.json)`:
+it shows exactly what the user approved, leaving *no gap* to fill with a cheaper
+stand-in (heuristics, regex, a stub classifier). When the pipeline is ready, point
+the surface at its output -- but crystallization is exactly when the worker may
+rethink and improve the output schema, so diff the new output against the
+confirmed sample; if the shape changed, update the surface and **re-confirm with
+the user**. If you ever feel the urge to write a second way of producing the data
+to feed a surface, stop -- that divergence is the bug this rule exists to prevent.
 
 **Surface the raw data and its source from the first version.** Per the
 preserve-and-surface principle (CLAUDE.md), the first surface -- not just the
 crystallized one -- includes a clean, unprompted affordance to view each record's
 raw payload (rendered in its native format -- "view raw email" shows the rendered
-email, not its HTML source) and jump to its source (e.g. "open in Gmail"). Build
-it in now, from the confirmed sample, so the throwaway first version and the
-eventual crystallized version agree. Build it in quietly -- it's just part of the
-surface, not something to announce. This depends on the sample carrying the raw
-payload + source reference. **If you are building the surface as a web view, use
-the `build-web-service` skill** -- it runs its own interactive UI-mock
-confirmation (the data sample confirms the data *shape*, not the UI shape) and
-covers the same raw-data requirement, including rendering untrusted HTML safely.
-Hand it the confirmed `sample.json` so the mock renders real data.
+email, not HTML source) and jump to its source (e.g. "open in Gmail"). Build it in
+quietly from the confirmed sample, so the throwaway and crystallized versions
+agree; this depends on the sample carrying the raw payload + source reference.
+**If the surface is a web view, use the `build-web-service` skill** -- it runs its
+own UI-mock confirmation (the data sample confirms the data *shape*, not the UI
+shape) and covers the same raw-data requirement, including rendering untrusted HTML
+safely. Hand it the confirmed `sample.json` so the mock renders real data.
 
 Additional surfaces (scheduling, persistence, history, live integration) each get
 their *own* delivery and feedback gate -- even when the user's original prompt

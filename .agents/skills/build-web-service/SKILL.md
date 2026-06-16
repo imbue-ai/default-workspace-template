@@ -48,11 +48,10 @@ against real data.
 ## Step 0: Clarify and plan (business terms only)
 
 Ask only the questions that block, and phrase **every** architectural choice as
-the user-visible consequence that motivates it -- never as a technical term. This
-system serves non-technical users; build-web-service exists precisely so you do
-not ask them questions they cannot answer. Default to the simplest conventional
-choice and to a **single user**, state the default in one line, and only ask when
-a fork is both genuinely uncertain and expensive to reverse.
+the user-visible consequence that motivates it -- never a technical term (this
+system serves non-technical users). Default to the simplest conventional choice
+and to a **single user**, state the default in one line, and only ask when a fork
+is both genuinely uncertain and expensive to reverse.
 
 Worked examples (generate the actual questions per task -- this is not a fixed
 list):
@@ -244,27 +243,25 @@ there's no markup to design.
 
 When a view renders data *derived* from underlying records (a summary,
 a reformatted list, extracted fields), include -- by default, without
-the user asking -- a clean affordance to see the raw record the view
-was built from and/or jump to its source. Concretely: a "view raw"
-control that shows the original record **rendered in its native format
--- an HTML email as the rendered email (not escaped HTML source text),
-JSON pretty-printed, markdown rendered. The point is the faithful
-original minus your processing, presented as a human would actually
-read it.** When you render untrusted third-party HTML (a raw email
-body is the common case), sandbox it -- a sandboxed `iframe` or a
-sanitizer -- so the view can't run scripts or phone home via tracking
-pixels. And, when the record came from an external service, an "open in
-<source>" link back to the origin (e.g. open the email in Gmail).
-This is the surfacing half of the preserve-and-surface principle in
-CLAUDE.md: the derived view inevitably leaves gaps (a field the agent
-didn't extract, a rendering it didn't anticipate), and a raw/source
-affordance lets the user bridge that gap immediately instead of waiting
-for a rebuild. Design it in from the first version -- it depends on the
-data layer having persisted the raw payload and source reference (see
-the crystallize data-capture guidance), so confirm that's available and
+the user asking -- a "view raw" control showing the original record
+**rendered in its native format** (an HTML email as the rendered email,
+not escaped source; JSON pretty-printed; markdown rendered -- the
+faithful original minus your processing) plus, for records from an
+external service, an "open in <source>" link back to the origin (e.g.
+open the email in Gmail). When you render untrusted third-party HTML (a
+raw email body is the common case), sandbox it -- a sandboxed `iframe`
+or a sanitizer -- so the view can't run scripts or phone home via
+tracking pixels.
+
+This is the surfacing half of the preserve-and-surface principle
+(CLAUDE.md): the derived view inevitably leaves gaps (a field the agent
+didn't extract, a rendering it didn't anticipate), and the raw/source
+affordance lets the user bridge them without waiting for a rebuild.
+Design it in from the first version -- it depends on the data layer
+having persisted the raw payload and source reference (see the
+crystallize data-capture guidance), so confirm that's available and
 flag it if it isn't. Keep it unobtrusive (a small per-record control,
-not clutter), and don't call it out in your chat messages -- it should
-just be there for the user who goes looking. Always present, never
+not clutter) and don't call it out in chat -- always present, never
 announced.
 
 ### File-path conventions
@@ -338,10 +335,9 @@ the main agent. This is the harden-ratify hook (skeleton phase 7).
 
 **The trigger is an explicit confirmation on the *working* site -- never your own
 sense that the code looks done.** Once the usable site is in front of the user,
-ask a plain "this generally looks good?" and only spawn the worker once they
-confirm. Agent-judged completeness is not the signal; the user exercising the real
-behavior and approving it is. (The mock confirmed the UX *shape*; this confirms
-the real *behavior* -- the point where deep changes actually surface, so
+ask a plain "this generally looks good?" and spawn the worker only once they
+confirm by exercising the real behavior. (The mock confirmed the UX *shape*; this
+confirms the real *behavior* -- the point where deep changes actually surface, so
 finalizing earlier risks hardening an architecture the user is about to
 invalidate.)
 

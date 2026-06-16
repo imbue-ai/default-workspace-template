@@ -14,13 +14,12 @@ business-logic questions worth asking differ by task and are not shared.
 
 ## Why this shape exists
 
-The failure mode it prevents: an agent works for a long time -- scaffolding,
-testing, hardening -- before the user ever confirms the basic thing is right,
-then has to throw that work away when the user says "no, not like that." The fix
-is to put a cheap, real, throwaway artifact in front of the user *first*, loop on
-it until they confirm the shape, and defer everything expensive (thorough tests,
-review gates, polish) until after that confirmation -- and run it in the
-background so the user is never blocked.
+It prevents the failure mode where an agent scaffolds, tests, and hardens for a
+long time before the user confirms the basic thing is right -- then throws it all
+away on "no, not like that." The fix: put a cheap, real, throwaway artifact in
+front of the user *first*, loop until they confirm the shape, and defer everything
+expensive (thorough tests, review gates, polish) to a background worker so the
+user is never blocked.
 
 ## The skeleton
 
@@ -50,9 +49,10 @@ not skip ahead of an unconfirmed gate.
    *(hook: cheap-throwaway-artifact)*. Produce the smallest *real* artifact that
    lets the user judge the shape, and loop on it: present, take feedback, present
    an updated artifact that *visibly applies* the feedback. Keep this phase
-   throwaway -- no production scripts, services, tests, or commits yet. Loop
-   until the user **explicitly confirms** the shape is right. That confirmation
-   is the gate to everything below.
+   throwaway -- no production scripts, services, tests, or commits yet; producing
+   the artifact by hand, in-context, is fine, as long as the *output* is real.
+   Loop until the user **explicitly confirms** the shape is right. That
+   confirmation is the gate to everything below.
 
 6. **Hard gate: nothing hardened before confirmation.** Do not crystallize, write
    thorough tests, run review gates, or build production state on an unconfirmed
@@ -98,18 +98,6 @@ not skip ahead of an unconfirmed gate.
   to a database?"; "should everyone see the same list?" not "do we need
   multi-tenancy?". Translate every architectural fork into the user-visible
   consequence that motivates it.
-
-- **Throwaway until confirmed.** Everything before the confirmation gate is
-  disposable by design. Producing the artifact by hand -- you, the agent, doing
-  the work in-context -- is fine; what matters is that the *output* is real.
-  Polish, scripts, and tests come after, in the hardening phase.
-
-- **Surfaces one at a time.** Never land several deliverables at once; the user
-  must be able to react to each independently.
-
-- **Harden in the background; never gate the user on thoroughness.** The main
-  agent's job ends at a confirmed, usable artifact. The thorough pass runs in a
-  background worker so the user can keep moving.
 
 ## Binding the harden-ratify hook
 
