@@ -35,35 +35,31 @@ in isolation (including Playwright against an isolated instance) and run through
 the review gates, merged, and only then revealed. See
 `.agents/skills/update-system-interface/SKILL.md`.
 
-The reveal, after merge, depends on what changed. The running server serves the
-frontend bundle from `static/` on disk, so a frontend change needs no restart --
-just a rebuild and a browser reload. A backend (`.py`) change needs the server
-process to restart.
-
-**Frontend change:** rebuild the gitignored bundle, then tell open browsers to
-reload into it:
+The reveal, after merge, is a single self-healing command. With the known-good
+revision captured before the merge (`ROLLBACK_TO=$(git rev-parse HEAD)`):
 
 ```bash
-( cd apps/system_interface/frontend && npm run build )
-python3 .agents/skills/update-system-interface/scripts/reload_system_interface.py
+python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py --rollback-to "$ROLLBACK_TO"
 ```
 
-The reload script POSTs a `reload_system_interface` op to the loopback-only
+It classifies what changed and does only what is needed: refreshes dependencies
+if a manifest changed (`npm ci` / `uv tool install -e apps/system_interface
+--reinstall`), rebuilds the gitignored `static/` bundle and broadcasts a
+`reload_system_interface` op (frontend), and/or restarts the services agent so
+the editable backend re-imports the merged `.py` (backend). For a backend change
+it pre-flights the merged code on a throwaway port before touching the live
+service, then polls the loopback endpoint to confirm health. If anything fails,
+it restores the tree to `--rollback-to` as a forward revert commit, rebuilds and
+restarts from it, and re-confirms the UI is healthy -- so the served interface
+can never be left broken. The exit code reports the outcome (`0` revealed, `2`
+rolled back, `3` emergency, `1` precondition error).
+
+The `reload_system_interface` op it broadcasts goes to the loopback-only
 `/api/layout/broadcast` endpoint, which relays a `layout_op` WebSocket message;
-the dockview shell (`DockviewWorkspace.ts`) responds by reloading the top-level
-page -- shell chrome plus every child chat iframe -- so the browser picks up the
-new hashed assets. With no browser connected it is a harmless no-op. This is
-distinct from `scripts/layout.py refresh`, which only reloads a single inner
-iframe/panel for arranging the workspace.
-
-**Backend change:** restart the services agent so the editable-installed backend
-re-imports the merged `.py` source:
-
-```bash
-mngr start --restart system-services
-```
-
-(If a change touches both, do both.)
+the dockview shell (`DockviewWorkspace.ts`) reloads the top-level page -- shell
+chrome plus every child chat iframe -- so the browser picks up the new hashed
+assets. This is distinct from `scripts/layout.py refresh`, which only reloads a
+single inner iframe/panel for arranging the workspace.
 
 ## Driving the workspace layout from an agent
 

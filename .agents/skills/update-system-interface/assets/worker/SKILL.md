@@ -40,6 +40,12 @@ replies via `mngr message` and you resume. For terminal statuses, the run ends.
 
 - Your fresh worktree has no `.venv` (it is gitignored), so run
   `uv sync --all-packages` once before any `uv run`.
+- If your change needs a new dependency, add it the normal way (`uv add` for
+  Python, `npm install <pkg>` for the frontend) and **commit the manifest
+  changes** (`pyproject.toml` / `uv.lock` / `package.json` / `package-lock.json`)
+  on your branch. The lead's reveal detects those manifest changes and refreshes
+  the served environment before restarting -- but only if they are committed, so
+  they reach the lead in the merge.
 - Backend: exercise the edited Python **in-process** -- never install the global
   `system-interface` tool and never touch the running `svc-system_interface`
   service. `cd apps/system_interface && uv run pytest` imports

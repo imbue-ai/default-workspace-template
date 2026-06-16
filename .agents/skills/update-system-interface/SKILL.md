@@ -34,9 +34,11 @@ separate place to work.
    the detail of how to build, test, and verify the change in isolation.
 2. The **worker** implements + builds + tests it on its own branch (`mngr/<name>`),
    then reports `done`.
-3. You **merge** the worker's branch on a clean `done`.
-4. You **reveal** the change. A frontend change is rebuilt + reloaded in place;
-   a backend change is a service restart.
+3. You **record the known-good revision, then merge** the worker's branch on a
+   clean `done`.
+4. You **reveal** the change with one command, which refreshes dependencies,
+   rebuilds/restarts as needed, verifies the live UI is healthy, and
+   automatically rolls back if anything breaks.
 
 ## 1-2. Delegate to a worker
 
@@ -58,57 +60,84 @@ specifics for this flow:
     how to run, test, verify, and what not to touch; report `done` only when its
     testing contract and the review gates all pass.*
 
-## 3. Merge on a clean `done`
+## 3. Record known-good, then merge on a clean `done`
 
 Handle the worker's report per `launch-task` (its `## 4` and the referenced
-`lead-proxy.md`). On terminal `done`, merge the worker's branch (`mngr/<name>`)
-into the working branch the live UI is served from. On `stuck` or a timeout with
-a dead worker, surface to the user per `launch-task`'s failure flow -- **do not**
-reveal anything and do not retry silently.
+`lead-proxy.md`). On terminal `done`:
 
-Note: the built `static/` bundle is gitignored, so the merge brings only
-`frontend/src/` changes, not the worker's build output. The reveal step rebuilds
-it.
+1. **Capture the known-good revision first** -- the served branch's current
+   `HEAD`, *before* you merge. This is what the reveal rolls back to if the
+   change breaks:
+   ```bash
+   ROLLBACK_TO=$(git rev-parse HEAD)
+   ```
+2. **Merge** the worker's branch (`mngr/<name>`) into the working branch the live
+   UI is served from. Commit the merge so the tree is clean (the reveal refuses
+   to run on a dirty tree, so a rollback can never clobber unrelated work).
+
+On `stuck` or a timeout with a dead worker, surface to the user per
+`launch-task`'s failure flow -- **do not** reveal anything and do not retry
+silently.
+
+Note: the built `static/` bundle is gitignored, so the merge brings only source
+and dependency-manifest (`pyproject.toml` / `package.json` / lockfile) changes,
+not the worker's build output. The reveal step rebuilds it.
 
 ## 4. Reveal the change (after merge)
 
-Reveal depends on what changed. The running server serves the frontend bundle
-from `static/` on disk, so a frontend change needs no restart -- just a rebuild
-and a browser reload. A backend (`.py`) change needs the server process to
-restart.
-
-**Frontend change** (anything under `frontend/src`): rebuild the gitignored
-bundle, then tell open browsers to reload into it:
+Run the reveal script with the known-good revision you captured:
 
 ```bash
-( cd apps/system_interface/frontend && npm run build )
-python3 .agents/skills/update-system-interface/scripts/reload_system_interface.py
+python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py --rollback-to "$ROLLBACK_TO"
 ```
 
-The reload script broadcasts a `reload_system_interface` op over the websocket;
-the dockview shell responds by reloading the whole top-level page (picking up the
-new hashed assets and every child chat iframe). With no browser connected it's a
-harmless no-op.
+That single command owns the whole reveal as one deterministic, self-healing
+motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 
-**Backend change** (anything under `imbue/`): restart the services agent so the
-editable-installed `system-interface` backend re-imports the merged `.py`:
+- **Classifies** what the merge changed (frontend source, frontend manifest,
+  backend source, backend manifest).
+- **Refreshes dependencies only if a manifest changed** -- `npm ci` for the
+  frontend, `uv tool install -e apps/system_interface --reinstall` for the
+  backend. This is essential: a plain restart does *not* re-resolve the
+  editable-installed tool's dependencies, so a backend dependency addition would
+  otherwise crash the service on restart.
+- **Pre-flights a backend change** by booting the merged code on a throwaway port
+  before touching the live service. If it can't boot, the live service is never
+  restarted -- the UI never goes down.
+- **Reveals**: rebuilds the gitignored `static/` bundle and broadcasts a
+  `reload_system_interface` op so open browsers reload into the new assets
+  (frontend); restarts the services agent so the editable backend re-imports the
+  merged `.py` (backend). Restarting does not kill you -- you (a chat agent) and
+  the services agent are distinct agents sharing one work_dir.
+- **Verifies** the live service is healthy by polling its loopback endpoint.
+- **Auto-rolls-back on any failure**: restores the tree to `--rollback-to` as a
+  forward revert commit, rebuilds/restarts from it, and re-confirms the UI is
+  healthy.
 
-```bash
-mngr start --restart system-services
-```
+Interpret the exit code and report it to the user:
 
-This does not kill you: you (a chat agent) and the services agent are distinct
-agents sharing one work_dir. (If a change touches both, do both: rebuild + reload
-for the frontend, restart for the backend.)
+- `0` -- revealed; the live UI is updated and healthy.
+- `2` -- the change was bad and was **automatically rolled back**; the live UI is
+  healthy on the previous revision, but the requested change did **not** land.
+  Report this and diagnose before retrying.
+- `3` -- **emergency**: even rollback could not restore a healthy UI. The
+  interface may be down; escalate immediately.
+- `1` -- precondition error (e.g. a dirty tree); nothing was changed.
+
+Why this exists as a script and not a checklist: if the backend fails to start,
+the user loses their entire chat UI -- there is nowhere left to surface an error
+message. The recover-or-revert logic must therefore run identically every time
+and can never be skipped, which is exactly what belongs in a deterministic script
+rather than agent prose.
 
 `scripts/layout.py refresh` (the `manage-layout` skill) is unrelated -- it only
 reloads a single inner iframe/panel for arranging the workspace, not the
-top-level page, so it does **not** reveal a system-interface code change. Use the
-`reload_system_interface.py` script above for that.
+top-level page, so it does **not** reveal a system-interface code change.
 
 ## Why this shape
 
 The UI is what the user is actively looking at, so the design goal is "never
 serve a half-broken UI," not "iterate in place fast." The worker's isolated
-worktree clone + in-process testing + Playwright verification + review gates are
-what make it safe for you to merge and reveal in one motion.
+worktree clone + in-process testing + Playwright verification + review gates make
+it safe to merge; the reveal script's pre-flight, health probe, and autonomous
+rollback make it safe to reveal in one motion.
