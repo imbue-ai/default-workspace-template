@@ -233,6 +233,13 @@ _TWO_MESSAGEABLE_AGENTS = json.dumps(
     }
 )
 
+_ONE_MESSAGEABLE_AGENT = json.dumps(
+    {
+        "agents": [{"name": "agent-solo", "type": "claude", "state": "RUNNING"}],
+        "errors": [],
+    }
+)
+
 _ONLY_STOPPED_AGENT = json.dumps(
     {
         "agents": [{"name": "agent-web", "type": "claude", "state": "STOPPED"}],
@@ -257,6 +264,7 @@ class _FakeCommandRunner(NamedTuple):
     message_sends: list[list[str]]
     failing_windows: frozenset[str] = frozenset()
     send_fails: bool = False
+    failing_recipients: frozenset[str] = frozenset()
 
     def __call__(self, command: Sequence[str]) -> CommandResult:
         argv = list(command)
@@ -273,7 +281,8 @@ class _FakeCommandRunner(NamedTuple):
             return CommandResult(0, self.list_stdout, "")
         if argv[:2] == ["mngr", "message"]:
             self.message_sends.append(argv)
-            if self.send_fails:
+            recipient = argv[2]
+            if self.send_fails or recipient in self.failing_recipients:
                 return CommandResult(1, "", "delivery failed")
             return CommandResult(0, "", "")
         return CommandResult(127, "", f"unexpected command: {argv}")
@@ -396,7 +405,8 @@ def test_run_one_poll_realerts_once_an_agent_becomes_messageable() -> None:
 
 def test_run_one_poll_realerts_after_a_failed_send() -> None:
     # A send that fails (mngr message returns non-zero) must not mark the error
-    # as seen, so the next poll retries it rather than dropping it silently.
+    # as seen, so the next poll retries it rather than dropping it silently. A
+    # single-agent pool isolates this from the multi-agent fallback path.
     sends: list[list[str]] = []
     seen: dict[str, set[str]] = {}
     windows = ("svc-web",)
@@ -405,7 +415,7 @@ def test_run_one_poll_realerts_after_a_failed_send() -> None:
         session="agent-session",
         windows=windows,
         pane_text_by_window=pane_text,
-        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        list_stdout=_ONE_MESSAGEABLE_AGENT,
         message_sends=sends,
         send_fails=True,
     )
@@ -413,7 +423,7 @@ def test_run_one_poll_realerts_after_a_failed_send() -> None:
         session="agent-session",
         windows=windows,
         pane_text_by_window=pane_text,
-        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        list_stdout=_ONE_MESSAGEABLE_AGENT,
         message_sends=sends,
     )
     assert run_one_poll(failing, seen, random.Random(0), DEFAULT_ERROR_PATTERN) is None
@@ -422,9 +432,50 @@ def test_run_one_poll_realerts_after_a_failed_send() -> None:
     assert len(sends) == 1
     assert (
         run_one_poll(succeeding, seen, random.Random(0), DEFAULT_ERROR_PATTERN)
-        == "agent-api"
+        == "agent-solo"
     )
     assert len(sends) == 2
+
+
+def test_run_one_poll_falls_back_to_another_agent_when_a_send_fails() -> None:
+    # With random.Random(0) the first pick over two agents is "agent-api"; that
+    # send fails, so the alert must fall back to "agent-web" rather than be lost.
+    sends: list[list[str]] = []
+    seen: dict[str, set[str]] = {}
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web",),
+        pane_text_by_window={"svc-web": "Exception: boom"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+        failing_recipients=frozenset({"agent-api"}),
+    )
+    assert (
+        run_one_poll(runner, seen, random.Random(0), DEFAULT_ERROR_PATTERN)
+        == "agent-web"
+    )
+    # Both the failed first pick and the successful fallback were attempted.
+    assert [argv[2] for argv in sends] == ["agent-api", "agent-web"]
+    # Delivered, so the error is now recorded and not re-alerted next poll.
+    assert run_one_poll(runner, seen, random.Random(0), DEFAULT_ERROR_PATTERN) is None
+
+
+def test_run_one_poll_tries_every_agent_before_giving_up() -> None:
+    # When every messageable agent's send fails, all are attempted and the poll
+    # returns None without recording the error (so a later poll retries it).
+    sends: list[list[str]] = []
+    seen: dict[str, set[str]] = {}
+    runner = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web",),
+        pane_text_by_window={"svc-web": "Exception: boom"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+        send_fails=True,
+    )
+    assert run_one_poll(runner, seen, random.Random(0), DEFAULT_ERROR_PATTERN) is None
+    assert sorted(argv[2] for argv in sends) == ["agent-api", "agent-web"]
+    assert seen == {}
 
 
 def test_run_one_poll_tolerates_a_window_capture_failure() -> None:

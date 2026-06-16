@@ -11,3 +11,8 @@ environment variable.
 delivered. If no agent can currently be messaged, or the send fails, the error
 is no longer silently dropped: it stays eligible and is re-alerted on a later
 poll once an agent becomes reachable.
+
+- When the randomly chosen recipient cannot receive the alert (for example an
+agent that stopped between listing and messaging), the watcher now falls back to
+the other messageable agents in random order within the same poll instead of
+giving up after one failed send.
