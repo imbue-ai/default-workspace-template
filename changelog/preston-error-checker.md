@@ -16,3 +16,7 @@ poll once an agent becomes reachable.
 agent that stopped between listing and messaging), the watcher now falls back to
 the other messageable agents in random order within the same poll instead of
 giving up after one failed send.
+
+- Alert recipients are now restricted to `type: claude` agents (in addition to
+excluding `STOPPED` ones), so the non-interactive system-services agent is never
+chosen as a recipient.
