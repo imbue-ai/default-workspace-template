@@ -22,10 +22,9 @@ built and tested there, and merged back only after it passes. The only things
 you do to the served tree are committing the merge and running the reveal
 command at the end of this skill.
 
-That isolated clone is a `launch-task` worker: it runs in its own git worktree
-with its own copy of the source, so a half-broken build can never reach what the
-user is looking at. The worker is just the mechanism for getting that safe,
-separate place to work.
+That isolated clone is a `launch-task` worker -- its own git worktree and copy of
+the source, so a half-broken build can never reach the user. The worker is just
+the mechanism for that safe, separate place to work.
 
 ## Flow overview
 
@@ -137,7 +136,7 @@ top-level page, so it does **not** reveal a system-interface code change.
 ## Why this shape
 
 The UI is what the user is actively looking at, so the design goal is "never
-serve a half-broken UI," not "iterate in place fast." The worker's isolated
-worktree clone + in-process testing + Playwright verification + review gates make
-it safe to merge; the reveal script's pre-flight, health probe, and autonomous
-rollback make it safe to reveal in one motion.
+serve a half-broken UI." The worker's isolated clone (in-process testing,
+Playwright verification, review gates) makes it safe to merge; the reveal script's
+pre-flight, health probe, and autonomous rollback make it safe to reveal in one
+motion.

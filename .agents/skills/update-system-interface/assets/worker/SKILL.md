@@ -43,9 +43,8 @@ replies via `mngr message` and you resume. For terminal statuses, the run ends.
 - If your change needs a new dependency, add it the normal way (`uv add` for
   Python, `npm install <pkg>` for the frontend) and **commit the manifest
   changes** (`pyproject.toml` / `uv.lock` / `package.json` / `package-lock.json`)
-  on your branch. The lead's reveal detects those manifest changes and refreshes
-  the served environment before restarting -- but only if they are committed, so
-  they reach the lead in the merge.
+  on your branch -- the lead's reveal only refreshes the served environment from
+  *committed* manifest changes.
 - Backend: exercise the edited Python **in-process** -- never install the global
   `system-interface` tool and never touch the running `svc-system_interface`
   service. `cd apps/system_interface && uv run pytest` imports
