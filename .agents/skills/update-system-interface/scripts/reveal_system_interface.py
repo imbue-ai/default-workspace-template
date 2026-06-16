@@ -25,8 +25,12 @@ What it does, given the pre-merge revision (``--rollback-to``):
    reload, as applicable.
 6. Probe the live service's loopback endpoint until healthy (with a deadline).
 7. On ANY failure, restore the served tree to the known-good revision (as a
-   forward revert commit), rebuild/restart from it, and re-probe to *confirm*
-   the UI is back. Only then does the script exit -- reporting what happened via
+   forward revert commit) and re-probe to *confirm* the UI is back. The live
+   backend is restarted during recovery only if the failed reveal had already
+   restarted it (a failed post-restart health check); when the failure happened
+   before the live restart (pre-flight, dependency refresh, frontend build) the
+   live service is still serving known-good code and is left untouched, so the
+   UI never blips. Only then does the script exit -- reporting what happened via
    its exit code and stderr.
 
 Run via bare ``python3`` (standard library only), like ``forward_port.py`` and
@@ -102,7 +106,19 @@ class PreconditionError(RevealError):
 
 
 class RevealFailed(RevealError):
-    """The reveal of the merged change failed; the caller must roll back."""
+    """The reveal of the merged change failed; the caller must roll back.
+
+    ``live_service_restarted`` records whether the live service was already
+    (re)started before the failure. It is ``False`` for failures that happen
+    before the live restart (pre-flight, dependency refresh, frontend build) --
+    in which case the live service is untouched and still serving known-good
+    code, so recovery must NOT restart it -- and ``True`` once the restart has
+    been attempted, where recovery must restart to reload known-good code.
+    """
+
+    def __init__(self, message: str, *, live_service_restarted: bool = False) -> None:
+        super().__init__(message)
+        self.live_service_restarted = live_service_restarted
 
 
 @dataclass(frozen=True)
@@ -379,15 +395,26 @@ def _apply_reveal(
         )
     if changes.backend:
         if not _preflight_ok(repo_root, http, spawner, sleeper):
+            # Live service was never restarted, so it is still serving known-good
+            # code -- recovery must not restart it (live_service_restarted=False).
             raise RevealFailed(
                 "merged backend failed to boot in a pre-flight check; live service not restarted"
             )
-        _run_checked(
-            runner,
+        # From here on the live service has been (or is being) restarted, so any
+        # failure leaves it potentially running broken code: recovery must restart.
+        restart = runner.run(
             ["mngr", "start", "--restart", "system-services"],
-            repo_root,
-            "mngr start --restart",
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
         )
+        if getattr(restart, "returncode", 0) != 0:
+            raise RevealFailed(
+                f"mngr start --restart failed (exit {restart.returncode}): "
+                f"{(getattr(restart, 'stderr', '') or '').strip()}",
+                live_service_restarted=True,
+            )
         if not wait_healthy(
             http,
             f"{base_url}{HEALTH_PATH}",
@@ -395,7 +422,10 @@ def _apply_reveal(
             _HEALTH_INTERVAL_SECONDS,
             sleeper,
         ):
-            raise RevealFailed("backend did not become healthy after restart")
+            raise RevealFailed(
+                "backend did not become healthy after restart",
+                live_service_restarted=True,
+            )
     if changes.frontend:
         _broadcast_reload(http, base_url)
 
@@ -453,9 +483,17 @@ def _recover_running_state(
     runner: Runner,
     http: HttpClient,
     sleeper: Callable[[float], None],
+    live_service_restarted: bool,
 ) -> bool:
-    """After the tree is restored to known-good, rebuild/restart from it and
-    confirm the live UI is healthy. Returns True iff confirmed healthy.
+    """After the tree is restored to known-good, rebuild/restart from it as
+    needed and confirm the live UI is healthy. Returns True iff confirmed healthy.
+
+    ``live_service_restarted`` says whether the failed reveal had already
+    restarted the live backend. When it did not (pre-flight / dependency-refresh
+    / frontend-build failures), the live service is still running known-good code
+    in memory and the on-disk tree has just been restored to match it, so we must
+    NOT restart -- doing so would needlessly blip a healthy UI. We only restart
+    when the failed reveal had actually restarted the service into broken code.
 
     Unlike :func:`_apply_reveal`, nothing here raises -- this is the last line of
     defense, so a failed step just means "not recovered" (exit 3)."""
@@ -469,12 +507,16 @@ def _recover_running_state(
                 "npm run build",
             )
         if changes.backend:
-            _run_checked(
-                runner,
-                ["mngr", "start", "--restart", "system-services"],
-                repo_root,
-                "mngr start --restart",
-            )
+            if live_service_restarted:
+                _run_checked(
+                    runner,
+                    ["mngr", "start", "--restart", "system-services"],
+                    repo_root,
+                    "mngr start --restart",
+                )
+            # Probe the backend health endpoint either way: after a restart to
+            # confirm known-good booted, or (no restart) to confirm the untouched
+            # service is still serving.
             healthy = wait_healthy(
                 http,
                 f"{base_url}{HEALTH_PATH}",
@@ -536,7 +578,13 @@ def reveal(
             f"Reveal failed and was auto-reverted: {exc}",
         )
         if _recover_running_state(
-            changes, repo_root, resolved_base, runner, http, sleeper
+            changes,
+            repo_root,
+            resolved_base,
+            runner,
+            http,
+            sleeper,
+            live_service_restarted=exc.live_service_restarted,
         ):
             sys.stderr.write(
                 "rolled back to last-known-good; the live UI is confirmed healthy. "
