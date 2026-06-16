@@ -20,6 +20,7 @@ from error_watcher.watcher import (
     build_message_command,
     choose_recipient,
     compile_error_pattern,
+    dedup_key,
     format_alert,
     mark_alerted,
     match_lines,
@@ -96,6 +97,40 @@ def test_unseen_matches_deduplicates_within_a_single_capture() -> None:
     seen: dict[str, set[str]] = {}
     assert unseen_matches("svc-web", ["Error: boom", "Error: boom"], seen) == [
         "Error: boom"
+    ]
+
+
+def test_dedup_key_collapses_digit_runs() -> None:
+    # Timestamps / counters / numeric ids normalize to '#', so re-stamped copies
+    # of one error share a key.
+    assert dedup_key("[12:00:05] ERROR boom") == dedup_key("[12:00:10] ERROR boom")
+    assert dedup_key("[12:00:05] ERROR boom") == "[#:#:#] ERROR boom"
+
+
+def test_unseen_matches_collapses_re_timestamped_lines() -> None:
+    seen: dict[str, set[str]] = {}
+    fresh = unseen_matches("svc-web", ["[12:00:05] ERROR boom"], seen)
+    mark_alerted({"svc-web": fresh}, seen)
+    # The same error re-stamped with a later time must not re-alert (finding #4).
+    assert unseen_matches("svc-web", ["[12:00:10] ERROR boom"], seen) == []
+
+
+def test_unseen_matches_collapses_volatile_lines_within_one_capture() -> None:
+    seen: dict[str, set[str]] = {}
+    # Two timestamped copies of the same error in one capture yield one line.
+    assert unseen_matches(
+        "svc-web",
+        ["[12:00:05] ERROR boom", "[12:00:10] ERROR boom"],
+        seen,
+    ) == ["[12:00:05] ERROR boom"]
+
+
+def test_unseen_matches_keeps_errors_that_differ_in_text() -> None:
+    seen: dict[str, set[str]] = {}
+    mark_alerted({"svc-web": ["[12:00:05] ERROR boom"]}, seen)
+    # A genuinely different error (not just a new timestamp) still alerts.
+    assert unseen_matches("svc-web", ["[12:00:10] ERROR kaboom"], seen) == [
+        "[12:00:10] ERROR kaboom"
     ]
 
 
@@ -520,6 +555,33 @@ def test_run_one_poll_tries_every_agent_before_giving_up() -> None:
     assert run_one_poll(runner, seen, random.Random(0), DEFAULT_ERROR_PATTERN) is None
     assert sorted(argv[2] for argv in sends) == ["agent-api", "agent-web"]
     assert seen == {}
+
+
+def test_run_one_poll_does_not_realert_on_a_re_timestamped_error() -> None:
+    # An error line whose only change between polls is its timestamp must not
+    # produce a fresh alert every poll (finding #4). Two runners share `seen`.
+    sends: list[list[str]] = []
+    seen: dict[str, set[str]] = {}
+    first = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web",),
+        pane_text_by_window={"svc-web": "[12:00:05] ERROR connection reset"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+    )
+    second = _FakeCommandRunner(
+        session="agent-session",
+        windows=("svc-web",),
+        pane_text_by_window={"svc-web": "[12:00:10] ERROR connection reset"},
+        list_stdout=_TWO_MESSAGEABLE_AGENTS,
+        message_sends=sends,
+    )
+    assert (
+        run_one_poll(first, seen, random.Random(0), DEFAULT_ERROR_PATTERN)
+        == "agent-api"
+    )
+    assert run_one_poll(second, seen, random.Random(0), DEFAULT_ERROR_PATTERN) is None
+    assert len(sends) == 1
 
 
 def test_run_one_poll_never_messages_the_non_claude_system_agent() -> None:

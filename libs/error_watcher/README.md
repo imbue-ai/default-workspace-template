@@ -44,5 +44,10 @@ can be overridden via the `ERROR_WATCHER_PATTERN` environment variable.
   agent itself is eligible).
 - **In-memory dedup only.** The already-alerted set is not persisted, so a
   restart may re-alert on errors still on screen.
+- **Number-insensitive dedup.** Dedup keys ignore digit runs (timestamps,
+  counters, numeric ids), so a re-stamped error line is reported once rather
+  than every poll. The flip side is that two errors differing only in their
+  numbers are treated as the same for alerting -- acceptable for a "something
+  errored" nudge.
 - **Visible pane only.** It scans the rendered pane (`capture-pane -p`), not
   scrollback or log files; errors that scroll past between polls may be missed.

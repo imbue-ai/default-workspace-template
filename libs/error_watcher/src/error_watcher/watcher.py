@@ -90,25 +90,41 @@ def match_lines(text: str, pattern: re.Pattern[str]) -> list[str]:
     return [line for line in text.splitlines() if pattern.search(line)]
 
 
+def dedup_key(line: str) -> str:
+    """Normalize a matched line to the key used for dedup, ignoring volatile numbers.
+
+    Runs of digits (timestamps, counters, numeric request ids) collapse to a
+    single '#', so a re-stamped copy of the same error -- '[12:00:05] ERROR x'
+    then '[12:00:10] ERROR x' -- shares one key and alerts once rather than on
+    every 5s poll (review finding #4). Two errors differing only in their
+    numbers are therefore treated as the same for alerting purposes, which
+    suits a "something errored" nudge; non-numeric ids (e.g. hex request ids)
+    are deliberately left un-normalized to avoid collapsing distinct errors.
+    """
+    return re.sub(r"\d+", "#", line)
+
+
 def unseen_matches(
     window: str, current: Sequence[str], seen: Mapping[str, set[str]]
 ) -> list[str]:
     """Return the matching lines for `window` not already alerted on (read-only).
 
-    `seen` maps window name -> set of lines already alerted on. A line present
-    in `seen[window]` is suppressed; every other line is returned at most once
-    (duplicates within a single capture collapse to one). This does NOT mutate
-    `seen`: a line is only recorded as alerted once an alert is actually sent
-    (see `mark_alerted`), so an error whose alert could not be delivered is
-    reconsidered on the next poll rather than silently dropped (REQ-MATCH-3).
+    `seen` maps window name -> set of dedup keys (see `dedup_key`) already
+    alerted on. A line whose key is present is suppressed; every other line is
+    returned at most once (lines sharing a key within a single capture collapse
+    to the first). This does NOT mutate `seen`: a line is only recorded as
+    alerted once an alert is actually sent (see `mark_alerted`), so an error
+    whose alert could not be delivered is reconsidered on the next poll rather
+    than silently dropped (REQ-MATCH-3).
     """
     already_alerted = seen.get(window, frozenset())
     fresh_lines: list[str] = []
-    emitted: set[str] = set()
+    emitted_keys: set[str] = set()
     for line in current:
-        if line in already_alerted or line in emitted:
+        key = dedup_key(line)
+        if key in already_alerted or key in emitted_keys:
             continue
-        emitted.add(line)
+        emitted_keys.add(key)
         fresh_lines.append(line)
     return fresh_lines
 
@@ -116,7 +132,7 @@ def unseen_matches(
 def mark_alerted(
     matches_by_window: Mapping[str, Sequence[str]], seen: dict[str, set[str]]
 ) -> None:
-    """Record every line in a just-alerted batch as seen so it is not re-alerted.
+    """Record the dedup key of every line in a just-alerted batch so it is not re-alerted.
 
     Called only after an alert is actually dispatched, so that an undelivered
     alert (no messageable agent, enumeration failure, or a failed send) leaves
@@ -124,7 +140,7 @@ def mark_alerted(
     """
     for window, lines in matches_by_window.items():
         already_alerted = seen.setdefault(window, set())
-        already_alerted.update(lines)
+        already_alerted.update(dedup_key(line) for line in lines)
 
 
 def _truncate_line(line: str) -> str:
