@@ -69,11 +69,15 @@ Produce a short outline with:
   - `[prose]` -- executor meta-work only: steps that need the agent in the
     loop and are not part of an automated run.
 - Prose justification: for every step you tag `[prose]` that involves a
-  model's judgement, state *why* a scripted model call cannot do
-  it (e.g. it needs the live conversation, it gates on user interaction, the
-  inputs are chosen by the executor). A model step with no such reason
-  belongs in `[ai-script]`. The aim is a flow that runs headless so refresh
-  and scheduling work with no extra wiring.
+  model's judgement, apply the test in `spec-summary.md` -- could the step be
+  `f(data) -> result` with a *fixed* prompt and no live conversation? If yes,
+  it is `[ai-script]`, not prose. Only tag `[prose]` when you can name a
+  concrete reason a scripted call can't do it (it reads the live
+  conversation, gates on user interaction, chooses the inputs, makes an
+  open-ended next-step decision, or orchestrates the executor). Keep such
+  prose at the edges of the flow, not wedged between two scripted sections.
+  The aim is a flow that runs headless so refresh and scheduling work with no
+  extra wiring.
 - Subcommand justification: for any subcommand or subflow in the planned
   flow, what invariant makes it separate vs. inlined? If no invariant
   demands separation, inline it.

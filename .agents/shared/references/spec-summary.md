@@ -29,9 +29,55 @@ The point of `[ai-script]` is that the whole flow stays runnable headless:
 when every flow step (deterministic or model-driven) is scripted, the skill
 can be refreshed or scheduled with no additional wiring. Prose is reserved
 for the work that genuinely needs the executor in the loop -- not for any
-step that happens to require a model. When you leave a model step as
-`[prose]`, you must be able to say *why* a scripted model call
-cannot do it.
+step that happens to require a model.
+
+### The test: `[ai-script]` vs `[prose]`
+
+Needing a model's judgement is **never by itself** a reason to use prose.
+The decisive question is:
+
+> Could this step be written as a function `f(data) -> result` with a
+> *fixed* system prompt and no access to the live conversation?
+
+If yes, it is `[ai-script]` -- even though it needs judgement -- because the
+same prompt runs every time and only the data varies. `[prose]` is justified
+*only* when the step needs something a headless `f(data)` cannot be handed.
+In practice that is a small, specific set:
+
+1. **It reads the live conversation as input** -- it interprets the ongoing
+   chat, the user's phrasing this turn, or a decision made earlier in the
+   session. A scripted call doesn't have the transcript.
+2. **It gates on user interaction** -- present options and wait, get approval
+   before a destructive step, collect free-form feedback. A headless run has
+   no human to block on.
+3. **It chooses the inputs / frames the run** -- which file, which date range,
+   which parameters to feed the flow. The executor *deciding* the call, not
+   *making* it.
+4. **It interprets the final result and branches open-endedly** -- "decide
+   whether to rerun, escalate, or hand back." The decision space isn't a
+   fixed criterion.
+5. **It orchestrates the executor itself** -- invoking another skill,
+   delegating to a sub-agent, aborting.
+
+When you leave a model step as `[prose]`, you must be able to name which of
+these (or an equally concrete reason) applies. A model step with no such
+reason belongs in `[ai-script]`.
+
+### Push prose to the edges
+
+Notice that the justified cases fall at the *edges* of a flow -- input
+selection and framing at the front, result interpretation and next-step
+decisions at the back -- or are interaction gates. So the healthy shape is
+**prose at the edges, scripted steps in the middle**.
+
+A `[prose]` step wedged *between* two scripted sections is the expensive
+case: it splits the pipeline into two halves that can't compose, which is
+exactly what stops the flow from ever running unattended. Only accept
+prose-in-the-middle when the next action genuinely depends on live context
+that doesn't exist until runtime -- e.g. a human reading intermediate output
+and steering the next probe, or a mandatory sign-off gate. If you reach for
+prose-in-the-middle for any other reason, there is almost certainly an
+`[ai-script]` you haven't written yet.
 
 A mixed flow of all three kinds is the norm for useful skills.
 
