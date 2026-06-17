@@ -155,8 +155,14 @@ add appropriate dependencies to your PEP 723 header.
 `uv run .agents/shared/scripts/validate_skill.py <skill_dir>` checks SKILL.md
 frontmatter, the kebab-case name rules, directory-name match, description
 length, 500-line body limit, and that any `run.py` begins with a PEP 723
-header. Prints `ok` and exits 0 on success; exits 1 with a clear error on
-failure.
+header. When those static checks pass and a `run.py` exists, it also runs
+`uv run scripts/run.py --help`, which forces `uv` to resolve the script's PEP
+723 dependencies and import the module -- so a broken import or unresolvable
+dependency fails validation here rather than only at scenario time. (This is a
+shallow import check: `--help` exercises top-level imports and the argparse
+wiring, not imports done lazily inside subcommand bodies -- those are left to
+scenario testing.) Prints `ok` and exits 0 on success; exits 1 with a clear
+error on failure.
 
 ## Scenario template
 

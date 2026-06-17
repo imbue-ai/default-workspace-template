@@ -76,13 +76,15 @@ Terminal statuses (both flows): `done`, `stuck`, `no-update-needed`.
 
 ## Validation (both flows)
 
-Before emitting Gate 2, validate the target skill's layout:
+Before emitting Gate 2, validate the target skill:
 
 ```bash
 uv run .agents/shared/scripts/validate_skill.py .agents/skills/<name>
 ```
 
-It must print `ok` and exit 0.
+This checks the structure and, when a `run.py` exists, runs
+`scripts/run.py --help` to confirm its imports and PEP 723 dependencies
+resolve. It must print `ok` and exit 0.
 
 ## Scenarios (both flows)
 

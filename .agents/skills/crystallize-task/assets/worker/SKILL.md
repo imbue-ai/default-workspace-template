@@ -114,13 +114,15 @@ Do not proceed to Stage 3 without an explicit yes.
 ## Stage 3: Build the artifact
 
 Follow the layout and frontmatter conventions in
-`.agents/shared/references/spec-summary.md`. Then validate structurally:
+`.agents/shared/references/spec-summary.md`. Then validate:
 
 ```bash
 uv run .agents/shared/scripts/validate_skill.py .agents/skills/<name>
 ```
 
-It must print `ok` before moving on. If it fails, fix and rerun.
+This checks the structure and, when a `run.py` exists, runs
+`scripts/run.py --help` to confirm its imports and PEP 723 dependencies
+resolve. It must print `ok` before moving on. If it fails, fix and rerun.
 
 ## Stage 4: Hand-craft and run scenarios
 
