@@ -520,6 +520,39 @@ def _runtime_dir_has_files() -> bool:
     return any(RUNTIME_DIR.iterdir())
 
 
+def _create_orphan_runtime_worktree(branch: str) -> subprocess.CompletedProcess[str]:
+    """Add runtime/ as a worktree on a fresh orphan branch, git-version-agnostically.
+
+    `git worktree add --orphan` only exists in git >= 2.42, but the Lima
+    provider's Debian 12 base ships git 2.39. So build the orphan branch with
+    plumbing that has worked for ages -- a parentless commit on the empty tree --
+    then do a normal `git worktree add` for it. Returns the final worktree-add
+    CompletedProcess; if an earlier plumbing step fails, returns that failing
+    CompletedProcess so the caller's existing error handling fires.
+    """
+    empty_tree = _git_main("hash-object", "-w", "-t", "tree", "/dev/null")
+    if empty_tree.returncode != 0:
+        return empty_tree
+    # Commit identity is passed via -c because the container may have no global
+    # git identity yet, and commit-tree refuses to run without one.
+    orphan_commit = _git_main(
+        "-c",
+        f"user.name={RUNTIME_BACKUP_USER_NAME}",
+        "-c",
+        f"user.email={RUNTIME_BACKUP_USER_EMAIL}",
+        "commit-tree",
+        empty_tree.stdout.strip(),
+        "-m",
+        "runtime backup: init",
+    )
+    if orphan_commit.returncode != 0:
+        return orphan_commit
+    branch_result = _git_main("branch", branch, orphan_commit.stdout.strip())
+    if branch_result.returncode != 0:
+        return branch_result
+    return _git_main("worktree", "add", str(RUNTIME_DIR), branch)
+
+
 def _init_runtime_worktree() -> None:
     """One-time setup of runtime/ as a worktree of mindsbackup/$MNGR_AGENT_ID.
 
@@ -570,9 +603,7 @@ def _init_runtime_worktree() -> None:
             "worktree", "add", "-B", branch, str(RUNTIME_DIR), remote_ref
         )
     else:
-        result = _git_main(
-            "worktree", "add", "--orphan", "-b", branch, str(RUNTIME_DIR)
-        )
+        result = _create_orphan_runtime_worktree(branch)
 
     if result.returncode != 0:
         logger.error(
