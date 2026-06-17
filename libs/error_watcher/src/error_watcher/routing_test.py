@@ -40,9 +40,7 @@ _TWO_MESSAGEABLE_AGENTS = (
     '], "errors": []}'
 )
 
-_ONLY_STOPPED_AGENT = (
-    '{"agents": [{"name": "agent-web", "type": "claude", "state": "STOPPED"}], "errors": []}'
-)
+_ONLY_STOPPED_AGENT = '{"agents": [{"name": "agent-web", "type": "claude", "state": "STOPPED"}], "errors": []}'
 
 _CLAUDE_AND_MAIN_AGENTS = (
     '{"agents": ['
@@ -52,9 +50,7 @@ _CLAUDE_AND_MAIN_AGENTS = (
 )
 
 
-def _integrated_router(
-    runner: FakeCommandRunner, rng: random.Random
-) -> ErrorRouter:
+def _integrated_router(runner: FakeCommandRunner, rng: random.Random) -> ErrorRouter:
     return ErrorRouter(
         TmuxWindowErrorInput(runner, _OWN_WINDOW),
         RandomMngrAgentErrorOutput(runner, rng),
@@ -67,7 +63,10 @@ def _integrated_router(
 
 def test_match_lines_is_case_insensitive() -> None:
     text = "all good\nError: boom\nEXCEPTION raised\nstill fine"
-    assert match_lines(text, DEFAULT_ERROR_PATTERN) == ["Error: boom", "EXCEPTION raised"]
+    assert match_lines(text, DEFAULT_ERROR_PATTERN) == [
+        "Error: boom",
+        "EXCEPTION raised",
+    ]
 
 
 def test_match_lines_matches_traceback_exception() -> None:
@@ -218,7 +217,9 @@ def test_router_marks_seen_only_after_a_delivery_succeeds() -> None:
     # first poll, so the error must NOT be recorded and is retried on the second
     # poll, where delivery succeeds and it is recorded. The third poll suppresses
     # it. This is the lost-alert-ordering guarantee (REQ-MATCH-3) at the router.
-    error_input = SequencedErrorInput([_reading("agent-session", svc_web="Exception: boom")])
+    error_input = SequencedErrorInput(
+        [_reading("agent-session", svc_web="Exception: boom")]
+    )
     output = RecordingErrorOutput([None, "agent-x"])
     router = ErrorRouter(error_input, output, DEFAULT_ERROR_PATTERN)
     assert router.run_once() is None
@@ -230,7 +231,9 @@ def test_router_marks_seen_only_after_a_delivery_succeeds() -> None:
 
 
 def test_router_does_not_realert_a_static_error() -> None:
-    error_input = SequencedErrorInput([_reading("agent-session", svc_web="Exception: boom")])
+    error_input = SequencedErrorInput(
+        [_reading("agent-session", svc_web="Exception: boom")]
+    )
     output = RecordingErrorOutput(["agent-x"])
     router = ErrorRouter(error_input, output, DEFAULT_ERROR_PATTERN)
     assert router.run_once() == "agent-x"

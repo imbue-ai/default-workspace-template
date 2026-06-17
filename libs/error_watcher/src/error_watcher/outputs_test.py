@@ -50,7 +50,9 @@ _ONLY_STOPPED_AGENT = json.dumps(
 
 
 def _alert() -> ErrorAlert:
-    return ErrorAlert(origin="agent-session", matches_by_source={"svc-web": ["Exception: boom"]})
+    return ErrorAlert(
+        origin="agent-session", matches_by_source={"svc-web": ["Exception: boom"]}
+    )
 
 
 def _delivery_runner(
@@ -201,7 +203,11 @@ def test_choose_recipients_orders_the_pool_uniformly_at_random() -> None:
     output = RandomMngrAgentErrorOutput(_delivery_runner("", []), random.Random(0))
     # A deterministic permutation for a seeded rng; the first element is the
     # uniform-random first pick and the rest are the fallback order.
-    assert output.choose_recipients(["alpha", "beta", "gamma"]) == ["beta", "gamma", "alpha"]
+    assert output.choose_recipients(["alpha", "beta", "gamma"]) == [
+        "beta",
+        "gamma",
+        "alpha",
+    ]
 
 
 def test_choose_recipients_returns_empty_for_empty_pool() -> None:
