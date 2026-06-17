@@ -193,6 +193,31 @@ describe("assistant_streaming preview", () => {
     disconnectFromStream(agentId);
   });
 
+  it("keeps the preview when a non-boundary user_message arrives mid-turn", () => {
+    const agentId = `agent-${agentCounter++}`;
+    connectToStream(agentId);
+    const source = lastEventSource();
+
+    source.onmessage?.({
+      data: JSON.stringify({ type: "assistant_streaming", last_complete_id: "p", text: "still working" }),
+    });
+    expect(getStreamingPreview(agentId)).toBe("still working");
+
+    // A skill expansion is emitted as a user_message while the same logical turn
+    // is still in flight; it must not clear the live preview (which would flicker
+    // the bubble off until the next snapshot frame).
+    source.onmessage?.({
+      data: JSON.stringify(makeEvent("skill-1", "Base directory for this skill: /x/skills/foo/bar")),
+    });
+    expect(getStreamingPreview(agentId)).toBe("still working");
+
+    // Stop-hook feedback is likewise non-boundary mid-turn chrome.
+    source.onmessage?.({ data: JSON.stringify(makeEvent("hook-1", "Stop hook feedback:\nkeep going")) });
+    expect(getStreamingPreview(agentId)).toBe("still working");
+
+    disconnectFromStream(agentId);
+  });
+
   it("drops the preview when the stream is intentionally disconnected", () => {
     const agentId = `agent-${agentCounter++}`;
     connectToStream(agentId);
