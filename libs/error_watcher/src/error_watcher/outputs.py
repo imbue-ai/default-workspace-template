@@ -148,9 +148,7 @@ def format_alert(origin: str, matches_by_source: Mapping[str, Sequence[str]]) ->
     multiple sources erroring in one poll yield one batched message rather than
     one per source (REQ-NOTIFY-2, REQ-NOTIFY-6).
     """
-    header = (
-        f"Possible error/exception detected by error-watcher in '{origin}':"
-    )
+    header = f"Possible error/exception detected by error-watcher in '{origin}':"
     source_lines = [
         f"- '{name}': {' | '.join(_truncate_line(line) for line in lines)}"
         for name, lines in matches_by_source.items()
