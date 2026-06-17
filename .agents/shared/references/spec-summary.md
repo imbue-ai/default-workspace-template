@@ -50,7 +50,8 @@ the decisive question is not about any single step but about the skill's
   belongs in `[ai-script]`.
 
 (Merely wanting to *watch* an automatable skill run is not a reason for
-prose: script it and stream its output.)
+prose: with proper subcommand decomposition in the script, you can just choose
+at runtime to go step by step if that's what the user seems to want)
 
 ### Push prose to the edges
 
@@ -127,37 +128,11 @@ If the process interleaves deterministic and model-judgement steps, script
 *both* (the model steps become `[ai-script]` calls -- see below) so the whole
 chain runs end-to-end.
 
-### Scripting a model step (`[ai-script]`)
+### Packaging
 
-Script the step as a Claude call following the **`use-ai-integration`** skill
--- don't default to one mechanism. It picks the path by agency and whether
-`ANTHROPIC_API_KEY` is set (keyed non-agentic -> `litellm`; keyless -> the
-copyable `claude_p.py` helper; agentic -> `claude_p_task`) and covers
-surfacing the cost to the user.
-
-Packaging: `run.py` stays an ordinary self-contained PEP 723 script. For the
-keyless / agentic paths, copy `claude_p.py` (from the `use-ai-integration`
-skill's `scripts/`) in beside `run.py` and list its deps (`anyio`,
-`pydantic`) in the header; the keyed `litellm` path needs only `litellm`:
-
-```python
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["anyio", "pydantic>=2"]   # or ["litellm>=1.88.1"] for the keyed path
-# ///
-import anyio
-from claude_p import claude_p_completion   # keyless path; the file you copied in
-
-async def main() -> None:
-    result = await claude_p_completion(
-        prompt,
-        system="<a real task instruction, not a placeholder>",
-        model="claude-haiku-4-5",
-    )
-    print(result.text, result.cost_usd)
-
-anyio.run(main)
-```
+Packaging: `run.py` should be an ordinary self-contained PEP 723 script. 
+For [ai-script] steps, make sure to read and follow the instructions in the **`use-ai-integration`** skill;
+add appropriate dependencies to your PEP 723 header.
 
 - Begin every `run.py` with a PEP 723 header pinning its inline deps:
   ```python
