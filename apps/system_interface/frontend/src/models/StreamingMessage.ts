@@ -12,6 +12,7 @@ import { ReconnectBackoff } from "./backoff";
 import { appendEvents, fetchEvents, type TranscriptEvent } from "./Response";
 import { parseJsonMessage } from "./ws-json";
 import { openLoginModal } from "./ClaudeAuth";
+import { isNonBoundaryUserMessage } from "../views/user-message-classification";
 
 const activeStreams = new Map<string, EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
@@ -199,10 +200,16 @@ export function connectToStream(agentId: string): void {
     const event = raw as TranscriptEvent;
     // Reset the live preview at turn boundaries so prior-turn text can never
     // linger: a finalized assistant_message supersedes the preview (the durable
-    // bubble takes over), and a new user_message starts a fresh turn (any body
-    // still in mngr's buffer belongs to the turn the user just ended). Fresh
-    // frames re-populate the preview once the new response actually streams.
-    if (event.type === "assistant_message" || event.type === "user_message") {
+    // bubble takes over), and a genuine boundary user_message starts a fresh turn
+    // (any body still in mngr's buffer belongs to the turn the user just ended).
+    // Fresh frames re-populate the preview once the new response actually streams.
+    // Non-boundary user_messages (skill expansions, stop-hook feedback, /welcome)
+    // arrive mid-turn while the agent is still streaming, so they must NOT clear
+    // the preview -- doing so would flicker the live bubble off until the next
+    // snapshot frame. This mirrors how the turn-grouping layer decides boundaries.
+    if (event.type === "assistant_message") {
+      setStreamingPreview(agentId, "");
+    } else if (event.type === "user_message" && !isNonBoundaryUserMessage(event.content)) {
       setStreamingPreview(agentId, "");
     }
     const pending = inFlightSnapshotBuffersByAgent.get(agentId);
