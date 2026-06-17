@@ -42,8 +42,8 @@ from pathlib import Path
 from loguru import logger as _loguru_logger
 
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.mngr.primitives import AgentName
-from imbue.mngr.primitives import AgentNameOrId
+from imbue.mngr.primitives import AgentId
+from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import send_message
 from imbue.system_interface.session_watcher import AgentSessionWatcher
@@ -62,8 +62,9 @@ class WelcomeResendError(RuntimeError):
     """Raised when the welcome skill cannot be parsed for its opening line."""
 
 
-TranscriptReadFn = Callable[[str], str | None]
-MessageSendFn = Callable[[AgentNameOrId, str], bool]
+ResolveAgentFn = Callable[[str], AgentInfo | None]
+TranscriptReadFn = Callable[[AgentInfo], str | None]
+MessageSendFn = Callable[[AgentId, str], bool]
 
 
 def _strip_frontmatter(body: str) -> str:
@@ -164,22 +165,29 @@ def _resolve_initial_chat_agent_name() -> str | None:
     return name
 
 
-def _default_read_assistant_transcript(agent_name: str) -> str | None:
-    """Return the concatenated text of every assistant turn in the agent's transcript.
+def _default_resolve_agent(agent_name: str) -> AgentInfo | None:
+    """Resolve the initial chat agent's name to its full :class:`AgentInfo` (with id).
 
-    Resolves the agent's session files the same way the `/events` endpoint
-    does (via `AgentSessionWatcher`) and joins the `assistant_message`
-    text. Only assistant turns are included: the `/welcome` skill
-    expansion is a *user* message that also contains the welcome text
-    verbatim, so including user turns would always look like a delivered
-    welcome. Returns None when the agent or its transcript cannot be found
-    so the caller treats the welcome as not-yet-delivered.
+    Returns None when no agent with that name exists so the caller skips the
+    resend rather than dispatching to a nonexistent target.
     """
     matching = [agent for agent in discover_agents() if agent.name == agent_name]
     if not matching:
-        logger.warning("Agent {} not found while checking welcome transcript", agent_name)
+        logger.warning("Agent {} not found while resolving welcome target", agent_name)
         return None
-    agent = matching[0]
+    return matching[0]
+
+
+def _default_read_assistant_transcript(agent: AgentInfo) -> str | None:
+    """Return the concatenated text of every assistant turn in the agent's transcript.
+
+    Reads the agent's session files the same way the `/events` endpoint does
+    (via `AgentSessionWatcher`) and joins the `assistant_message` text. Only
+    assistant turns are included: the `/welcome` skill expansion is a *user*
+    message that also contains the welcome text verbatim, so including user
+    turns would always look like a delivered welcome. Returns None when the
+    transcript cannot be read so the caller treats the welcome as not-yet-delivered.
+    """
     watcher = AgentSessionWatcher(
         agent_id=agent.id,
         agent_state_dir=agent.agent_state_dir,
@@ -187,9 +195,7 @@ def _default_read_assistant_transcript(agent_name: str) -> str | None:
         on_events=lambda _agent_id, _events: None,
     )
     events = watcher.get_all_events()
-    assistant_texts = [
-        event.get("text", "") for event in events if event.get("type") == "assistant_message"
-    ]
+    assistant_texts = [event.get("text", "") for event in events if event.get("type") == "assistant_message"]
     return "\n".join(assistant_texts)
 
 
@@ -217,6 +223,7 @@ class WelcomeResender(FrozenModel):
     deterministic fakes.
     """
 
+    resolve_agent: ResolveAgentFn = _default_resolve_agent
     read_assistant_transcript: TranscriptReadFn = _default_read_assistant_transcript
     send_message_fn: MessageSendFn = send_message
     skill_path: Path | None = None
@@ -224,16 +231,19 @@ class WelcomeResender(FrozenModel):
     def check_and_resend_welcome(self) -> bool:
         """If the initial chat agent's transcript lacks the welcome, dispatch `/welcome`.
 
-        Resolves the target agent itself (see `_resolve_initial_chat_agent_name`)
-        rather than trusting a caller-supplied name. Returns True when a
-        resend was issued, False when it was skipped (target unresolved,
+        Resolves the target agent itself (name from `_resolve_initial_chat_agent_name`,
+        then id via `resolve_agent`) rather than trusting a caller-supplied id. Returns
+        True when a resend was issued, False when it was skipped (target unresolved,
         skill unreadable, or transcript already shows the welcome).
         """
         agent_name = _resolve_initial_chat_agent_name()
         if agent_name is None:
-            logger.warning(
-                "Could not resolve the initial chat agent name; skipping welcome resend"
-            )
+            logger.warning("Could not resolve the initial chat agent name; skipping welcome resend")
+            return False
+
+        agent = self.resolve_agent(agent_name)
+        if agent is None:
+            logger.warning("Initial chat agent {} not found; skipping welcome resend", agent_name)
             return False
 
         try:
@@ -242,17 +252,13 @@ class WelcomeResender(FrozenModel):
             logger.warning("Could not read welcome skill opening line: {}", e)
             return False
 
-        transcript = self.read_assistant_transcript(agent_name)
+        transcript = self.read_assistant_transcript(agent)
         if _transcript_shows_welcome(transcript, opening_line):
-            logger.debug(
-                "Agent {} transcript already shows welcome; skipping resend", agent_name
-            )
+            logger.debug("Agent {} transcript already shows welcome; skipping resend", agent_name)
             return False
 
-        logger.info(
-            "Resending /welcome to agent {} (transcript missing opening line)", agent_name
-        )
-        sent = self.send_message_fn(AgentName(agent_name), _WELCOME_COMMAND)
+        logger.info("Resending /welcome to agent {} (transcript missing opening line)", agent_name)
+        sent = self.send_message_fn(AgentId(agent.id), _WELCOME_COMMAND)
         if not sent:
             logger.warning("Failed to dispatch /welcome to agent {}", agent_name)
             return False
