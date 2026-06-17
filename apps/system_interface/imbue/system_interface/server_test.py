@@ -4,7 +4,6 @@ import json
 import queue
 from pathlib import Path
 from typing import Generator
-from unittest.mock import ANY
 from unittest.mock import patch
 
 import pytest
@@ -278,7 +277,9 @@ def test_send_message_success(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
-    mock_send.assert_called_once_with("test-agent", "hello", lookup_locations=ANY)
+    assert mock_send.call_count == 1
+    assert mock_send.call_args.args == ("test-agent", "hello")
+    assert "lookup_locations" in mock_send.call_args.kwargs
 
 
 def test_interrupt_agent_returns_404_for_unknown_agent(client: TestClient) -> None:
