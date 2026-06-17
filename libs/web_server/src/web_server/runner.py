@@ -3,7 +3,7 @@
 Serves a single placeholder page so the "web" application slot in the
 desktop client has something meaningful to render out of the box.
 Registration with ``runtime/applications.toml`` is handled by the
-``services.toml`` entry (via ``scripts/forward_port.py``) so the
+``web`` supervisord program (via ``scripts/forward_port.py``) so the
 app-watcher writes the service_registered event to ``events/services/events.jsonl``.
 """
 
@@ -37,8 +37,8 @@ _PLACEHOLDER_HTML = """<!DOCTYPE html>
   <p>
     The source lives at <code>libs/web_server/</code> in your project.
     Edit <code>runner.py</code> to add your own routes, or swap it out for
-    any other FastAPI/ASGI app by pointing <code>services.toml</code> at
-    a different command.
+    any other FastAPI/ASGI app by pointing the <code>web</code> program in
+    <code>supervisord.conf</code> at a different command.
   </p>
 </body>
 </html>

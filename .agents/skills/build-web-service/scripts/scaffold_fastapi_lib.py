@@ -3,12 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = ["tomlkit>=0.12"]
 # ///
-"""Stand up a new FastAPI web-service lib (and its services.toml entry).
+"""Stand up a new FastAPI web-service lib (and its supervisord program entry).
 
 Creates `libs/<package>/` with a sync-FastAPI starter, updates the root
-pyproject.toml workspace/sources/dependencies, adds a `[services.<name>]`
-entry that sets `ROOT_PATH=/service/<name>` for prefix-aware URL emission,
-and runs `uv sync --all-packages` to materialize the workspace.
+pyproject.toml workspace/sources/dependencies, appends a `[program:<name>]`
+block to supervisord.conf that sets `ROOT_PATH=/service/<name>` for prefix-aware
+URL emission, and runs `uv sync --all-packages` to materialize the workspace.
 
 Usage:
     uv run .agents/skills/build-web-service/scripts/scaffold_fastapi_lib.py \\
@@ -44,6 +44,9 @@ RESERVED_NAMES = frozenset(
         "bootstrap",
         "telegram-bot",
         "runtime-backup",
+        "host-backup",
+        "terminal",
+        "deferred-install",
         "imbue-common",
     }
 )
@@ -67,17 +70,14 @@ def _validate_name(name: str) -> None:
         sys.exit(f"error: --name {name!r} is reserved")
 
 
-def _services_toml_ports(services_toml: Path) -> set[int]:
-    if not services_toml.exists():
+def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
+    # Every service registers its localhost backend via a forward_port.py call in
+    # its [program:*] command, so scanning the whole config text for
+    # http://localhost:<port> / http://127.0.0.1:<port> finds all in-use ports.
+    if not supervisord_conf.exists():
         return set()
-    doc = tomlkit.parse(services_toml.read_text())
-    services = doc.get("services", {})
-    ports: set[int] = set()
-    for entry in services.values():
-        cmd = entry.get("command", "") if isinstance(entry, (dict, Table)) else ""
-        for match in LOCALHOST_PORT_RE.finditer(str(cmd)):
-            ports.add(int(match.group(1)))
-    return ports
+    text = supervisord_conf.read_text()
+    return {int(match.group(1)) for match in LOCALHOST_PORT_RE.finditer(text)}
 
 
 def _applications_toml_ports(applications_toml: Path) -> set[int]:
@@ -95,8 +95,8 @@ def _applications_toml_ports(applications_toml: Path) -> set[int]:
 
 
 def _pick_port(repo_root: Path, requested: int | None) -> int:
-    in_use = _services_toml_ports(
-        repo_root / "services.toml"
+    in_use = _supervisord_conf_ports(
+        repo_root / "supervisord.conf"
     ) | _applications_toml_ports(repo_root / "runtime" / "applications.toml")
     if requested is not None:
         if requested in in_use:
@@ -157,9 +157,9 @@ Services run from /mngr/code (the repo root). Conventions:
 The ``ROOT_PATH`` env var is read so FastAPI emits prefix-aware
 absolute URLs (OpenAPI links, redirects) when this app is reached
 through the system_interface proxy at ``/service/{name}/``. The
-services.toml command sets ``ROOT_PATH=/service/{name}`` for that
-case. Standalone ``uv run {name}`` leaves it empty so the app serves
-at ``/``.
+supervisord program command sets ``ROOT_PATH=/service/{name}`` for
+that case. Standalone ``uv run {name}`` leaves it empty so the app
+serves at ``/``.
 """
 
 import os
@@ -347,31 +347,39 @@ def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
     path.write_text(tomlkit.dumps(doc))
 
 
-def _update_services_toml(repo_root: Path, name: str, port: int) -> None:
-    path = repo_root / "services.toml"
-    doc: TOMLDocument
-    if path.exists():
-        doc = tomlkit.parse(path.read_text())
-    else:
-        doc = tomlkit.document()
-    services = doc.get("services")
-    if services is None:
-        services = tomlkit.table()
-        doc["services"] = services
-    if not isinstance(services, Table):
-        sys.exit("error: services.toml [services] is not a table")
-    if name in services:
-        sys.exit(f"error: services.toml already has a [services.{name}] entry")
+_SUPERVISORD_PROGRAM_TEMPLATE = """\
+[program:{name}]
+command=bash -c "ROOT_PATH=/service/{name} python3 scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
+directory=/mngr/code
+autostart=true
+autorestart=true
+startretries=1000000
+stopasgroup=true
+killasgroup=true
+stdout_logfile=/var/log/supervisor/{name}-stdout.log
+stderr_logfile=/var/log/supervisor/{name}-stderr.log
+stdout_logfile_maxbytes=10MB
+stderr_logfile_maxbytes=10MB
+stdout_logfile_backups=3
+stderr_logfile_backups=3
+"""
 
-    entry = tomlkit.table()
-    entry["command"] = (
-        f"ROOT_PATH=/service/{name} python3 scripts/forward_port.py "
-        f"--url http://localhost:{port} --name {name} && uv run {name}"
-    )
-    entry["restart"] = "on-failure"
-    services[name] = entry
 
-    path.write_text(tomlkit.dumps(doc))
+def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
+    # supervisord.conf is INI (not TOML) and has hand-written comments worth
+    # preserving, so append a [program:<name>] block as text rather than
+    # round-tripping through a parser. ROOT_PATH=/service/<name> makes FastAPI
+    # emit prefix-correct URLs when reached through the system_interface proxy.
+    # The command is wrapped in `bash -c "..."` because supervisord exec's
+    # commands directly (no shell) and this one chains forward_port.py with `&&`.
+    path = repo_root / "supervisord.conf"
+    if not path.exists():
+        sys.exit(f"error: {path} not found (cannot register the new service)")
+    existing = path.read_text()
+    if f"[program:{name}]" in existing:
+        sys.exit(f"error: supervisord.conf already has a [program:{name}] section")
+    block = _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port)
+    path.write_text(existing.rstrip("\n") + "\n\n" + block)
 
 
 def _run_uv_sync(repo_root: Path) -> None:
@@ -390,9 +398,11 @@ def _run_uv_sync(repo_root: Path) -> None:
 def _find_repo_root(start: Path) -> Path:
     current = start.resolve()
     for parent in [current, *current.parents]:
-        if (parent / "pyproject.toml").exists() and (parent / "services.toml").exists():
+        if (parent / "pyproject.toml").exists() and (
+            parent / "supervisord.conf"
+        ).exists():
             return parent
-    sys.exit("error: could not locate repo root (pyproject.toml + services.toml)")
+    sys.exit("error: could not locate repo root (pyproject.toml + supervisord.conf)")
 
 
 def main() -> None:
@@ -411,7 +421,7 @@ def main() -> None:
     parser.add_argument(
         "--repo-root",
         default=None,
-        help="repo root (defaults to nearest ancestor containing pyproject.toml + services.toml)",
+        help="repo root (defaults to nearest ancestor containing pyproject.toml + supervisord.conf)",
     )
     parser.add_argument(
         "--skip-uv-sync",
@@ -433,7 +443,7 @@ def main() -> None:
         repo_root, args.name, args.description, port, list(args.extra_dep)
     )
     _update_root_pyproject(repo_root, args.name, package)
-    _update_services_toml(repo_root, args.name, port)
+    _update_supervisord_conf(repo_root, args.name, port)
 
     if not args.skip_uv_sync:
         _run_uv_sync(repo_root)
