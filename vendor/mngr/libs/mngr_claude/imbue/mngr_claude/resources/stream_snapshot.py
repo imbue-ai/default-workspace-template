@@ -833,48 +833,31 @@ def _run_one_poll(
     active_path: Path,
     transcript_path: Path,
     buffer_path: Path,
-    was_active: bool,
-) -> bool:
-    """Perform a single capture/convert/stitch/write cycle.
-
-    Returns whether the agent was active this poll; the caller threads it back
-    in as ``was_active`` on the next poll so the active->idle edge is detectable.
-
-    While the agent is idle we do no streaming work at all -- no transcript read,
-    no pane capture, no buffer write. Streaming is a live preview of an
-    actively-working agent; an idle agent has nothing to preview, and the durable
-    transcript event already carries the finalized message. The sole exception is
-    the active->idle transition, where we clear the buffer body once (so a stale
-    in-progress preview cannot linger) and pin the id line to the now-final
-    message.
-    """
-    if not active_path.exists():
-        if was_active:
-            # active -> idle edge: empty the in-progress body once and refresh
-            # the id line to the last complete message. Resetting the accumulator
-            # also guarantees the next turn starts from a clean slate.
-            state.reset()
-            last_id = _read_last_complete_assistant_id(transcript_path)
-            _write_buffer_atomically(buffer_path, format_buffer(last_id, state.body_lines))
-        return False
-
+) -> None:
+    """Perform a single capture/convert/stitch/write cycle."""
     last_id = _read_last_complete_assistant_id(transcript_path)
+
+    # Agent idle: empty the body, keep refreshing the id line.
+    if not active_path.exists():
+        state.reset()
+        _write_buffer_atomically(buffer_path, format_buffer(last_id, state.body_lines))
+        return
+
     pane = _capture_pane(session_name)
     if pane is None:
-        return True
+        return
 
     # Extract the message region (marker-anchored when the start is visible, or
     # the scrolled tail otherwise) and stitch it onto the accumulated body.
     region_result = extract_message_region(pane)
     if region_result is None:
         _write_buffer_atomically(buffer_path, format_buffer(last_id, state.body_lines))
-        return True
+        return
 
     region_lines, has_marker = region_result
     conversion = convert_block_to_markdown(region_lines)
     state.ingest_block(conversion, has_marker)
     _write_buffer_atomically(buffer_path, format_buffer(last_id, state.body_lines))
-    return True
 
 
 def main(argv: list[str]) -> int:
@@ -930,13 +913,9 @@ def main(argv: list[str]) -> int:
     state = StreamBufferState()
     _write_buffer_atomically(buffer_path, format_buffer("", []))
 
-    # The startup write above already left the buffer empty, so start from the
-    # idle baseline: an agent idle at startup does no work until it goes active,
-    # while the first active->idle transition still triggers the clearing write.
-    was_active = False
     try:
         while _session_is_alive(session_name):
-            was_active = _run_one_poll(session_name, state, active_path, transcript_path, buffer_path, was_active)
+            _run_one_poll(session_name, state, active_path, transcript_path, buffer_path)
             time.sleep(interval_seconds)
     finally:
         try:
