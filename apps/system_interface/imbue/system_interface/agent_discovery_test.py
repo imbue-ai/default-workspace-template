@@ -212,3 +212,26 @@ def test_returns_false_when_nothing_reachable(mngr_ctx: MngrContext) -> None:
         _send_message_to_agent("ghost", "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send)
         is False
     )
+
+
+def test_multiple_known_locations_are_all_messaged_without_discovery(mngr_ctx: MngrContext) -> None:
+    """A name known on several hosts messages all of them in one send, no discovery."""
+    match_a = _make_match("twin", host="host-a")
+    match_b = _make_match("twin", host="host-b")
+    discover_calls: list[str] = []
+    send_calls: list[tuple[AgentMatch, ...]] = []
+
+    def _lookup(name: str) -> Sequence[AgentMatch]:
+        return (match_a, match_b)
+
+    def _discover(name: str, ctx: MngrContext) -> Sequence[AgentMatch]:
+        discover_calls.append(name)
+        return ()
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        return MessageResult(successful_agents=[str(m.agent_name) for m in matches])
+
+    assert _send_message_to_agent("twin", "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send)
+    assert discover_calls == []
+    assert send_calls == [(match_a, match_b)]

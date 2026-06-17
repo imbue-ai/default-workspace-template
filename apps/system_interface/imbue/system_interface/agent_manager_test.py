@@ -340,9 +340,15 @@ def test_agent_destroyed_removes_agent(agent_manager: AgentManager, broadcaster:
     assert str_id not in [a["id"] for a in msg["agents"]]
 
 
-def _snapshot_with_located_agent(name: str) -> tuple[MngrAgentId, HostId, Any]:
-    host_id = HostId()
-    agent_id = MngrAgentId()
+def _located(
+    name: str,
+    host_name: str = "myhost",
+    agent_id: MngrAgentId | None = None,
+    host_id: HostId | None = None,
+) -> tuple[DiscoveredAgent, DiscoveredHost]:
+    """Build a (DiscoveredAgent, DiscoveredHost) pair on the same host."""
+    agent_id = agent_id if agent_id is not None else MngrAgentId()
+    host_id = host_id if host_id is not None else HostId()
     agent = DiscoveredAgent(
         host_id=host_id,
         agent_id=agent_id,
@@ -350,8 +356,13 @@ def _snapshot_with_located_agent(name: str) -> tuple[MngrAgentId, HostId, Any]:
         provider_name=ProviderInstanceName("local"),
         certified_data={"labels": {}, "work_dir": None},
     )
-    host = DiscoveredHost(host_id=host_id, host_name=HostName("myhost"), provider_name=ProviderInstanceName("local"))
-    return agent_id, host_id, make_full_discovery_snapshot_event([agent], [host])
+    host = DiscoveredHost(host_id=host_id, host_name=HostName(host_name), provider_name=ProviderInstanceName("local"))
+    return agent, host
+
+
+def _snapshot_with_located_agent(name: str) -> tuple[MngrAgentId, HostId, Any]:
+    agent, host = _located(name)
+    return agent.agent_id, agent.host_id, make_full_discovery_snapshot_event([agent], [host])
 
 
 def test_full_snapshot_populates_agent_locations(agent_manager: AgentManager) -> None:
@@ -395,6 +406,44 @@ def test_agent_without_host_in_snapshot_is_not_located(agent_manager: AgentManag
 
     assert agent_manager.get_agent_matches_by_name("hostless") == []
     assert len(agent_manager.get_agents()) == 1
+
+
+def test_get_agent_matches_by_name_returns_all_for_shared_name(agent_manager: AgentManager) -> None:
+    """A name on multiple hosts resolves to every matching location."""
+    agent_a, host_a = _located("twin", host_name="host-a")
+    agent_b, host_b = _located("twin", host_name="host-b")
+    agent_manager._handle_full_snapshot(make_full_discovery_snapshot_event([agent_a, agent_b], [host_a, host_b]))
+
+    matches = agent_manager.get_agent_matches_by_name("twin")
+    assert len(matches) == 2
+    assert {str(m.host_name) for m in matches} == {"host-a", "host-b"}
+    assert {str(m.agent_id) for m in matches} == {str(agent_a.agent_id), str(agent_b.agent_id)}
+
+
+def test_agent_location_updates_when_host_changes(agent_manager: AgentManager) -> None:
+    """A later snapshot relocating an agent replaces its cached location."""
+    agent_id = MngrAgentId()
+    agent_a, host_a = _located("mover", host_name="host-a", agent_id=agent_id)
+    agent_manager._handle_full_snapshot(make_full_discovery_snapshot_event([agent_a], [host_a]))
+    assert str(agent_manager.get_agent_matches_by_name("mover")[0].host_name) == "host-a"
+
+    agent_b, host_b = _located("mover", host_name="host-b", agent_id=agent_id)
+    agent_manager._handle_full_snapshot(make_full_discovery_snapshot_event([agent_b], [host_b]))
+
+    matches = agent_manager.get_agent_matches_by_name("mover")
+    assert len(matches) == 1
+    assert str(matches[0].host_name) == "host-b"
+    assert str(matches[0].agent_id) == str(agent_id)
+
+
+def test_remove_agent_drops_location(agent_manager: AgentManager) -> None:
+    """remove_agent (the API destroy path) drops the cached location too."""
+    agent_id, _host_id, snapshot = _snapshot_with_located_agent("doomed")
+    agent_manager._handle_full_snapshot(snapshot)
+    assert len(agent_manager.get_agent_matches_by_name("doomed")) == 1
+
+    agent_manager.remove_agent(str(agent_id))
+    assert agent_manager.get_agent_matches_by_name("doomed") == []
 
 
 def test_on_applications_changed(
