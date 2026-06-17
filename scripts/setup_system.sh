@@ -19,11 +19,13 @@ export DEBIAN_FRONTEND=noninteractive
 : "${NODE_MAJOR:=20}"
 : "${LATCHKEY_VERSION:=2.14.0}"
 
-# System packages (tini for signal handling; the rest are agent/runtime deps).
+# System packages (tini for signal handling; supervisor runs our background
+# services; the rest are agent/runtime deps). supervisor provides the system
+# supervisord + supervisorctl that `uv run bootstrap` execs into the foreground.
 apt-get update
 apt-get install -y --no-install-recommends \
     bash build-essential ca-certificates curl fd-find git git-lfs jq less nano \
-    openssh-server procps restic ripgrep rsync sqlite3 tini tmux unison wget \
+    openssh-server procps restic ripgrep rsync sqlite3 supervisor tini tmux unison wget \
     xxd xmlstarlet
 rm -rf /var/lib/apt/lists/*
 
