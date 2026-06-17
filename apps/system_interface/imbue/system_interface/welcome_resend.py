@@ -37,6 +37,7 @@ import json
 import os
 import re
 from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 
 from loguru import logger as _loguru_logger
@@ -165,17 +166,29 @@ def _resolve_initial_chat_agent_name() -> str | None:
     return name
 
 
-def _default_resolve_agent(agent_name: str) -> AgentInfo | None:
-    """Resolve the initial chat agent's name to its full :class:`AgentInfo` (with id).
+def _unique_agent_by_name(agent_name: str, agents: Sequence[AgentInfo]) -> AgentInfo | None:
+    """Return the single agent named ``agent_name``, or None if not exactly one.
 
-    Returns None when no agent with that name exists so the caller skips the
-    resend rather than dispatching to a nonexistent target.
+    The workspace is single-host, where mngr guarantees the name is unique, so a
+    correct resolution yields exactly one agent. Anything else -- zero matches (no
+    such agent) or more than one (the single-host assumption was violated and the
+    name spans hosts) -- returns None so the caller skips the resend rather than
+    dispatching `/welcome` to an arbitrary, possibly wrong, agent.
     """
-    matching = [agent for agent in discover_agents() if agent.name == agent_name]
-    if not matching:
-        logger.warning("Agent {} not found while resolving welcome target", agent_name)
+    matching = [agent for agent in agents if agent.name == agent_name]
+    if len(matching) != 1:
+        logger.warning(
+            "Welcome target {} resolved to {} agents (expected exactly 1); skipping resend",
+            agent_name,
+            len(matching),
+        )
         return None
     return matching[0]
+
+
+def _default_resolve_agent(agent_name: str) -> AgentInfo | None:
+    """Resolve the initial chat agent's name to its full :class:`AgentInfo` (with id)."""
+    return _unique_agent_by_name(agent_name, discover_agents())
 
 
 def _default_read_assistant_transcript(agent: AgentInfo) -> str | None:
