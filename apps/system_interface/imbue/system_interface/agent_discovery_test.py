@@ -122,10 +122,13 @@ def mngr_ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[MngrCo
         cg.__exit__(None, None, None)
 
 
-def _make_match(name: str, host: str = "host-a") -> AgentMatch:
+_AGENT_ID = AgentId("agent-00000000000000000000000000000001")
+
+
+def _make_match(agent_id: AgentId = _AGENT_ID, host: str = "host-a") -> AgentMatch:
     return AgentMatch(
-        agent_id=AgentId.generate(),
-        agent_name=AgentName(name),
+        agent_id=agent_id,
+        agent_name=AgentName("alpha"),
         host_id=HostId.generate(),
         host_name=HostName(host),
         provider_name=ProviderInstanceName("local"),
@@ -133,115 +136,82 @@ def _make_match(name: str, host: str = "host-a") -> AgentMatch:
 
 
 def test_known_location_is_messaged_without_discovery(mngr_ctx: MngrContext) -> None:
-    match = _make_match("alpha")
-    discover_calls: list[str] = []
+    match = _make_match()
+    discover_calls: list[AgentId] = []
     send_calls: list[tuple[AgentMatch, ...]] = []
 
-    def _lookup(name: str) -> Sequence[AgentMatch]:
+    def _lookup(agent_id: AgentId) -> Sequence[AgentMatch]:
         return (match,)
 
-    def _discover(name: str, ctx: MngrContext) -> Sequence[AgentMatch]:
-        discover_calls.append(name)
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        discover_calls.append(agent_id)
         return ()
 
     def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
         send_calls.append(tuple(matches))
-        return MessageResult(successful_agents=[str(m.agent_name) for m in matches])
+        return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
 
-    assert _send_message_to_agent(
-        AgentName("alpha"), "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send
-    )
+    assert _send_message_to_agent(_AGENT_ID, "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send)
     assert discover_calls == []
     assert send_calls == [(match,)]
 
 
 def test_empty_lookup_falls_back_to_discovery(mngr_ctx: MngrContext) -> None:
-    discovered = _make_match("alpha")
-    discover_calls: list[str] = []
+    discovered = _make_match()
+    discover_calls: list[AgentId] = []
     send_calls: list[tuple[AgentMatch, ...]] = []
 
-    def _lookup(name: str) -> Sequence[AgentMatch]:
+    def _lookup(agent_id: AgentId) -> Sequence[AgentMatch]:
         return ()
 
-    def _discover(name: str, ctx: MngrContext) -> Sequence[AgentMatch]:
-        discover_calls.append(name)
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        discover_calls.append(agent_id)
         return (discovered,)
 
     def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
         send_calls.append(tuple(matches))
-        return MessageResult(successful_agents=[str(m.agent_name) for m in matches])
+        return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
 
-    assert _send_message_to_agent(
-        AgentName("alpha"), "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send
-    )
-    assert discover_calls == ["alpha"]
+    assert _send_message_to_agent(_AGENT_ID, "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send)
+    assert discover_calls == [_AGENT_ID]
     assert send_calls == [(discovered,)]
 
 
 def test_stale_known_location_falls_back_to_discovery(mngr_ctx: MngrContext) -> None:
-    stale = _make_match("alpha")
-    fresh = _make_match("alpha")
-    discover_calls: list[str] = []
+    stale = _make_match(host="host-a")
+    fresh = _make_match(host="host-b")
+    discover_calls: list[AgentId] = []
     send_calls: list[tuple[AgentMatch, ...]] = []
 
-    def _lookup(name: str) -> Sequence[AgentMatch]:
+    def _lookup(agent_id: AgentId) -> Sequence[AgentMatch]:
         return (stale,)
 
-    def _discover(name: str, ctx: MngrContext) -> Sequence[AgentMatch]:
-        discover_calls.append(name)
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        discover_calls.append(agent_id)
         return (fresh,)
 
     def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
         send_calls.append(tuple(matches))
         # The stale location reaches no agent; the freshly discovered one does.
-        reached = [str(m.agent_name) for m in matches if m.agent_id == fresh.agent_id]
+        reached = [str(m.agent_id) for m in matches if str(m.host_name) == "host-b"]
         return MessageResult(successful_agents=reached)
 
-    assert _send_message_to_agent(
-        AgentName("alpha"), "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send
-    )
-    assert discover_calls == ["alpha"]
+    assert _send_message_to_agent(_AGENT_ID, "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send)
+    assert discover_calls == [_AGENT_ID]
     assert send_calls == [(stale,), (fresh,)]
 
 
 def test_returns_false_when_nothing_reachable(mngr_ctx: MngrContext) -> None:
-    def _lookup(name: str) -> Sequence[AgentMatch]:
+    def _lookup(agent_id: AgentId) -> Sequence[AgentMatch]:
         return ()
 
-    def _discover(name: str, ctx: MngrContext) -> Sequence[AgentMatch]:
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
         return ()
 
     def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
         return MessageResult(successful_agents=[])
 
     assert (
-        _send_message_to_agent(
-            AgentName("ghost"), "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send
-        )
+        _send_message_to_agent(_AGENT_ID, "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send)
         is False
     )
-
-
-def test_multiple_known_locations_are_all_messaged_without_discovery(mngr_ctx: MngrContext) -> None:
-    """A name known on several hosts messages all of them in one send, no discovery."""
-    match_a = _make_match("twin", host="host-a")
-    match_b = _make_match("twin", host="host-b")
-    discover_calls: list[str] = []
-    send_calls: list[tuple[AgentMatch, ...]] = []
-
-    def _lookup(name: str) -> Sequence[AgentMatch]:
-        return (match_a, match_b)
-
-    def _discover(name: str, ctx: MngrContext) -> Sequence[AgentMatch]:
-        discover_calls.append(name)
-        return ()
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return MessageResult(successful_agents=[str(m.agent_name) for m in matches])
-
-    assert _send_message_to_agent(
-        AgentName("twin"), "hi", mngr_ctx, lookup_locations=_lookup, discover=_discover, send=_send
-    )
-    assert discover_calls == []
-    assert send_calls == [(match_a, match_b)]

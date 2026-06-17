@@ -16,13 +16,25 @@ from pathlib import Path
 import pytest
 
 from imbue.system_interface import welcome_resend
+from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.welcome_resend import WelcomeResender
+
+# A well-formed agent id (AgentId validates the `agent-<32 hex>` shape).
+_AGENT_ID = "agent-00000000000000000000000000000001"
+
+
+def _agent_info(name: str, agent_id: str = _AGENT_ID) -> AgentInfo:
+    return AgentInfo(
+        id=agent_id,
+        name=name,
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/agent"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
 
 
 def _write_welcome_skill(skill: Path) -> Path:
-    skill.write_text(
-        "---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nA Mind\n\n---\n"
-    )
+    skill.write_text("---\nname: w\n---\n\nIntro\n\n---\n\n### Welcome to Minds\n\nA Mind\n\n---\n")
     return skill
 
 
@@ -82,9 +94,7 @@ def test_transcript_shows_welcome_false_when_only_auth_errors() -> None:
     assert welcome_resend._transcript_shows_welcome(transcript, "### Welcome to Minds") is False
 
 
-def test_resolve_initial_chat_agent_name_reads_host_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_resolve_initial_chat_agent_name_reads_host_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The resend target is the host_name (the initial chat agent's name)."""
     _set_up_host(tmp_path, "my-mind", monkeypatch)
     assert welcome_resend._resolve_initial_chat_agent_name() == "my-mind"
@@ -105,17 +115,18 @@ def test_check_and_resend_welcome_resends_when_transcript_missing_welcome(
     _set_up_host(tmp_path, "my-agent", monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(name: str, message: str) -> bool:
-        send_calls.append((name, message))
+    def _record_send(agent_id: str, message: str) -> bool:
+        send_calls.append((agent_id, message))
         return True
 
     resender = WelcomeResender(
-        read_assistant_transcript=lambda _name: "Not logged in",
+        resolve_agent=lambda _name: _agent_info("my-agent"),
+        read_assistant_transcript=lambda _agent: "Not logged in",
         send_message_fn=_record_send,
         skill_path=skill,
     )
     assert resender.check_and_resend_welcome() is True
-    assert send_calls == [("my-agent", "/welcome")]
+    assert send_calls == [(_AGENT_ID, "/welcome")]
 
 
 def test_check_and_resend_welcome_skips_when_transcript_has_welcome(
@@ -131,12 +142,13 @@ def test_check_and_resend_welcome_skips_when_transcript_has_welcome(
     _set_up_host(tmp_path, "my-agent", monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(name: str, message: str) -> bool:
-        send_calls.append((name, message))
+    def _record_send(agent_id: str, message: str) -> bool:
+        send_calls.append((agent_id, message))
         return True
 
     resender = WelcomeResender(
-        read_assistant_transcript=lambda _name: "### Welcome to Minds\n\nA Mind runs ...",
+        resolve_agent=lambda _name: _agent_info("my-agent"),
+        read_assistant_transcript=lambda _agent: "### Welcome to Minds\n\nA Mind runs ...",
         send_message_fn=_record_send,
         skill_path=skill,
     )
@@ -147,40 +159,62 @@ def test_check_and_resend_welcome_skips_when_transcript_has_welcome(
 def test_check_and_resend_welcome_resends_when_transcript_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A None transcript (agent/file not found) is treated as welcome-absent."""
+    """A None transcript (agent found, transcript file unreadable) is welcome-absent."""
     skill = _write_welcome_skill(tmp_path / "SKILL.md")
     _set_up_host(tmp_path, "my-agent", monkeypatch)
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(name: str, message: str) -> bool:
-        send_calls.append((name, message))
+    def _record_send(agent_id: str, message: str) -> bool:
+        send_calls.append((agent_id, message))
         return True
 
     resender = WelcomeResender(
-        read_assistant_transcript=lambda _name: None,
+        resolve_agent=lambda _name: _agent_info("my-agent"),
+        read_assistant_transcript=lambda _agent: None,
         send_message_fn=_record_send,
         skill_path=skill,
     )
     assert resender.check_and_resend_welcome() is True
-    assert send_calls == [("my-agent", "/welcome")]
+    assert send_calls == [(_AGENT_ID, "/welcome")]
 
 
 def test_check_and_resend_welcome_skips_when_host_name_unresolved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With no resolvable target agent, the resend is skipped, not guessed."""
+    """With no resolvable target name, the resend is skipped, not guessed."""
     skill = _write_welcome_skill(tmp_path / "SKILL.md")
     # MNGR_HOST_DIR is set but no data.json is written, so the target
     # agent name cannot be resolved.
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     send_calls: list[tuple[str, str]] = []
 
-    def _record_send(name: str, message: str) -> bool:
-        send_calls.append((name, message))
+    def _record_send(agent_id: str, message: str) -> bool:
+        send_calls.append((agent_id, message))
         return True
 
     resender = WelcomeResender(
-        read_assistant_transcript=lambda _name: None,
+        resolve_agent=lambda _name: _agent_info("my-agent"),
+        read_assistant_transcript=lambda _agent: None,
+        send_message_fn=_record_send,
+        skill_path=skill,
+    )
+    assert resender.check_and_resend_welcome() is False
+    assert send_calls == []
+
+
+def test_check_and_resend_welcome_skips_when_agent_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The name resolves but no agent with it exists, so the resend is skipped."""
+    skill = _write_welcome_skill(tmp_path / "SKILL.md")
+    _set_up_host(tmp_path, "my-agent", monkeypatch)
+    send_calls: list[tuple[str, str]] = []
+
+    def _record_send(agent_id: str, message: str) -> bool:
+        send_calls.append((agent_id, message))
+        return True
+
+    resender = WelcomeResender(
+        resolve_agent=lambda _name: None,
+        read_assistant_transcript=lambda _agent: None,
         send_message_fn=_record_send,
         skill_path=skill,
     )
@@ -193,8 +227,9 @@ def test_check_and_resend_welcome_returns_false_when_skill_unreadable(
 ) -> None:
     _set_up_host(tmp_path, "my-agent", monkeypatch)
     resender = WelcomeResender(
-        read_assistant_transcript=lambda _name: None,
-        send_message_fn=lambda _name, _message: True,
+        resolve_agent=lambda _name: _agent_info("my-agent"),
+        read_assistant_transcript=lambda _agent: None,
+        send_message_fn=lambda _agent_id, _message: True,
         skill_path=tmp_path / "missing.md",
     )
     assert resender.check_and_resend_welcome() is False

@@ -24,8 +24,8 @@ from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.loader import load_config
 from imbue.mngr.main import get_or_create_plugin_manager
 from imbue.mngr.primitives import AgentAddress
+from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
-from imbue.mngr.primitives import AgentNameOrId
 from imbue.mngr.utils.env_utils import parse_env_file
 
 logger = _loguru_logger
@@ -172,20 +172,20 @@ def discover_agents(
     return agents
 
 
-LocationLookupFn = Callable[[AgentNameOrId], Sequence[AgentMatch]]
-DiscoverFn = Callable[[AgentNameOrId, MngrContext], Sequence[AgentMatch]]
+LocationLookupFn = Callable[[AgentId], Sequence[AgentMatch]]
+DiscoverFn = Callable[[AgentId, MngrContext], Sequence[AgentMatch]]
 SendFn = Callable[[Sequence[AgentMatch], str, MngrContext], MessageResult]
 
 
-def _no_known_locations(agent: AgentNameOrId) -> Sequence[AgentMatch]:
+def _no_known_locations(agent_id: AgentId) -> Sequence[AgentMatch]:
     """Default location lookup: nothing known, so the caller discovers."""
     return ()
 
 
-def _discover_locations(agent: AgentNameOrId, mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
-    """Resolve an agent name or id to its locations via a full mngr discovery."""
+def _discover_locations(agent_id: AgentId, mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
+    """Resolve an agent id to its location via a full mngr discovery."""
     return find_all_agents(
-        addresses=(AgentAddress(agent=agent),),
+        addresses=(AgentAddress(agent=agent_id),),
         filter_all=False,
         target_state=None,
         mngr_ctx=mngr_ctx,
@@ -204,7 +204,7 @@ def _send_to(matches: Sequence[AgentMatch], message: str, mngr_ctx: MngrContext)
 
 
 def _send_message_to_agent(
-    agent: AgentNameOrId,
+    agent_id: AgentId,
     message: str,
     mngr_ctx: MngrContext,
     *,
@@ -212,30 +212,31 @@ def _send_message_to_agent(
     discover: DiscoverFn = _discover_locations,
     send: SendFn = _send_to,
 ) -> bool:
-    """Send to ``agent`` (name or id) using a known location if there is one, else discovery.
+    """Send to the agent with ``agent_id`` using its known location, else discovery.
 
     A known location (from the live observe stream) is messaged directly -- no
     discovery. On a miss, or if that send reaches no agent (the location just went
     stale: destroyed, recreated, or moved hosts), it falls back to a full mngr
-    discovery and sends to whatever that resolves.
+    discovery. The id is globally unique, so it resolves to exactly the intended
+    agent rather than fanning out across same-named agents on other hosts.
     """
-    known = lookup_locations(agent)
+    known = lookup_locations(agent_id)
     if known and send(known, message, mngr_ctx).successful_agents:
         return True
-    matches = discover(agent, mngr_ctx)
+    matches = discover(agent_id, mngr_ctx)
     return bool(send(matches, message, mngr_ctx).successful_agents)
 
 
-def send_message(agent: AgentNameOrId, message: str, *, lookup_locations: LocationLookupFn = _no_known_locations) -> bool:
-    """Send a message to an agent (addressed by name or id). Returns True on success.
+def send_message(agent_id: AgentId, message: str, *, lookup_locations: LocationLookupFn = _no_known_locations) -> bool:
+    """Send a message to the agent with ``agent_id``. Returns True on success.
 
     ``lookup_locations`` is consulted first for the agent's already-known
-    location(s); the server backs it with the live observe stream so a message
+    location; the server backs it with the live observe stream so a message
     skips discovery. STOPPED agents are auto-started (`is_start_desired=True`).
     """
     mngr_ctx, cg = _get_mngr_context()
     try:
-        return _send_message_to_agent(agent, message, mngr_ctx, lookup_locations=lookup_locations)
+        return _send_message_to_agent(agent_id, message, mngr_ctx, lookup_locations=lookup_locations)
     finally:
         cg.__exit__(None, None, None)
 
