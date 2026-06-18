@@ -70,7 +70,9 @@ CATEGORIES = (
 )
 # Fields the script owns; the AI must never set these (we inject them from the
 # fetched record so the source of truth stays the raw email, not the model).
-PRESERVED_KEYS = frozenset({"id", "from", "subject", "date", "gmail_url", "raw_body"})
+PRESERVED_KEYS = frozenset(
+    {"id", "from", "subject", "date", "gmail_url", "raw_body", "body_kind", "raw_payload"}
+)
 
 
 class InboxDigestError(RuntimeError):
@@ -401,6 +403,7 @@ def _merge_record(record: dict[str, object], extracted: dict[str, object]) -> di
         "subject": record.get("subject", ""),
         "date": record.get("date", ""),
         "gmail_url": record.get("gmail_url", ""),
+        "body_kind": record.get("body_kind", ""),
         "raw_body": record.get("body", ""),
     }
     # Layer AI fields on top, but never let the model overwrite preserved keys
@@ -457,6 +460,20 @@ async def _digest_async(records: list[dict[str, object]]) -> _DigestOutcome:
     return _DigestOutcome(records=finished, cost_usd=sum(costs))
 
 
+def _link_raw_payload(digested: list[dict[str, object]], out_dir: Path) -> None:
+    """Point each digest record at its preserved raw Gmail payload, when present.
+
+    ``fetch`` writes the full payload to ``<out_dir>/messages/<id>.json``; adding
+    a reference to it (relative to the repo root, the documented cwd) lets a
+    surface render the original email in its native format -- not just the
+    HTML-stripped ``raw_body`` -- and the link survives into the stable copy.
+    """
+    for record in digested:
+        payload_path = out_dir / "messages" / f"{record.get('id', '')}.json"
+        if payload_path.is_file():
+            record["raw_payload"] = str(payload_path)
+
+
 def digest(records: list[dict[str, object]], out_dir: Path) -> list[dict[str, object]]:
     """Classify + extract every record via AI, write digest.json, return records."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -464,6 +481,7 @@ def digest(records: list[dict[str, object]], out_dir: Path) -> list[dict[str, ob
         outcome = _DigestOutcome(records=[], cost_usd=0.0)
     else:
         outcome = anyio.run(_digest_async, records)
+    _link_raw_payload(outcome.records, out_dir)
     (out_dir / "digest.json").write_text(
         json.dumps(outcome.records, indent=1, ensure_ascii=False), encoding="utf-8"
     )
