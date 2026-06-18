@@ -381,6 +381,18 @@ def render_page() -> str:
         body = "".join(render_record(r, i) for i, r in enumerate(items))
         sections.append(f'<section id="sec-{cat}">{body}</section>')
 
+    # Records whose category is neither a known section nor "promotion" still
+    # belong on the page -- drop nothing silently. render_record already falls
+    # back to a neutral accent and the raw category as its label.
+    known = set(CATEGORY_ORDER) | {"promotion"}
+    other = [rec for rec in records if rec.get("category") not in known]
+    if other:
+        tally_bits.append(
+            f'<a href="#sec-other"><b>{len(other)}</b> other</a>'
+        )
+        body = "".join(render_record(r, i) for i, r in enumerate(other))
+        sections.append(f'<section id="sec-other">{body}</section>')
+
     promos = by_cat.get("promotion", [])
     promos_html = ""
     if promos:
