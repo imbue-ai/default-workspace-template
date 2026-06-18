@@ -938,7 +938,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     unpreview_parser = subparsers.add_parser(
         "unpreview",
-        help="Tear down a preview (server, service registration, worktree). Idempotent.",
+        help="Tear down a preview (kill the server, deregister the service). Idempotent.",
     )
     unpreview_parser.add_argument(
         "--slug", required=True, help="The slug passed to 'preview'."
