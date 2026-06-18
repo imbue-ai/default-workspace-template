@@ -36,6 +36,10 @@ class FakePexpectProcess:
       `self.match` is preset to the result of regex-matching `url_match`.
       When None, the first `expect()` returns `expect_return_index`
       (typically 1 for EOF or 2 for TIMEOUT) without setting `match`.
+    - `raw_output`: the bytes the real CLI left in the consumed buffer
+      (`process.before + process.after`). Defaults to `url_match` (a bare
+      URL), but a test can inject the escape-wrapped OSC 8 hyperlink the
+      real `claude auth login` emits to exercise the URL-extraction path.
     - `expect_return_index`: index returned on the first `expect()` call.
       Lets a test simulate the URL-found / EOF-before-URL / timeout
       branches of `_spawn_oauth_and_parse_url`.
@@ -50,6 +54,7 @@ class FakePexpectProcess:
         url_match: str | None = None,
         expect_return_index: int = 0,
         eof_return_index: int = 0,
+        raw_output: str | None = None,
     ) -> None:
         self._expect_return_index = expect_return_index
         self._eof_return_index = eof_return_index
@@ -59,6 +64,11 @@ class FakePexpectProcess:
         self.close_calls = 0
         self.timeout: float | None = None
         self.match: re.Match[str] | None = None
+        # Mirror what pexpect leaves after a successful match: everything it
+        # consumed lives in `before` + `after`. `_spawn_oauth_and_parse_url`
+        # reads that pair, so the fake drives extraction through `after`.
+        self.before = ""
+        self.after = raw_output if raw_output is not None else (url_match or "")
         if url_match is not None:
             self.match = re.compile(r".*").match(url_match)
             assert self.match is not None
