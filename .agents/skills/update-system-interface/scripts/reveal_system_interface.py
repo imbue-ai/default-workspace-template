@@ -890,7 +890,13 @@ def preview(
             "log": str(log_path),
         }
         _preview_state_path(repo_root, slug).write_text(json.dumps(state, indent=2))
-    except RevealError as exc:
+    except (RevealError, OSError) as exc:
+        # OSError as well as RevealError: a build/boot step can fail not only by
+        # returning non-zero (-> RevealError via _run_checked) but by raising --
+        # a missing ``uv``/``git``/``npm`` binary surfaces as FileNotFoundError,
+        # and ``find_free_port`` can raise a socket OSError. Either way the
+        # worktree (and possibly a booted server) is already on disk, so teardown
+        # must run to honor "on any failure the partial state is torn down".
         sys.stderr.write(f"preview failed: {exc}\ntearing down partial preview...\n")
         _teardown_preview(
             repo_root,
