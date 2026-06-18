@@ -87,8 +87,9 @@ What gets generated:
 - `libs/<package>/src/<package>/__init__.py` -- empty.
 - `libs/<package>/src/<package>/runner.py` -- sync FastAPI starter.
   Reads `ROOT_PATH` from env (default empty) and passes it to
-  `FastAPI(...)` so the app emits prefix-aware URLs when reached
-  through the proxy.
+  `FastAPI(...)` so the app emits prefix-aware *server-side* URLs
+  (OpenAPI, redirects) when reached through the proxy. URLs in the
+  HTML/JS you emit are a separate concern -- see the URL rule in Step 2.
 - `libs/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
 - `libs/<package>/README.md` -- one-line description.
@@ -103,14 +104,21 @@ What gets updated:
 
   ```toml
   [services.<name>]
-  command = "ROOT_PATH=/service/<name> python3 scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
+  command = "python3 scripts/forward_port.py --url http://localhost:<port> --name <name> && ROOT_PATH=/service/<name> uv run <name>"
   restart = "on-failure"
   ```
 
-  The `ROOT_PATH=/service/<name>` prefix is what makes FastAPI emit
-  prefix-correct OpenAPI links and absolute redirects when reached
-  through the system_interface. Standalone `uv run <name>` keeps
+  `ROOT_PATH=/service/<name>` makes FastAPI emit prefix-correct OpenAPI
+  links and absolute redirects when reached through the system_interface.
+  It must sit on `uv run <name>` (the app), **not** at the front of the
+  whole line: a `VAR=val cmd1 && cmd2` prefix binds `VAR` to `cmd1` only,
+  so a leading `ROOT_PATH=` would reach `forward_port.py` (which ignores
+  it) and leave the app's env empty -- silently breaking every
+  server-side URL FastAPI generates. Standalone `uv run <name>` keeps
   working at `/` because the env var is unset there.
+
+  This only governs *server-side* URL generation. URLs in the HTML/JS
+  you serve are governed by the relative-URL rule in Step 2 instead.
 
 The bootstrap service manager picks up the new entry automatically
 (no manual restart). Confirm with:
@@ -132,6 +140,35 @@ placeholder with your real routes.
 
 Use **sync handlers** (`def`, not `async def`). The starter is fully
 sync and most pages don't need otherwise.
+
+### The URL rule: emit relative URLs, never reconstruct the prefix
+
+Your app is served at `/service/<name>/` behind the proxy but at `/`
+when run standalone. **Every URL your client-side markup builds -- `fetch`
+paths, iframe `src`, form `action`, `<a href>`, WebSocket URLs -- must
+be a RELATIVE path** (`raw/123`, `api/items`, `socket`), never an
+absolute path and never a hardcoded prefix.
+
+Why relative wins on every axis:
+
+- The proxy injects `<base href="/service/<name>/">`, so a relative URL
+  resolves to `/service/<name>/raw/123` behind the proxy and to
+  `/raw/123` standalone -- correct in both, with zero knowledge of the
+  prefix.
+- An **absolute path** (`/raw/123`) ignores the `<base>` and resolves
+  against the origin root, so it escapes your service and hits the
+  workspace shell -- e.g. an iframe pointed at `/raw/123` loads the
+  workspace UI (blank inside a sandbox), not your route.
+- A **hardcoded prefix** (`/service/<name>/raw/123`) works behind the
+  proxy but breaks standalone and silently rots if the service is renamed.
+
+Do not try to read the prefix at runtime and prepend it yourself
+(`ROOT_PATH` is not reliably available to your client code, and threading
+it through is the bug this rule exists to avoid). Just emit the relative
+path. This is the same constraint the gotchas doc already states for
+WebSockets and redirects -- it applies to *all* client URLs. `root_path`
+(Step 1) is the server-side half; this is the client-side half. You need
+both.
 
 ### Rendering HTML for a human
 

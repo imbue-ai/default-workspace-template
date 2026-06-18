@@ -44,19 +44,54 @@ What this means for you: if your app emits relative `Location`s or
 absolute paths under its own root, redirects work. If it hardcodes
 public URLs at non-prefixed paths, those will land at the wrong place.
 
-## FastAPI absolute URLs (OpenAPI, redirects)
+## Client-side URLs: emit relative paths, never the prefix
+
+This is the single most common prefix bug. Your app is at
+`/service/<name>/` behind the proxy and at `/` standalone, so **every
+URL your HTML/JS builds -- `fetch`, iframe `src`, form `action`,
+`<a href>`, WebSocket URLs -- must be RELATIVE** (`raw/123`,
+`api/items`), never absolute and never a hardcoded prefix.
+
+The proxy injects `<base href="/service/<name>/">`, so a relative URL
+resolves under the prefix behind the proxy and under `/` standalone.
+
+- **Absolute path** (`/raw/123`): ignores `<base>`, resolves against the
+  origin root, escapes your service, and hits the workspace shell. The
+  classic symptom is an iframe whose `src` is `/raw/123` rendering blank
+  -- it loaded the workspace UI (and any script there is killed by the
+  iframe sandbox), not your route.
+- **Hardcoded prefix** (`/service/<name>/raw/123`): works behind the
+  proxy, breaks standalone, rots on rename.
+
+Do not read the prefix at runtime to prepend it yourself -- `ROOT_PATH`
+is a server-only env var, not reliably present in client code. Just emit
+the relative path. (The WebSocket section below is one instance of this
+same rule.)
+
+## FastAPI absolute URLs (OpenAPI, redirects) -- the server-side half
 
 FastAPI emits absolute URLs in OpenAPI metadata (`/docs`,
-`/openapi.json`) based on `app.root_path`. The scaffolder reads
-`ROOT_PATH` from env and passes it to `FastAPI(root_path=ROOT_PATH)`,
-and the generated services.toml command sets
-`ROOT_PATH=/service/<name>`. So the scaffolded happy path emits
-prefix-correct URLs without further work.
+`/openapi.json`) and from `RedirectResponse`/`request.url_for` based on
+`app.root_path`. The scaffolder reads `ROOT_PATH` from env, passes it to
+`FastAPI(root_path=ROOT_PATH)`, and the generated services.toml command
+sets `ROOT_PATH=/service/<name>` **on the app process**
+(`... && ROOT_PATH=/service/<name> uv run <name>`).
 
-If you wrote your own FastAPI runner without using the scaffolder,
-or you want to expose an existing FastAPI app via the wrap-existing
-escape hatch, set `root_path=/service/<name>` either at construction
-time or via the same `ROOT_PATH` env-var pattern. Without it,
+Watch the placement: a `VAR=val cmd1 && cmd2` prefix binds `VAR` to
+`cmd1` only. If `ROOT_PATH=` sits at the front of the whole command it
+reaches `forward_port.py` (which ignores it) and the app's env stays
+empty -- so `root_path` is `""` and every server-generated URL is
+mis-prefixed, even though the line *looks* correct. The scaffolder puts
+it in the right place; if you hand-edit the command or use the
+wrap-existing escape hatch, keep the assignment on the app.
+
+`root_path` only fixes URLs FastAPI generates **server-side**. It does
+nothing for URLs in the markup you emit -- those follow the relative-URL
+rule above. A correct setup uses both halves.
+
+If you wrote your own FastAPI runner without using the scaffolder, set
+`root_path=/service/<name>` at construction time or via the same
+`ROOT_PATH` env-var pattern (on the app process). Without it,
 `/openapi.json` will list endpoints at `/`, breaking the API explorer.
 
 ## Static-file servers and trailing slashes
