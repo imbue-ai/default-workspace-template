@@ -506,6 +506,11 @@ def _load_records(path: Path) -> list[dict[str, object]]:
     data = json.loads(path.read_text())
     if not isinstance(data, list):
         raise InboxDigestError(f"{path} is not a JSON list of records")
+    for index, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise InboxDigestError(
+                f"{path} record at index {index} is not a JSON object"
+            )
     return data
 
 
