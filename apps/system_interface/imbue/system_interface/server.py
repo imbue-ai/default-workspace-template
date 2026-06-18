@@ -34,7 +34,6 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
-from imbue.system_interface.agent_discovery import send_message
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.claude_auth import ClaudeAuthService
@@ -105,6 +104,10 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
 
     application.state.broadcaster = broadcaster
     application.state.agent_manager = agent_manager
+    preconfigured_welcome_resender: WelcomeResender | None = application.state.preconfigured_welcome_resender
+    application.state.welcome_resender = preconfigured_welcome_resender or WelcomeResender(
+        send_message_fn=agent_manager.send_message_to_agent
+    )
     # Advisory in-process mutex serializing layout-mutating ops. The agent
     # script never auto-retries on contention -- it surfaces the 409 to the
     # agent along with the in-flight holder's metadata.
@@ -418,11 +421,7 @@ def _send_message_endpoint(agent_id: str, send_message_request: SendMessageReque
         return _agent_not_found_response(agent_id)
 
     agent_manager: AgentManager = request.app.state.agent_manager
-    success = send_message(
-        AgentId(agent_info.id),
-        send_message_request.message,
-        lookup_locations=agent_manager.get_agent_matches_by_id,
-    )
+    success = agent_manager.send_message_to_agent(AgentId(agent_info.id), send_message_request.message)
     if not success:
         error = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
         return JSONResponse(content=error.model_dump(), status_code=500)
@@ -1031,7 +1030,9 @@ def create_application(
     # One long-lived ClaudeAuthService per app so the in-flight OAuth
     # subprocess survives between the /start and /submit-code requests.
     application.state.claude_auth_service = claude_auth_service or ClaudeAuthService()
-    application.state.welcome_resender = welcome_resender or WelcomeResender()
+    # The default resender is wired to the agent manager in `_lifespan` (where the
+    # real manager exists), so welcome resend sends through the same location cache.
+    application.state.preconfigured_welcome_resender = welcome_resender
     # Per-agent watcher registries. Seeded here (not only in ``_lifespan``) so the
     # attributes always exist on ``app.state`` -- ``_stop_all_watchers`` runs in test
     # paths that construct the app without driving the lifespan, and would otherwise

@@ -45,6 +45,7 @@ from imbue.system_interface.activity_state import last_event_type
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
+from imbue.system_interface.agent_discovery import send_message
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import ApplicationEntry
@@ -391,6 +392,16 @@ class AgentManager:
         with self._lock:
             match = self._match_by_agent_id.get(agent_id)
             return [match] if match is not None else []
+
+    def send_message_to_agent(self, agent_id: AgentId, message: str) -> bool:
+        """Send a message to the agent with ``agent_id``, using the live location cache.
+
+        The single entry point for messaging an agent: it backs `send_message`'s
+        location lookup with this manager's event-fed `get_agent_matches_by_id`, so
+        the message skips a fresh mngr discovery whenever the agent's location is
+        already known. Returns True on success.
+        """
+        return send_message(agent_id, message, lookup_locations=self.get_agent_matches_by_id)
 
     def remove_agent(self, agent_id: str) -> None:
         """Remove an agent from the tracked state and broadcast the update.

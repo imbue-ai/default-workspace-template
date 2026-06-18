@@ -272,14 +272,15 @@ def test_send_message_success(client: TestClient) -> None:
     )
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch("imbue.system_interface.server.send_message", return_value=True) as mock_send,
+        patch("imbue.system_interface.agent_manager.send_message", return_value=True) as mock_send,
     ):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hello"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert mock_send.call_count == 1
-    # The endpoint addresses the agent by id (exact agent), not by name.
+    # The endpoint routes through AgentManager.send_message_to_agent, which addresses
+    # the agent by id and backs the lookup with the live location cache.
     assert mock_send.call_args.args == (agent_id, "hello")
     assert "lookup_locations" in mock_send.call_args.kwargs
 
