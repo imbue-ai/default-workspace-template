@@ -6,6 +6,7 @@ import threading
 import tomllib
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
@@ -137,13 +138,24 @@ def _build_observe_command_argv(mngr_binary: str) -> list[str]:
     ]
 
 
-def _build_agent_match(agent: DiscoveredAgent, host_name: HostName) -> AgentMatch:
-    """Assemble an AgentMatch (the messaging location) from a discovered agent."""
+# AgentMatch requires a host_name, but the send path never reads it -- it groups
+# and resolves hosts by host_id + provider_name (see mngr's group_agents_by_host /
+# send_message_to_agents). So we don't track real host names: the cached match
+# carries this placeholder, which only ever flows back into send_message_to_agents.
+_UNUSED_HOST_NAME: Final[HostName] = HostName("unknown")
+
+
+def _build_agent_match(agent: DiscoveredAgent) -> AgentMatch:
+    """Assemble the messaging-location AgentMatch for a discovered agent.
+
+    Addressed by agent_id + host_id + provider_name; host_name is a placeholder
+    (see `_UNUSED_HOST_NAME`).
+    """
     return AgentMatch(
         agent_id=agent.agent_id,
         agent_name=agent.agent_name,
         host_id=agent.host_id,
-        host_name=host_name,
+        host_name=_UNUSED_HOST_NAME,
         provider_name=agent.provider_name,
     )
 
@@ -851,13 +863,7 @@ class AgentManager:
                 work_dir=str(agent.work_dir) if agent.work_dir else None,
             )
 
-        host_name_by_id = {host.host_id: host.host_name for host in event.hosts}
-        new_matches: dict[str, AgentMatch] = {}
-        for agent in event.agents:
-            host_name = host_name_by_id.get(agent.host_id)
-            if host_name is None:
-                continue
-            new_matches[str(agent.agent_id)] = _build_agent_match(agent, host_name)
+        new_matches = {str(agent.agent_id): _build_agent_match(agent) for agent in event.agents}
 
         with self._lock:
             old_ids = set(self._agents.keys())
@@ -891,17 +897,10 @@ class AgentManager:
 
         with self._lock:
             self._agents[agent_id] = agent_state
-            # The delta lacks the host's name, but any other agent already known
-            # on the same host carries it. When derivable, record the location now
-            # so the first message to a just-created agent skips discovery instead
-            # of waiting for the next full snapshot. A first-agent-on-a-new-host
-            # has no donor entry, so it stays discovery-resolved until the snapshot.
-            host_name = next(
-                (match.host_name for match in self._match_by_agent_id.values() if match.host_id == agent.host_id),
-                None,
-            )
-            if host_name is not None:
-                self._match_by_agent_id[agent_id] = _build_agent_match(agent, host_name)
+            # Record the location now (host_id + provider_name from the delta) so the
+            # first message to a just-created agent skips discovery instead of waiting
+            # for the next full snapshot.
+            self._match_by_agent_id[agent_id] = _build_agent_match(agent)
 
         if agent_id == self._own_agent_id and agent_state.work_dir:
             self._start_app_watcher(agent_id, Path(agent_state.work_dir))
