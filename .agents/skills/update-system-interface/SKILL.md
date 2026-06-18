@@ -21,8 +21,9 @@ edits here. Every change is made in a separate, isolated clone of the source,
 built and tested there, and merged back only after it passes. The only things
 you do to the served tree are committing the merge and running this skill's
 `preview` / `reveal` / `unpreview` commands -- and `preview`/`unpreview` never
-modify the served tree at all (they build the change in a separate worktree, so
-even the pre-merge preview can't reach what the user is looking at).
+modify the served tree at all (they act only on the worker's separate,
+already-built work_dir, so even the pre-merge preview can't reach what the user
+is looking at).
 
 That isolated clone is a `launch-task` worker: it runs in its own git worktree
 with its own copy of the source, so a half-broken build can never reach what the
