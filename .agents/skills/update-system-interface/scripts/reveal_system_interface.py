@@ -38,21 +38,24 @@ Run via bare ``python3`` (standard library only), like ``forward_port.py`` and
 it must not depend on any particular venv being synced.
 
 The same script also owns the deterministic halves of the *pre-merge preview*
-gate, where the user clicks around the change before it is merged:
+gate, where the user clicks around the change before it is merged. The worker is
+a local git-worktree sub-agent in this same container, so its work_dir is just a
+folder it has already built -- the preview serves it in place:
 
-- ``preview`` builds the worker's branch in an isolated worktree, boots it on a
-  free port (layout persistence neutered so it can't clobber the live
-  ``layout.json``), and registers it as the ``si-preview`` service so the live
-  UI can proxy it as a tab. It never merges or touches the served tree.
-- ``unpreview`` tears that down (kill the server, deregister the service, remove
-  the worktree). Idempotent.
+- ``preview`` boots the worker's ``--work-dir`` on a free port (layout
+  persistence neutered so it can't clobber the live ``layout.json``) and
+  registers it as the ``si-preview`` service so the live UI can proxy it as a
+  tab. No fetch, no second checkout, no rebuild; it never touches the served
+  tree or the worker's folder. The worker must still exist at preview time.
+- ``unpreview`` tears that down (kill the server, deregister the service).
+  Idempotent.
 
 The non-deterministic part -- opening the tab and gating on the user's judgment
 -- stays with the agent.
 
 Usage:
     python3 reveal_system_interface.py reveal --rollback-to <pre-merge-sha> [--repo-root PATH]
-    python3 reveal_system_interface.py preview --slug <name> --branch mngr/<name> [--repo-root PATH]
+    python3 reveal_system_interface.py preview --slug <name> --work-dir <worker-work-dir> [--repo-root PATH]
     python3 reveal_system_interface.py unpreview --slug <name> [--repo-root PATH]
 
 Environment:
@@ -102,22 +105,27 @@ FRONTEND_DIR = f"{APP_DIR}/frontend"
 TOOL_NAME = "system-interface"
 RELOAD_OP = "reload_system_interface"
 
-# Pre-merge preview: a throwaway worktree built from the worker's branch and
-# booted as a service the live UI proxies, so the user can click around the
-# change before it is merged. See ``preview`` / ``unpreview``.
+# Pre-merge preview: boot the worker's own (already-built) work_dir as a service
+# the live UI proxies, so the user can click around the change before it is
+# merged. The worker is a local git-worktree sub-agent in this same container,
+# so its work_dir is just a built folder on disk -- no fetch or rebuild needed.
+# See ``preview`` / ``unpreview``.
 #
 # The preview is registered under a single fixed service name -- the
 # update-system-interface flow runs one preview at a time, and ``preview``
-# tears down any stale preview for the slug first. State (the worktree, the
-# detached pid, the port, the service name) lives under ``runtime/`` so it is
-# gitignored and survives between the separate ``preview`` and ``unpreview``
-# invocations.
+# tears down any stale preview for the slug first. State (the detached pid, the
+# port, the service name, the worker work_dir) lives under the lead's
+# ``runtime/`` so it is gitignored and survives between the separate ``preview``
+# and ``unpreview`` invocations.
 PREVIEW_SERVICE_NAME = "si-preview"
 PREVIEW_STATE_ROOT = "runtime/system-interface-preview"
 PREVIEW_STATE_FILENAME = "preview.json"
 PREVIEW_LOG_FILENAME = "preview.log"
-PREVIEW_WORKTREE_DIRNAME = "tree"
-FORWARD_PORT_SCRIPT = "scripts/forward_port.py"
+# forward_port.py imports tomlkit (a venv dependency), but this script is run via
+# bare python3 with no venv assumed, and the ambient ``python3`` need not have
+# tomlkit. Invoke it through ``uv run`` (like scripts/run_ttyd.sh) so the
+# dependency is always resolved regardless of the caller's environment.
+FORWARD_PORT_CMD = ("uv", "run", "python3", "scripts/forward_port.py")
 
 # Endpoints used to probe liveness. ``/api/agents`` exercises the mngr plugin
 # discovery path -- exactly what a missing backend dependency or a broken
@@ -133,9 +141,9 @@ _HEALTH_INTERVAL_SECONDS = 1.0
 # Pre-flight boot is a fresh process on a throwaway port; give it the same grace.
 _PREFLIGHT_ATTEMPTS = 30
 _PREFLIGHT_INTERVAL_SECONDS = 1.0
-# A preview boots a full, freshly-built instance from a worktree; give it a
-# longer grace than the pre-flight since first import + startup runs alongside
-# the live service on the same box.
+# A preview boots a full instance from the worker's work_dir; give it a longer
+# grace than the pre-flight since first import + startup runs alongside the live
+# service on the same box.
 _PREVIEW_ATTEMPTS = 60
 _PREVIEW_INTERVAL_SECONDS = 1.0
 
@@ -707,14 +715,13 @@ def _teardown_preview(
     *,
     pid: int | None,
     service: str | None,
-    worktree: str | None,
 ) -> None:
     """Best-effort teardown of whatever a preview set up. Every step is
     unchecked so partial state still fully unwinds and re-runs are no-ops.
 
-    Order: kill the detached server (by process group), deregister the proxied
-    service so the live UI stops routing to a dead port, then remove the
-    worktree and prune its registration.
+    Order: kill the detached server (by process group), then deregister the
+    proxied service so the live UI stops routing to a dead port. There is no
+    worktree to remove -- the preview serves the worker's own work_dir in place.
     """
     if pid is not None:
         # Negative pid signals the whole process group (see ``spawn_detached``).
@@ -727,35 +734,20 @@ def _teardown_preview(
         )
     if service is not None:
         runner.run(
-            ["python3", FORWARD_PORT_SCRIPT, "--remove", "--name", service],
+            [*FORWARD_PORT_CMD, "--remove", "--name", service],
             cwd=str(repo_root),
             capture_output=True,
             text=True,
             check=False,
         )
-    if worktree is not None:
-        runner.run(
-            ["git", "worktree", "remove", "--force", worktree],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    runner.run(
-        ["git", "worktree", "prune"],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
 
 
 def unpreview(slug: str, repo_root: Path, *, runner: Runner) -> int:
     """Tear down the preview for ``slug``: kill the server, deregister the
-    service, remove the worktree, and delete the state directory.
+    service, and delete the state directory.
 
     Idempotent: a missing state file is a no-op success, so this is safe to run
-    on reject, after a successful reveal, or to recover from a half-built
+    on reject, after a successful reveal, or to recover from a half-set-up
     preview. Returns 0 unless the state file is unreadable.
     """
     state_path = _preview_state_path(repo_root, slug)
@@ -772,7 +764,6 @@ def unpreview(slug: str, repo_root: Path, *, runner: Runner) -> int:
         runner,
         pid=state.get("pid"),
         service=state.get("service"),
-        worktree=state.get("worktree"),
     )
     shutil.rmtree(_preview_state_dir(repo_root, slug), ignore_errors=True)
     sys.stderr.write(f"preview for '{slug}' torn down.\n")
@@ -781,7 +772,7 @@ def unpreview(slug: str, repo_root: Path, *, runner: Runner) -> int:
 
 def preview(
     slug: str,
-    branch: str,
+    work_dir: str,
     repo_root: Path,
     *,
     runner: Runner,
@@ -789,56 +780,41 @@ def preview(
     spawner: Spawner,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> int:
-    """Stand up a pre-merge preview of ``branch`` as a proxied service.
+    """Stand up a pre-merge preview of the worker's ``work_dir`` as a proxied service.
 
-    Builds the worker's branch in an isolated worktree (its own static bundle,
-    so the live one is never touched), boots it detached on a free port with
-    layout persistence neutered, then registers it so the live UI can proxy it
-    as a tab. On any failure the partial state is torn down and 1 is returned;
-    on success the state file lets ``unpreview`` find everything later.
+    The worker is a local git-worktree sub-agent in this same container, so
+    ``work_dir`` is a folder on disk that the worker has already built (its
+    ``done`` contract runs ``uv sync`` + ``npm run build``). We just boot that
+    built instance detached on a free port -- with layout persistence neutered --
+    and register it so the live UI can proxy it as a tab. No fetch, no second
+    checkout, no rebuild; the worker's folder is never modified (the log and
+    state live under the lead's ``runtime/``).
 
-    This never modifies the served working tree, so it does not require a clean
-    tree and nothing is merged -- the whole point is to look before merging.
+    On any failure the partial state is torn down and 1 is returned; on success
+    the state file lets ``unpreview`` find the server + service later. ``work_dir``
+    must still exist -- run this before the worker is destroyed.
     """
-    # Clear any stale preview for this slug first so a fixed service name and
-    # worktree path can be reused cleanly.
+    # Sanity-check the work_dir before disturbing anything: a wrong --work-dir
+    # should fail fast, not tear down an existing good preview for this slug.
+    worker_app_dir = Path(work_dir) / APP_DIR
+    if not worker_app_dir.is_dir():
+        sys.stderr.write(
+            f"preview: {worker_app_dir} is not a directory; is --work-dir correct "
+            "and is the worker still alive (not destroyed)?\n"
+        )
+        return 1
+
+    # Clear any stale preview for this slug first so the fixed service name and
+    # state dir can be reused cleanly.
     unpreview(slug, repo_root, runner=runner)
 
     state_dir = _preview_state_dir(repo_root, slug)
-    worktree = state_dir / PREVIEW_WORKTREE_DIRNAME
     log_path = state_dir / PREVIEW_LOG_FILENAME
     state_dir.mkdir(parents=True, exist_ok=True)
 
     pid: int | None = None
     service_registered = False
-    worktree_added = False
     try:
-        # Fetch the worker's branch (it reaches the lead via origin, same as the
-        # merge path) and check it out detached at the fetched commit -- detached
-        # so we never collide with or move a local ``mngr/<name>`` branch, since
-        # the preview only builds and serves, never commits.
-        _run_checked(runner, ["git", "fetch", "origin", branch], repo_root, "git fetch")
-        _run_checked(
-            runner,
-            [
-                "git",
-                "worktree",
-                "add",
-                "--force",
-                "--detach",
-                str(worktree),
-                "FETCH_HEAD",
-            ],
-            repo_root,
-            "git worktree add",
-        )
-        worktree_added = True
-        _run_checked(runner, ["uv", "sync", "--all-packages"], worktree, "uv sync")
-        _run_checked(runner, ["npm", "ci"], worktree / FRONTEND_DIR, "npm ci")
-        _run_checked(
-            runner, ["npm", "run", "build"], worktree / FRONTEND_DIR, "npm run build"
-        )
-
         port = find_free_port()
         env = dict(os.environ)
         env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
@@ -848,9 +824,11 @@ def preview(
         # dir"). MNGR_HOST_DIR is kept, so the preview still discovers and
         # renders the real agents/conversations -- a faithful look at the change.
         env.pop("MNGR_AGENT_ID", None)
+        # Boot from the worker's own work_dir; ``uv run`` resolves that worktree's
+        # already-synced ``.venv`` and serves its already-built ``static/`` bundle.
         pid = spawner.spawn_detached(
             ["uv", "run", TOOL_NAME],
-            cwd=str(worktree / APP_DIR),
+            cwd=str(worker_app_dir),
             env=env,
             log_path=str(log_path),
         )
@@ -868,8 +846,7 @@ def preview(
         _run_checked(
             runner,
             [
-                "python3",
-                FORWARD_PORT_SCRIPT,
+                *FORWARD_PORT_CMD,
                 "--name",
                 PREVIEW_SERVICE_NAME,
                 "--url",
@@ -882,8 +859,7 @@ def preview(
 
         state = {
             "slug": slug,
-            "branch": branch,
-            "worktree": str(worktree),
+            "work_dir": str(work_dir),
             "port": port,
             "pid": pid,
             "service": PREVIEW_SERVICE_NAME,
@@ -891,26 +867,24 @@ def preview(
         }
         _preview_state_path(repo_root, slug).write_text(json.dumps(state, indent=2))
     except (RevealError, OSError) as exc:
-        # OSError as well as RevealError: a build/boot step can fail not only by
-        # returning non-zero (-> RevealError via _run_checked) but by raising --
-        # a missing ``uv``/``git``/``npm`` binary surfaces as FileNotFoundError,
-        # and ``find_free_port`` can raise a socket OSError. Either way the
-        # worktree (and possibly a booted server) is already on disk, so teardown
-        # must run to honor "on any failure the partial state is torn down".
+        # OSError as well as RevealError: the boot can fail by raising rather than
+        # exiting non-zero -- a missing ``uv`` binary surfaces as FileNotFoundError,
+        # and ``find_free_port`` can raise a socket OSError. Either way a server may
+        # already be running, so teardown must run to honor "on any failure the
+        # partial state is torn down".
         sys.stderr.write(f"preview failed: {exc}\ntearing down partial preview...\n")
         _teardown_preview(
             repo_root,
             runner,
             pid=pid,
             service=PREVIEW_SERVICE_NAME if service_registered else None,
-            worktree=str(worktree) if worktree_added else None,
         )
         shutil.rmtree(state_dir, ignore_errors=True)
         return 1
 
     sys.stderr.write(
         f"preview up: open the '{PREVIEW_SERVICE_NAME}' service tab to explore the "
-        f"change (served from {worktree}, port {port}). Run 'unpreview --slug {slug}' "
+        f"change (serving {work_dir} on port {port}). Run 'unpreview --slug {slug}' "
         "to tear it down.\n"
     )
     return 0
@@ -946,18 +920,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     preview_parser = subparsers.add_parser(
         "preview",
-        help="Build a worker branch in an isolated worktree and serve it as a "
+        help="Boot the worker's already-built work_dir and serve it as a "
         "previewable tab, before any merge.",
     )
     preview_parser.add_argument(
         "--slug",
         required=True,
-        help="Short kebab-case id for this preview (names the worktree/state dir).",
+        help="Short kebab-case id for this preview (names the service/state dir).",
     )
     preview_parser.add_argument(
-        "--branch",
+        "--work-dir",
         required=True,
-        help="The worker branch to preview (e.g. 'mngr/<slug>').",
+        help="The worker's work_dir (from `mngr ls --include 'name==\"<worker>\"' "
+        "--format json` -> agent.work_dir). The worker must still exist.",
     )
     _add_repo_root_arg(preview_parser)
 
@@ -984,7 +959,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "preview":
             return preview(
                 args.slug,
-                args.branch,
+                args.work_dir,
                 repo_root,
                 runner=Runner(),
                 http=HttpClient(),
