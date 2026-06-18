@@ -400,19 +400,13 @@ def test_build_create_chat_command_requests_json_output() -> None:
 # --- _parse_created_agent_id ---
 
 
-def test_parse_created_agent_id_reads_agent_id_from_json_line() -> None:
+def test_parse_created_agent_id_reads_agent_id_from_json_object() -> None:
     stdout = '{"agent_id": "agent-abc", "host_id": "host-1", "host_name": "ws"}\n'
     assert _parse_created_agent_id(stdout) == "agent-abc"
 
 
-def test_parse_created_agent_id_skips_non_json_lines() -> None:
-    """Tolerates log noise interleaved with the JSON result line."""
-    stdout = 'some log line\n{"agent_id": "agent-xyz"}\nmore noise\n'
-    assert _parse_created_agent_id(stdout) == "agent-xyz"
-
-
 def test_parse_created_agent_id_returns_none_when_absent() -> None:
-    assert _parse_created_agent_id('{"host_id": "host-1"}\n') is None
+    assert _parse_created_agent_id('{"host_id": "host-1"}') is None
     assert _parse_created_agent_id("not json at all") is None
     assert _parse_created_agent_id("") is None
 

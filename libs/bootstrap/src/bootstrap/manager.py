@@ -261,8 +261,6 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
         "--message",
         "/welcome",
         "--no-connect",
-        # JSON output so we can read back the created agent's id and persist it
-        # for the welcome-resend target (see _persist_initial_chat_agent_id).
         "--format",
         "json",
     ]
@@ -276,17 +274,17 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
 
 
 def _parse_created_agent_id(stdout: str) -> str | None:
-    """Pull ``agent_id`` from `mngr create --format json` output, or None if absent."""
-    for line in stdout.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            data = json.loads(stripped)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict) and isinstance(data.get("agent_id"), str):
-            return data["agent_id"]
+    """Pull ``agent_id`` from `mngr create --format json` stdout, or None if absent.
+
+    `--format json` writes a single JSON object to stdout (logs go to stderr).
+    None on any malformed/missing case keeps the caller non-fatal.
+    """
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(data, dict) and isinstance(data.get("agent_id"), str):
+        return data["agent_id"]
     return None
 
 
