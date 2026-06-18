@@ -1009,8 +1009,6 @@ def create_application(
     # One long-lived ClaudeAuthService per app so the in-flight OAuth
     # subprocess survives between the /start and /submit-code requests.
     application.state.claude_auth_service = claude_auth_service or ClaudeAuthService()
-    # The default resender is wired to the agent manager in `_lifespan` (where the
-    # real manager exists), so welcome resend sends through the same location cache.
     application.state.preconfigured_welcome_resender = welcome_resender
     # Per-agent watcher registries. Seeded here (not only in ``_lifespan``) so the
     # attributes always exist on ``app.state`` -- ``_stop_all_watchers`` runs in test
