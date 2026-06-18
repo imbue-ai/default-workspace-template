@@ -77,8 +77,13 @@ uv run .agents/skills/inbox-digest/scripts/run.py digest --out-dir runtime/inbox
 `digest.json` is a JSON list. Every record has:
 
 ```
-id, category, from, subject, date, gmail_url, raw_body, sender_name
+id, category, from, subject, date, gmail_url, body_kind, raw_body, sender_name
 ```
+
+plus `raw_payload` (path to the preserved full Gmail payload) when the record
+was produced by `fetch`. `body_kind` is `plain`/`html`/`none` -- when it is
+`html`, `raw_body` is the HTML stripped to text, so render `raw_payload`'s
+original for native formatting.
 
 `category` is one of `newsletter`, `github`, `event`, `action`, `receipt`,
 `networking`, `promotion`, and adds that category's fields:
@@ -102,10 +107,11 @@ footnote table at the bottom is always included.
 
 ## Preserve and surface
 
-The raw Gmail payload of every email is kept at `messages/<id>.json` and the
-full decoded body at `raw_body`, with `gmail_url` linking back to the source.
-A later change in what the digest extracts needs no refetch, and a surface can
-render the original email or jump to Gmail.
+The raw Gmail payload of every email is kept at `messages/<id>.json` (and each
+digest record points to it via `raw_payload`), with the full decoded body at
+`raw_body` and `gmail_url` linking back to the source. A later change in what the
+digest extracts needs no refetch, and a surface can render the original email
+from its preserved payload or jump to Gmail.
 
 ## Tests
 
