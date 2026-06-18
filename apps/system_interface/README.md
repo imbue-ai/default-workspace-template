@@ -39,11 +39,14 @@ once approved, merged and revealed. See
 The same `reveal_system_interface.py` script owns the deterministic setup/teardown
 on both sides of that user gate, as sub-commands:
 
-- `preview --slug <name> --branch mngr/<name>` builds the worker's branch in an
-  isolated worktree, boots it on a free port, and registers it as the
-  `si-preview` service so the live UI can proxy it as a tab -- all without
-  merging or touching the served tree.
-- `unpreview --slug <name>` tears that down (idempotent).
+- `preview --slug <name> --work-dir <worker-work-dir>` boots the worker's
+  already-built work_dir (a local worktree-agent folder in this same container)
+  on a free port and registers it as the `si-preview` service so the live UI can
+  proxy it as a tab -- no fetch, no re-checkout, no rebuild, and without merging
+  or touching the served tree. (Resolve the work_dir from
+  `mngr ls --include 'name=="<name>"' --format json` -> `agents[0].work_dir`.)
+- `unpreview --slug <name>` tears that down -- kill the server, deregister the
+  service (idempotent).
 - `reveal --rollback-to <sha>` reveals the merged change (below).
 
 The reveal, after merge, is a single self-healing command. With the known-good

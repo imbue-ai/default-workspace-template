@@ -36,9 +36,10 @@ separate place to work.
    the detail of how to build, test, and verify the change in isolation.
 2. The **worker** implements + builds + tests it on its own branch (`mngr/<name>`),
    then reports `done`.
-3. You **preview** the worker's branch *before merging*: one command builds it in
-   an isolated worktree and serves it as a tab the user can click around. The
-   user approves or rejects.
+3. You **preview** the change *before merging*: the worker is a local
+   worktree-agent in this container that already built its own work_dir, so one
+   command boots that folder and serves it as a tab the user can click around.
+   The user approves or rejects.
 4. **On approval**, you **record the known-good revision, then merge** the
    worker's branch.
 5. You **reveal** the merged change with one command (refresh dependencies,
@@ -70,21 +71,30 @@ specifics for this flow:
 
 Handle the worker's report per `launch-task` (its `## 4` and the referenced
 `lead-proxy.md`). On a terminal `done`, show the user the change *before* merging
-anything. One command builds the worker's branch and serves it as a tab:
+anything. The worker is a local worktree sub-agent in this same container, so its
+work_dir is a folder it has **already built** (its `done` contract runs
+`uv sync` + `npm run build`). The preview just boots that folder -- no fetch, no
+re-checkout, no rebuild.
+
+**Do not destroy the worker yet** -- the preview serves its work_dir in place, so
+the worker must stay alive until the user gives a verdict.
+
+First resolve the worker's work_dir, then boot it:
 
 ```bash
+WORK_DIR=$(mngr ls --include 'name == "<name>"' --format json \
+    | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
-    --slug <name> --branch mngr/<name>
+    --slug <name> --work-dir "$WORK_DIR"
 ```
 
-This builds the branch in a throwaway worktree (its own `static/` bundle, so the
-served UI is never touched), boots it on a free port with layout persistence
-neutered (it reads the same agents, so the user's real conversations render, but
-it cannot clobber the live `layout.json`), and registers it under the
-`si-preview` service. It does **not** merge or modify the served tree -- the
-whole point is to look before committing to the change. Exit `0` means the
-preview is up; a non-zero exit means it failed to build or boot and tore itself
-down (diagnose before retrying).
+This boots the worker's already-built instance on a free port with layout
+persistence neutered (it reads the same agents, so the user's real conversations
+render, but it cannot clobber the live `layout.json`) and registers it under the
+`si-preview` service. It does **not** merge, touch the served tree, or modify the
+worker's folder. Exit `0` means the preview is up; a non-zero exit means it
+failed to boot (or the work_dir was wrong / the worker was already destroyed) and
+tore itself down -- diagnose before retrying.
 
 Open it as a tab and ask the user to explore:
 
@@ -172,9 +182,11 @@ rejection where nothing was merged), tear it down:
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug <name>
 ```
 
-`unpreview` kills the preview server, deregisters the `si-preview` service, and
-removes the worktree. It is idempotent, so it is also the safe way to clean up
-after a `preview` that failed partway.
+`unpreview` kills the preview server and deregisters the `si-preview` service
+(there is no worktree to remove -- the preview served the worker's folder in
+place). It is idempotent, so it is also the safe way to clean up after a
+`preview` that failed partway. Once the preview is down, the worker can be
+destroyed per `launch-task`.
 
 Why this exists as a script and not a checklist: if the backend fails to start,
 the user loses their entire chat UI -- there is nowhere left to surface an error
@@ -192,9 +204,10 @@ The UI is what the user is actively looking at, so the design goal is "never
 serve a half-broken UI," not "iterate in place fast." The worker's isolated
 worktree clone + in-process testing + Playwright verification + review gates make
 it safe to merge; the pre-merge preview lets the user actually click around the
-change (served from its own worktree, so it can't touch the live UI) and approve
-it before anything lands; and the reveal script's pre-flight, health probe, and
-autonomous rollback make it safe to reveal in one motion. Preview setup and
-teardown are deterministic, so they live as `preview`/`unpreview` sub-commands of
-the same script rather than as agent prose -- the only non-deterministic part,
-gating on the user's judgment, stays with you.
+change before anything lands -- and since the worker already built its own
+work_dir (a folder in this same container), the preview just boots that folder
+in place rather than re-cloning or rebuilding; and the reveal script's
+pre-flight, health probe, and autonomous rollback make it safe to reveal in one
+motion. Preview setup and teardown are deterministic, so they live as
+`preview`/`unpreview` sub-commands of the same script rather than as agent prose
+-- the only non-deterministic part, gating on the user's judgment, stays with you.

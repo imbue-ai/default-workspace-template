@@ -109,7 +109,9 @@ class _FakeSpawner(reveal_mod.Spawner):
     spawns: list[list[str]] = field(default_factory=list)
     detached_spawns: list[list[str]] = field(default_factory=list)
     detached_envs: list[dict] = field(default_factory=list)
+    detached_cwds: list[str] = field(default_factory=list)
     detached_pid: int = 4242
+    detached_raises: BaseException | None = None
     last: _FakeSpawned | None = None
 
     def spawn(self, argv: Sequence[str], cwd: str, env: dict) -> _FakeSpawned:
@@ -122,6 +124,10 @@ class _FakeSpawner(reveal_mod.Spawner):
     ) -> int:
         self.detached_spawns.append(list(argv))
         self.detached_envs.append(dict(env))
+        self.detached_cwds.append(cwd)
+        # Model a boot that fails by raising (e.g. a missing ``uv`` binary).
+        if self.detached_raises is not None:
+            raise self.detached_raises
         return self.detached_pid
 
 
@@ -436,7 +442,13 @@ def test_restore_tree_removes_adds_and_checks_out_the_rest() -> None:
 
 
 _SLUG = "demo-change"
-_BRANCH = "mngr/demo-change"
+
+
+def _make_work_dir(tmp_path: Path) -> Path:
+    """A stand-in for a worker's work_dir: a folder with an apps/system_interface."""
+    work_dir = tmp_path / "worker"
+    (work_dir / reveal_mod.APP_DIR).mkdir(parents=True)
+    return work_dir
 
 
 def _preview(
@@ -444,10 +456,11 @@ def _preview(
     http: _FakeHttp,
     spawner: _FakeSpawner,
     repo_root: Path,
+    work_dir: Path,
 ) -> int:
     return reveal_mod.preview(
         _SLUG,
-        _BRANCH,
+        str(work_dir),
         repo_root,
         runner=runner,
         http=http,
@@ -460,136 +473,124 @@ def _state_path(repo_root: Path) -> Path:
     return reveal_mod._preview_state_path(repo_root, _SLUG)
 
 
-def test_preview_builds_boots_registers_and_records_state(tmp_path: Path) -> None:
+def test_preview_boots_the_work_dir_registers_and_records_state(tmp_path: Path) -> None:
+    work_dir = _make_work_dir(tmp_path)
     runner = _RecordingRunner()
-    http = _FakeHttp(_all_healthy)
     spawner = _FakeSpawner()
 
-    code = _preview(runner, http, spawner, tmp_path)
+    code = _preview(runner, _FakeHttp(_all_healthy), spawner, tmp_path, work_dir)
 
     assert code == 0
-    # Built the worker branch in an isolated worktree.
-    assert runner.ran("git", "fetch", "origin", _BRANCH)
-    assert runner.ran("git", "worktree", "add", "--force")
-    assert runner.ran("uv", "sync", "--all-packages")
-    assert runner.ran("npm", "ci")
-    assert runner.ran("npm", "run", "build")
-    # Booted the built instance detached (from the worktree, via uv run).
+    # No re-clone / rebuild: the worker already built its work_dir.
+    assert not runner.ran("git", "fetch")
+    assert not runner.ran("git", "worktree", "add")
+    assert not runner.ran("uv", "sync")
+    assert not runner.ran("npm", "run", "build")
+    # Booted the worker's instance detached, with cwd inside the worker's work_dir.
     assert spawner.detached_spawns == [["uv", "run", reveal_mod.TOOL_NAME]]
+    assert spawner.detached_cwds == [str(work_dir / reveal_mod.APP_DIR)]
     # Layout persistence is neutered (no MNGR_AGENT_ID) but discovery is kept.
     env = spawner.detached_envs[0]
     assert "MNGR_AGENT_ID" not in env
     assert env["SYSTEM_INTERFACE_HOST"] == "127.0.0.1"
     assert env["SYSTEM_INTERFACE_PORT"]
     # Registered the preview as a proxied service.
-    register = runner.argvs_starting(
-        "python3", reveal_mod.FORWARD_PORT_SCRIPT, "--name"
-    )
-    assert register and register[0][3] == reveal_mod.PREVIEW_SERVICE_NAME
+    register = runner.argvs_starting(*reveal_mod.FORWARD_PORT_CMD, "--name")
+    assert register and reveal_mod.PREVIEW_SERVICE_NAME in register[0]
     # Recorded enough state for unpreview to find everything later.
     state = json.loads(_state_path(tmp_path).read_text())
     assert state["pid"] == spawner.detached_pid
     assert state["service"] == reveal_mod.PREVIEW_SERVICE_NAME
-    assert state["branch"] == _BRANCH
+    assert state["work_dir"] == str(work_dir)
     assert isinstance(state["port"], int)
-    assert state["worktree"].endswith(reveal_mod.PREVIEW_WORKTREE_DIRNAME)
 
 
-def test_preview_clears_a_stale_preview_before_building(tmp_path: Path) -> None:
+def test_preview_rejects_a_work_dir_without_the_app(tmp_path: Path) -> None:
+    # A wrong --work-dir (or a destroyed worker) should fail fast and touch nothing.
+    runner = _RecordingRunner()
+    spawner = _FakeSpawner()
+    bad_work_dir = tmp_path / "gone"  # no apps/system_interface under it
+
+    code = reveal_mod.preview(
+        _SLUG,
+        str(bad_work_dir),
+        tmp_path,
+        runner=runner,
+        http=_FakeHttp(_all_healthy),
+        spawner=spawner,
+        sleeper=lambda _seconds: None,
+    )
+
+    assert code == 1
+    assert not spawner.detached_spawns
+    assert not runner.ran("kill")  # didn't disturb any existing preview
+    assert not _state_path(tmp_path).exists()
+
+
+def test_preview_clears_a_stale_preview_before_booting(tmp_path: Path) -> None:
     # A leftover preview from a prior run must be torn down first so the fixed
-    # service name and worktree path can be reused cleanly.
+    # service name and state dir can be reused cleanly.
+    work_dir = _make_work_dir(tmp_path)
     state_dir = reveal_mod._preview_state_dir(tmp_path, _SLUG)
     state_dir.mkdir(parents=True)
     _state_path(tmp_path).write_text(
-        json.dumps(
-            {
-                "pid": 999,
-                "service": reveal_mod.PREVIEW_SERVICE_NAME,
-                "worktree": "/old/tree",
-            }
-        )
+        json.dumps({"pid": 999, "service": reveal_mod.PREVIEW_SERVICE_NAME})
     )
     runner = _RecordingRunner()
 
-    code = _preview(runner, _FakeHttp(_all_healthy), _FakeSpawner(), tmp_path)
+    code = _preview(runner, _FakeHttp(_all_healthy), _FakeSpawner(), tmp_path, work_dir)
 
     assert code == 0
     assert runner.ran("kill", "-TERM", "-999")  # old server killed
     assert runner.ran(
-        "python3", reveal_mod.FORWARD_PORT_SCRIPT, "--remove", "--name"
+        *reveal_mod.FORWARD_PORT_CMD, "--remove", "--name"
     )  # old service deregistered
     # A fresh state file replaced the stale one.
     assert json.loads(_state_path(tmp_path).read_text())["pid"] == 4242
 
 
-def test_preview_tears_down_and_reports_failure_when_build_fails(
-    tmp_path: Path,
-) -> None:
-    runner = _RecordingRunner()
-    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="tsc error"))
-    spawner = _FakeSpawner()
-
-    code = _preview(runner, _FakeHttp(_all_healthy), spawner, tmp_path)
-
-    assert code == 1
-    assert not spawner.detached_spawns  # never got to boot
-    assert not runner.ran(
-        "python3", reveal_mod.FORWARD_PORT_SCRIPT, "--name"
-    )  # never registered
-    assert runner.ran("git", "worktree", "remove", "--force")  # worktree cleaned up
-    assert not _state_path(tmp_path).exists()  # no state left behind
-
-
-def test_preview_tears_down_when_a_build_step_raises(tmp_path: Path) -> None:
-    # A build step can fail by raising (a missing binary surfaces as
+def test_preview_tears_down_when_the_boot_raises(tmp_path: Path) -> None:
+    # The boot can fail by raising (a missing ``uv`` binary surfaces as
     # FileNotFoundError) rather than exiting non-zero -- teardown must still run.
+    work_dir = _make_work_dir(tmp_path)
     runner = _RecordingRunner()
-    runner.respond(("npm", "run", "build"), FileNotFoundError("npm not found"))
-    spawner = _FakeSpawner()
+    spawner = _FakeSpawner(detached_raises=FileNotFoundError("uv not found"))
 
-    code = _preview(runner, _FakeHttp(_all_healthy), spawner, tmp_path)
+    code = _preview(runner, _FakeHttp(_all_healthy), spawner, tmp_path, work_dir)
 
     assert code == 1
-    assert not spawner.detached_spawns  # never reached the boot step
-    assert runner.ran("git", "worktree", "remove", "--force")  # worktree cleaned up
-    assert not _state_path(tmp_path).exists()
+    assert not runner.ran(*reveal_mod.FORWARD_PORT_CMD, "--name")  # never registered
+    assert not _state_path(tmp_path).exists()  # no state left behind
 
 
 def test_preview_tears_down_booted_server_when_it_never_gets_healthy(
     tmp_path: Path,
 ) -> None:
+    work_dir = _make_work_dir(tmp_path)
     runner = _RecordingRunner()
     spawner = _FakeSpawner()
     # The preview port never returns 200.
     http = _FakeHttp(lambda _url: None)
 
-    code = _preview(runner, http, spawner, tmp_path)
+    code = _preview(runner, http, spawner, tmp_path, work_dir)
 
     assert code == 1
     assert spawner.detached_spawns  # it was booted
     assert runner.ran("kill", "-TERM", f"-{spawner.detached_pid}")  # then killed
     assert not runner.ran(
-        "python3", reveal_mod.FORWARD_PORT_SCRIPT, "--name"
+        *reveal_mod.FORWARD_PORT_CMD, "--name"
     )  # never registered (health failed first)
-    assert runner.ran("git", "worktree", "remove", "--force")
     assert not _state_path(tmp_path).exists()
 
 
 # --- preview teardown -------------------------------------------------------
 
 
-def test_unpreview_tears_down_everything_in_the_state_file(tmp_path: Path) -> None:
+def test_unpreview_tears_down_the_server_and_service(tmp_path: Path) -> None:
     state_dir = reveal_mod._preview_state_dir(tmp_path, _SLUG)
     state_dir.mkdir(parents=True)
-    worktree = str(state_dir / reveal_mod.PREVIEW_WORKTREE_DIRNAME)
     _state_path(tmp_path).write_text(
-        json.dumps(
-            {
-                "pid": 4242,
-                "service": reveal_mod.PREVIEW_SERVICE_NAME,
-                "worktree": worktree,
-            }
-        )
+        json.dumps({"pid": 4242, "service": reveal_mod.PREVIEW_SERVICE_NAME})
     )
     runner = _RecordingRunner()
 
@@ -597,13 +598,10 @@ def test_unpreview_tears_down_everything_in_the_state_file(tmp_path: Path) -> No
 
     assert code == 0
     assert runner.ran("kill", "-TERM", "-4242")
-    remove = runner.argvs_starting(
-        "python3", reveal_mod.FORWARD_PORT_SCRIPT, "--remove", "--name"
-    )
+    remove = runner.argvs_starting(*reveal_mod.FORWARD_PORT_CMD, "--remove", "--name")
     assert remove and remove[0][-1] == reveal_mod.PREVIEW_SERVICE_NAME
-    assert [c[-1] for c in runner.argvs_starting("git", "worktree", "remove")] == [
-        worktree
-    ]
+    # The preview served the worker's work_dir in place -- there is no worktree.
+    assert not runner.ran("git", "worktree", "remove")
     assert not state_dir.exists()  # state directory deleted
 
 
@@ -614,7 +612,6 @@ def test_unpreview_without_state_is_a_noop_success(tmp_path: Path) -> None:
 
     assert code == 0
     assert not runner.ran("kill")
-    assert not runner.ran("git", "worktree", "remove")
 
 
 def test_main_routes_unpreview(tmp_path: Path) -> None:
