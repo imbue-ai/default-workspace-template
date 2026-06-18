@@ -61,7 +61,11 @@ class _RecordingRunner(reveal_mod.Runner):
         for prefix, result in self._responses.items():
             if tuple(argv_list[: len(prefix)]) == prefix:
                 if isinstance(result, list):
-                    return result.pop(0) if len(result) > 1 else result[0]
+                    result = result.pop(0) if len(result) > 1 else result[0]
+                # A canned exception models a command that raises (e.g. a missing
+                # binary -> FileNotFoundError) rather than exiting non-zero.
+                if isinstance(result, BaseException):
+                    raise result
                 assert isinstance(result, _Result)
                 return result
         return _Result()
@@ -534,6 +538,21 @@ def test_preview_tears_down_and_reports_failure_when_build_fails(
     )  # never registered
     assert runner.ran("git", "worktree", "remove", "--force")  # worktree cleaned up
     assert not _state_path(tmp_path).exists()  # no state left behind
+
+
+def test_preview_tears_down_when_a_build_step_raises(tmp_path: Path) -> None:
+    # A build step can fail by raising (a missing binary surfaces as
+    # FileNotFoundError) rather than exiting non-zero -- teardown must still run.
+    runner = _RecordingRunner()
+    runner.respond(("npm", "run", "build"), FileNotFoundError("npm not found"))
+    spawner = _FakeSpawner()
+
+    code = _preview(runner, _FakeHttp(_all_healthy), spawner, tmp_path)
+
+    assert code == 1
+    assert not spawner.detached_spawns  # never reached the boot step
+    assert runner.ran("git", "worktree", "remove", "--force")  # worktree cleaned up
+    assert not _state_path(tmp_path).exists()
 
 
 def test_preview_tears_down_booted_server_when_it_never_gets_healthy(
