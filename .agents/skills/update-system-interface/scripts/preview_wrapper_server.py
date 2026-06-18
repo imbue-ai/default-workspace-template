@@ -4,9 +4,10 @@
 A pre-merge preview is just another service the live UI proxies at
 ``/service/<name>/``, so by default it renders as a bare iframe -- visually
 indistinguishable from (and confusingly nested inside) the live interface. This
-server wraps that inner service in a thin chrome page: a banner that marks the
-tab as a *preview of a proposed change*, with the inner service embedded in a
-full-bleed iframe below it.
+server wraps that inner service in a chrome page that frames it on all four
+sides: an accent border + a header label marking the tab as a *preview of a
+proposed change*, with the inner service held in a bordered "stage" iframe
+inside that frame.
 
 It is deliberately service-agnostic. Given any inner service name already
 registered under the system-interface service dispatcher, plus a human-readable
@@ -60,19 +61,23 @@ def build_wrapper_html(inner_service: str, title: str) -> str:
 <title>Preview: {safe_title}</title>
 <style>
   :root {{ color-scheme: dark; }}
+  * {{ box-sizing: border-box; }}
   html, body {{ margin: 0; height: 100%; }}
+  /* The amber accent surrounds the previewed app on all four sides (a frame),
+     with the label as a header inside it -- so the whole tab reads as a
+     contained preview, not just a page with a header strip. */
   body {{
-    display: flex; flex-direction: column;
-    background: #0f1115;
+    display: flex; flex-direction: column; gap: 8px;
+    height: 100%; padding: 10px;
+    background: #2c2200;
+    border: 2px solid #f5b301;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   }}
   .preview-banner {{
     flex: 0 0 auto;
     display: flex; align-items: center; gap: 12px;
-    padding: 9px 14px;
-    background: #2c2200;
+    padding: 2px 4px;
     color: #ffd76a;
-    border-bottom: 2px solid #f5b301;
     font-size: 13px; line-height: 1.3;
   }}
   .preview-banner .tag {{
@@ -88,8 +93,15 @@ def build_wrapper_html(inner_service: str, title: str) -> str:
     margin-left: auto; color: #cdbb86;
     font-size: 12px; white-space: nowrap;
   }}
+  /* The previewed app sits inside a bordered, rounded stage so it reads as an
+     object held within the frame rather than the live UI itself. */
+  .preview-stage {{
+    flex: 1 1 auto; min-height: 0;
+    border: 1px solid #f5b301; border-radius: 6px; overflow: hidden;
+    background: #0f1115;
+  }}
   .preview-frame {{
-    flex: 1 1 auto; width: 100%; border: none; background: #0f1115;
+    display: block; width: 100%; height: 100%; border: none; background: #0f1115;
   }}
 </style>
 </head>
@@ -100,7 +112,9 @@ def build_wrapper_html(inner_service: str, title: str) -> str:
     <span class="desc">proposed change &mdash; not yet live</span>
     <span class="hint">Approve or request changes in chat</span>
   </div>
-  <iframe class="preview-frame" id="preview-frame" title="Preview of {safe_title}"></iframe>
+  <div class="preview-stage">
+    <iframe class="preview-frame" id="preview-frame" title="Preview of {safe_title}"></iframe>
+  </div>
   <script>
     var previewService = {service_literal};
     var previewTarget = "/service/" + previewService + "/";
