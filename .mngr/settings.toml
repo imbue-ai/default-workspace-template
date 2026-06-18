@@ -12,6 +12,12 @@ host_env__extend = [
     # Fast mode is enabled for all agents (settings_overrides fastMode=true on
     # agent_types.claude below); this gates the Opus fast-mode capability on.
     "CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE=1",
+    # Skip Claude Code's org-level fast-mode eligibility check. Agents sign in
+    # with a Claude Max subscription that supports fast mode, but the session
+    # resolves under an organization whose org check otherwise reports fast
+    # mode as "currently unavailable" -- so without this, /fast is refused in
+    # the container even though the same account gets fast mode on the laptop.
+    "CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1",
     # Lock Claude Code to the version pinned in agent_types.claude.version and the
     # Dockerfile's CLAUDE_CODE_VERSION; disable the auto-updater + background
     # feedback pings so the installed binary cannot silently drift. Tracks the
