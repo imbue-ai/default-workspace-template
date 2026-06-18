@@ -503,7 +503,12 @@ def run_all(query: str, max_results: int, out_dir: Path, stable_path: Path) -> N
 
 
 def _load_records(path: Path) -> list[dict[str, object]]:
-    data = json.loads(path.read_text())
+    try:
+        data = json.loads(path.read_text())
+    except OSError as exc:
+        raise InboxDigestError(f"could not read raw records at {path}: {exc}") from exc
+    except ValueError as exc:
+        raise InboxDigestError(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, list):
         raise InboxDigestError(f"{path} is not a JSON list of records")
     for index, item in enumerate(data):
