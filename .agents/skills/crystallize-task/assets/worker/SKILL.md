@@ -124,6 +124,29 @@ This checks the structure and, when a `run.py` exists, runs
 `scripts/run.py --help` to confirm its imports and PEP 723 dependencies
 resolve. It must print `ok` before moving on. If it fails, fix and rerun.
 
+### Data-capture guidance
+When the skill being built fetches data from external APIs, capture
+*all reasonable fields per record* in the calls you're already making,
+not just the fields the user displayed in the original turn. This keeps
+downstream consumers (e.g. an interface built later on top of the
+captured data) unconstrained. Pagination is a normal part of the
+workflow if the original ask requires it. Do NOT make extra
+un-asked-for API calls just to gather more data.
+
+Go further than fields: **persist the raw payload of each record and a
+reference to its source, durably** (e.g. under `runtime/<name>/`), not
+just the extracted/processed fields (see the preserve-and-surface
+principle in CLAUDE.md for what "raw payload" and "source reference"
+mean). A pipeline that fetches, transforms, and discards the raw payload
+cannot satisfy that principle no matter what consumers do: persisting it
+is what lets a *later* change in processing requirements re-derive new
+fields with no refetch, and what lets surfaces show the raw record or
+link out to the source. Retain whatever a consumer needs to *render*
+the record faithfully later -- e.g. keep the email's content-type and
+HTML body, not just a flattened text field -- so a downstream surface
+can render it in its native format rather than dump escaped source.
+This is a universal postcondition of the skill's data-capture step.
+
 ## Stage 4: Hand-craft and run scenarios
 
 Pick 2-3 scenarios that exercise the skill end-to-end:
@@ -141,9 +164,8 @@ Run each scenario:
 
 - For `[script]` and `[ai-script]` steps: invoke `scripts/run.py` (or the
   relevant helper) with real inputs and inspect the output. An `[ai-script]`
-  step makes a real Claude call, so it needs credentials at run time
-  (`ANTHROPIC_API_KEY`, or an inherited `CLAUDE_CONFIG_DIR` for the keyless
-  path); run it on a small input and note the cost it reports.
+  step makes a real Claude call; run it on a small input to note cost information
+  and confirm that your prompting is functional.
 - For `[prose]` steps: walk through the SKILL.md instructions as if you were
   an agent using the skill, and confirm they produce the expected
   behavior on the scenario's data. Write out this walk-through process; don't just think through it.
