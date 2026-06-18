@@ -158,7 +158,7 @@ def e2e_server(tmp_path: Path) -> Generator[tuple[str, list[AgentInfo], Path], N
     env_patcher = patch.dict(os.environ, {"MNGR_HOST_DIR": str(tmp_path), "MNGR_AGENT_ID": ""})
     env_patcher.start()
 
-    send_patcher = patch("imbue.system_interface.server.send_message", return_value=True)
+    send_patcher = patch("imbue.system_interface.agent_manager.send_message", return_value=True)
     send_patcher.start()
     discover_patcher = patch("imbue.system_interface.server.discover_agents", return_value=agents)
     discover_patcher.start()
@@ -343,7 +343,7 @@ def test_tool_calls_render_as_collapsible(tmp_path: Path, page: Page) -> None:
 
     with (
         patch("imbue.system_interface.server.discover_agents", return_value=agents),
-        patch("imbue.system_interface.server.send_message", return_value=True),
+        patch("imbue.system_interface.agent_manager.send_message", return_value=True),
     ):
         server = uvicorn.Server(uvicorn.Config(app=app, host="127.0.0.1", port=_PORT + 1, log_level="error"))
         thread = threading.Thread(target=server.run, daemon=True)
@@ -522,7 +522,7 @@ def test_no_agents_shows_empty_state(page: Page, tmp_path: Path) -> None:
 
     with (
         patch("imbue.system_interface.server.discover_agents", return_value=[]),
-        patch("imbue.system_interface.server.send_message", return_value=True),
+        patch("imbue.system_interface.agent_manager.send_message", return_value=True),
     ):
         server = uvicorn.Server(uvicorn.Config(app=app, host="127.0.0.1", port=_PORT + 2, log_level="error"))
         thread = threading.Thread(target=server.run, daemon=True)
