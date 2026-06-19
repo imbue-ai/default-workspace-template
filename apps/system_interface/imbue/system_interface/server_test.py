@@ -536,6 +536,33 @@ def test_layout_broadcast_refresh_bypasses_mutex(app: FastAPI) -> None:
 
 
 @pytest.mark.timeout(10)
+def test_layout_broadcast_reload_system_interface_emits_ws_message(app: FastAPI) -> None:
+    """``reload_system_interface`` broadcasts a layout_op so the shell reloads.
+
+    This is the frontend-reveal trigger: the reload script POSTs this op and the
+    dockview shell responds by reloading the whole top-level page. It carries no
+    args and bypasses the mutex (read-only).
+    """
+    with TestClient(app, client=("127.0.0.1", _TEST_CLIENT_PORT)) as loopback_client:
+        with loopback_client.websocket_connect("/api/ws") as ws:
+            json.loads(ws.receive_text())
+            json.loads(ws.receive_text())
+
+            response = loopback_client.post(
+                "/api/layout/broadcast",
+                json={"op": "reload_system_interface", "args": {}, "agent_id": "agent-42"},
+            )
+            assert response.status_code == 200
+            msg = json.loads(ws.receive_text())
+            assert msg == {
+                "type": "layout_op",
+                "op": "reload_system_interface",
+                "args": {},
+                "requester_agent_id": "agent-42",
+            }
+
+
+@pytest.mark.timeout(10)
 def test_layout_broadcast_open_terminal_allocates_panel_id_and_returns_ref(app: FastAPI) -> None:
     """``open service:terminal`` is the synchronous-ref-return path.
 
