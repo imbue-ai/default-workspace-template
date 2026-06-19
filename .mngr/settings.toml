@@ -93,12 +93,14 @@ sync_credentials_on_login = false
 # new shared-mode default). Every other agent in the workspace points at
 # *this* directory via the host env var the bootstrap writes.
 use_env_config_dir = false
-# Window 0 of the services agent must never actually run claude -- the
-# bootstrap+services live in other tmux windows, and the real chat agents
-# are spun up separately by the bootstrap. The trailing "&& claude" is
-# unreachable; it exists only so ClaudeAgent.assemble_command can still
-# splice --resume / --session-id onto a claude-shaped invocation without
-# producing a syntactically bogus command.
+# Window 0 of the services agent must never actually run claude -- the bootstrap
+# window (extra_window) runs supervisord, which owns every background service,
+# and the real chat agents are spun up separately by the bootstrap. Making
+# window 0 a live claude is unsafe: the user could close it, tearing down the
+# tmux session (and supervisord with it). The trailing "&& claude" is
+# unreachable; it exists only so ClaudeAgent.assemble_command can still splice
+# --resume / --session-id onto a claude-shaped invocation without producing a
+# syntactically bogus command.
 command = "sleep infinity && claude"
 
 # the "worker" agent type -- the default for delegated tasks
@@ -172,18 +174,20 @@ docker_runtime = "runsc"
 # the template that is shared across all agent types
 [create_templates.main]
 type = "main"
-# `/welcome` is *not* set here anymore: the services agent's window 0 sleeps
-# forever (see `[agent_types.main] command`) and never reaches claude. The
-# bootstrap creates a separate chat agent on first boot and passes
-# `--message /welcome` to it instead.
-env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=0"]
-extra_window = [
-    "bootstrap='uv run bootstrap'",
-    "telegram='uv run telegram-bot'",
-    "terminal='bash scripts/run_ttyd.sh'",
-    "reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'",
-    "git_auth_setup='git config --global --replace-all url.\"https://github.com/\".insteadOf \"git@github.com:\" && git config --global --add url.\"https://github.com/\".insteadOf \"ssh://git@github.com/\" && git config --global core.hooksPath /mngr/code/scripts/git_hooks && gh auth setup-git'"
-]
+# `/welcome` is still NOT set here: the services agent's window 0 sleeps forever
+# (see `[agent_types.main] command`) and never reaches claude. The bootstrap
+# creates a separate chat agent on first boot and passes `--message /welcome`
+# to it instead.
+#
+# bootstrap is the only extra_window now. It runs first-boot setup (git config,
+# runtime worktree, CLAUDE_CONFIG_DIR host-env write, backup config, initial
+# chat agent) and then launches supervisord, which runs every background
+# service (system_interface, web, cloudflared, app-watcher, runtime-backup,
+# host-backup, terminal, and the one-shot deferred-install -- see
+# supervisord.conf). The old telegram + git_auth_setup windows are gone
+# (telegram is retired; the git config it performed now runs inside bootstrap),
+# and terminal is a supervisord service rather than its own window.
+extra_window = ["bootstrap='uv run bootstrap'"]
 # Write a sane default tmux config on every minds host. tuple-typed
 # `extra_provision_command` stacks across templates (see
 # `apply_create_template` in vendor/mngr/.../common_opts.py), so the
@@ -389,10 +393,6 @@ post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 # Chat template: minimal agent for additional chat sessions in the same work directory
 [create_templates.chat]
 type = "claude"
-env = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=0"]
-extra_window = [
-    "reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"
-]
 
 # Worktree template: agent in a new git worktree, no services by default --
 # creates its own as needed. Uses the plain `claude` type (not `main`), so
@@ -404,8 +404,8 @@ type = "claude"
 # Worker template: general purpose sub agent for doing tasks reliably (and ensuring that they are verified)
 [create_templates.worker]
 type = "worker"
-extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR'"]
-env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0"]
+extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
 agent_args = [
     "--dangerously-skip-permissions",
     "--append-system-prompt",
