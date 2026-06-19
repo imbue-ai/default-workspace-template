@@ -126,12 +126,12 @@ content drawn from your conversation -- do not leave the placeholders.
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name heal-$TARGET \
-    --template crystallize-worker \
+    --template subskill-worker \
     --runtime-dir runtime/heal/$TARGET/ \
     --task-file runtime/heal/$TARGET/task.md
 ```
 
-The `crystallize-worker` template pre-installs `heal-skill-worker`.
+The `subskill-worker` template pre-installs `heal-skill-worker`.
 
 ## Step 4: Proxy the final-artifact gate, then merge
 

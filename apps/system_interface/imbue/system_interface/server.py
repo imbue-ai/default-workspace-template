@@ -883,8 +883,11 @@ async def _layout_broadcast_endpoint(request: Request) -> JSONResponse:
       ``agent_manager``'s in-memory service/agent registry plus the
       persisted ``layout.json`` (for ``is_open`` flags / tree layout)
       and return a structured payload. Bypass the mutex.
-    - ``refresh``: a state-preserving broadcast that doesn't mutate
-      serialized layout. Bypass the mutex.
+    - ``refresh`` / ``reload_system_interface``: state-preserving
+      broadcasts that don't mutate serialized layout. Bypass the mutex.
+      ``reload_system_interface`` tells connected browsers to reload the
+      whole top-level page (the frontend-reveal step of the
+      ``update-system-interface`` flow).
     - All other ops (``open``, ``focus``, ``split``, ``close``, ``move``,
       ``rename``, ``maximize``, ``restore``, ``replace-url``): acquire
       the advisory mutex first; on contention return HTTP 409 with the
