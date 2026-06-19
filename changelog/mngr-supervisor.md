@@ -8,13 +8,6 @@
   lima). Edit `supervisord.conf` and run `supervisorctl reread && supervisorctl
   update` to apply service changes.
 
-- The `system-services` agent now runs a real (idle) Claude agent in window 0
-  instead of `sleep infinity`: the `[agent_types.main]` command override was
-  removed (so it falls back to the default `claude`), and a background-services
-  system prompt is appended via `[create_templates.main]` `agent_args`. It is
-  told it will be sent operational errors to triage -- fixing directly or
-  delegating to a worker via `launch-task`.
-
 - Cleaned up the `[create_templates.main]` `extra_window` list: `bootstrap` is
   now the only entry. `telegram` was retired, the `git_auth_setup` commands now
   run inside `bootstrap` (minus the obsolete `gh auth setup-git`), `terminal`

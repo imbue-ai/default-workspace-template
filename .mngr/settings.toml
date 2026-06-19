@@ -93,12 +93,15 @@ sync_credentials_on_login = false
 # new shared-mode default). Every other agent in the workspace points at
 # *this* directory via the host env var the bootstrap writes.
 use_env_config_dir = false
-# Window 0 of the services agent now runs a real (idle) claude agent: the
-# `command` override that used to `sleep infinity` has been removed, so it
-# falls back to the default `claude` from agent_types.claude. Its
-# background-services system prompt is appended via create_templates.main's
-# agent_args. bootstrap (in extra_window) launches supervisord, which runs
-# every background service.
+# Window 0 of the services agent must never actually run claude -- the bootstrap
+# window (extra_window) runs supervisord, which owns every background service,
+# and the real chat agents are spun up separately by the bootstrap. Making
+# window 0 a live claude is unsafe: the user could close it, tearing down the
+# tmux session (and supervisord with it). The trailing "&& claude" is
+# unreachable; it exists only so ClaudeAgent.assemble_command can still splice
+# --resume / --session-id onto a claude-shaped invocation without producing a
+# syntactically bogus command.
+command = "sleep infinity && claude"
 
 # the "worker" agent type -- the default for delegated tasks
 [agent_types.worker]
@@ -171,10 +174,10 @@ docker_runtime = "runsc"
 # the template that is shared across all agent types
 [create_templates.main]
 type = "main"
-# `/welcome` is still NOT set here: the bootstrap creates a separate chat agent
-# on first boot and passes `--message /welcome` to it. The system-services
-# agent's window 0 now runs a real (idle) claude with the background-services
-# system prompt appended via agent_args below.
+# `/welcome` is still NOT set here: the services agent's window 0 sleeps forever
+# (see `[agent_types.main] command`) and never reaches claude. The bootstrap
+# creates a separate chat agent on first boot and passes `--message /welcome`
+# to it instead.
 #
 # bootstrap is the only extra_window now. It runs first-boot setup (git config,
 # runtime worktree, CLAUDE_CONFIG_DIR host-env write, backup config, initial
@@ -185,14 +188,6 @@ type = "main"
 # (telegram is retired; the git config it performed now runs inside bootstrap),
 # and terminal is a supervisord service rather than its own window.
 extra_window = ["bootstrap='uv run bootstrap'"]
-# Append a background-services system prompt, mirroring the worker template's
-# --append-system-prompt pattern. The agent is told it will be sent operational
-# errors to triage -- fixing directly or delegating to a worker via launch-task
-# -- and that it can sit idle until then.
-agent_args = [
-    "--append-system-prompt",
-    """You are the system-services agent for this workspace. You run continuously in the background, alongside the user's chat agent(s). The workspace's background services (web UI, terminal, tunnel, backups, etc.) are managed by supervisord, not directly by you. You will be sent messages about errors and operational problems occurring in this workspace. When you receive one, triage it: fix straightforward issues directly, or delegate larger investigations to a worker agent using the launch-task skill. Until you are messaged, simply remain idle.""",
-]
 # Write a sane default tmux config on every minds host. tuple-typed
 # `extra_provision_command` stacks across templates (see
 # `apply_create_template` in vendor/mngr/.../common_opts.py), so the
