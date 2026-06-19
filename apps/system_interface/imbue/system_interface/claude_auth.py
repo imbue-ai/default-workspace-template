@@ -75,6 +75,7 @@ from imbue.mngr_claude.claude_config import acknowledge_cost_threshold
 from imbue.mngr_claude.claude_config import complete_onboarding
 from imbue.mngr_claude.claude_config import dismiss_effort_callout
 from imbue.mngr_claude.claude_config import read_claude_config
+from imbue.mngr_claude.resources.stream_snapshot import strip_ansi
 
 logger = _loguru_logger
 
@@ -309,6 +310,22 @@ def _drive_oauth_code(process: Any, code: str) -> None:
         raise ClaudeAuthError("Timed out waiting for claude auth login to complete after code submit")
 
 
+def _extract_oauth_url(raw_output: str) -> str | None:
+    """Pull the single OAuth URL out of `claude auth login`'s PTY output.
+
+    The CLI renders the URL as an OSC 8 terminal hyperlink styled with ANSI
+    color, so the raw stream carries the URL *twice* -- once as the
+    hyperlink target and once as the styled visible label -- interleaved
+    with escape sequences (`ESC]8;;<url>ST <colored url> ESC]8;;ST`).
+    Matching the URL straight off that stream captures both copies plus the
+    escapes. Stripping the escapes first collapses the hyperlink back to its
+    bare visible label, leaving exactly one clean URL for the regex.
+    """
+    cleaned = strip_ansi(raw_output)
+    match = _OAUTH_URL_REGEX.search(cleaned)
+    return match.group(0) if match is not None else None
+
+
 def _build_list_command() -> list[str]:
     """Build the ``mngr list`` argv used to enumerate agents.
 
@@ -509,14 +526,21 @@ class ClaudeAuthService(MutableModel):
             if match_index == 1:
                 raise ClaudeAuthError("claude auth login exited before printing OAuth URL")
             raise ClaudeAuthError("Timed out waiting for OAuth URL from claude auth login")
-        match = process.match
-        if match is None:
+        # `process.match` spans the raw stream, where the CLI's OSC 8
+        # hyperlink renders the URL twice and wraps it in escape sequences.
+        # Re-extract from the full consumed buffer (`before` + `after`, which
+        # together hold the hyperlink's opening `ESC]8;;` and both URL copies)
+        # with the escapes stripped, so we hand back one clean URL.
+        consumed = (process.before or "") + (process.after or "")
+        oauth_url = _extract_oauth_url(consumed)
+        if oauth_url is None:
             _safe_terminate(process)
             _safe_close(process)
             raise ClaudeAuthError(
-                "OAuth URL regex matched but pexpect.match is None (unexpected)"
+                "OAuth URL matched in the stream but could not be extracted "
+                "after stripping terminal escape sequences"
             )
-        return process, match.group(0)
+        return process, oauth_url
 
     def start_oauth_login(self, provider: OAuthProvider) -> OAuthStartResult:
         """Spawn `claude auth login --<provider>` and return the parsed OAuth URL.
