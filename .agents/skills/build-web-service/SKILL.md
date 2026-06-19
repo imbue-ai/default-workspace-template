@@ -149,6 +149,14 @@ Skip this step for routes that emit only JSON, only redirects, or that
 serve an existing third-party UI through the escape hatch below --
 there's no markup to design.
 
+### Calling Claude from your service
+
+If your service needs to call Claude (classify/summarize content, run a one-shot
+agentic task, or launch a full agent), follow the `use-ai-integration` skill: it
+picks the path (a keyed `litellm` call or the keyless `claude_p.py` helper),
+covers the `claude -p` environment fix and the cost model, and saves you from
+hand-rolling the call.
+
 ### Always surface the raw data and its source
 
 When a view renders data *derived* from underlying records (a summary,
