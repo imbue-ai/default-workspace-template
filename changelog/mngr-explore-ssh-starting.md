@@ -7,9 +7,11 @@
     container entrypoint (in the vendored mngr) then self-heals sshd, so the host
     is reachable again without a manual `mngr start`.
 
-  - The `lima` template installs a systemd unit in the VM that runs
-    `mngr start system-services` on boot (the agent runs directly in the VM in
-    lima mode).
+  - The `lima` template installs a systemd path+service pair in the VM that runs
+    `mngr start system-services` the moment the workspace volume appears on boot
+    (the agent runs directly in the VM in lima mode). A path unit is used because
+    lima mounts /mngr (a separate btrfs disk) at a highly variable point late in
+    boot, so event-driven triggering avoids racing the mount.
 
   - The `vultr`, `aws`, and `pool_host` modes install a systemd unit on the
     outer VPS/VM (via the new mngr `post_host_create_outer_command` hook) that,
