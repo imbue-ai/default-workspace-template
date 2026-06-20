@@ -21,10 +21,11 @@ import type { TranscriptEvent, ToolResultEvent } from "../models/Response";
 import {
   renderUserMessage,
   renderAssistantMessage,
+  renderPermissionItem,
   buildToolResultsWithSkillExpansions,
   computeAuthErrorHiddenEventIds,
 } from "./message-renderers";
-import { isHiddenUserMessage } from "./user-message-classification";
+import { isHiddenUserMessage } from "./message-classification";
 import { buildSections, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
 import { ESTIMATED_USER_HEIGHT_PX, ESTIMATED_ASSISTANT_HEIGHT_PX } from "./row-measurement";
@@ -98,6 +99,16 @@ function buildRows(
             render: () => renderAssistantMessage(event, toolResults, agentId),
           });
         }
+      } else if (item.kind === "permission") {
+        // A permission request lifted out of its step: rendered inline as an
+        // always-visible card so the user can act on it without expanding a step.
+        const permissionEvent = item.event;
+        const resolution = item.resolution;
+        rows.push({
+          key: `perm-${permissionEvent.event_id}`,
+          estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
+          render: () => renderPermissionItem(permissionEvent, toolResults, agentId, resolution),
+        });
       } else if (item.kind === "chip") {
         const chipEvent = item.event;
         if (!isHiddenUserMessage(chipEvent.content || "")) {
