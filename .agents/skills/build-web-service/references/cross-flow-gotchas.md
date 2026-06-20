@@ -15,14 +15,15 @@ tab bar at the top.
 Root cause: the system_interface could not reach the registered
 backend, so the request fell through to the top-level UI. Either:
 
-- The backend never came up (check `tmux capture-pane -t svc-<name> -p`).
+- The backend never came up (check `supervisorctl status <name>` and
+  `/var/log/supervisor/<name>-stderr.log`).
 - The backend bound to a different host than what was registered
   (e.g. bound to a Unix socket, or to an interface the system_interface
   cannot reach inside the container).
 - The `--name` passed to `forward_port.py` does not match the URL
   segment the user clicked.
 
-Fix: re-check pre-flight (bind to 127.0.0.1, port matches services.toml,
+Fix: re-check pre-flight (bind to 127.0.0.1, port matches supervisord.conf,
 name matches the URL segment) and Step 3 verification.
 
 ## Backend redirects (3xx Location headers)
@@ -49,7 +50,7 @@ public URLs at non-prefixed paths, those will land at the wrong place.
 FastAPI emits absolute URLs in OpenAPI metadata (`/docs`,
 `/openapi.json`) based on `app.root_path`. The scaffolder reads
 `ROOT_PATH` from env and passes it to `FastAPI(root_path=ROOT_PATH)`,
-and the generated services.toml command sets
+and the generated supervisord program command sets
 `ROOT_PATH=/service/<name>`. So the scaffolded happy path emits
 prefix-correct URLs without further work.
 
@@ -97,14 +98,14 @@ one URL per service name.
 ## Port already in use
 
 If the port you chose is bound by something else, the start command
-will fail loudly inside `svc-<name>` (the framework will print an
-error and exit). The bootstrap manager will keep restarting it if
-`restart = "on-failure"`, producing a tight crash loop visible in
-`tmux capture-pane -t svc-<name> -p`. Pick a different port.
+will fail loudly (the framework will print an error and exit). With
+`autorestart=true`, supervisord will keep restarting it, producing a
+crash loop visible via `supervisorctl status <name>` and
+`/var/log/supervisor/<name>-stderr.log`. Pick a different port.
 
-The scaffolder's port-picking pre-flight (which parses `services.toml`
+The scaffolder's port-picking pre-flight (which parses `supervisord.conf`
 and `runtime/applications.toml`) catches this before you write the
-service entry. For the wrap-existing escape hatch, run `ss -tln`
+program entry. For the wrap-existing escape hatch, run `ss -tln`
 manually before choosing a port.
 
 ## Bind host (wrap-existing path mostly)
