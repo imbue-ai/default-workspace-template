@@ -18,10 +18,10 @@ set -eu
 
 UNIT_PATH=/etc/systemd/system/minds-autostart.service
 
-# `bash -lc` is a login shell, so it picks up /root/.local/bin via
-# /etc/profile.d/fct_path.sh but NOT /mngr/env (that is wired into .bashrc, for
-# interactive shells only). Source /mngr/env explicitly so mngr resolves the
-# agent with the same host_dir/prefix context it was created with.
+# ExecStart runs through a login shell (`bash -lc`) so uv/mngr are on PATH, and
+# delegates to minds_start_services_agent.sh, which sources the host AND the
+# system-services agent env (matching mngr's own agent-env contract) before
+# starting the agent.
 cat > "$UNIT_PATH" <<'UNIT'
 [Unit]
 Description=Start the minds system-services agent on boot
@@ -32,7 +32,7 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 Environment=HOME=/root
-ExecStart=/bin/bash -lc 'set -a; [ -f /mngr/env ] && . /mngr/env; set +a; mngr start system-services'
+ExecStart=/bin/bash -lc 'exec /mngr/code/scripts/minds_start_services_agent.sh'
 
 [Install]
 WantedBy=multi-user.target
