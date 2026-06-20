@@ -308,12 +308,25 @@ idle_mode = "disabled"
 # `docker run` args go via start_arg (vps_docker forwards start_arg to the inner
 # `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /mngr/code,
 # inside the mounted /mngr volume, already exists as the process cwd) and
-# `--security-opt=no-new-privileges`.
-start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/"]
+# `--security-opt=no-new-privileges`. `--restart=unless-stopped` brings the
+# agent container back after a VPS reboot; the entrypoint then self-heals sshd.
+start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Same forwarding as the docker template; see comment there.
 pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
+# Install the outer-VM boot unit so the agent recovers after a VPS reboot even
+# without the desktop app; same as the pool_host template. See
+# scripts/minds_install_outer_autostart.sh.
+post_host_create_outer_command__extend = [
+    """
+set -eu
+container_id="$(docker ps -q --filter label=com.imbue.mngr.host-id | head -n1)"
+test -n "$container_id"
+docker cp "$container_id:/mngr/code/scripts/minds_install_outer_autostart.sh" /tmp/minds-install-outer-autostart.sh
+sh /tmp/minds-install-outer-autostart.sh
+""",
+]
 
 # Provider-agnostic FCT pool-host build recipe (the imbue-cloud pool bake stacks
 # this on top of `main` for BOTH OVH VPSes and lima slices -- they build the same
@@ -346,33 +359,17 @@ post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 # Install a systemd unit on the OUTER pool/slice VM that, on every VM boot,
 # starts the agent container and relaunches the system-services agent inside it
 # -- so the workspace recovers from a VM reboot even when the minds desktop app
-# is not running. Runs once at bake time on the VM (post_host_create_command /
-# fct-seed has already seeded /mngr/code in the container, so the ExecStart
-# script can be copied out of it). The unit persists across leases and
-# container rebuilds (it finds the container by mngr label, not by name).
+# is not running. Runs once on the VM (post_host_create_command / fct-seed has
+# already seeded /mngr/code in the container, so the installer can be copied out
+# of it). The unit persists across leases and container rebuilds (it finds the
+# container by mngr label, not by name). See scripts/minds_install_outer_autostart.sh.
 post_host_create_outer_command__extend = [
     """
 set -eu
 container_id="$(docker ps -q --filter label=com.imbue.mngr.host-id | head -n1)"
 test -n "$container_id"
-docker cp "$container_id:/mngr/code/scripts/minds_outer_autostart.sh" /usr/local/sbin/minds-outer-autostart.sh
-chmod +x /usr/local/sbin/minds-outer-autostart.sh
-cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
-[Unit]
-Description=Start the minds system-services agent on boot
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/sbin/minds-outer-autostart.sh
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-systemctl daemon-reload
-systemctl enable minds-autostart.service
+docker cp "$container_id:/mngr/code/scripts/minds_install_outer_autostart.sh" /tmp/minds-install-outer-autostart.sh
+sh /tmp/minds-install-outer-autostart.sh
 """,
 ]
 
@@ -399,12 +396,25 @@ idle_mode = "disabled"
 # `docker run` args go via start_arg (vps_docker forwards start_arg to the inner
 # `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /mngr/code,
 # inside the mounted /mngr volume, already exists as the process cwd) and
-# `--security-opt=no-new-privileges`.
-start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/"]
+# `--security-opt=no-new-privileges`. `--restart=unless-stopped` brings the
+# agent container back after an EC2 reboot; the entrypoint then self-heals sshd.
+start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Same forwarding as the docker template; see comment there.
 pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
+# Install the outer-VM boot unit so the agent recovers after an EC2 reboot even
+# without the desktop app; same as the pool_host template. See
+# scripts/minds_install_outer_autostart.sh.
+post_host_create_outer_command__extend = [
+    """
+set -eu
+container_id="$(docker ps -q --filter label=com.imbue.mngr.host-id | head -n1)"
+test -n "$container_id"
+docker cp "$container_id:/mngr/code/scripts/minds_install_outer_autostart.sh" /tmp/minds-install-outer-autostart.sh
+sh /tmp/minds-install-outer-autostart.sh
+""",
+]
 
 # Template for imbue_cloud-leased pool hosts. minds invokes this as
 # `--template main --template imbue_cloud` (mirroring how the other modes
