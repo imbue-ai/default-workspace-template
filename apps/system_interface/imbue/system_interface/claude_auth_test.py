@@ -138,6 +138,64 @@ def test_oauth_session_extracts_url_from_spawner_stdout() -> None:
     assert result.session_id
 
 
+def _osc8_hyperlink(url: str) -> str:
+    """Render `url` the way `claude auth login` does: an OSC 8 hyperlink whose
+    target *and* blue-styled visible label are both the URL.
+
+    Layout: `ESC]8;;<url>ST <ESC[94m><url><ESC[39m> ESC]8;;ST`. The bare URL
+    thus appears twice, wrapped in escape sequences -- the exact stream that
+    made the modal copy a doubled, escape-laden link.
+    """
+    return f"\x1b]8;;{url}\x1b\\\x1b[94m{url}\x1b[39m\x1b]8;;\x1b\\"
+
+
+# A real authorize URL as emitted by the current CLI (from the reported bug).
+_REAL_OAUTH_URL = (
+    "https://claude.com/cai/oauth/authorize?code=true"
+    "&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code"
+    "&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback"
+    "&scope=org%3Acreate_api_key+user%3Aprofile&code_challenge=FfOfVy8IPT0c"
+    "&code_challenge_method=S256&state=42H_HryL59xS-VHl3yIDzgDwy5Xp29xUXPuoWMmOL8U"
+)
+
+
+def test_extract_oauth_url_collapses_osc8_hyperlink_to_single_clean_url() -> None:
+    """The doubled, escape-wrapped OSC 8 hyperlink collapses to one bare URL."""
+    wrapped = _osc8_hyperlink(_REAL_OAUTH_URL)
+    # Sanity: the raw stream really does carry the URL twice plus escapes,
+    # which is what the old regex-only extraction returned verbatim.
+    assert wrapped.count(_REAL_OAUTH_URL) == 2
+    assert claude_auth._extract_oauth_url(wrapped) == _REAL_OAUTH_URL
+
+
+def test_extract_oauth_url_returns_none_when_no_url_present() -> None:
+    assert claude_auth._extract_oauth_url("no link in this output\n") is None
+
+
+def test_oauth_session_extracts_clean_url_from_osc8_hyperlink_stream() -> None:
+    """End-to-end: a spawner emitting the OSC 8 hyperlink yields one clean URL."""
+    fake_process = FakePexpectProcess(
+        raw_output=_osc8_hyperlink(_REAL_OAUTH_URL), expect_return_index=0
+    )
+    service = claude_auth.ClaudeAuthService(
+        pexpect_spawner=lambda *_args, **_kwargs: fake_process
+    )
+    result = service.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
+    assert result.oauth_url == _REAL_OAUTH_URL
+
+
+def test_oauth_session_raises_when_url_unextractable_after_stripping() -> None:
+    fake_process = FakePexpectProcess(
+        raw_output="matched something but no url survives stripping",
+        expect_return_index=0,
+    )
+    service = claude_auth.ClaudeAuthService(
+        pexpect_spawner=lambda *_args, **_kwargs: fake_process
+    )
+    with pytest.raises(claude_auth.ClaudeAuthError, match="could not be extracted"):
+        service.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
+
+
 @pytest.mark.parametrize(
     "url",
     [
