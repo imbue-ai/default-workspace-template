@@ -8,14 +8,14 @@
 #
 #   1. /usr/local/sbin/minds-outer-autostart.sh -- the boot action: start every
 #      mngr-managed agent container and relaunch the "system-services" agent
-#      inside it. Containers are found by the fixed mngr label rather than a
-#      baked-in name, so it survives container rebuilds. The agent container
-#      already returns on its own via its docker `--restart` policy and the
-#      container entrypoint self-heals sshd; the `docker start` here is a
-#      harmless no-op in that case, and `mngr start` is idempotent + flock-
-#      serialized so racing the desktop client is safe. `bash -lc` is a login
-#      shell (so uv/mngr are on PATH) but does not source /mngr/env, so we
-#      source it explicitly for the host_dir/prefix context.
+#      inside it (via the in-container scripts/minds_start_services_agent.sh,
+#      which sources the host AND agent env per mngr's contract). Containers are
+#      found by the fixed mngr label rather than a baked-in name, so it survives
+#      container rebuilds. The agent container already returns on its own via its
+#      docker `--restart` policy and the container entrypoint self-heals sshd; the
+#      `docker start` here is a harmless no-op in that case, and `mngr start` is
+#      idempotent + flock-serialized so racing the desktop client is safe.
+#      `bash -lc` is a login shell so uv/mngr are on PATH inside the container.
 #
 #   2. /etc/systemd/system/minds-autostart.service -- a oneshot unit that runs
 #      the boot action on every VM boot.
@@ -29,7 +29,7 @@ set -u
 for container_id in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
     docker start "$container_id" >/dev/null 2>&1 || true
     docker exec --workdir / "$container_id" \
-        bash -lc 'set -a; [ -f /mngr/env ] && . /mngr/env; set +a; mngr start system-services' || true
+        bash -lc 'exec /mngr/code/scripts/minds_start_services_agent.sh' || true
 done
 BOOT_ACTION
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
