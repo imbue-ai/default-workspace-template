@@ -1,0 +1,17 @@
+Rewrote the system interface to be fully synchronous: replaced FastAPI/uvicorn with Flask served by the threaded Werkzeug server, and replaced all WebSocket handling with `flask-sock` (`simple-websocket` for the service proxy's backend leg). No `asyncio` remains anywhere in the app.
+
+The HTTP/SSE/WebSocket wire contract is unchanged, so the frontend needs no changes: REST responses keep their status codes and JSON shapes, SSE streams emit identical frames (including `: keepalive`), and the `/api/ws`, proto-agent-logs, and `/service/<name>/` WebSocket endpoints speak the same messages.
+
+Notable internals:
+
+- `app.state` is replaced by a single typed `SystemInterfaceState` context object built once in `create_application` and read via `get_state()`.
+
+- App-wide objects are built eagerly in `create_application`; teardown is wired in `main()` via `atexit` plus SIGTERM/SIGINT handlers (replacing the FastAPI lifespan and its SIGINT-only handler).
+
+- The WebSocket broadcaster's asyncio task-cancellation machinery is gone; a wedged client is freed by `flask-sock`'s `ping_interval` keepalive or by the broadcaster pushing a shutdown sentinel into its queue. The `/service/<name>/` WebSocket proxy bridges the two directions with one thread each.
+
+- Thread-safety: the per-agent session-watcher registry and the latchkey catalog cache are now guarded, since handlers run truly concurrently across threads under the threaded server.
+
+- The `endpoint` plugin hook now receives a Flask app.
+
+- Tests run against Flask's test client for HTTP/SSE and a real `run_simple` listener on an ephemeral port for the WebSocket endpoints.
