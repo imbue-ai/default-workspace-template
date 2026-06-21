@@ -316,15 +316,41 @@ pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 # Install the outer-VM boot unit so the agent recovers after a VPS reboot even
-# without the desktop app; same as the pool_host template. See
-# scripts/minds_install_outer_autostart.sh.
+# without the desktop app; same as the pool_host template..
 post_host_create_outer_command__extend = [
     """
 set -eu
-container_id="$(docker ps -q --filter label=com.imbue.mngr.host-id | head -n1)"
-test -n "$container_id"
-docker cp "$container_id:/mngr/code/scripts/minds_install_outer_autostart.sh" /tmp/minds-install-outer-autostart.sh
-sh /tmp/minds-install-outer-autostart.sh
+cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
+#!/bin/sh
+# On VM boot, start every mngr-managed agent container and relaunch the
+# system-services agent inside it (in its full host+agent env, via the shared
+# in-container start script). Containers are found by the fixed mngr label, so
+# this survives container rebuilds. `docker start` is a no-op if the container's
+# --restart policy already brought it back; `mngr start` is idempotent + flock-
+# serialized, so racing the desktop client is safe.
+set -u
+for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
+    docker start "$cid" >/dev/null 2>&1 || true
+    docker exec --workdir / "$cid" bash -lc 'exec /mngr/code/scripts/minds_start_services_agent.sh' || true
+done
+BOOT
+chmod +x /usr/local/sbin/minds-outer-autostart.sh
+cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
+[Unit]
+Description=Start the minds system-services agent on boot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/minds-outer-autostart.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable minds-autostart.service
 """,
 ]
 
@@ -362,14 +388,41 @@ post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 # is not running. Runs once on the VM (post_host_create_command / fct-seed has
 # already seeded /mngr/code in the container, so the installer can be copied out
 # of it). The unit persists across leases and container rebuilds (it finds the
-# container by mngr label, not by name). See scripts/minds_install_outer_autostart.sh.
+# container by mngr label, not by name).
 post_host_create_outer_command__extend = [
     """
 set -eu
-container_id="$(docker ps -q --filter label=com.imbue.mngr.host-id | head -n1)"
-test -n "$container_id"
-docker cp "$container_id:/mngr/code/scripts/minds_install_outer_autostart.sh" /tmp/minds-install-outer-autostart.sh
-sh /tmp/minds-install-outer-autostart.sh
+cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
+#!/bin/sh
+# On VM boot, start every mngr-managed agent container and relaunch the
+# system-services agent inside it (in its full host+agent env, via the shared
+# in-container start script). Containers are found by the fixed mngr label, so
+# this survives container rebuilds. `docker start` is a no-op if the container's
+# --restart policy already brought it back; `mngr start` is idempotent + flock-
+# serialized, so racing the desktop client is safe.
+set -u
+for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
+    docker start "$cid" >/dev/null 2>&1 || true
+    docker exec --workdir / "$cid" bash -lc 'exec /mngr/code/scripts/minds_start_services_agent.sh' || true
+done
+BOOT
+chmod +x /usr/local/sbin/minds-outer-autostart.sh
+cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
+[Unit]
+Description=Start the minds system-services agent on boot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/minds-outer-autostart.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable minds-autostart.service
 """,
 ]
 
@@ -404,15 +457,41 @@ pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
 # Same first-boot seed as the docker template; see comment there.
 post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 # Install the outer-VM boot unit so the agent recovers after an EC2 reboot even
-# without the desktop app; same as the pool_host template. See
-# scripts/minds_install_outer_autostart.sh.
+# without the desktop app; same as the pool_host template..
 post_host_create_outer_command__extend = [
     """
 set -eu
-container_id="$(docker ps -q --filter label=com.imbue.mngr.host-id | head -n1)"
-test -n "$container_id"
-docker cp "$container_id:/mngr/code/scripts/minds_install_outer_autostart.sh" /tmp/minds-install-outer-autostart.sh
-sh /tmp/minds-install-outer-autostart.sh
+cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
+#!/bin/sh
+# On VM boot, start every mngr-managed agent container and relaunch the
+# system-services agent inside it (in its full host+agent env, via the shared
+# in-container start script). Containers are found by the fixed mngr label, so
+# this survives container rebuilds. `docker start` is a no-op if the container's
+# --restart policy already brought it back; `mngr start` is idempotent + flock-
+# serialized, so racing the desktop client is safe.
+set -u
+for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
+    docker start "$cid" >/dev/null 2>&1 || true
+    docker exec --workdir / "$cid" bash -lc 'exec /mngr/code/scripts/minds_start_services_agent.sh' || true
+done
+BOOT
+chmod +x /usr/local/sbin/minds-outer-autostart.sh
+cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
+[Unit]
+Description=Start the minds system-services agent on boot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/minds-outer-autostart.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable minds-autostart.service
 """,
 ]
 
