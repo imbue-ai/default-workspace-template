@@ -93,8 +93,8 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 This boots the worker's already-built instance on a free port with layout
 persistence redirected to a throwaway dir (it reads the same agents, so the
 user's real conversations render, but it cannot clobber the live `layout.json` --
-and you can drive its own dockview via `preview_layout.py`, below), then boots a
-small wrapper page that embeds it in a labeled "preview" frame. The user-facing `si-preview`
+and you can drive its own dockview by pointing `layout.py` at that port, below),
+then boots a small wrapper page that embeds it in a labeled "preview" frame. The user-facing `si-preview`
 service points at that wrapper (the inner instance is registered separately as
 `si-preview-app`), so the tab reads as a clearly-marked proposed change rather
 than a confusing nested clone of the live UI. It does **not** merge, touch the
@@ -112,30 +112,33 @@ python3 scripts/layout.py open si-preview
 
 Before handing it over, navigate the preview *itself* to the view that shows the
 change, so the user lands on the relevant scenario instead of clicking around to
-find it. `preview_layout.py` runs any `manage-layout` op against the **preview
-instance** (the dockview *inside* the labeled preview frame), not the live UI:
+find it. `scripts/layout.py` already talks to whatever `MINDS_WORKSPACE_SERVER_URL`
+points at, so aim it at the preview's inner instance instead of the live UI (the
+`preview` command prints this port, and it's also recorded as `inner_port` in the
+preview's state file):
 
 ```bash
-python3 .agents/skills/update-system-interface/scripts/preview_layout.py --slug <name> inspect
-python3 .agents/skills/update-system-interface/scripts/preview_layout.py --slug <name> open chat:<agent>
-python3 .agents/skills/update-system-interface/scripts/preview_layout.py --slug <name> maximize chat:<agent>
+PORT=$(python3 -c 'import json; print(json.load(open("runtime/system-interface-preview/<name>/preview.json"))["inner_port"])')
+MINDS_WORKSPACE_SERVER_URL=http://127.0.0.1:$PORT python3 scripts/layout.py inspect
+MINDS_WORKSPACE_SERVER_URL=http://127.0.0.1:$PORT python3 scripts/layout.py open chat:<agent>
+MINDS_WORKSPACE_SERVER_URL=http://127.0.0.1:$PORT python3 scripts/layout.py maximize chat:<agent>
 ```
 
-It accepts every `scripts/layout.py` verb verbatim (`inspect`, `list`, `open`,
-`focus`, `split`, `move`, `maximize`, `rename`, ...) -- it just resolves the
-preview's recorded port and points the helper at it. Because `preview` persists
-the preview's layout to a throwaway dir (rather than neutering it), `inspect` /
-`list` reflect the real preview state and wait-stable confirmation + no-op
-detection work as against the live UI -- so start with `inspect` to see what's
-open. Anchor splits/moves with explicit refs (`chat:<name>` from `list`); the
-`self` ref only resolves when that agent's own chat tab is already open in the
-preview, which isn't guaranteed there.
+Every `layout.py` verb works verbatim (`inspect`, `list`, `open`, `focus`,
+`split`, `move`, `maximize`, `rename`, ...), now landing on the dockview *inside*
+the labeled preview frame. Because `preview` persists the preview's layout to a
+throwaway dir (rather than neutering it), `inspect` / `list` reflect the real
+preview state and wait-stable confirmation + no-op detection work as against the
+live UI -- so start with `inspect` to see what's open. Anchor splits/moves with
+explicit refs (`chat:<name>` from `list`); the `self` ref only resolves when that
+agent's own chat tab is already open in the preview, which isn't guaranteed there.
 
-Don't confuse the two layout calls: `scripts/layout.py open si-preview` (above)
-arranges the **live** UI's tab that *hosts* the preview; `preview_layout.py`
-arranges the dockview *within* that preview. (`open service:<name>` against the
-preview is best-effort -- service iframes depend on the preview's own registry --
-so prefer chat/split/focus/maximize ops for navigation.)
+Don't confuse the two layout targets: a plain `scripts/layout.py open si-preview`
+(no env override) arranges the **live** UI's tab that *hosts* the preview; setting
+`MINDS_WORKSPACE_SERVER_URL` to the inner port arranges the dockview *within* that
+preview. (`open service:<name>` against the preview is best-effort -- service
+iframes depend on the preview's own registry -- so prefer chat/split/focus/maximize
+ops for navigation.)
 
 Then confirm with the user via `send-user-message`: a binary keep/discard *and*
 room for free-form notes (what looks off, what they'd change). Wait for their
