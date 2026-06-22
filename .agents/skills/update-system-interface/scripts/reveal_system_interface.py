@@ -869,9 +869,12 @@ def preview(
         env.pop("MNGR_AGENT_ID", None)
         # Redirect layout persistence to a throwaway dir under the lead's runtime
         # state (never the live workspace's layout.json). This is what lets the
-        # previewing agent drive ``scripts/layout.py`` against the preview with
-        # full fidelity -- ``inspect`` / wait-stable / ``self`` all work, and the
-        # arrangement survives a preview reload -- via ``preview_layout.py``.
+        # previewing agent drive ``scripts/layout.py`` against the preview via
+        # ``preview_layout.py``: ``inspect`` / ``list``, wait-stable confirmation,
+        # and no-op detection all reflect the real preview state, and the
+        # arrangement survives a preview reload. (The ``self`` ref still depends
+        # on the lead's own chat tab being open in the preview, so anchor ops with
+        # explicit ``chat:<name>`` refs there.)
         # Absolute because the inner instance runs with cwd inside the worker's
         # work_dir, not the lead's repo root.
         env[ENV_LAYOUT_DIR_OVERRIDE] = str(state_dir / PREVIEW_LAYOUT_DIRNAME)
