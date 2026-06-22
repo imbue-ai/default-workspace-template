@@ -91,9 +91,10 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 ```
 
 This boots the worker's already-built instance on a free port with layout
-persistence neutered (it reads the same agents, so the user's real conversations
-render, but it cannot clobber the live `layout.json`), then boots a small wrapper
-page that embeds it in a labeled "preview" frame. The user-facing `si-preview`
+persistence redirected to a throwaway dir (it reads the same agents, so the
+user's real conversations render, but it cannot clobber the live `layout.json` --
+and you can drive its own dockview via `preview_layout.py`, below), then boots a
+small wrapper page that embeds it in a labeled "preview" frame. The user-facing `si-preview`
 service points at that wrapper (the inner instance is registered separately as
 `si-preview-app`), so the tab reads as a clearly-marked proposed change rather
 than a confusing nested clone of the live UI. It does **not** merge, touch the
@@ -101,11 +102,40 @@ served tree, or modify the worker's folder. Exit `0` means the preview is up; a
 non-zero exit means it failed to boot (or the work_dir was wrong / the worker was
 already destroyed) and tore itself down -- diagnose before retrying.
 
-Open it as a tab and ask the user to explore:
+Open it as a tab:
 
 ```bash
 python3 scripts/layout.py open si-preview
 ```
+
+### Drive the preview to the scenario being changed
+
+Before handing it over, navigate the preview *itself* to the view that shows the
+change, so the user lands on the relevant scenario instead of clicking around to
+find it. `preview_layout.py` runs any `manage-layout` op against the **preview
+instance** (the dockview *inside* the labeled preview frame), not the live UI:
+
+```bash
+python3 .agents/skills/update-system-interface/scripts/preview_layout.py --slug <name> inspect
+python3 .agents/skills/update-system-interface/scripts/preview_layout.py --slug <name> open chat:<agent>
+python3 .agents/skills/update-system-interface/scripts/preview_layout.py --slug <name> maximize chat:<agent>
+```
+
+It accepts every `scripts/layout.py` verb verbatim (`inspect`, `list`, `open`,
+`focus`, `split`, `move`, `maximize`, `rename`, ...) -- it just resolves the
+preview's recorded port and points the helper at it. Because `preview` persists
+the preview's layout to a throwaway dir (rather than neutering it), `inspect` /
+`list` reflect the real preview state and wait-stable confirmation + no-op
+detection work as against the live UI -- so start with `inspect` to see what's
+open. Anchor splits/moves with explicit refs (`chat:<name>` from `list`); the
+`self` ref only resolves when that agent's own chat tab is already open in the
+preview, which isn't guaranteed there.
+
+Don't confuse the two layout calls: `scripts/layout.py open si-preview` (above)
+arranges the **live** UI's tab that *hosts* the preview; `preview_layout.py`
+arranges the dockview *within* that preview. (`open service:<name>` against the
+preview is best-effort -- service iframes depend on the preview's own registry --
+so prefer chat/split/focus/maximize ops for navigation.)
 
 Then confirm with the user via `send-user-message`: a binary keep/discard *and*
 room for free-form notes (what looks off, what they'd change). Wait for their
@@ -129,10 +159,16 @@ If the user **approves** the preview:
    UI is served from. Commit the merge so the tree is clean (the reveal refuses
    to run on a dirty tree, so a rollback can never clobber unrelated work).
 
-If the user **rejects**, do not merge. Tear down the preview (see the end of the
-next section) and hand back with their feedback -- decide *with them* whether to
-re-brief the worker for another pass. Re-briefing is your judgment, not an
-automatic loop.
+If the user **rejects** or **asks for changes**, do not merge. Decide *with them*
+whether to re-brief the worker for another pass -- re-briefing is your judgment,
+not an automatic loop. Either way, **tear the preview down now** (the `unpreview`
+command at the end of the next section), *before* the worker starts reworking --
+do not leave it up during the rework. The preview serves the worker's work_dir in
+place, so once the worker re-edits and rebuilds it would serve stale, in-flux,
+possibly half-built assets, and the rebuild churns the very folder it is reading
+from. Stand up a fresh preview (back at step 3) only when the worker reports
+`done` again. Once the preview is down, the worker can be re-briefed (or
+destroyed, if you're not continuing).
 
 Note: the built `static/` bundle is gitignored, so the merge brings only source
 and dependency-manifest (`pyproject.toml` / `package.json` / lockfile) changes,
@@ -180,8 +216,9 @@ Interpret the exit code and report it to the user:
   interface may be down; escalate immediately.
 - `1` -- precondition error (e.g. a dirty tree); nothing was changed.
 
-Once you no longer need the preview (after a successful reveal, *or* after a
-rejection where nothing was merged), tear it down:
+Once you no longer need the preview -- after a successful reveal, *or* after a
+rejection / change request where nothing was merged (in which case tear it down
+*before* the worker reworks, per step 4) -- tear it down:
 
 ```bash
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug <name>
