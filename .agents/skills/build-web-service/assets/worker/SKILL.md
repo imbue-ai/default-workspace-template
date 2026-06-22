@@ -7,16 +7,20 @@ metadata:
 
 # Finalizing a freshly built web service
 
+This is the **service specialization of crystallization**. Follow
+`.agents/shared/references/crystallize-artifact.md` for the generic contract --
+the premise (the thorough pass the lead deferred), the bar (genuinely
+well-tested and clean before you report `done`, not "it ran once"), working in
+your own worktree, reporting back, the testing/hardening contract, the review
+gates, and the give-up path. This sub-skill adds the web-specific parts below.
+
 Your task file points at a web service the lead already built and confirmed with
 the user in the foreground: a scaffolded Flask lib under `libs/<package>/`,
 registered in `supervisord.conf`, reachable at `/service/<name>/`. The user has
-already signed off on how it looks and works. Your job is the **thorough pass the
-lead deliberately deferred**: prove it actually works under test, harden it, and
-pass the review gates -- all in your **own git worktree**, so nothing you do
-touches the live service until the lead merges.
-
-The bar: **the service is genuinely well-tested and clean before you report
-`done`**, not just "it ran once."
+already signed off on how it looks and works. The artifact already exists on
+disk, so nothing needs reconstructing from the transcript -- your job is to prove
+it works under test, harden it, and pass the review gates, without touching the
+live service until the lead merges.
 
 ## Reporting back to the lead
 
@@ -59,22 +63,20 @@ via `mngr message` and you resume. For terminal statuses, the run ends.
   curl-then-Playwright recipe; adapt it to your isolated port rather than the live
   proxy.
 
-## Testing contract (verify it actually works, then crystallize)
+## Testing contract (web specifics)
 
-- **Write or extend thorough tests** for the service's real routes -- assert on
-  markers that are true if and only if each route behaves correctly (status,
-  rendered content, the raw-data/source affordance, empty and overflow states).
-  Add a `test_<package>.py` (and Playwright coverage where the value is in the
-  rendered UI, not just the JSON).
-- Crystallize the behavior worth keeping as committed tests; use ad-hoc manual
-  checks only for purely visual things not worth a permanent test. Do not
-  duplicate the same coverage in both.
+Apply the crystallization contract's testing/hardening and review-gate sections,
+with these web specifics:
+
+- The real routes are what you test -- assert on markers true if and only if each
+  route behaves correctly (status, rendered content, the raw-data/source
+  affordance, empty and overflow states). Add a `test_<package>.py`, plus
+  Playwright coverage where the value is in the rendered UI, not just the JSON.
 - Run every suite that applies: `cd libs/<package> && uv run pytest` (or the
   repo-root invocation the project uses), plus the ratchets in
   `test_<package>_ratchets.py`.
-- Run the repo's review gates before reporting `done`. Your `subskill-worker`
-  template already enables autofix + CI + architecture gates; report `done` only
-  when all tests and gates pass.
+- Your `subskill-worker` template already enables the autofix + CI + architecture
+  gates the contract requires; report `done` only when all tests and gates pass.
 
 ## What you must NOT do
 
@@ -89,9 +91,8 @@ via `mngr message` and you resume. For terminal statuses, the run ends.
 
 ## If you need to give up
 
-If you cannot get the service to a tested, clean state (e.g. a dependency is
-unreachable, or a route's intended behavior is underspecified and you cannot
-resolve it from the task file), emit a `name: stuck` terminal report (body shape
-per `.agents/shared/references/worker-reporting.md`) stating what blocked you and
-where the work stands. Do not report `done` on a service whose tests or gates do
-not pass.
+Emit a `stuck` terminal report per the crystallization contract, stating what
+blocked you and where the work stands -- e.g. a dependency you cannot reach, or a
+route whose intended behavior is underspecified and you cannot resolve it from
+the task file. Do not report `done` on a service whose tests or gates do not
+pass.

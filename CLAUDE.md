@@ -329,24 +329,26 @@ The upstream is defined in `parent.toml`.
 
 - **Live first, ratify at turn-end via the worker pipeline.** The
   lifecycle skills follow the same shape: handle the user's immediate
-  request *live* in the current chat to keep the conversation interactive
-  and iterative; at turn-end, formalize the work through a background
-  worker that runs validation, scenario testing, the review gates, and
-  proper commits. Both halves now have a shared core. The **live** half is
-  the interactive-delivery shape in
-  `.agents/shared/references/interactive-delivery.md`, specialized by
-  `do-something-new`'s routes (`fetch-process-show` for data,
-  `build-web-service` for web views). The **ratify** half is
-  `lead-proxy.md` + `worker-reporting.md`, shared by `crystallize-task`,
-  `heal-skill`, and `update-skill`. The harden/ratify phase **always runs
-  in a background worker** -- the main agent never runs the code-guardian
-  gates or the thorough test passes itself (the stop hook deliberately
-  does not nudge the main agent to run them; do not start those flows in
-  the main agent). If you find yourself committing a change to any
-  contract-bearing file (a skill, a hook script with a documented
-  contract, an invariant elsewhere) and stopping there, you've skipped
-  the ratify step. The live phase is necessary but not sufficient -- the
-  worker pipeline exists to add the rigor that's awkward to do
+  request *live* in the current chat to keep it interactive and iterative;
+  at turn-end, formalize the work through a background worker. Three shared
+  references carry the core: the **live** half is the interactive-delivery
+  shape (`.agents/shared/references/interactive-delivery.md`), specialized
+  by `do-something-new`'s routes (`fetch-process-show` for data,
+  `build-web-service` for web views); the turn-end **harden pass** follows
+  the generic **crystallization** contract
+  (`.agents/shared/references/crystallize-artifact.md`), which
+  `crystallize-task` (artifact = a skill) and `build-web-service`
+  (artifact = a service) each bind to a concrete worker; both sit on the
+  worker **plumbing**, `lead-proxy.md` + `worker-reporting.md` (also used
+  by the skill-lifecycle ratify flows `heal-skill` and `update-skill`).
+  The harden pass **always runs in a background worker** -- the main agent
+  never runs the code-guardian gates or the thorough test passes itself
+  (the stop hook deliberately does not nudge the main agent to run them; do
+  not start those flows in the main agent). If you find yourself committing
+  a change to any contract-bearing file (a skill, a hook script with a
+  documented contract, an invariant elsewhere) and stopping there, you've
+  skipped the ratify step. The live phase is necessary but not sufficient
+  -- the worker pipeline exists to add the rigor that's awkward to do
   interactively.
 
   Concrete cases:
@@ -354,8 +356,8 @@ The upstream is defined in `parent.toml`.
     `do-something-new`. It routes to `fetch-process-show` (data) or
     `build-web-service` (web view) -- or applies the shared
     interactive-delivery shape directly when neither fits -- to drive the
-    live phase. The data flow hands off to `crystallize-task`; the web
-    flow hands off to its own background finalization worker.
+    live phase. Both hand off to a crystallization worker -- `crystallize-task`
+    for the data pipeline, a finalization worker for the web view.
   - **Stop-hook crystallization nudge** after a normal turn that turned
     out to be cohesive, likely to recur, and mostly deterministic:
     invoke `crystallize-task` to ratify the just-finished work.

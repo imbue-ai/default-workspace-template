@@ -12,6 +12,15 @@ and gives you verbatim quote anchors for locating it in the lead's
 transcript via `mngr transcript`. Follow these stages to go from
 "task handed off" to "new skill committed on your branch".
 
+**Follow `.agents/shared/references/crystallize-artifact.md` for the generic
+crystallization contract** -- the bar, working in isolation, reporting back,
+the testing/hardening contract, the review gates, preserving captured data, and
+the give-up path. This sub-skill is the specialization where the artifact is a
+**skill**: it adds transcript reconstruction (Stage 1), the agentskills.io
+layout, scenario crafting, and an outline gate. The stages below give those
+skill-specific parts; where one matches the generic contract it just points
+back to it.
+
 **Principle.** Reliability is the floor; simplicity is the target. Default to
 a subcommand per cleanly-separable step plus a `run all` that chains them (see
 `spec-summary.md`); add surface beyond that only when a specific invariant
@@ -125,27 +134,14 @@ This checks the structure and, when a `run.py` exists, runs
 resolve. It must print `ok` before moving on. If it fails, fix and rerun.
 
 ### Data-capture guidance
-When the skill being built fetches data from external APIs, capture
-*all reasonable fields per record* in the calls you're already making,
-not just the fields the user displayed in the original turn. This keeps
-downstream consumers (e.g. an interface built later on top of the
-captured data) unconstrained. Pagination is a normal part of the
-workflow if the original ask requires it. Do NOT make extra
-un-asked-for API calls just to gather more data.
-
-Go further than fields: **persist the raw payload of each record and a
-reference to its source, durably** (e.g. under `runtime/<name>/`), not
-just the extracted/processed fields (see the preserve-and-surface
-principle in CLAUDE.md for what "raw payload" and "source reference"
-mean). A pipeline that fetches, transforms, and discards the raw payload
-cannot satisfy that principle no matter what consumers do: persisting it
-is what lets a *later* change in processing requirements re-derive new
-fields with no refetch, and what lets surfaces show the raw record or
-link out to the source. Retain whatever a consumer needs to *render*
-the record faithfully later -- e.g. keep the email's content-type and
-HTML body, not just a flattened text field -- so a downstream surface
-can render it in its native format rather than dump escaped source.
-This is a universal postcondition of the skill's data-capture step.
+The crystallization contract's preserve-and-surface requirement -- persist each
+record's raw payload and a source reference durably (under `runtime/<name>/`) --
+is a postcondition of any data-capture step you build. Two skill-specific points
+on top: capture *all reasonable fields per record* in the calls you're already
+making (not just the fields the user displayed in the original turn), so
+downstream consumers stay unconstrained, and treat pagination as normal when the
+ask requires it -- but do NOT make extra un-asked-for API calls just to gather
+more data.
 
 ## Stage 4: Hand-craft and run scenarios
 
@@ -175,41 +171,23 @@ correct but your scenario was wrong, update the scenario.
 
 ### Fixture-based tests for skills that parse external data
 
-If the skill's scripts parse external data -- HTML, JSON from
-third-party APIs, scraped pages, user-uploaded files -- add a
-fixture-based unit test alongside the live-data scenarios above.
-Live-data scenarios alone miss a category of bugs that only surface
-when a specific input shape hits the parser (e.g. a substring match
-that also matches an unintended token, a hardcoded numeric bound, a
-date format the parser did not anticipate).
-
-Concretely:
-- Save 1-3 representative samples of the external data under
-  `.agents/skills/<name>/tests/fixtures/` (small, anonymized if
-  applicable).
-- Add a `scripts/<name>_test.py` (or similar) that loads each fixture,
-  feeds it through the parser, and asserts on the expected shape of
-  the output (exact counts, specific field values, edge-case flags).
-- Run it as part of Stage 4.
-
-This is strongly recommended -- skipping it is how parser regressions
-land. Typical defects that only surface under a concrete input shape:
-a substring match that also matches an unintended token (e.g. `jr`
-matching inside "major"), a hardcoded numeric bound silently capping
-user-specified values, a regex eating whitespace from adjacent fields.
-A single fixture-based test catches all of these before they ship.
+The crystallization contract requires fixture-based tests for anything that
+parses external data (HTML, JSON from third-party APIs, scraped pages, uploaded
+files) -- live-data scenarios alone miss the bugs that only surface when a
+specific input shape hits the parser. For a skill, that means: save 1-3
+representative samples under `.agents/skills/<name>/tests/fixtures/` (small,
+anonymized if applicable), add a `scripts/<name>_test.py` that feeds each fixture
+through the parser and asserts on the exact output shape (counts, field values,
+edge-case flags), and run it as part of Stage 4.
 
 ## Stage 5: Code review and architecture verification
 
-1. Run `/autofix` on your commits. Fix anything the reviewer flags.
-2. Run `/imbue-code-guardian:verify-architecture` on your branch. Read
-   the verdict. If it flags a blocker, fix it and re-run; if it flags
-   non-blockers worth mentioning, surface them in the Gate 2 summary
-   below.
-
-Both of these run **before** Stage 6's final-artifact report -- the
-user should see a single report that already reflects the review
-verdicts, not a report-then-verify-then-report-again pattern.
+Run the review gates per the crystallization contract -- `/autofix` and
+`/imbue-code-guardian:verify-architecture` on your branch -- and fix what they
+flag. If verify-architecture flags non-blockers worth mentioning, surface them
+in the Gate 2 summary below. Both run **before** Stage 6's final-artifact report,
+so the user sees a single report that already reflects the verdicts rather than a
+report-then-verify-then-report-again pattern.
 
 ## Stage 6: Gate 2 -- final artifact approval
 
@@ -238,21 +216,16 @@ merge the branch.
 
 ## If you need to give up
 
-If you cannot produce a good artifact, emit a `name: stuck` terminal report
-(body shape per `.agents/shared/references/worker-reporting.md`); state in
-the body that no skill was saved.
+Emit a `stuck` terminal report per the crystallization contract; state in the
+body that no skill was saved. Reasons that genuinely warrant giving up here:
 
-Reasons that genuinely warrant giving up:
-
-- The work turned out to have no stable process across hypothetical re-runs -- each
-  re-run would require entirely different steps, not just different
-  data.
+- The work turned out to have no stable process across hypothetical re-runs --
+  each re-run would require entirely different steps, not just different data.
 - You hit a dependency you cannot resolve (e.g. a required service is
   unreachable, a file format you cannot parse).
 
-"Too judgement-heavy to script" is NOT a valid reason to give up. Model
-judgement that is a fixed part of the flow is scripted as `[ai-script]`
-calls; only genuine executor meta-work stays as SKILL.md
-prose. A skill can be pure prose with no scripts at all if every step is
-executor meta-work. Only give up if the *process* itself is unstable, not
-if parts of it happen to require judgement.
+Per the contract, "too judgement-heavy to script" is NOT a valid reason: model
+judgement that is a fixed part of the flow is scripted as `[ai-script]` calls,
+and only genuine executor meta-work stays as SKILL.md prose (a skill can be pure
+prose if every step is executor meta-work). Only give up if the *process* itself
+is unstable, not if parts of it happen to require judgement.

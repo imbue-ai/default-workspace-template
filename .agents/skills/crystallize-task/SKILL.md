@@ -11,6 +11,13 @@ reusable skill consisting of a PEP 723 `scripts/run.py` and a companion
 You dispatch the actual build to a sub-agent; your role is to package context,
 launch, and merge.
 
+This is the **skill specialization of crystallization**
+(`.agents/shared/references/crystallize-artifact.md`): the artifact being
+hardened is a reusable skill, and -- unlike specializations whose artifact
+already exists on disk -- the work must first be reconstructed from the
+transcript. The worker sub-skill binds the generic crystallization contract and
+adds those skill-specific parts.
+
 **Principle.** Reliability is the floor; simplicity is the target. Default to
 a subcommand per cleanly-separable step plus a `run all` that chains them (see
 `spec-summary.md`); add surface beyond that only when a specific invariant
@@ -61,8 +68,9 @@ Pick a short kebab-case slug `$NAME` for this crystallization (e.g.
 
 Use that same slug everywhere below.
 
-If this skill was invoked from `fetch-process-show`, reuse its slug (`$SLUG`) as
-`$NAME` -- the `source_artifacts_dir` frontmatter assumes matched paths.
+If a calling specialization (e.g. `fetch-process-show`) handed you a confirmed
+sample and already chose a slug, reuse that slug (`$SLUG`) as `$NAME` -- the
+`source_artifacts_dir` frontmatter assumes matched paths.
 
 ## Step 1: Confirm
 
@@ -72,7 +80,8 @@ Triggers that count as explicit invocation:
 - The user typed `/crystallize-task`, said "crystallize this / yes
   crystallize / make a skill out of this" in the immediately-prior
   turn, or otherwise named the skill by hand.
-- The calling skill is `fetch-process-show` (after sample approval).
+- A calling specialization (e.g. `fetch-process-show`) invoked this skill after
+  the user approved a sample.
 
 In any of those cases go straight to Step 2 -- asking again is
 redundant and annoying.
