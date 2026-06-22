@@ -85,6 +85,13 @@ export function buildRows(
     // the seam be just the next block's normal top margin. Derived from the same
     // no-bubble predicate as the bubble decision (next section, if any) -- not
     // from the permission card's position in the DOM.
+    //
+    // The void is specifically a `.progress-block`-to-`.progress-block` gap
+    // (two stacked turn-margins), so the flush is only applied on the stepful
+    // branch below. When this section has no steps, its tail renders as inline
+    // `.message`-style rows (an ungrouped reply or a bare `perm-` card), which
+    // carry their own smaller spacing rather than the progress-block turn-margin
+    // -- so there is no oversized void to collapse there.
     const nextSection = sections[s + 1];
     const nextHasNoBubble = nextSection !== undefined && !sectionRendersUserBubble(nextSection);
     const userEvent = section.user_event;
