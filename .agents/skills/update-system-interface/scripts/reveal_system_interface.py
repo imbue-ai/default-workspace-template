@@ -44,9 +44,9 @@ folder it has already built -- the preview serves it in place:
 
 - ``preview`` boots the worker's ``--work-dir`` on a free port (layout
   persistence redirected to a throwaway dir under the preview's state, so it can
-  be inspected/rearranged via ``preview_layout.py`` without clobbering the live
-  ``layout.json``) and registers it as the ``si-preview-app`` service, then boots
-  a small wrapper page
+  be inspected/rearranged by pointing ``scripts/layout.py`` at the printed
+  ``MINDS_WORKSPACE_SERVER_URL`` without clobbering the live ``layout.json``) and
+  registers it as the ``si-preview-app`` service, then boots a small wrapper page
   (``preview_wrapper_server.py``) that embeds it in a labeled "preview" frame and
   registers that as the user-facing ``si-preview`` service. The live UI proxies
   ``si-preview`` as a tab that reads as a clearly-marked proposed change rather
@@ -822,8 +822,9 @@ def preview(
     ``done`` contract runs ``uv sync`` + ``npm run build``). We boot that built
     instance detached on a free port -- with layout persistence redirected to a
     throwaway dir under the preview's state (so it can be inspected and rearranged
-    via ``preview_layout.py`` without touching the live ``layout.json``) -- and
-    register it as the inner service. We then boot the small wrapper chrome page
+    by pointing ``scripts/layout.py`` at the printed ``MINDS_WORKSPACE_SERVER_URL``
+    without touching the live ``layout.json``) -- and register it as the inner
+    service. We then boot the small wrapper chrome page
     (``preview_wrapper_server.py``) on a second port and register it as the
     user-facing service, so the tab the user opens reads as a labeled "preview"
     frame around the change rather than a confusing nested clone of the live UI.
@@ -869,12 +870,13 @@ def preview(
         env.pop("MNGR_AGENT_ID", None)
         # Redirect layout persistence to a throwaway dir under the lead's runtime
         # state (never the live workspace's layout.json). This is what lets the
-        # previewing agent drive ``scripts/layout.py`` against the preview via
-        # ``preview_layout.py``: ``inspect`` / ``list``, wait-stable confirmation,
-        # and no-op detection all reflect the real preview state, and the
-        # arrangement survives a preview reload. (The ``self`` ref still depends
-        # on the lead's own chat tab being open in the preview, so anchor ops with
-        # explicit ``chat:<name>`` refs there.)
+        # previewing agent drive ``scripts/layout.py`` against the preview (by
+        # pointing ``MINDS_WORKSPACE_SERVER_URL`` at the printed inner port):
+        # ``inspect`` / ``list``, wait-stable confirmation, and no-op detection all
+        # reflect the real preview state, and the arrangement survives a preview
+        # reload. (The ``self`` ref still depends on the lead's own chat tab being
+        # open in the preview, so anchor ops with explicit ``chat:<name>`` refs
+        # there.)
         # Absolute because the inner instance runs with cwd inside the worker's
         # work_dir, not the lead's repo root.
         env[ENV_LAYOUT_DIR_OVERRIDE] = str(state_dir / PREVIEW_LAYOUT_DIRNAME)
@@ -988,6 +990,8 @@ def preview(
         f"preview up: open the '{PREVIEW_SERVICE_NAME}' service tab to explore the "
         f"change (serving {work_dir} on port {inner_port}, wrapped on port "
         f"{wrapper_port}). Run 'unpreview --slug {slug}' to tear it down.\n"
+        f"  drive its dockview (inspect/open/focus/split/...) with:\n"
+        f"  MINDS_WORKSPACE_SERVER_URL=http://127.0.0.1:{inner_port} python3 scripts/layout.py inspect\n"
     )
     return 0
 
