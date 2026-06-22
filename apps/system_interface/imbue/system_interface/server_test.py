@@ -22,6 +22,7 @@ from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
+from imbue.system_interface.server import _primary_agent_layout_dir
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import close_ws
@@ -414,6 +415,61 @@ def test_save_layout_creates_directory(client: FlaskClient, tmp_path: Path, monk
     client.post("/api/layout", json={"test": True})
 
     assert (tmp_path / "agents" / "agent-123" / "workspace_layout" / "layout.json").exists()
+
+
+def test_layout_dir_override_wins_over_agent_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SYSTEM_INTERFACE_LAYOUT_DIR takes precedence over the agent-id-derived path.
+
+    This is what lets the pre-merge preview persist its own layout to a
+    throwaway directory rather than the live workspace's layout.json.
+    """
+    override = tmp_path / "preview-layout"
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    monkeypatch.setenv("SYSTEM_INTERFACE_LAYOUT_DIR", str(override))
+
+    assert _primary_agent_layout_dir() == override
+
+
+def test_layout_dir_override_works_without_an_agent_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The override is honored even when MNGR_AGENT_ID is unset.
+
+    The preview drops MNGR_AGENT_ID (to stay a faithful read-only-ish copy) but
+    still needs a working layout dir so ``inspect`` and persistence function.
+    """
+    override = tmp_path / "preview-layout"
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    monkeypatch.setenv("SYSTEM_INTERFACE_LAYOUT_DIR", str(override))
+
+    assert _primary_agent_layout_dir() == override
+
+
+def test_save_and_get_layout_round_trips_through_override_dir(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the override set (and no agent id), layout save/get lands in the override dir.
+
+    Mirrors the preview's environment: an instance with no MNGR_AGENT_ID but an
+    explicit layout dir must still persist and serve its layout.
+    """
+    override = tmp_path / "preview-layout"
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    monkeypatch.setenv("SYSTEM_INTERFACE_LAYOUT_DIR", str(override))
+
+    layout_data = {"dockview": {"panels": {}}, "panelParams": {}}
+    save_response = client.post("/api/layout", json=layout_data)
+    assert save_response.status_code == 200
+
+    assert (override / "layout.json").exists()
+    get_response = client.get("/api/layout")
+    assert get_response.status_code == 200
+    assert get_response.get_json() == layout_data
 
 
 def test_save_layout_rejects_invalid_json(
