@@ -61,6 +61,22 @@ replies via `mngr message` and you resume. For terminal statuses, the run ends.
 
 ## Testing contract (verify it actually works, then crystallize)
 
+- **If the task file has a `## Real scenario to reproduce` section, your fixture
+  MUST reproduce that exact DOM shape -- do not invent a simpler one.** This is
+  the most dangerous failure mode for a UI bug fix: you run in an isolated
+  worktree and cannot see the conversation/screen that motivated the change, so
+  it is tempting to build a plausible-looking fixture from imagination. If that
+  fixture's structure differs from the real case even slightly (e.g. prose that
+  is a separate trailing message vs. folded into a card), your CSS selector or
+  assertion can match your fixture while never matching reality -- and your test
+  passes against a structure that does not exist. Build the fixture to match the
+  lead-provided structure (same element nesting, same classes present), assert
+  the DOM actually has that shape (so the test can't silently pass against the
+  wrong tree), and confirm your regression test **fails before your fix and
+  passes after** by reverting the change. Reproduce the lead's measured
+  before-value and hit the stated target value. If the task gives no real
+  scenario but the change is clearly motivated by one, ask the lead for it
+  (a `question` gate) rather than guessing.
 - **For any change that touches the frontend, you MUST look at the rendered page
   -- not just assert on the DOM.** This is the single most important step and the
   one most easily skipped. A clean build and passing Playwright assertions prove

@@ -52,18 +52,39 @@ separate place to work.
 ## 1-2. Delegate to a worker
 
 Follow the `launch-task` skill for the mechanics (task file, `create_worker.py
-launch`, background-poll the report, handle `done`/`stuck`), with two
+launch`, background-poll the report, handle `done`/`stuck`), with three
 specifics for this flow:
 
 - **Launch the worker with the `--template subskill-worker` template** (not the
   default `worker`). That template installs the bundled
   `update-system-interface-worker` sub-skill into the worker's `.agents/skills/`
   tree so the worker can load it.
-- **Keep the task brief short and point it at the sub-skill.** You do not need to
-  restate how the worker builds or tests anything -- that all lives in the
-  sub-skill. The brief only needs:
+- **Ground the brief in the REAL motivating scenario.** If the change is
+  motivated by how something actually looks/behaves in a specific real
+  conversation or screen (the usual case for a bug report -- "this gap looks
+  wrong *here*"), the worker runs in an isolated worktree with its own empty
+  agent and **cannot see that scenario**. Left to imagine it, the worker will
+  invent a fixture, get the structure subtly wrong, and "verify" against its own
+  invention -- a green check that proves nothing. So before/while briefing,
+  **capture the real artifact yourself and hand it to the worker**:
+  - Identify the motivating agent/conversation (often the lead's own
+    `$MNGR_AGENT_ID`) and render it in the *live* UI with Playwright
+    (`--no-sandbox`). Capture the actual DOM structure and computed measurements
+    that define the bug (element nesting, which classes are present, the measured
+    px gap/size, etc.).
+  - Put those concrete facts in the brief under a `## Real scenario to reproduce`
+    section, and require the worker's reproduction fixture to **match that exact
+    DOM shape** (not a simplified guess) and its regression test to **fail
+    before the fix and pass after**. State the measured before-value and the
+    target value so "done" is objectively checkable.
+- **Keep the rest of the task brief short and point it at the sub-skill.** You do
+  not need to restate how the worker builds or tests anything -- that all lives
+  in the sub-skill. The brief only needs:
   - `## What to do`: the actual UI change the user asked for.
   - `## Context`: any specifics (which panel, desired behavior, constraints).
+  - `## Real scenario to reproduce` (when applicable): the captured real DOM
+    shape + measurements from above, as the worker's reproduction fixture and
+    acceptance target.
   - `## Success criteria`: what "done" looks like for this change, plus the
     standing line: *follow the `update-system-interface-worker` sub-skill for
     how to run, test, verify, and what not to touch; report `done` only when its
@@ -106,6 +127,25 @@ Open it as a tab and ask the user to explore:
 ```bash
 python3 scripts/layout.py open si-preview
 ```
+
+**Self-verify against the real scenario before you ask the user.** The preview's
+inner instance opens on its server's *primary* agent -- which is the worker's
+own (empty) agent, not the motivating conversation. So neither the user nor you
+sees the real case by default. Before showing it off:
+
+- Render the **motivating** conversation in the preview's inner app with
+  Playwright (`--no-sandbox`): use the tab bar's add-tab (`+`) dropdown and pick
+  the real agent (its `.dockview-add-tab-dropdown-item`), or otherwise navigate
+  to it.
+- Re-take the same DOM measurement you captured pre-brief and **confirm the fix
+  actually moved the number** (e.g. the gap went from the measured before-value
+  to the target). A worker reporting `done` with passing tests is not proof the
+  real case is fixed -- you caught the scenario, so you confirm it. If it did not
+  move, the fix missed the real DOM: re-brief the worker (with the fresh
+  measurement) rather than merging.
+- Tell the user how to see the real case themselves (the preview opens on the
+  worker's empty agent; they switch via the `+` dropdown to the motivating
+  agent).
 
 Then confirm with the user via `send-user-message`: a binary keep/discard *and*
 room for free-form notes (what looks off, what they'd change). Wait for their
@@ -190,8 +230,21 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 `unpreview` kills both preview servers (the inner instance and the wrapper) and
 deregisters both their services (there is no worktree to remove -- the preview
 served the worker's folder in place). It is idempotent, so it is also the safe
-way to clean up after a `preview` that failed partway. Once the preview is down,
-the worker can be destroyed per `launch-task`.
+way to clean up after a `preview` that failed partway.
+
+`unpreview` only handles the *service* side; it does **not** touch the workspace
+layout. The `si-preview` tab you opened earlier with `layout.py open` is a
+separate concern (a layout panel, not a service), so you must close it yourself
+-- otherwise the user is left with a stale tab pointing at a now-deregistered
+service:
+
+```bash
+python3 scripts/layout.py close si-preview
+```
+
+Do this whenever you tear the preview down -- after a successful reveal *or*
+after a rejection where nothing was merged. Once the preview is down and its tab
+is closed, the worker can be destroyed per `launch-task`.
 
 Why this exists as a script and not a checklist: if the backend fails to start,
 the user loses their entire chat UI -- there is nowhere left to surface an error
