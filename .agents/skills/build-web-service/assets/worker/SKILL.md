@@ -1,6 +1,6 @@
 ---
 name: build-web-service-worker
-description: Harden a freshly built web service (a scaffolded FastAPI lib under libs/) in an isolated worktree -- write thorough Playwright tests, run the full suite and ratchets, run the review gates -- then report back. Invoke when your task file asks you to finalize a newly built web service.
+description: Harden a freshly built web service (a scaffolded Flask lib under libs/) in an isolated worktree -- write thorough Playwright tests, run the full suite and ratchets, run the review gates -- then report back. Invoke when your task file asks you to finalize a newly built web service.
 metadata:
   role: worker-sub-skill
 ---
@@ -8,8 +8,8 @@ metadata:
 # Finalizing a freshly built web service
 
 Your task file points at a web service the lead already built and confirmed with
-the user in the foreground: a scaffolded FastAPI lib under `libs/<package>/`,
-registered in `services.toml`, reachable at `/service/<name>/`. The user has
+the user in the foreground: a scaffolded Flask lib under `libs/<package>/`,
+registered in `supervisord.conf`, reachable at `/service/<name>/`. The user has
 already signed off on how it looks and works. Your job is the **thorough pass the
 lead deliberately deferred**: prove it actually works under test, harden it, and
 pass the review gates -- all in your **own git worktree**, so nothing you do
@@ -35,11 +35,11 @@ via `mngr message` and you resume. For terminal statuses, the run ends.
 
 ## Where the source lives
 
-- The scaffolded lib: `libs/<package>/src/<package>/runner.py` (the FastAPI app
+- The scaffolded lib: `libs/<package>/src/<package>/runner.py` (the Flask app
   and routes) plus its `pyproject.toml`, `README.md`, and
   `test_<package>_ratchets.py`. Your task file names the exact package and
   service name.
-- The service entry in `services.toml` (and the matching root `pyproject.toml`
+- The service entry in `supervisord.conf` (and the matching root `pyproject.toml`
   workspace wiring). You normally do not need to touch these -- the lead's build
   created them.
 
@@ -50,10 +50,10 @@ via `mngr message` and you resume. For terminal statuses, the run ends.
 - If a fix needs a new dependency, add it the normal way (`uv add ...`) and
   **commit the manifest changes** (`pyproject.toml` / `uv.lock`) on your branch so
   they reach the lead in the merge.
-- Exercise the app **in-process** -- import the FastAPI app and drive it with
-  `fastapi.testclient.TestClient` / `httpx`, or launch a **throwaway** uvicorn
-  instance on an alternate port (never `8000`, never the service's live port).
-  Never restart or curl the live `svc-<name>` window.
+- Exercise the app **in-process** -- drive the Flask app with its test client
+  (`app.test_client()`), or launch a **throwaway** threaded Werkzeug server
+  (`run_simple(..., threaded=True)`) on an alternate port (never `8000`, never the
+  service's live port). Never restart or curl the live `svc-<name>` window.
 - For browser-level verification, drive Playwright against that isolated instance.
   The `build-web-service` skill's `references/verify.md` describes the
   curl-then-Playwright recipe; adapt it to your isolated port rather than the live

@@ -49,9 +49,10 @@ nearly all of it (measured on this repo, Haiku, a one-line prompt):
   attempted (litellm's auth error, or a non-zero `claude -p` exit surfaced as
   `ClaudeCLIError`) rather than hanging.
 
-A service started from `services.toml` inherits the agent's environment, so in a
-deployed mngr agent both `CLAUDE_CONFIG_DIR` and `ANTHROPIC_API_KEY` should be
-present and both paths should work.
+A service run by supervisord inherits the agent's environment (supervisord is
+launched from the bootstrap shell that sourced the host env files, and its child
+programs inherit it), so in a deployed mngr agent both `CLAUDE_CONFIG_DIR` and
+`ANTHROPIC_API_KEY` should be present and both paths should work.
 
 ## The mngr `claude -p` session-hook bug
 
