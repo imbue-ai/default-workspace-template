@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 
 from loguru import logger as _loguru_logger
@@ -10,11 +12,13 @@ from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.find import find_all_agents
 from imbue.mngr.api.find import find_one_agent
 from imbue.mngr.api.find import resolve_to_started_host_and_running_agent
 from imbue.mngr.api.list import ErrorBehavior
 from imbue.mngr.api.list import list_agents
+from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.message import send_message_to_agents
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.loader import load_config
@@ -167,30 +171,76 @@ def discover_agents(
     return agents
 
 
+# Agent name -> its last resolved location. A best-effort cache: concurrent sends
+# race benignly on this dict (each get/set/pop is atomic; the worst case is an
+# extra re-resolve), so it needs no lock.
+_AGENT_LOCATION_CACHE: dict[str, AgentMatch] = {}
+
+ResolveAgentFn = Callable[[str, MngrContext], Sequence[AgentMatch]]
+SendToAgentsFn = Callable[[Sequence[AgentMatch], str, MngrContext], MessageResult]
+
+
+def _resolve_agent(agent_name: str, mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
+    """Resolve an agent name to its matching locations via mngr discovery."""
+    return find_all_agents(
+        addresses=(AgentAddress(agent=AgentName(agent_name)),),
+        filter_all=False,
+        target_state=None,
+        mngr_ctx=mngr_ctx,
+    )
+
+
+def _send_to_agents(matches: Sequence[AgentMatch], message: str, mngr_ctx: MngrContext) -> MessageResult:
+    """Send a message to a pre-resolved set of agents, auto-starting STOPPED ones."""
+    return send_message_to_agents(
+        mngr_ctx=mngr_ctx,
+        message_content=message,
+        agents_to_message=matches,
+        error_behavior=ErrorBehavior.CONTINUE,
+        is_start_desired=True,
+    )
+
+
+def _send_message_to_agent(
+    agent_name: str,
+    message: str,
+    mngr_ctx: MngrContext,
+    *,
+    resolve: ResolveAgentFn = _resolve_agent,
+    send: SendToAgentsFn = _send_to_agents,
+) -> bool:
+    """Send to ``agent_name``, reusing its cached location and re-resolving if stale.
+
+    On a cache hit the message goes straight to the known location -- no mngr
+    discovery. If that send reaches no agent (the cached location is stale: the
+    agent was destroyed, recreated, or moved hosts), the entry is dropped and the
+    agent is re-resolved. A uniquely-resolved location is cached for reuse; a name
+    matching several agents is never cached, so every such send reaches all of them.
+    """
+    cached = _AGENT_LOCATION_CACHE.get(agent_name)
+    if cached is not None:
+        if send((cached,), message, mngr_ctx).successful_agents:
+            return True
+        _AGENT_LOCATION_CACHE.pop(agent_name, None)
+    matches = tuple(resolve(agent_name, mngr_ctx))
+    if len(matches) == 1:
+        _AGENT_LOCATION_CACHE[agent_name] = matches[0]
+    return bool(send(matches, message, mngr_ctx).successful_agents)
+
+
 def send_message(agent_name: str, message: str) -> bool:
     """Send a message to an agent. Returns True on success.
 
-    STOPPED agents are automatically started before the message is sent
-    (`is_start_desired=True`), so messaging is possible regardless of agent state.
+    The agent's location is resolved via mngr discovery and cached, so repeat
+    messages to the same agent skip discovery and go straight to its host (this is
+    what mngr's pre-resolved ``agents_to_message`` API enables). STOPPED agents are
+    auto-started (`is_start_desired=True`) regardless of cache state.
     """
     mngr_ctx, cg = _get_mngr_context()
     try:
-        matches = find_all_agents(
-            addresses=(AgentAddress(agent=AgentName(agent_name)),),
-            filter_all=False,
-            target_state=None,
-            mngr_ctx=mngr_ctx,
-        )
-        result = send_message_to_agents(
-            mngr_ctx=mngr_ctx,
-            message_content=message,
-            agents_to_message=matches,
-            error_behavior=ErrorBehavior.CONTINUE,
-            is_start_desired=True,
-        )
+        return _send_message_to_agent(agent_name, message, mngr_ctx)
     finally:
         cg.__exit__(None, None, None)
-    return len(result.successful_agents) > 0
 
 
 def start_agent(agent_name: str) -> None:
