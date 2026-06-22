@@ -47,28 +47,22 @@ against real data.
 
 ## Step 0: Clarify and plan (business terms only)
 
-Ask only the questions that block, and phrase **every** architectural choice as
-the user-visible consequence that motivates it -- never a technical term (this
-system serves non-technical users). Default to the simplest conventional choice
-and to a **single user**, state the default in one line, and only ask when a fork
-is both genuinely uncertain and expensive to reverse.
+Ask only the questions that genuinely *block* -- a fork that is both genuinely
+uncertain *and* expensive to reverse later. Most web views have none: default to
+the simplest conventional choice and to a **single user**, state each default in
+one line, and move on. Cheap-to-reverse choices (persistence, auto-reload vs.
+reload-to-refresh, latest-only vs. history) are not P0 -- pick the obvious
+default and let them surface during the mock loop or as a later follow-up
+surface, where the user can react to something concrete rather than answer
+"should this update on its own?" in the abstract.
 
-Worked examples (generate the actual questions per task -- this is not a fixed
-list):
+If you *do* hit a real blocker, phrase it as the user-visible consequence that
+motivates it -- never a technical term (this system serves non-technical users):
+"should everyone see the same list?" not "do we need multi-tenancy?".
 
-- Persistence: "Should what you do here still be saved when you come back
-  tomorrow, or is it fine for it to reset each time?" -- not "flat file or
-  database?".
-- Multi-user: "Is this just for you, or will other people open the same page and
-  need to see their own version?" -- not "do we need auth / multi-tenancy?".
-- Freshness: "Should this update on its own, or only when you reload?" -- not
-  "do we need websockets / polling?".
-- History: "Do you want to look back at older ones, or only ever see the latest?"
-  -- not "do we need a time-series store?".
-
-Record the answers (and your stated defaults) -- they are the architecture you
-build once, after the mock converges. Do not build any of it yet. Then propose a
-small plan and wait for approval.
+Record your stated defaults -- they are the architecture you build once, after
+the mock converges. Do not build any of it yet. Then propose a small plan and
+wait for approval.
 
 ## Decide which path applies
 
@@ -347,7 +341,10 @@ is hidden).
 The foreground work stops at a usable, surfaced site. The thorough pass --
 extending Playwright coverage, the full test suite and ratchets, `/autofix`, and
 the code-guardian gates -- runs in a **background finalization worker**, never in
-the main agent. This is skeleton phase 7 (harden / ratify).
+the main agent. This is skeleton phase 7: **crystallization**
+(`.agents/shared/references/crystallize-artifact.md`), the variant where the
+artifact is the scaffolded service itself -- already on disk, so nothing needs
+reconstructing from the transcript.
 
 **The trigger is an explicit confirmation on the *working* site -- never your own
 sense that the code looks done.** Once the usable site is in front of the user,
@@ -398,11 +395,6 @@ on `stuck` or a dead-worker timeout, surface to the user -- do not retry silentl
 The confirmed mock plus the confirmed working site remain the single source of
 truth: if finalization changes the look-and-feel, re-confirm with the user before
 calling the work done.
-
-**`build-web-service` is invocation-agnostic.** It behaves identically whether
-invoked directly, from `do-something-new`, or from `fetch-process-show`. It never
-reaches back to a `crystallize-task` worker -- that coupling lives only in the
-data flow. Its own hardening always goes through the finalization worker above.
 
 ## Escape hatch: wrap an existing server
 
@@ -483,44 +475,13 @@ Flags:
 
 ## The global (Cloudflare) URL
 
-If the workspace has Cloudflare tunneling configured, the service is
-also reachable at a public URL in addition to the local one. Two
-caveats:
-
-- **The public hostname is owned server-side**, not by the
-  cloudflared process running in this container. Skimming the
-  `cloudflared` service's logs will not surface a URL.
-- **The public URL is *not* written into `runtime/applications.toml`.**
-  `forward_port.py` only stores `name` and `url` (the local
-  `http://localhost:<port>` backend address). Do not grep that file
-  for a public URL.
-
-The reliable way to get the public URL is through the desktop client
-itself: when the user clicks the service tab, the client resolves the
-public hostname via its services API. If you need the exact URL for
-testing, ask the user to read it from their browser's address bar.
-
-If the workspace does not have a tunnel token configured, this section
-does not apply -- the local `http://127.0.0.1:8000/service/<name>/`
-URL is the only entry point.
+If the workspace has Cloudflare tunneling configured, the service is also
+reachable at a public URL -- with caveats about where that hostname lives and
+why it isn't in `runtime/applications.toml`. See
+[references/public-url.md](references/public-url.md).
 
 ## Cleanup
 
-Removing a web service:
-
-1. `python3 scripts/forward_port.py --name <name> --remove` (drops the
-   entry from `runtime/applications.toml`).
-2. Stop the program and remove its block from `supervisord.conf`, then
-   reconcile:
-
-   ```bash
-   supervisorctl stop <name>
-   # delete the [program:<name>] block from supervisord.conf
-   supervisorctl reread && supervisorctl update
-   ```
-
-   (See `edit-services` for the mechanics.)
-3. If you scaffolded a lib, also: `rm -rf libs/<package>/` and revert
-   the matching diff in the root `pyproject.toml` (drop from
-   `[project].dependencies`, `[tool.uv.workspace].members`, and
-   `[tool.uv.sources]`).
+To remove a web service (drop the `applications.toml` entry, stop and unregister
+the supervisord program, and revert the scaffolded lib), see
+[references/cleanup.md](references/cleanup.md).
