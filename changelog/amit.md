@@ -15,3 +15,5 @@
 - Refactored the Docker/NixOS Dockerfile to delegate Nix profile setup, closure verification, and compatibility shims to a parallel `setup_system_nixos.sh` script so the Dockerfile structure stays close to the Debian Dockerfile.
 
 - Moved the Docker/NixOS Dockerfile to `nix/Dockerfile` so IDEs recognize it as a Dockerfile while keeping the repo-root Docker build context.
+
+- Exposed the Docker provider bootstrap commands from the Nix profile on the image's default root `PATH`, preventing the provider from falling back to Debian `apt-get` package installation before SSH profile setup runs.

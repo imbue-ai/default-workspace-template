@@ -131,6 +131,17 @@ setup_compatibility_paths() {
     /usr/sbin/sshd -t
 }
 
+expose_provider_bootstrap_commands() {
+    _export_nix_env
+    mkdir -p /root/.local/bin
+
+    for command_name in git curl tmux rsync jq xxd flock; do
+        command_path="$(command -v "$command_name")"
+        test -n "$command_path"
+        ln -sf "$command_path" "/root/.local/bin/$command_name"
+    done
+}
+
 install_uv_and_claude() {
     _export_nix_env
     curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
@@ -175,6 +186,7 @@ install_global_tools() {
 
 setup_system() {
     setup_compatibility_paths
+    expose_provider_bootstrap_commands
     install_uv_and_claude
     write_shell_profile
     seed_github_host_keys

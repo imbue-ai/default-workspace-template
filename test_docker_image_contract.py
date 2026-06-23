@@ -216,6 +216,25 @@ def test_fct_dockerfile_image_contract() -> None:
     _run_in_image(
         r"""
 set -euo pipefail
+
+echo "checking provider bootstrap commands on default PATH"
+provider_bootstrap_commands=(
+  git
+  curl
+  tmux
+  rsync
+  jq
+  xxd
+  flock
+)
+
+for command_name in "${provider_bootstrap_commands[@]}"; do
+  command -v "$command_name" >/dev/null
+done
+
+test -f /etc/ssl/certs/ca-certificates.crt
+test -x /usr/sbin/sshd
+
 export PATH="/root/.local/bin:$PATH"
 if [ -f /etc/profile.d/fct_path.sh ]; then
   . /etc/profile.d/fct_path.sh
