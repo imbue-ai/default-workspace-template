@@ -11,7 +11,6 @@ There are two shapes, selected by which artifact you are crystallizing:
 |---|---|---|
 | skill | **Reconstruct** -- does not yet exist on disk; build it from the lead's transcript and/or a handed-off sample | outline gate (Stage 2) + final gate (Stage 6) |
 | service | **Pre-existing, confirmed-live** -- already on disk; the user signed off on its shape live | none -- the live confirmation stands in for the final gate |
-| system interface | n/a -- never crystallized (it already exists) | -- |
 
 - **Reconstruct** (skill): you build the artifact from scratch, so both the
   outline gate and the final gate apply.

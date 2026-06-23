@@ -7,29 +7,18 @@ off the interactive path. This contract is the part that is identical across
 every operation (crystallize, update, heal) and every artifact (a reusable
 skill, a web service, the system interface).
 
-This reference is never read on its own. The generic `harden-worker` sub-skill
-reads it for the universal flow, then layers on two more references it is told
-to load: an **operation** reference (`op-crystallize.md` / `op-update.md` /
-`op-heal.md`) for the gate shape and pre-work, and an **artifact** reference
-(`artifact-skill.md` / `artifact-service.md` / `artifact-system-interface.md`)
-for the layout, isolation/test mechanics, and don't-touch list. Keep those
-specifics in those references; keep this contract generic.
-
 ## The premise and the bar
 
-The lead has handed you work the user already signed off on in the foreground,
-and **deliberately deferred** the thorough pass to you. Your job is that pass:
-prove the artifact actually works under test, harden it, and pass the review
-gates. The bar is that the artifact is **genuinely well-tested and clean before
-you report `done`** -- not "it ran once."
+The user has already signed off on work in the foreground; the thorough pass has been **deliberately deferred**.
+The task now is to prove the artifact actually works under test, harden it, and pass the review
+gates. The bar is that the artifact is **genuinely well-tested and clean** -- not "it ran once."
 
 ## Isolation
 
-Do all of this on your **own branch / worktree**. Nothing you do touches the
-live, user-facing state until the lead merges your branch. If your worktree has
+Do all of this on an **isolated branch / worktree**. Nothing should the
+live, user-facing state until the branch is merged. If the worktree has
 no `.venv`, sync once before any `uv run`. If a fix needs a new dependency, add
-it the normal way and commit the manifest changes so they reach the lead in the
-merge.
+it the normal way and commit the manifest changes so they appear in the merge.
 
 ## Reporting back to the lead
 
@@ -37,9 +26,7 @@ Follow `.agents/shared/references/worker-reporting.md` for the report-file
 procedure and the task-file frontmatter schema, and substitute the runtime
 paths your operation/artifact references specify. Surface decisions the user
 must make as `gate` reports and stop; end the run with a terminal `done` or
-`stuck` status. The lead side follows `.agents/shared/references/lead-proxy.md`
-for polling, gate decisions, the "do not interrupt more recent user work" rule,
-and terminal-status handling. Your operation reference names the exact gate and
+`stuck` status. The operation reference names the exact gate and
 status values its flow uses.
 
 ## Testing and hardening contract
@@ -59,8 +46,8 @@ status values its flow uses.
 
 ## Review gates
 
-Run the repo's review gates -- `/autofix` and the architecture/CI gates -- and
-fix what they flag **before** you write the final gate report, so the user sees
+Run the repo's review gates -- `/autofix` and the architecture gates -- and
+fix what they flag **before** writing the final gate report, so the user sees
 a single report that already reflects the review verdicts rather than a
 report-then-verify-then-report-again pattern.
 
