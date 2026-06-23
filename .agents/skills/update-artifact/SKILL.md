@@ -139,7 +139,8 @@ Flow-specific substitutions:
 - Gates: `outline-approval` (emergent only -- the design gate) and
   `final-artifact` (both).
 - Terminal statuses: `done` (go live, Step 4); `no-update-needed` (no change --
-  close the ticket, no merge); `stuck` (failure flow).
+  close the ticket, no merge); `stuck` (failure flow per
+  `.agents/skills/launch-task/references/worker-failure.md`).
 
 ## Step 4: Merge and go live
 

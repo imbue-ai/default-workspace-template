@@ -32,8 +32,7 @@ classify each step:
 The identical and structurally-same parts are the skill's deterministic
 substructure. The judgement parts are ALSO part of the skill -- scripted as
 `[ai-script]` model calls so the flow runs headless. A step stays `[prose]`
-only when the skill needs the *user* in the loop while it runs, per the
-execution-mode test in `.agents/shared/references/spec-summary.md`.
+only when the skill needs the *user* in the loop while it runs.
 
 If much of the re-run would be literally the same work, you have a
 candidate. Diff the original run against the hypothetical re-run; what's
@@ -43,7 +42,7 @@ shared is the skill's process.
 
 A skill is a SKILL.md recipe ("do X, then Y, then Z") plus supporting
 scripts, references, or assets. Each step is `[script]`, `[ai-script]`, or
-`[prose]` (see `.agents/shared/references/spec-summary.md`). Model-judgement
+`[prose]`. Model-judgement
 steps are scripted as `[ai-script]` calls by default, not parked in prose, so
 a process like fetch (`[script]`) -> natural-language filter (`[ai-script]`)
 -> dedupe and format (`[script]`) runs fully headless.

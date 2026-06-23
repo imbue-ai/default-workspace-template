@@ -18,8 +18,8 @@ It is what the user is looking at *right now*, so you always work against an
 
 ## Running and testing
 
-Follow `web-frontend-testing.md` for the isolated-instance and rendered-page
-rules. System-interface specifics:
+The isolated-instance and rendered-page rules are in `web-frontend-testing.md`.
+System-interface specifics:
 
 - A fresh worktree has no `.venv`, so run `uv sync --all-packages` once before
   any `uv run`. If your change needs a new dependency, add it the normal way

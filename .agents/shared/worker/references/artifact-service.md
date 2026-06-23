@@ -16,8 +16,8 @@ frontend in isolation, see
 
 ## Running and testing
 
-Follow `web-frontend-testing.md` for the isolated-instance and rendered-page
-rules. Service specifics:
+The isolated-instance and rendered-page rules are in `web-frontend-testing.md`.
+Service specifics:
 
 - A fresh worktree has no `.venv`, so run `uv sync --all-packages` once before
   any `uv run`. If a fix needs a new dependency, `uv add ...` and commit the

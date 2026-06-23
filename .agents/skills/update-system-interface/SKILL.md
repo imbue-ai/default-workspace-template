@@ -82,8 +82,9 @@ the worker, background-poll the report) with these system-interface specifics:
 - **Terminal handling differs:** the system interface emits no gate, and on
   `done` you do **not** merge here (that is `update-artifact` Step 4's behavior
   for other artifacts). Instead, go to the preview below. On `stuck` or a
-  dead-worker timeout, surface to the user per `launch-task`'s failure flow --
-  do **not** preview, merge, or reveal, and do not retry silently.
+  dead-worker timeout, surface to the user per
+  `.agents/skills/launch-task/references/worker-failure.md` -- do **not**
+  preview, merge, or reveal, and do not retry silently.
 
 ## 3. Preview the change before merging
 

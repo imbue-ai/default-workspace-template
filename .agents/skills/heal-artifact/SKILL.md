@@ -118,7 +118,8 @@ Flow-specific substitutions:
   `runtime/harden/heal-$TARGET/reports/`; consumed
   `runtime/harden/heal-$TARGET/reports/consumed/`
 - The only user-approval gate is `final-artifact` -- a heal has no outline gate.
-- Terminal statuses: `done` (go live, Step 4); `stuck` (failure flow).
+- Terminal statuses: `done` (go live, Step 4); `stuck` (failure flow per
+  `.agents/skills/launch-task/references/worker-failure.md`).
 
 ## Step 4: Merge and go live
 
