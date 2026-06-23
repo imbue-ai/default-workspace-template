@@ -1,0 +1,9 @@
+- Added a locked Nix flake for the Docker/NixOS workspace system package set, so the Nix-managed tools resolve through a committed `flake.lock` instead of the base image's ambient `<nixpkgs>` channel.
+
+- Updated `Dockerfile.nixos` to build the workspace system environment from the locked flake while leaving Docker base-image digest pinning as a later golden-image hardening step.
+
+- Moved the Docker/NixOS workspace package set to Node 24 because the locked `nixpkgs` revision marks Node 20 as insecure/end-of-life, and the workspace still needs npm for global CLI installation.
+
+- Updated the Docker image contract smoke test so the Debian Dockerfile continues to expect Node 20 while the Docker/NixOS path expects Node 24 by default.
+
+- Switched the Docker/NixOS workspace flake input from `nixos-unstable` to the current stable `nixos-26.05` branch.
