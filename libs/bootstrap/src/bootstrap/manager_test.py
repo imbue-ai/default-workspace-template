@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import io
 import json
 import subprocess
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
+from imbue.mngr.cli.output_helpers import write_json_line
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from bootstrap.manager import (
+    INITIAL_CHAT_AGENT_ID_FILENAME,
     _build_create_chat_command,
     _configure_git_global,
     _create_orphan_runtime_worktree,
@@ -17,7 +21,9 @@ from bootstrap.manager import (
     _format_env_file,
     _initialize_workspace_main_branch,
     _maybe_create_initial_chat,
+    _parse_created_agent_id,
     _parse_env_file,
+    _persist_initial_chat_agent_id,
     _read_host_name,
     _read_main_agent_labels,
     _resolve_services_claude_config_dir,
@@ -273,14 +279,72 @@ def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
     assert_mngr_argv_valid(argv)
 
 
+def test_build_create_chat_command_requests_json_output() -> None:
+    """`--format json` lets the create step read back the new agent's id."""
+    cmd = _build_create_chat_command("ws", {"workspace": "ws"})
+    assert "--format" in cmd
+    assert cmd[cmd.index("--format") + 1] == "json"
+
+
+# --- _parse_created_agent_id ---
+
+
+def test_parse_created_agent_id_reads_agent_id_from_json_object() -> None:
+    stdout = '{"agent_id": "agent-abc", "host_id": "host-1", "host_name": "ws"}\n'
+    assert _parse_created_agent_id(stdout) == "agent-abc"
+
+
+def test_parse_created_agent_id_returns_none_when_absent() -> None:
+    assert _parse_created_agent_id('{"host_id": "host-1"}') is None
+    assert _parse_created_agent_id("not json at all") is None
+    assert _parse_created_agent_id("") is None
+
+
+def test_parse_created_agent_id_reads_live_mngr_json_output() -> None:
+    """Confront the parser with mngr's real `--format json` serializer, so a
+    vendor/mngr switch to pretty-printed or JSONL create output fails here at
+    merge time rather than only at host boot. `write_json_line` is exactly what
+    `mngr create`'s JSON branch calls (one compact object on stdout)."""
+    result_data = {
+        "agent_id": "agent-0123456789abcdef0123456789abcdef",
+        "host_id": "host-1",
+        "host_name": "my-workspace",
+    }
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        write_json_line(result_data)
+    assert _parse_created_agent_id(buffer.getvalue()) == result_data["agent_id"]
+
+
+# --- _persist_initial_chat_agent_id ---
+
+
+def test_persist_initial_chat_agent_id_writes_sidecar(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    _persist_initial_chat_agent_id("agent-abc")
+    assert (tmp_path / INITIAL_CHAT_AGENT_ID_FILENAME).read_text() == "agent-abc"
+
+
+def test_persist_initial_chat_agent_id_skips_when_host_dir_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    _persist_initial_chat_agent_id("agent-abc")
+    assert not (tmp_path / INITIAL_CHAT_AGENT_ID_FILENAME).exists()
+
+
 # --- _maybe_create_initial_chat ---
 
 
 class _StubSubprocess:
     """Capture-and-replay double for subprocess.run used by the chat-create call."""
 
-    def __init__(self, returncode: int = 0) -> None:
+    def __init__(self, returncode: int = 0, stdout: str = "") -> None:
         self.returncode = returncode
+        self.stdout = stdout
         self.calls: list[list[str]] = []
 
     def run(
@@ -293,7 +357,7 @@ class _StubSubprocess:
         del capture_output, text, check  # keyword-only signature mirrors stdlib.
         self.calls.append(cmd)
         return subprocess.CompletedProcess(
-            args=cmd, returncode=self.returncode, stdout="", stderr=""
+            args=cmd, returncode=self.returncode, stdout=self.stdout, stderr=""
         )
 
 
@@ -327,6 +391,18 @@ def test_maybe_create_initial_chat_creates_and_writes_signal(
     _maybe_create_initial_chat()
     assert len(stub.calls) == 1
     assert (_bootstrap_env / "runtime" / "initial_chat_created").exists()
+
+
+def test_maybe_create_initial_chat_persists_created_agent_id(
+    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
+) -> None:
+    """A successful create writes the parsed agent id to the welcome-resend sidecar."""
+    stub = _StubSubprocess(returncode=0, stdout='{"agent_id": "agent-created"}\n')
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    _maybe_create_initial_chat()
+    assert (
+        _bootstrap_env / INITIAL_CHAT_AGENT_ID_FILENAME
+    ).read_text() == "agent-created"
 
 
 def test_maybe_create_initial_chat_skips_when_signal_present(
