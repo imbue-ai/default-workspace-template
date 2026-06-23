@@ -7,8 +7,7 @@ platform="${FCT_DOCKER_PLATFORM:-}"
 
 build_args=(
   "--file" "$dockerfile"
-  "--target" "fct-nix-profile"
-  "--build-arg" "FCT_NIX_CLOSURE_MODE=generate"
+  "--target" "fct-nix-profile-generate"
   "--tag" "$image_tag"
 )
 

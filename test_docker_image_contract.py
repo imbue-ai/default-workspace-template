@@ -216,6 +216,9 @@ def test_fct_dockerfile_image_contract() -> None:
         r"""
 set -euo pipefail
 export PATH="/root/.local/bin:$PATH"
+if [ -f /etc/profile.d/fct_path.sh ]; then
+  . /etc/profile.d/fct_path.sh
+fi
 
 echo "checking image-level commands"
 required_commands=(
@@ -308,6 +311,9 @@ test ! -e /mngr/code || test -d /mngr/code
 set -euo pipefail
 export PATH="/root/.local/bin:$PATH"
 export OPENSSL_armcap=0
+if [ -f /etc/profile.d/fct_path.sh ]; then
+  . /etc/profile.d/fct_path.sh
+fi
 
 echo "seeding fresh /mngr volume"
 /usr/local/bin/fct-seed
