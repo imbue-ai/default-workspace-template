@@ -1,72 +1,55 @@
 # Artifact: skill
 
 A reusable skill under `.agents/skills/<name>/` -- a SKILL.md process recipe plus
-the scripts its steps call. This reference describes what a skill *is* and how you
-author, validate, and test one.
+the scripts its steps call. `.agents/shared/references/spec-summary.md` is the
+authority on the agentskills.io spec: directory layout, frontmatter, the
+`[script]` / `[ai-script]` / `[prose]` step kinds, `run.py` packaging,
+validation, and the scenario template. This reference adds only what that spec
+cheat-sheet and the universal `harden-artifact.md` contract don't already cover.
 
-**Principle.** Reliability is the floor; simplicity is the target. Default to a
-subcommand per cleanly-separable step plus a `run all` that chains them; add
+**Design judgement.** Reliability is the floor; simplicity is the target. Default
+to a subcommand per cleanly-separable step plus a `run all` that chains them; add
 surface beyond that only when a specific invariant demands it. Split into a
-separate skill only when the components are likely to be used independently.
-
-Consult `.agents/shared/references/spec-summary.md` for the agentskills.io
-layout, the frontmatter template, PEP 723 script conventions, the
-`[script]` / `[ai-script]` / `[prose]` step-kind definitions, and the scenario
-template.
+*separate* skill only when the components are likely to be used independently.
 
 ## Where a skill's behavior lives
 
-A skill's behavior is split between its scripts and its SKILL.md prose, so a
-change (or a fix) may touch either or both:
+A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, in
+`scripts/`) and its SKILL.md prose, so a change -- or a fix -- may touch either or
+both. When a wrong behavior traces to an ambiguous or incorrect prose
+instruction, the edit is a SKILL.md edit even if the skill has scripts; a
+pure-prose skill (no scripts) has all of its behavior in SKILL.md.
 
-- A deterministic step is a `[script]`; a model-judgement step is an
-  `[ai-script]` model call -- both live in `scripts/`. Only executor meta-work
-  belongs in SKILL.md as `[prose]`.
-- A wrong behavior can originate in a script OR in an ambiguous/incorrect prose
-  instruction; when the root cause is the prose, the edit is a SKILL.md edit even
-  if the skill has scripts. A pure-prose skill (no scripts) has all of its
-  behavior in SKILL.md.
-- Keep SKILL.md under ~500 lines; split long content into `references/`.
 - A crystallized skill is marked `metadata.crystallized: true`.
+- Keep SKILL.md under ~500 lines; split long content into `references/`.
 - **Cross-section alignment sweep** (after any localized edit): update the
-  frontmatter `description`, the H1/opening prose, any top-of-file principle
-  bullets, section headings, cross-references between sections, and
-  `## Conventions` / `## Gotchas` -- every place that names or summarizes the
-  changed material.
+  frontmatter `description`, the H1/opening prose, any principle bullets, section
+  headings, cross-references, and `## Conventions` / `## Gotchas` -- every place
+  that names or summarizes the changed material.
 
-## Validation
+## Testing a skill
 
-```bash
-uv run .agents/shared/scripts/validate_skill.py .agents/skills/<name>
-```
-
-This checks the structure and, when a `run.py` exists, runs `scripts/run.py
---help` to confirm its imports and PEP 723 dependencies resolve. It must print
-`ok`.
-
-## Scenarios and fixture tests
-
-- Hand-craft 2-3 scenarios (happy path + realistic edge cases) using the
-  template in `spec-summary.md`. Scenarios are **ephemeral** -- run them in your
-  transcript, do NOT write them as files in the skill.
-- For `[script]` / `[ai-script]` steps, invoke `scripts/run.py` with real inputs
-  and inspect the output (an `[ai-script]` step makes a real Claude call; run it
-  on a small input to note cost and confirm prompting works). For `[prose]`
-  steps, walk through the SKILL.md instructions as if you were the executing
-  agent and write out the walk-through.
-- **Fixture-based tests for external-data parsing**: save 1-3 representative
-  samples under `.agents/skills/<name>/tests/fixtures/`, add a
-  `scripts/<name>_test.py` that feeds each fixture through the parser and asserts
-  on the exact output shape, and run it.
+- Validate with `uv run .agents/shared/scripts/validate_skill.py
+  .agents/skills/<name>` -- it must print `ok` (see `spec-summary.md` for what it
+  checks).
+- Hand-craft and run 2-3 scenarios (template in `spec-summary.md`); they are
+  **ephemeral** -- run them in your transcript, never saved as files. For a
+  `[script]` / `[ai-script]` step, invoke `scripts/run.py` on real input and
+  inspect the output (an `[ai-script]` step makes a real Claude call -- run it on
+  a small input to note cost). For a `[prose]` step, walk the SKILL.md
+  instructions as the executing agent.
+- The universal fixture-test rule (`harden-artifact.md`), for a skill: save 1-3
+  samples under `.agents/skills/<name>/tests/fixtures/` and add a
+  `scripts/<name>_test.py` that feeds each through the parser and asserts the
+  exact output shape.
 
 ## Data capture
 
-If a skill captures data, persist each record's raw payload and a source
-reference durably (under `runtime/<name>/`) -- a postcondition of any
-data-capture step. Two skill-specific points: capture *all reasonable fields per
-record* in the calls you already make (not just the fields the original turn
-displayed), and treat pagination as normal when the ask requires it -- but do NOT
-make extra un-asked-for API calls just to gather more data.
+Beyond the universal preserve-and-surface rule (`harden-artifact.md`), persist
+each record under `runtime/<name>/`, capture *all reasonable fields per record*
+in the calls you already make (not just the fields the original turn displayed),
+and treat pagination as normal when the ask requires it -- but do NOT make extra
+un-asked-for API calls just to gather more data.
 
 ## Built-in skills
 
