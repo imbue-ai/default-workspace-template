@@ -52,6 +52,38 @@ function getServiceUrl(serviceName: string): string {
   return `/service/${serviceName}/`;
 }
 
+/** Split the body of a ``service:`` ref into its service name and an
+ *  optional ``?query`` suffix. Plain ``service:web`` yields
+ *  ``{name: "web", query: ""}``; ``service:browser?session=2`` yields
+ *  ``{name: "browser", query: "?session=2"}``. The browser fleet is the one
+ *  case that uses the query: each browser pane is addressed as
+ *  ``service:browser?session=<id>`` so distinct sessions resolve to distinct
+ *  panels. The query is preserved verbatim so the resolved iframe URL and
+ *  the dedup key both include it. */
+function parseServiceRefBody(body: string): { name: string; query: string } {
+  const queryIndex = body.indexOf("?");
+  if (queryIndex === -1) return { name: body, query: "" };
+  return { name: body.substring(0, queryIndex), query: body.substring(queryIndex) };
+}
+
+/** Resolve a ``service:`` ref body to its on-origin iframe URL. The query
+ *  (e.g. ``?session=2``) is appended after the service base URL so a
+ *  browser-session ref resolves to ``/service/browser/?session=2`` -- the
+ *  viewer's per-session entrypoint. Plain refs resolve to
+ *  ``/service/<name>/``. */
+function serviceRefUrl(body: string): string {
+  const { name, query } = parseServiceRefBody(body);
+  return `${getServiceUrl(name)}${query}`;
+}
+
+/** Extract the ``session`` id from a service ref ``?query`` for use in a tab
+ *  title (``?session=2`` -> ``"2"``). Falls back to the raw query (minus the
+ *  leading ``?``) when there is no ``session`` param. */
+function serviceSessionLabel(query: string): string {
+  const params = new URLSearchParams(query.startsWith("?") ? query.substring(1) : query);
+  return params.get("session") ?? query.replace(/^\?/, "");
+}
+
 export function getTerminalUrl(): string {
   return getServiceUrl("terminal");
 }
@@ -326,42 +358,122 @@ function placementForGroup(
   return {};
 }
 
-// "New browser" is gated on a resolvable ANTHROPIC_API_KEY inside the compute
-// (the browser-use agent needs it). Cached at module load and refreshed each
-// time the "+" dropdown opens, so a key added after boot enables the item
-// without a reload (the fetch resolves in time for the next open).
+// A single browser in the per-workspace fleet, as returned by
+// ``GET /service/browser/browsers``. Each is a separately-addressable pane
+// (viewer at ``/service/browser/?session=<id>``).
+interface BrowserInfo {
+  id: number;
+  controller: "human" | "agent";
+  owner_agent_id?: string | null;
+  owner_name?: string | null;
+  human_pinned?: boolean;
+}
+
+// Cached snapshot of the browser fleet, refreshed each time the "+" dropdown
+// opens so it reflects browsers created since boot (and so "New browser" is
+// gated on the live ANTHROPIC_API_KEY status the daemon reports). The list
+// drives one dropdown item per active browser; ``keyAvailable`` gates the
+// "New browser" action (the browser-use agent needs the key).
+let browserFleet: BrowserInfo[] = [];
 let browserKeyAvailable = false;
-function refreshBrowserKeyStatus(): void {
-  fetch(getServiceUrl("browser") + "key-status")
-    .then((r) => (r.ok ? r.json() : { available: false }))
-    .then((status) => {
-      browserKeyAvailable = Boolean(status.available);
+
+/** Fetch the live browser fleet + key status. ``onUpdate`` runs after the
+ *  cache is refreshed so an already-open dropdown can re-render with the
+ *  browsers that the (async) fetch just returned -- the dropdown is built
+ *  synchronously from the cache, so without this callback a freshly-opened
+ *  menu would show a stale fleet until the next open. */
+function refreshBrowserFleet(onUpdate?: () => void): void {
+  fetch(getServiceUrl("browser") + "browsers")
+    .then((r) => (r.ok ? r.json() : { browsers: [], key_available: false }))
+    .then((data) => {
+      browserFleet = Array.isArray(data.browsers) ? (data.browsers as BrowserInfo[]) : [];
+      browserKeyAvailable = Boolean(data.key_available);
     })
     .catch(() => {
+      browserFleet = [];
       browserKeyAvailable = false;
+    })
+    .finally(() => {
+      onUpdate?.();
     });
 }
-refreshBrowserKeyStatus();
+refreshBrowserFleet();
 
-function openBrowserTab(targetGroup?: DockviewGroupPanel): void {
-  openIframeTab(getServiceUrl("browser"), "Browser", "iframe", "browser", targetGroup);
+/** Human-readable owner suffix for a browser dropdown item:
+ *  "(you took control)" when a human holds it, "(agent <name> has control)"
+ *  when an agent does, or "" when it's free. */
+function browserOwnerLabel(browser: BrowserInfo): string {
+  if (browser.controller === "human") return " (you took control)";
+  if (browser.controller === "agent") {
+    const name = browser.owner_name ?? browser.owner_agent_id ?? "agent";
+    return ` (agent ${name} has control)`;
+  }
+  return "";
+}
+
+/** Open (or focus, via ``addPanelForRef`` dedup) the pane for browser
+ *  ``id``. Routed through the same ``service:browser?session=<id>`` ref the
+ *  agent CLI uses so the two surfaces share dedup/focus and on-disk shape.
+ *  If the pane is already open, ``addPanelForRef`` focuses it; opening a new
+ *  pane activates it (the user explicitly asked for this browser from the
+ *  "+" menu, so taking focus is the intended behavior, matching every other
+ *  "+" menu action). Tabs into ``targetGroup`` when it's a live group. */
+function openBrowserSessionTab(id: number, targetGroup?: DockviewGroupPanel | null): void {
+  if (!dockview) return;
+  const placement =
+    targetGroup && dockview.groups.some((g) => g.id === targetGroup.id)
+      ? { position: { referenceGroup: targetGroup.id } }
+      : {};
+  addPanelForRef(`service:browser?session=${id}`, getPrimaryAgentId(), placement);
+}
+
+/** POST a new browser into the fleet, then open its pane. On 409 (fleet
+ *  full) or 503 (Chromium still installing) surface the daemon's error
+ *  message instead of failing silently. */
+function createBrowserTab(targetGroup?: DockviewGroupPanel | null): void {
+  fetch(getServiceUrl("browser") + "browsers", { method: "POST" })
+    .then(async (r) => {
+      const data = await r.json().catch(() => ({}) as Record<string, unknown>);
+      if (r.ok) {
+        const id = typeof data.id === "number" ? data.id : null;
+        if (id !== null) openBrowserSessionTab(id, targetGroup);
+        // Refresh so the next dropdown open lists the new browser.
+        refreshBrowserFleet();
+        return;
+      }
+      const detail = typeof data.error === "string" ? data.error : `HTTP ${r.status}`;
+      if (r.status === 503) {
+        alert(`Cannot create a browser yet: ${detail}. Chromium is still installing -- try again shortly.`);
+      } else if (r.status === 409) {
+        alert(`Cannot create a browser: ${detail}.`);
+      } else {
+        alert(`Failed to create a browser: ${detail}.`);
+      }
+    })
+    .catch((e) => {
+      alert(`Failed to create a browser: ${(e as Error).message}`);
+    });
 }
 
 function buildDropdownItems(
   targetGroup?: DockviewGroupPanel,
 ): Array<{ label: string; action: () => void; dividerAfter?: boolean; disabled?: boolean }> {
   const items: Array<{ label: string; action: () => void; dividerAfter?: boolean; disabled?: boolean }> = [];
-  refreshBrowserKeyStatus();
   const openChatIds = getOpenChatAgentIds();
   const openAppNames = getOpenAppNames();
 
   // --- Existing items section ---
 
   // Applications that don't have open tabs. Exclude "system_interface"
-  // (that's the surrounding chrome UI, not a tab-able app) and "terminal"
-  // (reachable via the "New terminal" menu item further down). Everything
-  // else, including the default "web" example server, is openable.
-  const apps = getApplications().filter((app) => app.name !== "system_interface" && app.name !== "terminal");
+  // (that's the surrounding chrome UI, not a tab-able app), "terminal"
+  // (reachable via the "New terminal" menu item further down), and "browser"
+  // (the fleet has its own per-session items + "New browser" below; the bare
+  // ``/service/browser/`` app entry would open a session-less viewer that
+  // doesn't dedup against the fleet panes). Everything else, including the
+  // default "web" example server, is openable.
+  const apps = getApplications().filter(
+    (app) => app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser",
+  );
   for (const app of apps) {
     if (!openAppNames.has(app.name)) {
       const proxyUrl = getServiceUrl(app.name);
@@ -394,6 +506,17 @@ function buildDropdownItems(
     }
   }
 
+  // Active browsers in the fleet -- one item each, labeled with the owner.
+  // Clicking focuses the pane if it's already open (``openBrowserSessionTab``
+  // dedups on the ``?session=<id>`` URL) or opens it otherwise. Built from
+  // the cached fleet snapshot the dropdown open-handler refreshed.
+  for (const browser of browserFleet) {
+    items.push({
+      label: `Browser ${browser.id}${browserOwnerLabel(browser)}`,
+      action: () => openBrowserSessionTab(browser.id, targetGroup),
+    });
+  }
+
   // Add divider if we had existing items
   if (items.length > 0) {
     items[items.length - 1].dividerAfter = true;
@@ -418,7 +541,7 @@ function buildDropdownItems(
 
   items.push(
     browserKeyAvailable
-      ? { label: "New browser", action: () => openBrowserTab(targetGroup) }
+      ? { label: "New browser", action: () => createBrowserTab(targetGroup) }
       : {
           label: "New browser",
           disabled: true,
@@ -439,6 +562,39 @@ function buildDropdownItems(
   });
 
   return items;
+}
+
+/** Render ``buildDropdownItems(targetGroup)`` into ``dropdown`` (clearing it
+ *  first). Shared by the header "+" button and the empty-state overlay so
+ *  the item markup + click wiring live in one place. Re-invoked when the
+ *  async browser-fleet fetch resolves so a freshly-opened menu picks up the
+ *  live browser list. */
+function renderDropdownItems(dropdown: HTMLElement, targetGroup?: DockviewGroupPanel): void {
+  dropdown.innerHTML = "";
+  const items = buildDropdownItems(targetGroup);
+  for (const item of items) {
+    const menuItem = document.createElement("div");
+    menuItem.className = "dockview-add-tab-dropdown-item";
+    menuItem.textContent = item.label;
+    if (item.disabled) {
+      menuItem.style.opacity = "0.5";
+      menuItem.style.cursor = "not-allowed";
+    }
+    menuItem.addEventListener("click", (clickEvent) => {
+      clickEvent.stopPropagation();
+      dropdown.style.display = "none";
+      item.action();
+    });
+    dropdown.appendChild(menuItem);
+
+    if (item.dividerAfter) {
+      const divider = document.createElement("div");
+      divider.className = "dockview-add-tab-dropdown-divider";
+      divider.style.borderTop = "1px solid #e5e7eb";
+      divider.style.margin = "4px 0";
+      dropdown.appendChild(divider);
+    }
+  }
 }
 
 function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
@@ -463,31 +619,14 @@ function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
     if (isVisible) {
       dropdown.style.display = "none";
     } else {
-      dropdown.innerHTML = "";
-      const items = buildDropdownItems(group);
-      for (const item of items) {
-        const menuItem = document.createElement("div");
-        menuItem.className = "dockview-add-tab-dropdown-item";
-        menuItem.textContent = item.label;
-        if (item.disabled) {
-          menuItem.style.opacity = "0.5";
-          menuItem.style.cursor = "not-allowed";
-        }
-        menuItem.addEventListener("click", (clickEvent) => {
-          clickEvent.stopPropagation();
-          dropdown.style.display = "none";
-          item.action();
-        });
-        dropdown.appendChild(menuItem);
-
-        if (item.dividerAfter) {
-          const divider = document.createElement("div");
-          divider.className = "dockview-add-tab-dropdown-divider";
-          divider.style.borderTop = "1px solid #e5e7eb";
-          divider.style.margin = "4px 0";
-          dropdown.appendChild(divider);
-        }
-      }
+      // Build from current state, then refresh the browser fleet and
+      // re-render once it resolves (only if the menu is still open) so the
+      // active-browser items reflect the live fleet rather than a stale
+      // snapshot from a previous open.
+      renderDropdownItems(dropdown, group);
+      refreshBrowserFleet(() => {
+        if (dropdown.style.display !== "none") renderDropdownItems(dropdown, group);
+      });
       dropdown.style.display = "block";
     }
   });
@@ -616,6 +755,24 @@ function findIframePanelIdForService(serviceName: string): string | null {
   return null;
 }
 
+/** Find an existing iframe panel for a ``service:`` ref body, or null.
+ *
+ *  Dedup is keyed on what makes the pane unique:
+ *   - A ref with no query (``web``) dedups by ``serviceName`` -- the
+ *     existing single-pane-per-service behavior.
+ *   - A ref with a query (``browser?session=2``) dedups by the resolved
+ *     URL, which embeds the query. Two browser panes with different
+ *     ``?session=`` therefore resolve to different panels and never collide:
+ *     opening ``service:browser?session=2`` focuses session 2's pane (or
+ *     creates it) without touching session 0's. */
+function findIframePanelIdForServiceRef(body: string): string | null {
+  const { name, query } = parseServiceRefBody(body);
+  if (query === "") {
+    return findIframePanelIdForService(name);
+  }
+  return findIframePanelIdForUrl(serviceRefUrl(body));
+}
+
 /** Derive a tab title from an external URL: its hostname, falling back to
  *  the raw string when the URL can't be parsed. */
 function externalUrlTitle(url: string): string {
@@ -668,6 +825,8 @@ function buildTerminalUrl(): string {
  *  Shared by ``handleSplit`` and ``handleOpenPanelRequest`` so that the
  *  panelParams bookkeeping + addPanel invocation only exist in one place.
  *  When a panel already exists for the ref (service: dedup by serviceName,
+ *  except a ``service:browser?session=<id>`` browser-fleet ref which dedups
+ *  by its ``?session=<id>`` URL so distinct sessions stay distinct panels;
  *  chat: dedup by deterministic ``chat-<agent-id>``, https:// dedup by
  *  URL), focuses it and returns its id. Otherwise creates the panel with
  *  the supplied positioning and returns the new id. A bare ``https://``
@@ -710,27 +869,40 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
   }
 
   if (ref.startsWith("service:")) {
-    const serviceName = ref.substring("service:".length);
-    const existingPanelId = findIframePanelIdForService(serviceName);
+    const body = ref.substring("service:".length);
+    // Dedup distinguishes browser sessions: ``service:browser?session=2``
+    // resolves to a different panel than ``service:browser?session=0`` (or
+    // the bare ``service:browser``) because the query is part of the URL we
+    // dedup on. Plain service refs still dedup by serviceName.
+    const existingPanelId = findIframePanelIdForServiceRef(body);
     if (existingPanelId !== null) {
       const existing = dockview.panels.find((p) => p.id === existingPanelId);
       if (existing) dockview.setActivePanel(existing);
       return existingPanelId;
     }
+    const { name: serviceName, query } = parseServiceRefBody(body);
     const ownerId = requesterAgentId || getPrimaryAgentId();
     const panelId = `iframe-${ownerId}-${Date.now()}`;
+    // ``serviceName`` is the bare name (no query) so the per-tab Refresh
+    // button and service-wide reload still match every browser pane. The
+    // ``url`` carries the ``?session=`` query so the viewer selects the
+    // right browser and so URL-based dedup keeps sessions distinct. The
+    // title gets the session id appended (``browser?session=2`` ->
+    // "browser 2") so multiple browser tabs are tellable apart.
+    const url = serviceRefUrl(body);
+    const title = query === "" ? serviceName : `${serviceName} ${serviceSessionLabel(query)}`;
     const params: PanelParams = {
       panelType: "iframe",
       agentId: ownerId,
-      url: getServiceUrl(serviceName),
-      title: serviceName,
+      url,
+      title,
       serviceName,
     };
     panelParams.set(panelId, params);
     dockview.addPanel({
       id: panelId,
       component: "iframe",
-      title: serviceName,
+      title,
       params,
       ...placement,
     });
@@ -1073,7 +1245,9 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
     return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
   }
   if (ref.startsWith("service:")) {
-    return findIframePanelIdForService(ref.substring("service:".length));
+    // Handles both the bare ``service:web`` (dedup by serviceName) and the
+    // session-specific ``service:browser?session=2`` (dedup by URL) forms.
+    return findIframePanelIdForServiceRef(ref.substring("service:".length));
   }
   if (ref.startsWith("https://")) {
     // An external-URL ref resolves to whichever ad-hoc iframe tab is
@@ -1197,7 +1371,9 @@ async function handleOpen(args: Record<string, unknown>, requesterAgentId: strin
   if (ref.startsWith("service:")) {
     // Drop silently if the service isn't registered in ``applications``
     // yet -- the script polls registration, but the broadcast races it.
-    const serviceName = ref.substring("service:".length);
+    // Strip any ``?session=`` suffix (browser fleet) before the lookup:
+    // registration is per-service, not per-session.
+    const serviceName = parseServiceRefBody(ref.substring("service:".length)).name;
     if (!getApplications().find((a) => a.name === serviceName)) return;
     handleOpenPanelRequest(ref, requesterAgentId, args.new_group === true);
     return;
@@ -1595,29 +1771,13 @@ function createEmptyStateOverlay(): HTMLElement {
       dropdown.style.display = "none";
       return;
     }
-    dropdown.innerHTML = "";
-    const items = buildDropdownItems();
-    for (const item of items) {
-      const menuItem = document.createElement("div");
-      menuItem.className = "dockview-add-tab-dropdown-item";
-      menuItem.textContent = item.label;
-      if (item.disabled) {
-        menuItem.style.opacity = "0.5";
-        menuItem.style.cursor = "not-allowed";
-      }
-      menuItem.addEventListener("click", (clickEvent) => {
-        clickEvent.stopPropagation();
-        dropdown.style.display = "none";
-        item.action();
-      });
-      dropdown.appendChild(menuItem);
-      if (item.dividerAfter) {
-        const divider = document.createElement("div");
-        divider.style.borderTop = "1px solid #e5e7eb";
-        divider.style.margin = "4px 0";
-        dropdown.appendChild(divider);
-      }
-    }
+    // Same build-now-then-refresh pattern as the header "+" dropdown: render
+    // from the cached fleet immediately, then re-render once the live fetch
+    // resolves (if still open) so active browsers show up here too.
+    renderDropdownItems(dropdown);
+    refreshBrowserFleet(() => {
+      if (dropdown.style.display !== "none") renderDropdownItems(dropdown);
+    });
     dropdown.style.display = "block";
   });
 

@@ -74,11 +74,12 @@ def test_prevent_relative_imports() -> None:
 def test_prevent_asyncio_import() -> None:
     # This is an inherently async service: FastAPI WebSocket endpoints, the
     # Playwright async API, and browser-use's Agent.run are all asyncio-native.
-    # Three files rely on asyncio: session.py plus the two test modules that drive
-    # it with asyncio.run (runner.py uses none). This mirrors the system_interface
-    # lib, which bumps the same ratchet for its async WebSocket code (see
-    # apps/system_interface/.../test_ratchets.py).
-    rc.check_asyncio_import(_DIR, snapshot(3))
+    # Four files rely on asyncio: session.py (the state machine + run loop),
+    # runner.py (the streaming task endpoint cancels/queues with asyncio), and the
+    # two test modules that drive them with asyncio.run. This mirrors the
+    # system_interface lib, which bumps the same ratchet for its async WebSocket
+    # code (see apps/system_interface/.../test_ratchets.py).
+    rc.check_asyncio_import(_DIR, snapshot(4))
 
 
 def test_prevent_dataclasses_import() -> None:

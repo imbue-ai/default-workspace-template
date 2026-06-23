@@ -1,6 +1,6 @@
-"""Live browser sessions: headful Chromium + CDP screencast + human/agent control.
+"""Live browser fleet: headless Chromium + CDP screencast + a per-browser ownership state machine.
 
-Each :class:`LiveBrowser` owns one headful Chromium (launched and driven by
+Each :class:`LiveBrowser` owns one headless Chromium (launched and driven by
 ``browser_use.BrowserSession``) plus a second, observer-only Playwright
 connection over the same CDP endpoint. The Playwright side does the things
 browser-use does not: stream the live view to the user (CDP
@@ -9,10 +9,30 @@ user's mouse/keyboard (CDP ``Input.dispatch*Event``). The browser-use side does
 the AI driving (``Agent.run``). Both clients share the one Chromium, so the
 human sees exactly what the agent does and vice versa.
 
-Control is a single flag (``control_owner``). When the human has control, the
-cast socket's input is dispatched; when the agent has control, human input is
-dropped (``_input_enabled`` cleared) and browser-use drives. "Take control"
-pauses the agent and hands the flag back.
+Ownership is a small per-browser state machine, and it is the heart of this
+module. Many agents (a chat agent plus its sub-agents, each a distinct
+``MNGR_AGENT_ID``) share one fleet; any single browser is controlled by exactly
+one party at a time: a specific agent, or the human. Every control change goes
+through the single writer :meth:`LiveBrowser._write_control_locked`, called only
+under ``_control_lock`` with a compare-and-set guard, so there is no bespoke
+ordering anywhere and "single asyncio process" actually means atomic. The state:
+
+* ``controller`` -- ``"human"`` or ``"agent"``.
+* ``owner_agent_id`` -- which agent holds it (when ``controller == "agent"``).
+* ``human_pinned`` -- the human explicitly took control; agents are locked out
+  until the human hands back. (Idle ``human`` with ``human_pinned`` false is
+  the resting state: human-drivable and agent-acquirable.)
+
+Rules that fall out of this and never need a special case:
+
+* Agents NEVER preempt anyone. :meth:`acquire` succeeds only against an unpinned
+  human (or the same agent re-acquiring); against another agent it parks the
+  caller in a FIFO wait-queue (monitor-and-wait) until that agent releases.
+* The human ALWAYS wins: :meth:`take_control` preempts whatever agent is driving
+  (cancelling its run) and pins; a pinned browser evicts any waiters.
+* Ownership is bound to the live ``task`` request (see runner.py): if the agent
+  process dies, the request disconnects, the run is cancelled, and the browser
+  is released -- no fire-and-forget locks, no stuck owners.
 
 The Anthropic API key is read lazily from the environment (and a fresh re-read of
 ``$MNGR_HOST_DIR/env``) at run time, so a key submitted after this service booted
@@ -23,7 +43,8 @@ Cloud / litellm proxy (``ANTHROPIC_BASE_URL``) path is intentionally unsupported
 import asyncio
 import json
 import os
-import uuid
+from collections.abc import Awaitable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from typing import Literal
@@ -54,6 +75,11 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
 _BROWSER_ERRORS = (RuntimeError, ConnectionError, OSError, PlaywrightError)
 
 ControlOwner = Literal["human", "agent"]
+
+# An event emitted by a running task: thinking / action / status / done / error /
+# preempted. The runner streams these to the agent's CLI as line-delimited JSON.
+TaskEvent = dict[str, Any]
+EventSink = Callable[[TaskEvent], Awaitable[None]]
 
 # JPEG screencast tuned so a single base64 JSON frame stays comfortably under the
 # system_interface WebSocket proxy's 1 MiB per-message cap, even on busy pages.
@@ -91,7 +117,13 @@ _KEEPALIVE_SECONDS = 10
 
 # Each live session = a headless Chromium + a Playwright observer; cap the concurrent
 # count so a small compute (e.g. 4 GB) can't be OOM-ed. Override via BROWSER_MAX_SESSIONS.
-_MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "3"))
+_MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "5"))
+
+# Hard ceilings on a single browser-use task so a hung or non-cancel-safe run can
+# never pin a browser forever (the connection-disconnect path is the primary
+# release; these are the backstop). Both env-tunable.
+_TASK_MAX_STEPS = int(os.environ.get("BROWSER_TASK_MAX_STEPS", "100"))
+_TASK_MAX_SECONDS = float(os.environ.get("BROWSER_TASK_MAX_SECONDS", "900"))
 
 
 def _action_summary(action: Any) -> str:
@@ -160,17 +192,49 @@ def deferred_install_ready() -> tuple[bool, str]:
     return True, "ready"
 
 
+def _enabled_event() -> asyncio.Event:
+    """An asyncio.Event that starts SET -- the resting controller is the human, so
+    human input is enabled from construction (not only after :meth:`LiveBrowser.start`)."""
+    event = asyncio.Event()
+    event.set()
+    return event
+
+
 class BrowserStartupError(Exception):
     """Raised when a Chromium session fails to come up (e.g. no CDP endpoint)."""
 
 
+class FleetFullError(BrowserStartupError):
+    """Raised when the fleet is already at ``_MAX_SESSIONS`` (maps to HTTP 409)."""
+
+
+class _AcquireWaiter:
+    """One agent parked in a browser's FIFO wait-queue (monitor-and-wait).
+
+    ``event`` is set when the waiter is resolved; ``granted`` distinguishes the two
+    outcomes -- handed ownership (the prior agent released) vs evicted because a
+    human took control (agents never wait on a human-pinned browser).
+    """
+
+    def __init__(self, agent_id: str, agent_name: str | None) -> None:
+        self.agent_id = agent_id
+        self.agent_name = agent_name
+        self.event = asyncio.Event()
+        self.granted = False
+
+
 class LiveBrowser(MutableModel):
-    """One headful Chromium streamed to the user, optionally driven by a browser-use agent."""
+    """One headless Chromium streamed to the user, optionally driven by a browser-use agent."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
-    session_id: str
-    control_owner: ControlOwner = "human"
+    # The integer the user/agent sees (0 is the permanent default browser). Stable
+    # and never reused: a closed id is gone, so a cached id is the same browser or a 404.
+    browser_id: int
+    controller: ControlOwner = "human"
+    owner_agent_id: str | None = None
+    owner_agent_name: str | None = None
+    human_pinned: bool = False
 
     _playwright: Playwright = PrivateAttr()
     _bu_session: BrowserSession = PrivateAttr()
@@ -180,21 +244,23 @@ class LiveBrowser(MutableModel):
     _active_cdp: CDPSession | None = PrivateAttr(default=None)
     _agent: Agent | None = PrivateAttr(default=None)
     _agent_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
-    _input_enabled: asyncio.Event = PrivateAttr(default_factory=asyncio.Event)
+    _run_on_event: EventSink | None = PrivateAttr(default=None)
+    _input_enabled: asyncio.Event = PrivateAttr(default_factory=_enabled_event)
     _cast_sockets: list[WebSocket] = PrivateAttr(default_factory=list)
-    _chat_sockets: list[WebSocket] = PrivateAttr(default_factory=list)
     _latest_frame: str | None = PrivateAttr(default=None)
     _send_in_flight: bool = PrivateAttr(default=False)
     _nav_tracked: set[Page] = PrivateAttr(default_factory=set)
     _active_target_id: str | None = PrivateAttr(default=None)
-    _queued_prompt: str | None = PrivateAttr(default=None)
-    _run_active: bool = PrivateAttr(default=False)
     _keepalive_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
     _closed: bool = PrivateAttr(default=False)
+    # Serializes screencast/active-tab changes (slow CDP work).
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
+    # Serializes ALL ownership changes -- the single mutual-exclusion primitive.
+    _control_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
+    _wait_queue: list[_AcquireWaiter] = PrivateAttr(default_factory=list)
 
     async def start(self, playwright: Playwright) -> None:
-        """Launch the headful Chromium (browser-use) and attach the Playwright observer."""
+        """Launch the headless Chromium (browser-use) and attach the Playwright observer."""
         self._playwright = playwright
         self._input_enabled.set()
         chromium_path = playwright.chromium.executable_path
@@ -227,7 +293,7 @@ class LiveBrowser(MutableModel):
         except _BROWSER_ERRORS as e:
             logger.debug("initial nav to {} ignored ({})", _HOME_URL, e)
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-        logger.info("LiveBrowser {} started (cdp_url={})", self.session_id, cdp_url)
+        logger.info("LiveBrowser {} started (cdp_url={})", self.browser_id, cdp_url)
 
     # --- screencast / active tab ---------------------------------------------
 
@@ -335,8 +401,11 @@ class LiveBrowser(MutableModel):
             self._send_in_flight = False
 
     async def _broadcast_tabs(self) -> None:
+        await self._broadcast({"type": "tabs", "tabs": await self._tab_list()})
+
+    async def _tab_list(self) -> list[dict[str, Any]]:
         if self._context is None:
-            return
+            return []
         tabs = []
         for index, page in enumerate(self._context.pages):
             tabs.append(
@@ -347,7 +416,7 @@ class LiveBrowser(MutableModel):
                     "active": page is self._active_page,
                 }
             )
-        await self._broadcast({"type": "tabs", "tabs": tabs})
+        return tabs
 
     async def _follow_agent_focus(self) -> None:
         """Re-point the screencast to the tab the agent just switched to.
@@ -388,11 +457,22 @@ class LiveBrowser(MutableModel):
     # --- input ----------------------------------------------------------------
 
     async def handle_cast_message(self, message: dict[str, Any]) -> None:
-        """Handle a message from a cast socket: human input or tab control."""
+        """Handle a message from a cast socket: human input or tab control.
+
+        Input/tab/nav are gated on ``_input_enabled`` (set only while the human has
+        control). The check and the CDP dispatch happen together under
+        ``_control_lock`` so an agent acquiring the browser mid-dispatch can't let a
+        stale human input land after the handoff (the input/control TOCTOU).
+        """
         kind = message.get("type")
-        # While the agent drives, drop ALL human browser control (input + tabs + nav).
-        if kind in ("mouse", "key", "tab", "navigate") and not self._input_enabled.is_set():
-            return
+        if kind in ("mouse", "key", "tab", "navigate"):
+            async with self._control_lock:
+                if not self._input_enabled.is_set():
+                    return
+                await self._dispatch_input(message)
+
+    async def _dispatch_input(self, message: dict[str, Any]) -> None:
+        kind = message.get("type")
         try:
             cdp = self._active_cdp
             if kind == "mouse" and cdp is not None:
@@ -424,22 +504,177 @@ class LiveBrowser(MutableModel):
             if 0 <= index < len(self._context.pages):
                 await self._context.pages[index].close()
 
-    # --- agent control --------------------------------------------------------
+    # --- ownership state machine ----------------------------------------------
 
-    async def run_agent(self, prompt: str) -> None:
-        """Run a browser-use task against this browser, streaming steps to chat sockets.
+    def _state_tuple(self) -> tuple[ControlOwner, str | None, bool]:
+        return (self.controller, self.owner_agent_id, self.human_pinned)
 
-        Single-flight: any agent already running or paused is stopped first, so only
-        one agent ever drives the shared browser.
+    async def _write_control_locked(
+        self, to: ControlOwner, agent_id: str | None, agent_name: str | None, pinned: bool
+    ) -> None:
+        """The ONLY writer of control state. Caller must hold ``_control_lock``.
+
+        Writes ``controller``/``owner_agent_id``/``human_pinned`` and ``_input_enabled``
+        together (so the input gate can never disagree with the controller), then
+        broadcasts the new state to every cast socket and stores it as the current
+        state for ``send_initial_state`` to replay to late joiners.
+        """
+        self.controller = to
+        self.owner_agent_id = agent_id
+        self.owner_agent_name = agent_name
+        self.human_pinned = pinned
+        if to == "human":
+            self._input_enabled.set()
+        else:
+            self._input_enabled.clear()
+        await self._broadcast(self._control_message())
+
+    def _control_message(self) -> dict[str, Any]:
+        return {
+            "type": "control",
+            "owner": self.controller,
+            "owner_agent_id": self.owner_agent_id,
+            "owner_name": self.owner_agent_name,
+            "human_pinned": self.human_pinned,
+        }
+
+    async def _settle_queue_locked(self) -> None:
+        """Reconcile the FIFO wait-queue with the current control state. Holds ``_control_lock``.
+
+        * human-pinned -> evict every waiter (agents never wait on a human).
+        * free (unpinned human) -> hand the browser to the first waiter, gaplessly.
+        * agent-owned -> nothing (someone holds it; waiters stay queued).
+        """
+        if self.controller == "human" and self.human_pinned:
+            waiters, self._wait_queue = self._wait_queue, []
+            for waiter in waiters:
+                waiter.granted = False
+                waiter.event.set()
+        elif self.controller == "human" and self._wait_queue:
+            waiter = self._wait_queue.pop(0)
+            await self._write_control_locked("agent", waiter.agent_id, waiter.agent_name, pinned=False)
+            waiter.granted = True
+            waiter.event.set()
+
+    async def _transition(
+        self,
+        *,
+        to: ControlOwner,
+        agent_id: str | None = None,
+        agent_name: str | None = None,
+        pinned: bool = False,
+        expect: tuple[ControlOwner, str | None, bool] | None = None,
+        preempt: bool = False,
+    ) -> bool:
+        """Atomic compare-and-set control transition (the single mutation path).
+
+        Returns False (and changes nothing) if ``expect`` is given and the current
+        state differs -- this is how a stale finally / double-release no-ops safely.
+        When ``preempt`` is set, the displaced agent's run is cancelled OUTSIDE the
+        lock and never awaited here: the cancelled run's own finally re-enters this
+        method, CAS-fails (state already moved on), and no-ops -- so there is no
+        lock cycle (the deadlock the audit warned about).
+        """
+        displaced_agent: Agent | None = None
+        displaced_task: "asyncio.Task[None] | None" = None
+        async with self._control_lock:
+            if expect is not None and self._state_tuple() != expect:
+                return False
+            if preempt:
+                displaced_agent = self._agent
+                displaced_task = self._agent_task
+            await self._write_control_locked(to, agent_id, agent_name, pinned)
+            await self._settle_queue_locked()
+        if displaced_agent is not None:
+            displaced_agent.stop()
+        if displaced_task is not None and displaced_task is not asyncio.current_task() and not displaced_task.done():
+            displaced_task.cancel()
+        return True
+
+    async def acquire(
+        self,
+        agent_id: str,
+        agent_name: str | None = None,
+        *,
+        reclaim: bool = False,
+        wait: bool = True,
+        max_wait: float | None = None,
+        on_wait: Callable[[str | None, str | None], Awaitable[None]] | None = None,
+    ) -> str:
+        """Acquire control for an agent. Returns one of:
+
+        ``"acquired"`` -- the agent now controls the browser.
+        ``"busy_human"`` -- a human holds it (pinned); only an explicit ``reclaim``
+            (the human told the agent to resume) takes it. Agents never wait on a human.
+        ``"busy_agent"`` -- another agent holds it and ``wait`` was False.
+        ``"timed_out"`` -- waited ``max_wait`` seconds for another agent to release.
+
+        With ``wait`` (the default) and another agent in control, the caller parks in
+        a FIFO queue and is handed the browser the instant that agent releases.
+        """
+        async with self._control_lock:
+            if self.controller == "agent" and self.owner_agent_id == agent_id:
+                self.owner_agent_name = agent_name  # refresh display name on re-acquire
+                return "acquired"
+            if self.controller == "human" and self.human_pinned and not reclaim:
+                return "busy_human"
+            if self.controller == "human":  # free, or reclaim of a pinned human
+                await self._write_control_locked("agent", agent_id, agent_name, pinned=False)
+                return "acquired"
+            # controller == "agent", a different agent -> must wait or fail fast.
+            if not wait:
+                return "busy_agent"
+            busy_id, busy_name = self.owner_agent_id, self.owner_agent_name
+            waiter = _AcquireWaiter(agent_id, agent_name)
+            self._wait_queue.append(waiter)
+        if on_wait is not None:
+            await on_wait(busy_id, busy_name)
+        try:
+            await asyncio.wait_for(waiter.event.wait(), timeout=max_wait)
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            async with self._control_lock:
+                if waiter in self._wait_queue:
+                    self._wait_queue.remove(waiter)
+                elif waiter.granted and self.controller == "agent" and self.owner_agent_id == agent_id:
+                    # Handed the browser concurrently with our give-up: release it so
+                    # the next waiter (or the human) isn't blocked by a no-show owner.
+                    await self._write_control_locked("human", None, None, pinned=False)
+                    await self._settle_queue_locked()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            return "timed_out"
+        return "acquired" if waiter.granted else "busy_human"
+
+    async def release(self, agent_id: str) -> bool:
+        """Release this agent's control back to the human (free). CAS: only the owner can."""
+        return await self._transition(to="human", expect=("agent", agent_id, False))
+
+    async def take_control(self) -> bool:
+        """Human 'take control': preempt whatever agent is driving and pin (agents locked out).
+
+        Always wins (no ``expect``): flips to a pinned human and cancels the run. The
+        cancel happens outside the control lock, so the run's finally can re-enter the
+        state machine without deadlocking. No resume: the human hands back via
+        :meth:`return_to_agents`, or tells an agent to resume (which uses ``reclaim``).
+        """
+        return await self._transition(to="human", pinned=True, preempt=True)
+
+    async def return_to_agents(self) -> bool:
+        """Human hands control back: un-pin (only if currently pinned). Frees any waiter."""
+        return await self._transition(to="human", pinned=False, expect=("human", None, True))
+
+    async def run_agent(self, prompt: str, on_event: EventSink) -> None:
+        """Run a browser-use task against this (already-acquired) browser, streaming steps.
+
+        Ownership is managed by the caller (the task endpoint acquires before and
+        releases after); this method only drives browser-use and reports events.
         """
         api_key = resolve_anthropic_key()
         if not api_key:
-            await self._broadcast({"type": "error", "text": anthropic_key_status()[1]}, chat=True)
+            await on_event({"type": "error", "text": anthropic_key_status()[1]})
             return
-        await self._stop_active_agent()
+        self._run_on_event = on_event
         self._agent_task = asyncio.current_task()
-        await self._set_control("agent")
-        await self._broadcast({"type": "chat", "role": "user", "text": prompt}, chat=True)
         # Key is passed straight to ChatAnthropic -- never into os.environ, which would
         # leak across the manager's concurrent sessions and race between runs.
         agent = Agent(
@@ -449,22 +684,32 @@ class LiveBrowser(MutableModel):
         )
         self._agent = agent
         try:
-            await agent.run(on_step_end=self._on_agent_step)
+            await asyncio.wait_for(
+                agent.run(on_step_end=self._on_agent_step, max_steps=_TASK_MAX_STEPS),
+                timeout=_TASK_MAX_SECONDS,
+            )
             summary = agent.history.final_result()
-            await self._broadcast({"type": "chat", "role": "assistant", "text": summary or "Done."}, chat=True)
+            await on_event({"type": "done", "result": summary or "Done."})
         except asyncio.CancelledError:
+            await on_event({"type": "preempted"})
             raise
-        except Exception as e:  # noqa: BLE001 -- surface any agent failure to the user's chat
-            logger.opt(exception=e).error("browser-use agent run failed for {}", self.session_id)
-            await self._broadcast({"type": "error", "text": f"Agent error: {e}"}, chat=True)
+        except TimeoutError:
+            agent.stop()
+            await on_event({"type": "error", "text": f"Task exceeded {_TASK_MAX_SECONDS:.0f}s and was stopped."})
+        except Exception as e:  # noqa: BLE001 -- surface any agent failure to the caller's stream
+            logger.opt(exception=e).error("browser-use agent run failed for browser {}", self.browser_id)
+            await on_event({"type": "error", "text": f"Agent error: {e}"})
         finally:
             if self._agent is agent:
                 self._agent = None
                 self._agent_task = None
-                await self._set_control("human")
+                self._run_on_event = None
 
     async def _on_agent_step(self, agent: Agent) -> None:
-        """browser-use per-step hook: stream the latest thought + action as separate collapsible blocks."""
+        """browser-use per-step hook: stream the latest thought + action as separate events."""
+        emit = self._run_on_event
+        if emit is None:
+            return
         history = agent.history
         thoughts = history.model_thoughts()
         actions = history.model_actions()
@@ -476,92 +721,27 @@ class LiveBrowser(MutableModel):
                 or "Thinking"
             ).strip()
             detail = str(getattr(thought, "thinking", "") or thought).strip()
-            await self._broadcast({"type": "chat", "role": "thinking", "text": summary, "detail": detail}, chat=True)
+            await emit({"type": "thinking", "text": summary, "detail": detail})
         if actions:
             action = actions[-1]
-            await self._broadcast(
-                {"type": "chat", "role": "action", "text": _action_summary(action), "detail": json.dumps(action, indent=2, default=str)},
-                chat=True,
+            await emit(
+                {"type": "action", "text": _action_summary(action), "detail": json.dumps(action, indent=2, default=str)}
             )
         # Keep the streamed view on whatever tab the agent is now focused on.
         await self._follow_agent_focus()
 
-    async def submit(self, prompt: str) -> None:
-        """Start an agent run, or queue the prompt if a run is already in progress.
-
-        While the agent has control the user can't start a second concurrent run;
-        the message waits and auto-runs when the current task finishes. ``_run_active``
-        is set synchronously here so a prompt sent in the brief window before the
-        Agent object is assigned still queues instead of starting a parallel run.
-        """
-        if self._run_active:
-            self._queued_prompt = prompt
-            await self._broadcast({"type": "queued", "text": prompt}, chat=True)
-            return
-        self._run_active = True
-        asyncio.create_task(self._run_chain(prompt))
-
-    async def _run_chain(self, prompt: str | None) -> None:
-        """Run prompts to completion one at a time, draining a queued follow-up after each."""
-        try:
-            while prompt is not None:
-                await self.run_agent(prompt)
-                prompt = self._queued_prompt
-                if prompt is not None:
-                    self._queued_prompt = None
-                    await self._broadcast({"type": "queued", "text": None}, chat=True)
-        finally:
-            self._run_active = False
-
-    async def cancel_queue(self) -> None:
-        """Drop the pending queued message (user cancelled the chip)."""
-        self._queued_prompt = None
-        await self._broadcast({"type": "queued", "text": None}, chat=True)
-
-    async def take_control(self) -> None:
-        """'Interrupt & take control': hand control to the human now, then abort the run.
-
-        Flips control to the human first (so the UI unlocks on the first click), then
-        cancels the run task -- aborting an in-flight LLM call / step at once instead of
-        waiting for browser-use's cooperative stop to reach the next step boundary. No
-        resume: to continue, the user sends a new message. Any queued message is dropped.
-        """
-        self._queued_prompt = None
-        await self._set_control("human")
-        await self._broadcast({"type": "queued", "text": None}, chat=True)
-        agent, task = self._agent, self._agent_task
-        if agent is not None:
-            agent.stop()
-        if task is not None and task is not asyncio.current_task() and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, *_BROWSER_ERRORS):
-                pass
-
     async def _stop_active_agent(self) -> None:
-        """Stop any running agent and wait for its run task to unwind."""
+        """Stop any running agent and wait for its run task to unwind (used by close())."""
         agent = self._agent
         task = self._agent_task
         if agent is not None:
             agent.stop()
         if task is not None and task is not asyncio.current_task():
+            task.cancel()
             try:
                 await task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, *_BROWSER_ERRORS):
                 pass
-
-    async def _set_control(self, owner: ControlOwner) -> None:
-        self.control_owner = owner
-        # Human input flows in every state except while the agent is actively driving.
-        if owner == "agent":
-            self._input_enabled.clear()
-        else:
-            self._input_enabled.set()
-        # Broadcast on BOTH sockets: the cast socket may be mid-reconnect when the
-        # agent starts, so relying on it alone would leave the status box stale.
-        await self._broadcast({"type": "control", "owner": owner})
-        await self._broadcast({"type": "control", "owner": owner}, chat=True)
 
     # --- socket bookkeeping ---------------------------------------------------
 
@@ -572,35 +752,44 @@ class LiveBrowser(MutableModel):
         if ws in self._cast_sockets:
             self._cast_sockets.remove(ws)
 
-    def add_chat_socket(self, ws: WebSocket) -> None:
-        self._chat_sockets.append(ws)
-
-    def remove_chat_socket(self, ws: WebSocket) -> None:
-        if ws in self._chat_sockets:
-            self._chat_sockets.remove(ws)
-
     async def send_initial_state(self, ws: WebSocket) -> None:
-        """Send current control + tab state to a freshly-connected cast socket."""
-        await ws.send_json({"type": "control", "owner": self.control_owner})
-        await self._broadcast_tabs()
+        """Send current control + tab state to a freshly-connected cast socket (initial sync)."""
+        await ws.send_json(self._control_message())
+        await ws.send_json({"type": "tabs", "tabs": await self._tab_list()})
 
-    async def _broadcast(self, message: dict[str, Any], chat: bool = False) -> None:
-        sockets = self._chat_sockets if chat else self._cast_sockets
+    async def describe(self) -> dict[str, Any]:
+        """Snapshot for ``GET /browsers``: id, owner, and the current tab list."""
+        return {
+            "id": self.browser_id,
+            "controller": self.controller,
+            "owner_agent_id": self.owner_agent_id,
+            "owner_name": self.owner_agent_name,
+            "human_pinned": self.human_pinned,
+            "tabs": await self._tab_list(),
+        }
+
+    async def _broadcast(self, message: dict[str, Any]) -> None:
         dead: list[WebSocket] = []
-        for ws in list(sockets):
+        for ws in list(self._cast_sockets):
             try:
                 await ws.send_json(message)
             except _BROWSER_ERRORS as e:
                 logger.debug("dropping dead socket ({})", e)
                 dead.append(ws)
         for ws in dead:
-            if ws in sockets:
-                sockets.remove(ws)
+            if ws in self._cast_sockets:
+                self._cast_sockets.remove(ws)
 
     async def close(self) -> None:
         self._closed = True
         if self._keepalive_task is not None:
             self._keepalive_task.cancel()
+        # Evict any waiters so their task endpoints unblock instead of hanging on a dead browser.
+        async with self._control_lock:
+            waiters, self._wait_queue = self._wait_queue, []
+        for waiter in waiters:
+            waiter.granted = False
+            waiter.event.set()
         await self._stop_active_agent()
         await self._stop_screencast()
         self._context = None  # bail out any nav re-attach queued during teardown
@@ -625,50 +814,73 @@ async def _safe_title(page: Page) -> str:
 
 
 class BrowserSessionManager(MutableModel):
-    """Owns all live browsers and the shared Playwright driver."""
+    """Owns the whole fleet (all live browsers) and the shared Playwright driver.
+
+    The fleet is shared per workspace: every agent in a mind reaches this one
+    manager, so ``ls`` shows one fleet and ownership arbitrates between agents.
+    Browser ids are monotonic and never reused (``_next_id`` only increases);
+    id 0 is the permanent default, re-createable via :meth:`ensure_browser_0`.
+    """
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
-    _sessions: dict[str, LiveBrowser] = PrivateAttr(default_factory=dict)
+    _browsers: dict[int, LiveBrowser] = PrivateAttr(default_factory=dict)
     _playwright: Playwright | None = PrivateAttr(default=None)
+    _next_id: int = PrivateAttr(default=1)  # 0 is reserved for the default browser
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
 
-    async def create(self) -> LiveBrowser:
-        async with self._lock:
-            # ponytail: soft cap -- sessions are registered after start() below, so
-            # rapid concurrent creates could overshoot by one; fine for a single-user
-            # desktop tool where "New browser" clicks are sequential.
-            if len(self._sessions) >= _MAX_SESSIONS:
-                raise BrowserStartupError(
-                    f"Too many open browsers ({len(self._sessions)}/{_MAX_SESSIONS}). "
-                    "Close one before opening another."
-                )
-            if self._playwright is None:
-                self._playwright = await async_playwright().start()
-        session = LiveBrowser(session_id=uuid.uuid4().hex)
+    async def _start_and_register_locked(self, browser_id: int) -> LiveBrowser:
+        """Launch + register one browser. Caller must hold ``self._lock`` for the whole
+        call so a concurrent create can't observe a stale count (no cap overshoot) or
+        race the id assignment."""
+        if self._playwright is None:
+            self._playwright = await async_playwright().start()
+        session = LiveBrowser(browser_id=browser_id)
         started = False
         try:
             await session.start(self._playwright)
             started = True
         finally:
             if not started:
-                # start() failed partway -- tear down so we don't leak a Chromium.
-                await session.close()
-        self._sessions[session.session_id] = session
+                await session.close()  # start() failed partway -- don't leak a Chromium
+        self._browsers[browser_id] = session
         return session
 
-    def get(self, session_id: str) -> LiveBrowser:
-        # Dict access raises KeyError for a missing session; callers catch it.
-        return self._sessions[session_id]
+    async def create(self) -> LiveBrowser:
+        """Start a new browser with the next monotonic id ('New browser' / fleet ``new``)."""
+        async with self._lock:
+            if len(self._browsers) >= _MAX_SESSIONS:
+                raise FleetFullError(
+                    f"Too many open browsers ({len(self._browsers)}/{_MAX_SESSIONS}). "
+                    "Close one before opening another."
+                )
+            browser_id = self._next_id
+            self._next_id += 1
+            return await self._start_and_register_locked(browser_id)
 
-    async def close(self, session_id: str) -> None:
-        session = self._sessions.pop(session_id, None)
+    async def ensure_browser_0(self) -> LiveBrowser:
+        """Return the default browser (id 0), creating it if absent. Idempotent under the lock."""
+        async with self._lock:
+            existing = self._browsers.get(0)
+            if existing is not None:
+                return existing
+            return await self._start_and_register_locked(0)
+
+    def get(self, browser_id: int) -> LiveBrowser:
+        # Dict access raises KeyError for a missing/closed id; callers turn it into a 404.
+        return self._browsers[browser_id]
+
+    async def list_browsers(self) -> list[dict[str, Any]]:
+        return [await self._browsers[bid].describe() for bid in sorted(self._browsers)]
+
+    async def close(self, browser_id: int) -> None:
+        session = self._browsers.pop(browser_id, None)
         if session is not None:
             await session.close()
 
     async def shutdown(self) -> None:
-        for session_id in list(self._sessions):
-            await self.close(session_id)
+        for browser_id in list(self._browsers):
+            await self.close(browser_id)
         if self._playwright is not None:
             await self._playwright.stop()
             self._playwright = None
