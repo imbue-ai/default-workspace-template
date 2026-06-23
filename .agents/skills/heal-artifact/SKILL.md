@@ -12,8 +12,6 @@ fix, re-run scenarios, and present a single approval gate. Heal is a turn-end
 action -- do not interrupt in-flight work to invoke it; the user's original
 request is already delivered.
 
-**NOTE: If the issue in question was with the system_interface service, you should defer to the `update-system-interface` skill flow instead**
-
 ## The artifact parameter
 
 `artifact` is `skill` (the default) or `service`. The worker reads it and loads

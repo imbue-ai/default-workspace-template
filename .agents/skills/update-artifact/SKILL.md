@@ -10,8 +10,6 @@ already exists; you dispatch a generic worker to harden the change in the
 background, proxy its gates, merge, and go live. There is one flow with a
 **design-gate toggle** keyed on whether the change is already committed.
 
-**NOTE: If the artifact in question is the system_interface service, defer to the `update-system-interface` skill flow instead**
-
 ## The two origins
 
 - **committed** -- you and the user discussed the change live and it is already
