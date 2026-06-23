@@ -57,7 +57,7 @@ Skip the delete if any of the following:
 - The directory contains user-supplied state (auth tokens, captured
   inputs you'd lose) -- read it first to be sure.
 
-`runtime/crystallize/<slug>/` itself (the dir holding `task.md`,
+`runtime/harden/crystallize-<name>/` itself (the dir holding `task.md`,
 `reports/`, and `ticket_id.txt`) is also stale post-merge,
 but **do not delete it yet** -- section 5 below still needs to read
 `ticket_id.txt`. Section 6's commit cleanup removes it after the
@@ -113,12 +113,12 @@ it so the new path takes effect:
 
 ## 5. Close the tracking ticket
 
-`crystallize-task` Step 2 wrote the ticket ID to
-`runtime/crystallize/<slug>/ticket_id.txt` at launch time. Read it and
+`crystallize-artifact` Step 2 wrote the ticket ID to
+`runtime/harden/crystallize-<name>/ticket_id.txt` at launch time. Read it and
 close:
 
 ```bash
-TICKET_FILE="runtime/crystallize/<slug>/ticket_id.txt"
+TICKET_FILE="runtime/harden/crystallize-<name>/ticket_id.txt"
 if command -v tk >/dev/null 2>&1 && [ -s "$TICKET_FILE" ]; then
     tk close "$(cat "$TICKET_FILE")"
 fi
@@ -134,11 +134,11 @@ have a list command in this build -- look for the ticket in
 The migration touches consumer code and removes runtime artifacts;
 those should be a separate commit from the merge so the migration is
 reviewable on its own. Now that section 5 has read `ticket_id.txt`,
-also delete `runtime/crystallize/<slug>/` (unless the user asked to
+also delete `runtime/harden/crystallize-<name>/` (unless the user asked to
 keep the scratch around).
 
 ```bash
-rm -rf runtime/crystallize/<slug>/
+rm -rf runtime/harden/crystallize-<name>/
 git add <consumer-files-you-changed>
 git commit -m "post-crystallize migration for <slug>: switch consumers to skill path"
 ```

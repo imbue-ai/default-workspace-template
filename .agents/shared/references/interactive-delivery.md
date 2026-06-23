@@ -60,19 +60,19 @@ specifics, but the shape below holds for all of them.
    into a background worker that cannot see corrections the user has not made
    yet. The confirmation from phase 5 is what unlocks this.
 
-7. **Harden / ratify (crystallization).** The expensive, thorough pass: real
-   tests, review gates, polish. This **always runs in a background worker**; you
-   (as the main agent) never run the code-guardian gates or the thorough test
-   passes itself. Backgrounding never strands the user, because they already
-   have the confirmed artifact (or a usable build of it) to work with while the
-   slow checks run behind them. Notably, this means that at the time of
-   backgrounding there must be a reasonably representative sample artifact; it
-   can't just be a basic mock. This background pass is **crystallization** -- its
-   generic contract lives in
-   `.agents/shared/references/crystallize-artifact.md`. Each specialization binds
-   it to a concrete worker (a `crystallize-task` worker, a finalization worker,
-   ...) that layers on the artifact-specific parts; this skeleton stays
-   mechanism-agnostic.
+7. **Harden / ratify.** The expensive, thorough pass: real tests, review gates,
+   polish. This **always runs in a background worker**; you (as the main agent)
+   never run the code-guardian gates or the thorough test passes itself.
+   Backgrounding never strands the user, because they already have the confirmed
+   artifact (or a usable build of it) to work with while the slow checks run
+   behind them. Notably, this means that at the time of backgrounding there must
+   be a reasonably representative sample artifact; it can't just be a basic mock.
+   This background pass is the **harden pass** -- its universal contract lives in
+   `.agents/shared/references/harden-artifact.md`, and the create operation that
+   produces a brand-new artifact from a confirmed prototype is the
+   `crystallize-artifact` lead. Each specialization (`build-web-service`,
+   `fetch-process-show`, ...) hands its confirmed artifact to that lead, which
+   dispatches the generic worker; this skeleton stays mechanism-agnostic.
 
 8. **Deliver further capabilities one at a time.** A confirmation on the first
    artifact approves *that* artifact, not everything downstream of it. Every

@@ -1,17 +1,19 @@
-# Crystallizing an artifact
+# Hardening an artifact
 
-The shared contract for **crystallization**: once the user is satisfied with a
-sample or prototype, put in all the thorough, expensive effort to turn it into a
-hardened, committed, reviewed artifact -- in the background, off the interactive
-path. The artifact can be anything (a reusable skill, a web service, a data
-pipeline); this contract is the part that is identical regardless of what is
-being hardened.
+The universal contract for the **background harden pass**: once the user has
+signed off on a shape in the foreground, put in the thorough, expensive effort
+to turn it into a hardened, committed, reviewed artifact -- in the background,
+off the interactive path. This contract is the part that is identical across
+every operation (crystallize, update, heal) and every artifact (a reusable
+skill, a web service, the system interface).
 
-This reference is never read on its own. A caller (a worker sub-skill) reads it
-for the generic flow and layers on its own specifics: what the artifact is,
-whether the work must first be reconstructed, which gates apply, the runtime
-paths, and anything the worker must not touch. Keep those specifics in the
-caller; keep this contract generic.
+This reference is never read on its own. The generic `harden-worker` sub-skill
+reads it for the universal flow, then layers on two more references it is told
+to load: an **operation** reference (`op-crystallize.md` / `op-update.md` /
+`op-heal.md`) for the gate shape and pre-work, and an **artifact** reference
+(`artifact-skill.md` / `artifact-service.md` / `artifact-system-interface.md`)
+for the layout, isolation/test mechanics, and don't-touch list. Keep those
+specifics in those references; keep this contract generic.
 
 ## The premise and the bar
 
@@ -33,12 +35,12 @@ merge.
 
 Follow `.agents/shared/references/worker-reporting.md` for the report-file
 procedure and the task-file frontmatter schema, and substitute the runtime
-paths your caller specifies. Surface decisions the user must make as `gate`
-reports and stop; end the run with a terminal `done` or `stuck` status. The
-lead side follows `.agents/shared/references/lead-proxy.md` for polling, gate
-decisions, the "do not interrupt more recent user work" rule, and
-terminal-status handling. Your caller names the exact gate and status values
-its flow uses.
+paths your operation/artifact references specify. Surface decisions the user
+must make as `gate` reports and stop; end the run with a terminal `done` or
+`stuck` status. The lead side follows `.agents/shared/references/lead-proxy.md`
+for polling, gate decisions, the "do not interrupt more recent user work" rule,
+and terminal-status handling. Your operation reference names the exact gate and
+status values its flow uses.
 
 ## Testing and hardening contract
 
@@ -58,9 +60,9 @@ its flow uses.
 ## Review gates
 
 Run the repo's review gates -- `/autofix` and the architecture/CI gates -- and
-fix what they flag **before** you write the final-artifact gate report, so the
-user sees a single report that already reflects the review verdicts rather than
-a report-then-verify-then-report-again pattern.
+fix what they flag **before** you write the final gate report, so the user sees
+a single report that already reflects the review verdicts rather than a
+report-then-verify-then-report-again pattern.
 
 ## Preserve and surface captured data
 

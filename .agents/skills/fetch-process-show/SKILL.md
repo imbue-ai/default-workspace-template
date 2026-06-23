@@ -29,7 +29,7 @@ Pick a short kebab-case slug `$SLUG` for the task (e.g. `fetch-emails`,
 
 - Runtime path: `runtime/fetch-process-show/$SLUG/`
 - Sample data path: `runtime/fetch-process-show/$SLUG/sample.json`
-- Slug passed to `crystallize-task` at the end (reused as its `$NAME`)
+- Slug passed to `crystallize-artifact` at the end (reused as its `$NAME`)
 
 ## Clarify and scope (skeleton phases 1-3)
 
@@ -161,14 +161,16 @@ surface on an unconfirmed process bakes the wrong process into code *and* into a
 background worker that cannot see the corrections the user hasn't made yet.
 
 Once the user has confirmed, the harden/ratify pass (skeleton phase 7) runs as
-a **`crystallize-task` worker**:
+a **`crystallize-artifact` worker** (the crystallize operation, artifact = a
+script-centric **skill**):
 
-1. **Kick off `crystallize-task`** with `source_artifacts_dir:
-   runtime/fetch-process-show/$SLUG/`.
+1. **Kick off `crystallize-artifact`** with `artifact=skill` and
+   `source_artifacts_dir: runtime/fetch-process-show/$SLUG/` in the task
+   frontmatter, reusing `$SLUG` as its `$NAME`.
 2. **Launch the lead-proxy poll** (`run_in_background: true`) for worker reports,
-   per `crystallize-task` Step 5 / `.agents/shared/references/lead-proxy.md`. Do
-   this *before* returning to the user. The poll does not block subsequent steps.
-   Without it, Gate 1 / Gate 2 reports never reach the user and the worker
+   per `crystallize-artifact` Step 5 / `.agents/shared/references/lead-proxy.md`.
+   Do this *before* returning to the user. The poll does not block subsequent
+   steps. Without it, Gate 1 / Gate 2 reports never reach the user and the worker
    deadlocks waiting for approval.
 3. **Begin surfaces.** The first surface renders the *confirmed sample data*
    directly -- you do not need to wait for the crystallized pipeline to exist,
@@ -234,7 +236,7 @@ requirements.
 
 ## Background crystallize gates
 
-The standard lead-proxy mechanics for `crystallize-task` apply -- nothing
+The standard lead-proxy mechanics for `crystallize-artifact` apply -- nothing
 special. By default Gate 1 outline-approval is answered by the lead unless the
 worker has a genuine process question, and Gate 2 final-artifact escalates to the
 user but is deferred until the user isn't actively working on something else.

@@ -340,17 +340,18 @@ is hidden).
 
 The foreground work stops at a usable, surfaced site. The thorough pass --
 extending Playwright coverage, the full test suite and ratchets, `/autofix`, and
-the code-guardian gates -- runs in a **background finalization worker**, never in
-the main agent. This is skeleton phase 7: **crystallization**
-(`.agents/shared/references/crystallize-artifact.md`), the variant where the
-artifact is the scaffolded service itself -- already on disk, so nothing needs
-reconstructing from the transcript.
+the code-guardian gates -- runs in a **background harden worker**, never in the
+main agent. This is skeleton phase 7: the harden pass
+(`.agents/shared/references/harden-artifact.md`), here the **crystallize**
+operation with the **service** artifact -- the scaffolded service is already on
+disk and the user confirmed it live, so nothing needs reconstructing and there
+are no worker gates.
 
 **The trigger is an explicit confirmation on the *working* site -- never your own
 sense that the code looks done.** Once the usable site is in front of the user,
-ask a plain "this generally looks good?" and spawn the worker only once they
-confirm by exercising the real behavior. (The mock confirmed the UX *shape*; this
-confirms the real *behavior* -- the point where deep changes actually surface, so
+ask a plain "this generally looks good?" and hand off only once they confirm by
+exercising the real behavior. (The mock confirmed the UX *shape*; this confirms
+the real *behavior* -- the point where deep changes actually surface, so
 finalizing earlier risks hardening an architecture the user is about to
 invalidate.)
 
@@ -358,7 +359,7 @@ Reading the confirmation signal:
 
 - If the user keeps asking for changes, each one is a **cheap foreground
   iteration that resets the clock** -- you have run no gates or thorough tests
-  yet, so pivots stay cheap. Do not spawn the worker until their response is a
+  yet, so pivots stay cheap. Do not hand off until their response is a
   confirmation rather than a change request.
 - If the user starts asking for surface-level (cosmetic) tweaks, or pivots to a
   slightly unrelated task or follow-up, treat that as a sign the core is settled:
@@ -367,31 +368,16 @@ Reading the confirmation signal:
 - Wait for an explicit confirmation rather than firing on a timeout or silence.
   The user is never blocked: they already hold the usable site.
 
-On confirmation, spawn the worker via the `launch-task` mechanics, with two
-specifics:
+On confirmation, **hand the confirmed service to the `crystallize-artifact`
+skill with `artifact=service`.** It owns the rest -- the tracking ticket, the
+task file (set `artifact: service`), launching the generic `harden-worker`,
+polling, merging on `done`, and refreshing the tab after merge. Give it only:
+the slug (the service name), and a task body naming the built lib path, the
+service name, the URL segment, and what the service does. The generic worker
+loads `harden-artifact.md` + `op-crystallize.md` + `artifact-service.md` and
+reports `done` once its testing contract and the review gates pass; there is no
+worker gate because the user already confirmed the live site.
 
-- **Launch with `--template subskill-worker`** (not the default `worker`). That
-  template installs the bundled `build-web-service-worker` sub-skill into the
-  worker's `.agents/skills/` tree.
-- **Keep the task brief short and point it at the sub-skill** -- you do not
-  restate how the worker tests or hardens anything; that lives in the sub-skill.
-  The brief needs only: which service was built (lib path, service name, the URL
-  segment), what it does, and the standing line *follow the
-  `build-web-service-worker` sub-skill for how to test, harden, verify, and what
-  not to touch; report `done` only when its testing contract and the review gates
-  all pass.*
-
-```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
-    --name finalize-<service-name> \
-    --template subskill-worker \
-    --runtime-dir runtime/launch-task/finalize-<service-name>/ \
-    --task-file runtime/launch-task/finalize-<service-name>/task.md
-```
-
-Then background-poll the report per `launch-task` (its Step 3-4 and
-`.agents/shared/references/lead-proxy.md`): on `done`, merge the worker's branch;
-on `stuck` or a dead-worker timeout, surface to the user -- do not retry silently.
 The confirmed mock plus the confirmed working site remain the single source of
 truth: if finalization changes the look-and-feel, re-confirm with the user before
 calling the work done.

@@ -1,9 +1,8 @@
 # When to crystallize
 
-You reached this file because the stop hook flagged a possible skill shape
-in the just-finished turn. Your job now is to decide whether to invoke
-`crystallize-task` -- and the **default is to ask the user**, not to
-decide silently.
+You are deciding whether the just-finished turn is worth crystallizing into a
+reusable skill via `crystallize-artifact` (artifact = skill) -- and the
+**default is to ask the user**, not to decide silently.
 
 ## The rule
 
@@ -58,8 +57,10 @@ step is deterministic.
 Before you decline, check whether your reasoning matches any of these:
 
 - **"This was one-off."** This turn may have involved one-off work (e.g. identifying data sources); that does not mean that the whole task was one-off. Consider the output that you generated - is it possible the user may want this output regenerated based on updated data or using different parameter values?
-- **"The data sources change too fast."** Fragility is manageable via `heal-skill` when the skill is
-  used often. You can flag to the user if you think this is a serious concern, but it shouldn't by itself be a reason not to crystallize.
+- **"The data sources change too fast."** Fragility is manageable via
+  `heal-artifact` when the skill is used often. You can flag to the user if you
+  think this is a serious concern, but it shouldn't by itself be a reason not to
+  crystallize.
 - **"The hard part was judgement."** Setup judgement (which sites, which
   filters, which approach) is often a one-time cost paid during the first
   run; the crystallized skill captures the *post-setup* process. Ongoing
