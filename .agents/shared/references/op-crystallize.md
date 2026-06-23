@@ -5,16 +5,18 @@ time and you are putting in the thorough pass that makes it real. Load this
 alongside `harden-artifact.md` (the universal contract) and your artifact
 reference (where it lives, how to test it, what not to touch).
 
-There are two shapes, and your **artifact reference tells you which applies**:
+There are two shapes, selected by which artifact you are crystallizing:
 
-- **Reconstruct** -- the artifact does not yet exist on disk; you build it from
-  the lead's transcript and/or a handed-off sample. This is the skill case.
-  Both the outline gate and the final gate apply.
-- **Pre-existing, confirmed-live** -- the artifact already exists on disk and the
-  user already signed off on its shape in the foreground (e.g. a scaffolded web
-  service the lead built and the user clicked around). Nothing is reconstructed
-  and there is no outline gate; the live confirmation stands in for the final
-  gate. Harden it and report `done`.
+| Artifact | Shape | Gates |
+|---|---|---|
+| skill | **Reconstruct** -- does not yet exist on disk; build it from the lead's transcript and/or a handed-off sample | outline gate (Stage 2) + final gate (Stage 6) |
+| service | **Pre-existing, confirmed-live** -- already on disk; the user signed off on its shape live | none -- the live confirmation stands in for the final gate |
+| system interface | n/a -- never crystallized (it already exists) | -- |
+
+- **Reconstruct** (skill): you build the artifact from scratch, so both the
+  outline gate and the final gate apply.
+- **Pre-existing, confirmed-live** (service): nothing is reconstructed and there
+  is no outline gate; harden it and report `done`.
 
 ## Valid report `name:` values
 
@@ -47,11 +49,12 @@ that out explicitly at the outline (Stage 2) and again at the final gate (Stage
 
 ## Stage 2: Propose an outline, then Gate 1 (reconstruct shape only)
 
-Produce a short outline. Your artifact reference defines the outline fields and
-the layout conventions (for a skill: name, description, inputs/outputs,
-step-by-step flow with each step tagged `[script]` / `[ai-script]` / `[prose]`,
-subcommand structure, and 2-3 scenarios you plan to hand-craft). Include any
-edge cases you foresaw but chose not to handle, and why.
+The reconstruct shape applies only to skills, so the outline is a skill outline:
+load `.agents/shared/references/skill-outline-fields.md` for its exact contents
+(name, description, inputs/outputs, the step-by-step flow with each step tagged
+`[script]` / `[ai-script]` / `[prose]`, subcommand structure, and the 2-3
+scenarios you plan to hand-craft). Include any edge cases you foresaw but chose
+not to handle, and why.
 
 Write a `type: gate`, `name: outline-approval` report whose body is the outline
 plus an explicit "Approve this outline? (yes / no with notes)" prompt. Push it
@@ -79,11 +82,20 @@ the user sees a single report that already reflects the verdicts.
 
 ## Stage 6: Final gate, then commit and hand off
 
-In the **reconstruct shape**, write a `type: gate`, `name: final-artifact`
-report (your artifact reference gives the body template -- a built-artifact
-summary, the scenarios run, and any shape changes from the sample) plus an
-"Approve and save? (yes / no with notes)" prompt. Push it and stop. On approval,
-commit on your branch and emit a `name: done` terminal report.
+In the **reconstruct shape** (skill), write a `type: gate`, `name: final-artifact`
+report with this body plus an "Approve and save? (yes / no with notes)" prompt:
+
+```
+<Built | Created> `<name>`:
+- SKILL.md: <one-line summary, or "unchanged">
+- Scripts: <one-line summary per script, or "none -- pure prose skill">
+- Scenarios run: <list, with pass/fail>
+- Shape changes from the sample: <none, or the output-schema / field / CLI /
+  exit-code deltas a consumer or surface would need to adapt to>
+```
+
+Push it and stop. On approval, commit on your branch and emit a `name: done`
+terminal report.
 
 In the **pre-existing/confirmed-live shape**, skip the final gate: commit and
 emit `name: done` once tests and gates pass. The user already confirmed the

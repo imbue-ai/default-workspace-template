@@ -36,15 +36,18 @@ Read all three, in this order:
    bar, isolation, reporting, testing/hardening, review gates,
    preserve-and-surface, give-up). Always.
 2. `.agents/shared/references/op-<OPERATION>.md` -- your operation's pre-work,
-   stages, and the exact gate / terminal-status `name:` values that apply.
-3. `.agents/shared/references/artifact-<ARTIFACT>.md` -- where the artifact
-   lives, how to run/test it in isolation, scenario specifics, the final-gate
-   body template, and the don't-touch list.
+   stages, the exact gate / terminal-status `name:` values that apply, and the
+   gate report body templates (keyed by artifact where they differ).
+3. `.agents/shared/references/artifact-<ARTIFACT>.md` -- what the artifact is:
+   where it lives, how to run/test it in isolation, scenario specifics, and how
+   to work on it safely.
 
-Then follow them. Where the operation reference and the artifact reference both
-speak to the same stage (e.g. the final gate), the operation reference owns the
-*shape* (which gates fire, in what order) and the artifact reference owns the
-*content* (the body template, the layout, the test mechanics).
+Then follow them. The operation reference is the lifecycle spine -- it owns the
+stages, which gates fire and in what order, and the report templates. The
+artifact reference is the operation-agnostic description of the thing you are
+hardening -- its layout, test mechanics, and isolation rules. Where the operation
+reference needs an artifact-specific value (a gate template's field list, the
+crystallize shape), it carries that itself, keyed by artifact.
 
 ## Step 3: Report back to the lead
 
