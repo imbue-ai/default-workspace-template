@@ -11,9 +11,11 @@ dependencies = [
 ]
 
 # Entry point is "browser-service", not "browser": browser-use ships its own
-# "browser" console script, which would otherwise shadow this one.
+# "browser" console script, which would otherwise shadow this one. The fleet CLI
+# (agentic-browser-fleet) is what agents call to drive the browsers.
 [project.scripts]
 browser-service = "browser.runner:main"
+agentic-browser-fleet = "browser.fleet:main"
 
 [build-system]
 requires = ["hatchling"]

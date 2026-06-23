@@ -1,21 +1,25 @@
-"""Integration tests for the browser session layer.
+"""Integration tests for the browser fleet.
 
-Two kinds:
+Three kinds:
 - A real headless-Chromium test of the steel-style path (spawn -> CDP screencast
   frames -> input dispatch -> open a 2nd tab -> active-tab follow). It skips when
   Chromium isn't installed (CI runners without the deferred-install), so it never
   fails for lack of a browser; it runs on a host/compute that has Chromium.
-- A browser-use-free test of the agent control state machine (submit -> agent
-  control, queue a second prompt while busy, take-control -> stop + human),
-  with Agent/ChatAnthropic mocked so it runs everywhere without an LLM or browser.
+- A browser-use-free test of the run-agent event stream + human take-control
+  preemption, with Agent/ChatAnthropic mocked so it runs everywhere.
+- HTTP-layer tests of the fleet endpoints (list / task stream / release / cap)
+  via FastAPI's TestClient, with run_agent stubbed (no LLM, no browser).
 """
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 from playwright.async_api import Error as PlaywrightError
 
+from browser import runner
 from browser import session as bsession
 
 
@@ -42,7 +46,7 @@ def test_live_browser_streams_and_accepts_input(monkeypatch: pytest.MonkeyPatch)
             pytest.skip(f"Chromium unavailable in this environment: {e}")
         try:
             cast = _FakeWS()
-            session.add_cast_socket(cast)
+            session.add_cast_socket(cast)  # type: ignore[arg-type]
             await session.handle_cast_message({"type": "navigate", "url": "https://example.com"})
             for _ in range(20):
                 await asyncio.sleep(0.5)
@@ -69,24 +73,42 @@ def test_live_browser_streams_and_accepts_input(monkeypatch: pytest.MonkeyPatch)
 
 
 class _FakeHistory:
-    def model_thoughts(self) -> list[str]:
-        return ["thinking about the task"]
+    def model_thoughts(self) -> list[Any]:
+        return [{"next_goal": "do the thing", "thinking": "reasoning"}]
 
-    def model_actions(self) -> list[str]:
-        return ["click(1)"]
+    def model_actions(self) -> list[Any]:
+        return [{"click": {"index": 1}}]
+
+    def final_result(self) -> str:
+        return "all done"
 
 
-class _FakeAgent:
-    """Stand-in for browser_use.Agent: run() loops until stop()."""
+class _FinishingAgent:
+    """browser_use.Agent stand-in whose run() steps once and returns."""
 
     def __init__(self, **_kwargs: Any) -> None:
-        self._stopped = False
         self.history = _FakeHistory()
 
-    async def run(self, on_step_end: Any = None) -> _FakeHistory:
+    async def run(self, on_step_end: Any = None, max_steps: int | None = None) -> _FakeHistory:
         if on_step_end is not None:
             await on_step_end(self)
-        for _ in range(500):
+        return self.history
+
+    def stop(self) -> None:
+        pass
+
+
+class _BlockingAgent:
+    """browser_use.Agent stand-in whose run() steps once then blocks until stopped/cancelled."""
+
+    def __init__(self, **_kwargs: Any) -> None:
+        self.history = _FakeHistory()
+        self._stopped = False
+
+    async def run(self, on_step_end: Any = None, max_steps: int | None = None) -> _FakeHistory:
+        if on_step_end is not None:
+            await on_step_end(self)
+        for _ in range(10000):
             if self._stopped:
                 break
             await asyncio.sleep(0.01)
@@ -96,46 +118,145 @@ class _FakeAgent:
         self._stopped = True
 
 
-def test_agent_control_state_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_agent_streams_thinking_and_action_then_done(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(bsession, "Agent", _FakeAgent)
+    monkeypatch.setattr(bsession, "Agent", _FinishingAgent)
     monkeypatch.setattr(bsession, "ChatAnthropic", lambda **_kwargs: object())
+    browser = bsession.LiveBrowser(browser_id=1)
+    browser._bu_session = object()  # type: ignore[assignment]
+    events: list[dict[str, Any]] = []
 
-    browser = bsession.LiveBrowser(session_id="t")
-    browser._bu_session = object()  # run_agent only passes this through to the (mocked) Agent
-    chat = _FakeWS()
-    browser.add_chat_socket(chat)
+    async def on_event(event: dict[str, Any]) -> None:
+        events.append(event)
 
     async def go() -> None:
-        await browser.submit("do something")
-        for _ in range(100):
+        await browser.run_agent("do something", on_event)
+        kinds = [e["type"] for e in events]
+        assert "thinking" in kinds and "action" in kinds
+        assert events[-1]["type"] == "done" and events[-1]["result"] == "all done"
+
+    asyncio.run(go())
+
+
+def test_human_take_control_preempts_a_running_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(bsession, "Agent", _BlockingAgent)
+    monkeypatch.setattr(bsession, "ChatAnthropic", lambda **_kwargs: object())
+    browser = bsession.LiveBrowser(browser_id=1)
+    browser._bu_session = object()  # type: ignore[assignment]
+    events: list[dict[str, Any]] = []
+
+    async def on_event(event: dict[str, Any]) -> None:
+        events.append(event)
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")
+        run = asyncio.create_task(browser.run_agent("do something", on_event))
+        for _ in range(200):
             await asyncio.sleep(0.01)
-            if browser.control_owner == "agent":
+            if browser._agent is not None:
                 break
-        assert browser.control_owner == "agent"
-        assert any(e.get("role") == "user" for e in chat.events)
-        assert any(e.get("type") == "chat" and e.get("role") in ("thinking", "action") for e in chat.events)
-
-        # A second prompt while the agent runs is queued, not started concurrently.
-        await browser.submit("next thing")
-        assert browser._queued_prompt == "next thing"
-        assert any(e.get("type") == "queued" and e.get("text") == "next thing" for e in chat.events)
-
-        # Take control: stop completely, drop the queue, hand control back (no resume).
-        await browser.take_control()
-        assert browser.control_owner == "human"
-        assert browser._agent is None
-        assert browser._queued_prompt is None
+        assert browser._agent is not None, "agent run never started"
+        await asyncio.wait_for(browser.take_control(), timeout=2.0)
+        try:
+            await run
+        except asyncio.CancelledError:
+            pass
+        assert any(e["type"] == "preempted" for e in events)
+        assert browser._state_tuple() == ("human", None, True)
 
     asyncio.run(go())
 
 
-def test_take_control_with_no_agent_is_safe() -> None:
-    browser = bsession.LiveBrowser(session_id="t2")
+# --- HTTP layer (TestClient; run_agent stubbed) ------------------------------
 
-    async def go() -> None:
-        await browser.take_control()  # no agent running -> just confirms human control
-        assert browser.control_owner == "human"
-        await browser._stop_active_agent()  # no agent -> no-op
 
-    asyncio.run(go())
+def _install_fake_browser(monkeypatch: pytest.MonkeyPatch, browser_id: int = 0) -> bsession.LiveBrowser:
+    runner.manager._browsers.clear()
+    fake = bsession.LiveBrowser(browser_id=browser_id)
+    fake._bu_session = object()  # type: ignore[assignment]
+    runner.manager._browsers[browser_id] = fake
+    return fake
+
+
+def _stream_events(text: str) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def test_http_task_streams_trace_and_releases(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_browser(monkeypatch)
+
+    async def fake_run_agent(self: bsession.LiveBrowser, prompt: str, on_event: Any) -> None:
+        await on_event({"type": "thinking", "text": "planning"})
+        await on_event({"type": "action", "text": "click"})
+        await on_event({"type": "done", "result": "ok"})
+
+    monkeypatch.setattr(bsession.LiveBrowser, "run_agent", fake_run_agent)
+    client = TestClient(runner.app)
+    resp = client.post(
+        "/browsers/0/task",
+        json={"prompt": "do it"},
+        headers={"X-Mngr-Agent-Id": "A", "X-Mngr-Agent-Name": "Alice"},
+    )
+    assert resp.status_code == 200
+    kinds = [e["type"] for e in _stream_events(resp.text)]
+    assert kinds[0] == "acquired"
+    assert "thinking" in kinds and "action" in kinds and "done" in kinds
+    # The connection is the lease: once the task finishes, the browser is released.
+    assert fake._state_tuple() == ("human", None, False)
+
+
+def test_http_task_without_agent_id_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_browser(monkeypatch)
+    client = TestClient(runner.app)
+    resp = client.post("/browsers/0/task", json={"prompt": "do it"})
+    assert resp.status_code == 400
+
+
+def test_http_task_on_human_pinned_browser_reports_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_browser(monkeypatch)
+
+    async def pin() -> None:
+        await fake.acquire("X", "X")
+        await fake.take_control()  # human now holds it (pinned)
+
+    asyncio.run(pin())
+    client = TestClient(runner.app)
+    resp = client.post(
+        "/browsers/0/task",
+        json={"prompt": "do it", "wait": False},
+        headers={"X-Mngr-Agent-Id": "A", "X-Mngr-Agent-Name": "Alice"},
+    )
+    kinds = [e["type"] for e in _stream_events(resp.text)]
+    assert kinds == ["busy_human"]
+
+
+def test_http_list_browsers_shows_fleet(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_browser(monkeypatch)
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    client = TestClient(runner.app)
+    resp = client.get("/browsers")
+    assert resp.status_code == 200
+    ids = [b["id"] for b in resp.json()["browsers"]]
+    assert 0 in ids
+
+
+def test_http_release_requires_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _install_fake_browser(monkeypatch)
+    asyncio.run(fake.acquire("owner", "Owner"))
+    client = TestClient(runner.app)
+    # A non-owner cannot free someone else's browser.
+    resp = client.post("/browsers/0/release", headers={"X-Mngr-Agent-Id": "intruder"})
+    assert resp.status_code == 200 and resp.json()["released"] is False
+    assert fake._state_tuple() == ("agent", "owner", False)
+    # The owner can.
+    resp = client.post("/browsers/0/release", headers={"X-Mngr-Agent-Id": "owner"})
+    assert resp.json()["released"] is True
+
+
+def test_http_new_browser_blocked_until_chromium_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
+    monkeypatch.setattr(bsession, "_PLAYWRIGHT_MARKER", bsession.Path("/nonexistent/marker"))
+    client = TestClient(runner.app)
+    resp = client.post("/browsers")
+    assert resp.status_code == 503

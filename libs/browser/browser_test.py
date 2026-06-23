@@ -1,9 +1,13 @@
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from browser import session as bsession
+
+
+# --- env / key helpers (unchanged) -------------------------------------------
 
 
 def test_parse_env_file_handles_quotes_and_comments() -> None:
@@ -42,7 +46,7 @@ def test_anthropic_key_status_reflects_availability(monkeypatch: pytest.MonkeyPa
 def test_deferred_install_ready_gates_on_marker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Only the Chromium marker gates now -- CDP streaming is headless, no Xvfb.
+    monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
     play = tmp_path / "done.playwright"
     monkeypatch.setattr(bsession, "_PLAYWRIGHT_MARKER", play)
     ready, _ = bsession.deferred_install_ready()
@@ -53,61 +57,219 @@ def test_deferred_install_ready_gates_on_marker(
     assert reason == "ready"
 
 
-def test_control_state_toggles_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    browser = bsession.LiveBrowser(session_id="t")
+# --- ownership state machine (no browser needed) -----------------------------
 
-    async def _exercise() -> None:
-        await browser._set_control("agent")
-        assert browser.control_owner == "agent"
+
+class _FakeCDP:
+    def __init__(self) -> None:
+        self.sends: list[tuple[str, Any]] = []
+
+    async def send(self, method: str, params: Any = None) -> dict[str, Any]:
+        self.sends.append((method, params))
+        return {}
+
+
+def test_acquire_release_is_compare_and_set() -> None:
+    browser = bsession.LiveBrowser(browser_id=1)
+
+    async def go() -> None:
+        assert await browser.acquire("A", "Alice") == "acquired"
+        assert browser._state_tuple() == ("agent", "A", False)
+        # A second agent can't grab it; with --no-wait it fails fast.
+        assert await browser.acquire("B", "Bob", wait=False) == "busy_agent"
+        # The same agent re-acquiring is idempotent.
+        assert await browser.acquire("A") == "acquired"
+        # Only the owner can release; a double / non-owner release is a safe no-op.
+        assert await browser.release("A") is True
+        assert browser._state_tuple() == ("human", None, False)
+        assert await browser.release("A") is False
+        assert await browser.release("B") is False
+
+    asyncio.run(go())
+
+
+def test_input_gating_follows_controller() -> None:
+    browser = bsession.LiveBrowser(browser_id=1)
+    cdp = _FakeCDP()
+    browser._active_cdp = cdp  # type: ignore[assignment]
+
+    async def go() -> None:
+        # Human (resting): a mouse event is dispatched to the browser.
+        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved"}})
+        assert any(m == "Input.dispatchMouseEvent" for m, _ in cdp.sends)
+        cdp.sends.clear()
+        # Agent in control: human input is dropped (the input/control TOCTOU guard).
+        await browser.acquire("A")
         assert not browser._input_enabled.is_set()
-        # While the agent drives, human input AND tab control are dropped (no raise).
         await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved"}})
         await browser.handle_cast_message({"type": "tab", "action": "new"})
-        await browser.handle_cast_message({"type": "navigate", "url": "https://example.com"})
-        await browser._set_control("human")
-        assert browser.control_owner == "human"
+        assert cdp.sends == []
+        # Released back to the human: input flows again.
+        await browser.release("A")
         assert browser._input_enabled.is_set()
+        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved"}})
+        assert any(m == "Input.dispatchMouseEvent" for m, _ in cdp.sends)
 
-    asyncio.run(_exercise())
+    asyncio.run(go())
 
 
-def test_create_rejects_when_at_session_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_take_control_preempts_pins_and_reclaim_resumes() -> None:
+    browser = bsession.LiveBrowser(browser_id=1)
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")
+        # Human take-control always wins: pinned human, input re-enabled.
+        assert await browser.take_control() is True
+        assert browser._state_tuple() == ("human", None, True)
+        assert browser._input_enabled.is_set()
+        # While pinned, agents are locked out -- even with wait they get busy_human.
+        assert await browser.acquire("B", "Bob", wait=False) == "busy_human"
+        assert await browser.acquire("B", "Bob", wait=True, max_wait=0.1) == "busy_human"
+        # Only an explicit reclaim (the human told the agent to resume) takes it back.
+        assert await browser.acquire("B", "Bob", reclaim=True) == "acquired"
+        assert browser._state_tuple() == ("agent", "B", False)
+
+    asyncio.run(go())
+
+
+def test_return_to_agents_only_unpins_a_pinned_human() -> None:
+    browser = bsession.LiveBrowser(browser_id=1)
+
+    async def go() -> None:
+        # No-op when an agent owns it (can't yank a browser from an agent this way).
+        await browser.acquire("A")
+        assert await browser.return_to_agents() is False
+        await browser.release("A")
+        # No-op when already a free human.
+        assert await browser.return_to_agents() is False
+        # Un-pins a human who took control.
+        await browser.acquire("A")
+        await browser.take_control()
+        assert await browser.return_to_agents() is True
+        assert browser._state_tuple() == ("human", None, False)
+
+    asyncio.run(go())
+
+
+def test_take_control_cancels_the_running_task_without_deadlock() -> None:
+    # The displaced run's finally re-enters the state machine; the cancel happens
+    # OUTSIDE the control lock, so there is no lock cycle (the audit's worst case).
+    browser = bsession.LiveBrowser(browser_id=1)
+
+    async def go() -> None:
+        await browser.acquire("A")
+        started = asyncio.Event()
+
+        async def fake_run() -> None:
+            browser._agent_task = asyncio.current_task()
+            try:
+                started.set()
+                await asyncio.sleep(100)
+            finally:
+                # Mirror run_agent's CAS-guarded finally: a no-op once the human took over.
+                await browser.release("A")
+
+        run = asyncio.create_task(fake_run())
+        await started.wait()
+        await asyncio.wait_for(browser.take_control(), timeout=2.0)  # must not hang
+        await asyncio.sleep(0.05)
+        assert run.cancelled()
+        assert browser._state_tuple() == ("human", None, True)
+
+    asyncio.run(go())
+
+
+def test_monitor_and_wait_hands_off_in_fifo_order() -> None:
+    browser = bsession.LiveBrowser(browser_id=2)
+    order: list[tuple[str, str]] = []
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")
+
+        async def waiter(name: str) -> None:
+            order.append((name, await browser.acquire(name, name, wait=True, max_wait=5)))
+
+        task_b = asyncio.create_task(waiter("B"))
+        await asyncio.sleep(0.05)
+        task_c = asyncio.create_task(waiter("C"))
+        await asyncio.sleep(0.05)
+        assert [w.agent_id for w in browser._wait_queue] == ["B", "C"]
+        await browser.release("A")  # hands to B (first in line)
+        await asyncio.sleep(0.05)
+        assert browser._state_tuple() == ("agent", "B", False)
+        await browser.release("B")  # hands to C
+        await task_b
+        await task_c
+        assert browser._state_tuple() == ("agent", "C", False)
+        assert order == [("B", "acquired"), ("C", "acquired")]
+
+    asyncio.run(go())
+
+
+def test_wait_times_out_and_dequeues() -> None:
+    browser = bsession.LiveBrowser(browser_id=3)
+
+    async def go() -> None:
+        await browser.acquire("A")
+        assert await browser.acquire("Z", "Z", wait=True, max_wait=0.2) == "timed_out"
+        assert browser._wait_queue == []  # a timed-out waiter removes itself
+
+    asyncio.run(go())
+
+
+def test_take_control_evicts_waiters() -> None:
+    browser = bsession.LiveBrowser(browser_id=4)
+
+    async def go() -> None:
+        await browser.acquire("A")
+
+        async def waiter() -> str:
+            return await browser.acquire("W", "W", wait=True, max_wait=5)
+
+        task = asyncio.create_task(waiter())
+        await asyncio.sleep(0.05)
+        await browser.take_control()  # preempt + pin -> waiters are evicted
+        assert await task == "busy_human"
+        assert browser._wait_queue == []
+
+    asyncio.run(go())
+
+
+# --- manager: ids + cap ------------------------------------------------------
+
+
+def test_create_rejects_when_fleet_full(monkeypatch: pytest.MonkeyPatch) -> None:
     # The cap must reject before launching Chromium, so a small compute can't be OOM-ed.
     monkeypatch.setattr(bsession, "_MAX_SESSIONS", 2)
     mgr = bsession.BrowserSessionManager()
-    mgr._sessions["a"] = object()  # type: ignore[assignment]
-    mgr._sessions["b"] = object()  # type: ignore[assignment]
+    mgr._browsers[1] = object()  # type: ignore[assignment]
+    mgr._browsers[2] = object()  # type: ignore[assignment]
 
-    async def _exercise() -> None:
-        with pytest.raises(bsession.BrowserStartupError, match="Too many open browsers"):
+    async def go() -> None:
+        with pytest.raises(bsession.FleetFullError, match="Too many open browsers"):
             await mgr.create()
 
-    asyncio.run(_exercise())
+    asyncio.run(go())
 
 
-def test_submit_queues_while_agent_running() -> None:
-    # With an agent already set, submit() must queue (not start a second run) and
-    # surface a "queued" event; cancel_queue clears it.
-    browser = bsession.LiveBrowser(session_id="q")
-    browser._run_active = True  # pretend a run is in progress
+def test_ids_are_monotonic_and_never_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Stub the Chromium launch so we exercise pure id-allocation logic.
+    async def fake_start(self: bsession.LiveBrowser, _playwright: Any) -> None:
+        return None
 
-    class _Chat:
-        def __init__(self) -> None:
-            self.events: list[dict] = []
+    monkeypatch.setattr(bsession.LiveBrowser, "start", fake_start)
+    mgr = bsession.BrowserSessionManager()
+    mgr._playwright = object()  # type: ignore[assignment]  # skip async_playwright().start()
 
-        async def send_json(self, obj: dict) -> None:
-            self.events.append(obj)
+    async def go() -> None:
+        assert (await mgr.ensure_browser_0()).browser_id == 0
+        assert (await mgr.ensure_browser_0()).browser_id == 0  # idempotent
+        assert (await mgr.create()).browser_id == 1
+        assert (await mgr.create()).browser_id == 2
+        await mgr.close(1)
+        # id 1 is gone for good -- the next create gets 3, and `task 1` would 404.
+        assert (await mgr.create()).browser_id == 3
+        with pytest.raises(KeyError):
+            mgr.get(1)
 
-    chat = _Chat()
-    browser.add_chat_socket(chat)  # type: ignore[arg-type]
-
-    async def _exercise() -> None:
-        await browser.submit("second task")
-        assert browser._queued_prompt == "second task"
-        assert any(e.get("type") == "queued" and e.get("text") == "second task" for e in chat.events)
-        await browser.cancel_queue()
-        assert browser._queued_prompt is None
-        assert chat.events[-1] == {"type": "queued", "text": None}
-
-    asyncio.run(_exercise())
+    asyncio.run(go())

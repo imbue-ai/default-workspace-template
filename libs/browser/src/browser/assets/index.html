@@ -8,9 +8,7 @@
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; background: #1e1e1e; color: #ddd; }
-  #app { display: flex; height: 100vh; }
-  #left { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  #right { width: 360px; border-left: 1px solid #333; display: flex; flex-direction: column; }
+  #app { display: flex; flex-direction: column; height: 100vh; min-width: 0; }
 
   #tabbar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: #252525; border-bottom: 1px solid #333; overflow-x: auto; }
   .tab { padding: 4px 8px; background: #333; border-radius: 4px 4px 0 0; font-size: 12px; white-space: nowrap; cursor: pointer; max-width: 180px; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 6px; align-items: center; }
@@ -24,58 +22,41 @@
   #url { flex: 1; padding: 5px 8px; background: #1e1e1e; border: 1px solid #444; color: #ddd; border-radius: 4px; }
   #url:disabled { opacity: .5; }
 
+  /* A small persistent bar shown only when the human has explicitly taken
+     control (human_pinned), so handing back to the agents is always discoverable. */
+  #returnbar { display: none; align-items: center; gap: 10px; padding: 6px 10px; background: #2a2a2a; border-bottom: 1px solid #333; font-size: 12px; color: #4ec9b0; }
+  #returnbar.show { display: flex; }
+  #returnbtn { padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+
   #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
   #screen { max-width: 100%; max-height: 100%; cursor: default; }
-  #placeholder { position: absolute; color: #777; font-size: 13px; }
-
-  #status { padding: 12px; border-bottom: 1px solid #333; background: #252525; }
-  #status .owner { font-weight: 600; margin-bottom: 8px; }
-  #status .owner.agent { color: #e2b340; }
-  #status .owner.human { color: #4ec9b0; }
-  #takecontrol { display: none; padding: 6px 12px; background: #b5462b; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
   #screen:focus { outline: none; }
+  #placeholder { position: absolute; color: #777; font-size: 13px; text-align: center; padding: 0 20px; }
 
-  #chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  #log { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-  .msg { padding: 7px 9px; border-radius: 8px; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
-  .msg.user { background: #0e639c; align-self: flex-end; max-width: 90%; }
-  .msg.assistant { background: #333; align-self: flex-start; max-width: 90%; }
-  .msg.step { background: #2a2a2a; color: #aaa; font-size: 12px; align-self: flex-start; max-width: 95%; }
-  .msg.error { background: #5a1d1d; color: #f0b0b0; align-self: flex-start; max-width: 95%; }
-  .trace { align-self: flex-start; max-width: 95%; background: #2a2a2a; border-radius: 8px; padding: 4px 9px; font-size: 12px; color: #9aa6a6; }
-  .trace summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .trace.action summary { color: #8fbf8f; }
-  .trace pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0 2px; color: #cccccc; }
-  #queued { display: none; margin: 0 8px 8px; padding: 6px 9px; background: #3a3320; border: 1px solid #5a4d20; border-radius: 6px; font-size: 12px; color: #e2c98a; }
-  #queued .cancel { float: right; cursor: pointer; opacity: .7; }
-  #queued .cancel:hover { opacity: 1; }
-  #composer { display: flex; gap: 6px; padding: 8px; border-top: 1px solid #333; }
-  #prompt { flex: 1; resize: none; height: 40px; padding: 8px; background: #1e1e1e; border: 1px solid #444; color: #ddd; border-radius: 6px; font-family: inherit; }
-  #send { padding: 0 14px; background: #0e639c; border: none; color: #fff; border-radius: 6px; cursor: pointer; }
+  /* Full-stage grey overlay shown while an agent has control. It sits above the
+     canvas and swallows pointer events, so the human cannot click through to the
+     live page (the server also drops input, but this blocks it locally too). */
+  #overlay { display: none; position: absolute; inset: 0; z-index: 10; background: rgba(30, 30, 30, 0.72); flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 20px; }
+  #overlay.show { display: flex; }
+  #overlay .msg { font-size: 15px; color: #e2b340; font-weight: 600; max-width: 80%; word-break: break-word; }
+  #takecontrol { padding: 8px 16px; background: #b5462b; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  #takecontrol:disabled { opacity: .6; cursor: default; }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="left">
-    <div id="tabbar"><button id="newtab" title="New tab">+</button></div>
-    <div id="navbar"><input id="url" placeholder="Enter URL and press Enter" /></div>
-    <div id="stage">
-      <canvas id="screen" tabindex="0"></canvas>
-      <div id="placeholder">Starting browser…</div>
-    </div>
+  <div id="tabbar"><button id="newtab" title="New tab">+</button></div>
+  <div id="navbar"><input id="url" placeholder="Enter URL and press Enter" /></div>
+  <div id="returnbar">
+    <span>You have control.</span>
+    <button id="returnbtn">Return to agents</button>
   </div>
-  <div id="right">
-    <div id="status">
-      <div class="owner human" id="owner">You have control</div>
-      <button id="takecontrol">Interrupt &amp; take control</button>
-    </div>
-    <div id="chat">
-      <div id="log"></div>
-      <div id="queued"></div>
-      <div id="composer">
-        <textarea id="prompt" placeholder="Ask the agent to do something…"></textarea>
-        <button id="send">Send</button>
-      </div>
+  <div id="stage">
+    <canvas id="screen" tabindex="0"></canvas>
+    <div id="placeholder">Starting browser…</div>
+    <div id="overlay">
+      <div class="msg" id="overlaymsg">An agent has control.</div>
+      <button id="takecontrol">Take control</button>
     </div>
   </div>
 </div>
@@ -85,86 +66,54 @@
   const canvas = document.getElementById("screen");
   const ctx = canvas.getContext("2d");
   const placeholder = document.getElementById("placeholder");
-  const ownerEl = document.getElementById("owner");
-  const takeControlBtn = document.getElementById("takecontrol");
-  const queuedEl = document.getElementById("queued");
   const tabbar = document.getElementById("tabbar");
   const newtabBtn = document.getElementById("newtab");
   const urlInput = document.getElementById("url");
-  const log = document.getElementById("log");
-  const promptEl = document.getElementById("prompt");
-  const sendBtn = document.getElementById("send");
+  const overlay = document.getElementById("overlay");
+  const overlayMsg = document.getElementById("overlaymsg");
+  const takeControlBtn = document.getElementById("takecontrol");
+  const returnBar = document.getElementById("returnbar");
+  const returnBtn = document.getElementById("returnbtn");
 
-  let control = "human";
+  // Latest control state from the server's {type:"control"} broadcast. The
+  // human can only drive the page while owner === "human".
+  let controlOwner = "human";
   let castWs = null;
-  let chatWs = null;
   let hasFrame = false;
   let lastMove = 0;
-  let sessionId = null;
+  let browserId = null;
   let reconnectTimer = null;
+  let closedForGood = false;  // set on a 1008 close: the browser is gone, stop reconnecting.
 
-  function rel(path) { return new URL(path, document.baseURI).toString(); }
   function wsUrl(path) {
     const u = new URL(path, document.baseURI);
     u.protocol = (u.protocol === "https:") ? "wss:" : "ws:";
     return u.toString();
   }
 
-  function addMsg(role, text, detail) {
-    if (role === "thinking" || role === "action") {
-      const d = document.createElement("details");
-      d.className = "trace " + role;
-      const s = document.createElement("summary");
-      s.textContent = (role === "thinking" ? "Thinking — " : "Action — ") + (text || "");
-      d.appendChild(s);
-      if (detail) { const pre = document.createElement("pre"); pre.textContent = detail; d.appendChild(pre); }
-      log.appendChild(d);
-    } else {
-      const div = document.createElement("div");
-      div.className = "msg " + role;
-      div.textContent = text;
-      log.appendChild(div);
-    }
-    log.scrollTop = log.scrollHeight;
-  }
+  // Drive the overlay / return-bar / input lock from the latest control message.
+  // owner == "agent":                      grey overlay + "Take control".
+  // owner == "human" && human_pinned:      no overlay, persistent "Return to agents" bar.
+  // owner == "human" && !human_pinned:     resting state, fully interactive, no chrome.
+  function setControl(state) {
+    controlOwner = state.owner;
+    const agentDriving = state.owner === "agent";
+    const humanPinned = state.owner === "human" && !!state.human_pinned;
 
-  function setControl(owner) {
-    control = owner;
-    // While the agent drives, lock human tab/URL/canvas changes; the composer
-    // queues (Send -> Queue) instead of starting a second concurrent run.
-    const agentDriving = owner === "agent";
     tabbar.style.opacity = agentDriving ? "0.5" : "1";
     tabbar.style.pointerEvents = agentDriving ? "none" : "auto";
     urlInput.disabled = agentDriving;
     newtabBtn.disabled = agentDriving;
-    sendBtn.textContent = agentDriving ? "Queue" : "Send";
-    if (agentDriving) {
-      ownerEl.textContent = "Agent has control";
-      ownerEl.className = "owner agent";
-      takeControlBtn.style.display = "inline-block";
-    } else {
-      ownerEl.textContent = "You have control";
-      ownerEl.className = "owner human";
-      takeControlBtn.style.display = "none";
-    }
-  }
 
-  function setQueued(text) {
-    if (text) {
-      queuedEl.innerHTML = "";
-      const span = document.createElement("span");
-      span.textContent = "Queued: " + text;
-      const cancel = document.createElement("span");
-      cancel.className = "cancel";
-      cancel.textContent = "✕ cancel";
-      cancel.onclick = () => sendChat({ action: "cancel_queue" });
-      queuedEl.appendChild(span);
-      queuedEl.appendChild(cancel);
-      queuedEl.style.display = "block";
+    if (agentDriving) {
+      const who = state.owner_name || state.owner_agent_id || "an agent";
+      overlayMsg.textContent = "Agent has control: " + who;
+      overlay.classList.add("show");
+      takeControlBtn.disabled = false;
     } else {
-      queuedEl.style.display = "none";
-      queuedEl.innerHTML = "";
+      overlay.classList.remove("show");
     }
+    returnBar.classList.toggle("show", humanPinned);
   }
 
   function showLoading(msg) {
@@ -209,7 +158,6 @@
   }
 
   function sendCast(obj) { if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify(obj)); }
-  function sendChat(obj) { if (chatWs && chatWs.readyState === 1) chatWs.send(JSON.stringify(obj)); }
 
   // --- coordinate scaling: canvas CSS px -> frame device px ---
   function scaled(e) {
@@ -224,7 +172,7 @@
   const BUTTONS = ["left", "middle", "right"];
 
   function mouse(type, e) {
-    if (control === "agent" || !hasFrame) return;
+    if (controlOwner === "agent" || !hasFrame) return;
     if (type === "mouseMoved") {
       const now = performance.now();
       if (now - lastMove < 30) return;  // throttle moves so they don't starve the frame stream
@@ -244,14 +192,14 @@
   canvas.addEventListener("mousemove", (e) => mouse("mouseMoved", e));
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas.addEventListener("wheel", (e) => {
-    if (control === "agent" || !hasFrame) return;
+    if (controlOwner === "agent" || !hasFrame) return;
     e.preventDefault();
     const p = scaled(e);
     sendCast({ type: "mouse", event: { type: "mouseWheel", x: p.x, y: p.y, button: "none", deltaX: e.deltaX, deltaY: e.deltaY, modifiers: modifiers(e) } });
   }, { passive: false });
 
   function key(type, e) {
-    if (control === "agent" || !hasFrame) return;
+    if (controlOwner === "agent" || !hasFrame) return;
     e.preventDefault();
     const isChar = type === "keyDown" && e.key.length === 1;
     sendCast({ type: "key", event: {
@@ -261,8 +209,8 @@
     }});
   }
   // Listen on the canvas (focused by a click), so host/browser shortcuts still
-  // work when the browser pane isn't focused, and typing in the chat/URL inputs
-  // is unaffected.
+  // work when the browser pane isn't focused, and typing in the URL input is
+  // unaffected.
   canvas.addEventListener("keydown", (e) => key("keyDown", e));
   canvas.addEventListener("keyup", (e) => key("keyUp", e));
 
@@ -275,74 +223,59 @@
       if (u) { showLoading(); sendCast({ type: "navigate", url: u }); }
     }
   });
-  takeControlBtn.onclick = () => sendChat({ action: "stop" });
-  function submitPrompt() {
-    const text = promptEl.value.trim();
-    if (!text) return;
-    sendChat({ prompt: text });  // server runs it now, or queues it if the agent is busy
-    promptEl.value = "";
-  }
-  sendBtn.onclick = submitPrompt;
-  promptEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitPrompt(); }
-  });
+  // Take control: optimistically hide the overlay so a laggy round-trip can't
+  // invite a double-click; the authoritative {type:"control"} broadcast reconciles.
+  takeControlBtn.onclick = () => {
+    takeControlBtn.disabled = true;
+    overlay.classList.remove("show");
+    sendCast({ type: "take_control" });
+  };
+  returnBtn.onclick = () => { returnBar.classList.remove("show"); sendCast({ type: "return_to_agents" }); };
 
   // --- connect ---
   function connect(id) {
-    sessionId = id;
-    castWs = new WebSocket(wsUrl("sessions/" + id + "/cast"));
+    browserId = id;
+    castWs = new WebSocket(wsUrl("browsers/" + id + "/cast"));
     castWs.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.type === "frame") drawFrame(m.data);
-      else if (m.type === "control") setControl(m.owner);
+      else if (m.type === "control") setControl(m);
       else if (m.type === "tabs") renderTabs(m.tabs);
       // m.type === "ping" -> ignore; it only keeps the proxy stream alive.
     };
-    castWs.onclose = () => {
+    castWs.onclose = (ev) => {
       hasFrame = false;
+      // 1008: the browser/session no longer exists (daemon restarted or closed).
+      // Terminal state -- show a clear message and stop reconnecting.
+      if (ev.code === 1008) {
+        closedForGood = true;
+        overlay.classList.remove("show");
+        returnBar.classList.remove("show");
+        showLoading("Browser closed — reopen it from the + menu.");
+        return;
+      }
       placeholder.style.display = "block";
       placeholder.textContent = "Reconnecting…";
       scheduleReconnect();
     };
     castWs.onerror = () => { try { castWs.close(); } catch (_) {} };
-    chatWs = new WebSocket(wsUrl("sessions/" + id + "/chat"));
-    chatWs.onmessage = (ev) => {
-      let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
-      if (m.type === "chat") addMsg(m.role, m.text, m.detail);
-      else if (m.type === "control") setControl(m.owner);
-      else if (m.type === "error") addMsg("error", m.text);
-      else if (m.type === "queued") setQueued(m.text);
-    };
   }
 
   function scheduleReconnect() {
-    if (reconnectTimer || !sessionId) return;
-    // Reconnect both sockets to the SAME session (the server keeps it alive).
+    if (reconnectTimer || browserId === null || closedForGood) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      try { if (chatWs) chatWs.close(); } catch (_) {}
-      connect(sessionId);
+      connect(browserId);
     }, 1000);
   }
 
-  async function boot() {
+  function boot() {
+    // Which browser to show comes from the URL (?session=<id>); default to the
+    // permanent browser 0, which the server lazily (re)creates on connect.
     const params = new URLSearchParams(location.search);
-    let id = params.get("session");
-    if (!id) {
-      const resp = await fetch(rel("sessions"), { method: "POST" });
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        placeholder.textContent = body.error || ("Could not start browser (HTTP " + resp.status + ")");
-        return;
-      }
-      const data = await resp.json();
-      id = data.id;
-      params.set("session", id);
-      history.replaceState(null, "", location.pathname + "?" + params.toString());
-      if (!data.key_available) addMsg("error", "No Anthropic API key found — the chat agent is disabled, but you can drive the browser yourself.");
-    }
+    const raw = params.get("session");
+    const id = (raw !== null && /^\d+$/.test(raw)) ? parseInt(raw, 10) : 0;
     connect(id);
-    window.addEventListener("beforeunload", () => { fetch(rel("sessions/" + id), { method: "DELETE", keepalive: true }); });
   }
   boot();
 })();
