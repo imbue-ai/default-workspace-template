@@ -68,7 +68,7 @@ specifics, but the shape below holds for all of them.
    behind them. Notably, this means that at the time of backgrounding there must
    be a reasonably representative sample artifact; it can't just be a basic mock.
    This background pass is the **harden pass** -- its universal contract lives in
-   `.agents/shared/references/harden-artifact.md`, and the create operation that
+   `.agents/shared/worker/references/harden-artifact.md`, and the create operation that
    produces a brand-new artifact from a confirmed prototype is the
    `crystallize-artifact` lead. Each specialization (`build-web-service`,
    `fetch-process-show`, ...) hands its confirmed artifact to that lead, which

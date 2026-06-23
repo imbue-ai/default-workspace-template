@@ -30,4 +30,4 @@ The outline contains:
 
 When the outline is for a change to an existing skill, it also states the
 decision -- update-in-place of `<existing-name>`, or a new sibling named
-`<new-name>` -- per `.agents/shared/references/update-vs-create-new.md`.
+`<new-name>` -- per `.agents/shared/worker/references/update-vs-create-new.md`.

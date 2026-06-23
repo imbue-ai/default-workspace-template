@@ -32,13 +32,13 @@ loudly if `OPERATION` or `ARTIFACT` is unset -- the lead must supply both.
 
 Read all three, in this order:
 
-1. `.agents/shared/references/harden-artifact.md` -- the universal contract (the
+1. `.agents/shared/worker/references/harden-artifact.md` -- the universal contract (the
    bar, isolation, reporting, testing/hardening, review gates,
    preserve-and-surface, give-up). Always.
-2. `.agents/shared/references/op-<OPERATION>.md` -- your operation's pre-work,
+2. `.agents/shared/worker/references/op-<OPERATION>.md` -- your operation's pre-work,
    stages, the exact gate / terminal-status `name:` values that apply, and the
    gate report body templates (keyed by artifact where they differ).
-3. `.agents/shared/references/artifact-<ARTIFACT>.md` -- what the artifact is:
+3. `.agents/shared/worker/references/artifact-<ARTIFACT>.md` -- what the artifact is:
    where it lives, how to run/test it in isolation, scenario specifics, and how
    to work on it safely.
 

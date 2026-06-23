@@ -336,7 +336,7 @@ The upstream is defined in `parent.toml`.
   by `do-something-new`'s routes (`fetch-process-show` for data,
   `build-web-service` for web views); the turn-end **harden pass** follows
   the universal contract
-  (`.agents/shared/references/harden-artifact.md`), driven by three generic
+  (`.agents/shared/worker/references/harden-artifact.md`), driven by three generic
   operation leads -- `crystallize-artifact` (create), `update-artifact`
   (change), `heal-artifact` (fix) -- each parameterized by the artifact
   (skill / service / system-interface). A single generic `harden-worker`

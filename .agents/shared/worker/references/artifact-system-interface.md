@@ -3,7 +3,7 @@
 `apps/system_interface` -- the live web workspace UI (dockview shell, chat
 panels, progress view) and its Flask backend. This reference describes what the
 system interface *is*; for how to run and test a web frontend in isolation, see
-`.agents/shared/references/web-frontend-testing.md`.
+`.agents/shared/worker/references/web-frontend-testing.md`.
 
 It is what the user is looking at *right now*, so you always work against an
 **isolated instance** -- nothing you do reaches the live UI directly.

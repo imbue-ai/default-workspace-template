@@ -13,6 +13,12 @@ set -euo pipefail
 # every subskill-worker installs exactly this one worker -- it reads the
 # operation + artifact from its task file and composes the matching references.
 #
+# The worker's references live at .agents/shared/worker/references/ and the
+# worker reads them from there (its checkout has the full repo). We deliberately
+# do NOT bundle that references/ subdir into the installed skill -- it would be a
+# never-read duplicate of the repo copy. Only the SKILL.md needs to land in the
+# .agents/skills/ tree for the skill to be loadable.
+#
 # Usage:
 #   install_worker_skills.sh <destination-directory>
 #
@@ -38,5 +44,8 @@ mkdir -p "$destination"
 dest_name="harden-worker"
 rm -rf "${destination:?}/$dest_name"
 cp -R "$worker_source" "$destination/$dest_name"
+# The references are read from the repo, not the installed skill -- drop the
+# bundled copy so there is a single source of truth.
+rm -rf "$destination/$dest_name/references"
 
 echo "installed harden-worker into $destination"

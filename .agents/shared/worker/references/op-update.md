@@ -55,18 +55,18 @@ artifacts.
 1. Read the task file: the `## Incident summary` and the `## Anchors` verbatim
    quotes are your primary guide.
 2. Locate the incident and the manual follow-up in the lead's transcript --
-   follow `.agents/shared/references/transcript-exploration.md`.
+   follow `.agents/shared/worker/references/transcript-exploration.md`.
 3. Read the artifact's current state on disk per your artifact reference.
 
 ### Stage 2: Design and Gate 1
 
 For a **skill** artifact, first decide update-in-place vs. split-a-new-sibling
-per `.agents/shared/references/update-vs-create-new.md` (default to in-place;
+per `.agents/shared/worker/references/update-vs-create-new.md` (default to in-place;
 only split when the gap has a concrete standalone use case). Other artifacts
 update in place.
 
 Propose an outline. For a **skill**, load
-`.agents/shared/references/skill-outline-fields.md` for the outline contents and
+`.agents/shared/worker/references/skill-outline-fields.md` for the outline contents and
 add the update decision (update-in-place vs. new sibling). For a **service**, the
 outline is the decision, what changes, and the routes/scenarios affected. Write a
 `type: gate`, `name: outline-approval` report with the outline plus "Approve this

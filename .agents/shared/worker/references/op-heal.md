@@ -32,7 +32,7 @@ Fixed the system interface on branch `<branch>`. Ready to preview.
 1. Read the task file: the `## Incident summary` and the `## Anchors` verbatim
    quotes are your primary guide.
 2. Locate the incident in the lead's transcript -- follow
-   `.agents/shared/references/transcript-exploration.md`.
+   `.agents/shared/worker/references/transcript-exploration.md`.
 3. Read the artifact's current state on disk per your artifact reference.
 4. Reproduce the failure. If it depends on external state you cannot recreate,
    construct a minimal synthetic input that exercises the same code path (or,

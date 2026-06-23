@@ -342,7 +342,7 @@ The foreground work stops at a usable, surfaced site. The thorough pass --
 extending Playwright coverage, the full test suite and ratchets, `/autofix`, and
 the code-guardian gates -- runs in a **background harden worker**, never in the
 main agent. This is skeleton phase 7: the harden pass
-(`.agents/shared/references/harden-artifact.md`), here the **crystallize**
+(`.agents/shared/worker/references/harden-artifact.md`), here the **crystallize**
 operation with the **service** artifact -- the scaffolded service is already on
 disk and the user confirmed it live, so nothing needs reconstructing and there
 are no worker gates.

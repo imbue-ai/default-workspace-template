@@ -4,7 +4,7 @@ A web service -- a scaffolded Flask lib under `libs/<package>/`, registered in
 `supervisord.conf`, reachable at `/service/<name>/` through the system_interface
 proxy. This reference describes what a service *is*; for how to run and test a web
 frontend in isolation, see
-`.agents/shared/references/web-frontend-testing.md`.
+`.agents/shared/worker/references/web-frontend-testing.md`.
 
 ## Where the source lives
 
