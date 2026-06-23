@@ -15,8 +15,17 @@ exists; you are not redesigning it, just repairing it.
 
 **System-interface exception.** When the artifact is the system interface, emit
 **no `final-artifact` gate**: user approval happens through the lead's pre-merge
-live preview, not a worker gate. Run Stages 1-5 as written, then report `done`
-per `artifact-system-interface.md` once the fix is implemented and verified.
+live preview, not a worker gate. Run Stages 1-5 as written, then -- once the fix
+is implemented and verified per `artifact-system-interface.md` -- report `done`
+with a body that summarizes the work so the lead can frame the preview:
+
+```
+Fixed the system interface on branch `<branch>`. Ready to preview.
+- Change: <one-sentence (root cause + fix)>
+- Frontend / backend: <which, and the files touched>
+- Tests run: <backend pytest / frontend lint+test / Playwright -- all pass>
+- Screenshots reviewed: <pages/states you eyeballed>
+```
 
 ## Stage 1: Replicate
 
@@ -59,10 +68,29 @@ Run `/autofix` and the other gates per `harden-artifact.md`; fix what they flag.
 
 ## Stage 6: Final gate, then commit and hand off
 
-Write a `type: gate`, `name: final-artifact` report (your artifact reference
-gives the body template -- root cause, change, scenarios run) plus "Approve the
-fix? (yes / no with notes)". Push it and stop. On approval, commit on your
-branch and emit a `name: done` terminal report.
+Write a `type: gate`, `name: final-artifact` report plus "Approve the fix? (yes /
+no with notes)", with the body keyed to your artifact:
+
+**Skill:**
+
+```
+Fixed `<name>`:
+- Root cause: <one-sentence>
+- Change: <one-sentence>
+- Scenarios run: <list, all pass>
+```
+
+**Service:**
+
+```
+Fixed service `<name>`:
+- Change: <one-sentence (root cause + fix)>
+- Routes affected: <list>
+- Scenarios / tests run: <list, all pass>
+```
+
+Push it and stop. On approval, commit on your branch and emit a `name: done`
+terminal report.
 
 ## If you cannot fix it
 

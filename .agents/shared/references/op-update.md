@@ -33,7 +33,18 @@ absent or unrecognized.
 is no `## Change origin` toggle and **no gate report at all**: the change is
 handed to you as a plain brief, and user approval happens through the lead's
 pre-merge live preview, not a worker gate. Implement the brief, verify it per
-`artifact-system-interface.md`, and report `done` (or `question` / `stuck`).
+`artifact-system-interface.md`, then report `done` (or a mid-flight `question`,
+or `stuck`) with a body that summarizes the work so the lead can frame the
+preview:
+
+```
+Updated the system interface on branch `<branch>`. Ready to preview.
+- Change: <one-sentence>
+- Frontend / backend: <which, and the files touched>
+- Tests run: <backend pytest / frontend lint+test / Playwright -- all pass>
+- Screenshots reviewed: <pages/states you eyeballed>
+```
+
 The committed/emergent paths and gates below apply only to skill and service
 artifacts.
 
@@ -54,10 +65,13 @@ per `.agents/shared/references/update-vs-create-new.md` (default to in-place;
 only split when the gap has a concrete standalone use case). Other artifacts
 update in place.
 
-Propose an outline (the decision, what changes, and -- per your artifact
-reference -- the flow/scenarios). Write a `type: gate`, `name: outline-approval`
-report with the outline plus "Approve this outline? (yes / no with notes)". Push
-it and stop. Wait for an explicit yes before coding.
+Propose an outline. For a **skill**, load
+`.agents/shared/references/skill-outline-fields.md` for the outline contents and
+add the update decision (update-in-place vs. new sibling). For a **service**, the
+outline is the decision, what changes, and the routes/scenarios affected. Write a
+`type: gate`, `name: outline-approval` report with the outline plus "Approve this
+outline? (yes / no with notes)". Push it and stop. Wait for an explicit yes
+before coding.
 
 ### Stage 3: Implement
 
@@ -103,11 +117,32 @@ path, any fixes become follow-up commits on your branch.
 
 ### Final gate, then hand off
 
-Write a `type: gate`, `name: final-artifact` report (your artifact reference
-gives the body template) plus "Approve and save? (yes / no with notes)". Push it
-and stop. On approval, emit a `name: done` terminal report. In the committed
-path a clean verification may produce no new worker commits -- that is fine; the
-merge still brings the live commit forward.
+Write a `type: gate`, `name: final-artifact` report plus "Approve and save? (yes
+/ no with notes)", with the body keyed to your artifact:
+
+**Skill:**
+
+```
+<Updated | Created> `<name>`:
+- SKILL.md: <one-line summary, or "unchanged">
+- Scripts: <one-line summary per script, or "none -- pure prose skill">
+- Scenarios run: <list, with pass/fail>
+- Shape changes: <none, or the output-schema / field / CLI / exit-code deltas a
+  consumer or surface would need to adapt to>
+```
+
+**Service:**
+
+```
+Updated service `<name>`:
+- Change: <one-sentence>
+- Routes affected: <list>
+- Scenarios / tests run: <list, all pass>
+```
+
+Push it and stop. On approval, emit a `name: done` terminal report. In the
+committed path a clean verification may produce no new worker commits -- that is
+fine; the merge still brings the live commit forward.
 
 ## If no change is needed
 
