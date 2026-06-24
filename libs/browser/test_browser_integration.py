@@ -276,9 +276,14 @@ def test_direct_control_state_click_is_keyless_real_chromium(monkeypatch: pytest
         except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
             pytest.skip(f"Chromium unavailable in this environment: {e}")
         try:
-            assert (await browser.act_navigate("A", "Alice", "https://example.com"))["ok"]
+            nav = await browser.act_navigate("A", "Alice", "https://example.com")
+            assert nav["ok"]
+            # The first command newly takes the browser (the client uses this to
+            # surface the pane once); later commands don't re-trigger it.
+            assert nav["newly_acquired"] is True
             state = await browser.act_state("A", "Alice")
             assert state["ok"] and "example" in state["url"].lower()
+            assert state.get("newly_acquired") is False
             assert browser._selector_map, "state should expose numbered elements"
             assert "controller" in state and state["controller"] == "agent"
             index = sorted(browser._selector_map)[0]

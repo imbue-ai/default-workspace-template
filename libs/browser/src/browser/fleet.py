@@ -173,19 +173,22 @@ def _layout(*args: str) -> bool:
 
 
 def _pull_in_pane(browser_id: int) -> None:
-    """Surface browser ``browser_id`` as a pane next to the controlling agent's chat.
+    """Split browser ``browser_id`` into a pane on the right of the controlling
+    agent's chat (chat on the left, browser on the right -- one pane per browser).
 
     Anchor chain: ``$BROWSER_FLEET_ANCHOR`` (a parent passes its chat to sub-agents)
-    -> the caller's own chat -> a new group. Best-effort: a layout failure never
-    fails the task (the browser still runs), it just warns.
+    -> the caller's own chat (``self``). Splitting an already-open browser is a
+    no-op that just focuses it, so this is safe to call again on re-acquire. Best
+    effort: a layout failure never fails the command (the browser still runs
+    headless), it just warns.
     """
     ref = f"service:browser?session={browser_id}"
     anchor = os.environ.get(_ENV_ANCHOR)
     if anchor and _layout("split", ref, "--relative-to", anchor, "--direction", "right"):
         return
     if anchor:
-        _err(f"anchor {anchor!r} not found; opening browser {browser_id} by my own chat instead")
-    if not _layout("open", ref):
+        _err(f"anchor {anchor!r} not found; splitting browser {browser_id} next to my own chat instead")
+    if not _layout("split", ref, "--relative-to", "self", "--direction", "right"):
         _err(f"could not pull browser {browser_id} into view (it is still running headless)")
 
 
@@ -213,7 +216,9 @@ def cmd_ls(args: argparse.Namespace) -> int:
         tabs = browser.get("tabs", [])
         active = next((t for t in tabs if t.get("active")), None)
         where = (active.get("url") or active.get("title") or "") if active else "(no tab)"
-        _out(f"browser {browser['id']}: {_owner_label(browser, me)} -- {len(tabs)} tab(s), active: {where}")
+        waiting = browser.get("waiting") or []
+        queued = f"  [queued: {', '.join(waiting)}]" if waiting else ""
+        _out(f"browser {browser['id']}: {_owner_label(browser, me)} -- {len(tabs)} tab(s), active: {where}{queued}")
         if getattr(args, "include_tabs", False):
             for tab in tabs:
                 mark = "*" if tab.get("active") else " "
@@ -362,6 +367,10 @@ def _action(browser_id: int, verb: str, kind: str, body: dict[str, Any] | None =
     if status == 404:
         _err(payload.get("error", f"no browser {browser_id}"))
         return _EXIT_ERROR
+    # The first command for a browser (and the first after a human hands it back)
+    # surfaces it as a pane split next to your chat, so the human can watch.
+    if payload.get("newly_acquired"):
+        _pull_in_pane(browser_id)
     return _render_action(payload, browser_id, kind)
 
 
@@ -409,6 +418,7 @@ def cmd_tab(args: argparse.Namespace) -> int:
 def cmd_acquire(args: argparse.Namespace) -> int:
     status, payload = _request("POST", f"/browsers/{args.id}/acquire", {"reclaim": args.reclaim})
     if payload.get("ok"):
+        _pull_in_pane(args.id)
         _out(f"acquired browser {args.id}")
         return _EXIT_OK
     return _render_action(payload, args.id, "acquire")

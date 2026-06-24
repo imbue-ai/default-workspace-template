@@ -18,7 +18,10 @@
   #newtab { padding: 4px 9px; background: #333; border: none; color: #ddd; border-radius: 4px; cursor: pointer; }
   #newtab:disabled { opacity: .5; cursor: not-allowed; }
 
-  #navbar { display: flex; gap: 6px; padding: 6px; background: #252525; border-bottom: 1px solid #333; }
+  #navbar { display: flex; gap: 6px; padding: 6px; background: #252525; border-bottom: 1px solid #333; align-items: center; }
+  .navbtn { padding: 4px 9px; background: #333; border: none; color: #ddd; border-radius: 4px; cursor: pointer; font-size: 15px; line-height: 1; }
+  .navbtn:hover:not(:disabled) { background: #3d3d3d; }
+  .navbtn:disabled { opacity: .4; cursor: not-allowed; }
   #url { flex: 1; padding: 5px 8px; background: #1e1e1e; border: 1px solid #444; color: #ddd; border-radius: 4px; }
   #url:disabled { opacity: .5; }
 
@@ -39,6 +42,7 @@
   #overlay { display: none; position: absolute; inset: 0; z-index: 10; background: rgba(30, 30, 30, 0.72); flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 20px; }
   #overlay.show { display: flex; }
   #overlay .msg { font-size: 15px; color: #e2b340; font-weight: 600; max-width: 80%; word-break: break-word; }
+  #overlay .sub { font-size: 12px; color: #aaa; max-width: 80%; min-height: 14px; }
   #takecontrol { padding: 8px 16px; background: #b5462b; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
   #takecontrol:disabled { opacity: .6; cursor: default; }
 </style>
@@ -46,7 +50,12 @@
 <body>
 <div id="app">
   <div id="tabbar"><button id="newtab" title="New tab">+</button></div>
-  <div id="navbar"><input id="url" placeholder="Enter URL and press Enter" /></div>
+  <div id="navbar">
+    <button id="back" class="navbtn" title="Back">&#8592;</button>
+    <button id="forward" class="navbtn" title="Forward">&#8594;</button>
+    <button id="reload" class="navbtn" title="Reload this page">&#8635;</button>
+    <input id="url" placeholder="Enter URL and press Enter" />
+  </div>
   <div id="returnbar">
     <span>You have control.</span>
     <button id="returnbtn">Return to agents</button>
@@ -56,6 +65,7 @@
     <div id="placeholder">Starting browser…</div>
     <div id="overlay">
       <div class="msg" id="overlaymsg">An agent has control.</div>
+      <div class="sub" id="overlaysub"></div>
       <button id="takecontrol">Take control</button>
     </div>
   </div>
@@ -68,9 +78,13 @@
   const placeholder = document.getElementById("placeholder");
   const tabbar = document.getElementById("tabbar");
   const newtabBtn = document.getElementById("newtab");
+  const backBtn = document.getElementById("back");
+  const forwardBtn = document.getElementById("forward");
+  const reloadBtn = document.getElementById("reload");
   const urlInput = document.getElementById("url");
   const overlay = document.getElementById("overlay");
   const overlayMsg = document.getElementById("overlaymsg");
+  const overlaySub = document.getElementById("overlaysub");
   const takeControlBtn = document.getElementById("takecontrol");
   const returnBar = document.getElementById("returnbar");
   const returnBtn = document.getElementById("returnbtn");
@@ -91,6 +105,26 @@
     return u.toString();
   }
 
+  // Idle-countdown + queue line under the "Agent has control" overlay. The server
+  // pushes idle_seconds / idle_release_seconds (and the waiting queue) on each
+  // control message + every keepalive tick; we interpolate by the second in between.
+  let idleTimer = null, idleSeconds = 0, releaseSeconds = null, waitingList = [];
+  function renderOverlaySub() {
+    const parts = [];
+    if (releaseSeconds !== null) parts.push("idle " + idleSeconds + "s · releases control in " + releaseSeconds + "s");
+    if (waitingList.length) parts.push(waitingList.length + " waiting: " + waitingList.join(", "));
+    overlaySub.textContent = parts.join("   ·   ");
+  }
+  function startIdleTimer() {
+    if (idleTimer) return;
+    idleTimer = setInterval(() => {
+      idleSeconds += 1;
+      if (releaseSeconds !== null) releaseSeconds = Math.max(0, releaseSeconds - 1);
+      renderOverlaySub();
+    }, 1000);
+  }
+  function stopIdleTimer() { if (idleTimer) { clearInterval(idleTimer); idleTimer = null; } }
+
   // Drive the overlay / return-bar / input lock from the latest control message.
   // owner == "agent":                      grey overlay + "Take control".
   // owner == "human" && human_pinned:      no overlay, persistent "Return to agents" bar.
@@ -104,14 +138,30 @@
     tabbar.style.pointerEvents = agentDriving ? "none" : "auto";
     urlInput.disabled = agentDriving;
     newtabBtn.disabled = agentDriving;
+    backBtn.disabled = agentDriving;
+    forwardBtn.disabled = agentDriving;
+    reloadBtn.disabled = agentDriving;
 
     if (agentDriving) {
       const who = state.owner_name || state.owner_agent_id || "an agent";
       overlayMsg.textContent = "Agent has control: " + who;
       overlay.classList.add("show");
       takeControlBtn.disabled = false;
+      waitingList = Array.isArray(state.waiting) ? state.waiting : [];
+      if (typeof state.idle_release_seconds === "number") {
+        idleSeconds = state.idle_seconds || 0;
+        releaseSeconds = state.idle_release_seconds;
+        startIdleTimer();
+      } else {
+        releaseSeconds = null;
+        stopIdleTimer();
+      }
+      renderOverlaySub();
     } else {
       overlay.classList.remove("show");
+      stopIdleTimer();
+      releaseSeconds = null;
+      waitingList = [];
     }
     returnBar.classList.toggle("show", humanPinned);
   }
@@ -216,6 +266,11 @@
 
   // --- controls ---
   newtabBtn.onclick = () => { showLoading(); sendCast({ type: "tab", action: "new" }); };  // server opens the home page
+  // Page navigation (only active while the human has control; the server also
+  // gates on that). These drive the live page's own history, not the pane.
+  backBtn.onclick = () => sendCast({ type: "back" });
+  forwardBtn.onclick = () => sendCast({ type: "forward" });
+  reloadBtn.onclick = () => sendCast({ type: "reload" });
   urlInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       let u = urlInput.value.trim();
