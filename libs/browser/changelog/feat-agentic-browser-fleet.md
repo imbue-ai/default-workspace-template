@@ -37,3 +37,25 @@ browsers, each with an atomic ownership state machine, plus an
   optional, key-only `task`/`extract` verbs -- it never gates starting or driving
   a browser (direct control is keyless), and its message reflects that rather
   than the old "Browser sessions need an Anthropic API key" wording.
+
+- Direct control now surfaces the browser pane automatically: the first command
+  for a browser (and the first after a human hands it back) splits it in as a pane
+  to the right of your chat -- chat on the left, browser on the right, one pane per
+  browser. Previously only the `task`/`lock` verbs pulled the pane in, so driving a
+  browser with `state`/`click`/... left it headless. Re-acquiring an already-open
+  browser just focuses its pane (no duplicates).
+
+- Every tab now streams at the same resolution. browser-use pins the viewport on
+  the first tab, but tabs opened later could come up at a different size and render
+  with inconsistent letterboxing; the screencast now overrides the device metrics
+  on each tab so they all stream at the fixed screencast size.
+
+- The browser viewer's address bar gained Back / Forward / Reload buttons (active
+  only while you hold control). Reload reloads the live page; it does not restart
+  the browser.
+
+- The "Agent has control" overlay now shows a live idle countdown -- e.g. "idle
+  12s, releases control in 78s" -- so a watching human can see when a quiet agent's
+  sticky lease will auto-release (the 90s idle-TTL). It also lists any agents queued
+  (monitor-and-wait) behind the current owner. The same `waiting` queue is reported
+  by `GET /browsers` and shown in `agentic-browser-fleet ls` (`[queued: ...]`).

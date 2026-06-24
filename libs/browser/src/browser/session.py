@@ -345,6 +345,24 @@ class LiveBrowser(MutableModel):
                     self._active_target_id = info["targetInfo"]["targetId"]
                 except _BROWSER_ERRORS:
                     self._active_target_id = None
+                # Force a uniform render size on EVERY tab. browser-use pins the
+                # viewport on the first page, but tabs opened later (by the agent or
+                # by the site) can come up at a different size, so their frames would
+                # stream at a different resolution and the viewer would letterbox them
+                # inconsistently. Overriding the device metrics on each screencast
+                # target makes every tab stream at exactly the screencast cap.
+                try:
+                    await cdp.send(
+                        "Emulation.setDeviceMetricsOverride",
+                        {
+                            "width": _SCREENCAST_MAX_WIDTH,
+                            "height": _SCREENCAST_MAX_HEIGHT,
+                            "deviceScaleFactor": 1,
+                            "mobile": False,
+                        },
+                    )
+                except _BROWSER_ERRORS as e:
+                    logger.debug("device-metrics override ignored ({})", e)
                 cdp.on("Page.screencastFrame", self._on_screencast_frame)
                 await cdp.send(
                     "Page.startScreencast",
@@ -476,11 +494,14 @@ class LiveBrowser(MutableModel):
 
     async def _keepalive_loop(self) -> None:
         """Ping cast sockets periodically so a static page (no screencast frames)
-        doesn't let the WS proxy time out the idle stream; also sweep idle leases."""
+        doesn't let the WS proxy time out the idle stream; also sweep idle leases and
+        refresh the viewer's idle-countdown / queue display while an agent holds."""
         while not self._closed:
             await asyncio.sleep(_KEEPALIVE_SECONDS)
             await self._broadcast({"type": "ping"})
-            await self._sweep_idle_lease()
+            released = await self._sweep_idle_lease()
+            if not released and self.controller == "agent":
+                await self._broadcast(self._control_message())
 
     async def _sweep_idle_lease(self) -> bool:
         """Release a direct-control lease whose owner has gone quiet (dead/wandered-off
@@ -506,7 +527,7 @@ class LiveBrowser(MutableModel):
         stale human input land after the handoff (the input/control TOCTOU).
         """
         kind = message.get("type")
-        if kind in ("mouse", "key", "tab", "navigate"):
+        if kind in ("mouse", "key", "tab", "navigate", "back", "forward", "reload"):
             async with self._control_lock:
                 if not self._input_enabled.is_set():
                     return
@@ -524,6 +545,12 @@ class LiveBrowser(MutableModel):
                 await self._handle_tab_control(message)
             elif kind == "navigate" and self._active_page is not None:
                 await self._active_page.goto(message["url"])
+            elif kind == "back" and self._active_page is not None:
+                await self._active_page.go_back()
+            elif kind == "forward" and self._active_page is not None:
+                await self._active_page.go_forward()
+            elif kind == "reload" and self._active_page is not None:
+                await self._active_page.reload()
         except _BROWSER_ERRORS as e:
             logger.debug("cast input ignored ({})", e)
 
@@ -572,13 +599,23 @@ class LiveBrowser(MutableModel):
         await self._broadcast(self._control_message())
 
     def _control_message(self) -> dict[str, Any]:
-        return {
+        msg: dict[str, Any] = {
             "type": "control",
             "owner": self.controller,
             "owner_agent_id": self.owner_agent_id,
             "owner_name": self.owner_agent_name,
             "human_pinned": self.human_pinned,
+            # Agents queued (monitor-and-wait) behind the current owner, in FIFO order.
+            "waiting": [w.agent_name or w.agent_id for w in self._wait_queue],
         }
+        # While an agent holds a sticky direct-control lease (not a connection-bound
+        # task), tell the viewer how long it has been idle and when the idle-TTL will
+        # auto-release it, so a watching human knows the browser will free itself.
+        if self.controller == "agent" and self._agent_task is None and self._lease_touched_at:
+            idle = time.monotonic() - self._lease_touched_at
+            msg["idle_seconds"] = max(0, int(idle))
+            msg["idle_release_seconds"] = max(0, int(_LEASE_IDLE_TTL - idle))
+        return msg
 
     def _control_state(self) -> dict[str, Any]:
         """Owner snapshot embedded in every direct-command response so the agent can
@@ -818,6 +855,11 @@ class LiveBrowser(MutableModel):
         ``_control_lock`` -- so a human take-control stays instant (at worst one
         in-flight action lands before the next command sees it).
         """
+        # Did I already hold the lease, or does this command newly take the browser?
+        # The client uses this to surface the browser pane exactly once -- on the
+        # first command for a browser (and again after a human hands it back) --
+        # rather than on every click.
+        was_mine = self._state_tuple() == ("agent", agent_id, False)
         status = await self.acquire(agent_id, agent_name, wait=False)
         if status != "acquired":
             return {"ok": False, "status": status, **self._control_state()}
@@ -833,7 +875,7 @@ class LiveBrowser(MutableModel):
             except _BROWSER_ERRORS as e:
                 logger.debug("direct action failed on browser {} ({})", self.browser_id, e)
                 return {"ok": False, "status": "error", "error": str(e), **self._control_state()}
-        return {"ok": True, "status": "ok", **result, **self._control_state()}
+        return {"ok": True, "status": "ok", "newly_acquired": not was_mine, **result, **self._control_state()}
 
     def _node(self, index: int) -> Any:
         """Resolve an element index from the last ``state`` snapshot to its DOM node."""
@@ -948,6 +990,7 @@ class LiveBrowser(MutableModel):
             "owner_agent_id": self.owner_agent_id,
             "owner_name": self.owner_agent_name,
             "human_pinned": self.human_pinned,
+            "waiting": [w.agent_name or w.agent_id for w in self._wait_queue],
             "tabs": await self._tab_list(),
         }
 
