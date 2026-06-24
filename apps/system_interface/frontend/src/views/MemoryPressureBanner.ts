@@ -76,11 +76,11 @@ export function MemoryPressureBanner(): m.Component {
           role: "status",
         },
         [
-          m("span", { class: "memory-pressure-banner__title" }, "Memory is tight right now."),
+          m("span", { class: "memory-pressure-banner__title" }, "The workspace is low on memory."),
           m(
             "span",
             { class: "memory-pressure-banner__detail" },
-            " The workspace is freeing up memory to keep things responsive. Background work may be interrupted; your conversations are kept.",
+            " Background work may be paused to keep things responsive; your conversations and data are safe.",
           ),
           shedText ? m("span", { class: "memory-pressure-banner__detail" }, ` ${shedText}`) : null,
           blocked.length > 0

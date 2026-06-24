@@ -2,45 +2,18 @@ import json
 import os
 import tempfile
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Final
 
 from loguru import logger
 
 from memory_watchdog.data_types import MemoryStatus, ShedRecord, now_iso_timestamp
 
-# Both files live under runtime/ so they ride the runtime-backup branch and
-# survive container loss. The ledger is the append-only history; the status file
-# is the current-state read API for the UI banner and for pressure checks.
-#
-# These path helpers are the single source of truth for the layout: the watchdog
-# (writer), the system interface (status reader), and bootstrap (block/unblock
-# writer) all import them, so the schema location can't drift between producer
-# and consumers. The base resolves relative to the agent work dir (the repo
-# root, where every service runs), falling back to the current directory, and is
-# overridable in full via MEMORY_WATCHDOG_RUNTIME_DIR -- used by tests, and
-# honored uniformly so a production override can't make readers and the writer
-# diverge.
-_RUNTIME_DIR_ENV_VAR: Final[str] = "MEMORY_WATCHDOG_RUNTIME_DIR"
-_RUNTIME_SUBDIR: Final[Path] = Path("runtime") / "memory_watchdog"
-
-
-def _watchdog_runtime_dir() -> Path:
-    override = os.environ.get(_RUNTIME_DIR_ENV_VAR, "")
-    if override:
-        return Path(override)
-    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
-    base = Path(work_dir) if work_dir else Path.cwd()
-    return base / _RUNTIME_SUBDIR
-
-
-def shed_ledger_path() -> Path:
-    return _watchdog_runtime_dir() / "events" / "shed" / "events.jsonl"
-
-
-def status_path() -> Path:
-    return _watchdog_runtime_dir() / "status.json"
-
+# The ledger is the append-only history; the status file is the current-state
+# read API for the UI banner and for pressure checks. Their on-disk locations
+# come from memory_watchdog.paths -- the single dependency-free source of truth
+# shared with the system interface and the revival hook (re-exported here so
+# existing ``from memory_watchdog.ledger import ...`` callers keep working).
+from memory_watchdog.paths import shed_ledger_path, status_path
 
 # Record-type tags written into the ledger's "type" field.
 _RECORD_TYPE_PROCESS_SHED: Final[str] = "process_shed"
@@ -74,7 +47,11 @@ def append_shed_records(records: Sequence[ShedRecord]) -> None:
 
 
 def record_service_blocked(service_name: str, reason: str) -> None:
-    """Record that bootstrap paused a crash-looping service under pressure."""
+    """Record that a crash-looping service was paused under pressure.
+
+    Reserved: no caller writes these today (supervisord now owns restarts). Kept
+    for a future supervisorctl-driven poller -- see README's crash-loop section.
+    """
     _append_ledger_line(
         {
             "timestamp": now_iso_timestamp(),

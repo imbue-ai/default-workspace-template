@@ -1,4 +1,4 @@
-from memory_watchdog.classifier import classify_processes, find_services_session_name
+from memory_watchdog.classifier import classify_processes
 from memory_watchdog.data_types import ProcessInfo, Tier, TmuxPane
 
 _SERVICES_SESSION = "mngr-services"
@@ -197,19 +197,3 @@ def test_unlabeled_agent_defaults_to_user_agent_protective() -> None:
     # No label either way -> protect it at tier 5 rather than risk shedding a
     # user's agent early.
     assert _tier_by_pid(classifications)[201] == Tier.USER_AGENT
-
-
-def test_find_services_session_name_from_supervisord_ancestor() -> None:
-    processes, panes = _build_standard_tree()
-    # supervisord (102) descends from the bootstrap pane (100) in the services
-    # session, so that is the services session.
-    assert find_services_session_name(processes, panes) == _SERVICES_SESSION
-
-
-def test_find_services_session_name_is_none_without_supervisord() -> None:
-    processes = [
-        ProcessInfo(pid=10, parent_pid=1, resident_kb=2000, command_line="tmux"),
-        ProcessInfo(pid=200, parent_pid=10, resident_kb=500, command_line="bash"),
-    ]
-    panes = [TmuxPane(session_name="mngr-alice", window_name="0", pane_pid=200)]
-    assert find_services_session_name(processes, panes) is None
