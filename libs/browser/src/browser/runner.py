@@ -90,12 +90,15 @@ async def _startup() -> None:
             _init_status = {"phase": "waiting_for_chromium", "reason": reason}
             return
         await manager.restore()
-        manager.start_checkpointing()
         _init_status = {"phase": "ready"}
     except _STARTUP_ERRORS as e:
         logger.error("browser fleet restore failed ({}); serving an empty fleet", e)
         _init_status = {"phase": "ready", "error": str(e)}
     finally:
+        # Always run the periodic manifest checkpoint -- including the waiting-for-
+        # chromium and restore-failed paths, where the fleet comes up lazily later;
+        # otherwise tab-URL drift would never be persisted for the daemon's lifetime.
+        manager.start_checkpointing()
         _init_done.set()
 
 
@@ -236,11 +239,19 @@ async def close_browser(browser_id: int) -> JSONResponse:
     if (gate := _require_ready()) is not None:
         return gate
     await manager.close(browser_id)
-    # Order matters: rewrite the manifest (id now gone) BEFORE deleting the profile,
-    # so a crash between them leaves an orphan dir (GC'd next boot), never a manifest
-    # entry pointing at a deleted profile.
-    await manager._save_manifest()
-    manager.forget_profile_dir(browser_id)
+    # Rewrite the manifest (id now gone) BEFORE deleting the profile, so a crash between
+    # them leaves an orphan dir (swept next boot), never a manifest entry pointing at a
+    # deleted profile. A manifest-write hiccup must not 500 the close or skip the
+    # profile delete -- the periodic checkpoint will reconcile the manifest anyway.
+    try:
+        await manager._save_manifest()
+    except (OSError, *_STARTUP_ERRORS) as e:
+        logger.warning("manifest save during close of browser {} failed ({})", browser_id, e)
+    # Browser 0 is the permanent default and is recreated on demand, so closing it must
+    # NOT wipe its persistent profile (that would silently log the user out the next
+    # time 0 comes back). Only a retired (non-default) id forgets its profile.
+    if browser_id != 0:
+        manager.forget_profile_dir(browser_id)
     return JSONResponse({"closed": True})
 
 

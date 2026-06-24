@@ -380,6 +380,23 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
     assert saved is not None and all(e.id != 2 for e in saved.browsers)
 
 
+def test_close_browser_0_keeps_its_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Browser 0 is the recreated-on-demand default; closing it must NOT wipe its
+    # persistent profile, or the user would be silently logged out when 0 comes back.
+    profile = bsession._profile_dir(0)
+    profile.mkdir(parents=True)
+    fake = _install_fake_browser(monkeypatch, browser_id=0)
+    fake._bu_session = object()  # type: ignore[assignment]
+
+    async def fake_close(self: bsession.LiveBrowser) -> None:
+        return None
+
+    monkeypatch.setattr(bsession.LiveBrowser, "close", fake_close)
+    client = TestClient(runner.app)
+    assert client.delete("/browsers/0").status_code == 200
+    assert profile.exists()  # browser 0's profile (logins) is preserved across close
+
+
 # --- persistence: the core promise, against real Chromium --------------------
 
 

@@ -393,15 +393,22 @@ class LiveBrowser(MutableModel):
     # rather than silently freezing; its id is never reused (a new browser gets a new
     # number), so the dead one stays clearly labeled.
     _crashed: bool = PrivateAttr(default=False)
+    # Set by the manager: a no-arg hook that checkpoints the fleet manifest. Fired on
+    # crash so a browser that died is dropped from the manifest promptly (not only on
+    # the next ~10s checkpoint tick), so an ungraceful kill right after a crash doesn't
+    # restore the dead browser as healthy next boot.
+    _crash_save_hook: "Callable[[], None] | None" = PrivateAttr(default=None)
 
-    async def start(self, playwright: Playwright, restore_tabs: list[str] | None = None) -> None:
+    async def start(
+        self, playwright: Playwright, restore_tabs: list[str] | None = None, active_tab: int = 0
+    ) -> None:
         """Launch the headless Chromium (browser-use) and attach the Playwright observer.
 
         Uses a persistent ``user_data_dir`` per browser id so cookies/logins/history
         survive a restart (Chromium's own persistence; we serialize none of it). When
         ``restore_tabs`` is given (a list of URLs from the manifest), reopen those tabs
-        in order instead of the single default home page; the persistent profile means
-        they come back logged in.
+        in order instead of the single default home page (and re-focus ``active_tab``);
+        the persistent profile means they come back logged in.
         """
         self._playwright = playwright
         self._input_enabled.set()
@@ -442,12 +449,15 @@ class LiveBrowser(MutableModel):
         page = pages[0] if pages else await self._context.new_page()
         self._track_nav(page)
         await self._set_active_page(page)
-        await self._open_initial_tabs(page, restore_tabs)
+        await self._open_initial_tabs(page, restore_tabs, active_tab)
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         logger.info("LiveBrowser {} started (cdp_url={})", self.browser_id, cdp_url)
 
-    async def _open_initial_tabs(self, first_page: Page, restore_tabs: list[str] | None) -> None:
-        """Navigate the initial page(s): the saved tabs on restore, else the home page.
+    async def _open_initial_tabs(
+        self, first_page: Page, restore_tabs: list[str] | None, active_tab: int = 0
+    ) -> None:
+        """Navigate the initial page(s): the saved tabs on restore, else the home page,
+        then re-focus the tab that was active before the restart.
 
         Each navigation is bounded by ``_RESTORE_NAV_TIMEOUT`` so one slow/hung URL
         can't stall startup, and failures are swallowed (a tab that won't load just
@@ -460,6 +470,7 @@ class LiveBrowser(MutableModel):
             except (TimeoutError, *_BROWSER_ERRORS) as e:
                 logger.debug("restore nav to {} ignored ({})", url, e)
 
+        pages = [first_page]
         await _go(first_page, urls[0])
         for url in urls[1:]:
             try:
@@ -468,7 +479,12 @@ class LiveBrowser(MutableModel):
                 logger.debug("restore new-tab for {} ignored ({})", url, e)
                 continue
             self._track_nav(page)
+            pages.append(page)
             await _go(page, url)
+        # Re-focus the tab that was active before the restart (each new_page above
+        # made itself active, so without this the LAST tab would be foregrounded).
+        if 0 <= active_tab < len(pages) and pages[active_tab] is not self._active_page:
+            await self._set_active_page(pages[active_tab])
 
     # --- screencast / active tab ---------------------------------------------
 
@@ -610,6 +626,21 @@ class LiveBrowser(MutableModel):
                 }
             )
         return tabs
+
+    def tab_urls(self) -> tuple[list[str], int]:
+        """The restorable tab URLs + the active tab's index within them, for the
+        manifest. ``page.url`` is a cached property (no CDP round-trip), unlike the
+        title fetch in ``_tab_list`` -- so the periodic checkpoint stays cheap."""
+        if self._context is None:
+            return [], 0
+        urls: list[str] = []
+        active = 0
+        for page in self._context.pages:
+            if _is_restorable_url(page.url):
+                if page is self._active_page:
+                    active = len(urls)
+                urls.append(page.url)
+        return urls, active
 
     async def _follow_agent_focus(self) -> None:
         """Re-point the screencast to the tab the agent just switched to.
@@ -875,6 +906,10 @@ class LiveBrowser(MutableModel):
     async def _announce_crash(self) -> None:
         logger.warning("browser {} crashed (Chromium connection lost)", self.browser_id)
         await self._broadcast({"type": "crashed", "browser_id": self.browser_id})
+        if self._crash_save_hook is not None:
+            # Drop the dead browser from the manifest now (it's excluded from the live
+            # snapshot), so a kill right after the crash doesn't restore it as healthy.
+            self._crash_save_hook()
 
     def _observer_alive(self) -> bool:
         """Whether the Chromium connection is still up (cheap, no round-trip)."""
@@ -1160,9 +1195,17 @@ class LiveBrowser(MutableModel):
         return self._action_handler
 
     async def run_action(
-        self, agent_id: str, agent_name: str | None, action: Callable[[ActionHandler], Awaitable[dict[str, Any]]]
+        self,
+        agent_id: str,
+        agent_name: str | None,
+        action: Callable[[ActionHandler], Awaitable[dict[str, Any]]],
+        enqueue_on_busy: bool = True,
     ) -> dict[str, Any]:
         """Run one direct-control action for an agent, returning a result + owner snapshot.
+
+        ``enqueue_on_busy`` (default True) queues the agent to resume when a busy browser
+        frees. The read-only ``state`` passes False: merely *looking* at a browser a
+        human/another agent is driving must not silently enrol the agent as a waiter.
 
         Ownership is a sticky lease: the first action acquires the browser (CAS, no
         wait -- a busy browser fails fast rather than blocking a click), later actions
@@ -1183,16 +1226,18 @@ class LiveBrowser(MutableModel):
         # first command for a browser (and again after a human hands it back) --
         # rather than on every click.
         was_mine = self._state_tuple() == ("agent", agent_id, False)
-        status = await self.acquire(agent_id, agent_name, wait=False, enqueue_on_busy=True)
+        status = await self.acquire(agent_id, agent_name, wait=False, enqueue_on_busy=enqueue_on_busy)
         if status != "acquired":
             return {"ok": False, "status": status, **self._control_state()}
         async with self._control_lock:
             if self._state_tuple() != ("agent", agent_id, False):
                 # A human grabbed control in the tiny window between acquire and here.
                 # Queue this agent to resume (same as the busy_human path) so the
-                # daemon messages it back when the human hands the browser over.
-                self._enqueue_resume_locked(agent_id, agent_name)
-                await self._broadcast(self._control_message())
+                # daemon messages it back when the human hands the browser over -- but
+                # only for state-changing commands, not a passive `state` peek.
+                if enqueue_on_busy:
+                    self._enqueue_resume_locked(agent_id, agent_name)
+                    await self._broadcast(self._control_message())
                 return {"ok": False, "status": "lost_control", **self._control_state()}
             self._lease_touched_at = time.monotonic()
             self._granted_at = 0.0  # the agent claimed (sent a command); cancel the claim window
@@ -1223,7 +1268,8 @@ class LiveBrowser(MutableModel):
             elements = summary.dom_state.llm_representation()
             return {"url": summary.url, "title": summary.title, "elements": elements, "tabs": await self._tab_list()}
 
-        return await self.run_action(agent_id, agent_name, _do)
+        # state is a read-only peek: don't enqueue the agent as a waiter on a busy browser.
+        return await self.run_action(agent_id, agent_name, _do, enqueue_on_busy=False)
 
     async def act_navigate(self, agent_id: str, agent_name: str | None, url: str) -> dict[str, Any]:
         async def _do(handler: ActionHandler) -> dict[str, Any]:
@@ -1397,9 +1443,10 @@ class BrowserSessionManager(MutableModel):
     _last_manifest_json: str | None = PrivateAttr(default=None)
     _closed: bool = PrivateAttr(default=False)
     _checkpoint_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
+    _bg_save_tasks: set[Any] = PrivateAttr(default_factory=set)  # strong refs for _spawn_save
 
     async def _start_and_register_locked(
-        self, browser_id: int, restore_tabs: list[str] | None = None
+        self, browser_id: int, restore_tabs: list[str] | None = None, active_tab: int = 0
     ) -> LiveBrowser:
         """Launch + register one browser. Caller must hold ``self._lock`` for the whole
         call so a concurrent create can't observe a stale count (no cap overshoot) or
@@ -1407,9 +1454,10 @@ class BrowserSessionManager(MutableModel):
         if self._playwright is None:
             self._playwright = await async_playwright().start()
         session = LiveBrowser(browser_id=browser_id)
+        session._crash_save_hook = self._spawn_save  # checkpoint promptly if it crashes
         started = False
         try:
-            await session.start(self._playwright, restore_tabs=restore_tabs)
+            await session.start(self._playwright, restore_tabs=restore_tabs, active_tab=active_tab)
             started = True
         finally:
             if not started:
@@ -1433,10 +1481,14 @@ class BrowserSessionManager(MutableModel):
             return await self._start_and_register_locked(browser_id)
 
     async def ensure_browser_0(self) -> LiveBrowser:
-        """Return the default browser (id 0), creating it if absent. Idempotent under the lock."""
+        """Return the default browser (id 0), creating it if absent OR if the existing
+        one is a crashed shell. Browser 0 is the permanent default -- a first access
+        after it died (OOM/crash) must bring it back, not return a dead shell forever.
+        Recreating reuses id 0's persistent profile, so it comes back logged in.
+        Idempotent under the lock."""
         async with self._lock:
             existing = self._browsers.get(0)
-            if existing is not None:
+            if existing is not None and not existing._crashed:
                 return existing
             return await self._start_and_register_locked(0)
 
@@ -1461,22 +1513,30 @@ class BrowserSessionManager(MutableModel):
         """Non-crashed sessions, by id -- the set worth persisting/restoring."""
         return [self._browsers[i] for i in sorted(self._browsers) if not self._browsers[i]._crashed]
 
-    async def _snapshot_manifest_locked(self) -> fleet_manifest.Manifest:
-        """Build the durable manifest (ids + tab URLs + active tab). Caller holds ``_lock``.
-        Records topology ONLY -- never ownership/queues (process-scoped) or profile bytes."""
-        entries: list[fleet_manifest.ManifestEntry] = []
-        for browser in self.live_browsers():
-            urls: list[str] = []
-            active_tab = 0
-            for tab in await browser._tab_list():
-                if _is_restorable_url(tab.get("url")):
-                    if tab.get("active"):
-                        active_tab = len(urls)
-                    urls.append(tab["url"])
-            entries.append(
-                fleet_manifest.ManifestEntry(id=browser.browser_id, tabs=urls, active_tab=active_tab)
-            )
+    def _entry_for(self, browser: LiveBrowser) -> fleet_manifest.ManifestEntry:
+        """A manifest entry for a live browser: its tab URLs + active tab. Topology
+        ONLY -- never ownership/queues (process-scoped) or profile bytes. Uses the
+        title-free ``tab_urls()`` so checkpoints don't hammer CDP."""
+        urls, active_tab = browser.tab_urls()
+        return fleet_manifest.ManifestEntry(id=browser.browser_id, tabs=urls, active_tab=active_tab)
+
+    def _snapshot_manifest_locked(self) -> fleet_manifest.Manifest:
+        """Build the durable manifest from the live fleet. Caller holds ``_lock``."""
+        entries = [self._entry_for(browser) for browser in self.live_browsers()]
         return fleet_manifest.Manifest(next_id=self._next_id, browsers=entries)
+
+    def _spawn_save(self) -> None:
+        """Schedule a manifest checkpoint (fire-and-forget, strong-ref'd). For sync
+        callers like the crash hook."""
+        async def _do() -> None:
+            try:
+                await self._save_manifest()
+            except (OSError, *_BROWSER_ERRORS) as e:
+                logger.debug("crash-triggered manifest checkpoint ignored ({})", e)
+
+        task = asyncio.create_task(_do())
+        self._bg_save_tasks.add(task)
+        task.add_done_callback(self._bg_save_tasks.discard)
 
     async def _save_manifest(self) -> None:
         """Checkpoint the manifest if it changed (no-op when nothing did -- idle
@@ -1484,7 +1544,7 @@ class BrowserSessionManager(MutableModel):
         outside it; never called while holding ``_control_lock`` (ownership isn't
         persisted, so there's no lock-ordering hazard)."""
         async with self._lock:
-            snapshot = await self._snapshot_manifest_locked()
+            snapshot = self._snapshot_manifest_locked()
         blob = snapshot.model_dump_json()
         if blob == self._last_manifest_json:
             return
@@ -1512,53 +1572,86 @@ class BrowserSessionManager(MutableModel):
         """Delete a browser's persistent profile (called on explicit `close`)."""
         shutil.rmtree(_profile_dir(browser_id), ignore_errors=True)
 
+    async def _launch_one_restore(self, browser_id: int, restore_tabs: list[str] | None, active_tab: int) -> bool:
+        """Relaunch one browser under a BRIEF lock hold (released between browsers, so a
+        sequential restore of N browsers never blocks read-only ensure_browser_0/list for
+        the whole duration). Returns True if it came up, False if it flaked (left for a
+        next-boot retry). Idempotent vs a concurrent ensure_browser_0."""
+        async with self._lock:
+            if browser_id in self._browsers:
+                return True  # a concurrent ensure already brought it up
+            live = sum(1 for b in self._browsers.values() if not b._crashed)
+            if live >= _MAX_SESSIONS:
+                logger.warning("restore hit the fleet cap; deferring browser {}", browser_id)
+                return False
+            try:
+                await self._start_and_register_locked(browser_id, restore_tabs=restore_tabs, active_tab=active_tab)
+                return True
+            except (BrowserStartupError, *_BROWSER_ERRORS) as e:
+                logger.warning("could not restore browser {} ({}); will retry next boot", browser_id, e)
+                return False
+
     async def restore(self) -> None:
         """Bring the fleet back on daemon startup: relaunch saved browsers EAGER-
-        SEQUENTIALLY (one at a time -- no cold-boot memory spike), seed browser 0 on a
-        fresh workspace, then reconcile the manifest and sweep orphan profiles. Each
-        browser is independently guarded so one bad/locked profile never aborts the rest.
+        SEQUENTIALLY (one at a time -- no cold-boot memory spike; the lock is released
+        between launches so read-only routes aren't blocked), seed browser 0 on a fresh
+        workspace, then reconcile the manifest and sweep TRUE orphan profiles.
+
+        Durability rule: a browser that merely flakes on relaunch is NOT forgotten --
+        its profile is kept and its manifest entry preserved so it retries next boot.
+        Only profiles for ids we no longer want are swept.
         """
         saved = fleet_manifest.read_manifest()
-        profile_ids = self._scan_profile_ids()
+        saved_by_id = {e.id: e for e in saved.browsers} if saved is not None else {}
+        wanted_ids: set[int] = set()
 
-        def _live_count() -> int:
-            return sum(1 for b in self._browsers.values() if not b._crashed)
-
-        async with self._lock:
-            if saved is not None:
-                # Set the id high-water mark BEFORE relaunching so nothing re-hands a
-                # retired id, and a later create() continues past the restored max.
-                restored_ids = [e.id for e in saved.browsers]
-                self._next_id = max(saved.next_id, max(restored_ids, default=0) + 1, 1)
-                for entry in sorted(saved.browsers, key=lambda e: e.id):
-                    if _live_count() >= _MAX_SESSIONS:
-                        logger.warning("restore hit the fleet cap; skipping browser {}", entry.id)
-                        continue
-                    try:
-                        await self._start_and_register_locked(entry.id, restore_tabs=entry.tabs or None)
-                    except (BrowserStartupError, *_BROWSER_ERRORS) as e:
-                        logger.warning("could not restore browser {} ({}); skipping", entry.id, e)
-            elif profile_ids:
-                # Manifest lost but profiles survived: relaunch each profile (tabs
-                # unknown -> home), rather than wiping surviving logins as a "first boot".
-                self._next_id = max(profile_ids, default=0) + 1
+        if saved is not None:
+            # Set the id high-water mark BEFORE relaunching so nothing re-hands a retired
+            # id, and a later create() continues past the restored max.
+            async with self._lock:
+                self._next_id = max(saved.next_id, max(saved_by_id, default=0) + 1, 1)
+            for entry in sorted(saved.browsers, key=lambda e: e.id):
+                wanted_ids.add(entry.id)
+                await self._launch_one_restore(entry.id, entry.tabs or None, entry.active_tab)
+        else:
+            # No manifest. If profiles survived on the volume, relaunch them (tabs
+            # unknown -> home) rather than wiping the saved logins as a "first boot".
+            profile_ids = self._scan_profile_ids()
+            if profile_ids:
+                async with self._lock:
+                    self._next_id = max(profile_ids, default=0) + 1
                 for pid in profile_ids:
-                    if _live_count() >= _MAX_SESSIONS:
-                        break
-                    try:
-                        await self._start_and_register_locked(pid)
-                    except (BrowserStartupError, *_BROWSER_ERRORS) as e:
-                        logger.warning("could not restore profile {} ({}); skipping", pid, e)
-            # Always ensure the default browser exists (true first boot seeds it at home).
-            if 0 not in self._browsers and _live_count() < _MAX_SESSIONS:
-                try:
-                    await self._start_and_register_locked(0)
-                except (BrowserStartupError, *_BROWSER_ERRORS) as e:
-                    logger.warning("could not seed browser 0 ({})", e)
-            live_ids = {bid for bid, browser in self._browsers.items() if not browser._crashed}
-        # Outside the lock: reconcile the manifest (drops skipped/crashed) + sweep orphans.
-        await self._save_manifest()
-        self._sweep_orphan_profiles(live_ids)
+                    wanted_ids.add(pid)
+                    await self._launch_one_restore(pid, None, 0)
+
+        # Always ensure the default browser exists (true first boot seeds it at home).
+        wanted_ids.add(0)
+        if not self.has_browser(0):
+            await self._launch_one_restore(0, None, 0)
+
+        # Reconcile the manifest: fresh snapshots of live browsers + the saved entries
+        # for wanted ids that FAILED to relaunch (kept so they retry next boot), then
+        # sweep only profiles that are neither live nor wanted (true orphans).
+        await self._reconcile_manifest_after_restore(saved_by_id, wanted_ids)
+
+    async def _reconcile_manifest_after_restore(
+        self, saved_by_id: dict[int, fleet_manifest.ManifestEntry], wanted_ids: set[int]
+    ) -> None:
+        async with self._lock:
+            live_ids = {b.browser_id for b in self.live_browsers()}
+            entries = [self._entry_for(b) for b in self.live_browsers()]
+            # Preserve saved entries for wanted browsers that didn't relaunch this boot.
+            for bid in sorted(wanted_ids - live_ids):
+                if bid in saved_by_id:
+                    entries.append(saved_by_id[bid])
+            entries.sort(key=lambda e: e.id)
+            manifest = fleet_manifest.Manifest(next_id=self._next_id, browsers=entries)
+            keep_ids = live_ids | wanted_ids
+        blob = manifest.model_dump_json()
+        if blob != self._last_manifest_json:
+            fleet_manifest.write_manifest(manifest)
+            self._last_manifest_json = blob
+        self._sweep_orphan_profiles(keep_ids)
 
     def start_checkpointing(self) -> None:
         """Begin periodically re-checkpointing the manifest (catches tab-URL drift)."""
@@ -1570,8 +1663,8 @@ class BrowserSessionManager(MutableModel):
             await asyncio.sleep(_MANIFEST_CHECKPOINT_SECONDS)
             try:
                 await self._save_manifest()
-            except OSError as e:  # a transient write failure shouldn't kill the loop
-                logger.debug("manifest checkpoint write ignored ({})", e)
+            except (OSError, *_BROWSER_ERRORS) as e:  # a transient hiccup shouldn't kill the loop
+                logger.debug("manifest checkpoint ignored ({})", e)
 
     async def shutdown(self) -> None:
         self._closed = True
@@ -1580,7 +1673,7 @@ class BrowserSessionManager(MutableModel):
         # Final checkpoint so a clean stop captures the latest tabs before teardown.
         try:
             await self._save_manifest()
-        except OSError as e:
+        except (OSError, *_BROWSER_ERRORS) as e:
             logger.debug("final manifest checkpoint ignored ({})", e)
         for browser_id in list(self._browsers):
             await self.close(browser_id)
