@@ -248,10 +248,13 @@ function createCustomTab(options: { id: string; name: string }): {
       // attribute, which is populated only when the tab is tied to a real
       // workspace service. For tabs without an explicit serviceName
       // (terminals, custom URLs, agent-owned iframes), suppress the Refresh
-      // button since there is nothing to match against.
+      // button since there is nothing to match against. Browser panes are
+      // also excluded: reloading the pane just reconnects the live view (which
+      // confuses people into thinking it restarts the browser) -- the viewer
+      // has its own in-page Reload button for the actual page.
       if (panelType === "iframe") {
         const shareName = pp?.serviceName ?? pp?.title ?? "web";
-        if (pp?.serviceName) {
+        if (pp?.serviceName && pp.serviceName !== "browser") {
           const serviceName = pp.serviceName;
           actions.appendChild(
             createTabActionButton("Refresh", SVG_REFRESH, () => {
@@ -461,13 +464,14 @@ function buildDropdownItems(
 
   // Applications that don't have open tabs. Exclude "system_interface"
   // (that's the surrounding chrome UI, not a tab-able app), "terminal"
-  // (reachable via the "New terminal" menu item further down), and "browser"
+  // (reachable via the "New terminal" menu item further down), "browser"
   // (the fleet has its own per-session items + "New browser" below; the bare
   // ``/service/browser/`` app entry would open a session-less viewer that
-  // doesn't dedup against the fleet panes). Everything else, including the
-  // default "web" example server, is openable.
+  // doesn't dedup against the fleet panes), and "web" (the placeholder example
+  // server -- the browser fleet is the real web surface, so it's just noise).
   const apps = getApplications().filter(
-    (app) => app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser",
+    (app) =>
+      app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser" && app.name !== "web",
   );
   for (const app of apps) {
     if (!openAppNames.has(app.name)) {

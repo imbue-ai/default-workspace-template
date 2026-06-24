@@ -17,3 +17,9 @@ Integrated the agentic browser fleet into the workspace UI.
   keyless, so a browser can always be started; the old menu item that disabled
   itself and showed a "Browser sessions need an Anthropic API key" dialog was a
   leftover from the delegation model and has been removed.
+
+- Dropped the placeholder "web" example server from the "+" menu (the browser
+  fleet is the real web surface), and removed the per-tab Refresh button from
+  browser panes -- reloading the pane only reconnects the live view, which read
+  as "restart the browser"; the browser viewer has its own in-page Reload button
+  for the actual page.

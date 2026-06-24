@@ -6,8 +6,14 @@ own reasoning (no API key) one command at a time. It documents choosing a browse
 (`ls [--include-tabs]`), the re-query-the-page-after-each-change discipline, the
 ownership rules (agents never preempt each other; a human "Take control" makes the
 agent's next command a clean "lost control", and it resumes only when told to via
-`--reclaim`), the exit codes, and how to anchor a sub-agent's browser pane next to
-the parent's chat (`BROWSER_FLEET_ANCHOR`).
+`--reclaim`), and the exit codes. It now also tells the agent to `release <id>`
+the moment it is done with a browser -- handing control straight back to the human
+instead of leaving a grey "Agent has control" overlay up until the ~90s idle
+timeout. And it clarifies that browser work belongs to the user-facing agent the
+human is watching: a `launch-task` sub-agent runs in a separate, isolated container
+with no access to this workspace's browser fleet or its live panes, so the agent
+drives the browser itself in this chat rather than delegating it to a background
+sub-agent.
 
 The `scripts/layout.py` agent helper can now address a specific browser session
 as a pane ref (`service:browser?session=<id>`).
