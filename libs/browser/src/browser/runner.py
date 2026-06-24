@@ -344,6 +344,10 @@ async def cmd_acquire(browser_id: int, request: Request) -> JSONResponse:
         reclaim=bool(body.get("reclaim", False)),
         wait=bool(body.get("wait", False)),
         max_wait=body.get("max_wait"),
+        # An explicit `acquire` that finds the browser busy queues the agent to be
+        # woken when it frees -- matching what the CLI tells the agent ("you're
+        # queued ... messaged when it frees"). Without this the promise is a lie.
+        enqueue_on_busy=True,
     )
     return JSONResponse({"ok": status == "acquired", "status": status, **session._control_state()})
 

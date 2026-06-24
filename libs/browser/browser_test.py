@@ -165,6 +165,40 @@ def test_enqueue_on_busy_queues_for_resume_and_wakes_on_handback(monkeypatch: py
     asyncio.run(go())
 
 
+def test_agent_in_both_queues_is_not_re_granted_after_it_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An agent can land in BOTH queues: a rejected direct command queues it for resume,
+    # then it runs an explicit blocking acquire and parks in the wait queue. When the
+    # wait-queue grant fires it must be removed from the resume queue too, or releasing
+    # later would spuriously re-grant the freed browser to the (now-done) agent.
+    woken: list[str | None] = []
+
+    async def fake_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
+        woken.append(agent_name)
+
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", fake_wake)
+    browser = bsession.LiveBrowser(browser_id=1)
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")  # A holds it
+        # B's direct command is rejected by A -> B queued for resume.
+        assert await browser.acquire("B", "Bob", wait=False, enqueue_on_busy=True) == "busy_agent"
+        assert browser._waiting_names() == ["Bob"]
+        # B then parks in the connection-bound wait queue for the same browser.
+        b_wait = asyncio.create_task(browser.acquire("B", "Bob", wait=True, max_wait=2.0))
+        await asyncio.sleep(0)
+        # A releases -> B is granted from the wait queue AND cleared from resume queue.
+        await browser.release("A")
+        assert await b_wait == "acquired"
+        assert browser._state_tuple() == ("agent", "B", False)
+        assert browser._waiting_names() == []  # not lingering in the resume queue
+        # B finishes. Releasing must NOT re-grant to B (it would, if B were still queued).
+        await browser.release("B")
+        assert browser._state_tuple() == ("human", None, False)
+        assert woken == []  # no spurious "handed back to you" wake
+
+    asyncio.run(go())
+
+
 def test_stale_human_pin_yields_to_a_queued_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     # A human who took control but walked away (no input within the active grace)
     # should not block a queued agent forever: the sweep hands the browser back.
