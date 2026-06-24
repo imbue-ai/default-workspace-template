@@ -261,8 +261,29 @@ def _get_events(agent_id: str) -> Response:
     # conversation, so the client sizes the scrollbar for the full length and
     # derives whether more history exists above (offset > 0) and below
     # (offset + len < total) -- no separate has_more flag needed.
-    total = watcher.get_total_event_count()
-    offset = watcher.get_event_offset(events[0]["event_id"]) if events else total
+    offset = watcher.get_event_offset(events[0]["event_id"]) if events else watcher.get_total_event_count()
+    is_tail_load = before_event_id is None and after_event_id is None and offset_str is None
+    if is_tail_load:
+        # A tail (live) load defines the live end AS OF THIS READ: any newer event
+        # arrives over the SSE stream (buffered during this fetch by the client's
+        # loadSnapshotWithStream), so ``total`` MUST be ``offset + len(events)`` to
+        # keep the client tail-anchored. Reading ``get_total_event_count()``
+        # separately races with a concurrent append during active streaming --
+        # total then exceeds offset+len, the client's ``TranscriptStore.append``
+        # treats the window as "not at the tail", and silently drops every
+        # subsequent live event (the intermittent launch-to-msg chat freeze).
+        naive_total = watcher.get_total_event_count()
+        total = offset + len(events)
+        if naive_total != total:
+            logger.warning(
+                "[diag-tail] tail snapshot race avoided: offset={} len={} total={} (naive get_total={})",
+                offset,
+                len(events),
+                total,
+                naive_total,
+            )
+    else:
+        total = watcher.get_total_event_count()
     return _json_response({"events": events, "offset": offset, "total": total})
 
 
