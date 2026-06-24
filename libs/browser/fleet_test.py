@@ -113,23 +113,29 @@ def test_parser_accepts_direct_verbs() -> None:
     assert close.func is fleet.cmd_close and close.id == 4
 
 
-def test_pull_in_pane_skips_for_non_primary_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A non-primary agent reaches the daemon over MINDS_BROWSER_SERVICE_URL but can't
-    # drive this workspace's layout, so it must NOT attempt a layout split (no 5s wait,
-    # no scary error) -- just note the browser is running.
-    calls: list[tuple] = []
-    monkeypatch.setattr(fleet, "_layout", lambda *a: calls.append(a) or True)
-    monkeypatch.setenv("MINDS_BROWSER_SERVICE_URL", "http://primary-host:8081")
-    fleet._pull_in_pane(2)
-    assert calls == []  # no layout attempt from a non-primary agent
-
-
 def test_pull_in_pane_opens_each_browser_in_its_own_pane(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The primary agent surfaces each browser as its OWN pane (--new-group), not tabbed
-    # into an existing browser pane.
+    # A user-started agent surfaces each browser as its OWN pane (--new-group), beside
+    # its own chat (--relative-to self), not tabbed into an existing browser pane.
     calls: list[tuple] = []
-    monkeypatch.setattr(fleet, "_layout", lambda *a: calls.append(a) or True)
-    monkeypatch.delenv("MINDS_BROWSER_SERVICE_URL", raising=False)
+    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
     monkeypatch.delenv("BROWSER_FLEET_ANCHOR", raising=False)
     fleet._pull_in_pane(0)
-    assert calls and "--new-group" in calls[0] and "right" in calls[0]
+    assert calls and "--new-group" in calls[0] and "right" in calls[0] and "self" in calls[0]
+
+
+def test_pull_in_pane_warns_cleanly_when_it_cant_show_a_pane(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A background/sub-agent (no chat in this UI) can't land the split: we attempt it,
+    # then warn in one clean line -- never crash, never leak the raw 5s "not registered"
+    # error (the browser is still running).
+    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: False)  # layout never lands
+    monkeypatch.delenv("BROWSER_FLEET_ANCHOR", raising=False)
+    fleet._pull_in_pane(2)  # must not raise
+
+
+def test_cmd_new_pulls_a_pane(monkeypatch: pytest.MonkeyPatch) -> None:
+    # "Open a new browser" should visibly open its pane, not wait for the first command.
+    pulled: list[int] = []
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"id": 4}))
+    monkeypatch.setattr(fleet, "_pull_in_pane", lambda bid: pulled.append(bid))
+    assert fleet.cmd_new(object()) == fleet._EXIT_OK  # type: ignore[arg-type]
+    assert pulled == [4]

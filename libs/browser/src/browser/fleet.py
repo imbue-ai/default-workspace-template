@@ -158,8 +158,10 @@ def _stream(path: str, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
 # --- pane pull-in (reuse scripts/layout.py) ----------------------------------
 
 
-def _layout(*args: str) -> bool:
-    """Run ``scripts/layout.py`` with the given args from the repo root. True on success."""
+def _layout(*args: str, quiet: bool = False) -> bool:
+    """Run ``scripts/layout.py`` with the given args from the repo root. True on success.
+    ``quiet`` suppresses layout.py's raw stderr so the caller can substitute its own
+    message (used by the pane-pull, which has a friendlier failure note)."""
     root = _repo_root()
     layout = root / "scripts" / "layout.py"
     if not layout.exists():
@@ -167,43 +169,37 @@ def _layout(*args: str) -> bool:
     result = subprocess.run(
         [sys.executable, str(layout), *args], cwd=str(root), capture_output=True, text=True
     )
-    if result.returncode != 0:
+    if result.returncode != 0 and not quiet:
         _err(result.stderr.strip() or f"layout {' '.join(args)} failed")
     return result.returncode == 0
 
 
 def _pull_in_pane(browser_id: int) -> None:
-    """Surface browser ``browser_id`` as its OWN pane to the right of the controlling
-    agent's chat (chat on the left, each browser in a separate pane).
+    """Surface browser ``browser_id`` as its OWN pane to the right of the requesting
+    agent's chat (each browser in a separate pane).
 
     ``--new-group`` forces a fresh pane rather than tabbing the browser into an
     existing pane group, so opening a second browser lands beside the first, not as a
     tab inside it. Splitting an already-open browser is a no-op that just focuses it,
-    so this is safe to call again on re-acquire.
+    so this is safe to call repeatedly.
 
-    Anchor chain: ``$BROWSER_FLEET_ANCHOR`` (a parent passes its chat to sub-agents)
-    -> the caller's own chat (``self``). Best effort: a layout failure never fails the
-    command (the browser is still running and reachable), it just warns.
+    Any agent the user started -- the primary, or one opened via "+ New agent" --
+    surfaces the pane next to its OWN chat (``--relative-to self``). A launch-task /
+    background agent has no chat in this workspace's UI (and may be a separate
+    container), so the split can't land; we then say so in one clear line rather than
+    leaking layout.py's raw 5s "service not registered" error. Either way the browser
+    is running and reachable -- the pane is just a viewing convenience.
     """
-    # A non-primary agent (a launch-task sub-agent, or a second "+ New agent") reaches
-    # the daemon over the network via MINDS_BROWSER_SERVICE_URL, but it lives in a
-    # different container and CANNOT drive this workspace's dockview layout -- the live
-    # pane is owned by the primary agent's UI. Don't wait 5s on a registry that isn't
-    # there or emit a scary error; just say it plainly. The browser still works.
-    if os.environ.get(_ENV_URL):
-        _err(f"browser {browser_id} is running, but I can't open its live pane from here "
-             "(only the workspace's primary agent shows browser panes). Open it from the "
-             '"+" menu, or have the main agent drive the browser.')
-        return
     ref = f"service:browser?session={browser_id}"
+    # A parent may hand a sub-agent its chat as an anchor; otherwise anchor on our own.
     anchor = os.environ.get(_ENV_ANCHOR)
-    if anchor and _layout("split", ref, "--relative-to", anchor, "--direction", "right", "--new-group"):
+    if anchor and _layout("split", ref, "--relative-to", anchor, "--direction", "right", "--new-group", quiet=True):
         return
-    if anchor:
-        _err(f"anchor {anchor!r} not found; splitting browser {browser_id} next to my own chat instead")
-    if not _layout("split", ref, "--relative-to", "self", "--direction", "right", "--new-group"):
-        _err(f"opened browser {browser_id} (running), but couldn't auto-open its pane -- "
-             'open it from the "+" menu if you want to watch.')
+    if _layout("split", ref, "--relative-to", "self", "--direction", "right", "--new-group", quiet=True):
+        return
+    _err(f"browser {browser_id} is running, but I couldn't open its live pane here. "
+         'If you are the workspace\'s main agent, open it from the "+" menu; a background '
+         "or sub-agent can't show panes (have the main agent drive the browser).")
 
 
 # --- commands -----------------------------------------------------------------
@@ -245,6 +241,9 @@ def cmd_ls(args: argparse.Namespace) -> int:
 def cmd_new(_args: argparse.Namespace) -> int:
     status, payload = _request("POST", "/browsers")
     if status == 200:
+        # Surface the new browser's pane right away, so "open a new browser" visibly
+        # opens one (idempotent with the pane-pull the first direct command also does).
+        _pull_in_pane(payload["id"])
         _out(f"started browser {payload['id']}")
         return _EXIT_OK
     _err(payload.get("error", f"new failed ({status})"))
