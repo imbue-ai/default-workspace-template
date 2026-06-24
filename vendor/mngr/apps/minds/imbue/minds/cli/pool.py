@@ -136,11 +136,12 @@ def build_create_admin_args(
 
     For the ``ovh_vps`` backend, auto-injects ``--tag minds_env=<env_name>`` (so
     ``minds env destroy`` can enumerate the VPSes the env owns) and forwards
-    ``--management-public-key-file``. For the ``slice`` backend it emits neither --
-    slices are not OVH-IAM-tagged and authorize the pool key from
-    POOL_SSH_PRIVATE_KEY at carve time. Every other user-supplied flag forwards
-    verbatim. Split out from the click command so tests can exercise the wiring
-    without faking a subprocess.
+    ``--management-public-key-file``. For the ``slice`` backend it instead forwards
+    ``--slice-env-name <env_name>`` (stamped into each slice's lima names, so a
+    shared box can attribute the slice to this env) -- slices are not OVH-IAM-tagged
+    and authorize the pool key from POOL_SSH_PRIVATE_KEY at carve time. Every other
+    user-supplied flag forwards verbatim. Split out from the click command so tests
+    can exercise the wiring without faking a subprocess.
 
     The bake source is exactly one of ``--from-tag`` (production, clones a tag)
     or ``--workspace-dir`` (dev, a working tree); the admin CLI derives the
@@ -187,6 +188,10 @@ def build_create_admin_args(
         args.extend(["--mngr-source", mngr_source])
     if backend == _BACKEND_OVH_VPS and not is_recycle_enabled:
         args.append("--no-recycle")
+    if backend == _BACKEND_SLICE:
+        # Stamp the owning env into each slice's lima names so multiple dev envs can
+        # share one bare-metal box (occupancy read from the box; reap scoped to this env).
+        args.extend(["--slice-env-name", env_name])
     if backend == _BACKEND_SLICE and server_id is not None:
         args.extend(["--server-id", server_id])
     if backend == _BACKEND_SLICE and is_dry_run:
@@ -198,6 +203,41 @@ def build_create_admin_args(
     return args
 
 
+def build_teardown_slices_admin_args(*, database_url: str | None) -> list[str]:
+    """Compose the ``mngr imbue_cloud admin pool teardown-slices`` argv.
+
+    Forwards ``--database-url`` only when non-None (dev auto-resolves it from the
+    activated env's secrets.toml; staging/production pass the Vault-resolved DSN).
+    """
+    args = ["teardown-slices"]
+    if database_url is not None:
+        args.extend(["--database-url", database_url])
+    return args
+
+
+def tear_down_env_pool_slices(env_name: str) -> None:
+    """Tear down the env's unleased pool slices on their boxes before the env's DB is deleted.
+
+    Resolves the pool SSH key (Vault) + host_pool DSN exactly like ``pool create``,
+    then shells to ``mngr imbue_cloud admin pool teardown-slices``. Leased slices are
+    left to their agent's release path. A missing pool SSH key is a bad state, not a
+    "nothing to clean up" signal -- it raises (failing the destroy) so we never
+    silently leak the env's slice VMs; a genuine teardown failure (an unreachable
+    box) likewise raises rather than leaking.
+    """
+    try:
+        pool_private_key = read_pool_private_key_from_vault(env_name)
+    except VaultReadError as exc:
+        raise click.ClickException(
+            f"Could not read the pool SSH private key from Vault for env '{env_name}': {exc}"
+        ) from exc
+    database_url = resolve_host_pool_dsn(env_name, None)
+    args = build_teardown_slices_admin_args(database_url=database_url)
+    _raise_on_failure(
+        "teardown-slices", _run_admin_command(args, extra_env={_POOL_PRIVATE_KEY_ENV_VAR: pool_private_key})
+    )
+
+
 def build_list_admin_args(*, database_url: str | None) -> list[str]:
     """Compose the ``mngr imbue_cloud admin pool list`` argv.
 
@@ -205,6 +245,18 @@ def build_list_admin_args(*, database_url: str | None) -> list[str]:
     :func:`build_create_admin_args`.
     """
     args = ["list"]
+    if database_url is not None:
+        args.extend(["--database-url", database_url])
+    return args
+
+
+def build_backfill_host_keys_admin_args(*, database_url: str | None) -> list[str]:
+    """Compose the ``mngr imbue_cloud admin pool backfill-host-keys`` argv.
+
+    ``--database-url`` forwarded only when explicitly supplied; see
+    :func:`build_create_admin_args`.
+    """
+    args = ["backfill-host-keys"]
     if database_url is not None:
         args.extend(["--database-url", database_url])
     return args
@@ -869,6 +921,30 @@ def pool_list(database_url: str | None) -> None:
     env_name = require_activated_env_name()
     args = build_list_admin_args(database_url=resolve_host_pool_dsn(env_name, database_url))
     _raise_on_failure("list", _run_admin_command(args))
+
+
+@pool.command(name="backfill-host-keys")
+@click.option(
+    "--database-url",
+    required=False,
+    default=None,
+    type=str,
+    help=_DATABASE_URL_HELP,
+)
+def pool_backfill_host_keys(database_url: str | None) -> None:
+    """One-time: keyscan + record SSH host public keys for pre-existing pool rows and boxes.
+
+    Forwards to ``mngr imbue_cloud admin pool backfill-host-keys`` -- the single
+    sanctioned trust-on-first-use, used once after deploying the host-key-pinning
+    connector so rows baked before the host-key columns existed become leasable
+    again. Resolves the staging / production host_pool DSN from the tier's
+    ``<vault_prefix>/neon.DATABASE_URL`` Vault entry exactly like ``pool list`` /
+    ``pool destroy``, so the operator never hand-passes ``--database-url``.
+    Idempotent: rows that already have keys are skipped.
+    """
+    env_name = require_activated_env_name()
+    args = build_backfill_host_keys_admin_args(database_url=resolve_host_pool_dsn(env_name, database_url))
+    _raise_on_failure("backfill-host-keys", _run_admin_command(args))
 
 
 @pool.command(name="destroy")

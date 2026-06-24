@@ -21,13 +21,12 @@ from werkzeug.exceptions import HTTPException
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.mngr.errors import MngrError
+from imbue.mngr.primitives import AgentId
 from imbue.system_interface import claude_auth_endpoints
 from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
-from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
-from imbue.system_interface.agent_discovery import send_message
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
@@ -207,30 +206,9 @@ def _list_agents_endpoint() -> Response:
 
 
 def _find_agent(agent_id: str) -> AgentInfo | None:
-    """Find a specific agent by ID.
-
-    Uses the AgentManager's already-loaded state instead of running a full
-    mngr discovery on every request.  Falls back to the agent state directory
-    for claude_config_dir resolution.
-    """
+    """Find a specific agent by ID, from the AgentManager's already-loaded state."""
     agent_manager: AgentManager = get_state().agent_manager
-    agent_state = agent_manager.get_agent_by_id(agent_id)
-    if agent_state is None:
-        return None
-
-    host_dir = get_host_dir()
-    agent_state_dir = host_dir / "agents" / agent_id
-    claude_config_dir = read_claude_config_dir_from_env_file(agent_state_dir)
-
-    return AgentInfo(
-        id=agent_state.id,
-        name=agent_state.name,
-        state=agent_state.state,
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-        labels=agent_state.labels,
-        work_dir=agent_state.work_dir,
-    )
+    return agent_manager.get_agent_info_by_id(agent_id)
 
 
 def _agent_not_found_response(agent_id: str) -> Response:
@@ -361,7 +339,8 @@ def _send_message_endpoint(agent_id: str) -> Response:
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
 
-    success = send_message(agent_info.name, send_message_request.message)
+    agent_manager: AgentManager = get_state().agent_manager
+    success = agent_manager.send_message_to_agent(AgentId(agent_info.id), send_message_request.message)
     if not success:
         error = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
         return _json_response(error.model_dump(), status_code=500)
@@ -967,7 +946,11 @@ def create_application(
         # One long-lived ClaudeAuthService per app so the in-flight OAuth
         # subprocess survives between the /start and /submit-code requests.
         claude_auth_service=claude_auth_service or ClaudeAuthService(),
-        welcome_resender=welcome_resender or WelcomeResender(),
+        welcome_resender=welcome_resender
+        or WelcomeResender(
+            resolve_agent=resolved_agent_manager.get_agent_info_by_id,
+            send_message_fn=resolved_agent_manager.send_message_to_agent,
+        ),
         http_client=resolved_http_client,
         latchkey_http_client=resolved_latchkey_http_client,
         is_agent_manager_owned=is_agent_manager_owned,
