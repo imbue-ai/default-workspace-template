@@ -121,9 +121,13 @@ browsers, each with an atomic ownership state machine, plus an
 - Each browser the agent surfaces now opens as its OWN pane to the right (the layout
   split uses `--new-group`), instead of being tabbed into an existing browser pane.
 
-- A non-primary agent (a `launch-task` sub-agent, or a second "+ New agent") that can
-  reach the fleet daemon over the network but can't drive this workspace's layout no
-  longer waits 5s and prints a confusing "service not registered / running headless"
-  error when it tries to surface a pane. It now says plainly that the browser is
-  running but its pane can only be shown by the primary agent (open it from the "+"
-  menu), and the misleading "headless" wording is gone from the pane-pull failure path.
+- `new` now opens the browser's pane immediately (idempotent with the pane-pull the
+  first direct command also does), so "open a new browser" visibly opens one rather
+  than showing nothing until the first `open`/`click`.
+
+- Any agent the user started -- the primary, or one opened via "+ New agent" --
+  surfaces the pane next to its OWN chat. A `launch-task`/background agent (no chat in
+  this workspace's UI) can't land the split; instead of leaking layout.py's raw 5s
+  "service not registered" error (and the misleading "headless" wording), it now warns
+  in one clean line that the browser is running but a background agent can't show panes
+  (open it from the "+" menu, or have the main agent drive it).
