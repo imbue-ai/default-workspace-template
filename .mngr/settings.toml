@@ -84,7 +84,7 @@ version = "2.1.160"
 # (inside the services agent) and inherited via the host env file the
 # bootstrap writes. Disabled below on the "main" type, which still owns
 # the per-agent config dir that everyone else points at.
-use_env_config_dir = true
+isolate_local_config_dir = false
 
 # The "main" (services) agent type -- inherits everything from claude, then
 # disables every path that pulls user-local content into the workspace. The
@@ -99,7 +99,7 @@ sync_credentials_on_login = false
 # Keep this agent's per-agent CLAUDE_CONFIG_DIR (don't inherit the parent's
 # new shared-mode default). Every other agent in the workspace points at
 # *this* directory via the host env var the bootstrap writes.
-use_env_config_dir = false
+isolate_local_config_dir = true
 # Window 0 of the services agent must never actually run claude -- the bootstrap
 # window (extra_window) runs supervisord, which owns every background service,
 # and the real chat agents are spun up separately by the bootstrap. Making
