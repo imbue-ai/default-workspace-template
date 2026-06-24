@@ -12,3 +12,8 @@ Integrated the agentic browser fleet into the workspace UI.
 
 - Updated the frontend to the browser daemon's new fleet endpoints (`/browsers`
   and `/browsers/{id}/cast`) in place of the previous single-session routes.
+
+- "New browser" is no longer gated on an Anthropic API key. Direct control is
+  keyless, so a browser can always be started; the old menu item that disabled
+  itself and showed a "Browser sessions need an Anthropic API key" dialog was a
+  leftover from the delegation model and has been removed.

@@ -32,3 +32,8 @@ browsers, each with an atomic ownership state machine, plus an
 - An optional `task <id> "<goal>"` verb remains for whole-goal delegation to an
   autonomous browser-use agent (the one path that needs an Anthropic key); its
   ownership is bound to the live request connection.
+
+- The Anthropic-key check (`anthropic_key_status`) now describes only the
+  optional, key-only `task`/`extract` verbs -- it never gates starting or driving
+  a browser (direct control is keyless), and its message reflects that rather
+  than the old "Browser sessions need an Anthropic API key" wording.

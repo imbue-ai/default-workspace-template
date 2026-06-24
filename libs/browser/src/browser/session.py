@@ -188,13 +188,18 @@ def resolve_anthropic_key() -> str | None:
 
 
 def anthropic_key_status() -> tuple[bool, str]:
-    """Return ``(available, reason)`` for gating the "New browser" menu item."""
+    """Return ``(available, reason)`` for the optional, key-only ``task``/``extract``
+    verbs. Direct control (state/click/input/scroll/...) is keyless and always
+    available, so this never gates starting or driving a browser -- only those two
+    verbs, which the daemon checks at call time."""
     if resolve_anthropic_key():
         return True, "Anthropic API key available"
     return (
         False,
-        "Browser sessions need an Anthropic API key. Create the workspace with the "
-        "'Anthropic API key' provider (the 'Claude subscription' option has no usable key).",
+        "The 'task' and 'extract' verbs need an Anthropic API key (create the workspace "
+        "with the 'Anthropic API key' provider; the 'Claude subscription' option has no "
+        "usable key). Direct control -- state/click/input/scroll/screenshot/tab -- works "
+        "without one.",
     )
 
 

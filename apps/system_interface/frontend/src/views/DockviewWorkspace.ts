@@ -370,12 +370,9 @@ interface BrowserInfo {
 }
 
 // Cached snapshot of the browser fleet, refreshed each time the "+" dropdown
-// opens so it reflects browsers created since boot (and so "New browser" is
-// gated on the live ANTHROPIC_API_KEY status the daemon reports). The list
-// drives one dropdown item per active browser; ``keyAvailable`` gates the
-// "New browser" action (the browser-use agent needs the key).
+// opens so it reflects browsers created since boot. The list drives one
+// dropdown item per active browser.
 let browserFleet: BrowserInfo[] = [];
-let browserKeyAvailable = false;
 
 /** Fetch the live browser fleet + key status. ``onUpdate`` runs after the
  *  cache is refreshed so an already-open dropdown can re-render with the
@@ -384,14 +381,12 @@ let browserKeyAvailable = false;
  *  menu would show a stale fleet until the next open. */
 function refreshBrowserFleet(onUpdate?: () => void): void {
   fetch(getServiceUrl("browser") + "browsers")
-    .then((r) => (r.ok ? r.json() : { browsers: [], key_available: false }))
+    .then((r) => (r.ok ? r.json() : { browsers: [] }))
     .then((data) => {
       browserFleet = Array.isArray(data.browsers) ? (data.browsers as BrowserInfo[]) : [];
-      browserKeyAvailable = Boolean(data.key_available);
     })
     .catch(() => {
       browserFleet = [];
-      browserKeyAvailable = false;
     })
     .finally(() => {
       onUpdate?.();
@@ -539,18 +534,10 @@ function buildDropdownItems(
     action: () => openIframeTab(buildTerminalUrl(), "terminal", "iframe", undefined, targetGroup),
   });
 
-  items.push(
-    browserKeyAvailable
-      ? { label: "New browser", action: () => createBrowserTab(targetGroup) }
-      : {
-          label: "New browser",
-          disabled: true,
-          action: () =>
-            alert(
-              "Browser sessions need an Anthropic API key. Create the workspace with the 'Anthropic API key' provider (Subscription mode has no key).",
-            ),
-        },
-  );
+  // Direct control is keyless -- the agent (and you) drive the browser by hand,
+  // so a browser can always be started. An Anthropic API key is only needed for
+  // the optional `task`/`extract` CLI verbs, which the daemon checks at call time.
+  items.push({ label: "New browser", action: () => createBrowserTab(targetGroup) });
 
   items.push({
     label: "New agent",
