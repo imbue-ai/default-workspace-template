@@ -40,7 +40,7 @@ class Tier(UpperCaseStrEnum):
     # New Chat ones). The shedder's last resort.
     USER_AGENT = auto()
     # Tier 6: auxiliary services -- telegram, web, app-watcher, and any service
-    # an agent added to services.toml.
+    # an agent added to supervisord.conf.
     AUXILIARY_SERVICE = auto()
     # Tier 7: agents created by other agents (workers and the like).
     WORKER_AGENT = auto()
@@ -104,7 +104,7 @@ class TmuxPane(FrozenModel):
 
     session_name: str = Field(description="tmux session the pane belongs to")
     window_name: str = Field(
-        description="tmux window name (e.g. svc-system_interface, bootstrap, 0)"
+        description="tmux window name (e.g. bootstrap, 0)"
     )
     pane_pid: int = Field(description="PID of the pane's root shell process")
 

@@ -6,14 +6,14 @@ watching tiers die in order. That is environment-dependent (and destructive), so
 it is a documented manual drill rather than a CI test. Run it once per deployment
 mode you care about (docker/gVisor, lima/runc, vps).
 
-The pure logic underneath (classification, shed selection, the breaker state
-machine, status/ledger IO) is covered by the unit tests next to the source and
-runs in CI.
+The pure logic underneath (classification, shed selection, the blocked-services
+ledger logic, status/ledger IO) is covered by the unit tests next to the source
+and runs in CI.
 
 ## Prerequisites
 
-- A live workspace container with the bootstrap services up (`svc-memory-watchdog`
-  window present in the services tmux session).
+- A live workspace container with supervisord up and the watchdog running
+  (`supervisorctl status memory-watchdog` shows `RUNNING`).
 - A way to watch memory: `watch -n1 free -m` in a terminal.
 - The system interface open in the UI.
 
@@ -68,25 +68,23 @@ runs in CI.
    background tasks were not restarted. Verify the ledger gained a
    `notice_delivered` line for it.
 
-6. **Observe recovery.** Kill the bootstrap process to confirm the watchdog
-   restarts it (mutual supervision):
+6. **Observe recovery.** supervisord owns liveness, including the watchdog's
+   own -- the watchdog supervises nothing itself. Kill the watchdog process to
+   confirm supervisord brings it straight back:
 
    ```bash
-   pkill -f "uv run bootstrap"   # find the exact PID first in practice
-   # within ~2 polls the svc-... / bootstrap window should be running again
+   supervisorctl status memory-watchdog   # note the current pid / uptime
+   pkill -f "memory-watchdog"
+   supervisorctl status memory-watchdog   # RUNNING again within a second or two, new pid
    ```
 
-7. **Observe the breaker.** Add a service to `services.toml` whose command exits
-   immediately and repeatedly (e.g. `command = "false"`, `restart = "on-failure"`).
-   After a few rapid restarts bootstrap should pause it; check:
-
-   ```bash
-   grep service_blocked runtime/memory_watchdog/events/shed/events.jsonl
-   ```
-
-   and confirm the banner lists it as paused. Remove the service when done.
+7. **Crash-loop visibility (reserved -- not yet observable).** supervisord now
+   owns restarts (`autorestart` + `startretries`), so nothing writes
+   `service_blocked` records today and the banner's paused-service line stays
+   empty. There is no drill step for it until a `supervisorctl`-driven poller
+   repopulates that signal; see the "Crash-loop visibility (reserved)" section
+   of `README.md`.
 
 ## Cleanup
 
-Kill any leftover synthetic hog, remove the test service from `services.toml`,
-and confirm `is_under_pressure` returns to false.
+Kill any leftover synthetic hog and confirm `is_under_pressure` returns to false.

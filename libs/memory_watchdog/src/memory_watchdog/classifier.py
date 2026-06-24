@@ -21,7 +21,6 @@ from memory_watchdog.data_types import (
 # program is shed before worker agents but after the recognized infrastructure.
 _SERVICE_TIER_RULES: Final[tuple[tuple[str, str, Tier], ...]] = (
     ("system-interface", "system_interface", Tier.USER_INTERFACE),
-    ("system_interface", "system_interface", Tier.USER_INTERFACE),
     ("cloudflare-tunnel", "cloudflared", Tier.USER_INTERFACE),
     ("run_ttyd", "terminal", Tier.USER_INTERFACE),
     ("memory-watchdog", "memory-watchdog", Tier.RECOVERY),
@@ -133,35 +132,6 @@ def _walk_subtree_depths(
         for child_pid in children_by_parent.get(pid, ()):
             frontier.append((child_pid, depth + 1))
     return discovered
-
-
-@pure
-def find_services_session_name(
-    processes: Sequence[ProcessInfo],
-    panes: Sequence[TmuxPane],
-) -> str | None:
-    """Return the tmux session that owns supervisord, or None if not found.
-
-    The watchdog runs as a supervisord child with no tmux pane of its own, so it
-    cannot ask tmux "what session am I in?". Instead the services session is
-    defined as whichever session's pane is an ancestor of the supervisord
-    process: walk parent pids up from supervisord until we reach a pane pid.
-    """
-    process_by_pid: dict[int, ProcessInfo] = {p.pid: p for p in processes}
-    session_by_pane_pid: dict[int, str] = {p.pane_pid: p.session_name for p in panes}
-    for process in processes:
-        if not _is_supervisord(process.command_line):
-            continue
-        # Walk up from supervisord toward its pane shell.
-        current: int | None = process.pid
-        seen: set[int] = set()
-        while current is not None and current not in seen:
-            if current in session_by_pane_pid:
-                return session_by_pane_pid[current]
-            seen.add(current)
-            parent = process_by_pid.get(current)
-            current = parent.parent_pid if parent is not None else None
-    return None
 
 
 @pure

@@ -15,7 +15,6 @@ processes -- it only decides which to shed under pressure.
 
 import os
 import signal
-import subprocess
 import threading
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -25,7 +24,7 @@ from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.imbue_common.pure import pure
 from loguru import logger
 
-from memory_watchdog.classifier import classify_processes, find_services_session_name
+from memory_watchdog.classifier import classify_processes
 from memory_watchdog.data_types import (
     ISO_TIMESTAMP_FORMAT,
     SHEDDABLE_TIERS_IN_SHED_ORDER,
@@ -48,6 +47,14 @@ from memory_watchdog.system_probe import (
 )
 from memory_watchdog.tagger import apply_oom_score_adjustments
 
+# How often we re-snapshot and re-tag. This is deliberately short, but NOT to
+# "beat" the kernel OOM killer -- that fires synchronously the instant an
+# allocation can't be satisfied, so nothing can preempt it. The interval instead
+# governs how fresh each process's oom_score_adj is: under runc (lima),
+# oom_score_adj is the real lever, so a process that spawns and grows between
+# polls is untagged when the kernel picks a victim. A short interval keeps the
+# tags current; a poll is cheap (one /proc walk, one tmux list-panes, a few small
+# file reads), so the cost is negligible.
 POLL_INTERVAL_SECONDS: Final[float] = 3.0
 # Used-fraction at which the shedder arms, and how long it must stay there before
 # the first kill. Hysteresis: pressure must be sustained, not a momentary spike.
@@ -72,20 +79,29 @@ def _iso(moment: datetime) -> str:
     return format_nanosecond_iso_timestamp(moment)
 
 
-def _tmux_current_session_name() -> str:
-    """Best-effort tmux "current session" fallback used until supervisord is up.
+def _services_session_name(mngr_prefix: str) -> str:
+    """The tmux session that runs supervisord and the background services.
 
-    Only consulted on the first polls before supervisord exists in the process
-    snapshot; once it does, the services session is derived from supervisord's
-    pane ancestor (see find_services_session_name), which is unambiguous.
+    The watchdog runs as a supervisord child of the services agent (in a minds
+    workspace, the constant-named ``system-services`` agent), so the services
+    session is that agent's own tmux session, named ``<mngr_prefix><agent_name>``.
+    The agent name is exported as MNGR_AGENT_NAME in the agent environment that
+    supervisord -- and therefore this process -- inherits, so we read it directly
+    rather than reconstructing it by walking the process tree.
+
+    If MNGR_AGENT_NAME is somehow unset, the result matches no real session, so
+    the services session's processes are simply classified like any other
+    agent's (the pane shell stays infrastructure and the main process defaults to
+    the protected user-agent tier -- never shed early). We log once so the
+    misconfiguration is visible.
     """
-    result = subprocess.run(
-        ["tmux", "display-message", "-p", "#S"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.stdout.strip()
+    agent_name = os.environ.get("MNGR_AGENT_NAME", "")
+    if not agent_name:
+        logger.warning(
+            "MNGR_AGENT_NAME is not set; cannot identify the services session by name. "
+            "Its processes will be treated like any other agent's (still protected)."
+        )
+    return f"{mngr_prefix}{agent_name}"
 
 
 @pure
@@ -156,7 +172,14 @@ def _prune_recent_records(
 
 def main() -> None:
     mngr_prefix = os.environ.get("MNGR_PREFIX", _MNGR_PREFIX_DEFAULT)
-    logger.info("Started memory watchdog (agent prefix: {})", mngr_prefix)
+    # The services session is fixed for the life of the process (it comes from
+    # the inherited agent environment, which never changes), so resolve it once.
+    services_session_name = _services_session_name(mngr_prefix)
+    logger.info(
+        "Started memory watchdog (agent prefix: {}, services session: {})",
+        mngr_prefix,
+        services_session_name,
+    )
 
     stop_event = threading.Event()
 
@@ -177,13 +200,6 @@ def main() -> None:
         processes = read_all_processes()
         panes = read_tmux_panes()
         user_created_names, agent_created_names = read_agent_label_sets()
-        # The watchdog has no tmux pane of its own (it is a supervisord child),
-        # so derive the services session from supervisord's pane ancestor. Fall
-        # back to tmux's notion of the current session only on the first polls,
-        # before supervisord appears in the snapshot.
-        services_session_name = (
-            find_services_session_name(processes, panes) or _tmux_current_session_name()
-        )
         classifications = classify_processes(
             processes=processes,
             panes=panes,
