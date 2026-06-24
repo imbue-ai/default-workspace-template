@@ -290,8 +290,8 @@ for results.
 |---|---|---|---|
 | `0` | ok | The command succeeded. | Read the output; for `state`, decide your next click. |
 | `1` | error | Command failed, or a **stale index** (you clicked before re-`state`ing). | Run `state <id>` again, find the element's new number, retry. For other errors, read the message. |
-| `2` | preempted | A human took control. | **Stop.** Tell the user; resume only on their explicit say-so (then `--reclaim`). Never auto-retry. |
-| `3` | busy | Held by a human, or held by another agent. | Human: ask the user (then `--reclaim` if they agree). Another agent: pick a different browser, or `acquire <id>` to queue. |
+| `2` | preempted | A human took control -- you're queued to resume. | **Stop and end your turn.** Tell the user; you'll be messaged to resume when they hand the browser back (re-run `state <id>` first). Don't poll or `--reclaim` on your own. |
+| `3` | busy | Held by another agent. | Use a different browser (or `new`); you're also queued and will be messaged when it frees. |
 | `4` | timed-out | You waited (`task --max-wait`) and another agent still held it. | Try later, or pick a different browser. |
 | `64` | usage | `MNGR_AGENT_ID` unset / bad arguments. | Run from inside an agent shell; fix the command. |
 | `69` | no daemon | Can't reach the browser daemon. | The browser service isn't running -- report it; don't blindly retry. |

@@ -73,9 +73,12 @@ browsers, each with an atomic ownership state machine, plus an
   CAPTCHA / login handoff flow. Mechanics:
 
     - A human pin only *blocks* agents while the human is actively driving; if they
-      go quiet for a grace period (`BROWSER_HUMAN_ACTIVE_GRACE`, default 20s) the pin
-      yields -- a queued agent is handed the browser automatically, and a freshly
-      arriving agent simply takes it. So a forgotten hold never blocks the fleet.
+      go quiet for a grace period (`BROWSER_HUMAN_ACTIVE_GRACE`, default 120s -- long
+      enough to read a CAPTCHA or fetch a 2FA code without the page being yanked, and
+      any click/keystroke refreshes it) the pin yields: a queued agent is handed the
+      browser automatically, and a freshly arriving agent simply takes it. So a
+      forgotten hold never blocks the fleet. The "Return control to agents" button is
+      the instant hand-back; the grace is only the walked-away backstop.
 
     - An agent handed the browser from the resume queue but that never sends a
       command (it was interrupted) has its grant revoked after a short claim window

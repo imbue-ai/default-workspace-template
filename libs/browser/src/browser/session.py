@@ -139,8 +139,12 @@ _LEASE_IDLE_TTL = float(os.environ.get("BROWSER_LEASE_IDLE_TTL", "90"))
 # A human take-control only *blocks* agents while the human is actively using the
 # browser. If they haven't touched it in this many seconds, the pin is treated as
 # stale and the next agent that wants the browser takes it (a forgotten/idle hold
-# yields). Active CAPTCHA/login solving keeps refreshing this, so it stays held.
-_HUMAN_ACTIVE_GRACE = float(os.environ.get("BROWSER_HUMAN_ACTIVE_GRACE", "20"))
+# yields). This MUST be long enough to cover a human pausing mid-task -- reading a
+# CAPTCHA's instructions, fetching a 2FA code from their phone -- without the page
+# being yanked out from under them; any input (click/key/nav) refreshes it. The
+# explicit "Return control to agents" button is the instant hand-back; this is only
+# the walked-away backstop, so it errs long. Env-tunable.
+_HUMAN_ACTIVE_GRACE = float(os.environ.get("BROWSER_HUMAN_ACTIVE_GRACE", "120"))
 
 # When the browser frees and is handed to a queued agent, that agent is *messaged*
 # to resume (it ended its turn). If it doesn't actually take the wheel (send a
@@ -148,6 +152,17 @@ _HUMAN_ACTIVE_GRACE = float(os.environ.get("BROWSER_HUMAN_ACTIVE_GRACE", "20"))
 # revoked and the browser passes to the next waiter, instead of sitting idle for
 # the full _LEASE_IDLE_TTL on a no-show.
 _CLAIM_WINDOW = float(os.environ.get("BROWSER_CLAIM_WINDOW", "12"))
+
+
+def _repo_root() -> Path:
+    """The workspace root (where ``scripts/`` lives), anchored on this file's location
+    rather than cwd -- used as the wake subprocess's cwd so the ``mngr`` dev shim
+    resolves this checkout regardless of where the daemon was started."""
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "scripts").is_dir() and (candidate / "libs").is_dir():
+            return candidate
+    return Path.cwd()
+
 
 # Where `screenshot` writes PNGs (relative to the daemon's cwd = repo root). The
 # CLI prints the path and the agent reads the file; agent + daemon share the FS.
@@ -310,6 +325,10 @@ class LiveBrowser(MutableModel):
     # When a resume-queue agent was handed the browser but hasn't sent a command
     # yet (the claim window); 0.0 once it claims (or when no grant is pending).
     _granted_at: float = PrivateAttr(default=0.0)
+    # Strong refs to in-flight _wake_agent tasks. asyncio keeps only weak references
+    # to bare create_task() results, so without this the wake (an `mngr message`
+    # subprocess) could be garbage-collected before it runs.
+    _wake_tasks: set[Any] = PrivateAttr(default_factory=set)
 
     async def start(self, playwright: Playwright) -> None:
         """Launch the headless Chromium (browser-use) and attach the Playwright observer."""
@@ -728,6 +747,12 @@ class LiveBrowser(MutableModel):
         """Drop an agent from the resume queue (it took control / no longer waiting)."""
         self._resume_queue = [(aid, an) for (aid, an) in self._resume_queue if aid != agent_id]
 
+    def _spawn_wake(self, agent_id: str, agent_name: str | None) -> None:
+        """Schedule a wake, holding a strong ref so the task isn't GC'd before it runs."""
+        task = asyncio.create_task(self._wake_agent(agent_id, agent_name))
+        self._wake_tasks.add(task)
+        task.add_done_callback(self._wake_tasks.discard)
+
     async def _wake_agent(self, agent_id: str, agent_name: str | None) -> None:
         """Message a queued agent that the browser is its again, so it resumes in a
         fresh turn (it ended its turn when it lost control). Best-effort: shells out to
@@ -745,6 +770,10 @@ class LiveBrowser(MutableModel):
                 target,
                 "--message",
                 text,
+                # Run from the repo root so the `mngr` dev shim resolves this checkout
+                # (repo-relative paths assume cwd = repo root; don't rely on the
+                # daemon's inherited cwd).
+                cwd=str(_repo_root()),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -773,6 +802,11 @@ class LiveBrowser(MutableModel):
             return
         if self._wait_queue:
             waiter = self._wait_queue.pop(0)
+            # An agent can be in BOTH queues (it sent a direct command -> resume queue,
+            # then ran `task`/`acquire --wait` -> wait queue). Granting it here must
+            # also clear its resume-queue entry, or a later settle would re-grant the
+            # freed browser to an agent that's already done and spuriously wake it.
+            self._dequeue_resume_locked(waiter.agent_id)
             await self._write_control_locked("agent", waiter.agent_id, waiter.agent_name, pinned=False)
             waiter.granted = True
             waiter.event.set()
@@ -780,7 +814,7 @@ class LiveBrowser(MutableModel):
             agent_id, agent_name = self._resume_queue.pop(0)
             await self._write_control_locked("agent", agent_id, agent_name, pinned=False)
             self._granted_at = time.monotonic()  # start the claim window
-            asyncio.create_task(self._wake_agent(agent_id, agent_name))
+            self._spawn_wake(agent_id, agent_name)
 
     async def _transition(
         self,
