@@ -33,6 +33,47 @@ function getBackoff(agentId: string): ReconnectBackoff {
 // eventsByAgent[agentId] does not drop them.
 const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
 
+// Last time any frame (event or keepalive) was received per agent. A healthy
+// stream delivers either real events or a server keepalive at least every ~8s,
+// so a gap past STALE_TIMEOUT_MS means the connection is a half-open/zombie that
+// EventSource will never surface as `onerror` -- the staleness watchdog
+// force-reconnects it.
+const lastActivityByAgent = new Map<string, number>();
+const STALE_TIMEOUT_MS = 25_000;
+const STALE_CHECK_INTERVAL_MS = 5_000;
+let stalenessWatchdog: ReturnType<typeof setInterval> | null = null;
+
+function markActivity(agentId: string): void {
+  lastActivityByAgent.set(agentId, Date.now());
+}
+
+function ensureStalenessWatchdog(): void {
+  if (stalenessWatchdog !== null) {
+    return;
+  }
+  stalenessWatchdog = setInterval(() => {
+    const now = Date.now();
+    for (const [agentId, eventSource] of [...activeStreams]) {
+      const last = lastActivityByAgent.get(agentId) ?? now;
+      if (now - last <= STALE_TIMEOUT_MS) {
+        continue;
+      }
+      // Zombie connection: no frames for STALE_TIMEOUT_MS and no `onerror`.
+      // Tear it down and reconnect (with a snapshot refetch) so missed events
+      // are recovered -- mirrors the onerror reconnect path.
+      console.warn(`SSE stream for agent ${agentId} stale (${now - last}ms); forcing reconnect`);
+      if (activeStreams.get(agentId) === eventSource) {
+        eventSource.close();
+        activeStreams.delete(agentId);
+      }
+      lastActivityByAgent.delete(agentId);
+      if (!explicitlyDisconnectedAgents.has(agentId)) {
+        void reconnectWithSnapshot(agentId);
+      }
+    }
+  }, STALE_CHECK_INTERVAL_MS);
+}
+
 // Claude auth is mind-global, so an auth-error on any agent's stream
 // opens the single shared login modal (see models/ClaudeAuth.ts) -- no
 // per-agent routing needed.
@@ -61,15 +102,23 @@ export function connectToStream(agentId: string): void {
 
   const eventSource = new EventSource(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/stream`));
   activeStreams.set(agentId, eventSource);
+  markActivity(agentId);
+  ensureStalenessWatchdog();
 
   eventSource.onopen = () => {
     // A successful (re)connection resets this agent's backoff.
     getBackoff(agentId).reset();
+    markActivity(agentId);
   };
 
   eventSource.onmessage = (messageEvent: MessageEvent) => {
+    // Any frame -- including a keepalive -- means the connection is alive.
+    markActivity(agentId);
     const raw = parseJsonMessage<{ type?: string }>(messageEvent.data);
     if (raw === null) {
+      return;
+    }
+    if (raw.type === "keepalive") {
       return;
     }
     const event = raw as TranscriptEvent;
@@ -143,6 +192,7 @@ export function disconnectFromStream(agentId: string): void {
   // Drop the backoff so a later fresh connectToStream starts from the base
   // delay rather than inheriting a stale grown delay.
   backoffByAgent.delete(agentId);
+  lastActivityByAgent.delete(agentId);
   const eventSource = activeStreams.get(agentId);
   if (eventSource !== undefined) {
     eventSource.close();
