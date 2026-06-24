@@ -208,8 +208,16 @@ Every browser has exactly one controller; every command's output names the
 owner. The rules:
 
 - **You auto-acquire and hold a sticky lease.** Your first command on a
-  browser acquires it, and it stays yours across the commands that follow.
-  No manual `acquire`/`release` in the normal case.
+  browser acquires it, and it stays yours across the commands that follow --
+  no manual `acquire` needed.
+- **Release it the moment you're done.** When you've finished with a browser
+  and are handing back to the user (you're ending your turn, or you no longer
+  need it), run `release <id>` for each browser you drove. That hands control
+  straight back to the human -- the live pane becomes interactive immediately,
+  instead of making them wait out the ~90s idle timeout while a grey "Agent has
+  control" overlay sits on a browser you're finished with. (If you forget, the
+  idle lease frees itself after ~90s; releasing is the instant, polite version
+  -- prefer it.)
 - **A human can take control** from the UI at any time. Your *next* command
   then comes back:
 
@@ -251,25 +259,16 @@ for results.
 
 - **Multiple browsers:** just use different ids. They don't interfere.
 - **Tabs:** `tab <id> ...` manages tabs *within* one browser.
-- **Sub-agents:** if you launch a sub-agent (via `launch-task`) that will run
-  `agentic-browser-fleet` itself, set `BROWSER_FLEET_ANCHOR=chat:<your-name>`
-  in its environment so its browser panes open next to **your** chat (where
-  the human is watching), not next to the sub-agent's own. `create_worker.py`
-  has no flag to inject env vars, so put the export in the **task file** you
-  write for the sub-agent:
-
-  ```text
-  ## Environment
-  Before running any agentic-browser-fleet command, export:
-
-      export BROWSER_FLEET_ANCHOR=chat:<your MNGR_AGENT_NAME>
-
-  so the browser panes open next to the orchestrator's chat.
-  ```
-
-  If unset it still works -- the pane just opens next to the sub-agent's own
-  chat. It's an ergonomics nicety for the human, not a correctness
-  requirement.
+- **You drive the browser -- don't hand it to a background sub-agent.** A
+  `launch-task` sub-agent runs in a **separate, isolated container**: it has no
+  access to *this* workspace's browser fleet, and any browser it managed to
+  start would be invisible to the user (no live pane next to this chat, and its
+  `agentic-browser-fleet` calls hit a daemon/registry that isn't there). So do
+  web/browser work **yourself, right here in this chat** -- that is the whole
+  point of direct control: keyless, inline, in the chat the human is watching.
+  If you've delegated other work to a sub-agent and it needs something from the
+  web, have it tell you what it needs and you do the browsing (or browse first
+  and pass the result down). The browser belongs to the user-facing agent.
 
 ## Exit codes -- branch on these
 
