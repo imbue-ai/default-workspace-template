@@ -15,6 +15,7 @@ from imbue.mngr.api.find import find_one_agent
 from imbue.mngr.api.find import resolve_to_started_host_and_running_agent
 from imbue.mngr.api.list import ErrorBehavior
 from imbue.mngr.api.list import list_agents
+from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.message import send_message_to_agents
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.loader import load_config
@@ -167,8 +168,8 @@ def discover_agents(
     return agents
 
 
-def send_message(agent_name: str, message: str) -> bool:
-    """Send a message to an agent. Returns True on success.
+def _dispatch_message(agent_name: str, message: str) -> MessageResult:
+    """Resolve the agent by name and attempt delivery, returning the raw result.
 
     STOPPED agents are automatically started before the message is sent
     (`is_start_desired=True`), so messaging is possible regardless of agent state.
@@ -190,7 +191,44 @@ def send_message(agent_name: str, message: str) -> bool:
         )
     finally:
         cg.__exit__(None, None, None)
-    return len(result.successful_agents) > 0
+    return result
+
+
+def describe_failed_delivery(agent_name: str, result: MessageResult) -> str | None:
+    """Return ``None`` if the message was delivered, else a human-readable reason.
+
+    ``send_message_to_agents`` records the underlying reason for each failed
+    delivery (e.g. a TUI submission-signal timeout when the agent's terminal is
+    busy, showing a dialog, or parked in a non-input view) in
+    ``MessageResult.failed_agents``. This surfaces that reason verbatim so callers
+    can show the user an actionable message instead of an opaque "0 successful
+    agents". Falls back to a generic message when no specific reason was recorded.
+
+    Kept as a pure function of the result (no I/O) so it can be tested directly.
+    """
+    if result.successful_agents:
+        return None
+    for failed_name, reason in result.failed_agents:
+        cleaned_reason = reason.strip()
+        if cleaned_reason:
+            return f"agent '{failed_name}' did not accept the message: {cleaned_reason}"
+    return f"agent '{agent_name}' did not accept the message"
+
+
+def send_message_and_get_error(agent_name: str, message: str) -> str | None:
+    """Send a message to an agent; return ``None`` on success or a failure reason."""
+    result = _dispatch_message(agent_name, message)
+    return describe_failed_delivery(agent_name, result)
+
+
+def send_message(agent_name: str, message: str) -> bool:
+    """Send a message to an agent. Returns True on success.
+
+    Thin boolean wrapper over `send_message_and_get_error` for callers that only
+    need success/failure (e.g. welcome resend). Prefer `send_message_and_get_error`
+    when you need to surface *why* a send failed.
+    """
+    return send_message_and_get_error(agent_name, message) is None
 
 
 def start_agent(agent_name: str) -> None:

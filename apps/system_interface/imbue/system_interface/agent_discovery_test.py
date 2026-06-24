@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from imbue.mngr.api.message import MessageResult
+from imbue.system_interface.agent_discovery import describe_failed_delivery
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 
 
@@ -94,3 +96,28 @@ def test_falls_back_to_home_claude_when_nothing_else_exists(monkeypatch: pytest.
     result = read_claude_config_dir_from_env_file(agent_state_dir)
 
     assert result == Path.home() / ".claude"
+
+
+def test_describe_failed_delivery_returns_none_on_success() -> None:
+    """A delivery with at least one successful agent reports no error."""
+    result = MessageResult(successful_agents=["test-agent"], failed_agents=[])
+    assert describe_failed_delivery("test-agent", result) is None
+
+
+def test_describe_failed_delivery_surfaces_recorded_reason() -> None:
+    """A failed delivery surfaces the underlying reason recorded for the agent."""
+    result = MessageResult(
+        successful_agents=[],
+        failed_agents=[("test-agent", "Timeout waiting for message submission signal (waited 40s)")],
+    )
+    error = describe_failed_delivery("test-agent", result)
+
+    assert error is not None
+    assert "test-agent" in error
+    assert "Timeout waiting for message submission signal (waited 40s)" in error
+
+
+def test_describe_failed_delivery_falls_back_when_no_reason_recorded() -> None:
+    """With neither a success nor a recorded reason, a generic message is returned."""
+    result = MessageResult(successful_agents=[], failed_agents=[])
+    assert describe_failed_delivery("test-agent", result) == "agent 'test-agent' did not accept the message"

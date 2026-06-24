@@ -33,7 +33,7 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
-from imbue.system_interface.agent_discovery import send_message
+from imbue.system_interface.agent_discovery import send_message_and_get_error
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.claude_auth import ClaudeAuthService
@@ -416,9 +416,9 @@ def _send_message_endpoint(agent_id: str, send_message_request: SendMessageReque
     if agent_info is None:
         return _agent_not_found_response(agent_id)
 
-    success = send_message(agent_info.name, send_message_request.message)
-    if not success:
-        error = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
+    failure_reason = send_message_and_get_error(agent_info.name, send_message_request.message)
+    if failure_reason is not None:
+        error = ErrorResponse(detail=failure_reason)
         return JSONResponse(content=error.model_dump(), status_code=500)
 
     return JSONResponse(content=SendMessageResponse(status="ok").model_dump())

@@ -271,13 +271,33 @@ def test_send_message_success(client: TestClient) -> None:
     )
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch("imbue.system_interface.server.send_message", return_value=True) as mock_send,
+        patch("imbue.system_interface.server.send_message_and_get_error", return_value=None) as mock_send,
     ):
         response = client.post("/api/agents/agent-123/message", json={"message": "hello"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     mock_send.assert_called_once_with("test-agent", "hello")
+
+
+def test_send_message_surfaces_failure_reason(client: TestClient) -> None:
+    """A failed send returns the underlying reason as the error detail, not an opaque message."""
+    agent_info = AgentInfo(
+        id="agent-123",
+        name="test-agent",
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+    reason = "agent 'test-agent' did not accept the message: Timeout waiting for message submission signal (waited 40s)"
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.server.send_message_and_get_error", return_value=reason),
+    ):
+        response = client.post("/api/agents/agent-123/message", json={"message": "hello"})
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == reason
 
 
 def test_interrupt_agent_returns_404_for_unknown_agent(client: TestClient) -> None:
