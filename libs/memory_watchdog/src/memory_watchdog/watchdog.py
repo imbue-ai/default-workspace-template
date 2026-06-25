@@ -2,10 +2,11 @@
 
 Each poll it snapshots the container's process tree, classifies every process
 into an OOM-priority tier, and keeps each process's oom_score_adj in line with
-its tier. Under sustained memory pressure it sheds whole tiers from the most
-expendable up (agent build/test/browser subprocesses first, the user's own
-agents only as a last resort), recording every kill to a ledger and publishing a
-status file the UI banner reads.
+its tier. Under sustained memory pressure it sheds individual processes, most
+expendable tier first and largest process first within a tier, stopping as soon
+as the projected reclaim is enough (agent build/test/browser subprocesses first,
+the user's own agents only as a last resort), recording every kill to a ledger
+and publishing a status file the UI banner reads.
 
 Liveness of the watchdog itself, and of every other background service, is owned
 by supervisord (see supervisord.conf): supervisord restarts this process if it
