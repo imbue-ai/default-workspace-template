@@ -79,6 +79,72 @@ body {
   opacity: 0.85;
 }
 
+.memory-pressure-banner__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+/* The collapsed-state count doubles as the disclosure control. */
+.memory-pressure-banner__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.memory-pressure-banner__toggle:hover {
+  text-decoration: underline;
+}
+
+.memory-pressure-banner__chevron {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.memory-pressure-banner__chevron[data-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.memory-pressure-banner__list {
+  list-style: none;
+  margin: 8px 0 2px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 640px;
+}
+
+.memory-pressure-banner__item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  background: color-mix(in srgb, #d9a441 10%, transparent);
+}
+
+.memory-pressure-banner__item-name {
+  font-weight: 500;
+}
+
+.memory-pressure-banner__item-meta {
+  opacity: 0.8;
+  white-space: nowrap;
+}
+
 /* ── Title bar ── */
 .app-header {
   padding: 14px 32px;
