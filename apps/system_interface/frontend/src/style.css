@@ -86,23 +86,41 @@ body {
   gap: 4px 8px;
 }
 
-/* The collapsed-state count doubles as the disclosure control. */
+/* The collapsed-state count doubles as the disclosure control. The chevron is
+   the affordance -- no underline (which collided awkwardly with the chevron);
+   hover just lifts a faint chip behind it. */
 .memory-pressure-banner__toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   margin: 0;
-  padding: 0;
+  padding: 1px 6px;
   background: none;
   border: none;
+  border-radius: 5px;
   font: inherit;
   font-weight: 500;
   color: var(--color-text-primary);
   cursor: pointer;
+  opacity: 0.85;
+  transition:
+    opacity 0.12s ease,
+    background-color 0.12s ease;
 }
 
 .memory-pressure-banner__toggle:hover {
-  text-decoration: underline;
+  opacity: 1;
+  background: color-mix(in srgb, #d9a441 16%, transparent);
+}
+
+/* Drop the mouse-click focus ring, but keep a visible ring for keyboard users. */
+.memory-pressure-banner__toggle:focus {
+  outline: none;
+}
+
+.memory-pressure-banner__toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, #d9a441 70%, transparent);
+  outline-offset: 2px;
 }
 
 .memory-pressure-banner__chevron {
