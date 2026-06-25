@@ -51,19 +51,24 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         isInterruptInFlight = false;
       }
 
-      // Pick up a one-shot prefill queued by a clicked choice card (prefill only;
-      // the user still sends). An empty draft clears and focuses the box. Mirror
-      // the per-agent localStorage persistence the live input uses so the prefill
-      // survives a reload or agent switch.
-      const draft = consumeInputDraft(agentId);
-      if (draft !== null) {
-        messageText = draft;
-        if (draft.length > 0) {
-          localStorage.setItem(messageTextKey(agentId), draft);
+      // Pick up a one-shot choice queued by a clicked card. A choice with text is
+      // sent immediately, reusing the composer's own send path so the optimistic
+      // bubble and activity indicator behave exactly like a typed-and-sent message
+      // (this is what makes a click feel reactive). An empty choice has nothing to
+      // send, so it just focuses the box for the user to type ("I have something in
+      // mind"). The send is deferred to a microtask so it runs after this render
+      // finishes rather than mutating composer state mid-view.
+      const queuedChoice = consumeInputDraft(agentId);
+      if (queuedChoice !== null) {
+        messageText = queuedChoice;
+        if (queuedChoice.trim().length > 0) {
+          queueMicrotask(() => {
+            void handleSend();
+          });
         } else {
           localStorage.removeItem(messageTextKey(agentId));
+          requestAnimationFrame(() => focusMessageTextarea());
         }
-        requestAnimationFrame(() => focusMessageTextarea());
       }
 
       async function handleSend(): Promise<void> {

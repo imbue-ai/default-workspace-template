@@ -25,5 +25,5 @@ tell me what you have in mind:
 ---
 
 The ` ```minds-choices ` block renders as four clickable cards; clicking one
-fills in the user's message for them. Output it exactly as written. Stop after the
+sends that message for the user. Output it exactly as written. Stop after the
 block.

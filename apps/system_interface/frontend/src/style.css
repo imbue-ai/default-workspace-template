@@ -1075,6 +1075,13 @@ body {
   box-shadow: 0 0 0 2px var(--color-accent-light);
 }
 
+/* Tactile press feedback: the card sends its message on click, so a quick
+   pressed state makes that feel responsive. */
+.choice-card:active {
+  transform: translateY(1px);
+  background: var(--color-accent-light);
+}
+
 .choice-card-title {
   font-size: 14px;
   font-weight: 600;
