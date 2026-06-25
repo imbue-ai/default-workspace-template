@@ -310,7 +310,16 @@ def _stream_filtered_events(
                 event = event_queue.get(timeout=1)
                 if event is None:
                     break
-                if not should_forward(event):
+                forwarded = should_forward(event)
+                logger.info(
+                    "[diag-gen] agent={} got event_id={} type={} session={} forward={}",
+                    agent_id,
+                    event.get("event_id"),
+                    event.get("type"),
+                    event.get("session_id"),
+                    forwarded,
+                )
+                if not forwarded:
                     continue
                 keepalive_counter = 0
                 yield f"data: {json.dumps(event)}\n\n"
