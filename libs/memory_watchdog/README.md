@@ -15,8 +15,8 @@ Every few seconds it:
    individual processes -- most-expendable tier first and largest process first
    within a tier, stopping as soon as the projected reclaim clears the relief
    threshold (and never killing a process below the minimum-RSS floor). So agent
-   build/test/browser subprocesses go first, then auxiliary services, then worker
-   agents, and the user's own agents only as a last resort. Infrastructure, the
+   build/test/browser subprocesses go first, then worker agents, then auxiliary
+   services, and the user's own agents only as a last resort. Infrastructure, the
    UI, the recovery machinery, and the backups (tiers 1-4) are never shed.
 
 The watchdog only *decides what to shed*; it does not supervise other processes.
