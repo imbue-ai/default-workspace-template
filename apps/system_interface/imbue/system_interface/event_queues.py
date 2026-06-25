@@ -76,9 +76,11 @@ class AgentEventQueues:
                 self._event_buffers.pop(agent_id, None)
             queues = list(self._queues.get(agent_id, []))
         _diag_logger.info(
-            "[diag-sse] BROADCAST agent={} type={} -> {} clients",
+            "[diag-sse] BROADCAST agent={} event_id={} type={} session={} -> {} clients",
             agent_id,
+            clean_event.get("event_id"),
             clean_event.get("type") or clean_event.get("event_type") or "?",
+            clean_event.get("session_id"),
             len(queues),
         )
         for event_queue in queues:
