@@ -393,6 +393,16 @@ class OuterHostInterface(HostFileReadInterface, HostFileWriteInterface, ABC):
         """
         return None
 
+    # returns (outer_host_public_key, container_host_public_key)
+    def get_ssh_host_public_keys(self) -> tuple[str | None, str | None]:
+        """The host's outer (VPS/VM-root) and container sshd host public keys, when known.
+
+        Returns ``(None, None)`` by default. A provider that generates the host's
+        sshd host keys at bake time surfaces them here so ``mngr create --format
+        json`` can report them for strict host-key pinning.
+        """
+        return (None, None)
+
     def disconnect(self) -> None:
         """Disconnect from this host, releasing any held connections.
 
@@ -451,28 +461,25 @@ class OnlineHostInterface(HostInterface, OuterHostInterface, ABC):
 
     @abstractmethod
     @contextmanager
-    def lock_cooperatively(self, timeout_seconds: float = 30.0) -> Iterator[None]:
-        """Context manager for acquiring and releasing the host lock."""
-        ...
+    def lock_cooperatively(self, timeout_seconds: float | None = 300.0) -> Iterator[None]:
+        """Hold the host's exclusive, cross-actor lock for the duration of the block.
 
-    @abstractmethod
-    @contextmanager
-    def lock_for_starting(self) -> Iterator[None]:
-        """Context manager that serializes concurrent ``mngr start`` runs for this host.
-
-        Holds an exclusive flock(2) that coordinates local (in-host) and remote
-        (over-SSH) starts. Blocks indefinitely until the lock is acquired.
+        Holds a real flock(2) (directly on local hosts, over SSH on remote hosts)
+        that coordinates local (in-host) and remote (over-SSH) holders and
+        suppresses idle shutdown while held. ``timeout_seconds=None`` blocks
+        indefinitely; a finite value raises LockNotHeldError if it cannot be
+        acquired in time.
         """
         ...
 
     @abstractmethod
     def get_reported_lock_time(self) -> datetime | None:
-        """Return the last modification time of the host lock file, or None if not locked."""
+        """Return the last modification time of the host lock file, or None if absent."""
         ...
 
     @abstractmethod
     def is_lock_held(self) -> bool:
-        """Check whether the host lock is currently held."""
+        """Check whether the host lock is currently held (via a non-blocking flock probe)."""
         ...
 
     # =========================================================================
