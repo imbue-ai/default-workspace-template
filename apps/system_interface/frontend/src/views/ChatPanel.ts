@@ -450,11 +450,22 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     previousScrollTop = element.scrollTop;
     scrollTop = element.scrollTop;
 
+    const wasScrolledUp = userScrolledUp;
     userScrolledUp = nextUserScrolledUp({
       didScrollUp,
       isNearBottom: isNearBottom(element),
       hasMoreAfter: hasMoreAfter(currentAgentId ?? ""),
     });
+    const scrollDiag = (globalThis as unknown as {
+      __chatScrollDiag?: { events: number; latchedUp: number; lastDidScrollUp: boolean };
+    });
+    const d = scrollDiag.__chatScrollDiag ?? { events: 0, latchedUp: 0, lastDidScrollUp: false };
+    d.events += 1;
+    d.lastDidScrollUp = didScrollUp;
+    if (!wasScrolledUp && userScrolledUp) {
+      d.latchedUp += 1;
+    }
+    scrollDiag.__chatScrollDiag = d;
 
     if (currentAgentId !== null) {
       maybePage(currentAgentId, element);
@@ -621,6 +632,26 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
       viewportHeight: viewportHeight > 0 ? viewportHeight : (scrollEl?.clientHeight ?? 2000),
       overscanPx: OVERSCAN_PX,
     });
+
+    const chatDiag = (globalThis as unknown as { __chatDiag?: Record<string, unknown> });
+    chatDiag.__chatDiag = chatDiag.__chatDiag ?? {};
+    chatDiag.__chatDiag[agentId] = {
+      userScrolledUp,
+      scrollTop,
+      scrollHeight: scrollEl?.scrollHeight ?? -1,
+      clientHeight: scrollEl?.clientHeight ?? -1,
+      viewportHeight,
+      phantomTopHeight,
+      phantomBottomHeight,
+      startIndex: windowResult.startIndex,
+      endIndex: windowResult.endIndex,
+      rowCount: rows.length,
+      loadedEventCount: events.length,
+      total,
+      firstOffset,
+      newerUnloaded,
+      tailRowsHidden: windowResult.endIndex < rows.length,
+    };
 
     const visibleRows: m.Children[] = [];
     visibleRows.push(m("div", { key: "__spacer_top", style: `height: ${phantomTopHeight + windowResult.topPad}px` }));
