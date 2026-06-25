@@ -340,7 +340,8 @@ def classify_processes(
                     tier = base_tier
                     label = agent_name
             else:
-                # A prefixed session we cannot interpret; protect it.
+                # A non-services session whose name lacks the agent prefix, so
+                # we cannot resolve an agent for it; protect it like a user agent.
                 tier = Tier.USER_AGENT
                 label = pane.session_name
             assigned_pids.add(pid)
