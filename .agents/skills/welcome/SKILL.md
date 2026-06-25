@@ -11,10 +11,13 @@ Output the following welcome message to the user, verbatim, as your entire respo
 
 ### Welcome to Minds
 
-A Mind runs your responsibilities in the background — even when your laptop is closed. It learns what you care about, fixes connections when things break, and gets smarter every time you use it. 
-Tell it what you want, how it can be better, and it'll take care of it.
+I’m an AI operating system that’s been built to extend *you* — so you can do your best work.
 
-**What do you want to start with?**
+I can do tasks for you, make custom AI tools that are easily editable, or just brainstorm with you on how to help you to do your best work. I can connect to the many platforms and help pull information or build personalized views.
+
+Tell me what needs to get done and we can figure it out together.
+
+**What would make your work easier?**
 
 ---
 
