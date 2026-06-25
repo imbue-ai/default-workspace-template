@@ -84,31 +84,62 @@ function diagFor(agentId: string): SseAgentDiag {
   return diag;
 }
 
+// DIAG meta: confirms whether the watchdog timer is actually running (it is
+// throttled/suspended in a backgrounded/occluded WebContents) and whether a
+// visibility-triggered reconnect fired.
+const watchdogMeta = { ticks: 0, visibilityReconnects: 0, lastTickAt: 0 };
+(globalThis as unknown as { __sseDiagMeta?: typeof watchdogMeta }).__sseDiagMeta = watchdogMeta;
+
+// Tear down and reconnect (with snapshot refetch) any stream that has gone quiet
+// for `thresholdMs` -- a half-open/zombie connection EventSource never surfaces
+// as `onerror`. Shared by the interval watchdog and the visibility/focus path.
+function reconnectStaleStreams(thresholdMs: number, reason: string): void {
+  const now = Date.now();
+  for (const [agentId, eventSource] of [...activeStreams]) {
+    const last = lastActivityByAgent.get(agentId) ?? now;
+    if (now - last <= thresholdMs) {
+      continue;
+    }
+    console.warn(`SSE stream for agent ${agentId} stale (${now - last}ms, ${reason}); forcing reconnect`);
+    if (activeStreams.get(agentId) === eventSource) {
+      eventSource.close();
+      activeStreams.delete(agentId);
+    }
+    lastActivityByAgent.delete(agentId);
+    if (!explicitlyDisconnectedAgents.has(agentId)) {
+      void reconnectWithSnapshot(agentId);
+    }
+  }
+}
+
 function ensureStalenessWatchdog(): void {
   if (stalenessWatchdog !== null) {
     return;
   }
   stalenessWatchdog = setInterval(() => {
-    const now = Date.now();
-    for (const [agentId, eventSource] of [...activeStreams]) {
-      const last = lastActivityByAgent.get(agentId) ?? now;
-      if (now - last <= STALE_TIMEOUT_MS) {
-        continue;
-      }
-      // Zombie connection: no frames for STALE_TIMEOUT_MS and no `onerror`.
-      // Tear it down and reconnect (with a snapshot refetch) so missed events
-      // are recovered -- mirrors the onerror reconnect path.
-      console.warn(`SSE stream for agent ${agentId} stale (${now - last}ms); forcing reconnect`);
-      if (activeStreams.get(agentId) === eventSource) {
-        eventSource.close();
-        activeStreams.delete(agentId);
-      }
-      lastActivityByAgent.delete(agentId);
-      if (!explicitlyDisconnectedAgents.has(agentId)) {
-        void reconnectWithSnapshot(agentId);
-      }
-    }
+    watchdogMeta.ticks += 1;
+    watchdogMeta.lastTickAt = Date.now();
+    reconnectStaleStreams(STALE_TIMEOUT_MS, "watchdog");
   }, STALE_CHECK_INTERVAL_MS);
+
+  // The interval is throttled/suspended while the chat WebContents is hidden or
+  // occluded, so a stream that died while backgrounded would never be recovered
+  // by the timer alone. When the page becomes visible/focused again, immediately
+  // reconnect any stream that has been quiet -- a lower threshold here because
+  // the timer may have been asleep.
+  const onVisible = (): void => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      return;
+    }
+    watchdogMeta.visibilityReconnects += 1;
+    reconnectStaleStreams(STALE_CHECK_INTERVAL_MS, "visibility");
+  };
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", onVisible);
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("focus", onVisible);
+  }
 }
 
 // Claude auth is mind-global, so an auth-error on any agent's stream
