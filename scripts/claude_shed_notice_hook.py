@@ -109,7 +109,11 @@ def main() -> None:
         "had running -- for example polling loops waiting on another agent or an "
         "external event -- were cancelled and were NOT automatically restarted. "
         "If you were in the middle of multi-step work, re-check the current state "
-        "before continuing rather than assuming your last action completed."
+        "before continuing rather than assuming your last action completed. If you "
+        "were running a memory-intensive task, do not simply re-run it as-is -- it "
+        "will likely be stopped again; first find a way to do it using less memory "
+        "(smaller batches, streaming instead of loading everything at once, "
+        "releasing data you no longer need), and only retry if you can."
     )
     _append_delivery_marker(ledger_path, agent_name, max(pending))
 
