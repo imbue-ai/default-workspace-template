@@ -17,7 +17,7 @@ I can take on tasks for you, build custom AI tools that are easy to edit, or jus
 
 **What would make your work easier?**
 
-- **Already have something in mind?** Tell me what you'd like to work on below and we'll start building.
+- Already have something in mind? Tell me what you'd like to work on below and we'll start building.
 - If not, I'm happy to suggest a few ways to get started.
 
 ---
