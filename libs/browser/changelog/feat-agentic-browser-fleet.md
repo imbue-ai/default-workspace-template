@@ -73,13 +73,13 @@ browsers, each with an atomic ownership state machine, plus an
   the browser back (it re-reads the page with `state` and continues). This is the
   CAPTCHA / login handoff flow. Mechanics:
 
-    - A human pin only *blocks* agents while the human is actively driving; if they
-      go quiet for a grace period (`BROWSER_HUMAN_ACTIVE_GRACE`, default 120s -- long
-      enough to read a CAPTCHA or fetch a 2FA code without the page being yanked, and
-      any click/keystroke refreshes it) the pin yields: a queued agent is handed the
-      browser automatically, and a freshly arriving agent simply takes it. So a
-      forgotten hold never blocks the fleet. The "Return control to agents" button is
-      the instant hand-back; the grace is only the walked-away backstop.
+    - A human take-control is STICKY: it holds until the human explicitly hands back
+      ("Return to agent"), with no idle/grace yield. A human who grabs a browser keeps
+      it even if they step away mid-CAPTCHA/login, so they never come back to find an
+      agent moved the page out from under them. (Agents still auto-release via the idle
+      lease -- the asymmetry is deliberate: a dead agent must not hoard a browser, a
+      human must never be force-yielded. The tradeoff is that a forgotten human hold
+      parks that one browser until released; other browsers and `new` are unaffected.)
 
     - An agent handed the browser from the resume queue but that never sends a
       command (it was interrupted) has its grant revoked after a short claim window
@@ -131,3 +131,23 @@ browsers, each with an atomic ownership state machine, plus an
   "service not registered" error (and the misleading "headless" wording), it now warns
   in one clean line that the browser is running but a background agent can't show panes
   (open it from the "+" menu, or have the main agent drive it).
+
+- Agent-initiated handoff for CAPTCHAs / human verification. A new
+  `agentic-browser-fleet handoff <id> "<reason>"` verb (alias `request-human`) lets an
+  agent that hits a wall only a human can clear -- a CAPTCHA, a "verify you're human"
+  challenge, an SMS/2FA code, a credential login -- hand the browser to the human and
+  stop. The agent is placed at the FRONT of that browser's resume queue (it's mid-task)
+  and control goes to the *human*, pinned (not passed to the next queued agent), until
+  the human hands it back -- at which point the requester is the first agent woken to
+  resume. The viewer shows a distinct amber bar naming the agent and what to do ("X
+  needs your help: solve the CAPTCHA ... then click Return to agent"), and the pane is
+  surfaced/focused. The skill instructs agents to use it (and to NOT attempt CAPTCHAs
+  themselves). Exit code `2` (preempted), so the agent stops and ends its turn.
+
+- Browser-sandbox portability across minds modalities. Chromium's in-process sandbox is
+  redundant inside minds' outer boundary (gVisor under docker/cloud/AWS, the VM under
+  Lima / a non-gVisor VPS) and *refuses* to start on a plain-Linux runtime running as
+  root. The daemon now launches with the sandbox on by default (it works under gVisor)
+  but auto-retries once with it off if a first launch fails for a sandbox reason -- so
+  the fleet comes up unattended on Lima and non-gVisor VPSes too. `BROWSER_NO_SANDBOX=1`
+  forces it off explicitly. No provider sniffing; the feature stays provider-agnostic.

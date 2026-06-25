@@ -139,3 +139,32 @@ def test_cmd_new_pulls_a_pane(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fleet, "_pull_in_pane", lambda bid: pulled.append(bid))
     assert fleet.cmd_new(object()) == fleet._EXIT_OK  # type: ignore[arg-type]
     assert pulled == [4]
+
+
+def test_parser_accepts_handoff_and_request_human_alias() -> None:
+    p = fleet._build_parser()
+    a = p.parse_args(["handoff", "2", "solve the captcha"])
+    assert a.func is fleet.cmd_handoff and a.id == 2 and a.reason == "solve the captcha"
+    # The alias resolves to the same command, and reason defaults when omitted.
+    b = fleet._build_parser().parse_args(["request-human", "0"])
+    assert b.func is fleet.cmd_handoff and b.id == 0 and b.reason == "human verification needed"
+
+
+def test_cmd_handoff_pulls_pane_and_returns_preempted(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A successful handoff surfaces the pane (so the human sees what to solve) and exits
+    # PREEMPTED so the agent stops and waits to be woken to resume.
+    pulled: list[int] = []
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"ok": True, "status": "handed_off"}))
+    monkeypatch.setattr(fleet, "_pull_in_pane", lambda bid: pulled.append(bid))
+    args = fleet._build_parser().parse_args(["handoff", "1", "solve the captcha"])
+    assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED
+    assert pulled == [1]
+
+
+def test_cmd_handoff_not_owner_still_tells_agent_to_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Handing off a browser you no longer hold (a human already grabbed it) still exits
+    # PREEMPTED -- the agent isn't in control, so it should stop, not treat it as an error.
+    monkeypatch.setattr(fleet, "_request", lambda *a, **k: (200, {"ok": False, "status": "not_owner"}))
+    monkeypatch.setattr(fleet, "_pull_in_pane", lambda bid: None)
+    args = fleet._build_parser().parse_args(["handoff", "1"])
+    assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED

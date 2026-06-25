@@ -463,6 +463,29 @@ def cmd_acquire(args: argparse.Namespace) -> int:
     return _render_action(payload, args.id, "acquire")
 
 
+def cmd_handoff(args: argparse.Namespace) -> int:
+    """Hand a browser to the human for a CAPTCHA / robot-check / login you can't do."""
+    status, payload = _request("POST", f"/browsers/{args.id}/handoff", {"reason": args.reason})
+    if status == 404:
+        _err(payload.get("error", f"no browser {args.id}"))
+        return _EXIT_ERROR
+    if payload.get("ok"):
+        _pull_in_pane(args.id)  # surface/focus the pane so the human sees what to solve
+        _out(
+            f"handed browser {args.id} to the human: {args.reason}. You're first in line to "
+            f"resume. Tell the user what to do, end your turn, and re-run `state {args.id}` "
+            "when they hand control back."
+        )
+        return _EXIT_PREEMPTED
+    if payload.get("status") == "not_owner":
+        _out(
+            f"browser {args.id} isn't yours to hand off -- a human may already control it. "
+            f"Run `state {args.id}` to see who has it; if the human took over, you're queued to resume."
+        )
+        return _EXIT_PREEMPTED
+    return _render_action(payload, args.id, "handoff")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentic-browser-fleet", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -550,6 +573,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_acq.add_argument("id", type=int)
     p_acq.add_argument("--reclaim", action="store_true", help="Take a browser back from a human -- ONLY when they told you to resume.")
     p_acq.set_defaults(func=cmd_acquire)
+
+    for verb in ("handoff", "request-human"):
+        p_handoff = sub.add_parser(
+            verb,
+            help="Hand a browser to the human for a CAPTCHA / robot-check / login you can't do, then stop.",
+        )
+        p_handoff.add_argument("id", type=int)
+        p_handoff.add_argument("reason", nargs="?", default="human verification needed", help="What the human needs to do (e.g. 'solve the CAPTCHA').")
+        p_handoff.set_defaults(func=cmd_handoff)
 
     return parser
 
