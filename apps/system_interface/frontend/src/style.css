@@ -1491,6 +1491,30 @@ body {
   color: var(--color-text-secondary);
 }
 
+/* Newly auto-created agent tab (e.g. the nightly Caretaker): blink in the
+   accent color until the user opens it. createCustomTab() adds .dv-tab-new on
+   such tabs and removes it on the tab's first activation. */
+.dv-default-tab.dv-tab-new {
+  animation: tab-new-pulse 1.3s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+.dv-default-tab.dv-tab-new .dv-default-tab-content {
+  font-weight: 600;
+}
+
+@keyframes tab-new-pulse {
+  0%,
+  100% {
+    background-color: var(--color-accent-light);
+    color: var(--color-accent);
+  }
+  50% {
+    background-color: transparent;
+    color: var(--color-text-secondary);
+  }
+}
+
 /* ── Destroy confirmation dialog ── */
 .destroy-dialog-overlay {
   position: fixed;
