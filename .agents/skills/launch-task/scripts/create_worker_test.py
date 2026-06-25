@@ -687,6 +687,16 @@ def test_await_times_out_when_report_never_appears(
     assert "timed out" in capsys.readouterr().err
 
 
+def test_worker_name_is_derived_from_the_task_file_directory(tmp_path: Path) -> None:
+    """await derives the worker name from runtime/<flow>/<NAME>/task.md so the
+    shed-ledger watch works even when the caller forgot --name (a lead following
+    the skill easily does)."""
+    task = tmp_path / "runtime" / "launch-task" / "mem-probe" / "task.md"
+    task.parent.mkdir(parents=True)
+    task.write_text("---\nfinish_report_path: x/report.md\n---\n\nbody\n")
+    assert create_worker_mod._worker_name_from_task_file(task) == "mem-probe"
+
+
 def _write_shed_ledger(ledger_path: Path, records: list[dict[str, Any]]) -> None:
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     ledger_path.write_text("\n".join(json.dumps(r) for r in records) + "\n")

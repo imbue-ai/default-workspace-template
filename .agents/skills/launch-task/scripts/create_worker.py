@@ -229,6 +229,20 @@ def _read_finish_report_path(task_file: Path) -> Path:
     return Path(value)
 
 
+def _worker_name_from_task_file(task_file: Path) -> str:
+    """Best-effort worker (mngr agent) name, from the task file's directory.
+
+    Every flow stages the task at ``runtime/<flow>/<NAME>/task.md`` where
+    ``<NAME>`` is the worker's mngr agent name (launch passes the same ``<NAME>``
+    as both the directory and ``mngr create <NAME>``). So the parent directory
+    name is the worker name -- which is what lets ``await`` watch the shed ledger
+    for this worker even when the caller did not pass ``--name`` explicitly. If
+    the derived name is wrong it simply never matches a ledger record (no false
+    positive), so this is safe as a default.
+    """
+    return task_file.resolve().parent.name
+
+
 class Runner:
     """Indirection over ``subprocess.run`` so tests can intercept commands.
 
@@ -694,15 +708,19 @@ def _run_await(args: argparse.Namespace) -> int:
     # file; let the ValueError raise for a full traceback rather than swallowing
     # it into a terse exit-2 message (matches ``launch``'s handling above).
     report_path = _read_finish_report_path(args.task_file)
-    # When the worker name is known, also watch the watchdog's shed ledger so a
-    # worker paused for memory pressure surfaces promptly (and actionably) instead
-    # of as a silent 30-minute timeout.
-    shed_ledger = _resolve_shed_ledger_path() if args.name else None
+    # Watch the watchdog's shed ledger so a worker paused for memory pressure
+    # surfaces promptly (and actionably) instead of as a silent 30-minute
+    # timeout. The worker name defaults to the task file's directory name (the
+    # runtime/<flow>/<NAME>/ convention) so this works even when the caller did
+    # not pass --name explicitly -- which a lead following the skill easily
+    # forgets. --name overrides when given.
+    worker_name = args.name or _worker_name_from_task_file(args.task_file)
+    shed_ledger = _resolve_shed_ledger_path()
     return await_report(
         report_path=report_path,
         timeout_seconds=args.timeout,
         poll_interval_seconds=args.poll_interval,
-        worker_name=args.name,
+        worker_name=worker_name,
         shed_ledger_path=shed_ledger,
     )
 
