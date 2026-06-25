@@ -30,6 +30,7 @@
      indicator; the hand-back button appears only when an agent is queued for it. */
   #returnbar { display: none; align-items: center; gap: 10px; padding: 6px 10px; background: #2a2a2a; border-bottom: 1px solid #333; font-size: 12px; color: #4ec9b0; }
   #returnbar.show { display: flex; }
+  #returnbar.handoff { background: #5a3a1a; color: #ffcc66; }
   #returnbtn { padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
 
   #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
@@ -101,6 +102,10 @@
   let reconnectTimer = null;
   let closedForGood = false;  // set on a 1008 close: the browser is gone, stop reconnecting.
   let crashed = false;        // set on a {type:"crashed"} message: Chromium died; show a dead state.
+  // Latched when an agent hands off for a CAPTCHA/verification ({type:"handoff_request"}):
+  // the return bar shows what the human must do, until control goes back to an agent.
+  let handoffReason = null, handoffAgent = null;
+  let lastControlState = { owner: "human", human_pinned: false, waiting: [] };
 
   function wsUrl(path) {
     const u = new URL(path, document.baseURI);
@@ -133,9 +138,11 @@
   // owner == "human" && human_pinned:      no overlay, persistent "Return to agents" bar.
   // owner == "human" && !human_pinned:     resting state, fully interactive, no chrome.
   function setControl(state) {
+    lastControlState = state;
     controlOwner = state.owner;
     const agentDriving = state.owner === "agent";
     const humanPinned = state.owner === "human" && !!state.human_pinned;
+    if (agentDriving) { handoffReason = null; handoffAgent = null; }  // resumed -> clear the ask
 
     tabbar.style.opacity = agentDriving ? "0.5" : "1";
     tabbar.style.pointerEvents = agentDriving ? "none" : "auto";
@@ -173,12 +180,19 @@
     // (otherwise there's nobody to hand back to -- the next agent just takes it).
     if (!agentDriving) {
       const waiting = Array.isArray(state.waiting) ? state.waiting : [];
-      returnQueue.textContent = waiting.length
-        ? "You have control. Agents waiting to use this browser: " + waiting.join(", ")
-        : "You have control.";
-      returnBtn.style.display = waiting.length ? "" : "none";
+      if (humanPinned && handoffReason) {
+        returnQueue.textContent = (handoffAgent || "An agent") + " needs your help: " + handoffReason +
+          ". Do it in this pane, then click “Return to agent” to hand control back.";
+        returnBtn.style.display = "";
+      } else {
+        returnQueue.textContent = waiting.length
+          ? "You have control. Agents waiting to use this browser: " + waiting.join(", ")
+          : "You have control.";
+        returnBtn.style.display = waiting.length ? "" : "none";
+      }
     }
     returnBar.classList.toggle("show", !agentDriving);
+    returnBar.classList.toggle("handoff", !agentDriving && !!handoffReason);
   }
 
   function showLoading(msg) {
@@ -330,6 +344,13 @@
       else if (m.type === "initializing") showLoading("Starting up — restoring your saved browsers…");
       else if (m.type === "frame") drawFrame(m.data);  // first live frame clears the banner
       else if (m.type === "control") setControl(m);
+      else if (m.type === "handoff_request") {
+        // An agent handed us the browser for a CAPTCHA/verification it can't do. Latch
+        // the ask and re-render the bar (the preceding control message left us pinned).
+        handoffReason = m.reason || "human verification needed";
+        handoffAgent = m.agent_name || "An agent";
+        setControl(lastControlState);
+      }
       else if (m.type === "tabs") renderTabs(m.tabs);
       // m.type === "ping" -> ignore; it only keeps the proxy stream alive.
     };

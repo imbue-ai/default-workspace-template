@@ -155,6 +155,7 @@ page changed, so **run `state <id>` again** before clicking anything.
 uv run agentic-browser-fleet acquire 0            # reserve browser 0 across commands
 uv run agentic-browser-fleet acquire 0 --reclaim  # take it back from a human -- ONLY on their say-so
 uv run agentic-browser-fleet release 0            # let it go (alias: unlock 0)
+uv run agentic-browser-fleet handoff 0 "solve the CAPTCHA"  # hand to the human for a check you can't do
 ```
 
 You usually don't need `acquire` -- your first command auto-acquires the
@@ -243,6 +244,25 @@ owner. The rules:
   `acquire <id> --reclaim` still exists for "take it back right now on the
   user's say-so", but you normally just wait for the automatic hand-back.)
 
+- **Hand off to the human when you hit a wall only a human can clear** -- a
+  CAPTCHA, a reCAPTCHA / hCaptcha / Cloudflare "verify you're human" challenge,
+  an "I'm not a robot" checkbox, an SMS / 2FA / OTP code you don't have, or a
+  login that needs the user's own credentials. **Do not try to solve a CAPTCHA
+  yourself** (you'll fail and may get the account flagged). Instead:
+
+  ```bash
+  uv run agentic-browser-fleet handoff 0 "solve the CAPTCHA on the login page"
+  ```
+
+  This puts you at the **front** of that browser's resume queue and hands control
+  to the **human** (pinned -- it won't pass to another agent), and surfaces the
+  pane so they can see it. Then, in the **same turn**: tell the user in chat
+  exactly what to do and on which page ("I hit a CAPTCHA on the sign-in page --
+  I've handed you browser 0; solve it and click 'Return to agent' and I'll
+  continue"), and **end your turn** (exit `2`). The moment they hand control back
+  you're the first agent woken to resume -- **re-run `state 0`** to confirm the
+  challenge is gone, then carry on. (`request-human` is an alias for `handoff`.)
+
 - **Agents never preempt each other.** A browser another agent holds returns:
 
   ```text
@@ -315,7 +335,7 @@ for results.
 |---|---|---|---|
 | `0` | ok | The command succeeded. | Read the output; for `state`, decide your next click. |
 | `1` | error | Command failed, or a **stale index** (you clicked before re-`state`ing). | Run `state <id>` again, find the element's new number, retry. For other errors, read the message. |
-| `2` | preempted | A human took control -- you're queued to resume. | **Stop and end your turn.** Tell the user; you'll be messaged to resume when they hand the browser back (re-run `state <id>` first). Don't poll or `--reclaim` on your own. |
+| `2` | preempted | A human took control, **or you ran `handoff`** -- either way you're queued to resume. | **Stop and end your turn.** Tell the user (for `handoff`, what to solve); you'll be messaged to resume when they hand the browser back (re-run `state <id>` first). Don't poll or `--reclaim` on your own. |
 | `3` | busy | Held by another agent. | Use a different browser (or `new`); you're also queued and will be messaged when it frees. |
 | `4` | timed-out | You waited (`task --max-wait`) and another agent still held it. | Try later, or pick a different browser. |
 | `64` | usage | `MNGR_AGENT_ID` unset / bad arguments. | Run from inside an agent shell; fix the command. |
@@ -343,6 +363,11 @@ uv run agentic-browser-fleet state 0
 # Two browsers, independently (no queueing -- different ids).
 uv run agentic-browser-fleet open 0 https://site-a.com
 uv run agentic-browser-fleet open 1 https://site-b.com
+
+# Hit a CAPTCHA / "verify you're human" -- hand it to the user, then STOP.
+uv run agentic-browser-fleet handoff 0 "solve the CAPTCHA on the sign-in page"
+# -> tell the user in chat what to do, end your turn; you resume first when they hand back.
+uv run agentic-browser-fleet state 0            # (on resume) confirm the challenge cleared
 
 # Human took over, then said "keep going" -- and ONLY then:
 uv run agentic-browser-fleet acquire 1 --reclaim

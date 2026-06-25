@@ -139,15 +139,12 @@ _TASK_MAX_SECONDS = float(os.environ.get("BROWSER_TASK_MAX_SECONDS", "900"))
 # escape hatch; this TTL is the backstop. Env-tunable.
 _LEASE_IDLE_TTL = float(os.environ.get("BROWSER_LEASE_IDLE_TTL", "90"))
 
-# A human take-control only *blocks* agents while the human is actively using the
-# browser. If they haven't touched it in this many seconds, the pin is treated as
-# stale and the next agent that wants the browser takes it (a forgotten/idle hold
-# yields). This MUST be long enough to cover a human pausing mid-task -- reading a
-# CAPTCHA's instructions, fetching a 2FA code from their phone -- without the page
-# being yanked out from under them; any input (click/key/nav) refreshes it. The
-# explicit "Return control to agents" button is the instant hand-back; this is only
-# the walked-away backstop, so it errs long. Env-tunable.
-_HUMAN_ACTIVE_GRACE = float(os.environ.get("BROWSER_HUMAN_ACTIVE_GRACE", "120"))
+# A human take-control is STICKY: it blocks agents until the human explicitly hands
+# back ("Return to agent"). There is no idle/grace yield -- a human who grabs a
+# browser keeps it even if they walk away mid-CAPTCHA/login, so they never come back
+# to find an agent moved the page out from under them. (Agents still auto-release via
+# _LEASE_IDLE_TTL; the asymmetry is deliberate -- a dead agent must not hoard, a human
+# must not be force-yielded.)
 
 # When the browser frees and is handed to a queued agent, that agent is *messaged*
 # to resume (it ended its turn). If it doesn't actually take the wheel (send a
@@ -155,6 +152,16 @@ _HUMAN_ACTIVE_GRACE = float(os.environ.get("BROWSER_HUMAN_ACTIVE_GRACE", "120"))
 # revoked and the browser passes to the next waiter, instead of sitting idle for
 # the full _LEASE_IDLE_TTL on a no-show.
 _CLAIM_WINDOW = float(os.environ.get("BROWSER_CLAIM_WINDOW", "12"))
+
+# Disable Chromium's in-process sandbox. Every minds modality already wraps the
+# workspace in an OUTER boundary -- gVisor (runsc) under docker/cloud/AWS, the VM under
+# Lima/Vultr-without-gVisor -- so Chromium's own sandbox is redundant there, and on a
+# plain-Linux runtime running as root it *refuses* to start with the sandbox on. Off by
+# default (the sandbox works fine under gVisor, which docker/cloud use); set
+# BROWSER_NO_SANDBOX=1 to force it off. As a safety net, a first launch that fails for a
+# sandbox reason auto-retries with it off (see LiveBrowser.start), so the feature comes
+# up unattended on Lima and non-gVisor VPSes too.
+_NO_SANDBOX = os.environ.get("BROWSER_NO_SANDBOX", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _repo_root() -> Path:
@@ -220,6 +227,15 @@ def _clear_stale_singleton(profile_dir: Path) -> None:
             (profile_dir / name).unlink(missing_ok=True)
         except OSError as e:
             logger.debug("could not clear {} in {} ({})", name, profile_dir, e)
+
+
+def _is_sandbox_launch_error(exc: BaseException) -> bool:
+    """Whether a Chromium launch failure looks sandbox-related -- the runtime can't give
+    Chromium a usable namespace sandbox, or it's running as root with the sandbox on.
+    Chromium emits ``No usable sandbox!`` / ``Running as root without --no-sandbox is not
+    supported``; both contain ``sandbox``, and Playwright surfaces the browser stderr in
+    the error. Used to auto-retry with the sandbox off (see LiveBrowser.start)."""
+    return "sandbox" in str(exc).lower()
 
 
 def _is_restorable_url(url: str | None) -> bool:
@@ -377,9 +393,6 @@ class LiveBrowser(MutableModel):
     # is separate from _wait_queue (the connection-bound blocking waiters used by
     # `task`/`hold`). ``(agent_id, agent_name)`` per entry, deduped by id.
     _resume_queue: list[tuple[str, str | None]] = PrivateAttr(default_factory=list)
-    # Last time the human actually drove the browser (input/nav). A pin older than
-    # _HUMAN_ACTIVE_GRACE no longer blocks agents.
-    _human_touched_at: float = PrivateAttr(default=0.0)
     # When a resume-queue agent was handed the browser but hasn't sent a command
     # yet (the claim window); 0.0 once it claims (or when no grant is pending).
     _granted_at: float = PrivateAttr(default=0.0)
@@ -399,6 +412,51 @@ class LiveBrowser(MutableModel):
     # restore the dead browser as healthy next boot.
     _crash_save_hook: "Callable[[], None] | None" = PrivateAttr(default=None)
 
+    def _build_bu_session(self, profile_dir: Path, chromium_path: str, *, chromium_sandbox: bool) -> BrowserSession:
+        """Construct (don't start) the browser-use session for this browser's persistent
+        profile. ``chromium_sandbox`` is False when Chromium's in-process sandbox must be
+        disabled (see _NO_SANDBOX / the start() fallback); browser-use then injects
+        ``--no-sandbox`` itself."""
+        return BrowserSession(
+            headless=_HEADLESS,
+            executable_path=chromium_path,
+            # Persistent profile on the workspace volume -- the whole point of
+            # persistence. The dir name (see _profile_dir) is load-bearing for
+            # browser_use. We deliberately do NOT set storage_state (it would
+            # overwrite the live profile).
+            user_data_dir=str(profile_dir),
+            args=["--disable-dev-shm-usage"],
+            chromium_sandbox=chromium_sandbox,
+            keep_alive=True,
+            # Pin a fixed viewport + window so every site renders at the same
+            # resolution -- a consistent "Chromium in a small window", not a size
+            # that shifts per page. Matches the screencast cap so frames never scale.
+            viewport={"width": _SCREENCAST_MAX_WIDTH, "height": _SCREENCAST_MAX_HEIGHT},
+            window_size={"width": _SCREENCAST_MAX_WIDTH, "height": _SCREENCAST_MAX_HEIGHT},
+            device_scale_factor=1,
+        )
+
+    async def _start_bu_session(self, profile_dir: Path, chromium_path: str) -> BrowserSession:
+        """Launch the browser-use session, retrying ONCE without the Chromium sandbox if
+        the first launch fails for a sandbox reason. Some runtimes can't give Chromium a
+        usable sandbox -- a plain-Linux VM (Lima), or a VPS without gVisor -- and Chromium
+        refuses to start as root with the sandbox on. minds' outer boundary (gVisor or the
+        VM) already contains the browser, so the retry is safe; it's skipped when the
+        sandbox is already off (``_NO_SANDBOX``) or the failure isn't sandbox-related."""
+        session = self._build_bu_session(profile_dir, chromium_path, chromium_sandbox=not _NO_SANDBOX)
+        try:
+            await session.start()
+        except (BrowserStartupError, *_BROWSER_ERRORS) as e:
+            if _NO_SANDBOX or not _is_sandbox_launch_error(e):
+                raise
+            logger.warning(
+                "browser {} failed to launch ({}); retrying without the Chromium sandbox", self.browser_id, e
+            )
+            _clear_stale_singleton(profile_dir)
+            session = self._build_bu_session(profile_dir, chromium_path, chromium_sandbox=False)
+            await session.start()
+        return session
+
     async def start(
         self, playwright: Playwright, restore_tabs: list[str] | None = None, active_tab: int = 0
     ) -> None:
@@ -416,24 +474,7 @@ class LiveBrowser(MutableModel):
         profile_dir = _profile_dir(self.browser_id)
         profile_dir.mkdir(parents=True, exist_ok=True)
         _clear_stale_singleton(profile_dir)  # a prior hard kill may have orphaned a lock
-        self._bu_session = BrowserSession(
-            headless=_HEADLESS,
-            executable_path=chromium_path,
-            # Persistent profile on the workspace volume -- the whole point of
-            # persistence. The dir name (see _profile_dir) is load-bearing for
-            # browser_use. We deliberately do NOT set storage_state (it would
-            # overwrite the live profile).
-            user_data_dir=str(profile_dir),
-            args=["--disable-dev-shm-usage"],
-            keep_alive=True,
-            # Pin a fixed viewport + window so every site renders at the same
-            # resolution -- a consistent "Chromium in a small window", not a size
-            # that shifts per page. Matches the screencast cap so frames never scale.
-            viewport={"width": _SCREENCAST_MAX_WIDTH, "height": _SCREENCAST_MAX_HEIGHT},
-            window_size={"width": _SCREENCAST_MAX_WIDTH, "height": _SCREENCAST_MAX_HEIGHT},
-            device_scale_factor=1,
-        )
-        await self._bu_session.start()
+        self._bu_session = await self._start_bu_session(profile_dir, chromium_path)
         cdp_url = self._bu_session.cdp_url
         if not cdp_url:
             raise BrowserStartupError("browser-use BrowserSession did not expose a cdp_url after start")
@@ -680,11 +721,7 @@ class LiveBrowser(MutableModel):
             await self._broadcast({"type": "ping"})
             if self._crashed:
                 continue  # a dead browser: keep the proxy alive, but no sweeps/handoffs
-            changed = (
-                await self._sweep_unclaimed_grant()
-                or await self._sweep_stale_human_pin()
-                or await self._sweep_idle_lease()
-            )
+            changed = await self._sweep_unclaimed_grant() or await self._sweep_idle_lease()
             if not changed and self.controller == "agent":
                 await self._broadcast(self._control_message())
 
@@ -723,34 +760,12 @@ class LiveBrowser(MutableModel):
         return False
 
     def _human_pin_active(self) -> bool:
-        """A human pin still blocks agents only while the human is *actively* driving --
-        within ``_HUMAN_ACTIVE_GRACE`` of their last input. A stale pin (walked away)
-        yields: a queued agent is handed it by the keepalive sweep, and a freshly
-        arriving agent takes it via :meth:`acquire`."""
-        return (
-            self.controller == "human"
-            and self.human_pinned
-            and time.monotonic() - self._human_touched_at <= _HUMAN_ACTIVE_GRACE
-        )
-
-    async def _sweep_stale_human_pin(self) -> bool:
-        """A human holds the browser but hasn't driven it in ``_HUMAN_ACTIVE_GRACE`` and
-        an agent is queued to resume -> hand it back automatically (the human finished
-        the CAPTCHA/login and wandered off without clicking "Return control"). A pin
-        with NO agent waiting persists -- there's nobody to hand to, and a newly
-        arriving agent takes it lazily via :meth:`acquire`. An actively-driven pin keeps
-        refreshing ``_human_touched_at`` and is never yanked."""
-        async with self._control_lock:
-            if (
-                self.controller == "human"
-                and self.human_pinned
-                and self._resume_queue
-                and not self._human_pin_active()
-            ):
-                await self._write_control_locked("human", None, None, pinned=False)
-                await self._settle_queue_locked()
-                return True
-        return False
+        """A human pin blocks agents until the human explicitly hands back
+        (:meth:`return_to_agents`). Taking control is sticky on purpose -- a human can
+        walk away mid-CAPTCHA/login and the browser is never yanked back. A *resting*
+        human (controller=human, not pinned) is free: an agent takes it via
+        :meth:`acquire`."""
+        return self.controller == "human" and self.human_pinned
 
     # --- input ----------------------------------------------------------------
 
@@ -767,10 +782,6 @@ class LiveBrowser(MutableModel):
             async with self._control_lock:
                 if not self._input_enabled.is_set():
                     return
-                # The human is actively driving -> keep the pin fresh (so a queued
-                # agent doesn't take the browser out from under an active CAPTCHA/login).
-                if self.controller == "human" and self.human_pinned:
-                    self._human_touched_at = time.monotonic()
                 await self._dispatch_input(message)
 
     async def _dispatch_input(self, message: dict[str, Any]) -> None:
@@ -879,6 +890,13 @@ class LiveBrowser(MutableModel):
         """Add an agent to the resume queue (deduped by id). Caller holds _control_lock."""
         if not any(aid == agent_id for (aid, _) in self._resume_queue):
             self._resume_queue.append((agent_id, agent_name))
+
+    def _enqueue_resume_front_locked(self, agent_id: str, agent_name: str | None) -> None:
+        """Put an agent at the FRONT of the resume queue -- it handed off mid-task (e.g. a
+        CAPTCHA), so it resumes before agents that were merely waiting their turn. Moves
+        an existing entry to the front. Caller holds _control_lock."""
+        self._resume_queue = [(aid, an) for (aid, an) in self._resume_queue if aid != agent_id]
+        self._resume_queue.insert(0, (agent_id, agent_name))
 
     def _dequeue_resume_locked(self, agent_id: str) -> None:
         """Drop an agent from the resume queue (it took control / no longer waiting)."""
@@ -1030,9 +1048,9 @@ class LiveBrowser(MutableModel):
         """Acquire control for an agent. Returns one of:
 
         ``"acquired"`` -- the agent now controls the browser.
-        ``"busy_human"`` -- a human is *actively* driving it (pinned, within the active
-            grace); only an explicit ``reclaim`` takes it. A stale pin (human walked
-            away) is treated as free and taken.
+        ``"busy_human"`` -- a human took control (pinned); it stays the human's until
+            they hand back. Only an explicit ``reclaim`` takes it. A *resting* human
+            (not pinned) is free and taken.
         ``"busy_agent"`` -- another agent holds it and ``wait`` was False.
         ``"timed_out"`` -- waited ``max_wait`` seconds for another agent to release.
 
@@ -1093,14 +1111,38 @@ class LiveBrowser(MutableModel):
 
         Always wins (no ``expect``): flips to a pinned human and cancels the run. The
         cancel happens outside the control lock, so the run's finally can re-enter the
-        state machine without deadlocking. The human hands back explicitly via
-        :meth:`return_to_agents`, but the pin also yields on its own once the human
-        stops driving for ``_HUMAN_ACTIVE_GRACE`` (so a forgotten hold doesn't block a
-        queued agent forever); ``_human_touched_at`` is stamped now and refreshed on
-        each input.
+        state machine without deadlocking. The pin is sticky -- it holds until the human
+        explicitly hands back via :meth:`return_to_agents`, with no idle/grace yield (a
+        human who took control keeps it even if they step away).
         """
-        self._human_touched_at = time.monotonic()
         return await self._transition(to="human", pinned=True, preempt=True)
+
+    async def handoff(self, agent_id: str, agent_name: str | None, reason: str) -> bool:
+        """Agent-initiated handoff to the human (e.g. a CAPTCHA / verification it can't
+        solve). Atomically, if the caller currently holds the browser: put it at the
+        FRONT of the resume queue (it's mid-task), then hand control to the human PINNED.
+        Control goes to the *human* -- not the next queued agent -- and stays there until
+        the human explicitly returns it (the sticky pin), at which point this requester is
+        the first agent woken to resume. Returns False (no change) if the caller doesn't
+        hold it (a human already took over, or its lease lapsed).
+        """
+        async with self._control_lock:
+            if not (self.controller == "agent" and self.owner_agent_id == agent_id):
+                return False
+            self._enqueue_resume_front_locked(agent_id, agent_name)
+            await self._write_control_locked("human", None, None, pinned=True)
+            await self._settle_queue_locked()  # evict any connection-bound task/hold waiters
+            await self._broadcast(
+                {
+                    "type": "handoff_request",
+                    "browser_id": self.browser_id,
+                    "agent_name": agent_name or agent_id,
+                    "reason": reason,
+                    "url": self._active_page.url if self._active_page is not None else None,
+                    **self._control_state(),
+                }
+            )
+        return True
 
     async def return_to_agents(self) -> bool:
         """Human hands control back: un-pin (only if currently pinned). Frees any waiter."""

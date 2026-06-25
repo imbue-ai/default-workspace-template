@@ -438,6 +438,22 @@ async def cmd_acquire(browser_id: int, request: Request) -> JSONResponse:
     return JSONResponse({"ok": status == "acquired", "status": status, **session._control_state()})
 
 
+@app.post("/browsers/{browser_id}/handoff")
+async def cmd_handoff(browser_id: int, request: Request) -> JSONResponse:
+    """Agent hands this browser to the human (e.g. a CAPTCHA it can't solve). The agent
+    must currently hold it; it's put at the FRONT of the resume queue and control goes to
+    the human, pinned, until they hand back -- then this agent resumes first."""
+    target = await _direct_target(browser_id, request)
+    if isinstance(target, JSONResponse):
+        return target
+    session, agent_id, agent_name = target
+    body = await _body(request)
+    reason = str(body.get("reason", "")).strip() or "human verification needed"
+    handed = await session.handoff(agent_id, agent_name, reason)
+    status = "handed_off" if handed else "not_owner"
+    return JSONResponse({"ok": handed, "status": status, **session._control_state()})
+
+
 @app.post("/browsers/{browser_id}/state")
 async def cmd_state(browser_id: int, request: Request) -> JSONResponse:
     # `state` is read-only -- allowed during init so the agent can look at the page

@@ -200,38 +200,146 @@ def test_agent_in_both_queues_is_not_re_granted_after_it_finishes(monkeypatch: p
     asyncio.run(go())
 
 
-def test_stale_human_pin_yields_to_a_queued_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A human who took control but walked away (no input within the active grace)
-    # should not block a queued agent forever: the sweep hands the browser back.
+def test_human_pin_is_sticky_with_no_idle_yield(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A human take-control is STICKY: it holds until the human explicitly hands back,
+    # with no grace/idle yield -- even with an agent queued to resume. (A human can walk
+    # away mid-CAPTCHA and the browser is never moved out from under them.)
     monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
     browser = bsession.LiveBrowser(browser_id=1)
 
     async def go() -> None:
         await browser.acquire("A", "Alice")
-        await browser.take_control()  # pin is fresh -> A is blocked and queues
+        await browser.take_control()  # human pins
         assert await browser.acquire("A", "Alice", wait=False, enqueue_on_busy=True) == "busy_human"
-        assert await browser._sweep_stale_human_pin() is False  # pin still active: not yet
-        # The human goes quiet (no input past the grace) -> the pin is now stale.
-        browser._human_touched_at = time.monotonic() - bsession._HUMAN_ACTIVE_GRACE - 1
-        assert await browser._sweep_stale_human_pin() is True
+        assert browser._waiting_names() == ["Alice"]
+        # The only keepalive sweeps left act on agent ownership, never a human pin.
+        assert await browser._sweep_unclaimed_grant() is False
+        assert await browser._sweep_idle_lease() is False
+        assert browser._state_tuple() == ("human", None, True)  # still pinned to the human
+        assert await browser.acquire("A", "Alice", wait=False) == "busy_human"  # still locked out
+        # Only an explicit hand-back returns it -- and the queued agent then resumes.
+        assert await browser.return_to_agents() is True
         assert browser._state_tuple() == ("agent", "A", False)
 
     asyncio.run(go())
 
 
-def test_stale_human_pin_persists_when_nobody_waits() -> None:
-    # With no agent queued, a stale pin is NOT swept away (there's nobody to hand to);
-    # the next agent that wants it takes it lazily via acquire().
+def test_resting_human_is_free_for_the_next_agent() -> None:
+    # A *resting* human (controller=human, not pinned -- a fresh browser, or one an
+    # agent's idle-lease released) is free: the next agent's command just takes it.
+    browser = bsession.LiveBrowser(browser_id=1)
+
+    async def go() -> None:
+        assert browser._state_tuple() == ("human", None, False)  # fresh = resting/free
+        assert await browser.acquire("A", "Alice", wait=False) == "acquired"
+        await browser.release("A")  # back to resting (not pinned)
+        assert browser._state_tuple() == ("human", None, False)
+        assert await browser.acquire("B", "Bob", wait=False) == "acquired"  # taken freely
+
+    asyncio.run(go())
+
+
+def test_handoff_to_human_fronts_resume_queue_and_announces(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An agent that hits a CAPTCHA hands the browser to the HUMAN (pinned, NOT the next
+    # queued agent) and jumps to the FRONT of the resume queue, so it resumes first when
+    # the human hands back. A distinct handoff_request is broadcast for the viewer.
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
+    casts: list[dict] = []
+
+    async def fake_broadcast(self: bsession.LiveBrowser, message: dict) -> None:
+        casts.append(message)
+
+    monkeypatch.setattr(bsession.LiveBrowser, "_broadcast", fake_broadcast)
     browser = bsession.LiveBrowser(browser_id=1)
 
     async def go() -> None:
         await browser.acquire("A", "Alice")
-        await browser.take_control()
-        browser._human_touched_at = time.monotonic() - bsession._HUMAN_ACTIVE_GRACE - 1  # stale
-        assert await browser._sweep_stale_human_pin() is False  # nobody waiting -> persists
+        # B is already queued behind A (its direct command was rejected).
+        assert await browser.acquire("B", "Bob", wait=False, enqueue_on_busy=True) == "busy_agent"
+        assert browser._waiting_names() == ["Bob"]
+        # A hands off -> human pinned, A jumps to the FRONT of the queue (ahead of B).
+        assert await browser.handoff("A", "Alice", "solve the CAPTCHA") is True
         assert browser._state_tuple() == ("human", None, True)
-        # A newly-arriving agent finds the pin stale and just takes it.
-        assert await browser.acquire("B", "Bob", wait=False) == "acquired"
+        assert browser._waiting_names() == ["Alice", "Bob"]
+        announced = [m for m in casts if m.get("type") == "handoff_request"]
+        assert announced and announced[-1]["reason"] == "solve the CAPTCHA"
+        assert announced[-1]["agent_name"] == "Alice"
+        # Hand-back goes to the requester (A), not B.
+        assert await browser.return_to_agents() is True
+        assert browser._state_tuple() == ("agent", "A", False)
+
+    asyncio.run(go())
+
+
+def test_handoff_is_a_noop_when_the_caller_does_not_hold_it() -> None:
+    # Only the current owner can hand off; a stale/wrong caller changes nothing.
+    browser = bsession.LiveBrowser(browser_id=1)
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")
+        assert await browser.handoff("B", "Bob", "x") is False  # B never owned it
+        assert browser._state_tuple() == ("agent", "A", False)  # unchanged
+        await browser.take_control()  # a human now holds it
+        assert await browser.handoff("A", "Alice", "x") is False  # A no longer owns it
+        assert browser._state_tuple() == ("human", None, True)
+
+    asyncio.run(go())
+
+
+def test_is_sandbox_launch_error_detects_chromium_sandbox_messages() -> None:
+    err = bsession.BrowserStartupError
+    assert bsession._is_sandbox_launch_error(err("No usable sandbox! Update your kernel"))
+    assert bsession._is_sandbox_launch_error(err("Running as root without --no-sandbox is not supported."))
+    assert not bsession._is_sandbox_launch_error(err("net::ERR_CONNECTION_REFUSED"))
+
+
+class _FakeBuSession:
+    """A stand-in for browser-use's BrowserSession: its ``start`` fails with the given
+    message when the sandbox is on, so we can exercise the no-sandbox retry path."""
+
+    def __init__(self, chromium_sandbox: bool, fail_message: str) -> None:
+        self.chromium_sandbox = chromium_sandbox
+        self._fail_message = fail_message
+
+    async def start(self) -> None:
+        if self.chromium_sandbox:
+            raise bsession.BrowserStartupError(self._fail_message)
+
+
+def _patch_build(monkeypatch: pytest.MonkeyPatch, attempts: list[bool], fail_message: str) -> None:
+    def build(self: bsession.LiveBrowser, profile_dir: Path, chromium_path: str, *, chromium_sandbox: bool) -> Any:
+        attempts.append(chromium_sandbox)
+        return _FakeBuSession(chromium_sandbox, fail_message)
+
+    monkeypatch.setattr(bsession.LiveBrowser, "_build_bu_session", build)
+
+
+def test_start_bu_session_retries_without_sandbox_on_sandbox_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A sandbox-related first-launch failure (Lima / non-gVisor VPS) auto-retries ONCE
+    # with the sandbox off; the retry's session has chromium_sandbox=False and succeeds.
+    attempts: list[bool] = []
+    _patch_build(monkeypatch, attempts, "No usable sandbox! Update your kernel ...")
+    browser = bsession.LiveBrowser(browser_id=0)
+
+    async def go() -> None:
+        session = await browser._start_bu_session(Path("/tmp/x"), "/usr/bin/chromium")
+        assert attempts == [True, False]  # sandbox on (fails) -> retried off (succeeds)
+        assert session.chromium_sandbox is False
+
+    asyncio.run(go())
+
+
+def test_start_bu_session_does_not_retry_on_non_sandbox_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A non-sandbox failure surfaces immediately -- no silent retry that could mask a
+    # real problem or needlessly drop the sandbox.
+    attempts: list[bool] = []
+    _patch_build(monkeypatch, attempts, "net::ERR_CONNECTION_REFUSED")
+    browser = bsession.LiveBrowser(browser_id=0)
+
+    async def go() -> None:
+        with pytest.raises(bsession.BrowserStartupError, match="CONNECTION_REFUSED"):
+            await browser._start_bu_session(Path("/tmp/x"), "/usr/bin/chromium")
+        assert attempts == [True]  # tried once, did not retry
 
     asyncio.run(go())
 
