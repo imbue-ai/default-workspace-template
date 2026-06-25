@@ -248,10 +248,7 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
       return m(
         "div.agent-activity-indicator",
         { "data-state": content.dataState, role: "status", "aria-live": "polite" },
-        [
-          m("span.agent-activity-indicator__dot"),
-          m("span.agent-activity-indicator__label", content.label),
-        ],
+        [m("span.agent-activity-indicator__dot"), m("span.agent-activity-indicator__label", content.label)],
       );
     },
   };
