@@ -8,10 +8,12 @@ A worker can die because the **memory watchdog** shed it -- the container was ru
 
 ```bash
 # Did the watchdog shed this worker? (look for your worker's name)
-grep '"agent_name": *"<worker>"' runtime/memory_watchdog/events/shed/events.jsonl
+# Absolute path: the ledger is shared at /mngr/code/runtime/, but your cwd is
+# your own worktree, so a relative `runtime/...` would miss it.
+grep '"agent_name": *"<worker>"' /mngr/code/runtime/memory_watchdog/events/shed/events.jsonl
 
 # Is the container still under pressure right now?
-cat runtime/memory_watchdog/status.json   # is_under_pressure, used_fraction
+cat /mngr/code/runtime/memory_watchdog/status.json   # is_under_pressure, used_fraction
 ```
 
 Revival guidelines when a worker was shed:
