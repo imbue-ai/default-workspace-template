@@ -113,7 +113,7 @@ describe("renderChoiceCards", () => {
     expect(collectByTag(vnode, "button")).toHaveLength(2);
   });
 
-  it("prefills the composer with the clicked card's phrase (and never auto-sends)", () => {
+  it("hands the clicked card's phrase to the composer to send", () => {
     const vnode = renderChoiceCards(choices, "agent-1");
     const buttons = collectByTag(vnode, "button");
     const onclick = buttons[1].attrs?.onclick as (e: Event) => void;

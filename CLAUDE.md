@@ -289,11 +289,11 @@ bridge the two if needed.)
 
 The `minds-choices` clickable-card block is reserved exclusively for the
 `welcome` and `suggest-starting-points` skills, which emit it verbatim from
-their own instructions. The cards prefill the composer and are designed only
-for that starting-point menu, so never produce a `minds-choices` block in any
-other context. For every other question -- including clarifying questions --
-ask in plain prose; if a quick-pick feel seems useful, write the options as a
-plain numbered list.
+their own instructions. Clicking a card sends its message straight to the chat,
+and the cards are designed only for that starting-point menu, so never produce a
+`minds-choices` block in any other context. For every other question --
+including clarifying questions -- ask in plain prose; if a quick-pick feel seems
+useful, write the options as a plain numbered list.
 
 # Work delegation
 

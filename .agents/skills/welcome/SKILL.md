@@ -27,7 +27,8 @@ Tell it what you want, how it can be better, and it'll take care of it.
 
 That is the entire welcome message. Stop after printing it. Output the
 ` ```minds-choices ` block exactly as written -- it renders as two clickable
-cards in the chat, and clicking one fills in the user's message for them.
+cards in the chat, and clicking one sends that message for the user ("I have
+something in mind" has no message, so it just focuses the box to type).
 
 If the user then asks you to suggest things to work on (for example by picking
 "Suggest a few things"), the `suggest-starting-points` skill takes over and shows

@@ -1,12 +1,14 @@
 /**
- * One-shot "prefill the composer" channel, keyed by agentId.
+ * One-shot channel for handing text from a transcript choice card to the
+ * MessageInput composer, keyed by agentId.
  *
  * A choice card rendered inside the transcript (see views/choice-cards.ts) lives
- * in a different part of the component tree from the MessageInput composer, so it
- * can't set the input's text directly. Instead it writes a pending draft here;
- * the MessageInput for that agent consumes it on the next redraw, dropping the
- * text into the box and focusing it. This is *prefill only* -- it never sends, so
- * the user can edit the text before hitting enter.
+ * in a different part of the component tree from the composer, so it can't reach
+ * the input directly. Instead it stages the choice's text here; the MessageInput
+ * for that agent consumes it on the next redraw. The composer then *submits* the
+ * text as a message (so a click feels reactive), or -- when the text is empty
+ * ("I have something in mind") -- just focuses the box for the user to type. The
+ * submit/focus decision lives in the composer; this store only carries the text.
  *
  * Mirrors the module-level store pattern used by PendingMessages.ts (plain map +
  * an explicit redraw) rather than introducing any new state mechanism.

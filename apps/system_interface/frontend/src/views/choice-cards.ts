@@ -15,10 +15,10 @@
  *     ]
  *     ```
  *
- * Clicking a card drops its `prefill` into the composer (via the InputDraft
- * store) and focuses it -- prefill only, never an automatic send -- so the user
- * can edit before sending. An empty `prefill` just focuses the empty box (for an
- * "I have something in mind, let me type it" option).
+ * Clicking a card hands its `prefill` to the composer (via the InputDraft store),
+ * which sends it immediately as a message so the click feels reactive. An empty
+ * `prefill` has nothing to send, so it just focuses the empty box (for an "I have
+ * something in mind, let me type it" option).
  *
  * Parsing is deliberately forgiving: a fence whose body is not a valid choices
  * array is left untouched in the markdown stream, so a malformed block degrades
@@ -141,6 +141,8 @@ export function renderChoiceCards(choices: Choice[], agentId: string): m.Vnode {
           type: "button",
           onclick(e: Event) {
             e.preventDefault();
+            // Hand the choice to the composer, which sends it (or focuses the box
+            // when the prefill is empty). See InputDraft / MessageInput.
             setInputDraft(agentId, choice.prefill);
           },
         },
