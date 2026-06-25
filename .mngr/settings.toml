@@ -294,6 +294,28 @@ extra_provision_command__extend = [
     "bash /mngr/code/scripts/minds_lima_autostart.sh",
 ]
 
+# template for the Modal sandbox provider (the "modal" compute provider).
+# Like Lima, Modal has no Dockerfile build -- the toolchain is provisioned over SSH
+# after the sandbox boots, reusing the exact scripts the Dockerfile RUNs. There is
+# no autostart unit: Modal sandboxes are ephemeral (~1 day) and do not survive a
+# reboot, so the minds desktop app re-creates them rather than relying on systemd
+# (the lima-autostart step is intentionally absent). Sizing comes from the modal
+# provider config (default_cpu / default_memory), not docker-style start args.
+[create_templates.modal]
+provider = "modal"
+target_path = "/mngr/code/"
+idle_mode = "disabled"
+# Flip the (default-disabled) modal provider on for this create, mirroring lima.
+setting__extend = ["providers.modal.is_enabled=true"]
+# Same forwarding as the docker/lima templates so the agent inherits its creds.
+pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
+# Run the SAME setup as a Dockerfile-built workspace, directly in the sandbox.
+extra_provision_command__extend = [
+    "bash /mngr/code/scripts/setup_system.sh",
+    "bash /mngr/code/scripts/install_dependencies.sh",
+    "bash /mngr/code/scripts/build_workspace.sh",
+]
+
 # template for vultr VPS provider (cloud mode)
 [create_templates.vultr]
 provider = "vultr"
