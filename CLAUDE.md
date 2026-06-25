@@ -418,6 +418,8 @@ If you get a failure when trying to commit the first time, just try committing a
 
 If something unexpected happens -- errors, confusing state, things not working as documented -- use the `dealing-with-the-unexpected` skill for guidance.
 
+A background memory-watchdog SIGKILLs ("sheds") memory-heavy processes -- most-expendable first (an agent's build/test/tool subprocesses before the agent itself) -- under sustained memory pressure. If a command of yours dies with exit 137 and you did not kill it, confirm by checking the shed ledger at `/mngr/code/runtime/memory_watchdog/events/shed/events.jsonl` for a record naming it (or the memory banner in the UI). If it was shed, do NOT blindly re-run a memory-heavy command -- it will likely be shed again; find a lower-memory approach (smaller batches, streaming, releasing data you no longer need) and only retry if you can.
+
 # claude -p
 
 If ever building AI-powered services and wanting to use `claude -p`, make sure to unset the MAIN_CLAUDE_SESSION_ID for the process. This prevents conversation rendering issues.
