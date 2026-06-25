@@ -18,8 +18,11 @@ Integrated the agentic browser fleet into the workspace UI.
   itself and showed a "Browser sessions need an Anthropic API key" dialog was a
   leftover from the delegation model and has been removed.
 
-- Dropped the placeholder "web" example server from the "+" menu (the browser
-  fleet is the real web surface), and removed the per-tab Refresh button from
+- Dropped the placeholder "web" example server AND the "New URL" item from the
+  "+" menu -- "New browser" is the real web surface / replacement for opening an
+  ad-hoc URL. (The split-placement E2E that drove the old "New URL" item now
+  exercises the same placement path via "New terminal".) Also removed the per-tab
+  Refresh button from
   browser panes -- reloading the pane only reconnects the live view, which read
   as "restart the browser"; the browser viewer has its own in-page Reload button
   for the actual page.
