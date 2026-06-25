@@ -120,11 +120,66 @@ const panelParams = new Map<string, PanelParams>();
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let _layoutOpListener: LayoutOpListener | null = null;
 let initialized = false;
+// Set true once loadLayout() has restored the saved layout, so the
+// agents_updated listener never auto-opens an auto-created tab before the saved
+// layout (which may already contain that tab) has been applied.
+let layoutLoaded = false;
 
 // Target fraction of horizontal space that the newly-opened service panel
 // takes when it splits alongside the primary agent's chat. Picked so the
 // just-built view dominates while the chat stays legible.
 const OPEN_TAB_SPLIT_FRACTION = 0.6;
+
+// --- Auto-created agent tabs (e.g. the nightly Caretaker) ----------------
+// An agent carrying the ``auto_created`` / ``caretaker`` label gets its own
+// tab opened automatically the first time we ever see it, and that tab blinks
+// in the accent color until the user opens it. Both facts are remembered in
+// localStorage so that across reloads we neither re-open a tab the user closed
+// (``surfaced``) nor keep blinking a tab the user already opened (``seen``).
+const AUTO_SURFACED_STORAGE_KEY = "si.autoCreatedSurfaced.v1";
+const AUTO_SEEN_STORAGE_KEY = "si.autoCreatedSeen.v1";
+
+function loadStoredIdSet(key: string): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.filter((x): x is string => typeof x === "string"));
+      }
+    }
+  } catch {
+    // localStorage unavailable or corrupt -- degrade to in-memory only.
+  }
+  return new Set();
+}
+
+const surfacedAutoAgentIds = loadStoredIdSet(AUTO_SURFACED_STORAGE_KEY);
+const seenAutoAgentIds = loadStoredIdSet(AUTO_SEEN_STORAGE_KEY);
+
+function persistIdSet(key: string, ids: Set<string>): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify([...ids]));
+  } catch {
+    // In-memory only; nothing to persist.
+  }
+}
+
+function isAutoCreatedAgent(agent: { labels?: Record<string, string> } | undefined): boolean {
+  const labels = agent?.labels;
+  return !!labels && (labels.auto_created === "true" || labels.caretaker === "true");
+}
+
+function markAutoSurfaced(agentId: string): void {
+  surfacedAutoAgentIds.add(agentId);
+  persistIdSet(AUTO_SURFACED_STORAGE_KEY, surfacedAutoAgentIds);
+}
+
+function markAutoSeen(agentId: string): void {
+  if (seenAutoAgentIds.has(agentId)) return;
+  seenAutoAgentIds.add(agentId);
+  persistIdSet(AUTO_SEEN_STORAGE_KEY, seenAutoAgentIds);
+}
 
 function createMithrilRenderer(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -269,14 +324,27 @@ function createCustomTab(options: { id: string; name: string }): {
         }),
       );
 
-      // Show/hide actions based on active state
-      function updateActionsVisibility(isActive: boolean): void {
-        actions.style.display = isActive ? "flex" : "none";
+      // Show/hide actions based on active state. An auto-created agent tab
+      // (e.g. the nightly Caretaker) blinks in the accent color until the user
+      // opens it; the first activation marks it seen and stops the blink.
+      const chatAgentForTab = pp?.chatAgentId ?? pp?.agentId;
+      const isAutoCreatedTab =
+        panelType === "chat" && !!chatAgentForTab && isAutoCreatedAgent(getAgentById(chatAgentForTab));
+      if (isAutoCreatedTab && chatAgentForTab && !seenAutoAgentIds.has(chatAgentForTab)) {
+        element.classList.add("dv-tab-new");
       }
-      updateActionsVisibility(params.api.isActive);
+
+      function handleActiveChange(isActive: boolean): void {
+        actions.style.display = isActive ? "flex" : "none";
+        if (isActive && isAutoCreatedTab && chatAgentForTab) {
+          markAutoSeen(chatAgentForTab);
+          element.classList.remove("dv-tab-new");
+        }
+      }
+      handleActiveChange(params.api.isActive);
       disposables.push(
         params.api.onDidActiveChange((event) => {
-          updateActionsVisibility(event.isActive);
+          handleActiveChange(event.isActive);
         }),
       );
     },
@@ -491,7 +559,12 @@ function focusOrCreateChatPanel(
   addChatPanel(chatAgentId, chatAgentName, targetGroup);
 }
 
-function addChatPanel(chatAgentId: string, chatAgentName: string, targetGroup?: DockviewGroupPanel | null): void {
+function addChatPanel(
+  chatAgentId: string,
+  chatAgentName: string,
+  targetGroup?: DockviewGroupPanel | null,
+  options?: { inactive?: boolean },
+): void {
   if (!dockview) return;
   const panelId = `chat-${chatAgentId}`;
   const params: PanelParams = { panelType: "chat", agentId: chatAgentId, chatAgentId };
@@ -502,8 +575,28 @@ function addChatPanel(chatAgentId: string, chatAgentName: string, targetGroup?: 
     title: chatAgentName,
     params,
     renderer: "always",
+    // Auto-opened tabs (the Caretaker) are added inactive so they appear as a
+    // blinking new tab in the background without stealing the user's focus.
+    ...(options?.inactive ? { inactive: true } : {}),
     ...placementForGroup(targetGroup),
   });
+}
+
+/** Auto-open a tab for any newly-seen auto-created agent (e.g. the Caretaker),
+ *  exactly once ever (tracked in localStorage, so a tab the user closes is not
+ *  reopened on reload). The tab is added inactive so it does not steal focus;
+ *  createCustomTab() makes it blink in the accent color until the user opens it. */
+function surfaceAutoCreatedAgents(): void {
+  if (!dockview) return;
+  const openChatIds = getOpenChatAgentIds();
+  for (const agent of getAgents()) {
+    if (!isAutoCreatedAgent(agent)) continue;
+    if (surfacedAutoAgentIds.has(agent.id)) continue;
+    markAutoSurfaced(agent.id);
+    if (!openChatIds.has(agent.id)) {
+      addChatPanel(agent.id, agent.name, null, { inactive: true });
+    }
+  }
 }
 
 /**
@@ -1791,6 +1884,9 @@ function initializeDockview(parentElement: HTMLElement): void {
       awaitingInitialChat = false;
       updateEmptyState();
     }
+    if (layoutLoaded) {
+      surfaceAutoCreatedAgents();
+    }
   };
   addAgentsUpdatedListener(agentsUpdatedListener);
 
@@ -1852,6 +1948,10 @@ function initializeDockview(parentElement: HTMLElement): void {
         awaitingInitialChat = true;
       }
     }
+    // The saved layout (if any) is now applied; from here it is safe to
+    // auto-open tabs for any auto-created agents we already know about.
+    layoutLoaded = true;
+    surfaceAutoCreatedAgents();
     updateEmptyState();
   });
 }
