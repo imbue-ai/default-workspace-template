@@ -162,11 +162,7 @@ export function MemoryPressureBanner(): m.Component {
                     m("tr", [
                       m("td", { class: "memory-pressure-banner__cell-process" }, processName(item)),
                       m("td", creatorLabel(item)),
-                      m(
-                        "td",
-                        { class: "memory-pressure-banner__col-freed" },
-                        humanizeKb(item.reclaimed_kb),
-                      ),
+                      m("td", { class: "memory-pressure-banner__col-freed" }, humanizeKb(item.reclaimed_kb)),
                     ]),
                   ),
                   ...blocked.map((service) =>
