@@ -47,6 +47,16 @@
   #overlay .sub { font-size: 12px; color: #aaa; max-width: 80%; min-height: 14px; }
   #takecontrol { padding: 8px 16px; background: #b5462b; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
   #takecontrol:disabled { opacity: .6; cursor: default; }
+
+  /* Full-stage near-opaque cover for a crashed/OOM-killed browser. Distinct from
+     the agent-control #overlay: it sits above everything, covers the WHOLE pane,
+     and reads clearly with large white text -- so a dead browser is unmistakable,
+     not a subtle line of grey text on a black canvas. Terminal: this browser is
+     gone, a new one opens as a separate tab. */
+  #crashoverlay { display: none; position: absolute; inset: 0; z-index: 20; background: rgba(20, 20, 20, 0.92); flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px; }
+  #crashoverlay.show { display: flex; }
+  #crashoverlay .msg { font-size: 19px; line-height: 1.4; color: #fff; font-weight: 700; max-width: 90%; }
+  #crashoverlay .sub { font-size: 14px; color: rgba(255, 255, 255, 0.75); max-width: 90%; }
 </style>
 </head>
 <body>
@@ -70,6 +80,10 @@
       <div class="sub" id="overlaysub"></div>
       <button id="takecontrol">Take control</button>
     </div>
+    <div id="crashoverlay">
+      <div class="msg">This browser crashed.<br />Chromium was killed (for example, out of memory).</div>
+      <div class="sub">Open a new browser from the + menu.</div>
+    </div>
   </div>
 </div>
 <script>
@@ -85,6 +99,7 @@
   const reloadBtn = document.getElementById("reload");
   const urlInput = document.getElementById("url");
   const overlay = document.getElementById("overlay");
+  const crashOverlay = document.getElementById("crashoverlay");
   const overlayMsg = document.getElementById("overlaymsg");
   const overlaySub = document.getElementById("overlaysub");
   const takeControlBtn = document.getElementById("takecontrol");
@@ -201,6 +216,17 @@
     placeholder.style.display = "block";
   }
 
+  // Clear the "Starting browser…" / loading banner the moment we have evidence
+  // we're connected to a LIVE browser. A live frame is the strongest evidence,
+  // but a control/tabs message also proves the browser is up -- and a browser
+  // sitting on a static/blank page may send those without ever emitting a frame
+  // to a late-connecting client, so relying on `frame` alone leaves the banner
+  // stuck. Never clear once crashed: that banner is terminal.
+  function clearLoadingIfLive() {
+    if (crashed) return;
+    placeholder.style.display = "none";
+  }
+
   // The browser's Chromium died (OS/OOM kill, crash). Show a clear, terminal dead
   // state -- distinct from the agent-control overlay and the "reconnecting" state --
   // and lock the controls. This browser is gone; a new one opens as a separate tab.
@@ -210,9 +236,11 @@
     stopIdleTimer();
     overlay.classList.remove("show");
     returnBar.classList.remove("show");
-    placeholder.textContent =
-      "This browser crashed (Chromium was killed — e.g. out of memory). Open a new browser from the + menu.";
-    placeholder.style.display = "block";
+    // Full near-opaque cover over the whole pane (see #crashoverlay) -- the dead
+    // state must read at a glance, not as faint text on the black canvas. Hide the
+    // small placeholder so the two don't both show.
+    placeholder.style.display = "none";
+    crashOverlay.classList.add("show");
     tabbar.style.opacity = "0.5";
     tabbar.style.pointerEvents = "none";
     [urlInput, newtabBtn, backBtn, forwardBtn, reloadBtn].forEach((el) => (el.disabled = true));
@@ -343,7 +371,7 @@
       else if (crashed) return;  // once crashed, ignore any late frames/control/tabs
       else if (m.type === "initializing") showLoading("Starting up — restoring your saved browsers…");
       else if (m.type === "frame") drawFrame(m.data);  // first live frame clears the banner
-      else if (m.type === "control") setControl(m);
+      else if (m.type === "control") { setControl(m); clearLoadingIfLive(); }  // a control msg proves the browser is live
       else if (m.type === "handoff_request") {
         // An agent handed us the browser for a CAPTCHA/verification it can't do. Latch
         // the ask and re-render the bar (the preceding control message left us pinned).
@@ -351,7 +379,7 @@
         handoffAgent = m.agent_name || "An agent";
         setControl(lastControlState);
       }
-      else if (m.type === "tabs") renderTabs(m.tabs);
+      else if (m.type === "tabs") { renderTabs(m.tabs); clearLoadingIfLive(); }  // tabs also prove it's live
       // m.type === "ping" -> ignore; it only keeps the proxy stream alive.
     };
     castWs.onclose = (ev) => {

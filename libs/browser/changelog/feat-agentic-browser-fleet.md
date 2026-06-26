@@ -1,3 +1,23 @@
+Two viewer fixes surfaced in live testing:
+
+- A newly-created browser's pane no longer stays stuck on "Starting browser…"
+  after the browser is up. The viewer used to clear that banner only on the first
+  screencast frame, but a browser sitting on a static/blank page sends a
+  `control`/`tabs` sync without ever emitting a frame to a late-connecting client,
+  so the banner never cleared (reopening the tab fixed it). The pane now self-heals:
+  the viewer clears the banner as soon as it gets a `control` or `tabs` message
+  (evidence the browser is live), and the daemon replays the last screencast frame
+  to a newly-connected cast client so the canvas shows the live page at once instead
+  of staying black. The 1013 "starting" retry and the terminal 1008 "closed" states
+  are unchanged.
+
+- The browser-crash / OOM state is now a full, clearly-visible overlay: a
+  near-opaque grey cover over the whole pane with large white "This browser
+  crashed" text and a lighter "Open a new browser from the + menu" hint -- instead
+  of the previous faint line of grey text on the black canvas.
+
+----
+
 Follow-up fixes on the named-fleet work:
 
 - The `GET /browsers` route read the fleet's live count directly on the Flask
