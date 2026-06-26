@@ -1496,9 +1496,13 @@ body {
    .dv-tab-new on the inner tab content element, and the flash is applied to the
    enclosing .dv-tab wrapper (via :has) so the WHOLE clickable tab region lights
    up, not just the inner label. createCustomTab removes .dv-tab-new on the tab's
-   first activation. Each cycle snaps bright in the accent, then eases out to the
-   normal idle tab look before snapping bright again, so the indicator is hard to
-   miss. The accent is the per-workspace --workspace-accent, falling back to the
+   first activation.
+
+   Only the wrapper's BACKGROUND animates (accent -> transparent); the tab's
+   text color is never touched, so between flashes the label is exactly the gray
+   (or any other state-dependent color) dockview would give it normally -- the
+   background sits behind the label, so the accent still reads as a full-tab
+   pulse. The accent is the per-workspace --workspace-accent, falling back to the
    default accent. */
 .dv-tab:has(.dv-tab-new) {
   animation: tab-new-flash 1.4s ease-out infinite;
@@ -1512,12 +1516,10 @@ body {
 @keyframes tab-new-flash {
   0% {
     background-color: var(--workspace-accent, var(--color-accent));
-    color: #ffffff;
   }
   70%,
   100% {
     background-color: transparent;
-    color: var(--color-text-secondary);
   }
 }
 
