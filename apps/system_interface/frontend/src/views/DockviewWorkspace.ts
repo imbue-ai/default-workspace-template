@@ -158,9 +158,11 @@ function loadStoredIdSet(key: string): Set<string> {
 
 const seenAutoAgentIds = loadStoredIdSet(AUTO_SEEN_STORAGE_KEY);
 
-// In-memory: auto-created agents currently observed as "active" (mid-run). Used
-// to detect the rising edge of a new run so we re-surface the tab once per run.
-const activeAutoAgentIds = new Set<string>();
+// In-memory: the run key we last surfaced each auto-created agent for. A change
+// in an agent's run key (its ``caretaker_run`` label, which mngr bumps on every
+// wake) means a fresh run, so we re-surface the tab. Reset per page load, so a
+// reload also re-surfaces a tab the user had closed.
+const lastSurfacedRunKeyByAgent = new Map<string, string>();
 
 function persistIdSet(key: string, ids: Set<string>): void {
   try {
@@ -175,9 +177,12 @@ function isAutoCreatedAgent(agent: { labels?: Record<string, string> } | undefin
   return !!labels && (labels.auto_created === "true" || labels.caretaker === "true");
 }
 
-// True when the agent is actively working a turn (a run is in progress).
-function isAgentActive(agent: { activity_state?: string | null }): boolean {
-  return agent.activity_state === "THINKING" || agent.activity_state === "TOOL_RUNNING";
+// A stable key identifying the agent's current run. mngr bumps the
+// ``caretaker_run`` label on every wake, so a changed key means a fresh run.
+// Falls back to a constant for agents without the label, so they still surface
+// once on first sight (the tab reliably pops up even without a run label).
+function caretakerRunKey(agent: { labels?: Record<string, string> }): string {
+  return agent.labels?.caretaker_run ?? "exists";
 }
 
 // Reset the "seen" flag so a tab the user opened on a previous run flashes again
@@ -595,30 +600,25 @@ function addChatPanel(
   });
 }
 
-/** Re-open a tab for an auto-created agent (e.g. the Caretaker) on each fresh
- *  run, unless the user already has it open. A "fresh run" is the rising edge of
- *  the agent's activity (idle -> active), so the tab re-appears every day the
- *  Caretaker runs. The tab is added inactive so it does not steal focus;
- *  createCustomTab() makes it flash in the workspace accent color until opened.
- *  The flash is reset each run so a previously-seen tab flashes again. */
+/** Open a tab for an auto-created agent (e.g. the Caretaker) whenever a fresh run
+ *  appears and the user does not already have the tab open. A "fresh run" is a
+ *  change in the agent's run key (its ``caretaker_run`` label, bumped by mngr on
+ *  every wake) -- including the first time we ever see the agent -- so the tab
+ *  pops up reliably the first time and re-appears each day the Caretaker runs,
+ *  while an already-open tab is left untouched. The tab is added inactive so it
+ *  does not steal focus; createCustomTab() flashes it in the workspace accent
+ *  color until opened, and the flash is reset each run. */
 function surfaceAutoCreatedAgents(): void {
   if (!dockview) return;
   const openChatIds = getOpenChatAgentIds();
   for (const agent of getAgents()) {
     if (!isAutoCreatedAgent(agent)) continue;
 
-    const active = isAgentActive(agent);
-    const wasActive = activeAutoAgentIds.has(agent.id);
-    if (active) {
-      activeAutoAgentIds.add(agent.id);
-    } else {
-      activeAutoAgentIds.delete(agent.id);
-    }
+    const runKey = caretakerRunKey(agent);
+    if (lastSurfacedRunKeyByAgent.get(agent.id) === runKey) continue;
+    lastSurfacedRunKeyByAgent.set(agent.id, runKey);
 
-    // Surface only on the rising edge of a fresh run, and only when the user
-    // does not already have the tab open. This re-opens (and re-flashes) the tab
-    // each day the Caretaker runs while leaving an already-open tab untouched.
-    if (active && !wasActive && !openChatIds.has(agent.id)) {
+    if (!openChatIds.has(agent.id)) {
       clearAutoSeen(agent.id);
       addChatPanel(agent.id, agent.name, null, { inactive: true });
     }

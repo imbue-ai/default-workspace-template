@@ -102,6 +102,7 @@ create_caretaker() {
     --format json \
     --label caretaker=true \
     --label auto_created=true \
+    --label "caretaker_run=$(date +%s)" \
     "${label_args[@]}" \
     --message "$FIRST_RUN_MESSAGE"
 }
@@ -111,6 +112,10 @@ create_caretaker() {
 # agent is started before each send.
 clear_and_run() {
   local agent_id="$1"
+  # Bump the run key so the minds UI re-surfaces the tab (flashing) for this
+  # fresh run -- unless the user already has it open. Best-effort.
+  log "marking a fresh run for Caretaker ${agent_id}"
+  uv run mngr label "$agent_id" -l "caretaker_run=$(date +%s)" 2>/dev/null || true
   log "clearing Caretaker ${agent_id}'s chat"
   uv run mngr message "$agent_id" --start --message "/clear"
   sleep "$CLEAR_SETTLE_SECONDS"
