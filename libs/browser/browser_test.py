@@ -909,6 +909,44 @@ def test_register_cast_queue_seeds_initial_control_and_tabs() -> None:
     asyncio.run(go())
 
 
+def test_register_cast_queue_replays_last_frame_to_a_new_client() -> None:
+    # A client connecting mid-stream to a live browser sitting on a static page gets
+    # no fresh screencast frame (CDP only emits on a repaint), so register seeds the
+    # cached last frame after control + tabs -- otherwise the canvas stays black and
+    # the viewer's "Starting browser…" banner never clears.
+    browser = bsession.LiveBrowser(browser_id="b1")
+    browser._context = None
+    browser._latest_frame = "cached-jpeg-b64"
+
+    async def go() -> None:
+        q = await browser.register_cast_queue()
+        assert _pop_json(q)["type"] == "control"
+        assert _pop_json(q)["type"] == "tabs"
+        frame = _pop_json(q)
+        assert frame == {"type": "frame", "data": "cached-jpeg-b64"}
+        assert q.empty()
+
+    asyncio.run(go())
+
+
+def test_register_cast_queue_replays_no_frame_when_crashed() -> None:
+    # A crashed browser seeds the crash state, never a stale frame -- the dead browser
+    # must show as crashed, not as a frozen last frame.
+    browser = bsession.LiveBrowser(browser_id="b1")
+    browser._context = None
+    browser._latest_frame = "cached-jpeg-b64"
+    browser._crashed = True
+
+    async def go() -> None:
+        q = await browser.register_cast_queue()
+        assert _pop_json(q)["type"] == "control"
+        assert _pop_json(q)["type"] == "tabs"
+        assert _pop_json(q)["type"] == "crashed"
+        assert q.empty()  # crashed -> the cached frame is NOT replayed
+
+    asyncio.run(go())
+
+
 def test_broadcast_fans_out_to_registered_queues_and_unregister_removes() -> None:
     browser = bsession.LiveBrowser(browser_id="b1")
     browser._context = None

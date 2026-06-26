@@ -1476,6 +1476,14 @@ class LiveBrowser(MutableModel):
         fan-out list, so the viewer's first messages are deterministic -- no live
         frame can interleave ahead of the control/tabs the viewer needs first.
 
+        We also replay the LAST screencast frame (``_latest_frame``) to the new
+        client when one exists. The CDP screencast only emits a frame on a repaint,
+        so a client connecting mid-stream to a browser sitting on a static/blank
+        page would otherwise see a black canvas (and the viewer's "Starting
+        browser…" banner would never clear) until the page next changed. Replaying
+        the cached frame makes a fresh client see the live page at once. Skipped
+        when crashed -- a dead browser shows the crash state, not a stale frame.
+
         Runs on the loop (the runner calls it via ``bridge.run``), so the list
         mutation is single-threaded with respect to :meth:`_broadcast`.
         """
@@ -1484,6 +1492,8 @@ class LiveBrowser(MutableModel):
         client_queue.put_nowait(json.dumps({"type": "tabs", "tabs": await self._tab_list()}, default=str))
         if self._crashed:  # a viewer opening a crashed browser sees the crash state at once
             client_queue.put_nowait(json.dumps({"type": "crashed", "browser_id": self.browser_id}, default=str))
+        elif self._latest_frame is not None:  # replay the live page so a new client isn't stuck on black
+            client_queue.put_nowait(json.dumps({"type": "frame", "data": self._latest_frame}, default=str))
         self._cast_queues.append(client_queue)
         return client_queue
 
