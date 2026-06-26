@@ -144,7 +144,7 @@ describe("CreateBrowserModal", () => {
     expect(modal.calls.failed).toEqual([]);
   });
 
-  it("surfaces a 409 error inline and tears down the optimistic pane", async () => {
+  it("closes immediately on accept and tears down the optimistic pane on a 409", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 409,
@@ -156,12 +156,11 @@ describe("CreateBrowserModal", () => {
     typeName(modal, "my-browser");
     clickCreate(modal);
 
+    // The modal closes IMMEDIATELY on accept (it does not wait for the POST): the
+    // pane opens optimistically and the background POST runs. onCreated is never
+    // called; when the POST 409s, onFailed tears the optimistic pane back down.
     expect(modal.calls.accepted).toEqual(["my-browser"]);
     await vi.waitFor(() => expect(modal.calls.failed).toEqual([{ name: "my-browser", createdPane: true }]));
-
-    // The daemon's message is shown verbatim and the modal stays open (no
-    // onCreated, no auto-close).
-    expect(JSON.stringify(modal.render())).toContain("3/3 browsers open -- close one first.");
     expect(modal.calls.created).toEqual([]);
   });
 

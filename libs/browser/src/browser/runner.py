@@ -262,32 +262,36 @@ def list_browsers() -> Response:
 
 
 def create_browser() -> Response:
-    """Start a new browser, optionally with a user-chosen name.
+    """Register a new browser and return its name IMMEDIATELY (the Chromium launch runs
+    in the background).
 
-    NOT init-gated: create works DURING restore (the locked "init must not block create"
-    decision). It contends on the same ``manager._lock`` as the serialized relaunches, so
-    a create arriving mid-restore is accepted and simply queues behind them -- at most one
-    Chromium launches at a time. The only hard pre-check is that Chromium is installed
-    (otherwise there is genuinely nothing to launch -> 503).
+    NOT init-gated: create works DURING restore. ``manager.create`` registers the browser
+    in ``init`` under ``manager._lock`` (cap check + name resolution + insert -- all fast,
+    no Chromium launch) and returns at once, kicking the serialized launch off as a
+    background task. So this route does NOT block on (or time out against) the multi-second
+    launch -- the optimistic viewer pane finds the registered browser the instant it
+    connects and watches it flip from ``init`` to ``running`` over the cast socket. The
+    background launch persists the manifest itself once the browser is ``running``. The
+    only hard pre-check is that Chromium is installed (else nothing to launch -> 503).
 
     Body ``{"name": "<name>"}`` is optional; omitted -> a random name is generated.
     Response ``{"name": <chosen-name>, "key_available": <bool>}``. Errors: 400 invalid
-    name, 409 duplicate name or fleet full, 503 Chromium installing / launch failed."""
+    name, 409 duplicate name or fleet full, 503 Chromium installing."""
     ready, reason = deferred_install_ready()
     if not ready:
         return _error({"error": reason}, 503)
     available, _ = anthropic_key_status()
     name = _body().get("name")
     try:
+        # Returns fast: registers init + spawns the serialized launch on the loop.
         session = bridge.run(manager.create(name), timeout=_ROUTE_TIMEOUT)
     except InvalidBrowserNameError as e:
         return _error({"error": str(e)}, 400)
     except (DuplicateBrowserNameError, FleetFullError) as e:
         return _error({"error": str(e)}, 409)
     except _STARTUP_ERRORS as e:
-        logger.error("failed to create browser: {}", e)
+        logger.error("failed to register browser: {}", e)
         return _error({"error": f"Could not start browser: {e}"}, 503)
-    bridge.run(manager._save_manifest(), timeout=_ROUTE_TIMEOUT)  # a new browser is a topology change
     return jsonify({"name": session.browser_id, "key_available": available})
 
 

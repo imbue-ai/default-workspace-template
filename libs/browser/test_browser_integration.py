@@ -42,6 +42,18 @@ _SKIP_REAL_CHROMIUM_IN_GH_CI = pytest.mark.skipif(
 )
 
 
+async def _create_running(manager: "bsession.BrowserSessionManager", name: str | None = None) -> "bsession.LiveBrowser":
+    """create() now registers the browser ``init`` and launches Chromium in a background
+    task; for the real-Chromium tests that immediately drive the returned session, await
+    that launch so the browser is actually ``running`` before they touch it."""
+    session = await manager.create(name)
+    # Await every in-flight launch task (just this one in these tests) so the lifecycle
+    # has flipped to running (or the browser was removed on failure) before we proceed.
+    for task in list(manager._launch_tasks):
+        await task
+    return session
+
+
 def _drain_cast_queue(cast_queue: Any) -> tuple[list[str], list[dict[str, Any]]]:
     """Split a cast queue's buffered JSON strings into frames vs other events."""
     frames: list[str] = []
@@ -68,7 +80,7 @@ def test_live_browser_streams_and_accepts_input(monkeypatch: pytest.MonkeyPatch)
     async def go() -> None:
         manager = bsession.BrowserSessionManager()
         try:
-            session = await manager.create()
+            session = await _create_running(manager)
         except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
             pytest.skip(f"Chromium unavailable in this environment: {e}")
         try:
@@ -154,6 +166,7 @@ def test_run_agent_streams_thinking_and_action_then_done(monkeypatch: pytest.Mon
     monkeypatch.setattr(bsession, "ChatAnthropic", lambda **_kwargs: object())
     browser = bsession.LiveBrowser(browser_id="b1")
     browser._bu_session = object()  # type: ignore[assignment]
+    browser._lifecycle = "running"  # acquire/run_agent only apply once launched
     events: list[dict[str, Any]] = []
 
     async def on_event(event: dict[str, Any]) -> None:
@@ -177,6 +190,7 @@ def test_human_take_control_preempts_a_running_task(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(bsession, "ChatAnthropic", lambda **_kwargs: object())
     browser = bsession.LiveBrowser(browser_id="b1")
     browser._bu_session = object()  # type: ignore[assignment]
+    browser._lifecycle = "running"  # acquire/run_agent only apply once launched
     events: list[dict[str, Any]] = []
 
     async def on_event(event: dict[str, Any]) -> None:
@@ -211,6 +225,7 @@ def test_run_agent_aborts_if_control_lost_before_it_starts(monkeypatch: pytest.M
     monkeypatch.setattr(bsession, "ChatAnthropic", lambda **_kwargs: object())
     browser = bsession.LiveBrowser(browser_id="b1")
     browser._bu_session = object()  # type: ignore[assignment]
+    browser._lifecycle = "running"  # acquire/run_agent only apply once launched
     events: list[dict[str, Any]] = []
 
     async def on_event(event: dict[str, Any]) -> None:
@@ -238,6 +253,7 @@ def _install_fake_browser(monkeypatch: pytest.MonkeyPatch, browser_id: str = "al
     runner.manager._browsers.clear()
     fake = bsession.LiveBrowser(browser_id=browser_id)
     fake._bu_session = object()  # type: ignore[assignment]
+    fake._lifecycle = "running"  # a fake stand-in for an already-launched browser
     runner.manager._browsers[browser_id] = fake
     return fake
 
@@ -340,7 +356,7 @@ def test_direct_control_state_click_is_keyless_real_chromium(monkeypatch: pytest
     async def go() -> None:
         manager = bsession.BrowserSessionManager()
         try:
-            browser = await manager.create()
+            browser = await _create_running(manager)
         except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
             pytest.skip(f"Chromium unavailable in this environment: {e}")
         try:
@@ -379,7 +395,7 @@ def test_browser_crash_is_detected_and_reported_real_chromium(monkeypatch: pytes
     async def go() -> None:
         manager = bsession.BrowserSessionManager()
         try:
-            browser = await manager.create()
+            browser = await _create_running(manager)
         except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
             pytest.skip(f"Chromium unavailable in this environment: {e}")
         try:
@@ -483,7 +499,7 @@ def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch
         try:
             # Every browser is created on demand now; create one and remember its name.
             try:
-                browser = await first.create()
+                browser = await _create_running(first)
             except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
                 pytest.skip(f"Chromium unavailable in this environment: {e}")
             name = browser.browser_id

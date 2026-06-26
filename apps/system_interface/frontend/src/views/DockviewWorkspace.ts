@@ -2114,22 +2114,25 @@ export const DockviewWorkspace: m.Component = {
               // opening a pane or calling create -- never optimistically
               // touching the pane of the browser that already owns that name.
               existingBrowserNames: browserFleet.map((b) => b.id),
-              // Fires the instant the user accepts a name, before the
-              // (serialized, possibly slow) launch finishes: open the
-              // optimistic 'starting' pane immediately so the tab appears
-              // showing "Browser starting…". We keep ``newTabTargetGroup``
-              // until the modal resolves so a later success/failure can still
-              // reference the same group. Returns whether THIS call created a
-              // new pane (vs deduped onto an existing one) so a later failure
-              // only tears down a pane this flow created.
+              // Fires the instant the user accepts a name: open the optimistic
+              // 'starting' pane (which shows the full "Starting browser…" overlay
+              // and flips to the live page on its own when the daemon broadcasts
+              // ``running``) AND close the modal immediately -- we don't wait for
+              // the create POST. Returns whether THIS call created a new pane (vs
+              // deduped onto an existing one) so a later failure only tears down a
+              // pane this flow created. ``newTabTargetGroup`` is cleared here too
+              // since the modal is done; the background POST's success/failure
+              // callbacks reference the pane by name, not the group.
               onAccept(browserName: string): boolean {
-                return openBrowserSessionTab(browserName, newTabTargetGroup);
-              },
-              // Launch completed: the pane is already open, so just close the
-              // modal and refresh the fleet so the next dropdown lists it.
-              onCreated() {
+                const createdPane = openBrowserSessionTab(browserName, newTabTargetGroup);
                 showNewBrowserModal = false;
                 newTabTargetGroup = null;
+                return createdPane;
+              },
+              // The background create POST succeeded: the modal is already closed
+              // and the pane already open, so just refresh the fleet so the next
+              // dropdown lists the new browser.
+              onCreated() {
                 refreshBrowserFleet();
               },
               // Create failed (invalid / duplicate / full / installing): tear

@@ -268,3 +268,50 @@ browsers, each with an atomic ownership state machine, plus an
   sweep) took the browser first -- so the human always wins this race. The idle-lease
   sweep now snapshots the control fields under the same lock, and the daemon's
   startup-status read/write is lock-guarded for the Flask reader threads.
+
+----
+
+Reworked browser startup around an explicit per-browser lifecycle so a freshly-created
+browser's viewer pane is deterministic instead of racing the launch:
+
+- Each browser now tracks an explicit lifecycle: `init` (registered, Chromium not up
+  yet) -> `running` (Chromium up + screencast attached) -> `crashed`. It is reported on
+  every cast `control` broadcast, in each direct-command response, and in the `GET
+  /browsers` entry, so the whole system reads one source of truth instead of inferring
+  state from whether a frame arrived.
+
+- `POST /browsers` (and the `new` CLI verb) now returns the browser's name IMMEDIATELY:
+  `create` registers the browser `init` under the registry lock (the cap counts `init`
+  browsers too) and kicks the Chromium launch off as a background task. The launch is
+  serialized by a dedicated startup lock (at most one Chromium starting at a time), so
+  multiple new browsers queue and boot back-to-back. When a browser comes up it flips to
+  `running` and broadcasts; if its launch fails it is removed (not left as a stranded
+  `init` shell) and a `launch_failed` is broadcast. Restore uses the same
+  register-init -> serialized-launch path. Only `running` browsers are persisted to the
+  manifest.
+
+- A direct command (`state`/`click`/...) or a `task`/`lock`/`acquire` on a browser that
+  is still `init` now returns a clear, non-fatal "still starting up (Chromium is
+  launching) -- try again in a few seconds" (exit 3) so the agent waits and retries
+  instead of erroring on a half-built browser. Driving/ownership applies only once
+  `running`.
+
+- The viewer renders deterministically off the lifecycle: `init` shows a full
+  "Starting browser…" overlay covering the whole pane (tab/nav chrome hidden, no
+  half-built browser), `running` shows the live page (and removes the overlay on the
+  init->running transition), `crashed` shows the crashed overlay. The 1013 retry is now
+  just a thin fallback for the brief pre-registration window; a `launch_failed` is
+  terminal like 1008.
+
+Hardened the new background-launch path against teardown races:
+
+- `close()` racing a suspended launch can no longer resurrect a removed browser or leak a
+  second Chromium. `start()` now re-checks `_closed`/`_crashed` after the Chromium starts
+  and again right before the `running` flip, killing the just-launched Chromium and
+  aborting on that early return; and `manager.close` serializes against the in-flight
+  launch (awaiting its task) so the teardown lands after the launch finishes or aborts.
+
+- Cast sockets now tear down deterministically: `close()` and the launch-failure path push
+  a shutdown sentinel onto each connected cast queue (the launch_failed message is sent
+  first), so the server-side cast thread exits on its next drain instead of waiting for the
+  client to disconnect.

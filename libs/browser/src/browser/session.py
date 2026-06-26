@@ -80,6 +80,14 @@ _BROWSER_ERRORS = (RuntimeError, ConnectionError, OSError, PlaywrightError)
 
 ControlOwner = Literal["human", "agent"]
 
+# Explicit per-browser lifecycle. A browser is REGISTERED in the fleet the instant
+# create() is called (so the viewer/CLI can address it at once), but its Chromium is
+# launched asynchronously and serialized, so it starts in ``init`` and flips to
+# ``running`` only once Chromium is up and the screencast is attached. ``crashed`` is
+# terminal (Chromium died -- OOM/segfault). Driving/ownership only applies once
+# ``running``; the viewer renders deterministically off this field.
+Lifecycle = Literal["init", "running", "crashed"]
+
 # An event emitted by a running task: thinking / action / status / done / error /
 # preempted. The runner streams these to the agent's CLI as line-delimited JSON.
 TaskEvent = dict[str, Any]
@@ -398,6 +406,10 @@ class LiveBrowser(MutableModel):
     _nav_tracked: set[Page] = PrivateAttr(default_factory=set)
     _active_target_id: str | None = PrivateAttr(default=None)
     _keepalive_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
+    # The in-flight serialized launch task (set by the manager's _spawn_launch). close()
+    # awaits it via the manager so a teardown can't race a suspended start() -- the launch
+    # finishes/aborts first and observes _closed. None once create's launch isn't pending.
+    _launch_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
     _closed: bool = PrivateAttr(default=False)
     # Serializes screencast/active-tab changes (slow CDP work).
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
@@ -424,17 +436,43 @@ class LiveBrowser(MutableModel):
     # crash announcement). asyncio keeps only weak references to bare create_task()
     # results, so without this they could be garbage-collected before they run.
     _bg_tasks: set[Any] = PrivateAttr(default_factory=set)
-    # Set once Chromium dies unexpectedly (OS/OOM kill, segfault) -- detected via the
-    # Playwright observer's `disconnected` event, or lazily when an action finds the
-    # connection gone. A crashed browser reports "crashed" to agents and the viewer
-    # rather than silently freezing; its name is never reused (a new browser gets a new
-    # random name), so the dead one stays clearly labeled until it is closed.
-    _crashed: bool = PrivateAttr(default=False)
+    # The single explicit lifecycle field (see ``Lifecycle``). A browser is registered
+    # in ``init`` (Chromium not yet up), flips to ``running`` once Chromium is up and the
+    # screencast is attached, and to ``crashed`` if Chromium dies unexpectedly (OS/OOM
+    # kill, segfault) -- detected via the Playwright observer's `disconnected` event, or
+    # lazily when an action finds the connection gone. A crashed browser reports
+    # "crashed" to agents and the viewer rather than silently freezing; its name is never
+    # reused (a new browser gets a new random name), so the dead one stays clearly
+    # labeled until it is closed. All transitions stay on the single loop thread, so this
+    # plain field needs no lock (cooperative single-thread atomicity).
+    _lifecycle: Lifecycle = PrivateAttr(default="init")
     # Set by the manager: a no-arg hook that checkpoints the fleet manifest. Fired on
     # crash so a browser that died is dropped from the manifest promptly (not only on
     # the next ~10s checkpoint tick), so an ungraceful kill right after a crash doesn't
     # restore the dead browser as healthy next boot.
     _crash_save_hook: "Callable[[], None] | None" = PrivateAttr(default=None)
+
+    @property
+    def _crashed(self) -> bool:
+        """Whether Chromium died unexpectedly. Backed by the single ``_lifecycle`` field
+        (``crashed`` is terminal). A property -- not a separate flag -- so there is one
+        source of truth; the setter exists so the crash-detection paths (and tests) can
+        keep writing ``self._crashed = True`` while the real state lives in
+        ``_lifecycle``."""
+        return self._lifecycle == "crashed"
+
+    @_crashed.setter
+    def _crashed(self, value: bool) -> None:
+        if value:
+            self._lifecycle = "crashed"
+        elif self._lifecycle == "crashed":
+            self._lifecycle = "init"
+
+    @property
+    def _is_running(self) -> bool:
+        """Chromium is up and the screencast attached -- the only state in which the
+        browser can be driven and the viewer shows the live page."""
+        return self._lifecycle == "running"
 
     def _build_bu_session(self, profile_dir: Path, chromium_path: str, *, chromium_sandbox: bool) -> BrowserSession:
         """Construct (don't start) the browser-use session for this browser's persistent
@@ -500,6 +538,12 @@ class LiveBrowser(MutableModel):
         profile_dir.mkdir(parents=True, exist_ok=True)
         _clear_stale_singleton(profile_dir)  # a prior hard kill may have orphaned a lock
         self._bu_session = await self._start_bu_session(profile_dir, chromium_path)
+        # close() may have run while we were suspended in _start_bu_session (it holds no
+        # lock and pops the browser before this resumes). If so, abort -- and kill the
+        # Chromium we just brought up, so we don't leak a second handle behind a browser
+        # that's already been torn down / removed.
+        if await self._abort_start_if_torn_down():
+            return
         cdp_url = self._bu_session.cdp_url
         if not cdp_url:
             raise BrowserStartupError("browser-use BrowserSession did not expose a cdp_url after start")
@@ -516,8 +560,39 @@ class LiveBrowser(MutableModel):
         self._track_nav(page)
         await self._set_active_page(page)
         await self._open_initial_tabs(page, restore_tabs, active_tab)
+        # Re-check ONE more time right before the terminal flip: a close() (or a crash
+        # detected via the observer's disconnected event) may have landed during any of
+        # the awaits above (connect_over_cdp / _set_active_page / _open_initial_tabs).
+        # Without this we'd flip a torn-down / removed browser to "running" and broadcast
+        # a stale live state. The observer is already attached here, so close()'s own
+        # teardown covers the Chromium kill -- but if we got here via a launch that
+        # close() didn't serialize against, kill it ourselves to be safe.
+        if await self._abort_start_if_torn_down():
+            return
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        # Chromium is up and the screencast is attached: flip init -> running and tell
+        # every connected viewer, so an optimistic pane's "Starting browser…" overlay
+        # comes down and the live canvas shows. Done last (after the screencast is live)
+        # so a viewer that sees ``running`` is guaranteed real frames are coming.
+        self._lifecycle = "running"
+        self._broadcast(self._control_message())
         logger.info("LiveBrowser {} started (cdp_url={})", self.browser_id, cdp_url)
+
+    async def _abort_start_if_torn_down(self) -> bool:
+        """If close() or a crash landed while ``start`` was suspended at an await, abort the
+        launch: kill the Chromium we already brought up (so a close()-during-launch can't
+        leak a second handle) and report True so ``start`` returns without flipping to
+        ``running``. Returns False (and does nothing) on the normal path. Idempotent and
+        cheap; called at start()'s yield points after the bu_session exists."""
+        if not (self._closed or self._crashed):
+            return False
+        bu_session = getattr(self, "_bu_session", None)
+        if bu_session is not None:
+            try:
+                await bu_session.kill()
+            except _BROWSER_ERRORS as e:
+                logger.debug("aborted-launch kill ignored ({})", e)
+        return True
 
     async def _open_initial_tabs(
         self, first_page: Page, restore_tabs: list[str] | None, active_tab: int = 0
@@ -756,8 +831,8 @@ class LiveBrowser(MutableModel):
         while not self._closed:
             await asyncio.sleep(_KEEPALIVE_SECONDS)
             self._broadcast({"type": "ping"})
-            if self._crashed:
-                continue  # a dead browser: keep the proxy alive, but no sweeps/handoffs
+            if not self._is_running:
+                continue  # init (no ownership yet) or crashed (dead): no sweeps/handoffs
             changed = await self._sweep_unclaimed_grant() or await self._sweep_idle_lease()
             if not changed and self.controller == "agent":
                 self._broadcast(self._control_message())
@@ -907,6 +982,11 @@ class LiveBrowser(MutableModel):
     def _control_message(self) -> dict[str, Any]:
         msg: dict[str, Any] = {
             "type": "control",
+            # The explicit lifecycle (init/running/crashed) the viewer renders off of:
+            # init -> full "Starting browser…" overlay, running -> live page, crashed ->
+            # crashed overlay. Carried on EVERY control broadcast so the viewer reacts
+            # to each transition deterministically (not by guessing from frames).
+            "lifecycle": self._lifecycle,
             "owner": self.controller,
             "owner_agent_id": self.owner_agent_id,
             "owner_name": self.owner_agent_name,
@@ -925,8 +1005,11 @@ class LiveBrowser(MutableModel):
 
     def _control_state(self) -> dict[str, Any]:
         """Owner snapshot embedded in every direct-command response so the agent can
-        tell, after each call, whether it still holds control (e.g. a human took it)."""
+        tell, after each call, whether it still holds control (e.g. a human took it).
+        Carries the lifecycle too, so a caller acting on an ``init`` browser sees why
+        the command was deferred."""
         return {
+            "lifecycle": self._lifecycle,
             "controller": self.controller,
             "owner_agent_id": self.owner_agent_id,
             "owner_name": self.owner_agent_name,
@@ -987,6 +1070,13 @@ class LiveBrowser(MutableModel):
 
     def _crashed_payload(self) -> dict[str, Any]:
         return {"ok": False, "status": "crashed", **self._control_state()}
+
+    def _starting_payload(self) -> dict[str, Any]:
+        """Non-fatal "the browser is still launching" response for a command that arrives
+        while the browser is still ``init`` (Chromium not up yet). The CLI maps this to
+        the same wait-and-retry path as the fleet-still-restoring 503, so the agent waits
+        rather than erroring out."""
+        return {"ok": False, "status": "starting", **self._control_state()}
 
     async def _wake_agent(self, agent_id: str, agent_name: str | None) -> None:
         """Message a queued agent that the browser is its again, so it resumes in a
@@ -1105,6 +1195,9 @@ class LiveBrowser(MutableModel):
             (not pinned) is free and taken.
         ``"busy_agent"`` -- another agent holds it and ``wait`` was False.
         ``"timed_out"`` -- waited ``max_wait`` seconds for another agent to release.
+        ``"starting"`` -- the browser is still launching (``init``); driving/ownership
+            only applies once running. Non-fatal -- the caller waits and retries.
+        ``"crashed"`` -- Chromium died; the browser is gone.
 
         With ``wait`` (the default) and another agent in control, the caller parks in
         a FIFO queue and is handed the browser the instant that agent releases.
@@ -1113,6 +1206,15 @@ class LiveBrowser(MutableModel):
         ``busy_agent`` result also adds the agent to the resume queue: it ended its
         turn, and the daemon will message it to resume when the browser frees.
         """
+        # Ownership/driving only applies once the browser is running. An init browser
+        # has no Chromium yet (and no _bu_session to drive); a crashed one is gone. Both
+        # are reported here so task/hold/acquire don't park a waiter on (or try to drive)
+        # a browser that can't be driven. run_action gates on lifecycle before it calls
+        # acquire, so this is the guard for the task/hold/explicit-acquire paths.
+        if self._crashed:
+            return "crashed"
+        if not self._is_running:
+            return "starting"
         async with self._control_lock:
             if self.controller == "agent" and self.owner_agent_id == agent_id:
                 self.owner_agent_name = agent_name  # refresh display name on re-acquire
@@ -1338,6 +1440,11 @@ class LiveBrowser(MutableModel):
         # corpse -- tell the agent it's gone so it starts a fresh one.
         if self._crashed:
             return self._crashed_payload()
+        # Still launching (registered but Chromium not up yet): driving/ownership only
+        # applies once running. Return a clear, non-fatal "starting" so the CLI/agent
+        # waits and retries instead of erroring on a half-built browser.
+        if not self._is_running:
+            return self._starting_payload()
         # Did I already hold the lease, or does this command newly take the browser?
         # The client uses this to surface the browser pane exactly once -- on the
         # first command for a browser (and again after a human hands it back) --
@@ -1488,11 +1595,17 @@ class LiveBrowser(MutableModel):
         mutation is single-threaded with respect to :meth:`_broadcast`.
         """
         client_queue: "queue.Queue[str | None]" = queue.Queue(maxsize=_CAST_QUEUE_MAX_SIZE)
+        # The control message carries the lifecycle, so the viewer's FIRST message tells
+        # it whether to show the init overlay / live page / crashed overlay -- no guessing
+        # from frames. tabs follow (empty until running).
         client_queue.put_nowait(json.dumps(self._control_message(), default=str))
         client_queue.put_nowait(json.dumps({"type": "tabs", "tabs": await self._tab_list()}, default=str))
         if self._crashed:  # a viewer opening a crashed browser sees the crash state at once
             client_queue.put_nowait(json.dumps({"type": "crashed", "browser_id": self.browser_id}, default=str))
-        elif self._latest_frame is not None:  # replay the live page so a new client isn't stuck on black
+        elif self._is_running and self._latest_frame is not None:
+            # Replay the live page so a new client isn't stuck on black. Only when
+            # running: an ``init`` browser has no frame yet (the overlay covers it), and a
+            # crashed one shows the crash state, not a stale frame.
             client_queue.put_nowait(json.dumps({"type": "frame", "data": self._latest_frame}, default=str))
         self._cast_queues.append(client_queue)
         return client_queue
@@ -1505,16 +1618,22 @@ class LiveBrowser(MutableModel):
             self._cast_queues.remove(client_queue)
 
     async def describe(self) -> dict[str, Any]:
-        """Snapshot for ``GET /browsers``: id, owner, crash state, and the tab list."""
+        """Snapshot for ``GET /browsers``: id, lifecycle, owner, and the tab list.
+
+        ``lifecycle`` (init/running/crashed) is the explicit state the whole system
+        reads; ``crashed`` is kept as a derived convenience for existing consumers (the
+        CLI ``ls`` owner label). A browser still in ``init`` has no Chromium yet, so its
+        tab list is empty (the round-trip would have nothing to read)."""
         return {
             "id": self.browser_id,
+            "lifecycle": self._lifecycle,
             "controller": self.controller,
             "owner_agent_id": self.owner_agent_id,
             "owner_name": self.owner_agent_name,
             "human_pinned": self.human_pinned,
             "waiting": self._waiting_names(),
             "crashed": self._crashed,
-            "tabs": [] if self._crashed else await self._tab_list(),
+            "tabs": [] if not self._is_running else await self._tab_list(),
         }
 
     def _broadcast(self, message: dict[str, Any]) -> None:
@@ -1545,10 +1664,28 @@ class LiveBrowser(MutableModel):
                 except (queue.Empty, queue.Full):
                     pass  # a concurrent drain raced us; the client will catch up
 
+    def _shutdown_cast_queues(self) -> None:
+        """Push the ``None`` shutdown sentinel onto every connected cast queue so each
+        Flask cast thread tears down deterministically on the NEXT drain, instead of only
+        when the client happens to disconnect. Runs on the loop (same as ``_broadcast``),
+        so iterating ``_cast_queues`` needs no lock. Best-effort per queue: a full queue
+        is drained once to make room for the sentinel (the client is going away anyway)."""
+        for client_queue in self._cast_queues:
+            try:
+                client_queue.put_nowait(None)
+            except queue.Full:
+                try:
+                    client_queue.get_nowait()  # make room; the client is shutting down
+                    client_queue.put_nowait(None)
+                except (queue.Empty, queue.Full):
+                    pass
+
     async def close(self) -> None:
         self._closed = True
         if self._keepalive_task is not None:
             self._keepalive_task.cancel()
+        # Tell every cast socket to tear down (don't wait for the client to disconnect).
+        self._shutdown_cast_queues()
         # Evict any waiters so their task endpoints unblock instead of hanging on a dead browser.
         async with self._control_lock:
             waiters, self._wait_queue = self._wait_queue, []
@@ -1588,15 +1725,22 @@ class BrowserSessionManager(MutableModel):
     live fleet (generated under :attr:`_lock`, regenerated on collision) and never
     reused: a closed name is gone.
 
-    SERIALIZATION INVARIANT (the OOM guard): NO code may construct + ``start()`` a
-    :class:`LiveBrowser` except inside :meth:`_start_and_register_locked` while
-    holding :attr:`_lock`. Every launch path (create + restore) funnels through it,
-    so at most one Chromium launches at a time, and the lock is held across the WHOLE
-    (multi-second) launch -- a flood of creates serializes into back-to-back boots,
-    never parallel ones. Do NOT "optimize" by reserving a name and releasing the lock
-    before the launch completes: that would reintroduce both the OOM race and a
-    name-collision TOCTOU (the check-and-register is only atomic because the lock is
-    held across the entire launch).
+    REGISTER-INIT-IMMEDIATELY (the responsiveness fix): :meth:`create` registers a new
+    :class:`LiveBrowser` in ``init`` under :attr:`_lock` (cap check + name resolution +
+    add to ``_browsers``) and RETURNS at once, kicking the multi-second Chromium launch
+    off as a background task. The route no longer blocks on the launch, so the
+    optimistic viewer pane finds a real browser the instant it connects (the 1013
+    "not-registered-yet" window shrinks to the sub-millisecond gap before the dict insert
+    is visible).
+
+    SERIALIZATION INVARIANT (the OOM guard): at most one Chromium is ``start()``-ing at a
+    time. This is enforced by :attr:`_startup_lock` (a dedicated asyncio.Lock), which the
+    background launch (:meth:`_launch`) holds across the WHOLE (multi-second) launch.
+    Multiple ``init`` browsers queue on it and boot back-to-back, never in parallel.
+    Registration (under :attr:`_lock`) is decoupled from launching (under
+    :attr:`_startup_lock`): the cap counts ``init`` browsers too, so a flood of creates
+    can't overshoot even though their launches run later. ``init`` browsers DO count
+    toward the cap -- a half-started fleet still reserves its slots.
     """
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
@@ -1604,6 +1748,13 @@ class BrowserSessionManager(MutableModel):
     _browsers: dict[str, LiveBrowser] = PrivateAttr(default_factory=dict)
     _playwright: Playwright | None = PrivateAttr(default=None)
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
+    # Serializes the actual Chromium launches (the OOM guard). Decoupled from ``_lock``
+    # (which serializes registry mutation): registration is instant, launching is slow,
+    # so they take different locks. At most one launch runs at a time; ``init`` browsers
+    # queue here and boot one after another. Strong refs to the in-flight launch tasks so
+    # asyncio doesn't GC a bare create_task() result before it runs.
+    _startup_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
+    _launch_tasks: set[Any] = PrivateAttr(default_factory=set)
     # Last manifest JSON written, so the periodic checkpoint is a no-op when nothing
     # changed (idle workspaces produce zero backup-branch churn).
     _last_manifest_json: str | None = PrivateAttr(default=None)
@@ -1611,46 +1762,96 @@ class BrowserSessionManager(MutableModel):
     _checkpoint_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
     _bg_save_tasks: set[Any] = PrivateAttr(default_factory=set)  # strong refs for _spawn_save
 
-    async def _start_and_register_locked(
-        self, name: str, restore_tabs: list[str] | None = None, active_tab: int = 0
-    ) -> LiveBrowser:
-        """Launch + register one browser by name. Caller must hold ``self._lock`` for the
-        WHOLE call (the OOM-guard / single-launch serializer -- see the class docstring),
-        so a concurrent create can't observe a stale count (no cap overshoot) or register
-        a duplicate name. ``restore_tabs`` (manifest URLs) reopens prior tabs.
-
-        Playwright is started lazily here under the lock. On an empty-fleet fresh
-        workspace this means Playwright is first started by the FIRST create (restore
-        launches nothing), not pre-warmed by restore -- harmless (same loop, no
-        deadlock), just noted so the timing isn't surprising."""
-        if self._playwright is None:
-            self._playwright = await async_playwright().start()
+    def _register_init_locked(self, name: str) -> LiveBrowser:
+        """Construct a LiveBrowser in ``init`` and add it to the registry. Caller must
+        hold ``self._lock``, so the cap check + name resolution + insert are atomic (no
+        cap overshoot, no duplicate-name TOCTOU). Does NOT launch Chromium -- the caller
+        kicks :meth:`_launch` off as a background task after releasing the lock."""
         session = LiveBrowser(browser_id=name)
         session._crash_save_hook = self._spawn_save  # checkpoint promptly if it crashes
-        started = False
-        try:
-            await session.start(self._playwright, restore_tabs=restore_tabs, active_tab=active_tab)
-            started = True
-        finally:
-            if not started:
-                await session.close()  # start() failed partway -- don't leak a Chromium
         self._browsers[name] = session
         return session
+
+    async def _launch(
+        self, session: LiveBrowser, restore_tabs: list[str] | None = None, active_tab: int = 0, persist: bool = True
+    ) -> None:
+        """Serialized background Chromium launch for an already-registered ``init``
+        browser. Holds :attr:`_startup_lock` across the WHOLE launch, so at most one
+        Chromium starts at a time (the OOM guard) -- multiple ``init`` browsers queue here
+        and boot back-to-back. On success ``session.start`` flips the lifecycle to
+        ``running`` and broadcasts; on failure (Chromium never came up) we REMOVE the
+        browser from the registry rather than leaving a stranded ``init`` shell -- an
+        init that never launched would otherwise keep its name reserved and its cap slot
+        forever, and (unlike a crash, which preserves a dead shell that the user explicitly
+        closes) there is nothing for the user to look at. Runs entirely on the loop, so the
+        registry mutation needs no extra lock.
+
+        ``persist`` (default True for ``create``): checkpoint the manifest once the browser
+        is running, since a new running browser is a topology change. Restore passes
+        ``persist=False`` -- the post-restore reconcile owns the manifest there, and a
+        per-launch save would race it and clobber the preserved-for-retry entries of
+        browsers that flaked this boot.
+
+        Playwright is started lazily here under ``_startup_lock``. On an empty-fleet fresh
+        workspace this means Playwright is first started by the FIRST launch (restore
+        launches nothing), not pre-warmed by restore -- harmless (same loop, no deadlock),
+        just noted so the timing isn't surprising."""
+        async with self._startup_lock:
+            if session._closed or session.browser_id not in self._browsers:
+                return  # closed (or already removed) while it sat in the launch queue
+            if self._playwright is None:
+                self._playwright = await async_playwright().start()
+            try:
+                await session.start(self._playwright, restore_tabs=restore_tabs, active_tab=active_tab)
+            except (BrowserStartupError, *_BROWSER_ERRORS) as e:
+                logger.warning("browser {} failed to launch ({}); removing it", session.browser_id, e)
+                self._browsers.pop(session.browser_id, None)
+                # Tell any viewer waiting on the optimistic pane that this name is gone
+                # (terminal) BEFORE close() pushes the shutdown sentinel onto the cast
+                # queues -- so the viewer sees the launch_failed message and then the
+                # socket tears down deterministically, not only on its own disconnect.
+                session._broadcast({"type": "launch_failed", "browser_id": session.browser_id})
+                await session.close()  # don't leak a half-started Chromium; pushes the sentinel
+                return
+        # A new RUNNING browser is a topology change worth persisting promptly (create);
+        # restore defers to its reconcile instead (persist=False).
+        if persist:
+            self._spawn_save()
+
+    def _spawn_launch(
+        self, session: LiveBrowser, restore_tabs: list[str] | None = None, active_tab: int = 0
+    ) -> "asyncio.Task[None]":
+        """Kick a serialized launch off as a background task, holding a strong ref so
+        asyncio doesn't GC it before it runs. Records the task on the session so
+        :meth:`close` can await it (serializing teardown against an in-flight launch).
+        Returns the task (tests await it)."""
+        task = asyncio.create_task(self._launch(session, restore_tabs=restore_tabs, active_tab=active_tab))
+        session._launch_task = task
+        self._launch_tasks.add(task)
+        task.add_done_callback(self._launch_tasks.discard)
+        task.add_done_callback(lambda _t: setattr(session, "_launch_task", None))
+        return task
 
     async def create(self, name: str | None = None) -> LiveBrowser:
         """Start a new browser ('New browser' / fleet ``new``), optionally with a chosen name.
 
-        Under ``self._lock`` (held across the whole launch -- the serializer): enforce
-        the cap FIRST, then resolve the name. A ``None`` name is generated and
-        regenerated-on-collision against the LIVE fleet (the uniqueness guarantee -- a
-        crashed shell still holds its name). A provided name is validated
-        (:class:`InvalidBrowserNameError`) and rejected if it collides with a live
-        browser (:class:`DuplicateBrowserNameError`). Then the launch + register.
+        Registers the browser in ``init`` under ``self._lock`` (cap check FIRST, then name
+        resolution + insert -- all atomic) and RETURNS IMMEDIATELY, kicking the serialized
+        Chromium launch off as a background task. The route returns ``{name}`` fast; the
+        launch flips the browser to ``running`` (and broadcasts) when Chromium is up.
+
+        Cap: ``init`` browsers COUNT toward the cap (a half-started fleet still reserves
+        its slots); only crashed shells are excluded (they're dead, kept only to report
+        "crashed"). A ``None`` name is generated and regenerated-on-collision against the
+        registry (the uniqueness guarantee). A provided name is validated
+        (:class:`InvalidBrowserNameError`) and rejected on collision
+        (:class:`DuplicateBrowserNameError`).
         """
         async with self._lock:
             # Crashed browsers are dead shells kept only to report "crashed"; they
             # don't count toward the cap, so a crash never blocks opening a new one.
-            live = sum(1 for browser in self._browsers.values() if not getattr(browser, "_crashed", False))
+            # init + running both count -- the slot is reserved the moment we register.
+            live = sum(1 for browser in self._browsers.values() if not browser._crashed)
             if live >= _MAX_SESSIONS:
                 raise FleetFullError(f"{live}/{_MAX_SESSIONS} browsers open -- close one first.")
             if name is None:
@@ -1666,7 +1867,9 @@ class BrowserSessionManager(MutableModel):
                         f"the name '{name}' is already in use -- pick another, or close that browser first "
                         "(a crashed browser still holds its name until you close it)."
                     )
-            return await self._start_and_register_locked(name)
+            session = self._register_init_locked(name)
+        self._spawn_launch(session)
+        return session
 
     def _fresh_name_locked(self) -> str:
         """A generated name not currently in the live fleet. Caller holds ``self._lock``,
@@ -1697,13 +1900,29 @@ class BrowserSessionManager(MutableModel):
 
     async def close(self, browser_id: str) -> None:
         session = self._browsers.pop(browser_id, None)
-        if session is not None:
-            await session.close()
+        if session is None:
+            return
+        # Mark closed FIRST, then serialize against an in-flight launch: if create's
+        # background _launch is suspended mid-start(), await it so the launch finishes (or
+        # aborts via start()'s _abort_start_if_torn_down guard, which now sees _closed)
+        # before we tear down -- otherwise a resuming start() could resurrect this removed
+        # browser to "running" and leak a second Chromium. The launch holds _startup_lock
+        # (not awaited here), so awaiting the task is the right join point.
+        session._closed = True
+        launch_task = session._launch_task
+        if launch_task is not None and launch_task is not asyncio.current_task() and not launch_task.done():
+            try:
+                await launch_task
+            except (asyncio.CancelledError, BrowserStartupError, *_BROWSER_ERRORS) as e:
+                logger.debug("in-flight launch of {} unwound during close ({})", browser_id, e)
+        await session.close()
 
     # --- persistence: profiles (Tier A) + manifest (Tier B) -------------------
 
     def live_browsers(self) -> list[LiveBrowser]:
-        """Non-crashed sessions, by name -- the set worth persisting/restoring.
+        """Non-crashed sessions (init + running), by name -- the set that counts toward
+        the cap. An ``init`` browser reserves its slot the moment it's registered, so it
+        counts here even before Chromium is up.
 
         Snapshots ``_browsers`` with ``list(...)`` up front so iteration can't
         KeyError if the dict is mutated concurrently (e.g. a close on the loop
@@ -1711,9 +1930,18 @@ class BrowserSessionManager(MutableModel):
         snapshot = sorted(self._browsers.items())
         return [browser for _, browser in snapshot if not browser._crashed]
 
+    def running_browsers(self) -> list[LiveBrowser]:
+        """Only ``running`` sessions, by name -- the set worth PERSISTING/restoring. An
+        ``init`` browser whose Chromium isn't up yet is deliberately NOT persisted: it has
+        no tabs to save, and if the daemon is killed mid-launch we don't want to restore a
+        phantom that never actually came up (it would strand a cap slot next boot)."""
+        snapshot = sorted(self._browsers.items())
+        return [browser for _, browser in snapshot if browser._is_running]
+
     def capacity(self) -> tuple[int, int]:
-        """(live browser count, cap). Live = non-crashed, mirroring create()'s cap check,
-        so the UI can gate the 'New browser' button on the same condition create() enforces."""
+        """(non-crashed browser count, cap). Counts init + running, mirroring create()'s
+        cap check, so the UI gates the 'New browser' button on the same condition
+        create() enforces."""
         return len(self.live_browsers()), _MAX_SESSIONS
 
     async def capacity_async(self) -> tuple[int, int]:
@@ -1731,8 +1959,9 @@ class BrowserSessionManager(MutableModel):
         return fleet_manifest.ManifestEntry(id=browser.browser_id, tabs=urls, active_tab=active_tab)
 
     def _snapshot_manifest_locked(self) -> fleet_manifest.Manifest:
-        """Build the durable manifest from the live fleet. Caller holds ``_lock``."""
-        entries = [self._entry_for(browser) for browser in self.live_browsers()]
+        """Build the durable manifest from the RUNNING fleet (init browsers aren't
+        persisted -- they have no tabs and may never come up). Caller holds ``_lock``."""
+        entries = [self._entry_for(browser) for browser in self.running_browsers()]
         return fleet_manifest.Manifest(browsers=entries)
 
     def _spawn_save(self) -> None:
@@ -1801,11 +2030,12 @@ class BrowserSessionManager(MutableModel):
         shutil.rmtree(_profile_dir(browser_id), ignore_errors=True)
 
     async def _launch_one_restore(self, name: str, restore_tabs: list[str] | None, active_tab: int) -> bool:
-        """Relaunch one browser under a BRIEF lock hold (released between browsers, so a
-        sequential restore of N browsers never blocks read-only list/create for the whole
-        duration -- a create arriving mid-restore simply waits its turn on ``_lock``).
-        Returns True if it came up, False if it flaked (left for a next-boot retry).
-        Idempotent vs a concurrent create that already brought this name up."""
+        """Relaunch one saved browser through the SAME register-init -> serialized-launch
+        path as ``create``: register it ``init`` under a BRIEF ``_lock`` hold, then await
+        its serialized launch (so restore stays eager-sequential -- one Chromium at a
+        time). Returns True if it came up ``running``, False if it flaked (the launch
+        removed it; left in the manifest for a next-boot retry). Idempotent vs a
+        concurrent create that already brought this name up."""
         async with self._lock:
             if name in self._browsers:
                 return True  # a concurrent create already brought it up
@@ -1813,12 +2043,13 @@ class BrowserSessionManager(MutableModel):
             if live >= _MAX_SESSIONS:
                 logger.warning("restore hit the fleet cap; deferring browser {}", name)
                 return False
-            try:
-                await self._start_and_register_locked(name, restore_tabs=restore_tabs, active_tab=active_tab)
-                return True
-            except (BrowserStartupError, *_BROWSER_ERRORS) as e:
-                logger.warning("could not restore browser {} ({}); will retry next boot", name, e)
-                return False
+            session = self._register_init_locked(name)
+        # Await the serialized launch (restore is eager-sequential). persist=False: the
+        # post-restore reconcile owns the manifest, so a per-launch save can't race it
+        # and drop a flaked-but-wanted browser's preserved entry. On failure ``_launch``
+        # removes the browser; we report False so the saved entry is preserved for retry.
+        await self._launch(session, restore_tabs=restore_tabs, active_tab=active_tab, persist=False)
+        return name in self._browsers and self._browsers[name]._is_running
 
     async def restore(self) -> None:
         """Bring the fleet back on daemon startup: relaunch saved browsers EAGER-
@@ -1861,15 +2092,18 @@ class BrowserSessionManager(MutableModel):
         self, saved_by_name: dict[str, fleet_manifest.ManifestEntry], wanted_names: set[str]
     ) -> None:
         async with self._lock:
-            live_names = {b.browser_id for b in self.live_browsers()}
-            entries = [self._entry_for(b) for b in self.live_browsers()]
+            live_names = {b.browser_id for b in self.running_browsers()}
+            entries = [self._entry_for(b) for b in self.running_browsers()]
             # Preserve saved entries for wanted browsers that didn't relaunch this boot.
             for name in sorted(wanted_names - live_names):
                 if name in saved_by_name:
                     entries.append(saved_by_name[name])
             entries.sort(key=lambda e: e.id)
             manifest = fleet_manifest.Manifest(browsers=entries)
-            keep_names = live_names | wanted_names
+            # Keep profiles for running + wanted browsers AND any non-crashed browser
+            # (e.g. an init created mid-restore whose launch hasn't finished) -- never
+            # sweep a profile out from under a browser that's still coming up.
+            keep_names = live_names | wanted_names | {b.browser_id for b in self.live_browsers()}
         blob = manifest.model_dump_json()
         if blob != self._last_manifest_json:
             fleet_manifest.write_manifest(manifest)

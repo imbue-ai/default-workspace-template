@@ -90,7 +90,7 @@ browser morgan-lee: human (took control) -- 1 tab(s), active: https://bank.examp
       [1]  Dashboard           https://example.com/home
   ```
 
-- `new` starts a browser with a random name and prints it (`-> started browser alex-smith`). Pass `new <name>` to choose the name yourself (e.g. `new my-browser`); a **duplicate** name is rejected (pick another -- note a *crashed* browser still holds its name until you `close` it), and an invalid name (anything other than lowercase letters/digits joined by single dashes) is rejected too.
+- `new` starts a browser with a random name and prints it (`-> started browser alex-smith`). Pass `new <name>` to choose the name yourself (e.g. `new my-browser`); a **duplicate** name is rejected (pick another -- note a *crashed* browser still holds its name until you `close` it), and an invalid name (anything other than lowercase letters/digits joined by single dashes) is rejected too. `new` returns the name **immediately**; the browser's Chromium launches in the background (serialized, so back-to-back `new`s come up one at a time). If your very next command lands while it's still launching it returns `still starting up (Chromium is launching) -- try again in a few seconds` (exit 3) -- just wait a moment and retry the same command; it is **not** an error.
 - `close <name>` closes an entire browser (all its tabs) and retires its name (never reused). Use when permanently done with a browser. For a single tab, use `tab <name> close`.
 - The fleet is **capped (3 by default)**. `new` past the cap returns `3/3 browsers open -- close one first` -- `release` or `close` one you're done with first.
 - If there are no browsers yet, `ls` says so. There is **no default browser**: run `new` first (it prints a name), then drive by that name.
@@ -219,7 +219,7 @@ The browser shows up live in a UI pane next to your chat so the human can watch 
 | `0` | ok | Read the output; for `state`, decide your next action. |
 | `1` | error / stale index / crashed browser | Stale index: `state <name>`, find the new number, retry. Crashed: `new`. Else read the message. |
 | `2` | preempted (human took control, or you ran `handoff`) | **Stop and end your turn.** Tell the user; you'll be messaged to resume (re-run `state <name>` first). Don't poll or `--reclaim` on your own. |
-| `3` | busy (another agent holds it, or fleet full / still restoring) | Use a different browser (or `new`); you're queued and will be messaged when it frees. For "restoring", wait and retry (note: `new` works during restore -- only drive verbs can return this). |
+| `3` | busy (another agent holds it, or fleet full / still restoring / the browser is still launching) | Use a different browser (or `new`); you're queued and will be messaged when it frees. For "restoring" or "still starting up (Chromium is launching)", wait a few seconds and retry the SAME command (a freshly `new`ed browser launches in the background). |
 | `4` | timed out (waited via `--max-wait` and another agent still held it) | Try later, or pick a different browser. |
 | `64` | usage (`MNGR_AGENT_ID` unset / bad arguments / invalid `new <name>`) | Run from inside an agent shell; fix the command (for an invalid name, pick a valid one). |
 | `69` | no daemon (can't reach the browser service) | The service isn't running -- report it; don't blindly retry. |

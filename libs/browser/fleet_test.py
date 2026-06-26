@@ -39,6 +39,10 @@ def test_owner_label_distinguishes_self_other_free_and_pinned() -> None:
     assert fleet._owner_label(other, me) == "agent Bob"
     assert fleet._owner_label({"controller": "human", "human_pinned": False}, me) == "free"
     assert fleet._owner_label({"controller": "human", "human_pinned": True}, me) == "human (took control)"
+    # A still-launching (init) browser is labeled as starting, ahead of any owner read.
+    assert "starting" in fleet._owner_label({"lifecycle": "init", "controller": "human"}, me)
+    # The explicit crashed lifecycle reads as crashed even without the derived `crashed` flag.
+    assert "crashed" in fleet._owner_label({"lifecycle": "crashed", "controller": "human"}, me)
 
 
 @pytest.mark.parametrize(
@@ -50,6 +54,9 @@ def test_owner_label_distinguishes_self_other_free_and_pinned() -> None:
         ({"type": "busy_human"}, fleet._EXIT_BUSY),
         ({"type": "busy_agent"}, fleet._EXIT_BUSY),
         ({"type": "timed_out"}, fleet._EXIT_TIMEOUT),
+        # a task/hold whose acquire found the browser still launching -> wait and retry.
+        ({"type": "starting"}, fleet._EXIT_BUSY),
+        ({"type": "crashed"}, fleet._EXIT_ERROR),
         ({"type": "thinking", "text": "..."}, None),
         ({"type": "action", "text": "click"}, None),
         ({"type": "waiting", "busy_name": "Bob"}, None),
@@ -86,6 +93,8 @@ def test_parser_accepts_task_flags() -> None:
         ({"ok": False, "status": "busy_agent"}, "state", fleet._EXIT_BUSY),
         # the fleet is still restoring saved browsers -> try again (busy), not a hard error.
         ({"ok": False, "status": "initializing"}, "click", fleet._EXIT_BUSY),
+        # the browser itself is still launching (init) -> try again (busy), non-fatal.
+        ({"ok": False, "status": "starting"}, "click", fleet._EXIT_BUSY),
         ({"ok": False, "status": "crashed"}, "state", fleet._EXIT_ERROR),
         ({"ok": False, "status": "lost_control"}, "click", fleet._EXIT_PREEMPTED),
         ({"ok": False, "status": "stale_index", "error": "run state"}, "click", fleet._EXIT_ERROR),
