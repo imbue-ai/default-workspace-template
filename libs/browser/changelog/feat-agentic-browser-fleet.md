@@ -164,3 +164,24 @@ browsers, each with an atomic ownership state machine, plus an
   refuses a create during restore (so a "New browser" can never pile a concurrent launch
   onto a fleet relaunching browser 0 / multiple saved browsers); this just surfaces the
   reason instead of a bare 503.
+
+- The browser fleet daemon was migrated from FastAPI/uvicorn (async) to Flask +
+  flask-sock (synchronous, thread-per-connection), with browser_use's async quarantined
+  behind one background asyncio event loop reached via a single
+  `run_coroutine_threadsafe` bridge. The per-browser ownership state machine keeps its
+  asyncio locks/events unchanged on that one loop, so every ownership guarantee (atomic
+  single owner, the compare-and-set, FIFO wait/resume queues, human-always-wins
+  take-control, idle-TTL release, captcha handoff, disconnect-as-lease, the 503 init
+  gate) is preserved. The screencast WebSocket and direct-control HTTP API are unchanged;
+  there are no user-visible API or viewer changes.
+
+- Hardened the post-migration ownership handling so a human "Take control" can never be
+  preempted by a `task` run that started a beat too late. After the Flask split, the
+  endpoint acquires the browser in one coroutine and starts the browser-use run in a
+  separate one; a human take-control in that gap previously cancelled nothing (the run's
+  cancellable handle wasn't registered yet) and the agent then drove a browser the human
+  owned. The run now registers its handle and re-checks ownership together under the
+  control lock before driving, and aborts with "lost control" if the human (or an idle
+  sweep) took the browser first -- so the human always wins this race. The idle-lease
+  sweep now snapshots the control fields under the same lock, and the daemon's
+  startup-status read/write is lock-guarded for the Flask reader threads.

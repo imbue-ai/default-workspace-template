@@ -1,16 +1,28 @@
 import asyncio
+import json
+import queue
 import time
 from pathlib import Path
 from typing import Any
 
 import pytest
-
 from browser import manifest
 from browser import session as bsession
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
     """Stand-in for ``_wake_agent`` in tests: skip the real ``mngr message`` subprocess."""
+
+
+def _pop_json(cast_queue: "queue.Queue[str | None]") -> dict[str, Any]:
+    """Pop the next cast-queue payload and parse it as JSON.
+
+    A cast queue holds JSON strings, with ``None`` reserved as the shutdown sentinel
+    (never enqueued in these tests). Asserting it isn't ``None`` narrows the type for
+    ``json.loads`` and explodes loudly if a sentinel ever leaked in."""
+    payload = cast_queue.get_nowait()
+    assert payload is not None, "unexpected shutdown sentinel on the cast queue"
+    return json.loads(payload)
 
 
 # --- env / key helpers (unchanged) -------------------------------------------
@@ -246,7 +258,7 @@ def test_handoff_to_human_fronts_resume_queue_and_announces(monkeypatch: pytest.
     monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
     casts: list[dict] = []
 
-    async def fake_broadcast(self: bsession.LiveBrowser, message: dict) -> None:
+    def fake_broadcast(self: bsession.LiveBrowser, message: dict) -> None:
         casts.append(message)
 
     monkeypatch.setattr(bsession.LiveBrowser, "_broadcast", fake_broadcast)
@@ -326,7 +338,7 @@ def test_root_launches_with_sandbox_off_on_the_first_try(monkeypatch: pytest.Mon
     async def go() -> None:
         session = await browser._start_bu_session(Path("/tmp/x"), "/usr/bin/chromium")
         assert attempts == [False]  # one attempt, sandbox already off
-        assert session.chromium_sandbox is False
+        assert isinstance(session, _FakeBuSession) and session.chromium_sandbox is False
 
     asyncio.run(go())
 
@@ -342,7 +354,7 @@ def test_nonroot_retries_without_sandbox_when_a_sandboxed_launch_fails(monkeypat
     async def go() -> None:
         session = await browser._start_bu_session(Path("/tmp/x"), "/usr/bin/chromium")
         assert attempts == [True, False]  # sandbox on (fails) -> retried off (succeeds)
-        assert session.chromium_sandbox is False
+        assert isinstance(session, _FakeBuSession) and session.chromium_sandbox is False
 
     asyncio.run(go())
 
@@ -814,5 +826,69 @@ def test_idle_lease_sweep_releases_only_a_quiet_lease() -> None:
         browser._agent_task = None
         assert await browser._sweep_idle_lease() is True
         assert browser._state_tuple() == ("human", None, False)
+
+    asyncio.run(go())
+
+
+# --- cast fan-out: outbound queue per socket (the Flask<->loop WS inversion) ---
+
+
+def test_register_cast_queue_seeds_initial_control_and_tabs() -> None:
+    # A freshly-registered cast queue is seeded with the current control + tabs sync
+    # BEFORE any live frame, so the viewer's first messages are deterministic.
+    browser = bsession.LiveBrowser(browser_id=1)
+    browser._context = None  # _tab_list returns [] with no context
+
+    async def go() -> None:
+        q = await browser.register_cast_queue()
+        first = _pop_json(q)
+        second = _pop_json(q)
+        assert first["type"] == "control" and first["owner"] == "human"
+        assert second["type"] == "tabs" and second["tabs"] == []
+        assert q.empty()  # not crashed -> no crash message
+        assert q in browser._cast_queues
+
+    asyncio.run(go())
+
+
+def test_broadcast_fans_out_to_registered_queues_and_unregister_removes() -> None:
+    browser = bsession.LiveBrowser(browser_id=1)
+    browser._context = None
+
+    async def go() -> None:
+        q = await browser.register_cast_queue()
+        # Drain the initial seed so we only see the broadcast below.
+        while not q.empty():
+            q.get_nowait()
+        browser._broadcast({"type": "frame", "data": "abc"})
+        msg = _pop_json(q)
+        assert msg == {"type": "frame", "data": "abc"}
+        # Unregister stops further fan-out to this queue.
+        await browser.unregister_cast_queue(q)
+        assert q not in browser._cast_queues
+        browser._broadcast({"type": "frame", "data": "def"})
+        assert q.empty()
+
+    asyncio.run(go())
+
+
+def test_broadcast_drops_oldest_frame_when_a_slow_client_queue_is_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A client that falls behind must not block the loop: _broadcast drops the OLDEST
+    # buffered frame and enqueues the newest (only the latest frame matters).
+    monkeypatch.setattr(bsession, "_CAST_QUEUE_MAX_SIZE", 2)
+    browser = bsession.LiveBrowser(browser_id=1)
+    browser._context = None
+
+    async def go() -> None:
+        q = await browser.register_cast_queue()
+        while not q.empty():
+            q.get_nowait()
+        for n in range(5):
+            browser._broadcast({"type": "frame", "data": str(n)})
+        # maxsize 2 -> only the two most-recent frames survive (3 and 4).
+        survivors = []
+        while not q.empty():
+            survivors.append(_pop_json(q)["data"])
+        assert survivors == ["3", "4"]
 
     asyncio.run(go())

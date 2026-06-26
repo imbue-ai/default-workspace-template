@@ -5,8 +5,10 @@ description = "Live Chromium with human-in-the-loop control and a browser-use ag
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.110",
-    "uvicorn>=0.29",
+    "flask>=3.0",
+    "flask-sock>=0.7",
+    "simple-websocket>=1.0",
+    "werkzeug>=3.0",
     "browser-use[core]==0.13.1",
 ]
 

@@ -4,8 +4,11 @@ A per-workspace fleet of live Chromium browsers with a single atomic ownership
 model: each browser is controlled by exactly one party at a time (a specific
 agent, identified by its `MNGR_AGENT_ID`, or the human).
 
-- **Daemon** (`browser-service`): a FastAPI service that owns every browser. Each
-  browser is a headless Chromium driven by `browser_use.BrowserSession`, observed
+- **Daemon** (`browser-service`): a Flask + flask-sock service (synchronous,
+  thread-per-connection) that owns every browser. browser_use, Playwright (async),
+  and the per-browser ownership state machine run on one background asyncio event
+  loop, reached from the Flask threads through a single `run_coroutine_threadsafe`
+  bridge. Each browser is a headless Chromium driven by `browser_use.BrowserSession`, observed
   over the same CDP endpoint to stream a live view (`Page.startScreencast` ->
   base64 JPEG frames over a WebSocket) and inject human input. Browsers have
   monotonic integer ids; id 0 is the default and is (re)created on demand.

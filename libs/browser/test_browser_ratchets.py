@@ -26,7 +26,13 @@ def test_prevent_while_true() -> None:
 
 
 def test_prevent_time_sleep() -> None:
-    rc.check_time_sleep(_DIR, snapshot(0))
+    # +2 for the boot-a-server integration tests (test_browser_integration.py): they
+    # start the real threaded Werkzeug server on an ephemeral port and poll for server
+    # readiness and for a state transition over a real socket -- the only way to verify
+    # the disconnect-as-lease + cast-WS contract that the in-process Flask test client
+    # cannot exercise. This mirrors apps/system_interface, whose boot-server tests bump
+    # the same ratchet. No production code uses time.sleep.
+    rc.check_time_sleep(_DIR, snapshot(2))
 
 
 def test_prevent_global_keyword() -> None:
@@ -72,13 +78,14 @@ def test_prevent_relative_imports() -> None:
 
 
 def test_prevent_asyncio_import() -> None:
-    # This is an inherently async service: FastAPI WebSocket endpoints, the
-    # Playwright async API, and browser-use's Agent.run are all asyncio-native.
-    # Four files rely on asyncio: session.py (the state machine + run loop),
-    # runner.py (the streaming task endpoint cancels/queues with asyncio), and the
-    # two test modules that drive them with asyncio.run. This mirrors the
-    # system_interface lib, which bumps the same ratchet for its async WebSocket
-    # code (see apps/system_interface/.../test_ratchets.py).
+    # browser_use, the Playwright async API, and the per-browser ownership state
+    # machine are all asyncio-native and run on ONE background event loop. Four files
+    # rely on asyncio: session.py (the state machine + run loop), loop_bridge.py (the
+    # single sync<->async quarantine loop -- the one place run.py's old asyncio usage
+    # moved to), and the two test modules that drive session.py with asyncio.run.
+    # runner.py itself is now synchronous Flask and no longer imports asyncio (it
+    # reaches the loop only through the bridge), so the count holds at 4 despite the
+    # FastAPI->Flask swap. Mirrors the system_interface lib's async-WS ratchet.
     rc.check_asyncio_import(_DIR, snapshot(4))
 
 
