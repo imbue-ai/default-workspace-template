@@ -78,6 +78,14 @@ export function isHiddenUserMessage(content: string): boolean {
   if (trimmed === "/welcome" || trimmed === "/caretaker") {
     return true;
   }
+  // Before re-triggering the Caretaker each run, mngr sends "/clear" to wipe the
+  // chat. The cleared session then opens with the "/clear" command itself and a
+  // Claude Code local-command caveat ("<local-command-caveat>Caveat: The messages
+  // below were generated ... DO NOT respond ..."). Neither is a real user turn, so
+  // hide both -- the cleared chat should start at the Caretaker's own first message.
+  if (trimmed === "/clear" || content.startsWith("<local-command-caveat>")) {
+    return true;
+  }
   // Other skill expansions are folded into the corresponding "Tool: Skill"
   // tool-call block (see buildToolResultsWithSkillExpansions) so they
   // don't need to render inline as a separate chip.
