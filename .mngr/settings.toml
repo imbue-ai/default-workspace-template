@@ -84,7 +84,7 @@ version = "2.1.160"
 # (inside the services agent) and inherited via the host env file the
 # bootstrap writes. Disabled below on the "main" type, which still owns
 # the per-agent config dir that everyone else points at.
-use_env_config_dir = true
+isolate_local_config_dir = false
 
 # The "main" (services) agent type -- inherits everything from claude, then
 # disables every path that pulls user-local content into the workspace. The
@@ -99,7 +99,7 @@ sync_credentials_on_login = false
 # Keep this agent's per-agent CLAUDE_CONFIG_DIR (don't inherit the parent's
 # new shared-mode default). Every other agent in the workspace points at
 # *this* directory via the host env var the bootstrap writes.
-use_env_config_dir = false
+isolate_local_config_dir = true
 # Window 0 of the services agent must never actually run claude -- the bootstrap
 # window (extra_window) runs supervisord, which owns every background service,
 # and the real chat agents are spun up separately by the bootstrap. Making
@@ -199,8 +199,16 @@ extra_window = ["bootstrap='uv run bootstrap'"]
 # `extra_provision_command` stacks across templates (see
 # `apply_create_template` in vendor/mngr/.../common_opts.py), so the
 # mode-specific templates (docker/lima/...) keep their own commands.
+#
+# `mouse on` keeps wheel scroll and in-app mouse working in the browser
+# terminal. The clipboard lines make a plain mouse-drag copy reach the system
+# clipboard via OSC 52: `set-clipboard on` tells tmux to emit it,
+# `terminal-features ,*:clipboard` makes tmux believe the terminal accepts it,
+# and the copy-mode bindings copy-and-emit on drag-release. This relies on the
+# mngr_ttyd plugin serving an OSC 52-capable web client (the stock ttyd client
+# drops these escapes); see libs/mngr_ttyd in the mngr repo.
 extra_provision_command__extend = [
-    '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' > "$HOME/.tmux.conf"''',
+    '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' 'set -g set-clipboard on' 'set -as terminal-features ,*:clipboard' 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel' > "$HOME/.tmux.conf"''',
 ]
 
 # template for docker provider
@@ -560,14 +568,15 @@ agent_args = [
     "You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made.",
 ]
 
-# Subskill-worker template: sub-agent for any flow that hands its worker a
-# bundled sub-skill -- the crystallize-task / heal-skill / update-skill lifecycle
-# and the update-system-interface flow. Inherits from `worker`, adds:
-#  - MNGR_AGENT_ROLE=worker so the crystallization Stop hook skips in-worker.
-#  - A pre-provision step that installs the bundled worker sub-skills from
-#    each parent skill's assets/worker/ directory into the worker's
-#    .agents/skills/ tree. The installer auto-discovers any parent skill
-#    under .agents/skills/ that has an assets/worker/ subdir.
+# Subskill-worker template: sub-agent for any flow that hands its worker the
+# generic harden worker -- the crystallize-artifact / update-artifact /
+# heal-artifact lifecycle (across skills, services, and the system interface).
+# Inherits from `worker`, adds:
+#  - MNGR_AGENT_ROLE=worker so the harden Stop hook skips in-worker.
+#  - A pre-provision step that installs the single generic worker sub-skill from
+#    .agents/shared/worker/ into the worker's .agents/skills/ tree as
+#    `harden-worker`. The worker reads the operation + artifact from its task
+#    file and composes the matching references.
 [create_templates.subskill-worker]
 type = "worker"
 extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
