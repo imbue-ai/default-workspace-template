@@ -44,32 +44,29 @@ import asyncio
 import base64
 import json
 import os
+import queue
 import shutil
 import time
-from collections.abc import Awaitable
-from collections.abc import Callable
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
-from typing import Any
-from typing import Literal
+from typing import Any, Literal
 
-from browser_use import Agent
-from browser_use import BrowserSession
-from browser_use import ChatAnthropic
+from browser_use import Agent, BrowserSession, ChatAnthropic
 from browser_use.skill_cli.actions import ActionHandler
-from fastapi import WebSocket
+from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
-from playwright.async_api import Browser
-from playwright.async_api import BrowserContext
-from playwright.async_api import CDPSession
+from playwright.async_api import (
+    Browser,
+    BrowserContext,
+    CDPSession,
+    Page,
+    Playwright,
+    async_playwright,
+)
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page
-from playwright.async_api import Playwright
-from playwright.async_api import async_playwright
 from pydantic import PrivateAttr
 
 from browser import manifest as fleet_manifest
-from imbue.imbue_common.mutable_model import MutableModel
 
 # browser-use phones home anonymized telemetry by default; disable it (the
 # compute has no business making that call, and it spams connection-error logs
@@ -120,6 +117,12 @@ _HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com")
 # traffic the system_interface WS proxy closes the idle stream (~30s). A periodic
 # ping keeps the backend->client direction alive between real frames.
 _KEEPALIVE_SECONDS = 10
+
+# Outbound buffer depth per cast WebSocket. Screencast frames are produced on the
+# loop and drained by a Flask thread; if a client falls behind we drop the OLDEST
+# frame (a stale frame is worthless -- only the latest matters) rather than block
+# the loop. A handful of frames is plenty of slack for a momentarily-slow client.
+_CAST_QUEUE_MAX_SIZE = 16
 
 # Each live session = a headless Chromium + a Playwright observer; cap the concurrent
 # count so a small compute (e.g. 4 GB) can't be OOM-ed. Override via BROWSER_MAX_SESSIONS.
@@ -366,7 +369,14 @@ class LiveBrowser(MutableModel):
     _agent_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
     _run_on_event: EventSink | None = PrivateAttr(default=None)
     _input_enabled: asyncio.Event = PrivateAttr(default_factory=_enabled_event)
-    _cast_sockets: list[WebSocket] = PrivateAttr(default_factory=list)
+    # Outbound fan-out queues, one per connected cast WebSocket. The WS lives on a
+    # Flask thread (thread-per-connection); the loop pushes JSON frames onto its
+    # queue and the Flask thread drains and sends them. queue.Queue is thread-safe
+    # for the one-producer (loop) / one-consumer (Flask) handoff. The LIST itself is
+    # mutated ONLY on the loop thread (register/unregister are awaited via the
+    # bridge), so _broadcast can iterate it without a lock -- the single-loop
+    # serialization is the guard. Mirrors apps/system_interface's WebSocketBroadcaster.
+    _cast_queues: list["queue.Queue[str | None]"] = PrivateAttr(default_factory=list)
     _latest_frame: str | None = PrivateAttr(default=None)
     _send_in_flight: bool = PrivateAttr(default=False)
     _nav_tracked: set[Page] = PrivateAttr(default_factory=set)
@@ -502,6 +512,10 @@ class LiveBrowser(MutableModel):
         Each navigation is bounded by ``_RESTORE_NAV_TIMEOUT`` so one slow/hung URL
         can't stall startup, and failures are swallowed (a tab that won't load just
         comes up blank -- the profile's cookies are already attached either way)."""
+        # start() assigns _context immediately before calling this, so it is always set
+        # here; assert it for the type checker and to explode loudly if that ever changes.
+        context = self._context
+        assert context is not None, "_open_initial_tabs called before the browser context was attached"
         urls = [u for u in (restore_tabs or []) if _is_restorable_url(u)] or [_HOME_URL]
 
         async def _go(page: Page, url: str) -> None:
@@ -514,7 +528,7 @@ class LiveBrowser(MutableModel):
         await _go(first_page, urls[0])
         for url in urls[1:]:
             try:
-                page = await self._context.new_page()
+                page = await context.new_page()
             except _BROWSER_ERRORS as e:
                 logger.debug("restore new-tab for {} ignored ({})", url, e)
                 continue
@@ -645,12 +659,14 @@ class LiveBrowser(MutableModel):
         try:
             frame = self._latest_frame
             if frame is not None:
-                await self._broadcast({"type": "frame", "data": frame})
+                self._broadcast({"type": "frame", "data": frame})
         finally:
             self._send_in_flight = False
 
     async def _broadcast_tabs(self) -> None:
-        await self._broadcast({"type": "tabs", "tabs": await self._tab_list()})
+        # Stays async: it awaits _tab_list() (a CDP round-trip). The fan-out itself
+        # (_broadcast) is now synchronous.
+        self._broadcast({"type": "tabs", "tabs": await self._tab_list()})
 
     async def _tab_list(self) -> list[dict[str, Any]]:
         if self._context is None:
@@ -717,24 +733,32 @@ class LiveBrowser(MutableModel):
         refresh the viewer's idle-countdown / queue display while an agent holds."""
         while not self._closed:
             await asyncio.sleep(_KEEPALIVE_SECONDS)
-            await self._broadcast({"type": "ping"})
+            self._broadcast({"type": "ping"})
             if self._crashed:
                 continue  # a dead browser: keep the proxy alive, but no sweeps/handoffs
             changed = await self._sweep_unclaimed_grant() or await self._sweep_idle_lease()
             if not changed and self.controller == "agent":
-                await self._broadcast(self._control_message())
+                self._broadcast(self._control_message())
 
     async def _sweep_idle_lease(self) -> bool:
         """Release a direct-control lease whose owner has gone quiet (dead/wandered-off
         agent). A running ``task`` (``_agent_task`` set) is connection-bound and exempt;
         the CAS keeps this from clobbering a freshly-handed-off lease. Returns True if it
-        released one."""
-        if (
-            self.controller == "agent"
-            and self._agent_task is None
-            and time.monotonic() - self._lease_touched_at > _LEASE_IDLE_TTL
-        ):
-            return await self._transition(to="human", expect=("agent", self.owner_agent_id, False))
+        released one.
+
+        Snapshot the control fields (controller / _agent_task / owner_agent_id /
+        _lease_touched_at) under ``_control_lock`` so the idle check and the expect-tuple
+        it builds are taken from one consistent view -- otherwise a concurrent ownership
+        change between the reads could yield a torn expect-tuple. The CAS in
+        ``_transition`` then re-validates against the live state before mutating.
+        """
+        async with self._control_lock:
+            controller = self.controller
+            agent_running = self._agent_task is not None
+            owner_agent_id = self.owner_agent_id
+            lease_touched_at = self._lease_touched_at
+        if controller == "agent" and not agent_running and time.monotonic() - lease_touched_at > _LEASE_IDLE_TTL:
+            return await self._transition(to="human", expect=("agent", owner_agent_id, False))
         return False
 
     async def _sweep_unclaimed_grant(self) -> bool:
@@ -834,8 +858,10 @@ class LiveBrowser(MutableModel):
 
         Writes ``controller``/``owner_agent_id``/``human_pinned`` and ``_input_enabled``
         together (so the input gate can never disagree with the controller), then
-        broadcasts the new state to every cast socket and stores it as the current
-        state for ``send_initial_state`` to replay to late joiners.
+        broadcasts the new state to every cast socket. The broadcast is now a plain
+        synchronous fan-out (no ``await``), so the four-field write + broadcast run
+        with no intervening yield -- the input gate can never be observed mid-write.
+        Late joiners get the same state via ``register_cast_queue``'s initial seed.
         """
         self.controller = to
         self.owner_agent_id = agent_id
@@ -846,7 +872,7 @@ class LiveBrowser(MutableModel):
         else:
             self._input_enabled.clear()
             self._lease_touched_at = time.monotonic()  # start the sticky-lease idle clock
-        await self._broadcast(self._control_message())
+        self._broadcast(self._control_message())
 
     def _waiting_names(self) -> list[str]:
         """Display names of every agent queued for this browser: the resume queue
@@ -911,10 +937,15 @@ class LiveBrowser(MutableModel):
         """Schedule a wake, holding a strong ref so the task isn't GC'd before it runs."""
         self._spawn(self._wake_agent(agent_id, agent_name))
 
-    def _on_disconnected(self, _browser: Browser) -> None:
+    def _on_disconnected(self, _browser: Browser | None) -> None:
         """Playwright fires this when the Chromium CDP connection drops. During our own
         teardown (``_closed``) it's expected; otherwise the browser crashed -- record it
-        and tell the viewer. The agent finds out on its next command (see run_action)."""
+        and tell the viewer. The agent finds out on its next command (see run_action).
+
+        The ``_browser`` argument is the Playwright callback's payload and is unused; it
+        is typed ``| None`` because the lazy crash-detection path in ``run_action`` calls
+        this with ``self._observer``, which may already be ``None`` when the connection
+        is gone (and tests invoke it with ``None`` directly)."""
         if self._closed or self._crashed:
             return
         self._crashed = True
@@ -922,7 +953,7 @@ class LiveBrowser(MutableModel):
 
     async def _announce_crash(self) -> None:
         logger.warning("browser {} crashed (Chromium connection lost)", self.browser_id)
-        await self._broadcast({"type": "crashed", "browser_id": self.browser_id})
+        self._broadcast({"type": "crashed", "browser_id": self.browser_id})
         if self._crash_save_hook is not None:
             # Drop the dead browser from the manifest now (it's excluded from the live
             # snapshot), so a kill right after the crash doesn't restore it as healthy.
@@ -1068,7 +1099,7 @@ class LiveBrowser(MutableModel):
             if not reclaim and self._human_pin_active():
                 if enqueue_on_busy:
                     self._enqueue_resume_locked(agent_id, agent_name)
-                    await self._broadcast(self._control_message())
+                    self._broadcast(self._control_message())
                 return "busy_human"
             if self.controller == "human":  # free, a stale pin, or reclaim of a pin
                 self._dequeue_resume_locked(agent_id)
@@ -1078,7 +1109,7 @@ class LiveBrowser(MutableModel):
             if not wait:
                 if enqueue_on_busy:
                     self._enqueue_resume_locked(agent_id, agent_name)
-                    await self._broadcast(self._control_message())
+                    self._broadcast(self._control_message())
                 return "busy_agent"
             busy_id, busy_name = self.owner_agent_id, self.owner_agent_name
             waiter = _AcquireWaiter(agent_id, agent_name)
@@ -1131,7 +1162,7 @@ class LiveBrowser(MutableModel):
             self._enqueue_resume_front_locked(agent_id, agent_name)
             await self._write_control_locked("human", None, None, pinned=True)
             await self._settle_queue_locked()  # evict any connection-bound task/hold waiters
-            await self._broadcast(
+            self._broadcast(
                 {
                     "type": "handoff_request",
                     "browser_id": self.browser_id,
@@ -1147,26 +1178,49 @@ class LiveBrowser(MutableModel):
         """Human hands control back: un-pin (only if currently pinned). Frees any waiter."""
         return await self._transition(to="human", pinned=False, expect=("human", None, True))
 
-    async def run_agent(self, prompt: str, on_event: EventSink) -> None:
+    async def run_agent(self, agent_id: str, prompt: str, on_event: EventSink) -> None:
         """Run a browser-use task against this (already-acquired) browser, streaming steps.
 
-        Ownership is managed by the caller (the task endpoint acquires before and
-        releases after); this method only drives browser-use and reports events.
+        The caller (the task endpoint) acquires the browser in one submitted coroutine
+        and submits this run as a SEPARATE coroutine; between the two the loop is free to
+        run a human ``take_control`` (or an idle-lease sweep). So registering this run's
+        cancellable handle (``_agent_task``/``_agent``) MUST be atomic with ownership:
+        we take ``_control_lock`` and re-check that ``agent_id`` still owns the browser
+        (``controller == "agent"`` and ``owner_agent_id == agent_id``, unpinned) BEFORE
+        registering the handle and driving. This mirrors the pre-refactor design, where
+        acquire and the ``run_agent`` task lived in one coroutine on the loop with no
+        intervening preemption -- the invariant being that the cancellable handle and
+        ownership move together.
+
+        If ownership was lost in that gap (a human preempted, or the lease was swept),
+        we emit ``lost_control`` and return WITHOUT touching the browser -- we never
+        drive a browser the human (or another agent) now owns. Once the handle is
+        registered under the lock, a subsequent ``take_control`` sees ``_agent_task``
+        and cancels this run via the bridge.
         """
         api_key = resolve_anthropic_key()
         if not api_key:
             await on_event({"type": "error", "text": anthropic_key_status()[1]})
             return
-        self._run_on_event = on_event
-        self._agent_task = asyncio.current_task()
         # Key is passed straight to ChatAnthropic -- never into os.environ, which would
-        # leak across the manager's concurrent sessions and race between runs.
+        # leak across the manager's concurrent sessions and race between runs. Build the
+        # Agent BEFORE taking the lock (it mutates no shared state); only the handle
+        # registration below must be atomic with the ownership re-check.
         agent = Agent(
             task=prompt,
             llm=ChatAnthropic(model=_DEFAULT_MODEL, api_key=api_key),
             browser_session=self._bu_session,
         )
-        self._agent = agent
+        async with self._control_lock:
+            if self._state_tuple() != ("agent", agent_id, False):
+                # A human took control (or the lease was swept) between the caller's
+                # acquire and this run starting. Do not register the handle or drive --
+                # the browser is no longer ours.
+                await on_event({"type": "lost_control", **self._control_state()})
+                return
+            self._run_on_event = on_event
+            self._agent_task = asyncio.current_task()
+            self._agent = agent
         try:
             await asyncio.wait_for(
                 agent.run(on_step_end=self._on_agent_step, max_steps=_TASK_MAX_STEPS),
@@ -1278,7 +1332,7 @@ class LiveBrowser(MutableModel):
                 # only for state-changing commands, not a passive `state` peek.
                 if enqueue_on_busy:
                     self._enqueue_resume_locked(agent_id, agent_name)
-                    await self._broadcast(self._control_message())
+                    self._broadcast(self._control_message())
                 return {"ok": False, "status": "lost_control", **self._control_state()}
             self._lease_touched_at = time.monotonic()
             self._granted_at = 0.0  # the agent claimed (sent a command); cancel the claim window
@@ -1392,19 +1446,31 @@ class LiveBrowser(MutableModel):
 
     # --- socket bookkeeping ---------------------------------------------------
 
-    def add_cast_socket(self, ws: WebSocket) -> None:
-        self._cast_sockets.append(ws)
+    async def register_cast_queue(self) -> "queue.Queue[str | None]":
+        """Register a new cast WebSocket and SEED its initial sync, atomically on the loop.
 
-    def remove_cast_socket(self, ws: WebSocket) -> None:
-        if ws in self._cast_sockets:
-            self._cast_sockets.remove(ws)
+        Returns an outbound queue for the Flask cast handler to drain. The initial
+        control + tabs (+ crash) sync is pushed BEFORE the queue is added to the
+        fan-out list, so the viewer's first messages are deterministic -- no live
+        frame can interleave ahead of the control/tabs the viewer needs first.
 
-    async def send_initial_state(self, ws: WebSocket) -> None:
-        """Send current control + tab state to a freshly-connected cast socket (initial sync)."""
-        await ws.send_json(self._control_message())
-        await ws.send_json({"type": "tabs", "tabs": await self._tab_list()})
+        Runs on the loop (the runner calls it via ``bridge.run``), so the list
+        mutation is single-threaded with respect to :meth:`_broadcast`.
+        """
+        client_queue: "queue.Queue[str | None]" = queue.Queue(maxsize=_CAST_QUEUE_MAX_SIZE)
+        client_queue.put_nowait(json.dumps(self._control_message(), default=str))
+        client_queue.put_nowait(json.dumps({"type": "tabs", "tabs": await self._tab_list()}, default=str))
         if self._crashed:  # a viewer opening a crashed browser sees the crash state at once
-            await ws.send_json({"type": "crashed", "browser_id": self.browser_id})
+            client_queue.put_nowait(json.dumps({"type": "crashed", "browser_id": self.browser_id}, default=str))
+        self._cast_queues.append(client_queue)
+        return client_queue
+
+    async def unregister_cast_queue(self, client_queue: "queue.Queue[str | None]") -> None:
+        """Remove a cast queue from the fan-out. Async so it runs ON the loop (via
+        ``bridge.run``), keeping all ``_cast_queues`` list mutation single-threaded with
+        respect to :meth:`_broadcast` -- no lock needed because the loop serializes it."""
+        if client_queue in self._cast_queues:
+            self._cast_queues.remove(client_queue)
 
     async def describe(self) -> dict[str, Any]:
         """Snapshot for ``GET /browsers``: id, owner, crash state, and the tab list."""
@@ -1419,17 +1485,33 @@ class LiveBrowser(MutableModel):
             "tabs": [] if self._crashed else await self._tab_list(),
         }
 
-    async def _broadcast(self, message: dict[str, Any]) -> None:
-        dead: list[WebSocket] = []
-        for ws in list(self._cast_sockets):
+    def _broadcast(self, message: dict[str, Any]) -> None:
+        """Fan a message out to every connected cast socket's outbound queue.
+
+        Runs on the loop thread; pushes a JSON string onto each per-socket
+        ``queue.Queue`` (thread-safe) for the owning Flask thread to send. On a
+        full queue the client is behind, so we drop the OLDEST buffered frame and
+        enqueue this one (a stale frame is worthless -- only the latest matters),
+        mirroring WebSocketBroadcaster's drop-oldest policy.
+
+        This is a plain ``def`` (no ``await``): it used to ``await ws.send_json``
+        -- a real suspension point inside ``_write_control_locked`` while holding
+        ``_control_lock`` -- and now only enqueues, which TIGHTENS the state
+        machine's atomicity (one fewer mid-write yield). All call sites call it
+        synchronously (no ``await``). The ``_cast_queues`` list is mutated only on
+        this same loop thread (register/unregister go through the bridge), so
+        iterating it here needs no lock.
+        """
+        text = json.dumps(message, default=str)
+        for client_queue in self._cast_queues:
             try:
-                await ws.send_json(message)
-            except _BROWSER_ERRORS as e:
-                logger.debug("dropping dead socket ({})", e)
-                dead.append(ws)
-        for ws in dead:
-            if ws in self._cast_sockets:
-                self._cast_sockets.remove(ws)
+                client_queue.put_nowait(text)
+            except queue.Full:
+                try:
+                    client_queue.get_nowait()  # drop the oldest buffered frame
+                    client_queue.put_nowait(text)
+                except (queue.Empty, queue.Full):
+                    pass  # a concurrent drain raced us; the client will catch up
 
     async def close(self) -> None:
         self._closed = True
