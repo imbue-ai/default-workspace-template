@@ -45,11 +45,9 @@ import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
-from typing import Iterator
+from typing import Any, Iterator
 
-from imbue.mngr.cli.output_helpers import write_human_line
-from imbue.mngr.cli.output_helpers import write_stderr_line
+from imbue.mngr.cli.output_helpers import write_human_line, write_stderr_line
 
 _DEFAULT_URL = "http://127.0.0.1:8081"
 _ENV_URL = "MINDS_BROWSER_SERVICE_URL"
@@ -210,8 +208,10 @@ def _pull_in_pane(browser_name: str) -> None:
 
 
 def _owner_label(browser: dict[str, Any], me: str | None) -> str:
-    if browser.get("crashed"):
+    if browser.get("crashed") or browser.get("lifecycle") == "crashed":
         return "crashed (gone -- start a new one)"
+    if browser.get("lifecycle") == "init":
+        return "starting (Chromium launching -- ready shortly)"
     if browser["controller"] == "agent":
         name = browser.get("owner_name") or browser.get("owner_agent_id") or "?"
         return "you" if browser.get("owner_agent_id") == me else f"agent {name}"
@@ -309,6 +309,14 @@ def _render_event(event: dict[str, Any], browser_name: str) -> int | None:
     elif kind == "timed_out":
         _err(f"browser {browser_name} is still held by another agent after waiting; gave up.")
         return _EXIT_TIMEOUT
+    elif kind == "starting":
+        _err(f"browser {browser_name} is still starting up (Chromium is launching) -- "
+             "try again in a few seconds.")
+        return _EXIT_BUSY
+    elif kind == "crashed":
+        _err(f"browser {browser_name} crashed (Chromium was killed -- e.g. out of memory) and is gone. "
+             f"Start a fresh one with `new` (it gets a new name).")
+        return _EXIT_ERROR
     return None
 
 
@@ -395,6 +403,10 @@ def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int
     if status == "initializing":
         _err("the browser fleet is still starting up (restoring your saved browsers) -- "
              "try again in a few seconds. `ls` and `state` work now; this command needs the fleet ready.")
+        return _EXIT_BUSY
+    if status == "starting":
+        _err(f"browser {browser_name} is still starting up (Chromium is launching) -- "
+             "try again in a few seconds. It'll be ready shortly; just retry this command.")
         return _EXIT_BUSY
     if status == "crashed":
         _err(f"browser {browser_name} crashed (Chromium was killed -- e.g. out of memory) and is gone. "

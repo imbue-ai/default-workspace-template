@@ -67,3 +67,14 @@ Integrated the agentic browser fleet into the workspace UI.
   a "New browser" click during startup from racing the fleet's restore (e.g. while
   browser 0 or several saved browsers are still launching). Disabled "+" menu items
   no longer run their action on click (previously they were only greyed out).
+
+----
+
+The "New browser" modal now closes IMMEDIATELY when you click Start, rather than waiting
+for the create to finish. The optimistic browser pane opens right away showing a full
+"Starting browser…" overlay (its tab/nav chrome hidden) and flips to the live page on
+its own once the daemon reports the browser is running -- driven by the browser's explicit
+lifecycle state over the cast socket, not by guessing from the first frame. The
+create request runs in the background; if it fails (invalid/duplicate name, fleet full,
+or installing) the optimistic pane is torn back down. The duplicate-name pre-validation
+and the createdPane teardown defense from the prior fix are unchanged.

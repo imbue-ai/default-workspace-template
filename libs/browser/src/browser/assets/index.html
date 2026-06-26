@@ -57,6 +57,20 @@
   #crashoverlay.show { display: flex; }
   #crashoverlay .msg { font-size: 19px; line-height: 1.4; color: #fff; font-weight: 700; max-width: 90%; }
   #crashoverlay .sub { font-size: 14px; color: rgba(255, 255, 255, 0.75); max-width: 90%; }
+
+  /* Full-stage cover shown while the browser is in the `init` lifecycle state:
+     registered, but Chromium isn't up yet. It covers the WHOLE pane (above the
+     canvas) so the user never sees a half-built browser; the chrome (tab/nav bars)
+     is hidden too while it shows. Removed deterministically on the init->running
+     control message, not on "a frame arrived". A spinner gives a sense of progress. */
+  #initoverlay { display: none; position: absolute; inset: 0; z-index: 15; background: #1e1e1e; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 24px; }
+  #initoverlay.show { display: flex; }
+  #initoverlay .spinner { width: 28px; height: 28px; border: 3px solid #444; border-top-color: #0e639c; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  #initoverlay .msg { font-size: 15px; color: #ccc; font-weight: 600; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* While init/crashed cover the pane, hide the tab + nav chrome so a half-built
+     browser never peeks through. Toggled by the `chrome-hidden` class on #app. */
+  #app.chrome-hidden #tabbar, #app.chrome-hidden #navbar, #app.chrome-hidden #returnbar { display: none; }
 </style>
 </head>
 <body>
@@ -84,11 +98,16 @@
       <div class="msg">This browser crashed.<br />Chromium was killed (for example, out of memory).</div>
       <div class="sub">Open a new browser from the + menu.</div>
     </div>
+    <div id="initoverlay">
+      <div class="spinner"></div>
+      <div class="msg">Starting browser…</div>
+    </div>
   </div>
 </div>
 <script>
 (function () {
   "use strict";
+  const app = document.getElementById("app");
   const canvas = document.getElementById("screen");
   const ctx = canvas.getContext("2d");
   const placeholder = document.getElementById("placeholder");
@@ -100,6 +119,7 @@
   const urlInput = document.getElementById("url");
   const overlay = document.getElementById("overlay");
   const crashOverlay = document.getElementById("crashoverlay");
+  const initOverlay = document.getElementById("initoverlay");
   const overlayMsg = document.getElementById("overlaymsg");
   const overlaySub = document.getElementById("overlaysub");
   const takeControlBtn = document.getElementById("takecontrol");
@@ -117,6 +137,13 @@
   let reconnectTimer = null;
   let closedForGood = false;  // set on a 1008 close: the browser is gone, stop reconnecting.
   let crashed = false;        // set on a {type:"crashed"} message: Chromium died; show a dead state.
+  // The explicit per-browser lifecycle ("init" | "running" | "crashed"), carried on
+  // every {type:"control"} broadcast and the register-time seed. The viewer renders
+  // DETERMINISTICALLY off this -- init shows the full "Starting browser…" overlay (chrome
+  // hidden), running shows the live page, crashed shows the crashed overlay -- rather than
+  // guessing state from whether a frame arrived. Starts "init": until the first control
+  // message we assume the browser is still coming up and show the starting overlay.
+  let lifecycle = "init";
   // Latched when an agent hands off for a CAPTCHA/verification ({type:"handoff_request"}):
   // the return bar shows what the human must do, until control goes back to an agent.
   let handoffReason = null, handoffAgent = null;
@@ -216,15 +243,27 @@
     placeholder.style.display = "block";
   }
 
-  // Clear the "Starting browser…" / loading banner the moment we have evidence
-  // we're connected to a LIVE browser. A live frame is the strongest evidence,
-  // but a control/tabs message also proves the browser is up -- and a browser
-  // sitting on a static/blank page may send those without ever emitting a frame
-  // to a late-connecting client, so relying on `frame` alone leaves the banner
-  // stuck. Never clear once crashed: that banner is terminal.
-  function clearLoadingIfLive() {
-    if (crashed) return;
-    placeholder.style.display = "none";
+  // Render DETERMINISTICALLY from the explicit lifecycle on each control message.
+  // This is the single source of truth for the init/running overlays:
+  //   init    -> full "Starting browser…" overlay covering the pane; chrome hidden;
+  //              canvas/frames suppressed (don't show a half-built browser).
+  //   running -> overlays down, chrome shown; the live canvas + frames are visible.
+  //   crashed -> handed off to showCrashed() (the terminal dead state).
+  // Driven off the lifecycle field, NOT off "did a frame arrive", so init->running is
+  // exact: the moment the daemon broadcasts running, the starting overlay comes down.
+  function setLifecycle(next) {
+    if (!next || next === lifecycle) return;
+    lifecycle = next;
+    if (next === "crashed") { showCrashed(); return; }
+    if (next === "init") {
+      initOverlay.classList.add("show");
+      app.classList.add("chrome-hidden");
+      placeholder.style.display = "none";  // the full overlay covers the pane instead
+    } else if (next === "running") {
+      initOverlay.classList.remove("show");
+      app.classList.remove("chrome-hidden");
+      placeholder.style.display = "none";
+    }
   }
 
   // The browser's Chromium died (OS/OOM kill, crash). Show a clear, terminal dead
@@ -232,10 +271,13 @@
   // and lock the controls. This browser is gone; a new one opens as a separate tab.
   function showCrashed() {
     crashed = true;
+    lifecycle = "crashed";  // keep the explicit lifecycle consistent with the overlay
     hasFrame = false;
     stopIdleTimer();
     overlay.classList.remove("show");
     returnBar.classList.remove("show");
+    initOverlay.classList.remove("show");  // a crash from init replaces the starting overlay
+    app.classList.remove("chrome-hidden");  // the crashed overlay covers the pane on its own
     // Full near-opaque cover over the whole pane (see #crashoverlay) -- the dead
     // state must read at a glance, not as faint text on the black canvas. Hide the
     // small placeholder so the two don't both show.
@@ -369,9 +411,17 @@
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.type === "crashed") showCrashed();
       else if (crashed) return;  // once crashed, ignore any late frames/control/tabs
-      else if (m.type === "initializing") showLoading("Starting up — restoring your saved browsers…");
-      else if (m.type === "frame") drawFrame(m.data);  // first live frame clears the banner
-      else if (m.type === "control") { setControl(m); clearLoadingIfLive(); }  // a control msg proves the browser is live
+      else if (m.type === "launch_failed") {
+        // The serialized launch failed and the daemon removed the browser -- this name
+        // is gone for good. Treat it like the terminal 1008 "closed" state: stop
+        // retrying and tell the user to reopen.
+        closedForGood = true;
+        initOverlay.classList.remove("show");
+        showLoading("Browser failed to start — open a new one from the + menu.");
+      }
+      else if (m.type === "initializing") setLifecycle("init");  // fleet still restoring -> still starting
+      else if (m.type === "control") { setLifecycle(m.lifecycle); setControl(m); }  // explicit lifecycle drives the overlays
+      else if (m.type === "frame") { if (lifecycle === "running") drawFrame(m.data); }  // only paint once running
       else if (m.type === "handoff_request") {
         // An agent handed us the browser for a CAPTCHA/verification it can't do. Latch
         // the ask and re-render the bar (the preceding control message left us pinned).
@@ -379,7 +429,7 @@
         handoffAgent = m.agent_name || "An agent";
         setControl(lastControlState);
       }
-      else if (m.type === "tabs") { renderTabs(m.tabs); clearLoadingIfLive(); }  // tabs also prove it's live
+      else if (m.type === "tabs") { if (lifecycle === "running") renderTabs(m.tabs); }  // tabs only meaningful once running
       // m.type === "ping" -> ignore; it only keeps the proxy stream alive.
     };
     castWs.onclose = (ev) => {
@@ -390,20 +440,32 @@
         closedForGood = true;
         overlay.classList.remove("show");
         returnBar.classList.remove("show");
+        initOverlay.classList.remove("show");
         showLoading("Browser closed — reopen it from the + menu.");
         return;
       }
       // 1013 ("Try Again Later"): the name is valid but the browser hasn't registered
-      // YET -- this is the optimistic pane opened on accept, before the serialized
-      // launch finished. Show the "starting" banner and retry with backoff; it connects
-      // once the launch registers the name. NOT terminal.
+      // YET -- the narrow pre-registration window before create()'s loop insert is
+      // visible. With register-init-immediately this is now rare/brief. Keep the full
+      // "Starting browser…" overlay up and retry with backoff; we connect (and get the
+      // init/running lifecycle) once the name registers. NOT terminal.
       if (ev.code === 1013) {
-        showLoading("Browser starting…");
+        setLifecycle("init");
+        initOverlay.classList.add("show");
+        app.classList.add("chrome-hidden");
         scheduleReconnect();
         return;
       }
-      placeholder.style.display = "block";
-      placeholder.textContent = "Reconnecting…";
+      // An unexpected drop (daemon bounce, network blip) while we WERE running: keep the
+      // page as-is under a "Reconnecting…" note and retry. During init, keep the
+      // starting overlay rather than flashing a reconnect banner.
+      if (lifecycle === "init") {
+        initOverlay.classList.add("show");
+        app.classList.add("chrome-hidden");
+      } else {
+        placeholder.style.display = "block";
+        placeholder.textContent = "Reconnecting…";
+      }
       scheduleReconnect();
     };
     castWs.onerror = () => { try { castWs.close(); } catch (_) {} };
@@ -426,6 +488,11 @@
     const params = new URLSearchParams(location.search);
     const name = params.get("session");
     if (!name) { showLoading("Open a browser from the + menu."); return; }
+    // Show the full "Starting browser…" overlay up front (lifecycle starts "init"):
+    // the optimistic pane opens before the browser is registered/running, so the user
+    // sees the starting state until the first control message resolves the lifecycle.
+    initOverlay.classList.add("show");
+    app.classList.add("chrome-hidden");
     connect(name);
   }
   boot();

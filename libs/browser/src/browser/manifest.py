@@ -13,14 +13,12 @@ temp file + ``os.replace`` so a reader on the next boot sees either the old or t
 new complete file, never a torn one.
 """
 
-import json
 import os
 from pathlib import Path
 
+from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import ValidationError
-
-from imbue.imbue_common.mutable_model import MutableModel
 
 # Relative to the daemon's cwd (= repo root). Override for tests / alternate layouts.
 _MANIFEST_PATH = Path(os.environ.get("BROWSER_MANIFEST_PATH", "runtime/browser-fleet.json"))

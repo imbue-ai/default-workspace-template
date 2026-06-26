@@ -14,6 +14,16 @@ async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str 
     """Stand-in for ``_wake_agent`` in tests: skip the real ``mngr message`` subprocess."""
 
 
+def _running_browser(browser_id: str) -> bsession.LiveBrowser:
+    """A LiveBrowser already in the ``running`` lifecycle, for the ownership / state-machine
+    / cast tests that exercise behaviour available only once Chromium is up. A freshly
+    constructed LiveBrowser is ``init`` (Chromium not launched yet), where acquire/run
+    return ``starting``; these tests assume a live browser, so they start it ``running``."""
+    browser = bsession.LiveBrowser(browser_id=browser_id)
+    browser._lifecycle = "running"
+    return browser
+
+
 def _pop_json(cast_queue: "queue.Queue[str | None]") -> dict[str, Any]:
     """Pop the next cast-queue payload and parse it as JSON.
 
@@ -88,7 +98,7 @@ class _FakeCDP:
 
 
 def test_acquire_release_is_compare_and_set() -> None:
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         assert await browser.acquire("A", "Alice") == "acquired"
@@ -107,7 +117,7 @@ def test_acquire_release_is_compare_and_set() -> None:
 
 
 def test_input_gating_follows_controller() -> None:
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
     cdp = _FakeCDP()
     browser._active_cdp = cdp  # type: ignore[assignment]
 
@@ -132,7 +142,7 @@ def test_input_gating_follows_controller() -> None:
 
 
 def test_take_control_preempts_pins_and_reclaim_resumes() -> None:
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         await browser.acquire("A", "Alice")
@@ -160,7 +170,7 @@ def test_enqueue_on_busy_queues_for_resume_and_wakes_on_handback(monkeypatch: py
         woken.append(agent_name)
 
     monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", fake_wake)
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         await browser.acquire("A", "Alice")
@@ -189,7 +199,7 @@ def test_agent_in_both_queues_is_not_re_granted_after_it_finishes(monkeypatch: p
         woken.append(agent_name)
 
     monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", fake_wake)
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         await browser.acquire("A", "Alice")  # A holds it
@@ -217,7 +227,7 @@ def test_human_pin_is_sticky_with_no_idle_yield(monkeypatch: pytest.MonkeyPatch)
     # with no grace/idle yield -- even with an agent queued to resume. (A human can walk
     # away mid-CAPTCHA and the browser is never moved out from under them.)
     monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         await browser.acquire("A", "Alice")
@@ -239,7 +249,7 @@ def test_human_pin_is_sticky_with_no_idle_yield(monkeypatch: pytest.MonkeyPatch)
 def test_resting_human_is_free_for_the_next_agent() -> None:
     # A *resting* human (controller=human, not pinned -- a fresh browser, or one an
     # agent's idle-lease released) is free: the next agent's command just takes it.
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         assert browser._state_tuple() == ("human", None, False)  # fresh = resting/free
@@ -262,7 +272,7 @@ def test_handoff_to_human_fronts_resume_queue_and_announces(monkeypatch: pytest.
         casts.append(message)
 
     monkeypatch.setattr(bsession.LiveBrowser, "_broadcast", fake_broadcast)
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         await browser.acquire("A", "Alice")
@@ -285,7 +295,7 @@ def test_handoff_to_human_fronts_resume_queue_and_announces(monkeypatch: pytest.
 
 def test_handoff_is_a_noop_when_the_caller_does_not_hold_it() -> None:
     # Only the current owner can hand off; a stale/wrong caller changes nothing.
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         await browser.acquire("A", "Alice")
@@ -364,7 +374,7 @@ def test_unclaimed_grant_passes_to_next_waiter(monkeypatch: pytest.MonkeyPatch) 
     # command (interrupted/killed) has its grant revoked after the claim window, so
     # the browser doesn't sit idle on a no-show.
     monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         await browser.acquire("A", "Alice")
@@ -385,7 +395,7 @@ def test_unclaimed_grant_passes_to_next_waiter(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_return_to_agents_only_unpins_a_pinned_human() -> None:
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         # No-op when an agent owns it (can't yank a browser from an agent this way).
@@ -406,7 +416,7 @@ def test_return_to_agents_only_unpins_a_pinned_human() -> None:
 def test_take_control_cancels_the_running_task_without_deadlock() -> None:
     # The displaced run's finally re-enters the state machine; the cancel happens
     # OUTSIDE the control lock, so there is no lock cycle (the audit's worst case).
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
 
     async def go() -> None:
         await browser.acquire("A")
@@ -432,7 +442,7 @@ def test_take_control_cancels_the_running_task_without_deadlock() -> None:
 
 
 def test_monitor_and_wait_hands_off_in_fifo_order() -> None:
-    browser = bsession.LiveBrowser(browser_id="b2")
+    browser = _running_browser(browser_id="b2")
     order: list[tuple[str, str]] = []
 
     async def go() -> None:
@@ -459,7 +469,7 @@ def test_monitor_and_wait_hands_off_in_fifo_order() -> None:
 
 
 def test_wait_times_out_and_dequeues() -> None:
-    browser = bsession.LiveBrowser(browser_id="b3")
+    browser = _running_browser(browser_id="b3")
 
     async def go() -> None:
         await browser.acquire("A")
@@ -470,7 +480,7 @@ def test_wait_times_out_and_dequeues() -> None:
 
 
 def test_take_control_evicts_waiters() -> None:
-    browser = bsession.LiveBrowser(browser_id="b4")
+    browser = _running_browser(browser_id="b4")
 
     async def go() -> None:
         await browser.acquire("A")
@@ -487,6 +497,159 @@ def test_take_control_evicts_waiters() -> None:
     asyncio.run(go())
 
 
+# --- lifecycle: init -> running -> crashed -----------------------------------
+
+
+def test_create_registers_init_immediately_and_returns_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The fix: create() must register the browser in `init` and RETURN before the
+    # (slow) Chromium launch -- the launch is kicked off as a background task. So the
+    # returned session is `init`, it's already in the registry (the optimistic pane can
+    # find it), and a launch task is in flight. We capture the spawned launch instead of
+    # running it so the test stays Chromium-free.
+    launched: list[bsession.LiveBrowser] = []
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager, "_spawn_launch", lambda self, session, **k: launched.append(session)
+    )
+    mgr = bsession.BrowserSessionManager()
+
+    async def go() -> None:
+        session = await mgr.create("alex-smith")
+        # Returned immediately in `init`, already registered, launch kicked off.
+        assert session._lifecycle == "init"
+        assert mgr.has_browser("alex-smith")
+        assert launched == [session]
+        # init counts toward the cap (the slot is reserved at registration).
+        assert mgr.capacity()[0] == 1
+
+    asyncio.run(go())
+
+
+def test_command_on_an_init_browser_returns_starting() -> None:
+    # A direct command on a still-`init` browser is non-fatal: it returns `starting`
+    # (not an error / not acquired), so the agent waits and retries rather than driving
+    # a half-built browser. Ownership stays untouched.
+    browser = bsession.LiveBrowser(browser_id="alex-smith")  # init by default
+    browser._context = object()  # type: ignore[assignment]
+
+    async def go() -> None:
+        result = await browser.act_state("A", "Alice")
+        assert result["ok"] is False and result["status"] == "starting"
+        assert result["lifecycle"] == "init"
+        # acquire (the task/hold path) likewise reports starting and parks no waiter.
+        assert await browser.acquire("A", "Alice", wait=False) == "starting"
+        assert browser._state_tuple() == ("human", None, False)
+        assert browser._waiting_names() == []
+
+    asyncio.run(go())
+
+
+def test_lifecycle_init_to_running_broadcasts_the_new_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    # When the background launch finishes, start() flips init -> running and broadcasts a
+    # control message carrying lifecycle="running" so every viewer takes its starting
+    # overlay down deterministically. We stub the heavy launch internals and assert the
+    # transition + broadcast.
+    casts: list[dict[str, Any]] = []
+    monkeypatch.setattr(bsession.LiveBrowser, "_broadcast", lambda self, message: casts.append(message))
+
+    browser = bsession.LiveBrowser(browser_id="alex-smith")
+    assert browser._lifecycle == "init"
+
+    async def go() -> None:
+        # Drive only the tail of start() that flips the lifecycle (the rest needs real
+        # Chromium); this mirrors the production transition + broadcast at the end of start.
+        browser._lifecycle = "running"
+        browser._broadcast(browser._control_message())
+        running = [m for m in casts if m.get("type") == "control" and m.get("lifecycle") == "running"]
+        assert running, "init->running must broadcast a control message with lifecycle=running"
+        assert browser._is_running
+
+    asyncio.run(go())
+
+
+def test_launch_failure_removes_the_browser_and_announces(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An init browser whose Chromium never comes up is REMOVED (not left as a stranded
+    # init shell holding a cap slot), and a launch_failed message is broadcast so the
+    # optimistic viewer pane stops retrying.
+    casts: list[dict[str, Any]] = []
+    monkeypatch.setattr(bsession.LiveBrowser, "_broadcast", lambda self, message: casts.append(message))
+
+    async def boom_start(
+        self: bsession.LiveBrowser, _playwright: Any, restore_tabs: list[str] | None = None, active_tab: int = 0
+    ) -> None:
+        raise bsession.BrowserStartupError("no CDP endpoint")
+
+    monkeypatch.setattr(bsession.LiveBrowser, "start", boom_start)
+    mgr = bsession.BrowserSessionManager()
+    mgr._playwright = object()  # type: ignore[assignment]
+
+    async def go() -> None:
+        session = await mgr.create("alex-smith")
+        assert mgr.has_browser("alex-smith")  # registered init
+        await asyncio.gather(*list(mgr._launch_tasks))  # let the background launch run + fail
+        assert not mgr.has_browser("alex-smith")  # removed, not a stranded init shell
+        assert any(m.get("type") == "launch_failed" for m in casts)
+        assert session._lifecycle == "init"  # the removed shell never reached running
+
+    asyncio.run(go())
+
+
+class _KillableBuSession:
+    """Stand-in for browser-use's BrowserSession that records whether it was killed, so a
+    test can assert no Chromium handle is leaked when a launch is aborted."""
+
+    def __init__(self) -> None:
+        self.killed = False
+
+    async def kill(self) -> None:
+        self.killed = True
+
+
+def test_close_during_launch_does_not_resurrect_or_leak(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The close()-racing-start() race: manager.close pops + closes a browser whose
+    # background launch is SUSPENDED mid-start(). The launch must NOT resume to flip the
+    # removed browser to "running" / broadcast a stale live state, and the Chromium it
+    # already brought up must be killed (not leaked). This drives the real manager.close
+    # (which awaits the in-flight launch task) and the real _abort_start_if_torn_down guard.
+    casts: list[dict[str, Any]] = []
+    monkeypatch.setattr(bsession.LiveBrowser, "_broadcast", lambda self, message: casts.append(message))
+    started_bu = asyncio.Event()  # start() has brought up the (fake) Chromium and is suspended
+    resume = asyncio.Event()      # the test lets the suspended start() proceed after closing
+
+    async def suspending_start(
+        self: bsession.LiveBrowser, _playwright: Any, restore_tabs: list[str] | None = None, active_tab: int = 0
+    ) -> None:
+        # Bring up a killable bu_session (as real start() does early), then suspend at an
+        # await -- modelling start() parked at connect_over_cdp / _set_active_page while
+        # close() runs. On resume, run the SAME guard production uses before the flip.
+        self._bu_session = _KillableBuSession()  # type: ignore[assignment]
+        started_bu.set()
+        await resume.wait()
+        if await self._abort_start_if_torn_down():
+            return
+        self._lifecycle = "running"  # would-be terminal flip (must NOT be reached here)
+        self._broadcast(self._control_message())
+
+    monkeypatch.setattr(bsession.LiveBrowser, "start", suspending_start)
+    mgr = bsession.BrowserSessionManager()
+    mgr._playwright = object()  # type: ignore[assignment]
+
+    async def go() -> None:
+        session = await mgr.create("alex-smith")
+        await started_bu.wait()  # the launch is now suspended mid-start()
+        # Close concurrently: it pops the browser, then awaits the in-flight launch task.
+        close_task = asyncio.create_task(mgr.close("alex-smith"))
+        await asyncio.sleep(0)  # let close() pop + start awaiting the launch
+        resume.set()            # now let the suspended start() resume
+        await close_task
+        bu = session._bu_session
+        assert isinstance(bu, _KillableBuSession) and bu.killed  # Chromium killed, not leaked
+        assert session._lifecycle != "running"  # never flipped a removed browser to running
+        assert not any(m.get("lifecycle") == "running" for m in casts)  # no stale live broadcast
+        assert not mgr.has_browser("alex-smith")  # stays removed
+
+    asyncio.run(go())
+
+
 # --- manager: ids + cap ------------------------------------------------------
 
 
@@ -496,14 +659,16 @@ def test_crashed_browser_reports_crashed_to_agent_and_viewer() -> None:
     browser = bsession.LiveBrowser(browser_id="b3")
 
     async def go() -> None:
+        browser._lifecycle = "running"  # was up before Chromium died
         browser._on_disconnected(None)  # simulate Playwright's disconnected event
-        assert browser._crashed is True
+        assert browser._crashed is True and browser._lifecycle == "crashed"
         # An agent command short-circuits to a clear "crashed" status (no acquire).
         result = await browser.act_state("A", "Alice")
         assert result["ok"] is False and result["status"] == "crashed"
+        assert result["lifecycle"] == "crashed"
         # And it's reported in the fleet snapshot, with no tabs.
         desc = await browser.describe()
-        assert desc["crashed"] is True and desc["tabs"] == []
+        assert desc["crashed"] is True and desc["tabs"] == [] and desc["lifecycle"] == "crashed"
 
     asyncio.run(go())
 
@@ -533,20 +698,15 @@ def test_crashed_browsers_do_not_count_toward_the_fleet_cap(monkeypatch: pytest.
     mgr._browsers["riley-jones"] = dead
 
     async def go() -> None:
-        # 1 live + 1 crashed, cap 2 -> a new browser is still allowed (the crash is
-        # not counted). Stub the launch to avoid starting real Chromium.
-        async def fake_start_and_register(
-            self: bsession.BrowserSessionManager, name: str, restore_tabs: Any = None, active_tab: int = 0
-        ) -> object:
-            obj = bsession.LiveBrowser(browser_id=name)
-            self._browsers[name] = obj
-            return obj
-
+        # 1 live (init) + 1 crashed, cap 2 -> a new browser is still allowed (the crash
+        # is not counted; init + running both are). Stub the background launch to a no-op
+        # so create just registers the init browser without starting real Chromium.
         monkeypatch.setattr(
-            bsession.BrowserSessionManager, "_start_and_register_locked", fake_start_and_register
+            bsession.BrowserSessionManager, "_spawn_launch", lambda self, *a, **k: None
         )
         result = await mgr.create("morgan-lee")
         assert result.browser_id == "morgan-lee"  # allowed despite 2 entries (one crashed)
+        assert result._lifecycle == "init"  # registered, launch kicked off in the background
         assert mgr.has_browser("morgan-lee")
 
     asyncio.run(go())
@@ -554,11 +714,12 @@ def test_crashed_browsers_do_not_count_toward_the_fleet_cap(monkeypatch: pytest.
 
 def test_create_rejects_when_fleet_full(monkeypatch: pytest.MonkeyPatch) -> None:
     # The cap must reject before launching Chromium, so a small compute can't be OOM-ed.
+    # init browsers count toward the cap (the slot is reserved at registration), so three
+    # un-launched init browsers already fill a cap of 3.
     monkeypatch.setattr(bsession, "_MAX_SESSIONS", 3)
     mgr = bsession.BrowserSessionManager()
-    mgr._browsers["a-one"] = object()  # type: ignore[assignment]
-    mgr._browsers["b-two"] = object()  # type: ignore[assignment]
-    mgr._browsers["c-three"] = object()  # type: ignore[assignment]
+    for name in ("a-one", "b-two", "c-three"):
+        mgr._browsers[name] = bsession.LiveBrowser(browser_id=name)  # init lifecycle
 
     async def go() -> None:
         # The cap message surfaces the exact locked copy "3/3 browsers open -- close one first."
@@ -571,12 +732,9 @@ def test_create_rejects_when_fleet_full(monkeypatch: pytest.MonkeyPatch) -> None
 def test_create_generates_unique_names_and_regenerates_on_collision(monkeypatch: pytest.MonkeyPatch) -> None:
     # Two create()s with no name yield two DISTINCT registered names; a generator that
     # returns a duplicate first is retried (regenerate-on-collision under the lock).
-    async def fake_start(
-        self: bsession.LiveBrowser, _playwright: Any, restore_tabs: list[str] | None = None, active_tab: int = 0
-    ) -> None:
-        return None
-
-    monkeypatch.setattr(bsession.LiveBrowser, "start", fake_start)
+    # create() now registers init + kicks the launch off in the background; stub the
+    # launch to a no-op so the test only exercises (synchronous) name registration.
+    monkeypatch.setattr(bsession.BrowserSessionManager, "_spawn_launch", lambda self, *a, **k: None)
     mgr = bsession.BrowserSessionManager()
     mgr._playwright = object()  # type: ignore[assignment]  # skip async_playwright().start()
 
@@ -595,12 +753,7 @@ def test_create_generates_unique_names_and_regenerates_on_collision(monkeypatch:
 
 
 def test_create_rejects_invalid_and_duplicate_user_names(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_start(
-        self: bsession.LiveBrowser, _playwright: Any, restore_tabs: list[str] | None = None, active_tab: int = 0
-    ) -> None:
-        return None
-
-    monkeypatch.setattr(bsession.LiveBrowser, "start", fake_start)
+    monkeypatch.setattr(bsession.BrowserSessionManager, "_spawn_launch", lambda self, *a, **k: None)
     mgr = bsession.BrowserSessionManager()
     mgr._playwright = object()  # type: ignore[assignment]
 
@@ -621,12 +774,7 @@ def test_create_rejects_invalid_and_duplicate_user_names(monkeypatch: pytest.Mon
 
 
 def test_names_are_never_reused_after_close(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_start(
-        self: bsession.LiveBrowser, _playwright: Any, restore_tabs: list[str] | None = None, active_tab: int = 0
-    ) -> None:
-        return None
-
-    monkeypatch.setattr(bsession.LiveBrowser, "start", fake_start)
+    monkeypatch.setattr(bsession.BrowserSessionManager, "_spawn_launch", lambda self, *a, **k: None)
     mgr = bsession.BrowserSessionManager()
     mgr._playwright = object()  # type: ignore[assignment]
 
@@ -653,8 +801,10 @@ def test_profile_dir_round_trips_the_name() -> None:
 
 
 def _stub_start(monkeypatch: pytest.MonkeyPatch, fail_names: set[str] | None = None) -> list[tuple[str, Any]]:
-    """Replace LiveBrowser.start with a no-op that records (name, restore_tabs); names in
-    ``fail_names`` raise BrowserStartupError (to test resilient restore)."""
+    """Replace LiveBrowser.start with a no-op that records (name, restore_tabs) and flips
+    the lifecycle to ``running`` on success (mirroring the real start, so the manager's
+    ``_launch`` treats the browser as up); names in ``fail_names`` raise
+    BrowserStartupError (to test resilient restore, where ``_launch`` removes them)."""
     calls: list[tuple[str, Any]] = []
 
     async def fake_start(
@@ -663,6 +813,7 @@ def _stub_start(monkeypatch: pytest.MonkeyPatch, fail_names: set[str] | None = N
         calls.append((self.browser_id, restore_tabs))
         if fail_names and self.browser_id in fail_names:
             raise bsession.BrowserStartupError(f"boom {self.browser_id}")
+        self._lifecycle = "running"
 
     monkeypatch.setattr(bsession.LiveBrowser, "start", fake_start)
     return calls
@@ -700,7 +851,7 @@ def test_restore_passes_saved_tabs_and_comes_up_resting(monkeypatch: pytest.Monk
 
 def test_snapshot_excludes_crashed_and_persists_only_topology() -> None:
     mgr = bsession.BrowserSessionManager()
-    healthy = bsession.LiveBrowser(browser_id="alex-smith")
+    healthy = _running_browser("alex-smith")  # only RUNNING browsers are persisted
     healthy.controller = "agent"  # ownership state that must NOT be persisted
     healthy.owner_agent_id = "x"
     healthy.human_pinned = True
@@ -800,7 +951,7 @@ def test_restore_sweeps_orphan_profiles(monkeypatch: pytest.MonkeyPatch) -> None
 def test_state_on_busy_browser_does_not_enqueue_the_agent() -> None:
     # A passive `state` peek at a browser another agent holds must NOT enrol the
     # caller as a waiter (only state-changing commands queue for resume).
-    browser = bsession.LiveBrowser(browser_id="b0")
+    browser = _running_browser(browser_id="b0")
 
     async def go() -> None:
         await browser.acquire("A", "Alice")  # agent A holds it
@@ -818,7 +969,7 @@ def _direct_ready(name: str = "alex-smith") -> bsession.LiveBrowser:
     # A LiveBrowser wired enough to run run_action without a real Chromium: a
     # non-None _context passes the "closed" guard, and a pre-set _action_handler
     # skips constructing a real ActionHandler (the fake action ignores it).
-    browser = bsession.LiveBrowser(browser_id=name)
+    browser = _running_browser(browser_id=name)
     browser._context = object()  # type: ignore[assignment]
     browser._action_handler = object()  # type: ignore[assignment]
     return browser
@@ -893,8 +1044,10 @@ def test_idle_lease_sweep_releases_only_a_quiet_lease() -> None:
 
 def test_register_cast_queue_seeds_initial_control_and_tabs() -> None:
     # A freshly-registered cast queue is seeded with the current control + tabs sync
-    # BEFORE any live frame, so the viewer's first messages are deterministic.
-    browser = bsession.LiveBrowser(browser_id="b1")
+    # BEFORE any live frame, so the viewer's first messages are deterministic. The
+    # control seed carries the lifecycle (here `init` -- the browser hasn't launched),
+    # so the viewer shows the starting overlay until it sees `running`.
+    browser = bsession.LiveBrowser(browser_id="b1")  # init by default
     browser._context = None  # _tab_list returns [] with no context
 
     async def go() -> None:
@@ -902,8 +1055,9 @@ def test_register_cast_queue_seeds_initial_control_and_tabs() -> None:
         first = _pop_json(q)
         second = _pop_json(q)
         assert first["type"] == "control" and first["owner"] == "human"
+        assert first["lifecycle"] == "init"  # the viewer renders the starting overlay off this
         assert second["type"] == "tabs" and second["tabs"] == []
-        assert q.empty()  # not crashed -> no crash message
+        assert q.empty()  # not running -> no replayed frame; not crashed -> no crash message
         assert q in browser._cast_queues
 
     asyncio.run(go())
@@ -914,7 +1068,7 @@ def test_register_cast_queue_replays_last_frame_to_a_new_client() -> None:
     # no fresh screencast frame (CDP only emits on a repaint), so register seeds the
     # cached last frame after control + tabs -- otherwise the canvas stays black and
     # the viewer's "Starting browser…" banner never clears.
-    browser = bsession.LiveBrowser(browser_id="b1")
+    browser = _running_browser(browser_id="b1")
     browser._context = None
     browser._latest_frame = "cached-jpeg-b64"
 

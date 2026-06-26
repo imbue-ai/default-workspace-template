@@ -20,19 +20,22 @@
  * depth, in the parent): ``onAccept`` reports whether it actually created a new
  * pane, and ``onFailed`` only tears the pane down when this flow created it.
  *
- * Optimistic 'starting' pane: the launch is serialized server-side (at most one
- * Chromium starts at a time), so a create can take several seconds -- longer
- * during restore. To make the tab appear IMMEDIATELY, this modal calls
- * ``onAccept(name)`` the instant the user confirms a non-empty name; the parent
- * opens the browser pane right then, which shows "Browser starting…" until the
- * cast WebSocket delivers the first frame (the viewer retries on the daemon's
- * 1013 "not registered yet" close). The POST then runs in the background:
- *   - on success the modal closes and calls ``onCreated(finalName)`` (the
- *     daemon may have substituted a name only when none was typed; here the
- *     user always typed/accepted one, so the names match and the already-open
- *     pane is correct);
- *   - on failure the modal stays open, shows the daemon's error inline, and
- *     calls ``onFailed(name)`` so the parent tears down the optimistic pane.
+ * Close-immediately + optimistic 'starting' pane: the daemon now REGISTERS the
+ * browser instantly (the Chromium launch runs serialized in the background and
+ * the viewer watches it flip from ``init`` to ``running`` over the cast socket),
+ * so the create POST returns fast. The instant the user confirms a non-empty,
+ * non-duplicate name this modal:
+ *   1. opens the optimistic pane via ``onAccept(name)`` (the viewer shows the full
+ *      "Starting browser…" overlay until the daemon broadcasts ``running``), and
+ *   2. CLOSES the modal immediately (the parent's ``onAccept`` clears the flag) --
+ *      it does NOT wait for the POST.
+ * The POST then runs in the background:
+ *   - on success it calls ``onCreated(finalName)`` (the user always typed/accepted
+ *     a name here, so it matches the already-open pane) to refresh the fleet list;
+ *   - on failure (400 invalid / 409 duplicate-or-full / 503 installing / network)
+ *     it calls ``onFailed(name)`` so the parent tears down the optimistic pane
+ *     (only when this flow created it). Because the modal is already closed, the
+ *     failure surfaces by the pane disappearing rather than an inline message.
  */
 
 import m from "mithril";
@@ -101,46 +104,38 @@ export function CreateBrowserModal(): m.Component<CreateBrowserModalAttrs> {
 
     loading = true;
     error = null;
-    m.redraw();
 
-    // Open the optimistic pane immediately, before the (serialized, possibly
-    // slow) launch finishes. The pane shows "Browser starting…" and connects
-    // once the daemon registers the name. ``createdPane`` records whether this
-    // actually created a new pane so a failure only closes one this flow owns.
+    // Open the optimistic pane, then close the modal IMMEDIATELY -- we do not wait
+    // for the POST. The pane shows the full "Starting browser…" overlay and flips to
+    // the live page on its own when the daemon broadcasts ``running``. ``createdPane``
+    // records whether this actually created a new pane so a later failure only closes
+    // one this flow owns. ``onAccept`` (in the parent) also clears the modal flag.
     const createdPane = attrs.onAccept(chosen);
 
-    let response: globalThis.Response;
-    try {
-      response = await fetch(`${attrs.browserServiceUrl}browsers`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: chosen }),
-      });
-    } catch (e) {
-      // Network-level failure: tear down the optimistic pane and keep the modal
-      // open with the error.
+    // Background POST: registers the browser server-side (returns fast) and kicks off
+    // the serialized launch. The modal is already gone, so success just refreshes the
+    // fleet list and failure tears the optimistic pane back down.
+    void (async () => {
+      let response: globalThis.Response;
+      try {
+        response = await fetch(`${attrs.browserServiceUrl}browsers`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: chosen }),
+        });
+      } catch {
+        attrs.onFailed(chosen, createdPane);
+        return;
+      }
+      const data = (await response.json().catch(() => ({}))) as { name?: string; error?: string };
+      if (response.ok) {
+        attrs.onCreated(typeof data.name === "string" ? data.name : chosen);
+        return;
+      }
+      // 400 invalid / 409 duplicate-or-full / 503 installing: the registration was
+      // rejected, so tear down the optimistic pane (only if this flow created it).
       attrs.onFailed(chosen, createdPane);
-      error = (e as Error).message ?? "Creation failed";
-      loading = false;
-      m.redraw();
-      return;
-    }
-
-    const data = (await response.json().catch(() => ({}))) as { name?: string; error?: string };
-    if (response.ok) {
-      // Launch completed. The pane was already opened on accept; just close
-      // the modal and let the parent confirm/refresh.
-      attrs.onCreated(typeof data.name === "string" ? data.name : chosen);
-      return;
-    }
-
-    // 400 invalid name / 409 duplicate-or-full / 503 still installing: surface
-    // the daemon's message verbatim, close the optimistic pane (only if this
-    // flow created it), keep the modal open so the user can fix the name.
-    attrs.onFailed(chosen, createdPane);
-    error = typeof data.error === "string" ? data.error : `HTTP ${response.status}`;
-    loading = false;
-    m.redraw();
+    })();
   }
 
   return {
