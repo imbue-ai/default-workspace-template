@@ -2118,12 +2118,13 @@ export const DockviewWorkspace: m.Component = {
 
         showNewBrowserModal
           ? m(CreateBrowserModal, {
-              // Re-mount the modal whenever the failure pre-fill changes (a new
-              // background failure re-opens it). The closure component reads
-              // initialName/initialError in oninit, which only runs on a fresh
-              // mount; keying on the pre-filled name forces that remount so the
-              // re-opened modal shows the typed name + the daemon's reason.
-              key: newBrowserPrefillName ?? "new",
+              // NO `key` here. This modal sits in a children array among unkeyed
+              // sibling vnodes (the other modals/dialogs); Mithril throws "vnodes must
+              // either all have keys or none" if one child is keyed and the rest aren't,
+              // which silently kills the entire render so the modal never appears. A key
+              // isn't needed anyway: onAccept sets showNewBrowserModal=false before the
+              // POST, so a failure re-open (showNewBrowserModal back to true) is a fresh
+              // mount and oninit re-reads initialName/initialError on its own.
               browserServiceUrl: getServiceUrl("browser"),
               // Names of browsers already in the fleet, so the modal can
               // pre-validate a typed name and reject a duplicate inline BEFORE
