@@ -25,12 +25,13 @@ set -euo pipefail
 CARETAKER_NAME="caretaker"
 CARETAKER_FILTER='labels.caretaker == "true"'
 
-# Sent on first creation only: the very first thing the user ever sees from the
-# Caretaker should be its welcome, not the recurring "caretaking run" nudge (that
-# appears from the second day onward). A fresh agent has no prior context to
-# clear, so this just triggers the skill, whose first-run path's entire chat
-# output is the pre-prepared welcome message.
-FIRST_RUN_MESSAGE="Please introduce yourself to the user by following your caretaker skill (.agents/skills/caretaker/SKILL.md)."
+# Sent on first creation only. Mirrors how the initial chat is created
+# (mngr create ... --message /welcome): the Caretaker's first message is the
+# /caretaker-welcome slash command, which emits a fixed, pre-prepared welcome
+# verbatim and runs no routine -- so the very first thing the user sees is the
+# welcome, delivered the same way as the main chat's, not an agent-improvised run.
+# The recurring "caretaking run" nudge only appears from the second day onward.
+WELCOME_COMMAND="/caretaker-welcome"
 
 # Sent (after a "/clear") to re-wake an existing Caretaker for a fresh run.
 RUN_MESSAGE="It's time for your *caretaking* run. Follow your caretaker skill (.agents/skills/caretaker/SKILL.md)."
@@ -104,7 +105,7 @@ create_caretaker() {
     --label auto_created=true \
     --label "caretaker_run=$(date +%s)" \
     "${label_args[@]}" \
-    --message "$FIRST_RUN_MESSAGE"
+    --message "$WELCOME_COMMAND"
 }
 
 # Re-wake an existing Caretaker: mngr sends "/clear" to wipe the prior chat,
