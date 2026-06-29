@@ -104,6 +104,28 @@ def parse_iso_timestamp_to_epoch(timestamp: str | None) -> float | None:
 
 RUNNING_LIFECYCLE_STATES: frozenset[str] = frozenset({"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE"})
 
+# Lifecycle states in which the agent's claude *process* is alive, whether or not
+# it is mid-turn. Broader than RUNNING_LIFECYCLE_STATES (which gates the
+# *activity* indicator -- "is it working right now"): WAITING means the process
+# is up but idle, which counts as running for a process-liveness indicator yet is
+# not "active". mngr derives these states by probing whether the expected claude
+# process is alive in the agent's tmux pane -- not whether the container is up --
+# so a process the OOM handler (earlyoom) sheds drops out of this set within one
+# observe cycle.
+PROCESS_ALIVE_LIFECYCLE_STATES: frozenset[str] = frozenset({"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE", "WAITING"})
+
+
+@pure
+def is_lifecycle_process_running(state: str) -> bool:
+    """Whether ``state`` indicates the agent's claude process is alive.
+
+    Drives the per-agent process indicator on the agent tab, which is distinct
+    from the activity indicator: a WAITING agent (process up, idle) reads as
+    running here but as IDLE for activity. A process the OOM handler sheds leaves
+    this set once mngr's next observe cycle sees the claude process is gone.
+    """
+    return state in PROCESS_ALIVE_LIFECYCLE_STATES
+
 
 @pure
 def is_transcript_tail_stale(

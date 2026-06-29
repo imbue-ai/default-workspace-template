@@ -40,6 +40,7 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import derive_activity_state
 from imbue.system_interface.activity_state import has_unmatched_tool_use
+from imbue.system_interface.activity_state import is_lifecycle_process_running
 from imbue.system_interface.activity_state import last_event_timestamp
 from imbue.system_interface.activity_state import last_event_type
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
@@ -474,6 +475,7 @@ class AgentManager:
                     "labels": a.labels,
                     "work_dir": a.work_dir,
                     "activity_state": a.activity_state,
+                    "is_process_running": is_lifecycle_process_running(a.state),
                 }
                 for a in self._agents.values()
             ]
