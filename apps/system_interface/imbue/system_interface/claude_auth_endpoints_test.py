@@ -19,12 +19,12 @@ from flask.testing import FlaskClient
 
 from imbue.system_interface import welcome_resend
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.app_context import state_of
 from imbue.system_interface.claude_auth import ClaudeAuthService
 from imbue.system_interface.claude_auth import ProcessSetupError
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import FakeFinishedProcess
 from imbue.system_interface.testing import FakePexpectProcess
+from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.welcome_resend import WelcomeResender
 
 # The initial chat agent's id, as the bootstrap would persist it.
@@ -52,19 +52,13 @@ def _client(
     claude_auth_service: ClaudeAuthService | None = None,
     welcome_resender: WelcomeResender | None = None,
 ) -> Iterator[FlaskClient]:
-    """Build a Flask test client, seeding the auth services onto the app state.
+    """Build a Flask test client, injecting the auth collaborators into the app state.
 
-    Each argument left as None keeps the default production instance the app
-    factory already built -- fine for tests that never reach that dependency
-    (e.g. request-validation rejections).
+    Each argument left as None gets a default production instance -- fine for
+    tests that never reach that dependency (e.g. request-validation rejections).
     """
-    app = create_application()
-    state = state_of(app)
-    if claude_auth_service is not None:
-        state.claude_auth_service = claude_auth_service
-    if welcome_resender is not None:
-        state.welcome_resender = welcome_resender
-    yield app.test_client()
+    state = build_test_state(claude_auth_service=claude_auth_service, welcome_resender=welcome_resender)
+    yield create_application(state).test_client()
 
 
 def _logged_in_runner(_cmd: list[str], _timeout: float) -> FakeFinishedProcess:

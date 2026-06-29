@@ -304,15 +304,23 @@ class AgentManager:
     _activity_state_by_agent: dict[str, ActivityState]
 
     @classmethod
-    def build(cls, broadcaster: WebSocketBroadcaster, mngr_binary: str = _DEFAULT_MNGR_BINARY) -> "AgentManager":
+    def build(
+        cls,
+        broadcaster: WebSocketBroadcaster,
+        messenger: MngrMessenger | None = None,
+        mngr_binary: str = _DEFAULT_MNGR_BINARY,
+    ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
+        ``messenger`` is the agent-messaging collaborator; it defaults to a
+        ``MngrMessenger`` with the real mngr discover/send. Tests inject one
+        whose ``discover``/``send`` are fakes to avoid touching mngr.
         ``mngr_binary`` is the path or name of the mngr executable used for
         the discovery-only observe subprocess and for agent-creation commands.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
-        manager._messenger = MngrMessenger()
+        manager._messenger = messenger if messenger is not None else MngrMessenger()
         manager._lock = threading.Lock()
         manager._agents = {}
         manager._match_by_agent_id = {}

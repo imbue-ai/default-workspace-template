@@ -22,10 +22,11 @@ import pytest
 
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
-from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
+from imbue.system_interface.testing import RecordingMngrMessenger
+from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -159,17 +160,16 @@ def e2e_server(tmp_path: Path) -> Generator[tuple[str, list[AgentInfo], Path], N
     env_patcher = patch.dict(os.environ, {"MNGR_HOST_DIR": str(tmp_path), "MNGR_AGENT_ID": ""})
     env_patcher.start()
 
-    send_patcher = patch("imbue.system_interface.agent_discovery.MngrMessenger.send_to_agent", return_value=True)
-    send_patcher.start()
     discover_patcher = patch("imbue.system_interface.server.discover_agents", return_value=agents)
     discover_patcher.start()
 
-    # The autouse conftest fixture no-ops AgentManager.start (so background mngr
-    # discovery never runs in tests), so seed the agent into the manager directly
-    # and inject it. The UI renders its agent list from the WebSocket
-    # agents_updated snapshot, which the server sends from this manager on connect.
+    # Seed the agent into a manager and inject it; the manager is never started,
+    # so no background mngr discovery runs. Its messenger is a recording fake so
+    # message sends succeed without contacting mngr. The UI renders its agent
+    # list from the WebSocket agents_updated snapshot, which the server sends
+    # from this manager on connect.
     broadcaster = WebSocketBroadcaster()
-    manager = AgentManager.build(broadcaster)
+    manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())
     with manager._lock:
         manager._agents[agent_info.id] = AgentStateItem(
             id=agent_info.id,
@@ -181,8 +181,7 @@ def e2e_server(tmp_path: Path) -> Generator[tuple[str, list[AgentInfo], Path], N
     manager._ensure_activity_tracking(agent_info.id)
 
     config = Config(system_interface_host="127.0.0.1", system_interface_port=_PORT)
-    app = create_application(config)
-    state_of(app).agent_manager = manager
+    app = create_application(build_test_state(config=config, agent_manager=manager))
 
     server = make_threaded_server("127.0.0.1", _PORT, app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -199,7 +198,6 @@ def e2e_server(tmp_path: Path) -> Generator[tuple[str, list[AgentInfo], Path], N
     yield _BASE_URL, agents, session_file
 
     discover_patcher.stop()
-    send_patcher.stop()
     env_patcher.stop()
     server.shutdown()
     thread.join(timeout=5.0)
@@ -339,12 +337,10 @@ def test_tool_calls_render_as_collapsible(tmp_path: Path, page: Page) -> None:
     agents = [agent_info]
 
     config = Config(system_interface_host="127.0.0.1", system_interface_port=_PORT + 1)
-    app = create_application(config)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    app = create_application(build_test_state(config=config, agent_manager=manager))
 
-    with (
-        patch("imbue.system_interface.server.discover_agents", return_value=agents),
-        patch("imbue.system_interface.agent_discovery.MngrMessenger.send_to_agent", return_value=True),
-    ):
+    with patch("imbue.system_interface.server.discover_agents", return_value=agents):
         server = make_threaded_server("127.0.0.1", _PORT + 1, app)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -516,12 +512,10 @@ def test_new_tab_opens_in_clicked_split(e2e_server: tuple[str, list[AgentInfo], 
 def test_no_agents_shows_empty_state(page: Page, tmp_path: Path) -> None:
     """When there are no agents, the sidebar shows an empty message."""
     config = Config(system_interface_host="127.0.0.1", system_interface_port=_PORT + 2)
-    app = create_application(config)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    app = create_application(build_test_state(config=config, agent_manager=manager))
 
-    with (
-        patch("imbue.system_interface.server.discover_agents", return_value=[]),
-        patch("imbue.system_interface.agent_discovery.MngrMessenger.send_to_agent", return_value=True),
-    ):
+    with patch("imbue.system_interface.server.discover_agents", return_value=[]):
         server = make_threaded_server("127.0.0.1", _PORT + 2, app)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
