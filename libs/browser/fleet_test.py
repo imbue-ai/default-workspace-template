@@ -87,16 +87,21 @@ def test_parser_accepts_task_flags() -> None:
         ({"ok": True, "url": "https://x", "title": "X", "elements": "[1]<a>", "tabs": []}, "state", fleet._EXIT_OK),
         ({"ok": True, "screenshot_path": "/tmp/s.png"}, "screenshot", fleet._EXIT_OK),
         ({"ok": True, "clicked": 5}, "click", fleet._EXIT_OK),
-        # busy_human now means "the human is driving -- you're queued to resume; stop
-        # and wait for the wake", i.e. preempted (exit 2), not a generic busy (exit 3).
-        ({"ok": False, "status": "busy_human"}, "click", fleet._EXIT_PREEMPTED),
-        ({"ok": False, "status": "busy_agent"}, "state", fleet._EXIT_BUSY),
+        # busy_human when the agent was ENROLLED to resume (a state-changing command) means
+        # "the human is driving -- you're queued to resume; stop and wait for the wake", i.e.
+        # preempted (exit 2). A read-only `state` peek enrols nothing, so the same status is a
+        # generic busy (exit 3, move on) -- it must NOT claim the agent is queued.
+        ({"ok": False, "status": "busy_human", "enqueued": True}, "click", fleet._EXIT_PREEMPTED),
+        ({"ok": False, "status": "busy_human", "enqueued": False}, "state", fleet._EXIT_BUSY),
+        ({"ok": False, "status": "busy_agent", "enqueued": True}, "click", fleet._EXIT_BUSY),
+        ({"ok": False, "status": "busy_agent", "enqueued": False}, "state", fleet._EXIT_BUSY),
         # the fleet is still restoring saved browsers -> try again (busy), not a hard error.
         ({"ok": False, "status": "initializing"}, "click", fleet._EXIT_BUSY),
         # the browser itself is still launching (init) -> try again (busy), non-fatal.
         ({"ok": False, "status": "starting"}, "click", fleet._EXIT_BUSY),
         ({"ok": False, "status": "crashed"}, "state", fleet._EXIT_ERROR),
-        ({"ok": False, "status": "lost_control"}, "click", fleet._EXIT_PREEMPTED),
+        ({"ok": False, "status": "lost_control", "enqueued": True}, "click", fleet._EXIT_PREEMPTED),
+        ({"ok": False, "status": "lost_control", "enqueued": False}, "state", fleet._EXIT_BUSY),
         ({"ok": False, "status": "stale_index", "error": "run state"}, "click", fleet._EXIT_ERROR),
         ({"ok": False, "status": "timed_out"}, "state", fleet._EXIT_TIMEOUT),
         ({"ok": False, "status": "error", "error": "boom"}, "click", fleet._EXIT_ERROR),

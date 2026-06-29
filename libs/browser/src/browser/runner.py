@@ -425,6 +425,11 @@ def run_task(browser_id: str) -> Response:
             session.acquire(
                 agent_id, agent_name, reclaim=reclaim, wait=wait, max_wait=max_wait,
                 on_wait=_make_on_wait(gen_queue),
+                # If a human has the browser pinned, acquire returns busy_human immediately
+                # (the connection-bound wait queue is only for waiting on another AGENT).
+                # Enrol the agent in the resume queue so it's messaged when the human hands
+                # back -- otherwise a task/lock blocked by a human pin is silently dropped.
+                enqueue_on_busy=True,
             )
         )
         try:
@@ -513,6 +518,11 @@ def hold_browser(browser_id: str) -> Response:
             session.acquire(
                 agent_id, agent_name, reclaim=reclaim, wait=wait, max_wait=max_wait,
                 on_wait=_make_on_wait(gen_queue),
+                # If a human has the browser pinned, acquire returns busy_human immediately
+                # (the connection-bound wait queue is only for waiting on another AGENT).
+                # Enrol the agent in the resume queue so it's messaged when the human hands
+                # back -- otherwise a task/lock blocked by a human pin is silently dropped.
+                enqueue_on_busy=True,
             )
         )
         try:

@@ -431,9 +431,12 @@ def test_return_to_agents_only_unpins_a_pinned_human() -> None:
         await browser.release("A")
         # No-op when already a free human.
         assert await browser.return_to_agents() is False
-        # Un-pins a human who took control.
-        await browser.acquire("A")
+        # Un-pins a human who took control of a RESTING browser (no agent was driving, so
+        # nothing is queued to resume) -> back to a free human. (Taking control FROM a
+        # driving agent instead hands back to that agent; see
+        # test_take_control_queues_the_displaced_owner_to_resume_first.)
         await browser.take_control()
+        assert browser._resume_queue == []
         assert await browser.return_to_agents() is True
         assert browser._state_tuple() == ("human", None, False)
 
@@ -519,6 +522,127 @@ def test_take_control_evicts_waiters() -> None:
         await asyncio.sleep(0.05)
         await browser.take_control()  # preempt + pin -> waiters are evicted
         assert await task == "busy_human"
+        assert browser._wait_queue == []
+
+    asyncio.run(go())
+
+
+def test_take_control_queues_the_displaced_owner_to_resume_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A human taking control of a browser an agent is DRIVING queues that agent at the FRONT
+    # of the resume queue, so it resumes first on hand-back -- even though its natural next
+    # move (a read-only `state` re-check) does NOT enrol a waiter. Regression for the
+    # preempted agent that was told "you're queued" while actually in no queue.
+    woken: list[str] = []
+
+    async def fake_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
+        woken.append(agent_id)
+
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", fake_wake)
+    browser = _running_browser(browser_id="b1")
+
+    async def go() -> None:
+        await browser.acquire("A", "Alice")  # A is driving
+        await browser.take_control()  # human preempts + pins
+        assert browser._state_tuple() == ("human", None, True)
+        assert browser._resume_queue == [("A", "Alice")]  # A queued at the front, not dropped
+        await browser.return_to_agents()  # human hands back
+        assert browser._state_tuple() == ("agent", "A", False)  # granted to A synchronously
+        await asyncio.sleep(0.01)  # the resume message is fire-and-forget (spawned)
+        assert woken == ["A"]  # A is the one messaged to resume first
+
+    asyncio.run(go())
+
+
+def test_crash_releases_queued_agents_so_none_hangs(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A browser that crashes while agents are queued for it must release them all: a
+    # connection-bound wait-queue waiter (task/lock) gets `crashed` instead of hanging
+    # forever, and a resume-queue agent is messaged it's gone instead of waiting for a wake
+    # that never comes.
+    messaged: list[str] = []
+
+    async def fake_message(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None, text: str) -> None:
+        messaged.append(agent_id)
+
+    monkeypatch.setattr(bsession.LiveBrowser, "_message_agent", fake_message)
+    browser = _running_browser(browser_id="b1")
+
+    async def go() -> None:
+        await browser.acquire("A")  # A drives
+
+        async def waiter() -> str:  # B: a connection-bound wait-queue waiter
+            return await browser.acquire("B", "B", wait=True, max_wait=5)
+
+        task = asyncio.create_task(waiter())
+        await asyncio.sleep(0.05)
+        assert [w.agent_id for w in browser._wait_queue] == ["B"]
+        await browser.acquire("C", "C", wait=False, enqueue_on_busy=True)  # C: resume-queue agent
+        assert ("C", "C") in browser._resume_queue
+        browser._on_disconnected(None)  # Chromium connection drops -> crash
+        await asyncio.sleep(0.05)  # let _announce_crash reconcile the queues
+        assert await task == "crashed"  # B unblocked with `crashed`, not a hang or busy_human
+        assert browser._wait_queue == []
+        assert browser._resume_queue == []  # C cleared
+        assert "C" in messaged  # C messaged that the browser is gone
+
+    asyncio.run(go())
+
+
+def test_state_peek_on_busy_browser_reports_not_enqueued() -> None:
+    # A read-only `state` peek on a human-pinned browser must report enqueued=False (it does
+    # NOT enrol a waiter), so the CLI never promises a resume that will not come. A
+    # state-CHANGING command on the same browser DOES enrol -> enqueued=True. (Both short-
+    # circuit at the busy_human check before touching Chromium, so no real browser is needed.)
+    browser = _running_browser(browser_id="b1")
+
+    async def go() -> None:
+        await browser.take_control()  # human pins a free (resting) browser; no displaced owner
+        peek = await browser.act_state("A", "Alice")
+        assert peek["status"] == "busy_human"
+        assert peek["enqueued"] is False
+        assert browser._resume_queue == []  # a peek enrols nothing
+        nav = await browser.act_navigate("A", "Alice", "https://example.com")
+        assert nav["status"] == "busy_human"
+        assert nav["enqueued"] is True
+        assert ("A", "Alice") in browser._resume_queue  # a state-changing command enrols
+
+    asyncio.run(go())
+
+
+def test_acquire_denied_by_human_pin_enqueues_when_requested() -> None:
+    # A task/lock denied by a human pin (enqueue_on_busy=True) enrols in the resume queue so
+    # it is messaged when the human hands back -- not silently dropped. (acquire returns
+    # busy_human immediately because the connection-bound wait queue is only for waiting on
+    # another AGENT, never on a human pin.)
+    browser = _running_browser(browser_id="b1")
+
+    async def go() -> None:
+        await browser.take_control()  # human takes a free browser -> pinned, no displaced owner
+        assert browser._resume_queue == []
+        assert await browser.acquire("B", "B", enqueue_on_busy=True) == "busy_human"
+        assert browser._resume_queue == [("B", "B")]
+
+    asyncio.run(go())
+
+
+def test_close_releases_a_queued_waiter(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Closing a browser (user action) must unblock a connection-bound waiter with `closed`
+    # rather than leaving its task/lock hanging on a torn-down browser.
+    async def fake_message(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None, text: str) -> None:
+        return None
+
+    monkeypatch.setattr(bsession.LiveBrowser, "_message_agent", fake_message)
+    browser = _running_browser(browser_id="b1")
+
+    async def go() -> None:
+        await browser.acquire("A")
+
+        async def waiter() -> str:
+            return await browser.acquire("B", "B", wait=True, max_wait=5)
+
+        task = asyncio.create_task(waiter())
+        await asyncio.sleep(0.05)
+        await browser.close()
+        assert await task == "closed"
         assert browser._wait_queue == []
 
     asyncio.run(go())

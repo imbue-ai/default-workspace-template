@@ -317,6 +317,16 @@ def _render_event(event: dict[str, Any], browser_name: str) -> int | None:
         _err(f"browser {browser_name} crashed (Chromium was killed -- e.g. out of memory) and is gone. "
              f"Start a fresh one with `new` (it gets a new name).")
         return _EXIT_ERROR
+    elif kind == "closed":
+        _err(f"browser {browser_name} was closed and is gone. Start a fresh one with `new` (it gets a new name).")
+        return _EXIT_ERROR
+    elif kind == "lost_control":
+        _out(
+            f"lost control of browser {browser_name} (a human took over). You're queued to resume first; "
+            f"I will be messaged when they hand it back (if you don't hear back in a while, re-run "
+            f"`state {browser_name}` to check). Tell the user, then end your turn."
+        )
+        return _EXIT_PREEMPTED
     return None
 
 
@@ -385,21 +395,40 @@ def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int
             _out(f"ok: {kind}")
         return _EXIT_OK
     status = payload.get("status")
+    # Only when the agent was actually enrolled to be woken (a state-CHANGING command, or an
+    # explicit acquire/lock) do we tell it "you're queued ... messaged when it frees" and end
+    # its turn (preempted). A read-only `state` peek on a busy browser enrols nothing -> say so
+    # and let it move on (busy); never strand it on a resume message that won't come. And even
+    # when enrolled, point at a `state` re-check fallback, since a wake can be lost (e.g. a
+    # daemon restart drops the in-memory resume queue).
+    enqueued = bool(payload.get("enqueued"))
     if status == "busy_human":
-        _out(f"browser {browser_name}: the human took control -- you're queued to resume. "
-             "They can see you're waiting, and you'll be messaged to pick up when they hand it "
-             f"back. Tell the user, then end your turn; re-run `state {browser_name}` when you resume.")
-        return _EXIT_PREEMPTED
+        if enqueued:
+            _out(f"browser {browser_name}: the human took control -- you're queued to resume. They can "
+                 "see you're waiting, and you'll be messaged to pick up when they hand it back (if you "
+                 f"don't hear back in a while, re-run `state {browser_name}` to check). Tell the user, then end your turn.")
+            return _EXIT_PREEMPTED
+        _out(f"a human is controlling browser {browser_name} right now (you were only looking, so you're not "
+             f"queued for it). Use a different browser (or `new`), or re-run `state {browser_name}` later to check.")
+        return _EXIT_BUSY
     if status == "busy_agent":
-        _out(f"browser {browser_name} is held by another agent -- you're queued for it and will be "
-             f"messaged when it frees. For unrelated work, use a different browser (or `new`); "
-             f"re-run `state {browser_name}` when you resume.")
+        if enqueued:
+            _out(f"browser {browser_name} is held by another agent -- you're queued for it and will be "
+                 f"messaged when it frees (if you don't hear back in a while, re-run `state {browser_name}` to "
+                 f"check). For unrelated work, use a different browser (or `new`).")
+        else:
+            _out(f"another agent is using browser {browser_name} right now (you were only looking, so you're "
+                 f"not queued). Use a different browser (or `new`), or re-run `state {browser_name}` later to check.")
         return _EXIT_BUSY
     if status == "lost_control":
-        _out(f"browser {browser_name}: the human took control mid-step -- you're queued to resume. "
-             "Tell the user you'll pick up when they hand it back, then end your turn; "
-             f"re-run `state {browser_name}` when you resume.")
-        return _EXIT_PREEMPTED
+        if enqueued:
+            _out(f"browser {browser_name}: the human took control mid-step -- you're queued to resume. "
+                 "Tell the user you'll pick up when they hand it back (if you don't hear back in a while, "
+                 f"re-run `state {browser_name}` to check), then end your turn.")
+            return _EXIT_PREEMPTED
+        _out(f"a human took control of browser {browser_name} mid-step; you weren't queued. Use a different "
+             f"browser, or re-run `state {browser_name}` later to check.")
+        return _EXIT_BUSY
     if status == "initializing":
         _err("the browser fleet is still starting up (restoring your saved browsers) -- "
              "try again in a few seconds. `ls` and `state` work now; this command needs the fleet ready.")
@@ -411,6 +440,9 @@ def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int
     if status == "crashed":
         _err(f"browser {browser_name} crashed (Chromium was killed -- e.g. out of memory) and is gone. "
              f"Start a fresh one with `new` (it gets a new name); browser {browser_name} won't come back.")
+        return _EXIT_ERROR
+    if status == "closed":
+        _err(f"browser {browser_name} was closed and is gone. Start a fresh one with `new` (it gets a new name).")
         return _EXIT_ERROR
     if status == "stale_index":
         _err(payload.get("error") or f"that element index is stale -- run `state {browser_name}` again first")
