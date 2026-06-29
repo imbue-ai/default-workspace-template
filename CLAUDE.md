@@ -395,6 +395,18 @@ See the `edit-services` skill for details.
 
 After building or editing any app or service, proactively check `/var/log/supervisor/` for errors -- a clean exit code does not mean the service is healthy. Use the `check-app-errors` skill to survey `supervisorctl status` and scan the relevant logs for tracebacks before considering the work done.
 
+Supervisord is for **long-running** processes (the mind's apps and always-on daemons). For **routine jobs that run on a schedule and then exit**, use the scheduler instead (see below) -- do not write a sleep-loop supervisord program for periodic work.
+
+# Scheduled tasks
+
+For recurring routines that are part of *the mind itself* -- backups, health checks, daily messages to the user, the nightly Caretaker (on by default), and anything else that should happen on a cadence rather than run continuously -- use the **scheduler**, not supervisord. (Apps and services *within* the mind, which stay running, are supervisord programs; routines the mind performs *on a cadence* are scheduled tasks.)
+
+The scheduler (`libs/scheduler`, itself run as the `[program:scheduler]` supervisord program) reads `runtime/scheduled_tasks.toml`, runs each due task's command from the repo root, and -- unlike plain cron -- **catches up on tasks missed while the mind was offline**: a job that came due while the container was down runs once on next boot, and multiple misses coalesce into a single run. Per-task run state lives in `runtime/scheduler/state.toml`.
+
+Manage tasks with the **`manage-scheduled-tasks`** skill (or the `scheduler list|add|remove|show` CLI). Each task is a 5-field cron schedule plus a shell command, with `enabled` and `catch_up` flags.
+
+Rule of thumb: if it's an *app or service the mind exposes* (a web app, an always-listening bot), make it a supervisord program. If it's a *routine the mind performs on a cadence* (back something up, run a check, message the user each morning, the Caretaker's nightly run), make it a scheduled task.
+
 # Git
 
 Commit your changes locally.
