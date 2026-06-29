@@ -26,7 +26,6 @@ import {
 } from "../models/Response";
 import { computeVisibleWindow } from "../models/virtualWindow";
 import { nextUserScrolledUp } from "../models/scrollFollow";
-import { isScrollMeasurable } from "../models/scrollVisibility";
 import { createRowMeasurer, OVERSCAN_PX } from "./row-measurement";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
@@ -92,14 +91,6 @@ function isNearBottom(element: HTMLElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight < SCROLL_BOTTOM_THRESHOLD_PX;
 }
 
-// Whether scroll-management work may run against the scroll element right now.
-// Dockview keeps an inactive chat tab mounted under a display:none ancestor, so
-// the component keeps redrawing while hidden against a zero-sized element; doing
-// scroll work then corrupts the retained position (see scrollVisibility.ts).
-function canManageScroll(element: HTMLElement): boolean {
-  return isScrollMeasurable({ clientHeight: element.clientHeight, hasOffsetParent: element.offsetParent !== null });
-}
-
 function scrollToBottom(element: HTMLElement): void {
   element.scrollTop = element.scrollHeight;
 }
@@ -108,7 +99,7 @@ function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
 }
 
-export function ChatPanel(): m.Component<{ agentId: string }> {
+export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
   let loading = false;
   let loadingError: string | null = null;
   let currentAgentId: string | null = null;
@@ -123,12 +114,15 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   let previousScrollTop = 0;
   const rowMeasurer = createRowMeasurer();
   let viewportResizeObserver: ResizeObserver | null = null;
-  // Whether the scroll element was measurable (visible, non-zero size) at the last
-  // ResizeObserver callback. Dockview hides an inactive tab with display:none,
-  // collapsing the element to 0; tracking the transition lets us force a redraw
-  // when the tab becomes visible again so applyScrollPosition resumes and
-  // restores the user's position (rather than relying on an unrelated redraw).
-  let wasScrollMeasurable = false;
+  // Whether this panel is the visible (selected) tab in its dockview group.
+  // dockview keeps an inactive tab mounted (defaultRenderer: "always") and
+  // mithril redraws globally, so the component keeps running while hidden
+  // against an element collapsed to zero size; running scroll work then would
+  // corrupt the retained scroll position. The renderer feeds dockview's
+  // authoritative visibility in via the ``isVisible`` attr (see
+  // createMithrilRenderer); the scroll hooks below skip while it is false.
+  // Defaults to true so the panel works before the first render sets it.
+  let panelVisible = true;
   // Memoized turn-grouping output. buildSections walks the whole held
   // transcript, so it is recomputed only when the data actually changes (keyed
   // on the render version + idle flag), not on every scroll-driven redraw.
@@ -355,10 +349,10 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
    *     after a jump moved the window off the live tail): page one newer worth.
    */
   function maybePage(agentId: string, element: HTMLElement): void {
-    // The panel is hidden (an inactive dockview tab) so the element is zero-sized:
-    // scrollTop/scrollHeight read 0, mapping the viewport to event 0 and firing a
-    // spurious jump to the start of the conversation. Skip while not measurable.
-    if (!canManageScroll(element)) {
+    // While the panel is hidden (an inactive dockview tab) the element is
+    // zero-sized: scrollTop/scrollHeight read 0, which would map the viewport to
+    // event 0 and fire a spurious jump to the start of the conversation. Skip.
+    if (!panelVisible) {
       return;
     }
     // A fetch is already outstanding (only one at a time), or a just-completed jump
@@ -416,14 +410,14 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
   }
 
   function applyScrollPosition(element: HTMLElement): void {
-    // The panel is hidden (an inactive dockview tab) so the element is zero-sized.
-    // Re-pinning or scrolling-to-bottom now would set scrollTop from a 0
-    // scrollHeight and clobber the retained scrollTop/previousScrollTop to 0,
+    // While the panel is hidden (an inactive dockview tab) the element is
+    // zero-sized. Re-pinning or scrolling-to-bottom now would set scrollTop from
+    // a 0 scrollHeight and clobber the retained scrollTop/previousScrollTop to 0,
     // losing the user's place. The browser preserves the native scrollTop across
-    // a display:none hide/show, so skipping here keeps the position intact; the
-    // first redraw after the tab is shown again (driven by the ResizeObserver
-    // below) runs this normally and restores the tail / scrolled-up position.
-    if (!canManageScroll(element)) {
+    // a hide/show, so skipping here keeps the position intact; dockview fires a
+    // visibility change on show that forces a redraw (see createMithrilRenderer),
+    // so this runs again then and restores the tail / scrolled-up position.
+    if (!panelVisible) {
       return;
     }
     // After an offset jump, pin the viewport once to the top of the freshly loaded
@@ -500,7 +494,7 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
     // retained viewportHeight with 0 (the windowing math would then fall back to
     // a wrong height). The row measurer already ignores zero-height rows, so it
     // is safe to schedule regardless.
-    if (scrollEl !== null && canManageScroll(scrollEl)) {
+    if (scrollEl !== null && panelVisible) {
       viewportHeight = scrollEl.clientHeight;
     }
     rowMeasurer.scheduleMeasure(() => scrollEl);
@@ -688,6 +682,11 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
 
     view(vnode) {
       const agentId = vnode.attrs.agentId;
+      // dockview's live visibility for this panel, fed in by the renderer. Read
+      // it before building content / running lifecycle hooks so the scroll hooks
+      // (which read this closure variable) see the current value. Undefined for a
+      // mount without a panel api -- treat that as visible.
+      panelVisible = vnode.attrs.isVisible ?? true;
 
       // renderMessages sets the reserved heights, so build the content first, then
       // decide whether the viewport currently sits over a reserved region (above
@@ -710,25 +709,17 @@ export function ChatPanel(): m.Component<{ agentId: string }> {
             oncreate: (mainVnode: m.VnodeDOM) => {
               scrollEl = mainVnode.dom as HTMLElement;
               viewportHeight = scrollEl.clientHeight;
-              wasScrollMeasurable = canManageScroll(scrollEl);
               // Recompute the window when the panel itself resizes (dockview
-              // splits, window resize) since that changes the visible range. This
-              // also fires when dockview hides/shows the tab via display:none
-              // (collapse to 0, then back): ignore the collapse so we don't
-              // clobber the retained viewport height, and force a redraw when the
-              // tab becomes visible again so applyScrollPosition resumes and
-              // restores the user's scroll position.
+              // splits, window resize) since that changes the visible range. Skip
+              // while hidden: dockview collapses an inactive tab's element to 0,
+              // and updating viewportHeight from that 0 would break the windowing
+              // math. Restoring the position on show is driven by the visibility
+              // change forcing a redraw (see createMithrilRenderer), not here.
               viewportResizeObserver = new ResizeObserver(() => {
-                if (scrollEl === null) {
+                if (scrollEl === null || !panelVisible) {
                   return;
                 }
-                if (!canManageScroll(scrollEl)) {
-                  wasScrollMeasurable = false;
-                  return;
-                }
-                const becameVisible = !wasScrollMeasurable;
-                wasScrollMeasurable = true;
-                if (becameVisible || scrollEl.clientHeight !== viewportHeight) {
+                if (scrollEl.clientHeight !== viewportHeight) {
                   viewportHeight = scrollEl.clientHeight;
                   m.redraw();
                 }
