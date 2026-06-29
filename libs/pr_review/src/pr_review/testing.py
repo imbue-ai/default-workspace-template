@@ -111,8 +111,7 @@ def seed_repo_cache(repo: str, sha: str, files: dict[str, str]) -> Path:
     """Pre-populate the on-disk repo cache (under the cwd) so ``ensure_repo_tree``
     treats the tree as already fetched and never calls the network. Returns the
     extracted source root. Call after ``chdir`` into the test's working dir."""
-    slug = repo.replace("/", "__")
-    dest = github.REPO_CACHE / slug / sha
+    dest = github.REPO_CACHE / github._safe_slug(repo) / sha
     root = dest / f"{repo.split('/')[-1]}-{sha[:7]}"
     for rel, content in files.items():
         target = root / rel
