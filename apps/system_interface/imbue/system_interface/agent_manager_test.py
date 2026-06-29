@@ -160,13 +160,24 @@ def test_get_agents_serialized(agent_manager: AgentManager) -> None:
             labels={"user_created": "true"},
             work_dir="/tmp/work",
         )
+        # A shed/stopped agent: its claude process is gone (e.g. OOM-killed), so
+        # mngr reports a non-running lifecycle state.
+        agent_manager._agents["a2"] = AgentStateItem(
+            id="a2",
+            name="agent-two",
+            state="DONE",
+            labels={},
+            work_dir="/tmp/work2",
+        )
 
     serialized = agent_manager.get_agents_serialized()
-    assert len(serialized) == 1
-    assert serialized[0]["id"] == "a1"
-    assert serialized[0]["name"] == "agent-one"
-    assert serialized[0]["labels"] == {"user_created": "true"}
-    assert serialized[0]["activity_state"] is None
+    by_id = {item["id"]: item for item in serialized}
+    assert by_id["a1"]["name"] == "agent-one"
+    assert by_id["a1"]["labels"] == {"user_created": "true"}
+    assert by_id["a1"]["activity_state"] is None
+    # The process indicator is driven off the lifecycle state in the WS payload.
+    assert by_id["a1"]["is_process_running"] is True
+    assert by_id["a2"]["is_process_running"] is False
 
 
 def test_get_applications_serialized(agent_manager: AgentManager) -> None:

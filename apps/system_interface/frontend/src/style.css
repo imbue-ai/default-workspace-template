@@ -1441,6 +1441,26 @@ body {
   gap: 4px;
 }
 
+/* Per-agent process-liveness dot on chat tabs. Green when the agent's claude
+   process is alive, red when it has stopped (e.g. shed by the OOM handler).
+   Distinct from the chat's activity indicator, which tracks whether the agent
+   is actively working. */
+.dv-tab-process-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--color-text-secondary);
+}
+
+.dv-tab-process-dot[data-running="true"] {
+  background: var(--color-accent);
+}
+
+.dv-tab-process-dot[data-running="false"] {
+  background: #dc2626;
+}
+
 .dv-custom-tab-actions {
   display: flex;
   align-items: center;

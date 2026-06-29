@@ -29,6 +29,7 @@ import {
   getApplications,
   getProtoAgents,
   removeAgentLocally,
+  removeAgentsUpdatedListener,
   type AgentsUpdatedListener,
   type LayoutOpEvent,
   type LayoutOpListener,
@@ -241,6 +242,30 @@ function createCustomTab(options: { id: string; name: string }): {
         const chatAgentId = pp?.chatAgentId ?? pp?.agentId ?? "";
         const primaryAgentId = getPrimaryAgentId();
         const isPrimary = chatAgentId === primaryAgentId;
+
+        // Process-liveness dot, to the left of the title. Distinct from the
+        // chat's activity indicator: this tracks whether the agent's claude
+        // process is alive (green) or gone (red) -- e.g. it flips to red when
+        // the OOM handler sheds the process. Driven by ``is_process_running``
+        // on the agent WS payload; hidden until the agent's state is known.
+        const processDot = document.createElement("span");
+        processDot.className = "dv-tab-process-dot";
+        const updateProcessDot = (): void => {
+          const running = getAgentById(chatAgentId)?.is_process_running;
+          if (running === undefined) {
+            processDot.style.display = "none";
+            processDot.removeAttribute("title");
+            return;
+          }
+          processDot.style.display = "";
+          processDot.setAttribute("data-running", running ? "true" : "false");
+          processDot.title = running ? "Agent process running" : "Agent process stopped";
+        };
+        updateProcessDot();
+        element.insertBefore(processDot, element.firstChild);
+        const processDotListener: AgentsUpdatedListener = () => updateProcessDot();
+        addAgentsUpdatedListener(processDotListener);
+        disposables.push({ dispose: () => removeAgentsUpdatedListener(processDotListener) });
 
         const destroyBtn = createTabActionButton(
           isPrimary ? "Cannot destroy the primary agent" : "Destroy agent",
