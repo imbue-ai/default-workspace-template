@@ -636,6 +636,23 @@ function addChatPanel(
   });
 }
 
+/** The dockview group holding the workspace's main chat -- the first open chat
+ *  tab (the initial bootstrap chat), ignoring ``excludeAgentId``. Highlighted
+ *  tabs (the Caretaker) are tabbed into this group so they appear in the main
+ *  window alongside the initial chat, instead of landing in whichever group
+ *  happens to be active (or a fresh split). Returns null when no other chat tab
+ *  is open, so the caller falls back to default placement. */
+function mainChatGroup(excludeAgentId: string): DockviewGroupPanel | null {
+  if (!dockview) return null;
+  for (const panel of dockview.panels) {
+    const pp = panelParams.get(panel.id);
+    if (pp?.panelType !== "chat") continue;
+    if ((pp.chatAgentId ?? pp.agentId) === excludeAgentId) continue;
+    return panel.api.group ?? null;
+  }
+  return null;
+}
+
 /** Surface and flash a highlighted agent's tab (e.g. the Caretaker) whenever it
  *  has something new to show. "Something new" is a change in the agent's highlight
  *  key (the value of its ``highlight`` label, bumped by mngr each run) -- including
@@ -657,7 +674,9 @@ function surfaceHighlightedAgents(): void {
 
     if (!openChatIds.has(agent.id)) {
       clearHighlightSeen(agent.id);
-      addChatPanel(agent.id, agent.name, null, { inactive: true });
+      // Tab it into the main chat group (where the initial chat lives) so it
+      // shows up in the main window, not in a separate/active split.
+      addChatPanel(agent.id, agent.name, mainChatGroup(agent.id), { inactive: true });
     } else {
       // Tab already open -- re-blink it in place for this new highlight (the
       // callback no-ops if the user is currently viewing the tab).
