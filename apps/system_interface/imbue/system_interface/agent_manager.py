@@ -56,6 +56,9 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 _APPLICATIONS_TOML_FILENAME = "runtime/applications.toml"
 _APPLICATIONS_TOML_BASENAME = "applications.toml"
 _DEFAULT_MNGR_BINARY = "mngr"
+# The production messenger: a stateless, frozen value whose discover/send are the
+# real mngr calls, so one shared instance is the default for every built manager.
+_DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 
 _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
@@ -307,20 +310,20 @@ class AgentManager:
     def build(
         cls,
         broadcaster: WebSocketBroadcaster,
-        messenger: MngrMessenger | None = None,
+        messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
-        ``messenger`` is the agent-messaging collaborator; it defaults to a
-        ``MngrMessenger`` with the real mngr discover/send. Tests inject one
-        whose ``discover``/``send`` are fakes to avoid touching mngr.
-        ``mngr_binary`` is the path or name of the mngr executable used for
-        the discovery-only observe subprocess and for agent-creation commands.
+        ``messenger`` is the agent-messaging collaborator; it defaults to the
+        real mngr discover/send. Tests pass one whose ``discover``/``send`` are
+        fakes to avoid touching mngr. ``mngr_binary`` is the path or name of the
+        mngr executable used for the discovery-only observe subprocess and for
+        agent-creation commands.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
-        manager._messenger = messenger if messenger is not None else MngrMessenger()
+        manager._messenger = messenger
         manager._lock = threading.Lock()
         manager._agents = {}
         manager._match_by_agent_id = {}
