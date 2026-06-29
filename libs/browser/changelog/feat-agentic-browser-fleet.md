@@ -395,3 +395,40 @@ layer and the async engine more legible, with no behavior change.
   loop now goes through a `manager.resolve` coroutine on the engine. The engine remains
   async because browser_use (and the Playwright observer that shares its Chromium) are
   async-only; the web layer reaches it solely through the bridge.
+
+Ownership / queuing hardening (production-grade across agent<->agent, agent<->human,
+take/give/default control, crash, close, startup):
+
+- A human taking control of a browser an agent is actively DRIVING now queues that agent
+  at the FRONT of the resume queue. Previously the displaced agent was only re-enqueued if
+  its next command happened to be state-changing; its natural next move -- the read-only
+  `state` re-check -- did not enrol it, so it was told "you're queued to resume" while in
+  no queue: never woken on hand-back and never shown in the human's waiting list (so the
+  "Return control to agents" button never appeared). Now it's queued the instant control is
+  taken, the button appears, and hand-back wakes it first.
+
+- A browser that crashes or is closed while agents are queued for it now releases them all:
+  connection-bound `task`/`lock` waiters get a clear `crashed`/`closed` (start a new one)
+  instead of hanging forever, and resume-queue agents are messaged that the browser is gone
+  instead of waiting for a wake that never comes. (Previously only `close` unblocked the
+  wait queue, and neither path touched the resume queue.)
+
+- A `task`/`lock` denied by a human pin is now enrolled in the resume queue (messaged when
+  the human hands back), matching the direct-control path; previously it was dropped.
+
+Honest queuing messages (from an adversarial edge-case review of the above):
+
+- A busy-browser response now carries an `enqueued` flag, and the CLI only tells an agent
+  "you're queued to resume -- you'll be messaged when it frees" when it was actually enrolled.
+  A read-only `state` peek on a busy browser does NOT enrol a waiter, so it now says "you were
+  only looking, so you're not queued; use a different browser or re-check later" (exit busy)
+  instead of falsely promising a resume that would never come (which had also wrongly ended
+  the agent's turn as if preempted).
+
+- Every "you'll be messaged when it frees" message now also points at a `state <name>` re-check
+  fallback, so a wake that is lost (e.g. a daemon restart drops the in-memory resume queue)
+  no longer strands the agent waiting forever for a message that won't arrive.
+
+- Documented that `--reclaim` intentionally lets any agent (told by the human to "keep going")
+  override a human pin -- a deliberate cooperative-agent trust assumption, not a missing check;
+  the human's own take-control always instantly wins back.

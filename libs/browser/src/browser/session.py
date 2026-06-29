@@ -1071,7 +1071,13 @@ class LiveBrowser(MutableModel):
         status = await self.acquire(
             agent_id, agent_name, reclaim=reclaim, wait=wait, max_wait=max_wait, enqueue_on_busy=enqueue_on_busy
         )
-        return {"ok": status == "acquired", "status": status, **self._control_state()}
+        return {
+            "ok": status == "acquired",
+            "status": status,
+            # Only promise a resume in the CLI when the agent was actually enrolled (see run_action).
+            "enqueued": enqueue_on_busy and status in ("busy_human", "busy_agent"),
+            **self._control_state(),
+        }
 
     async def handoff_with_state(self, agent_id: str, agent_name: str | None, reason: str) -> dict[str, Any]:
         """:meth:`handoff`, then snapshot the control state -- both ON the loop (see
@@ -1124,6 +1130,11 @@ class LiveBrowser(MutableModel):
     async def _announce_crash(self) -> None:
         logger.warning("browser {} crashed (Chromium connection lost)", self.browser_id)
         self._broadcast({"type": "crashed", "browser_id": self.browser_id})
+        # Release anyone queued for this browser: it will never free, so wait-queue waiters
+        # must not hang and resume-queue agents must be told rather than wait for a wake
+        # that never comes. (close() does the same for a user-closed browser.)
+        async with self._control_lock:
+            await self._abandon_queues_locked("crashed")
         if self._crash_save_hook is not None:
             # Drop the dead browser from the manifest now (it's excluded from the live
             # snapshot), so a kill right after the crash doesn't restore it as healthy.
@@ -1143,16 +1154,11 @@ class LiveBrowser(MutableModel):
         rather than erroring out."""
         return {"ok": False, "status": "starting", **self._control_state()}
 
-    async def _wake_agent(self, agent_id: str, agent_name: str | None) -> None:
-        """Message a queued agent that the browser is its again, so it resumes in a
-        fresh turn (it ended its turn when it lost control). Best-effort: shells out to
-        ``mngr message`` (the same path launch-task uses to message agents). If it
-        fails, or the agent never shows, the claim window passes the browser on."""
+    async def _message_agent(self, agent_id: str, agent_name: str | None, text: str) -> None:
+        """Best-effort: message a queued agent via ``mngr message`` (the same path
+        launch-task uses). Failures are logged, not raised -- the claim window / lifecycle
+        handling is the backstop if a message never lands."""
         target = agent_name or agent_id
-        text = (
-            f"Browser {self.browser_id} was handed back to you (the human finished with it). "
-            f"Re-run `state {self.browser_id}` to re-read the page, then continue where you left off."
-        )
         try:
             proc = await asyncio.create_subprocess_exec(
                 "mngr",
@@ -1169,7 +1175,45 @@ class LiveBrowser(MutableModel):
             )
             await proc.wait()
         except OSError as e:
-            logger.warning("could not wake agent {} for browser {} ({})", target, self.browser_id, e)
+            logger.warning("could not message agent {} for browser {} ({})", target, self.browser_id, e)
+
+    async def _wake_agent(self, agent_id: str, agent_name: str | None) -> None:
+        """Message a queued agent that the browser is its again, so it resumes in a
+        fresh turn (it ended its turn when it lost control). If it fails, or the agent
+        never shows, the claim window passes the browser on."""
+        await self._message_agent(
+            agent_id,
+            agent_name,
+            f"Browser {self.browser_id} was handed back to you (the human finished with it). "
+            f"Re-run `state {self.browser_id}` to re-read the page, then continue where you left off.",
+        )
+
+    async def _abandon_queues_locked(self, reason: str) -> None:
+        """The browser is gone (crashed or closed): release EVERY queued agent so none
+        waits on a corpse. Caller holds ``_control_lock``.
+
+        * ``_wait_queue`` (connection-bound task/hold waiters) are woken ungranted -> their
+          ``acquire`` falls through to the crashed/closed check and returns that status, so
+          the streaming endpoint ends with a clear "gone" instead of hanging forever on a
+          browser that will never free.
+        * ``_resume_queue`` agents ended their turn waiting to be MESSAGED when it frees;
+          it never will, so message each that it's gone and clear the queue -- otherwise
+          they wait forever for a wake that never comes.
+        """
+        waiters, self._wait_queue = self._wait_queue, []
+        for waiter in waiters:
+            waiter.granted = False
+            waiter.event.set()
+        resume, self._resume_queue = self._resume_queue, []
+        for agent_id, agent_name in resume:
+            self._spawn(
+                self._message_agent(
+                    agent_id,
+                    agent_name,
+                    f"Browser {self.browser_id} is gone ({reason}) and won't come back. "
+                    f"Start a new browser with `new` if you still need one.",
+                )
+            )
 
     async def _settle_queue_locked(self) -> None:
         """Reconcile both wait-queues with the current control state. Holds ``_control_lock``.
@@ -1233,6 +1277,17 @@ class LiveBrowser(MutableModel):
             if preempt:
                 displaced_agent = self._agent
                 displaced_task = self._agent_task
+                # A human taking control of a browser an agent is DRIVING queues that agent
+                # at the FRONT of the resume queue, so it resumes first when the human hands
+                # back -- regardless of what it runs next. Without this, a preempted agent
+                # whose next command is the read-only `state` re-check (which deliberately
+                # does NOT enrol a waiter) would be silently dropped: told "you're queued"
+                # while in no queue, never woken on hand-back, and not shown in the human's
+                # waiting list (so the "Return control to agents" button never appears).
+                # Mirrors the agent-initiated handoff; the human-pinned settle below keeps
+                # the resume queue intact.
+                if self.controller == "agent" and self.owner_agent_id is not None:
+                    self._enqueue_resume_front_locked(self.owner_agent_id, self.owner_agent_name)
             await self._write_control_locked(to, agent_id, agent_name, pinned)
             await self._settle_queue_locked()
         if displaced_agent is not None:
@@ -1285,6 +1340,12 @@ class LiveBrowser(MutableModel):
                 self.owner_agent_name = agent_name  # refresh display name on re-acquire
                 self._dequeue_resume_locked(agent_id)
                 return "acquired"
+            # ``reclaim`` deliberately overrides a human pin for ANY agent, not just the
+            # displaced owner: it is the "the human told me to keep going / take over" verb,
+            # and the daemon cannot verify which agent the human addressed. This is an
+            # intentional trust assumption (cooperative agents following the skill, which
+            # says to reclaim ONLY on an explicit user instruction), not an oversight -- the
+            # human's own take-control always wins again instantly if they disagree.
             if not reclaim and self._human_pin_active():
                 if enqueue_on_busy:
                     self._enqueue_resume_locked(agent_id, agent_name)
@@ -1319,6 +1380,12 @@ class LiveBrowser(MutableModel):
             if isinstance(exc, asyncio.CancelledError):
                 raise
             return "timed_out"
+        # The browser may have died while we were parked: crash/close evicts the wait queue
+        # ungranted, so report that (not a misleading "busy_human") and the agent starts fresh.
+        if self._crashed:
+            return "crashed"
+        if self._closed:
+            return "closed"
         return "acquired" if waiter.granted else "busy_human"
 
     async def release(self, agent_id: str) -> bool:
@@ -1526,7 +1593,16 @@ class LiveBrowser(MutableModel):
         was_mine = self._state_tuple() == ("agent", agent_id, False)
         status = await self.acquire(agent_id, agent_name, wait=False, enqueue_on_busy=enqueue_on_busy)
         if status != "acquired":
-            return {"ok": False, "status": status, **self._control_state()}
+            # ``enqueued`` tells the CLI whether the agent was actually enrolled to be woken
+            # so it only promises "you're queued ... messaged when it frees" when true. The
+            # read-only `state` peek passes enqueue_on_busy=False, so a busy `state` must NOT
+            # over-promise a resume that will never come.
+            return {
+                "ok": False,
+                "status": status,
+                "enqueued": enqueue_on_busy and status in ("busy_human", "busy_agent"),
+                **self._control_state(),
+            }
         async with self._control_lock:
             if self._state_tuple() != ("agent", agent_id, False):
                 # A human grabbed control in the tiny window between acquire and here.
@@ -1536,7 +1612,7 @@ class LiveBrowser(MutableModel):
                 if enqueue_on_busy:
                     self._enqueue_resume_locked(agent_id, agent_name)
                     self._broadcast(self._control_message())
-                return {"ok": False, "status": "lost_control", **self._control_state()}
+                return {"ok": False, "status": "lost_control", "enqueued": enqueue_on_busy, **self._control_state()}
             self._lease_touched_at = time.monotonic()
             self._granted_at = 0.0  # the agent claimed (sent a command); cancel the claim window
         async with self._lock:
@@ -1781,12 +1857,11 @@ class LiveBrowser(MutableModel):
             self._keepalive_task.cancel()
         # Tell every cast socket to tear down (don't wait for the client to disconnect).
         self._shutdown_cast_queues()
-        # Evict any waiters so their task endpoints unblock instead of hanging on a dead browser.
+        # Release every queued agent so none hangs on a browser being torn down: wait-queue
+        # waiters unblock (their acquire returns `closed`); resume-queue agents are messaged
+        # it's gone and cleared.
         async with self._control_lock:
-            waiters, self._wait_queue = self._wait_queue, []
-        for waiter in waiters:
-            waiter.granted = False
-            waiter.event.set()
+            await self._abandon_queues_locked("closed")
         await self._stop_active_agent()
         await self._stop_screencast()
         self._context = None  # bail out any nav re-attach queued during teardown
