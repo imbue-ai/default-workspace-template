@@ -39,10 +39,11 @@ from imbue.mngr.errors import UserInputError
 from imbue.mngr.hosts.host import Host
 from imbue.mngr.hosts.host import ONBOARDING_TEXT
 from imbue.mngr.hosts.host import ONBOARDING_TEXT_TMUX_USER
-from imbue.mngr.hosts.host import _START_LOCK_ACQUIRED_MARKER
+from imbue.mngr.hosts.host import _LOCK_ACQUIRED_MARKER
+from imbue.mngr.hosts.host import _LOCK_TIMED_OUT_MARKER
 from imbue.mngr.hosts.host import _TMUX_SET_TITLES_STRING
 from imbue.mngr.hosts.host import _TMUX_STATUS_LEFT_LENGTH
-from imbue.mngr.hosts.host import _build_remote_start_lock_command
+from imbue.mngr.hosts.host import _build_remote_lock_command
 from imbue.mngr.hosts.host import _build_start_agent_shell_command
 from imbue.mngr.hosts.host import _format_env_file
 from imbue.mngr.hosts.host import _is_transient_ssh_error
@@ -1382,6 +1383,49 @@ def test_stop_agents_treats_tmux_no_current_target_as_benign(
     assert get_cleanup_failures(lambda: host.stop_agents([agent.id])) == []
 
 
+def test_reap_agent_process_tree_kills_pane_and_env_marked_orphans_but_not_the_session(
+    local_provider: LocalProviderInstance,
+) -> None:
+    """reap_agent_process_tree kills the pane descendants AND the MNGR_AGENT_ID-tagged
+    orphans (reparented to PID 1), with SIGTERM then SIGKILL, but does NOT kill the
+    tmux session itself.
+
+    Regression: a long-lived daemon launched under an agent (the FCT bootstrap's
+    supervisord and its ttyd) could be orphaned to PID 1 on an abrupt teardown and
+    outlive the agent, holding a fixed port (EADDRINUSE on the next relaunch). The
+    shared reap must catch such orphans via the env marker, which a pane/tree walk
+    misses. It must NOT kill the session, so callers can reap-then-relaunch in place.
+    """
+    agent = make_test_agent_details("reap-tree-agent")
+    pane_pid = "55502"
+    orphan_pid = "55501"
+
+    def handle(command: str) -> CommandResult:
+        if "list-windows" in command:
+            return CommandResult(stdout="0", stderr="", success=True)
+        if "list-panes" in command:
+            return CommandResult(stdout=pane_pid, stderr="", success=True)
+        # The env-marker /proc scan that finds orphans reparented to PID 1.
+        if "MNGR_AGENT_ID" in command:
+            return CommandResult(stdout=orphan_pid, stderr="", success=True)
+        return CommandResult(stdout="", stderr="", success=True)
+
+    host, recorded = _make_stop_agents_test_host(local_provider, cast(AgentInterface, agent), handle)
+
+    failures = host.reap_agent_process_tree(cast(AgentInterface, agent))
+
+    assert failures == []
+    commands = [command for command, _ in recorded]
+    # It ran the env-marker orphan scan.
+    assert any("MNGR_AGENT_ID" in command for command in commands)
+    # It killed BOTH the pane pid and the env-marked orphan, via SIGTERM and SIGKILL.
+    kill_commands = " ".join(c for c in commands if "kill -TERM" in c or "kill -KILL" in c)
+    assert "kill -TERM" in kill_commands and "kill -KILL" in kill_commands
+    assert pane_pid in kill_commands and orphan_pid in kill_commands
+    # It must NOT kill the tmux session -- that's stop_agents' job, not the reap's.
+    assert not any("kill-session" in command for command in commands)
+
+
 def test_execute_idempotent_command_raises_command_timeout_error_on_local_timeout(
     local_host: Host,
 ) -> None:
@@ -2613,40 +2657,49 @@ def test_host_lock_cooperatively_acquires_and_releases(
     assert host.is_lock_held() is False
 
 
-def test_build_remote_start_lock_command_holds_flock_until_stdin_closes() -> None:
-    """The remote lock command must be valid shell, flock the lock path, and signal acquisition."""
-    cmd = _build_remote_start_lock_command(Path("/mngr/host_start_lock"))
+def test_build_remote_lock_command_blocking_holds_flock_until_stdin_closes() -> None:
+    """The blocking remote lock command must be valid shell, flock the path, and signal acquisition."""
+    cmd = _build_remote_lock_command(Path("/mngr/host_lock"), timeout_seconds=None)
     assert subprocess.run(["sh", "-n", "-c", cmd], capture_output=True).returncode == 0
     assert "flock 9" in cmd
-    assert "/mngr/host_start_lock" in cmd
-    assert _START_LOCK_ACQUIRED_MARKER in cmd
+    assert "/mngr/host_lock" in cmd
+    assert _LOCK_ACQUIRED_MARKER in cmd
     # It must wait on stdin (so closing the channel releases the lock).
     assert "read" in cmd
 
 
-def test_host_lock_for_starting_acquires_and_releases(
+def test_build_remote_lock_command_with_timeout_uses_flock_wait() -> None:
+    """A bounded remote lock command must use ``flock -w`` and emit the timeout marker."""
+    cmd = _build_remote_lock_command(Path("/mngr/host_lock"), timeout_seconds=12.0)
+    assert subprocess.run(["sh", "-n", "-c", cmd], capture_output=True).returncode == 0
+    assert "flock -w 12 9" in cmd
+    assert _LOCK_ACQUIRED_MARKER in cmd
+    assert _LOCK_TIMED_OUT_MARKER in cmd
+
+
+def test_host_lock_cooperatively_acquires_and_releases_blocking(
     local_host: Host,
 ) -> None:
-    """lock_for_starting should acquire the dedicated start lock and create its file."""
+    """lock_cooperatively with an indefinite timeout should acquire and release the lock."""
     host = local_host
-    start_lock_path = host.host_dir / "host_start_lock"
-    with host.lock_for_starting():
-        assert start_lock_path.exists()
-    # It uses a dedicated file, not the idle-suppression host_lock.
-    assert not (host.host_dir / "host_lock").exists()
+    with host.lock_cooperatively(timeout_seconds=None):
+        assert host.is_lock_held() is True
+    # The lock file persists (stable inode) but is no longer held.
+    assert (host.host_dir / "host_lock").exists()
+    assert host.is_lock_held() is False
 
 
-def test_host_lock_for_starting_is_mutually_exclusive(
+def test_host_lock_cooperatively_is_mutually_exclusive(
     local_host: Host,
 ) -> None:
-    """A second lock_for_starting must block until the first releases (real flock)."""
+    """A second lock_cooperatively must block until the first releases (real flock)."""
     host = local_host
     first_acquired = threading.Event()
     allow_first_release = threading.Event()
     second_acquired = threading.Event()
 
     def hold_first() -> None:
-        with host.lock_for_starting():
+        with host.lock_cooperatively(timeout_seconds=None):
             first_acquired.set()
             # Hold the lock until the test signals release.
             allow_first_release.wait(timeout=30.0)
@@ -2654,7 +2707,7 @@ def test_host_lock_for_starting_is_mutually_exclusive(
     def acquire_second() -> None:
         # Only attempt once the first holder is established.
         first_acquired.wait(timeout=30.0)
-        with host.lock_for_starting():
+        with host.lock_cooperatively(timeout_seconds=None):
             second_acquired.set()
 
     first_thread = threading.Thread(target=hold_first)
