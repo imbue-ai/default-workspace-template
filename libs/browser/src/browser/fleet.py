@@ -298,13 +298,20 @@ def _render_event(event: dict[str, Any], browser_name: str) -> int | None:
         )
         return _EXIT_PREEMPTED
     elif kind == "busy_human":
+        # task/lock acquire passes enqueue_on_busy=True, so a human pin enrols this agent in
+        # the resume queue -- promise the wake (with the re-check fallback), like the direct path.
         _err(
-            f"browser {browser_name} is under human control. It is yours to drive; when you are done, "
-            'click "Return to agents" (or tell me to resume and I will reclaim it).'
+            f"a human is controlling browser {browser_name}. You're queued to resume and will be messaged "
+            f"when they hand it back (if you don't hear back in a while, re-run `state {browser_name}` to "
+            "check). Tell the user, then end your turn."
         )
         return _EXIT_BUSY
     elif kind == "busy_agent":
-        _err(f"browser {browser_name} is held by another agent (use without --no-wait to queue for it).")
+        _err(
+            f"browser {browser_name} is held by another agent. You're queued for it and will be messaged "
+            f"when it frees (if you don't hear back, re-run `state {browser_name}` to check); for unrelated "
+            "work, use a different browser (or `new`)."
+        )
         return _EXIT_BUSY
     elif kind == "timed_out":
         _err(f"browser {browser_name} is still held by another agent after waiting; gave up.")
