@@ -20,6 +20,7 @@ from imbue.mngr.api.discovery_events import HostDestroyedEvent
 from imbue.mngr.api.discovery_events import make_agent_discovery_event
 from imbue.mngr.api.discovery_events import make_full_discovery_snapshot_event
 from imbue.mngr.primitives import AgentId as MngrAgentId
+from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentName as MngrAgentName
 from imbue.mngr.primitives import DiscoveredAgent
 from imbue.mngr.primitives import HostId
@@ -316,6 +317,50 @@ def test_handle_agent_discovered(agent_manager: AgentManager, broadcaster: WebSo
     assert raw is not None
     msg = json.loads(raw)
     assert msg["type"] == "agents_updated"
+
+
+def test_full_snapshot_lifecycle_state_drives_is_process_running(agent_manager: AgentManager) -> None:
+    """The live lifecycle state carried on a discovery snapshot must reach the
+    serialized payload's ``is_process_running`` -- this is what lets the tab's
+    process dot flip to "stopped" when an agent's claude process dies (e.g. an
+    OOM shed) rather than staying green forever."""
+    alive = DiscoveredAgent(
+        host_id=HostId(),
+        agent_id=MngrAgentId(),
+        agent_name=MngrAgentName("alive"),
+        provider_name=ProviderInstanceName("local"),
+        # WAITING = process up but idle; still "running" for the liveness dot.
+        state=AgentLifecycleState.WAITING,
+        certified_data={"labels": {}, "work_dir": None},
+    )
+    dead = DiscoveredAgent(
+        host_id=HostId(),
+        agent_id=MngrAgentId(),
+        agent_name=MngrAgentName("dead"),
+        provider_name=ProviderInstanceName("local"),
+        state=AgentLifecycleState.DONE,
+        certified_data={"labels": {}, "work_dir": None},
+    )
+    agent_manager._handle_full_snapshot(make_full_discovery_snapshot_event([alive, dead], []))
+
+    by_name = {a["name"]: a for a in agent_manager.get_agents_serialized()}
+    assert by_name["alive"]["is_process_running"] is True
+    assert by_name["dead"]["is_process_running"] is False
+
+
+def test_discovered_agent_without_state_defaults_to_running(agent_manager: AgentManager) -> None:
+    """An incremental ``agent_discovered`` event (built from data.json, no live
+    probe) carries no state; the agent was just seen as present, so it defaults
+    to running until the next full snapshot can correct it."""
+    agent = DiscoveredAgent(
+        host_id=HostId(),
+        agent_id=MngrAgentId(),
+        agent_name=MngrAgentName("fresh"),
+        provider_name=ProviderInstanceName("local"),
+        certified_data={"labels": {}, "work_dir": None},
+    )
+    agent_manager._handle_agent_discovered(make_agent_discovery_event(agent))
+    assert agent_manager.get_agents_serialized()[0]["is_process_running"] is True
 
 
 def test_agent_destroyed_removes_agent(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster) -> None:
