@@ -17,7 +17,6 @@ members = [
     "runtime-backup",
     "system-interface",
     "taxonomy-editor",
-    "telegram-bot",
     "tk-command-parsing",
     "web-server",
 ]
@@ -822,7 +821,6 @@ dependencies = [
     { name = "playwright" },
     { name = "runtime-backup" },
     { name = "taxonomy-editor" },
-    { name = "telegram-bot" },
     { name = "tk-command-parsing" },
     { name = "tomlkit" },
     { name = "web-server" },
@@ -854,7 +852,6 @@ requires-dist = [
     { name = "playwright", specifier = "==1.58.0" },
     { name = "runtime-backup", editable = "libs/runtime_backup" },
     { name = "taxonomy-editor", editable = "libs/taxonomy_editor" },
-    { name = "telegram-bot", editable = "libs/telegram_bot" },
     { name = "tk-command-parsing", editable = "libs/tk_command_parsing" },
     { name = "tomlkit", specifier = ">=0.12" },
     { name = "web-server", editable = "libs/web_server" },
@@ -2977,17 +2974,6 @@ requires-dist = [
     { name = "markdown", specifier = ">=3.5" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]
-
-[[package]]
-name = "telegram-bot"
-version = "0.1.0"
-source = { editable = "libs/telegram_bot" }
-dependencies = [
-    { name = "loguru" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "loguru", specifier = ">=0.7.0" }]
 
 [[package]]
 name = "tenacity"
