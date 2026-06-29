@@ -43,7 +43,9 @@ a local git-worktree sub-agent in this same container, so its work_dir is just a
 folder it has already built -- the preview serves it in place:
 
 - ``preview`` boots the worker's ``--work-dir`` on a free port (layout
-  persistence neutered so it can't clobber the live ``layout.json``) and
+  persistence redirected to a throwaway dir under the preview's state, so it can
+  be inspected/rearranged by pointing ``scripts/layout.py`` at the printed
+  ``MINDS_WORKSPACE_SERVER_URL`` without clobbering the live ``layout.json``) and
   registers it as the ``si-preview-app`` service, then boots a small wrapper page
   (``preview_wrapper_server.py``) that embeds it in a labeled "preview" frame and
   registers that as the user-facing ``si-preview`` service. The live UI proxies
@@ -136,6 +138,15 @@ PREVIEW_STATE_ROOT = "runtime/system-interface-preview"
 PREVIEW_STATE_FILENAME = "preview.json"
 PREVIEW_LOG_FILENAME = "preview.log"
 PREVIEW_WRAPPER_LOG_FILENAME = "preview-wrapper.log"
+# Subdir of the preview's state dir where the inner instance persists its own
+# dockview layout. Kept separate from the live workspace's layout.json so the
+# preview can be inspected/rearranged without touching what the user is looking
+# at; ``unpreview`` removes the whole state dir, so it is cleaned up with the rest.
+PREVIEW_LAYOUT_DIRNAME = "layout"
+# Env var the system_interface server reads to override its layout directory
+# (see ``_primary_agent_layout_dir`` in apps/system_interface). Setting it points
+# the preview's persistence + ``inspect`` at PREVIEW_LAYOUT_DIRNAME.
+ENV_LAYOUT_DIR_OVERRIDE = "SYSTEM_INTERFACE_LAYOUT_DIR"
 # The wrapper server ships beside this script and is stdlib-only, so it runs
 # under the same bare ``python3`` that runs this script -- no venv resolution.
 _WRAPPER_SCRIPT_PATH = Path(__file__).resolve().parent / PREVIEW_WRAPPER_SCRIPT
@@ -809,8 +820,11 @@ def preview(
     The worker is a local git-worktree sub-agent in this same container, so
     ``work_dir`` is a folder on disk that the worker has already built (its
     ``done`` contract runs ``uv sync`` + ``npm run build``). We boot that built
-    instance detached on a free port -- with layout persistence neutered -- and
-    register it as the inner service. We then boot the small wrapper chrome page
+    instance detached on a free port -- with layout persistence redirected to a
+    throwaway dir under the preview's state (so it can be inspected and rearranged
+    by pointing ``scripts/layout.py`` at the printed ``MINDS_WORKSPACE_SERVER_URL``
+    without touching the live ``layout.json``) -- and register it as the inner
+    service. We then boot the small wrapper chrome page
     (``preview_wrapper_server.py``) on a second port and register it as the
     user-facing service, so the tab the user opens reads as a labeled "preview"
     frame around the change rather than a confusing nested clone of the live UI.
@@ -850,11 +864,22 @@ def preview(
         env = dict(os.environ)
         env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
         env["SYSTEM_INTERFACE_PORT"] = str(inner_port)
-        # Drop MNGR_AGENT_ID so the preview cannot persist layout over the live
-        # workspace's layout.json (the server treats a missing id as "no layout
-        # dir"). MNGR_HOST_DIR is kept, so the preview still discovers and
-        # renders the real agents/conversations -- a faithful look at the change.
+        # Drop MNGR_AGENT_ID so the preview is a faithful read-only-ish copy that
+        # never claims the live workspace's identity. MNGR_HOST_DIR is kept, so it
+        # still discovers and renders the real agents/conversations.
         env.pop("MNGR_AGENT_ID", None)
+        # Redirect layout persistence to a throwaway dir under the lead's runtime
+        # state (never the live workspace's layout.json). This is what lets the
+        # previewing agent drive ``scripts/layout.py`` against the preview (by
+        # pointing ``MINDS_WORKSPACE_SERVER_URL`` at the printed inner port):
+        # ``inspect`` / ``list``, wait-stable confirmation, and no-op detection all
+        # reflect the real preview state, and the arrangement survives a preview
+        # reload. (The ``self`` ref still depends on the lead's own chat tab being
+        # open in the preview, so anchor ops with explicit ``chat:<name>`` refs
+        # there.)
+        # Absolute because the inner instance runs with cwd inside the worker's
+        # work_dir, not the lead's repo root.
+        env[ENV_LAYOUT_DIR_OVERRIDE] = str(state_dir / PREVIEW_LAYOUT_DIRNAME)
         # Boot from the worker's own work_dir; ``uv run`` resolves that worktree's
         # already-synced ``.venv`` and serves its already-built ``static/`` bundle.
         pids.append(
@@ -965,6 +990,8 @@ def preview(
         f"preview up: open the '{PREVIEW_SERVICE_NAME}' service tab to explore the "
         f"change (serving {work_dir} on port {inner_port}, wrapped on port "
         f"{wrapper_port}). Run 'unpreview --slug {slug}' to tear it down.\n"
+        f"  drive its dockview (inspect/open/focus/split/...) with:\n"
+        f"  MINDS_WORKSPACE_SERVER_URL=http://127.0.0.1:{inner_port} python3 scripts/layout.py inspect\n"
     )
     return 0
 

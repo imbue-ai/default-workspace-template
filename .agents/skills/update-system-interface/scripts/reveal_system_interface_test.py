@@ -511,11 +511,17 @@ def test_preview_boots_the_work_dir_registers_and_records_state(tmp_path: Path) 
     assert reveal_mod.PREVIEW_WRAPPER_SCRIPT in wrapper_argv[1]
     assert "--inner-service" in wrapper_argv
     assert reveal_mod.PREVIEW_INNER_SERVICE_NAME in wrapper_argv
-    # Layout persistence is neutered (no MNGR_AGENT_ID) but discovery is kept.
+    # The preview drops MNGR_AGENT_ID (faithful, doesn't claim the live identity)
+    # but discovery is kept, and layout persistence is redirected to a throwaway
+    # dir under the preview's state so it can be inspected/rearranged without
+    # touching the live layout.json.
     env = spawner.detached_envs[0]
     assert "MNGR_AGENT_ID" not in env
     assert env["SYSTEM_INTERFACE_HOST"] == "127.0.0.1"
     assert env["SYSTEM_INTERFACE_PORT"]
+    assert env[reveal_mod.ENV_LAYOUT_DIR_OVERRIDE] == str(
+        reveal_mod._preview_state_dir(tmp_path, _SLUG) / reveal_mod.PREVIEW_LAYOUT_DIRNAME
+    )
     # Registered both the inner app and the user-facing wrapper as proxied services
     # (each ``forward_port ... --name <name> --url <url>`` argv carries the name).
     registered = runner.argvs_starting(*reveal_mod.FORWARD_PORT_CMD, "--name")
@@ -534,6 +540,25 @@ def test_preview_boots_the_work_dir_registers_and_records_state(tmp_path: Path) 
     assert state["work_dir"] == str(work_dir)
     assert isinstance(state["inner_port"], int)
     assert isinstance(state["wrapper_port"], int)
+
+
+def test_preview_prints_the_layout_endpoint_for_the_inner_port(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The success output hands the agent a ready-to-run layout.py command.
+
+    Driving the preview's dockview is done by pointing
+    ``MINDS_WORKSPACE_SERVER_URL`` at the inner port, so ``preview`` must surface
+    that port in a copy-pasteable form (it is also recorded in the state file).
+    """
+    work_dir = _make_work_dir(tmp_path)
+    code = _preview(_RecordingRunner(), _FakeHttp(_all_healthy), _FakeSpawner(), tmp_path, work_dir)
+    assert code == 0
+
+    inner_port = json.loads(_state_path(tmp_path).read_text())["inner_port"]
+    err = capsys.readouterr().err
+    assert f"MINDS_WORKSPACE_SERVER_URL=http://127.0.0.1:{inner_port}" in err
+    assert "scripts/layout.py" in err
 
 
 def test_preview_rejects_a_work_dir_without_the_app(tmp_path: Path) -> None:

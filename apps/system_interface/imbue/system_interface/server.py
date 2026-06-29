@@ -437,16 +437,34 @@ def _stream_subagent_events(agent_id: str, subagent_session_id: str) -> Response
 
 
 _LAYOUT_FILENAME = "layout.json"
+# Explicit override for the layout directory, taking precedence over the
+# MNGR_AGENT_ID-derived path. The pre-merge preview booted by the
+# ``update-system-interface`` skill sets this to a throwaway directory so it can
+# persist (and therefore ``inspect``) its own dockview layout without ever
+# writing the live workspace's ``layout.json``. See
+# ``reveal_system_interface.py``'s ``preview``.
+_LAYOUT_DIR_OVERRIDE_ENV_VAR = "SYSTEM_INTERFACE_LAYOUT_DIR"
 
 
 def _primary_agent_layout_dir() -> Path | None:
     """Return the workspace layout directory for this workspace's primary agent.
 
-    The system_interface always serves a single workspace (its own primary
-    agent); the layout lives at $MNGR_HOST_DIR/agents/<MNGR_AGENT_ID>/workspace_layout/.
-    Returns None if either env var is missing, which should only happen in
-    dev/test setups that don't care about persistence.
+    Resolution order:
+
+    1. ``SYSTEM_INTERFACE_LAYOUT_DIR`` -- an explicit directory that wins over
+       everything else. It decouples the layout location from the agent id so a
+       second instance (the pre-merge preview) can persist to a throwaway dir
+       instead of clobbering the live workspace's ``layout.json``.
+    2. Otherwise the per-agent path: the system_interface serves a single
+       workspace (its own primary agent), whose layout lives at
+       $MNGR_HOST_DIR/agents/<MNGR_AGENT_ID>/workspace_layout/.
+
+    Returns None if neither the override nor MNGR_AGENT_ID is set, which should
+    only happen in dev/test setups that don't care about persistence.
     """
+    override = os.environ.get(_LAYOUT_DIR_OVERRIDE_ENV_VAR, "")
+    if override:
+        return Path(override)
     agent_id = os.environ.get("MNGR_AGENT_ID", "")
     if not agent_id:
         return None
