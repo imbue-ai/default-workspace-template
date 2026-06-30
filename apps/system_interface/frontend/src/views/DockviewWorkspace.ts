@@ -182,6 +182,14 @@ const acknowledgedHighlightByAgent = loadStoredStringMap(HIGHLIGHT_ACK_STORAGE_K
 // re-surfaces a closed tab once.
 const lastOpenedKeyByAgent = new Map<string, string>();
 
+// In-memory: agent id -> the highlight key we last re-flashed an already-OPEN tab
+// for. surfaceHighlightedAgents() runs on every agents_updated event (~1/s), so
+// without this gate an unacknowledged highlighted tab would re-arm its flash on
+// every poll -- the tab would blink continuously rather than once per run. Gating
+// on the key flashes exactly once per genuinely new highlight. Reset per page
+// load, mirroring lastOpenedKeyByAgent.
+const lastFlashedKeyByAgent = new Map<string, string>();
+
 // In-memory: highlighted agents we have observed present at least once, so we can
 // detect when one is destroyed and close its now-dead tab. Scoped to highlighted
 // agents so a transient snapshot that briefly omits one of the user's own agents
@@ -679,15 +687,24 @@ function surfaceHighlightedAgents(): void {
     if (!shouldFlashHighlight(agent)) continue;
 
     if (openChatIds.has(agent.id)) {
-      // Tab already open -- re-blink it in place for this unacknowledged
-      // highlight (the callback no-ops if the user is currently viewing the tab).
-      reflashByAgentId.get(agent.id)?.();
+      // Tab already open -- re-blink it in place ONCE per new highlight key. This
+      // runs on every agents_updated poll, so without the key gate an
+      // unacknowledged tab would re-arm its flash every poll and blink
+      // continuously; we flash only when the agent produces a genuinely new
+      // highlight. (The callback also no-ops if the user is viewing the tab.)
+      if (lastFlashedKeyByAgent.get(agent.id) !== highlightKey(agent)) {
+        lastFlashedKeyByAgent.set(agent.id, highlightKey(agent));
+        reflashByAgentId.get(agent.id)?.();
+      }
     } else if (lastOpenedKeyByAgent.get(agent.id) !== highlightKey(agent)) {
       // Tab closed and we have not auto-opened it for this highlight yet -- open
       // it once, tabbed into the main chat group (where the initial chat lives)
       // so it shows up in the main window, not a separate/active split. Closing
-      // it will not re-open it until the agent produces a newer highlight.
+      // it will not re-open it until the agent produces a newer highlight. The
+      // freshly opened tab flashes once at render (createCustomTab), so record the
+      // key as flashed too, or the open branch above would flash it again next poll.
       lastOpenedKeyByAgent.set(agent.id, highlightKey(agent));
+      lastFlashedKeyByAgent.set(agent.id, highlightKey(agent));
       addChatPanel(agent.id, agent.name, mainChatGroup(agent.id), { inactive: true });
     }
   }
@@ -723,6 +740,7 @@ function pruneDestroyedHighlightTabs(): void {
     knownHighlightAgentIds.delete(agentId);
     // Allow a future agent (a new highlight) to re-surface and re-flash cleanly.
     lastOpenedKeyByAgent.delete(agentId);
+    lastFlashedKeyByAgent.delete(agentId);
   }
 }
 
