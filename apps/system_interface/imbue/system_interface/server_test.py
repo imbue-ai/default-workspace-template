@@ -4,6 +4,7 @@ import json
 import queue
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
 from flask import Flask
@@ -1078,3 +1079,33 @@ def test_non_image_path_falls_through_to_app_shell(client: FlaskClient, tmp_path
 
     assert response.status_code == 200
     assert "text/html" in response.content_type
+
+
+def test_serves_image_with_spaces_in_filename(client: FlaskClient, tmp_path: Path) -> None:
+    """A descriptive filename with spaces (percent-encoded in the URL) still serves.
+
+    The whole feature relies on the framework percent-decoding the catch-all path
+    before the handler reconstructs the on-disk path; pin that for a filename an
+    agent told to use 'descriptive' names could realistically produce.
+    """
+    image_path = tmp_path / "my chart 2026.png"
+    image_bytes = b"fake-png-bytes"
+    image_path.write_bytes(image_bytes)
+
+    response = client.get(quote(str(image_path)))
+
+    assert response.status_code == 200
+    assert response.content_type == "image/png"
+    assert response.data == image_bytes
+
+
+def test_serves_image_with_unicode_filename(client: FlaskClient, tmp_path: Path) -> None:
+    """A non-ASCII filename (percent-encoded in the URL) serves the right bytes."""
+    image_path = tmp_path / "gráfico.png"
+    image_bytes = b"fake-png-bytes"
+    image_path.write_bytes(image_bytes)
+
+    response = client.get(quote(str(image_path)))
+
+    assert response.status_code == 200
+    assert response.data == image_bytes
