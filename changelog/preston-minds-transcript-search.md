@@ -1,9 +1,8 @@
-- Added a `find-past-transcripts` skill so an agent can recover the chat history
-  of past agents the user refers to -- including agents that were destroyed. It
-  lists preserved transcripts via the Minds API (`GET /api/v1/workspaces/preserved`)
-  and reads any agent's transcript (`GET /api/v1/workspaces/<id>/transcript`),
-  reusing the `minds-api` skill's gateway/permission flow (`minds-workspaces-read`).
+- Added a `find-past-transcripts` skill: when an agent that ran on this workspace
+  host is destroyed (e.g. a sub-agent launched via `launch-task`, or an earlier
+  session), mngr preserves its conversation transcript locally on this host under
+  `/mngr/preserved/`. The skill finds and reads those (with `find`/`cat`/`jq`),
+  so an agent can recover the chat history of earlier agents on the same host.
 
-- Documented the two new transcript endpoints in the `minds-api` skill's read
-  section, and added a "Finding past work" note to `CLAUDE.md` so agents know by
-  default that earlier agents' chat history is preserved and retrievable.
+- Added a "Finding past work" note to `CLAUDE.md` so agents know by default that
+  earlier agents' transcripts on this host are preserved and where to find them.

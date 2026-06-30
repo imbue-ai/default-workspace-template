@@ -293,12 +293,13 @@ Use your judgment on when to do work directly vs delegating. Delegation is usefu
 
 # Finding past work
 
-When a past agent (workspace) is destroyed, the hub keeps a durable copy of its
-conversation transcript -- so the chat history of earlier agents is recoverable
-even after their hosts are gone. If the user refers to "old stuff" from a
+When an agent that ran on this host is destroyed (e.g. a sub-agent you launched
+via `launch-task`, or an earlier session), mngr keeps a copy of its conversation
+transcript on this host under `/mngr/preserved/`. So the chat history of earlier
+agents on this host is recoverable. If the user refers to "old stuff" from a
 previous agent (e.g. "what did the agent that set up auth do?", "find the chat
-where we discussed X"), use the `find-past-transcripts` skill to list those
-preserved agents and read any agent's transcript.
+where we worked on X"), use the `find-past-transcripts` skill to list those
+preserved agents and read their transcripts.
 
 # Self-modification
 

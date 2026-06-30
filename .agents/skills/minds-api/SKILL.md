@@ -104,18 +104,10 @@ the body only when that header is set).
 latchkey curl .../api/v1/workspaces | jq '.workspaces[] | {agent_id, name, host_state, provider_name}'
 latchkey curl .../api/v1/workspaces/<id>            # one workspace's detail
 latchkey curl .../api/v1/workspaces/<id>/version    # minds version + upgrade history
-latchkey curl .../api/v1/workspaces/preserved       # past agents whose transcripts were preserved on destroy
-latchkey curl .../api/v1/workspaces/<id>/transcript # a past or live agent's conversation transcript
 ```
 
 The listing includes destroyed-but-still-backed-up workspaces, so you can find
 an old workspace even after its host is gone.
-
-To find and read the **chat history** of a past agent (e.g. "what did the agent
-that set up auth do?"), use the dedicated **`find-past-transcripts` skill**: it
-covers `/workspaces/preserved` and `/workspaces/<id>/transcript` (both under
-this same `minds-workspaces-read` grant) and their `format`/`role`/`head`/`tail`
-filters.
 
 ### Create a new workspace (`minds-workspaces-create`)
 
