@@ -9,4 +9,11 @@ a line of whenever the user changes their mind. The file's existence is what mar
 Caretaker as introduced, and the user can edit it directly any time -- plain yes/no
 answers are all it needs. The `preferences.py` helper script is removed.
 
+Change the Caretaker's first night to show its value up front. Instead of only
+introducing itself and waiting for permission before looking, it now does one
+**look-only** scan on the very first night (it never changes anything that night),
+then introduces itself with what it found and asks whether to keep checking each
+night, fix small things on its own, or be switched off. From the second night on
+it still only scans once you've said yes.
+
 Also fix the in-workspace tab-blink, which flashed continuously. `surfaceHighlightedAgents()` runs on every discovery update (~10s poll) and re-armed the flash on any already-open, unacknowledged highlighted tab every time; it now gates the in-place re-flash on the highlight key, so a tab flashes once per genuinely new run. And simplify how the system interface gets labels: discovery already re-reads each agent's `data.json` into `certified_data` on every poll, so the snapshot carries current labels (including the per-run `highlight` bump) on its own -- the system interface now takes labels straight from the discovery event and drops the redundant local `data.json` re-read.
