@@ -16,6 +16,7 @@ import importlib.util
 import io
 import json
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -105,7 +106,17 @@ def test_happy_path_no_artifacts(tmp_path: Path) -> None:
     assert rc == 0
     argvs = [c.argv for c in runner.calls]
     assert argvs == [
-        ["mngr", "create", "demo-worker", "-t", "worker", "--label", "workspace=ws-1", "--label", "agent_created=true"],
+        [
+            "mngr",
+            "create",
+            "demo-worker",
+            "-t",
+            "worker",
+            "--label",
+            "workspace=ws-1",
+            "--label",
+            "agent_created=true",
+        ],
         [
             "mngr",
             "rsync",
@@ -451,7 +462,17 @@ def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
     argvs = [c.argv for c in runner.calls]
     expected_script = str(state_dir / "commands" / "common_transcript.sh")
     assert argvs == [
-        ["mngr", "create", "demo-worker", "-t", "worker", "--label", "workspace=ws-1", "--label", "agent_created=true"],
+        [
+            "mngr",
+            "create",
+            "demo-worker",
+            "-t",
+            "worker",
+            "--label",
+            "workspace=ws-1",
+            "--label",
+            "agent_created=true",
+        ],
         [
             "mngr",
             "rsync",
@@ -767,6 +788,91 @@ def test_main_await_missing_finish_report_path_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="finish_report_path"):
         create_worker_mod.main(_await_argv(task))
+
+
+# --- worker name round-trip (launch -> frontmatter -> await) --------------
+
+
+def test_launch_persists_worker_name_to_frontmatter(tmp_path: Path) -> None:
+    """launch records the worker name in the task frontmatter so a later await
+    can recover it from the task file alone (no directory-name guessing)."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        workspace="ws-1",
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert create_worker_mod._read_worker_name(task) == "demo-worker"
+    # Existing frontmatter and body survive (no YAML reflow).
+    assert create_worker_mod._read_frontmatter_field(task, "lead_agent") == "lead"
+    assert task.read_text().endswith("body\n")
+
+
+def test_read_worker_name_absent_returns_none(tmp_path: Path) -> None:
+    """A task file that never went through launch has no worker_name; await
+    then skips the shed check rather than guessing."""
+    task = tmp_path / "task.md"
+    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+
+    assert create_worker_mod._read_worker_name(task) is None
+
+
+def test_persist_worker_name_is_idempotent(tmp_path: Path) -> None:
+    """Re-recording the name rewrites the existing line rather than appending a
+    second one (so a re-launch can't leave a duplicate key)."""
+    task = tmp_path / "task.md"
+    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+
+    create_worker_mod._persist_worker_name(task, "first")
+    create_worker_mod._persist_worker_name(task, "second")
+
+    assert task.read_text().count("worker_name:") == 1
+    assert create_worker_mod._read_worker_name(task) == "second"
+
+
+def test_persist_worker_name_noops_without_frontmatter(tmp_path: Path) -> None:
+    """A task file with no frontmatter block is left untouched -- launch does
+    not validate or invent frontmatter (matching its no-abort contract), and
+    such a file can't be used with await anyway."""
+    task = tmp_path / "task.md"
+    original = "no frontmatter here, just a body\n"
+    task.write_text(original)
+
+    create_worker_mod._persist_worker_name(task, "demo-worker")
+
+    assert task.read_text() == original
+
+
+def test_worker_has_pending_shed_reflects_real_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_worker_has_pending_shed imports oom_priority for real (no swallowed
+    ImportError) and reflects a shed recorded in the ledger -- True only for the
+    worker whose own agent was shed."""
+    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path))
+    # No ledger yet: nothing is pending.
+    assert create_worker_mod._worker_has_pending_shed("demo-worker") is False
+
+    # Record a shed of this worker's own agent via oom_priority's own writer
+    # (the same module the kill hook uses -- no schema duplicated here).
+    src = create_worker_mod._oom_priority_src()
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+    from oom_priority.ledger import append_shed_record
+
+    append_shed_record(
+        pid=4321, comm="claude", agent_name="demo-worker", is_worker=True
+    )
+
+    assert create_worker_mod._worker_has_pending_shed("demo-worker") is True
+    assert create_worker_mod._worker_has_pending_shed("other-worker") is False
 
 
 @pytest.mark.parametrize(

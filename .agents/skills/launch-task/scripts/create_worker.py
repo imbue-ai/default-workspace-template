@@ -229,6 +229,58 @@ def _read_finish_report_path(task_file: Path) -> Path:
     return Path(value)
 
 
+def _read_worker_name(task_file: Path) -> str | None:
+    """Return the worker name ``launch`` recorded in the task frontmatter (see
+    ``_persist_worker_name``), or ``None`` if absent.
+
+    ``await`` uses this to watch the shed ledger for the right worker. When it
+    is absent (e.g. ``await`` was pointed at a task file that never went through
+    this script's ``launch``), the shed check is simply skipped and ``await``
+    falls back to plain timeout behaviour -- the same safe degradation as
+    before, but without ever guessing a wrong name from the directory layout.
+    """
+    return _read_frontmatter_field(task_file, "worker_name")
+
+
+def _persist_worker_name(task_file: Path, worker_name: str) -> None:
+    """Record the worker's mngr agent name in the task file's frontmatter.
+
+    The name is known for certain at launch (it is the ``mngr create <name>``
+    argument), so ``launch`` writes it here and ``await`` reads it back via
+    ``_read_worker_name``. This makes the name travel *with* the task file --
+    the same file ``await`` already parses for ``finish_report_path`` -- rather
+    than being re-derived from the runtime directory layout, which broke
+    silently whenever that layout drifted.
+
+    Idempotent and formatting-preserving: an existing ``worker_name`` line is
+    rewritten in place, otherwise a new line is inserted right after the opening
+    ``---`` fence. The rest of the frontmatter and the body are left unchanged
+    (no YAML round-trip), so the lead's authored task file is not reflowed.
+
+    No-ops when the file has no well-formed frontmatter block (no opening fence,
+    or an unterminated one): ``launch`` deliberately does not validate
+    frontmatter (that is the worker's job), and a task file without frontmatter
+    cannot be used with ``await`` anyway, so there is nothing for the name to be
+    read back from.
+    """
+    lines = task_file.read_text(encoding="utf-8").splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return
+    close_index = next(
+        (i for i in range(1, len(lines)) if lines[i].strip() == "---"), None
+    )
+    if close_index is None:
+        return
+    new_line = f"worker_name: {worker_name}\n"
+    for index in range(1, close_index):
+        if lines[index].strip().startswith("worker_name:"):
+            lines[index] = new_line
+            task_file.write_text("".join(lines), encoding="utf-8")
+            return
+    lines.insert(1, new_line)
+    task_file.write_text("".join(lines), encoding="utf-8")
+
+
 class Runner:
     """Indirection over ``subprocess.run`` so tests can intercept commands.
 
@@ -353,6 +405,12 @@ def launch(
         )
         return 2
 
+    # Record the worker name in the task frontmatter so a later ``await`` (a
+    # separate process that only gets ``--task-file``) can recover it without
+    # inferring it from the directory layout. Done before the syncs so the
+    # synced/sent task file already carries it.
+    _persist_worker_name(task_file, name)
+
     runner.run(
         [
             "mngr",
@@ -393,18 +451,27 @@ def launch(
     return 0
 
 
-def _worker_name_from_task_file(task_file: Path) -> str:
-    """Best-effort worker (mngr agent) name, from the task file's directory.
+def _oom_priority_src() -> Path:
+    """Path to the in-repo ``oom_priority`` package source.
 
-    Every flow stages the task at ``runtime/<flow>/<NAME>/task.md`` where
-    ``<NAME>`` is the worker's mngr agent name (launch passes the same ``<NAME>``
-    as both the directory and ``mngr create <NAME>``). So the parent directory
-    name is the worker name -- which is what lets ``await`` watch the shed ledger
-    for this worker even when the caller did not pass ``--name`` explicitly. If
-    the derived name is wrong it simply never matches a ledger record (no false
-    positive), so this is safe as a default.
+    ``oom_priority`` is a first-party, stdlib-only package that the OOM Claude
+    hooks reach by adding its ``src`` dir to ``sys.path`` (it is not a declared
+    dependency anywhere); this script does the same. We locate ``src`` by
+    walking up to the repo root -- the ancestor that contains
+    ``libs/oom_priority/src`` -- rather than counting a fixed number of parent
+    directories, so the lookup keeps working if this script is ever relocated
+    within the repo. Raises ``RuntimeError`` if it can't be found, since the
+    package is always present in the repo and its absence is a real
+    misconfiguration, not a condition to paper over.
     """
-    return task_file.resolve().parent.name
+    for ancestor in Path(__file__).resolve().parents:
+        candidate = ancestor / "libs" / "oom_priority" / "src"
+        if candidate.is_dir():
+            return candidate
+    raise RuntimeError(
+        f"could not locate libs/oom_priority/src above {Path(__file__).resolve()}"
+        " -- the launch-task script must run from within the template repo"
+    )
 
 
 def _worker_has_pending_shed(worker_name: str) -> bool:
@@ -412,20 +479,16 @@ def _worker_has_pending_shed(worker_name: str) -> bool:
     revived, per the shed ledger.
 
     Resolved through the ``oom_priority`` package (the same code the kill hook
-    and revival hook use), imported via a ``sys.path`` insert so it works whether
-    or not the package is installed in the active environment. If the package
-    can't be imported the check is skipped (await falls back to plain timeout
-    behaviour) -- a shed worker then simply surfaces as the normal timeout.
+    and revival hook use), imported via a ``sys.path`` insert. The package is
+    always present in the repo, so an import failure is a real misconfiguration
+    and is allowed to propagate rather than being swallowed into a misleading
+    "not shed" answer.
     """
-    try:
-        watchdog_src = (
-            Path(__file__).resolve().parents[4] / "libs" / "oom_priority" / "src"
-        )
-        if watchdog_src.is_dir() and str(watchdog_src) not in sys.path:
-            sys.path.insert(0, str(watchdog_src))
-        from oom_priority.ledger import has_pending_shed
-    except ImportError:
-        return False
+    src = _oom_priority_src()
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+    from oom_priority.ledger import has_pending_shed
+
     return has_pending_shed(worker_name)
 
 
@@ -681,11 +744,12 @@ def _run_await(args: argparse.Namespace) -> int:
     report_path = _read_finish_report_path(args.task_file)
     # Watch the shed ledger so a worker paused for memory pressure surfaces
     # promptly (and actionably) instead of as a silent 30-minute timeout. The
-    # worker name defaults to the task file's directory name (the
-    # runtime/<flow>/<NAME>/ convention) so this works even when the caller did
-    # not pass --name explicitly -- which a lead following the skill easily
-    # forgets. --name overrides when given.
-    worker_name = args.name or _worker_name_from_task_file(args.task_file)
+    # worker name comes from the task frontmatter, where ``launch`` recorded it
+    # (see ``_persist_worker_name``) -- so this works even when the caller did
+    # not pass --name explicitly, without inferring it from the directory
+    # layout. --name overrides when given; when neither is available the shed
+    # check is simply skipped (plain timeout behaviour).
+    worker_name = args.name or _read_worker_name(args.task_file)
     return await_report(
         report_path=report_path,
         timeout_seconds=args.timeout,
