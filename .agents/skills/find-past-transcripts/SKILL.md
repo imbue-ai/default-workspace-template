@@ -1,72 +1,59 @@
 ---
 name: find-past-transcripts
-description: "Use when the user refers to past work, an old conversation, or something a previous/earlier agent or workspace did -- including ones that were destroyed -- e.g. 'what did the agent that set up auth do', 'find the chat where we discussed X', 'pull up that old workspace's history'. Lists past agents whose transcripts were preserved and reads any agent's transcript through the Minds API."
-compatibility: Requires latchkey (the standard agent gateway) and curl. See the minds-api skill for the gateway/permission mechanics this skill builds on.
+description: "Use when the user refers to past work or an old conversation from an earlier agent that ran on this workspace -- e.g. 'what did the sub-agent that set up auth do', 'find the chat where we worked on X', 'pull up that earlier session'. Reads the preserved transcripts of agents that ran (and were destroyed) on THIS host from /mngr/preserved/."
+compatibility: Covers agents that ran on this host (sub-agents you launched, prior sessions). Uses find/cat/jq.
 ---
 
 # Find past transcripts
 
-When a Minds agent is destroyed, the hub keeps a durable copy of its
-conversation transcript even after the agent's host is gone. This skill lets you
-find that "old stuff" the user is referring to: list the past agents whose
-transcripts were preserved, then read any agent's transcript.
+When an agent that ran on **this** workspace host is destroyed -- a sub-agent you
+launched via the `launch-task` skill, a sibling agent, or an earlier session --
+mngr keeps a copy of its conversation transcript on this host under
+`/mngr/preserved/` (more precisely `$MNGR_HOST_DIR/preserved/`). This skill finds
+and reads those, so you can recover "old stuff" the user refers to.
 
-These two routes are part of the Minds API, reached the same way every other
-Minds API call is -- through the **latchkey gateway's `minds-api-proxy`**, using
-`latchkey curl` (never plain curl). They are gated by the same
-`minds-workspaces-read` permission used to list workspaces, so if you have not
-been granted it yet you will get a 403; see the **`minds-api` skill** for the
-gateway address, the permission table, and the `type: "workspace"` permission
-request flow (request `minds-workspaces-read`).
+**Scope:** this only covers agents that lived on **this** host. Agents from
+*other* workspaces are preserved on the user's machine, not here, and are not
+reachable from this skill.
 
-## 1. Find which past agents have a preserved transcript
+## 1. List the destroyed agents preserved on this host
 
 ```bash
-latchkey curl http://latchkey-self.invalid/minds-api-proxy/api/v1/workspaces/preserved \
-  | jq '.agents[] | {agent_name, agent_id, preserved_at}'
+ls -1t /mngr/preserved          # each entry is <agent_name>--<agent_id>, newest first
 ```
 
-Each entry has the agent's `agent_name`, its `agent_id`, and `preserved_at`
-(roughly when the agent was destroyed). The list is newest-first, so the most
-recently destroyed agents are at the top. Use the `agent_name` and timing to
-match the user's description ("the one that set up auth", "last week's
-workspace") to a specific `agent_id`.
+If `/mngr` isn't this host's mngr root, use `"$MNGR_HOST_DIR/preserved"` instead.
+Match the user's description to an agent by its `<agent_name>` and the directory's
+time (`ls -lt /mngr/preserved` -- the mtime is roughly when it was destroyed).
 
-This is the authoritative set of preserved transcripts on the hub -- it includes
-agents that are long gone from the live workspace list, which is exactly the
-"old stuff" you usually want.
-
-## 2. Read a chosen agent's transcript
+## 2. Find every preserved transcript on this host
 
 ```bash
-latchkey curl "http://latchkey-self.invalid/minds-api-proxy/api/v1/workspaces/<AGENT_ID>/transcript" \
-  | jq -r '.content'
+find /mngr/preserved -path '*/common_transcript/events.jsonl'
 ```
 
-The response has `agent_id`, `format`, `is_preserved` (true when it came from the
-destroyed-agent copy, false when read from a live agent), and `content` (the
-rendered transcript). It serves both destroyed agents (from the preserved copy)
-and live agents.
-
-Optional query params mirror `mngr transcript`, so you can keep large
-transcripts focused:
-
-- `format=human` (default), `json`, or `jsonl`
-- `role=user` / `role=assistant` / `role=tool` (repeatable) to filter by speaker
-- `head=N` or `tail=N` to take the first or last N events (not both)
+## 3. Read one (raw JSONL, one event per line)
 
 ```bash
-# Just the user messages, last 40 events, as JSONL:
-latchkey curl "http://latchkey-self.invalid/minds-api-proxy/api/v1/workspaces/<AGENT_ID>/transcript?role=user&tail=40&format=jsonl" \
-  | jq -r '.content'
+cat "/mngr/preserved/<agent_name>--<agent_id>/events/claude/common_transcript/events.jsonl"
+```
+
+## 4. Render it readably
+
+```bash
+F="/mngr/preserved/<agent_name>--<agent_id>/events/claude/common_transcript/events.jsonl"
+jq -r '
+  if .type=="user_message" then "USER: \(.content)"
+  elif .type=="assistant_message" then "ASSISTANT: \([.parts[]?|select(.type=="text").content]|join(" "))"
+  elif .type=="tool_result" then "TOOL(\(.tool_name)): \(.output[0:300])"
+  else .type end' "$F"
 ```
 
 ## Notes
 
-- An unknown `agent_id` (never preserved and not a live workspace) returns 404.
-- Reading a transcript is allowed under `minds-workspaces-read`, the same grant
-  that lets you list workspaces -- no separate permission. If the call is
-  rejected, file the `minds-workspaces-read` request per the `minds-api` skill
-  and retry once approved.
-- To find your *own* current agent id, see `$MNGR_AGENT_ID`; you rarely need it
-  here, since this skill is about *other*, past agents.
+- `<source>` in the path is the agent type (`claude`); the `events/*/...` glob in
+  step 2 covers other types.
+- `system-services--*` entries are infra agents and have no common transcript --
+  look at the named agents.
+- A transcript only exists if that agent actually produced one before it was
+  destroyed; a brand-new agent with no turns won't have one.
