@@ -728,7 +728,7 @@ def _render_default_scheduled_tasks_toml() -> str:
     task = tomlkit.table()
     task["name"] = "caretaker"
     task["schedule"] = "0 3 * * *"
-    task["command"] = "bash .agents/skills/caretaker/scripts/run_caretaker.sh"
+    task["command"] = "bash scripts/run_task_agent.sh caretaker --template caretaker"
     task["enabled"] = True
     task["catch_up"] = True
     task["description"] = (

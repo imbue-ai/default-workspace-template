@@ -71,7 +71,7 @@ export function isHiddenUserMessage(content: string): boolean {
   // The persistent Caretaker agent is seeded the same way: "/caretaker" on every
   // run (first and later). The caretaker skill is idempotent -- it self-detects the
   // first run and delivers the welcome then, otherwise it runs the nightly routine
-  // (see run_caretaker.sh). The trigger is hidden so the user's first visible
+  // (see scripts/run_task_agent.sh). The trigger is hidden so the user's first visible
   // message is always the Caretaker's own greeting, never the slash command that
   // produced it.
   const trimmed = content.trim();
