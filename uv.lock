@@ -33,7 +33,6 @@ members = [
     "mngr-cli-contract",
     "runtime-backup",
     "system-interface",
-    "telegram-bot",
     "tk-command-parsing",
     "web-server",
 ]
@@ -361,15 +360,19 @@ version = "0.1.0"
 source = { editable = "libs/browser" }
 dependencies = [
     { name = "browser-use", extra = ["core"] },
-    { name = "fastapi" },
-    { name = "uvicorn" },
+    { name = "flask" },
+    { name = "flask-sock" },
+    { name = "simple-websocket" },
+    { name = "werkzeug" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "browser-use", extras = ["core"], specifier = "==0.13.1" },
-    { name = "fastapi", specifier = ">=0.110" },
-    { name = "uvicorn", specifier = ">=0.29" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "flask-sock", specifier = ">=0.7" },
+    { name = "simple-websocket", specifier = ">=1.0" },
+    { name = "werkzeug", specifier = ">=3.0" },
 ]
 
 [[package]]
@@ -948,22 +951,6 @@ wheels = [
 ]
 
 [[package]]
-name = "fastapi"
-version = "0.138.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "annotated-doc" },
-    { name = "pydantic" },
-    { name = "starlette" },
-    { name = "typing-extensions" },
-    { name = "typing-inspection" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5b/58/ff455d9fe47c60abadb34b9e05a304b1f05f5ab8000ac01565156b6f5e43/fastapi-0.138.0.tar.gz", hash = "sha256:d445a4877636ad191e7053e08c9bf98cb921a6756776848400bb773d1740c061", size = 419240, upload-time = "2026-06-20T01:18:05.259Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/ff/8496d9847a5fedae775eb49460722d3efaa80487854273e9647ae876218c/fastapi-0.138.0-py3-none-any.whl", hash = "sha256:b6f54fd1bd72c80b0f899f172c61a600f6f7af9b43d4d772a018f35624048cb0", size = 126779, upload-time = "2026-06-20T01:18:03.483Z" },
-]
-
-[[package]]
 name = "fastuuid"
 version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1066,7 +1053,6 @@ dependencies = [
     { name = "litellm" },
     { name = "playwright" },
     { name = "runtime-backup" },
-    { name = "telegram-bot" },
     { name = "tk-command-parsing" },
     { name = "tomlkit" },
     { name = "web-server" },
@@ -1098,7 +1084,6 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.88.1" },
     { name = "playwright", specifier = "==1.58.0" },
     { name = "runtime-backup", editable = "libs/runtime_backup" },
-    { name = "telegram-bot", editable = "libs/telegram_bot" },
     { name = "tk-command-parsing", editable = "libs/tk_command_parsing" },
     { name = "tomlkit", specifier = ">=0.12" },
     { name = "web-server", editable = "libs/web_server" },
@@ -6595,17 +6580,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/46/58/8c37dea7bbf769b20
 wheels = [
     { url = "https://files.pythonhosted.org/packages/99/55/db07de81b5c630da5cbf5c7df646580ca26dfaefa593667fc6f2fe016d2e/tabulate-0.10.0-py3-none-any.whl", hash = "sha256:f0b0622e567335c8fabaaa659f1b33bcb6ddfe2e496071b743aa113f8774f2d3", size = 39814, upload-time = "2026-03-04T18:55:31.284Z" },
 ]
-
-[[package]]
-name = "telegram-bot"
-version = "0.1.0"
-source = { editable = "libs/telegram_bot" }
-dependencies = [
-    { name = "loguru" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "loguru", specifier = ">=0.7.0" }]
 
 [[package]]
 name = "tenacity"
