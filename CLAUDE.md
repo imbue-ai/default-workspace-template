@@ -291,6 +291,15 @@ Use your judgment on when to do work directly vs delegating. Delegation is usefu
 - Multi-file changes that benefit from verification before merging
 - Long-running operations you don't want to block on
 
+# Finding past work
+
+When a past agent (workspace) is destroyed, the hub keeps a durable copy of its
+conversation transcript -- so the chat history of earlier agents is recoverable
+even after their hosts are gone. If the user refers to "old stuff" from a
+previous agent (e.g. "what did the agent that set up auth do?", "find the chat
+where we discussed X"), use the `find-past-transcripts` skill to list those
+preserved agents and read any agent's transcript.
+
 # Self-modification
 
 You can (and should) modify your own configuration to improve yourself:
