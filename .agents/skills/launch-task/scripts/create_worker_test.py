@@ -323,10 +323,10 @@ def test_malformed_frontmatter_does_not_abort_launch(tmp_path: Path) -> None:
     ]
 
 
-def test_unresolved_lead_agent_resolved_from_env(
+def test_lead_agent_stamped_from_env_over_literal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A literal, unexpanded ``$MNGR_AGENT_NAME`` is rewritten to the launching
+    """A literal, unexpanded ``$MNGR_AGENT_NAME`` is replaced with the launching
     agent's real name so the worker has a valid address to send its report to."""
     runtime, task, _ = _make_layout(tmp_path)
     task.write_text("---\nlead_agent: $MNGR_AGENT_NAME\n---\n\nbody\n")
@@ -351,11 +351,60 @@ def test_unresolved_lead_agent_resolved_from_env(
     ]
 
 
+def test_lead_agent_env_overrides_resolved_file_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The launcher's own identity is authoritative: even a plain, resolved
+    file value is overwritten with MNGR_AGENT_NAME (the agent that polls for the
+    report). The file value is never trusted when the env names the launcher."""
+    runtime, task, _ = _make_layout(tmp_path)  # lead_agent: lead
+    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        workspace="ws-1",
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert "lead_agent: real-lead" in task.read_text()
+
+
+def test_lead_agent_injected_when_field_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A task file that omits lead_agent entirely still gets it filled in from
+    the environment -- authors no longer need to set it."""
+    runtime, task, _ = _make_layout(tmp_path)
+    task.write_text("---\nfinish_report_path: r/report.md\n---\n\nbody\n")
+    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        workspace="ws-1",
+        runner=runner,
+    )
+
+    assert rc == 0
+    body = task.read_text()
+    assert "lead_agent: real-lead" in body
+    assert "finish_report_path: r/report.md" in body  # sibling field preserved
+
+
 def test_unresolved_lead_agent_without_env_is_fatal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """If lead_agent is unresolved and the launcher cannot name itself, fail
-    before provisioning rather than launch an unaddressable worker."""
+    """If the launcher cannot name itself (no MNGR_AGENT_NAME) and the file value
+    is unresolved, fail before provisioning rather than launch an unaddressable
+    worker."""
     runtime, task, _ = _make_layout(tmp_path)
     task.write_text("---\nlead_agent: $MNGR_AGENT_NAME\n---\n\nbody\n")
     monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
@@ -375,13 +424,13 @@ def test_unresolved_lead_agent_without_env_is_fatal(
     assert "lead_agent is unresolved" in capsys.readouterr().err
 
 
-def test_resolved_lead_agent_left_untouched(
+def test_resolved_lead_agent_used_as_fallback_without_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A plain, author-set lead_agent is trusted and not overridden, even when
-    it differs from the launcher's own name."""
+    """Outside an mngr agent (no MNGR_AGENT_NAME), a plain author-set value is
+    accepted as a fallback so manual/test invocations still work."""
     runtime, task, _ = _make_layout(tmp_path)  # lead_agent: lead
-    monkeypatch.setenv("MNGR_AGENT_NAME", "someone-else")
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
