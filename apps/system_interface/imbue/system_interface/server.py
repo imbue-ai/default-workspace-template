@@ -35,6 +35,7 @@ from imbue.system_interface.app_context import get_state
 from imbue.system_interface.claude_auth import ClaudeAuthService
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.image_serving import try_serve_image
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
 from imbue.system_interface.layout_ops import is_broadcasting_op
@@ -173,6 +174,13 @@ def _index() -> Response:
 
 
 def _index_catch_all(path: str) -> Response:
+    # An agent-authored image is addressed by its absolute on-disk path, which
+    # lands here as a catch-all path; serve it (or 404) before falling through
+    # to the single-page-app shell. Non-image paths are client-side routes and
+    # render the app as before.
+    image_response = try_serve_image(path)
+    if image_response is not None:
+        return image_response
     return _index()
 
 
