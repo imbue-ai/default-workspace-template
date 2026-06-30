@@ -565,7 +565,7 @@ type = "claude"
 # a plain `claude` agent sharing the services agent's CLAUDE_CONFIG_DIR via the
 # inherited host env, but it is oriented by an appended system prompt to run the
 # `caretaker` skill. It is spawned (and re-woken) once a night by the scheduler
-# service via scripts/run_task_agent.sh (run_caretaker.sh wraps it), and is
+# service via scripts/run_task_agent.sh, and is
 # labelled task_agent=caretaker + highlight=<run-key> so it can be found as a
 # singleton and surfaced/re-flashed as a tab in the minds UI.
 [create_templates.caretaker]

@@ -21,7 +21,7 @@ agent-readable file and tracks each task's last run, so it can catch up on boot.
   [[task]]
   name = "caretaker"
   schedule = "0 3 * * *"                # standard 5-field cron
-  command = "bash .agents/skills/caretaker/scripts/run_caretaker.sh"
+  command = "bash scripts/run_task_agent.sh caretaker --template caretaker"
   enabled = true
   catch_up = true                       # run once on boot if missed during downtime
   description = "Nightly Caretaker run."
