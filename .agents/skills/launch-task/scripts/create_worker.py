@@ -246,18 +246,25 @@ def _set_frontmatter_field(text: str, key: str, value: str) -> str:
 
 
 def _ensure_lead_agent(task_file: Path) -> int | None:
-    """Make sure the task file names a real lead agent to send reports to.
+    """Stamp the launching agent as the report recipient in the task file.
 
-    The launching agent *is* the lead that polls for the worker's report, so
-    ``lead_agent`` must be its ``mngr`` name. Task files authored without shell
-    expansion can carry a literal ``$MNGR_AGENT_NAME`` (or omit the field),
-    which leaves the worker with no valid address -- it cannot rsync its report
-    back and the lead's poll waits forever. We detect that unresolved state and
-    substitute the launcher's real name from the environment.
+    The agent running ``launch`` *is* the lead that polls for the worker's
+    report, so its own ``MNGR_AGENT_NAME`` is the authoritative ``lead_agent`` --
+    we fill it in (overwriting whatever the file holds) from the environment
+    rather than trusting the task file. That frees task-file authors from setting
+    the field at all and eliminates a silent-failure class: a literal,
+    unexpanded ``$MNGR_AGENT_NAME`` (or a stale/omitted value) used to leave the
+    worker with no valid address, so it could not rsync its report back and the
+    lead's poll waited forever.
 
-    A value that already looks resolved (a plain name, no ``$``) is trusted and
-    left untouched. Returns exit code ``2`` when the value is unresolved but the
-    launcher cannot determine its own name; otherwise ``None``.
+    When ``MNGR_AGENT_NAME`` is unset -- i.e. ``launch`` is running outside an
+    mngr agent, as in a manual invocation or a test -- the file's existing value
+    is used as a fallback; an unresolved value (missing, blank, or an unexpanded
+    ``$...``) in that case is fatal (exit 2) rather than launching an
+    unaddressable worker.
+
+    Returns exit code ``2`` on unrecoverable misconfiguration; otherwise
+    ``None``.
     """
     try:
         frontmatter, _body = _split_frontmatter(task_file.read_text(encoding="utf-8"))
@@ -266,26 +273,28 @@ def _ensure_lead_agent(task_file: Path) -> int | None:
     if frontmatter is None:
         return None
     current = frontmatter.get("lead_agent")
+    lead_name = os.environ.get("MNGR_AGENT_NAME")
+    if lead_name:
+        if current == lead_name:
+            return None
+        fixed = _set_frontmatter_field(task_file.read_text(encoding="utf-8"), "lead_agent", lead_name)
+        task_file.write_text(fixed, encoding="utf-8")
+        print(
+            f"create_worker: set lead_agent to {lead_name!r} (was {current!r})",
+            file=sys.stderr,
+        )
+        return None
+    # No launcher identity in the environment: fall back to the file's own value.
     resolved = isinstance(current, str) and current.strip() and "$" not in current
     if resolved:
         return None
-    lead_name = os.environ.get("MNGR_AGENT_NAME")
-    if not lead_name:
-        print(
-            "create_worker: lead_agent is unresolved "
-            f"({current!r}) and MNGR_AGENT_NAME is unset -- the worker would have "
-            "no address to send its report to. Set lead_agent to the launching "
-            "agent's name in the task file.",
-            file=sys.stderr,
-        )
-        return 2
-    fixed = _set_frontmatter_field(task_file.read_text(encoding="utf-8"), "lead_agent", lead_name)
-    task_file.write_text(fixed, encoding="utf-8")
     print(
-        f"create_worker: resolved lead_agent to {lead_name!r} (was {current!r})",
+        "create_worker: lead_agent is unresolved "
+        f"({current!r}) and MNGR_AGENT_NAME is unset -- the worker would have no "
+        "address to send its report to.",
         file=sys.stderr,
     )
-    return None
+    return 2
 
 
 class Runner:
@@ -412,8 +421,9 @@ def launch(
         )
         return 2
 
-    # Resolve lead_agent before creating the worker so an unaddressable report
-    # path fails fast rather than after provisioning.
+    # Stamp the lead agent (this launcher) into the task file before creating
+    # the worker, so the report has a valid return address and an unaddressable
+    # case fails fast rather than after provisioning.
     lead_rc = _ensure_lead_agent(task_file)
     if lead_rc is not None:
         return lead_rc
