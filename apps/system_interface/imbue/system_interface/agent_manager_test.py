@@ -307,83 +307,37 @@ def test_handle_agent_discovered(agent_manager: AgentManager, broadcaster: WebSo
     assert msg["type"] == "agents_updated"
 
 
-def test_discovered_agent_labels_read_from_local_data_json(
-    agent_manager: AgentManager, tmp_path: Path
-) -> None:
-    """Labels missing from a discovery event are read from the agent's local data.json.
+def test_discovered_agent_labels_come_from_discovery(agent_manager: AgentManager) -> None:
+    """An agent's labels are taken straight from its discovery event.
 
-    ``mngr observe --discovery-only`` events carry no labels, so without this
-    fallback the web UI would never see ``caretaker`` / ``is_primary`` labels
-    and could not surface the auto-created Caretaker tab or hide the services
-    agent. mngr writes the labels to the agent's local state dir on create.
+    Discovery re-reads each agent's data.json into ``certified_data`` on every
+    poll (see DiscoveredAgent.labels), so the snapshot already carries current
+    labels -- including the ``highlight`` run-key that run_task_agent.sh bumps on
+    each task-agent run to re-flash its tab. The web UI keys its is_primary hiding
+    and its tab-blink off these, so they must pass straight through.
     """
-    agent_id = MngrAgentId()
-    # The discovery event carries no labels (certified_data has no "labels" key),
-    # exactly as `mngr observe --discovery-only` emits them.
     agent = DiscoveredAgent(
         host_id=HostId(),
-        agent_id=agent_id,
+        agent_id=MngrAgentId(),
         agent_name=MngrAgentName("caretaker"),
         provider_name=ProviderInstanceName("local"),
-        certified_data={"work_dir": "/tmp/work"},
-    )
-    data_dir = tmp_path / "agents" / str(agent_id)
-    data_dir.mkdir(parents=True)
-    (data_dir / "data.json").write_text(
-        json.dumps({"labels": {"caretaker": "true", "highlight": "1700000000"}})
+        certified_data={
+            "work_dir": "/tmp/work",
+            "labels": {"task_agent": "caretaker", "highlight": "1700000042", "workspace": "ws"},
+        },
     )
 
     agent_manager._handle_full_snapshot(make_full_discovery_snapshot_event([agent], []))
 
     agents = agent_manager.get_agents()
     assert len(agents) == 1
-    assert agents[0].labels == {"caretaker": "true", "highlight": "1700000000"}
+    assert agents[0].labels == {"task_agent": "caretaker", "highlight": "1700000042", "workspace": "ws"}
 
 
-def test_local_data_json_labels_win_over_stale_discovery_labels(
-    agent_manager: AgentManager, tmp_path: Path
-) -> None:
-    """Live data.json labels override stale create-time discovery labels.
-
-    Discovery ``certified_data`` labels are frozen at create, so the ``highlight``
-    run-key that run_task_agent.sh bumps on each task-agent run (via ``mngr
-    label``, which rewrites data.json) is stale in the discovery event. The web
-    UI's tab-blink keys off the *current* ``highlight``, so the snapshot handler
-    must surface data.json's value, not the frozen one -- otherwise a re-triggered
-    task agent never re-flashes its tab. This pins that the live value wins.
-    """
-    agent_id = MngrAgentId()
-    # Discovery carries the CREATE-TIME labels (highlight=1, the original run-key).
-    agent = DiscoveredAgent(
-        host_id=HostId(),
-        agent_id=agent_id,
-        agent_name=MngrAgentName("caretaker"),
-        provider_name=ProviderInstanceName("local"),
-        certified_data={"work_dir": "/tmp/work", "labels": {"task_agent": "caretaker", "highlight": "1"}},
-    )
-    # data.json holds the LIVE labels after a re-trigger bumped highlight to 2.
-    data_dir = tmp_path / "agents" / str(agent_id)
-    data_dir.mkdir(parents=True)
-    (data_dir / "data.json").write_text(
-        json.dumps({"labels": {"task_agent": "caretaker", "highlight": "2", "workspace": "ws"}})
-    )
-
-    agent_manager._handle_full_snapshot(make_full_discovery_snapshot_event([agent], []))
-
-    agents = agent_manager.get_agents()
-    assert len(agents) == 1
-    # The bumped highlight (2) wins over the stale certified one (1), and the
-    # data.json-only ``workspace`` label is still present.
-    assert agents[0].labels["highlight"] == "2"
-    assert agents[0].labels["workspace"] == "ws"
-    assert agents[0].labels["task_agent"] == "caretaker"
-
-
-def test_discovered_agent_without_local_data_json_has_empty_labels(
+def test_discovered_agent_with_no_labels_has_empty_labels(
     agent_manager: AgentManager,
 ) -> None:
-    """An agent with no local data.json (e.g. tracked on a remote host) keeps
-    empty labels rather than erroring."""
+    """An agent whose discovery event carries no labels gets empty labels (no error)."""
     agent = DiscoveredAgent(
         host_id=HostId(),
         agent_id=MngrAgentId(),
