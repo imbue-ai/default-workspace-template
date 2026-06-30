@@ -61,13 +61,9 @@ class RecordingMngrMessenger(MngrMessenger):
 def build_test_state(
     *,
     config: Config | None = None,
-    provider_names: tuple[str, ...] | None = None,
-    include_filters: tuple[str, ...] = (),
-    exclude_filters: tuple[str, ...] = (),
     agent_manager: AgentManager | None = None,
     claude_auth_service: ClaudeAuthService | None = None,
     welcome_resender: WelcomeResender | None = None,
-    http_client: httpx.Client | None = None,
     latchkey_http_client: httpx.Client | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
@@ -77,13 +73,17 @@ def build_test_state(
     so no `mngr observe` pipeline is spawned. The state's broadcaster is derived
     from the agent manager, so injecting `agent_manager` (often built with a fake
     `MngrMessenger`) repoints the broadcaster too.
+
+    Only the collaborators tests actually override are parameters; the agent
+    filters and the service-proxy http client (which no test substitutes) are
+    fixed to their production defaults inline.
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     return SystemInterfaceState(
         config=config if config is not None else Config(),
-        provider_names=provider_names,
-        include_filters=include_filters,
-        exclude_filters=exclude_filters,
+        provider_names=None,
+        include_filters=(),
+        exclude_filters=(),
         agent_manager=manager,
         event_queues=AgentEventQueues(),
         layout_mutex=LayoutMutex(),
@@ -94,7 +94,7 @@ def build_test_state(
             resolve_agent=manager.get_agent_info_by_id,
             send_message_fn=manager.send_message_to_agent,
         ),
-        http_client=http_client if http_client is not None else httpx.Client(follow_redirects=False, timeout=30.0),
+        http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
     )
 
