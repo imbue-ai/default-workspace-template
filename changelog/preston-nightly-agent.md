@@ -21,7 +21,8 @@ model, so the small custom scheduler is a net simplification.)
 **Scheduled agent tasks and the Caretaker.** A scheduled task can wake an agent
 that runs a skill on a cadence, in its own chat tab. `scripts/run_task_agent.sh
 <skill>` spawns a single persistent agent for that skill; on each run mngr clears
-its chat and re-sends `/<skill>` so the skill runs fresh in an empty conversation.
+the agent's session and re-sends `/<skill>` so the skill runs fresh, with no memory
+of the previous run.
 A new scheduled agent (e.g. a morning news digest) needs only a skill plus a
 scheduler entry -- no new agent template. The nightly **Caretaker** is the
 built-in instance: once a night it quietly checks the apps and services in your
@@ -31,9 +32,9 @@ plain, non-technical language. On its very first night it does one look-only sca
 (changing nothing), then introduces itself with what it found and asks whether to
 keep checking each night, fix small things on its own, or be switched off; from
 the second night on it scans only once you've opted in. It greets you each night
-before it starts, keeps the chat clean by starting each run fresh, and remembers
-your choices and what it saw on previous nights through its own notes on disk, not
-the conversation. Your standing permissions live in a single plain-language
+before it starts, runs each night from a fresh session (no memory of the prior
+run), and remembers your choices and what it saw on previous nights through its own
+notes on disk, not the conversation. Your standing permissions live in a single plain-language
 `runtime/caretaker/permissions.md` that the Caretaker reads each run and rewrites
 when you change your mind, and that you can edit yourself any time. You stay in
 full control: change when it runs, give it other regular chores, or switch it off

@@ -30,13 +30,13 @@
 #     message is `/<skill>`. A brand-new agent starts from an empty chat, so a
 #     self-detecting skill (like caretaker) can deliver a first-run welcome.
 #   - Agent already exists -> bump its run key (so the minds UI re-surfaces and
-#     re-flashes the tab if the user had closed it), send `/clear` to wipe the
-#     rendered chat, then send `/<skill>` to run again in the now-empty chat.
+#     re-flashes the tab if the user had closed it), send `/clear` to start a
+#     fresh session, then send `/<skill>` to run again with a clean context.
 #
-# `/clear` actually clears the rendered chat: the system interface renders only
-# the sessions at or after the most recent `/clear` boundary in the agent's
-# session history, so a clear makes the previous run's transcript disappear and
-# the new run starts from an empty chat.
+# `/clear` starts a new session, so the skill re-runs with no memory of the
+# previous run -- it re-detects first-run state, re-reads its own files, etc.
+# The clear resets the agent's context (what the next run reasons from), which
+# is what makes each run genuinely fresh.
 set -euo pipefail
 
 # ---- Arguments --------------------------------------------------------------
@@ -67,7 +67,7 @@ TASK_FILTER="labels.task_agent == \"${SKILL}\""
 RUN_MESSAGE="/${SKILL}"
 
 # Settle time (seconds) between sending /clear and the run trigger, so the clear
-# lands (and the new session boundary is recorded) before the run starts.
+# lands (the fresh session starts) before the run trigger.
 CLEAR_SETTLE_SECONDS=2
 
 log() { printf '%s run_task_agent[%s]: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SKILL" "$*"; }
