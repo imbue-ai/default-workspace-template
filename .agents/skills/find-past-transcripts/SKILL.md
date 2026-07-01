@@ -1,10 +1,15 @@
 ---
 name: find-past-transcripts
-description: "Use when the user refers to past work or an old conversation from an earlier agent that ran on this workspace -- e.g. 'what did the sub-agent that set up auth do', 'find the chat where we worked on X', 'pull up that earlier session'. Reads the preserved transcripts of agents that ran (and were destroyed) on THIS host from /mngr/preserved/."
+description: "Use whenever the user wants to recall, recover, or look up a PAST, earlier, previous, or DELETED chat / conversation / session / agent on this workspace -- e.g. 'what did I say in that chat I deleted', 'what did the sub-agent that set up auth do', 'find the conversation where we worked on X', 'pull up that earlier session', 'don't you remember what we discussed?'. Do NOT answer that you can't access other conversations: agents that ran on this host and were destroyed have their transcripts preserved locally under /mngr/preserved/, and this skill reads them. (This is for reading PAST/destroyed chats on THIS host; acting on OTHER live workspaces is the separate minds-api skill.)"
 compatibility: Covers agents that ran on this host (sub-agents you launched, prior sessions). Uses find/cat/jq.
 ---
 
 # Find past transcripts
+
+**Do not tell the user you can't see earlier or deleted conversations before you
+check `/mngr/preserved/`.** Agents that ran on this host and were destroyed leave
+their transcript behind locally, so past chats on this host are recoverable --
+refusing without looking is wrong.
 
 When an agent that ran on **this** workspace host is destroyed -- a sub-agent you
 launched via the `launch-task` skill, a sibling agent, or an earlier session --

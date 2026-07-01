@@ -295,11 +295,13 @@ Use your judgment on when to do work directly vs delegating. Delegation is usefu
 
 When an agent that ran on this host is destroyed (e.g. a sub-agent you launched
 via `launch-task`, or an earlier session), mngr keeps a copy of its conversation
-transcript on this host under `/mngr/preserved/`. So the chat history of earlier
-agents on this host is recoverable. If the user refers to "old stuff" from a
-previous agent (e.g. "what did the agent that set up auth do?", "find the chat
-where we worked on X"), use the `find-past-transcripts` skill to list those
-preserved agents and read their transcripts.
+transcript on this host under `/mngr/preserved/`. **Past and deleted chats on
+this host are therefore recoverable: never tell the user you can't access an
+earlier, previous, or deleted conversation without first checking
+`/mngr/preserved/`.** When the user asks about a past, earlier, or deleted chat
+or agent (e.g. "what did I say in that chat I deleted", "what did the agent that
+set up auth do?"), use the `find-past-transcripts` skill to list those preserved
+agents and read their transcripts.
 
 # Self-modification
 
