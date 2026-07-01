@@ -134,17 +134,19 @@ command = "sleep infinity && claude"
 # the "worker" agent type -- the default for delegated tasks
 [agent_types.worker]
 parent_type = "claude"
-# Set the OOM wrapper command explicitly here too, not only on [agent_types.claude].
-# Empirically, a worker created via `mngr create -t worker` launched plain claude
-# (its resolved command had base `claude`, so the wrapper never ran and the worker
-# sat at the default band) until this line was added -- and workers are the band
-# that must be shed first after subprocesses. NOTE: this is belt-and-suspenders,
-# not a fully-understood requirement -- resolve_agent_type() in isolation *does*
-# inherit the parent claude command to the worker child, so the live gap is
-# somewhere in the create/launch path we have not root-caused. Setting it here is
-# a reliable fix regardless. Verified live: with this line the worker's claude
-# sits at the worker band (600) and its Bash subprocesses at 900.
-# See scripts/claude_oom_launch.py.
+# Set the OOM wrapper command explicitly here too, not only on [agent_types.claude],
+# to work around an mngr config-load bug: a child agent type (worker's
+# parent_type = "claude") does NOT inherit the parent type's non-default `command`
+# through the real `mngr create` path, so a worker launched plain claude and never
+# got its band. Root cause: load_config() does a final MngrConfig.model_validate()
+# that re-marks every agent-type field as explicitly set, destroying the sparse
+# model_fields_set the layer merges preserve; resolve_agent_type()'s parent_type
+# inheritance then treats the worker's defaulted command ("claude") as set and
+# clobbers the inherited wrapper. (resolve_agent_type in isolation inherits fine --
+# only the full load path breaks it, which is why the existing inheritance test,
+# built via merge_with rather than load_config, does not catch it.) Verified live
+# in a staging container: with this line the worker's claude sits at the worker
+# band (600) and its Bash subprocesses at 900. See scripts/claude_oom_launch.py.
 command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_oom_launch.py"
 
 # --- Provider configurations ---
