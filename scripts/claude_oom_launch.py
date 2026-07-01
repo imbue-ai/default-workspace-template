@@ -11,12 +11,12 @@ Because it execs in place, the band-tagged process *is* the claude process (same
 pid -- ``oom_score_adj`` and the pid both survive ``execve``), so every
 subprocess claude later spawns inherits the agent band by default; the PreToolUse
 hook raises those subprocesses the rest of the way to the most-expendable band.
-This replaces the old SessionStart hook that had to crawl up the process tree to
-find the claude process after the fact -- here the process tags itself, so there
-is nothing to discover.
+Because the process tags itself at launch, the band is set before any subprocess
+exists -- the process that needs tagging is known directly, with no process tree
+to inspect.
 
-The user-vs-worker band comes from the agent's label, resolved from the same
-``MNGR_AGENT_NAME`` + host records the old hook used (see ``agent_identity``).
+The user-vs-worker band comes from the agent's label, resolved from
+``MNGR_AGENT_NAME`` + the host records (see ``agent_identity``).
 
 Tagging is best-effort: any failure (no writable ``/proc`` -- e.g. macOS -- or
 host records that can't classify the agent) is swallowed so it can never block

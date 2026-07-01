@@ -91,8 +91,8 @@ settings_overrides__extend = {model = "opus[1m]", fastMode = true}
 # base). Because it execs in place, the band-tagged process IS the claude
 # process and its subprocesses inherit the band -- so earlyoom sheds an agent's
 # subprocesses, then worker agents, then user agents, before any protected
-# service. This replaces the old SessionStart hook that crawled the process tree
-# to find the claude process after the fact. ${MNGR_AGENT_WORK_DIR:-.} mirrors
+# service. Tagging the band at launch sets the score before any subprocess is
+# spawned. ${MNGR_AGENT_WORK_DIR:-.} mirrors
 # the OOM Claude hooks' path form; the "main" type overrides command below so
 # its sleeping window-0 is unaffected.
 command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_oom_launch.py"
@@ -134,19 +134,12 @@ command = "sleep infinity && claude"
 # the "worker" agent type -- the default for delegated tasks
 [agent_types.worker]
 parent_type = "claude"
-# Set the OOM wrapper command explicitly here too, not only on [agent_types.claude],
-# to work around an mngr config-load bug: a child agent type (worker's
-# parent_type = "claude") does NOT inherit the parent type's non-default `command`
-# through the real `mngr create` path, so a worker launched plain claude and never
-# got its band. Root cause: load_config() does a final MngrConfig.model_validate()
-# that re-marks every agent-type field as explicitly set, destroying the sparse
-# model_fields_set the layer merges preserve; resolve_agent_type()'s parent_type
-# inheritance then treats the worker's defaulted command ("claude") as set and
-# clobbers the inherited wrapper. (resolve_agent_type in isolation inherits fine --
-# only the full load path breaks it, which is why the existing inheritance test,
-# built via merge_with rather than load_config, does not catch it.) Verified live
-# in a staging container: with this line the worker's claude sits at the worker
-# band (600) and its Bash subprocesses at 900. See scripts/claude_oom_launch.py.
+# Repeat the wrapper command here, not just on [agent_types.claude]: an mngr
+# config-load bug means a child type does not inherit the parent's non-default
+# `command`, so without this a worker launches plain claude and never gets its
+# band. (load_config's final model_validate re-marks every field as set, so the
+# parent_type merge sees the worker's defaulted command and clobbers the inherited
+# one; verified live.)
 command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_oom_launch.py"
 
 # --- Provider configurations ---

@@ -10,8 +10,8 @@ Start a background poll for the report file with `create_worker.py await`. It
 reads `finish_report_path` from the task file's frontmatter, blocks until that
 file appears, prints its contents, and exits 0; on timeout it exits non-zero
 (code 124). Run it with Bash's `run_in_background: true` so it returns the
-instant the report lands. Pass `--name <WORKER_NAME>` so the poll also watches
-the OOM shed ledger.
+instant the report lands. `--name <WORKER_NAME>` is required (the same name you
+passed to `launch`) so the poll also watches the OOM shed ledger.
 
 `await` is a generic poll-until-file primitive; the gate cycle below is this
 flow's *use* of it. Non-interactive callers that launch a tightly-scoped agent

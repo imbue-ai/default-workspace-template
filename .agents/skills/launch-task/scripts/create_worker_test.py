@@ -757,7 +757,7 @@ def test_read_finish_report_path_missing_raises(tmp_path: Path) -> None:
 
 
 def _await_argv(task_file: Path, extra: Sequence[str] = ()) -> list[str]:
-    return ["await", "--task-file", str(task_file), *extra]
+    return ["await", "--task-file", str(task_file), "--name", "demo", *extra]
 
 
 def test_main_await_prints_report(
@@ -790,64 +790,17 @@ def test_main_await_missing_finish_report_path_raises(tmp_path: Path) -> None:
         create_worker_mod.main(_await_argv(task))
 
 
-# --- worker name round-trip (launch -> frontmatter -> await) --------------
-
-
-def test_launch_persists_worker_name_to_frontmatter(tmp_path: Path) -> None:
-    """launch records the worker name in the task frontmatter so a later await
-    can recover it from the task file alone (no directory-name guessing)."""
-    runtime, task, _ = _make_layout(tmp_path)
-    runner = _RecordingRunner()
-
-    rc = create_worker_mod.launch(
-        name="demo-worker",
-        template="worker",
-        runtime_dir=runtime,
-        task_file=task,
-        workspace="ws-1",
-        runner=runner,
-    )
-
-    assert rc == 0
-    assert create_worker_mod._read_worker_name(task) == "demo-worker"
-    # Existing frontmatter and body survive (no YAML reflow).
-    assert create_worker_mod._read_frontmatter_field(task, "lead_agent") == "lead"
-    assert task.read_text().endswith("body\n")
-
-
-def test_read_worker_name_absent_returns_none(tmp_path: Path) -> None:
-    """A task file that never went through launch has no worker_name; await
-    then skips the shed check rather than guessing."""
+def test_main_await_requires_name(tmp_path: Path) -> None:
+    """await refuses to run without --name: the shed-ledger watch needs the
+    worker name, and it is the same name the caller already passed to launch."""
+    report = tmp_path / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("hi\n")
     task = tmp_path / "task.md"
-    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+    _write_await_task(task, report)
 
-    assert create_worker_mod._read_worker_name(task) is None
-
-
-def test_persist_worker_name_is_idempotent(tmp_path: Path) -> None:
-    """Re-recording the name rewrites the existing line rather than appending a
-    second one (so a re-launch can't leave a duplicate key)."""
-    task = tmp_path / "task.md"
-    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
-
-    create_worker_mod._persist_worker_name(task, "first")
-    create_worker_mod._persist_worker_name(task, "second")
-
-    assert task.read_text().count("worker_name:") == 1
-    assert create_worker_mod._read_worker_name(task) == "second"
-
-
-def test_persist_worker_name_noops_without_frontmatter(tmp_path: Path) -> None:
-    """A task file with no frontmatter block is left untouched -- launch does
-    not validate or invent frontmatter (matching its no-abort contract), and
-    such a file can't be used with await anyway."""
-    task = tmp_path / "task.md"
-    original = "no frontmatter here, just a body\n"
-    task.write_text(original)
-
-    create_worker_mod._persist_worker_name(task, "demo-worker")
-
-    assert task.read_text() == original
+    with pytest.raises(SystemExit):
+        create_worker_mod.main(["await", "--task-file", str(task)])
 
 
 def test_worker_has_pending_shed_reflects_real_ledger(

@@ -229,58 +229,6 @@ def _read_finish_report_path(task_file: Path) -> Path:
     return Path(value)
 
 
-def _read_worker_name(task_file: Path) -> str | None:
-    """Return the worker name ``launch`` recorded in the task frontmatter (see
-    ``_persist_worker_name``), or ``None`` if absent.
-
-    ``await`` uses this to watch the shed ledger for the right worker. When it
-    is absent (e.g. ``await`` was pointed at a task file that never went through
-    this script's ``launch``), the shed check is simply skipped and ``await``
-    falls back to plain timeout behaviour -- the same safe degradation as
-    before, but without ever guessing a wrong name from the directory layout.
-    """
-    return _read_frontmatter_field(task_file, "worker_name")
-
-
-def _persist_worker_name(task_file: Path, worker_name: str) -> None:
-    """Record the worker's mngr agent name in the task file's frontmatter.
-
-    The name is known for certain at launch (it is the ``mngr create <name>``
-    argument), so ``launch`` writes it here and ``await`` reads it back via
-    ``_read_worker_name``. This makes the name travel *with* the task file --
-    the same file ``await`` already parses for ``finish_report_path`` -- rather
-    than being re-derived from the runtime directory layout, which broke
-    silently whenever that layout drifted.
-
-    Idempotent and formatting-preserving: an existing ``worker_name`` line is
-    rewritten in place, otherwise a new line is inserted right after the opening
-    ``---`` fence. The rest of the frontmatter and the body are left unchanged
-    (no YAML round-trip), so the lead's authored task file is not reflowed.
-
-    No-ops when the file has no well-formed frontmatter block (no opening fence,
-    or an unterminated one): ``launch`` deliberately does not validate
-    frontmatter (that is the worker's job), and a task file without frontmatter
-    cannot be used with ``await`` anyway, so there is nothing for the name to be
-    read back from.
-    """
-    lines = task_file.read_text(encoding="utf-8").splitlines(keepends=True)
-    if not lines or lines[0].strip() != "---":
-        return
-    close_index = next(
-        (i for i in range(1, len(lines)) if lines[i].strip() == "---"), None
-    )
-    if close_index is None:
-        return
-    new_line = f"worker_name: {worker_name}\n"
-    for index in range(1, close_index):
-        if lines[index].strip().startswith("worker_name:"):
-            lines[index] = new_line
-            task_file.write_text("".join(lines), encoding="utf-8")
-            return
-    lines.insert(1, new_line)
-    task_file.write_text("".join(lines), encoding="utf-8")
-
-
 class Runner:
     """Indirection over ``subprocess.run`` so tests can intercept commands.
 
@@ -404,12 +352,6 @@ def launch(
             file=sys.stderr,
         )
         return 2
-
-    # Record the worker name in the task frontmatter so a later ``await`` (a
-    # separate process that only gets ``--task-file``) can recover it without
-    # inferring it from the directory layout. Done before the syncs so the
-    # synced/sent task file already carries it.
-    _persist_worker_name(task_file, name)
 
     runner.run(
         [
@@ -744,17 +686,14 @@ def _run_await(args: argparse.Namespace) -> int:
     report_path = _read_finish_report_path(args.task_file)
     # Watch the shed ledger so a worker paused for memory pressure surfaces
     # promptly (and actionably) instead of as a silent 30-minute timeout. The
-    # worker name comes from the task frontmatter, where ``launch`` recorded it
-    # (see ``_persist_worker_name``) -- so this works even when the caller did
-    # not pass --name explicitly, without inferring it from the directory
-    # layout. --name overrides when given; when neither is available the shed
-    # check is simply skipped (plain timeout behaviour).
-    worker_name = args.name or _read_worker_name(args.task_file)
+    # worker name is the same ``--name`` the caller passed to ``launch``, so it
+    # is a required argument here rather than something re-derived from the task
+    # file or the directory layout.
     return await_report(
         report_path=report_path,
         timeout_seconds=args.timeout,
         poll_interval_seconds=args.poll_interval,
-        worker_name=worker_name,
+        worker_name=args.name,
         pending_shed_check=_worker_has_pending_shed,
     )
 
@@ -830,10 +769,10 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
     )
     await_parser.add_argument(
         "--name",
-        default=None,
-        help="Worker name. Used to watch the shed ledger so a worker paused for "
-        "memory pressure is surfaced promptly (and actionably) instead of as a "
-        "silent timeout. Defaults to the task file's directory name.",
+        required=True,
+        help="Worker name (the same one passed to launch). Used to watch the "
+        "shed ledger so a worker paused for memory pressure is surfaced promptly "
+        "(and actionably) instead of as a silent timeout.",
     )
     await_parser.add_argument(
         "--timeout",

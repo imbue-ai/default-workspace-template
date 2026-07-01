@@ -36,3 +36,10 @@
   - An on-demand current-pressure check (reading `/proc/meminfo`) before reviving; for now revival follows the "revive at most once, twice-shed escalates" rule without a live pressure gate.
   - Auto-revive of shed agents once pressure clears, and any watcher that decides what to bring back; revival stays user-driven.
   - A sustained-pressure duration gate (earlyoom acts on instantaneous pressure), whole-process-group kills (`-g`), and container-death recovery for headless deployments — the outer host-restart tier already covers container death where a UI is attached.
+
+## Follow-ups (post-implementation notes)
+
+The sections above are the plan as originally written. This records where the shipped implementation diverged from it:
+
+- **Agent band tagging moved from a SessionStart hook to the launch command.** The plan (see "Self-tag at startup" and "Agent labels") tagged an agent's own process via a SessionStart hook. As built, the agent tags itself in a launch wrapper (`scripts/claude_oom_launch.py`) set as the `claude`/`worker` agent types' `command` in `.mngr/settings.toml`: it sets its own `oom_score_adj`, registers its pid, then `exec`s the real `claude` in place. Because the band is set at launch rather than at session start, it is in effect before any subprocess is spawned, and there is no need to locate the claude process after the fact. The revival-notice injection (see "Revival notice") remains a SessionStart hook. See `libs/oom_priority/README.md` for the current design.
+- **The wrapper `command` is set on both the `claude` and `worker` agent types.** The `worker` type repeats it rather than inheriting from `claude` because an mngr config-load quirk makes `parent_type` inheritance treat a child's defaulted `command` as explicitly set, clobbering the parent's value; setting it on both types is the reliable fix. See the README for details.

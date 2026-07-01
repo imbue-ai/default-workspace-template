@@ -24,7 +24,8 @@ into one of a few bands.
   handed only a pid that is already gone).
 - **`ledger`** -- the append-only shed ledger and the revival-notice bookkeeping.
 
-Tagging happens at three startup points, none of which re-scans the process tree:
+Tagging happens at three startup points, each setting a process's band directly
+without inspecting the process tree:
 
 | What | When | Band | Set by |
 |---|---|---|---|
@@ -44,7 +45,7 @@ the parent's value. The config resolver inherits correctly in isolation -- only
 the full load path breaks it -- so a worker without this line launches plain
 claude and never gets its band. Setting it on both types is the reliable fix.)
 Because the band and pid survive `execve`, the tagged process *is* the claude
-process -- no after-the-fact ancestor crawl needed. A subprocess inherits its
+process, so its band is set before any subprocess exists. A subprocess inherits its
 agent's band by default; the PreToolUse hook raises it the rest of the way so a
 runaway build/test/browser is always shed first.
 
