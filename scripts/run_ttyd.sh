@@ -97,7 +97,21 @@ fi
 if [ -n "$TERMINAL_ID" ] && [ -n "${MNGR_AGENT_STATE_DIR:-}" ]; then
     CLIENTS_DIR="$MNGR_AGENT_STATE_DIR/commands/ttyd/clients"
     mkdir -p "$CLIENTS_DIR"
-    tty > "$CLIENTS_DIR/$TERMINAL_ID" 2>/dev/null || true
+    MY_TTY="$(tty 2>/dev/null || true)"
+    if [ -n "$MY_TTY" ]; then
+        # This pty now authoritatively belongs to this terminal id. Drop any
+        # stale mapping that still points at the same pty: Linux reuses a pty
+        # number after a client disconnects, so a since-closed tab's leftover
+        # file could otherwise shadow this one and misroute title updates to a
+        # closed tab (the resolver returns the first matching entry).
+        for existing in "$CLIENTS_DIR"/*; do
+            [ -f "$existing" ] || continue
+            if [ "$(cat "$existing" 2>/dev/null)" = "$MY_TTY" ]; then
+                rm -f "$existing"
+            fi
+        done
+        printf '%s\n' "$MY_TTY" > "$CLIENTS_DIR/$TERMINAL_ID" 2>/dev/null || true
+    fi
 fi
 
 WORKDIR_ARGS=()
