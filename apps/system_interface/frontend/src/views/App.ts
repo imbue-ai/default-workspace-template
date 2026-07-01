@@ -2,6 +2,14 @@ import m from "mithril";
 import { DockviewWorkspace } from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
 import { isLoginModalOpen, closeLoginModal } from "../models/ClaudeAuth";
+import { InspirationPublishModal } from "./InspirationPublishModal";
+import { GitHubLoginModal } from "./GitHubLoginModal";
+import {
+  getInspirationProposal,
+  getInspirationProposalSlug,
+  closeInspirationModal,
+} from "../models/InspirationPublish";
+import { isGitHubLoginModalOpen, closeGitHubLoginModal } from "../models/GitHubAuth";
 
 export function App(): m.Component {
   return {
@@ -13,6 +21,21 @@ export function App(): m.Component {
         // app-level instance driven by global auth state -- not one per
         // ChatPanel. It opens when any agent surfaces an auth-error.
         isLoginModalOpen() ? m(ClaudeLoginModal, { onDismiss: closeLoginModal }) : null,
+        // GitHub-login modal: single app-level singleton, opened by the
+        // `github_auth_required` broadcast (mirrors the Claude modal).
+        isGitHubLoginModalOpen() ? m(GitHubLoginModal, { onDismiss: closeGitHubLoginModal }) : null,
+        // Inspiration publish modal: keyed by proposal slug so a superseding
+        // proposal (new slug) forces a fresh instance that re-prefills its form.
+        getInspirationProposal()
+          ? m(InspirationPublishModal, {
+              // The modal only renders when a proposal is present, so the slug
+              // is always a string here; coerce the nullable accessor to
+              // `undefined` to satisfy mithril's `key: string | number`.
+              key: getInspirationProposalSlug() ?? undefined,
+              proposal: getInspirationProposal()!,
+              onDismiss: () => closeInspirationModal(getInspirationProposalSlug()),
+            })
+          : null,
       ]);
     },
   };

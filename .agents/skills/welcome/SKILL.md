@@ -41,3 +41,11 @@ Here are some popular ways people get started with Minds. Pick whichever fits, a
 4. **Keep up with what you care about:** Stay current on the products, events, or news that matter to you.
 
 ---
+
+## Inspiration for this mind
+
+The region between the two markers below is machine-rewritten when a mind is published as an inspiration; the markers themselves are never moved or removed, and nothing outside them is touched. On the template path (a new mind created from an inspiration repo), read the region to learn which inspiration to adapt, then drive the adaptation via the `use-inspiration` skill.
+
+<!-- INSPIRATION:BEGIN -->
+No inspiration is present in this mind yet. This is the default template state.
+<!-- INSPIRATION:END -->

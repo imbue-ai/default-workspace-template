@@ -23,6 +23,8 @@ from imbue.concurrency_group.subprocess_utils import run_local_command_modern_ve
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.system_interface import claude_auth_endpoints
+from imbue.system_interface import github_auth_endpoints
+from imbue.system_interface import inspiration_endpoints
 from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
@@ -35,6 +37,8 @@ from imbue.system_interface.app_context import get_state
 from imbue.system_interface.claude_auth import ClaudeAuthService
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.github_auth import GitHubAuthService
+from imbue.system_interface.inspiration import InspirationService
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
 from imbue.system_interface.layout_ops import is_broadcasting_op
@@ -896,6 +900,8 @@ def create_application(
     agent_manager: AgentManager | None = None,
     claude_auth_service: ClaudeAuthService | None = None,
     welcome_resender: WelcomeResender | None = None,
+    inspiration_service: InspirationService | None = None,
+    github_auth_service: GitHubAuthService | None = None,
     http_client: httpx.Client | None = None,
     latchkey_http_client: httpx.Client | None = None,
 ) -> Flask:
@@ -951,6 +957,8 @@ def create_application(
             resolve_agent=resolved_agent_manager.get_agent_info_by_id,
             send_message_fn=resolved_agent_manager.send_message_to_agent,
         ),
+        inspiration_service=inspiration_service or InspirationService(broadcast=broadcaster.broadcast),
+        github_auth_service=github_auth_service or GitHubAuthService(),
         http_client=resolved_http_client,
         latchkey_http_client=resolved_latchkey_http_client,
         is_agent_manager_owned=is_agent_manager_owned,
@@ -982,6 +990,8 @@ def create_application(
     application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
     claude_auth_endpoints.register_routes(application)
+    inspiration_endpoints.register_routes(application)
+    github_auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(
