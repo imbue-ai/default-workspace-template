@@ -2752,3 +2752,57 @@ body {
   height: 32px;
   animation: claude-login-spin 800ms linear infinite;
 }
+
+/* ── Inline image lightbox ── */
+
+/* Inline chat images fit the message column and invite a click to enlarge. */
+.markdown-content img {
+  max-width: 100%;
+  height: auto;
+  cursor: zoom-in;
+}
+
+.image-lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem;
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.image-lightbox-img {
+  max-width: 95vw;
+  max-height: 82vh;
+  object-fit: contain;
+  border-radius: var(--radius-base);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+.image-lightbox-toolbar {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.image-lightbox-btn {
+  padding: 6px 16px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  background: #1e293b;
+  color: white;
+}
+
+.image-lightbox-btn:hover {
+  background: #334155;
+}
