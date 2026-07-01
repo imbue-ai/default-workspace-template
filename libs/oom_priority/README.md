@@ -35,11 +35,14 @@ Tagging happens at three startup points, none of which re-scans the process tree
 The agent's main process tags *itself*: the `claude` and `worker` agent types'
 `command` (in `.mngr/settings.toml`) runs `scripts/claude_oom_launch.py`, which
 sets its own `oom_score_adj` to the agent band, records its pid, then `exec`s
-claude in place. (Both the `claude` and `worker` types set the command; the
-`worker` type repeats it because, empirically, a worker launched plain claude
-without it -- the launch/create path did not carry the inherited command through,
-though the config resolver inherits it in isolation, so the exact gap is not fully
-root-caused. Setting it on both types is the reliable fix.)
+claude in place. (Both the `claude` and `worker` types set the command. The
+`worker` type has to repeat it rather than inherit it from `claude` because of an
+mngr config-load bug: `load_config` ends with a `MngrConfig.model_validate` that
+re-marks every agent-type field as explicitly set, so `resolve_agent_type`'s
+`parent_type` inheritance treats a child's defaulted `command` as set and clobbers
+the parent's value. The config resolver inherits correctly in isolation -- only
+the full load path breaks it -- so a worker without this line launches plain
+claude and never gets its band. Setting it on both types is the reliable fix.)
 Because the band and pid survive `execve`, the tagged process *is* the claude
 process -- no after-the-fact ancestor crawl needed. A subprocess inherits its
 agent's band by default; the PreToolUse hook raises it the rest of the way so a
