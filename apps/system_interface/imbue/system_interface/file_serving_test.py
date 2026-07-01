@@ -1,9 +1,9 @@
-"""Unit tests for the image-path classification used by the chat image route."""
+"""Unit tests for the path classification used by the chat file route."""
 
 import pytest
 
-from imbue.system_interface.image_serving import image_mime_type_for_path
-from imbue.system_interface.image_serving import try_serve_image
+from imbue.system_interface.file_serving import image_mime_type_for_path
+from imbue.system_interface.file_serving import try_serve_file
 
 
 @pytest.mark.parametrize(
@@ -39,6 +39,7 @@ def test_non_image_paths_have_no_mime_type(url_path: str) -> None:
     assert image_mime_type_for_path(url_path) is None
 
 
-def test_try_serve_image_returns_none_for_non_image_path() -> None:
-    """Non-image paths yield None so the catch-all falls through to the app shell."""
-    assert try_serve_image("agent/some-client-route") is None
+def test_try_serve_file_returns_none_for_nonexistent_non_image_path() -> None:
+    """A non-image path with no file behind it yields None so the catch-all falls
+    through to the app shell (client-side routing is preserved)."""
+    assert try_serve_file("agent/some-client-route-that-does-not-exist") is None
