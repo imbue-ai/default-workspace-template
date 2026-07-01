@@ -1028,8 +1028,11 @@ async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise
   let sessionName: string;
   try {
     sessionName = await allocateTerminalName();
-  } catch {
-    // Allocation failed (backend unreachable); nothing to open.
+  } catch (e) {
+    // Allocation failed (backend unreachable); surface it rather than leaving
+    // the "New terminal" click with no visible effect (matches the alert used
+    // by the other terminal/agent actions in this file).
+    alert(`Failed to open terminal: ${(e as Error).message}`);
     return;
   }
   addTerminalPanel(sessionName, { targetGroup });
