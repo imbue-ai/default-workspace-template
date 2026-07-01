@@ -32,9 +32,12 @@ Tagging happens at three startup points, none of which re-scans the process tree
 | an agent's main process | launch | user / worker agent | `scripts/claude_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `scripts/claude_oom_tag_subprocess.py` (PreToolUse) |
 
-The agent's main process tags *itself*: the claude agent type's `command` (in
-`.mngr/settings.toml`) runs `scripts/claude_oom_launch.py`, which sets its own
-`oom_score_adj` to the agent band, records its pid, then `exec`s claude in place.
+The agent's main process tags *itself*: the `claude` and `worker` agent types'
+`command` (in `.mngr/settings.toml`) runs `scripts/claude_oom_launch.py`, which
+sets its own `oom_score_adj` to the agent band, records its pid, then `exec`s
+claude in place. (The `worker` type repeats the command rather than inheriting it
+from `claude` -- mngr's parent_type merge lets a child's defaulted command win,
+so a child type that does not set `command` itself launches plain claude.)
 Because the band and pid survive `execve`, the tagged process *is* the claude
 process -- no after-the-fact ancestor crawl needed. A subprocess inherits its
 agent's band by default; the PreToolUse hook raises it the rest of the way so a
