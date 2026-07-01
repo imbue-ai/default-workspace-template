@@ -3,8 +3,7 @@
   `terminal-2`, ...), so a terminal survives closing the tab, reloading the
   workspace, and restarting the ttyd service. Only a container/host restart
   clears it (the tmux server is in-memory); a restored tab then reattaches, or
-  comes back as a fresh shell with a one-line "was reset" notice if the session
-  is gone.
+  comes back as a fresh shell if the session is gone.
 
 - tmux is the source of truth: any session not prefixed with `MNGR_PREFIX`
   ("mngr-") is a user terminal and appears in the tab "+" menu to reattach to;

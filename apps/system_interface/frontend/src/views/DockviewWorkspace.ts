@@ -991,7 +991,7 @@ function getOpenTerminalSessionNames(): Set<string> {
  *  ``terminal:<hash>`` ref) is preserved. */
 function addTerminalPanel(
   sessionName: string,
-  options: { panelId?: string; isRestore: boolean; targetGroup?: DockviewGroupPanel | null },
+  options: { panelId?: string; targetGroup?: DockviewGroupPanel | null },
 ): string | null {
   if (!dockview) return null;
   const panelId = options.panelId ?? terminalPanelId(sessionName);
@@ -1001,7 +1001,7 @@ function addTerminalPanel(
     return panelId;
   }
   const terminalId = mintTerminalId();
-  const url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir(), options.isRestore);
+  const url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
   const params: PanelParams = {
     panelType: "iframe",
     agentId: getPrimaryAgentId(),
@@ -1032,12 +1032,12 @@ async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise
     // Allocation failed (backend unreachable); nothing to open.
     return;
   }
-  addTerminalPanel(sessionName, { isRestore: false, targetGroup });
+  addTerminalPanel(sessionName, { targetGroup });
 }
 
 /** "+" menu: reattach a tab to an already-running terminal session. */
 function reattachTerminal(sessionName: string, targetGroup?: DockviewGroupPanel | null): void {
-  addTerminalPanel(sessionName, { isRestore: false, targetGroup });
+  addTerminalPanel(sessionName, { targetGroup });
 }
 
 /** Dedup-then-add for a ``service:``, ``chat:``, or ``https://`` ref.
@@ -1098,7 +1098,7 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
         if (!stored) return;
         stored.terminalSessionName = sessionName;
         stored.title = sessionName;
-        stored.url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir(), false);
+        stored.url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
         dockview?.panels.find((p) => p.id === panelId)?.api.setTitle(sessionName);
         m.redraw();
         scheduleSave();
@@ -2242,15 +2242,16 @@ function initializeDockview(parentElement: HTMLElement): void {
       for (const [id, params] of Object.entries(saved.panelParams)) {
         panelParams.set(id, params);
       }
-      // Rebuild each restored terminal's ttyd url with a fresh per-tab id and
-      // the restore flag, so the ttyd ``session`` dispatch reattaches to the
-      // live tmux session -- or recreates it with a "container restarted"
-      // notice if the tmux server was torn down since the layout was saved.
+      // Rebuild each restored terminal's ttyd url with a fresh per-tab id, so
+      // the ttyd ``session`` dispatch reattaches to the live tmux session -- or
+      // recreates it as a fresh shell if the tmux server was torn down since the
+      // layout was saved (e.g. a container restart). The fresh id keeps the
+      // pty->tab mapping (for live title tracking) accurate for this connection.
       // Done before ``fromJSON`` so the terminal renderer mounts on the new url.
       for (const [, params] of panelParams) {
         if (params.terminalSessionName) {
           params.terminalId = mintTerminalId();
-          params.url = buildSessionTerminalUrl(params.terminalSessionName, params.terminalId, primaryWorkDir(), true);
+          params.url = buildSessionTerminalUrl(params.terminalSessionName, params.terminalId, primaryWorkDir());
         }
       }
       try {

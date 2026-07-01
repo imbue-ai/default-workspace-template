@@ -2,9 +2,8 @@
   `system_interface` changelog for the user-facing feature). Root-level pieces:
 
 - `scripts/run_ttyd.sh` now writes a `session.sh` ttyd dispatch that attaches
-  to (or creates) a named tmux session per terminal tab, records the tab's pty
-  for live title tracking, and prints a reset notice when a restored tab's
-  session is gone.
+  to (or creates) a named tmux session per terminal tab and records the tab's
+  pty for live title tracking.
 
 - `scripts/terminal_tmux.conf` (new, sourced from `~/.tmux.conf` via
   `.mngr/settings.toml`) raises tmux `history-limit` to 10000, sets

@@ -348,22 +348,16 @@ const TERMINAL_SERVICE_URL_PATH = "/service/terminal/";
  *  ``session`` dispatch key. The ttyd dispatch reads the args positionally:
  *  ``$1`` ("_"), ``$2`` ("session"), ``$3`` (session name), ``$4`` (per-tab id
  *  used for live title tracking), ``$5`` (working dir for a fresh session;
- *  empty falls back to $HOME), ``$6`` ("restore" on layout restore, else
- *  empty). ``new-session -A`` attaches if the session exists and creates it
- *  otherwise, which is what makes these terminals persistent in memory. */
-export function buildSessionTerminalUrl(
-  sessionName: string,
-  terminalId: string,
-  workdir: string,
-  isRestore: boolean,
-): string {
+ *  empty falls back to $HOME). ``new-session -A`` attaches if the session
+ *  exists and creates it otherwise, which is what makes these terminals
+ *  persistent in memory. */
+export function buildSessionTerminalUrl(sessionName: string, terminalId: string, workdir: string): string {
   const params = new URLSearchParams();
   params.append("arg", "_");
   params.append("arg", "session");
   params.append("arg", sessionName);
   params.append("arg", terminalId);
   params.append("arg", workdir);
-  params.append("arg", isRestore ? "restore" : "");
   return `${TERMINAL_SERVICE_URL_PATH}?${params.toString()}`;
 }
 

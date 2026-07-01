@@ -10,23 +10,21 @@ function parseArgs(url: string): string[] {
 
 describe("buildSessionTerminalUrl", () => {
   it("emits the positional args in ttyd dispatch order", () => {
-    const url = buildSessionTerminalUrl("terminal-1", "term-abc", "/mngr/code", false);
+    const url = buildSessionTerminalUrl("terminal-1", "term-abc", "/mngr/code");
     expect(url.startsWith("/service/terminal/?")).toBe(true);
-    expect(parseArgs(url)).toEqual(["_", "session", "terminal-1", "term-abc", "/mngr/code", ""]);
+    expect(parseArgs(url)).toEqual(["_", "session", "terminal-1", "term-abc", "/mngr/code"]);
   });
 
-  it("sets 'restore' as the final arg only on restore", () => {
-    const fresh = buildSessionTerminalUrl("terminal-2", "term-xyz", "", false);
-    const restored = buildSessionTerminalUrl("terminal-2", "term-xyz", "", true);
-    expect(parseArgs(fresh)[5]).toBe("");
-    expect(parseArgs(restored)[5]).toBe("restore");
+  it("omits the working directory arg as empty when none is given", () => {
+    const url = buildSessionTerminalUrl("terminal-2", "term-xyz", "");
+    expect(parseArgs(url)).toEqual(["_", "session", "terminal-2", "term-xyz", ""]);
   });
 
   it("percent-encodes special characters but round-trips the original values", () => {
-    const url = buildSessionTerminalUrl("my term", "id", "/a b/c", false);
+    const url = buildSessionTerminalUrl("my term", "id", "/a b/c");
     // The raw query must not carry literal spaces...
     expect(url).not.toContain(" ");
     // ...but decoding recovers the exact session name and workdir.
-    expect(parseArgs(url)).toEqual(["_", "session", "my term", "id", "/a b/c", ""]);
+    expect(parseArgs(url)).toEqual(["_", "session", "my term", "id", "/a b/c"]);
   });
 });

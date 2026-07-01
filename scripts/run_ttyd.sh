@@ -76,12 +76,15 @@ WORKDIR_SCRIPT
 #   $2 = terminal id  (per-tab id used to map this ttyd client's pty back to
 #                      the dockview tab for live tab-title tracking; may be "")
 #   $3 = working directory to anchor a newly-created session in (may be "")
-#   $4 = "restore" when reopening a tab from a saved layout (else "")
+#
+# `tmux new-session -A` attaches when the session exists and creates it
+# otherwise, so this single path covers reattach (tab reopen / reload / ttyd
+# restart) and first creation, as well as recreation after a container restart
+# cleared the tmux server (the tab just comes back as a fresh shell).
 set -euo pipefail
 SESSION_NAME="${1:-}"
 TERMINAL_ID="${2:-}"
 WORKDIR="${3:-}"
-RESTORE_FLAG="${4:-}"
 unset TMUX
 
 if [ -z "$SESSION_NAME" ]; then
@@ -100,27 +103,6 @@ fi
 WORKDIR_ARGS=()
 if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
     WORKDIR_ARGS=(-c "$WORKDIR")
-fi
-
-# Reattach when the session is still alive.
-if tmux has-session -t "=$SESSION_NAME" 2>/dev/null; then
-    exec tmux attach -t "=$SESSION_NAME"
-fi
-
-# Session is gone. When reopening a restored tab (the container restarted and
-# cleared the tmux server), surface a one-line reset notice in the fresh
-# shell's scrollback. Brand-new terminals pass no restore flag and start
-# silently. We create the session with the default interactive shell (exactly
-# as the reattach path and every agent session do, for maximum compatibility)
-# and inject the notice via send-keys -- the keystrokes buffer in the pane pty
-# and the shell echoes them once its prompt is ready. If the notice ever races
-# away the terminal itself is unaffected.
-if [ "$RESTORE_FLAG" = "restore" ]; then
-    RESET_NOTICE="[minds] This terminal ($SESSION_NAME) was reset because the container restarted; previous in-memory state was lost. This is a fresh shell."
-    ESCAPED_NOTICE=${RESET_NOTICE//\'/\'\\\'\'}
-    tmux new-session -d -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}"
-    tmux send-keys -t "=$SESSION_NAME" "printf '%s\n\n' '$ESCAPED_NOTICE'" Enter
-    exec tmux attach -t "=$SESSION_NAME"
 fi
 
 exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}"
