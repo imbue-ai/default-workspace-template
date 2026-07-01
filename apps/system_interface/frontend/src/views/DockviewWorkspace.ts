@@ -299,9 +299,8 @@ function createCustomTab(options: { id: string; name: string }): {
       const pp = panelParams.get(options.id);
       const panelType = pp?.panelType ?? "chat";
       // Terminal tabs are iframe panels but get their own action set (Destroy
-      // + Close, no Share/Refresh). ``terminalId`` is set synchronously at
-      // creation; ``terminalSessionName`` arrives with (or after) it.
-      const isTerminal = pp?.terminalSessionName !== undefined || pp?.terminalId !== undefined;
+      // + Close, no Share/Refresh).
+      const isTerminal = isTerminalPanelParams(pp);
 
       // Share and Refresh buttons -- only on iframe/application tabs.
       // The Refresh button matches open iframes by their data-service-name
@@ -944,6 +943,15 @@ type AddPanelPlacementOptions = {
  *  existing tab instead of stacking a duplicate. */
 function terminalPanelId(sessionName: string): string {
   return `terminal-session-${sessionName}`;
+}
+
+/** A panel is a persistent-terminal tab iff it carries terminal params.
+ *  ``terminalId`` is set synchronously at creation (even before the tmux session
+ *  name has been allocated), and ``terminalSessionName`` arrives with or after
+ *  it, so either one marks a terminal panel. Single source of truth for the
+ *  tab-action selection and the terminal-renderer choice. */
+function isTerminalPanelParams(pp: PanelParams | undefined): boolean {
+  return pp?.terminalSessionName !== undefined || pp?.terminalId !== undefined;
 }
 
 /** Mint a fresh per-tab terminal id. The backend maps this back to the tab's
@@ -2156,7 +2164,7 @@ function initializeDockview(parentElement: HTMLElement): void {
           // reactive iframe (the url is filled in / rewritten after mount for
           // the agent-driven and layout-restore paths). Identified by the
           // terminal-panel params, which no other iframe sets.
-          const isSessionTerminal = params?.terminalSessionName !== undefined || params?.terminalId !== undefined;
+          const isSessionTerminal = isTerminalPanelParams(params);
           if (isSessionTerminal) {
             return createReactiveTerminalRenderer(options.id);
           }
