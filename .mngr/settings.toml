@@ -134,6 +134,14 @@ command = "sleep infinity && claude"
 # the "worker" agent type -- the default for delegated tasks
 [agent_types.worker]
 parent_type = "claude"
+# Repeat the OOM wrapper command here even though worker inherits from claude:
+# mngr's parent_type merge lets a child type's *defaulted* command ("claude")
+# clobber the value inherited from the parent, so a child type that does not set
+# command itself launches plain claude. Without this line workers -- the band
+# that must be shed first after subprocesses -- would never be tagged. Verified
+# on a live worker launch: with it, the worker's claude sits at the worker band
+# and its subprocesses at the most-expendable band. See scripts/claude_oom_launch.py.
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_oom_launch.py"
 
 # --- Provider configurations ---
 
