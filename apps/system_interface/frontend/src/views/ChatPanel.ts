@@ -25,8 +25,16 @@ import {
   MAX_HELD_EVENTS,
 } from "../models/Response";
 import { computeVisibleWindow } from "../models/virtualWindow";
-import { nextUserScrolledUp } from "../models/scrollFollow";
+import { nextUserScrolledUp, isSelectionActiveWithin } from "../models/scrollFollow";
 import { createRowMeasurer, OVERSCAN_PX } from "./row-measurement";
+import {
+  captureTopAnchor,
+  contentTopOfRow,
+  resolveSelectionRowRange,
+  selectionStateWithin,
+  SELECTION_PIN_MAX_GAP_ROWS,
+  type ScrollAnchor,
+} from "./scroll-selection";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
 import { openLoginModal } from "../models/ClaudeAuth";
@@ -128,6 +136,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // on the render version + idle flag), not on every scroll-driven redraw.
   let rowsCacheKey: string | null = null;
   let cachedRows: RowDescriptor[] = [];
+  // Row key -> index in cachedRows, memoized alongside it. Used to resolve a live
+  // selection's DOM rows to virtualization indices so they can be pinned into the
+  // window (see renderMessages).
+  let cachedKeyToIndex = new Map<string, number>();
   // Heights reserved above/below the loaded window for history that exists on the
   // server but isn't loaded yet (see renderMessages). Shared so the scroll handler
   // can tell when the viewport is over a reserved region and page/jump/overlay
@@ -143,12 +155,27 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // reserved heights now sized by a stable constant, the top of the loaded window
   // doesn't drift as rows measure, so a single pin suffices -- no timed settle.
   let pendingPinToWindowTop = false;
-  // After a backfill prepend, compensate scrollTop by the height the content
-  // grew so the user's viewport stays anchored instead of jumping. The pending
-  // flag is only raised once the backfill resolves, so unrelated redraws in the
-  // meantime do not consume (and discard) the captured pre-prepend height.
-  let scrollHeightBeforePrepend = 0;
-  let prependCompensationPending = false;
+  // Row-key scroll anchor for the scrolled-up case: keep the row at the top of
+  // the viewport visually fixed as content above it changes height (a backfill
+  // prepend landing, or an off-screen row measuring to its real height). This
+  // replaces the old "capture scrollHeight before the fetch, diff it after"
+  // compensation, which mis-attributed unrelated height changes (streaming tail
+  // appends, measure-pass corrections) to the prepend and could park the viewport
+  // exactly in the next backfill trigger band -- a self-sustaining up/down yank.
+  let scrollAnchor: ScrollAnchor | null = null;
+  // Last observed scrollHeight, to distinguish a browser shrink-clamp (content got
+  // shorter, so scrollTop was pushed up to the new max) from a genuine user
+  // scroll-up when updating the follow state.
+  let lastScrollHeight = 0;
+  // A pointer button is held down over the transcript (the user is mid-drag,
+  // likely selecting). The tail-follow pin is deferred while this holds so
+  // streaming output doesn't scroll content out from under the drag; it resumes
+  // the instant the button is released. Unlike a scroll-up, this never disengages
+  // follow.
+  let isPointerDown = false;
+  // Window-level listener that clears isPointerDown on release (the pointer may be
+  // released outside the panel). Registered on mount, removed on unmount.
+  let pointerReleaseListener: (() => void) | null = null;
 
   // Snapshot-load path: SSE only carries events emitted after subscription,
   // so an auth-error that happened before the user opened the panel (e.g.
@@ -234,8 +261,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     logWs.onmessage = (event: MessageEvent) => {
       const data = JSON.parse(event.data as string) as
-        | { line: string }
-        | { done: true; success: boolean; error: string | null };
+        { line: string } | { done: true; success: boolean; error: string | null };
 
       if ("line" in data) {
         logLines.push(data.line);
@@ -330,8 +356,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     previousScrollTop = 0;
     userScrolledUp = false;
     backfillInFlight = false;
-    scrollHeightBeforePrepend = 0;
-    prependCompensationPending = false;
+    scrollAnchor = null;
+    lastScrollHeight = 0;
     rowMeasurer.reset();
     loadAgent(agentId);
   }
@@ -361,17 +387,32 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (backfillInFlight || pendingPinToWindowTop) {
       return;
     }
-    const total = getTotalEventCount(agentId);
     const held = getEventCount(agentId);
     const firstOffset = getFirstOffset(agentId);
     const windowEnd = firstOffset + held;
 
-    // The event index roughly under the viewport top, from the scroll fraction.
-    const fraction = element.scrollHeight > 0 ? element.scrollTop / element.scrollHeight : 0;
-    const targetIndex = Math.round(fraction * total);
+    // Map the viewport to a target event index using the SAME phantom-region
+    // geometry the renderer uses to size the reserved spacers, so it is the exact
+    // inverse. Only the reserved regions above/below the loaded window can imply a
+    // jump; over the loaded rows the edge-paging branches below handle it. The old
+    // global-fraction mapping assumed scrollHeight ~= total * ESTIMATED_EVENT_HEIGHT_PX,
+    // so measured-height divergence in the loaded window could push the estimate
+    // across the jump threshold and fire a spurious window reset (which unmounts
+    // every row -- the most violent scroll jolt, and a guaranteed selection kill).
+    const loadedBottom = element.scrollHeight - phantomBottomHeight;
+    let targetIndex: number | null = null;
+    if (phantomTopHeight > 0 && element.scrollTop < phantomTopHeight) {
+      targetIndex = Math.round(element.scrollTop / ESTIMATED_EVENT_HEIGHT_PX);
+    } else if (phantomBottomHeight > 0 && element.scrollTop + element.clientHeight > loadedBottom) {
+      const intoBottomRegion = element.scrollTop + element.clientHeight - loadedBottom;
+      targetIndex = windowEnd + Math.round(intoBottomRegion / ESTIMATED_EVENT_HEIGHT_PX);
+    }
 
     // Far from the loaded window in either direction -> jump.
-    if (targetIndex < firstOffset - JUMP_GAP_EVENTS || targetIndex > windowEnd + JUMP_GAP_EVENTS) {
+    if (
+      targetIndex !== null &&
+      (targetIndex < firstOffset - JUMP_GAP_EVENTS || targetIndex > windowEnd + JUMP_GAP_EVENTS)
+    ) {
       backfillInFlight = true;
       fetchWindowAtOffset(agentId, targetIndex - Math.floor(JUMP_GAP_EVENTS / 2)).finally(() => {
         backfillInFlight = false;
@@ -384,14 +425,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       return;
     }
 
-    // Near the top of the loaded rows -> page older (anchored so the view doesn't
-    // jump when the older page lands above).
+    // Near the top of the loaded rows -> page older. The scroll anchor keeps the
+    // viewport fixed when the older page lands above (see applyScrollAnchor).
     if (hasMoreBefore(agentId) && element.scrollTop - phantomTopHeight < BACKFILL_TRIGGER_PX) {
       backfillInFlight = true;
-      scrollHeightBeforePrepend = element.scrollHeight;
       fetchBackfillEvents(agentId).finally(() => {
         backfillInFlight = false;
-        prependCompensationPending = true;
         m.redraw();
       });
       return;
@@ -430,41 +469,74 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       element.scrollTop = phantomTopHeight;
       scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
+      lastScrollHeight = element.scrollHeight;
+      scrollAnchor = null;
       return;
     }
 
-    // Compensate for the change in document height above the viewport caused by a
-    // just-completed older-page load, so the viewport stays anchored on what the
-    // user was reading rather than the thumb jumping. Done before the
-    // scroll-to-bottom check below; the two are mutually exclusive in practice (a
-    // prepend only happens while scrolled up).
-    //
-    // The delta is signed and BOTH signs must be applied. The top phantom shrinks
-    // by exactly (page events * ESTIMATED_EVENT_HEIGHT_PX), but the events render
-    // as grouped rows (a whole turn can be one row) whose real height rarely equals
-    // that, so the net document height above the viewport usually *shrinks*
-    // (delta < 0). Only compensating positive deltas left those shrinks
-    // uncompensated: scrollTop stayed put while scrollHeight dropped, nudging the
-    // thumb down a few px on every page -- the "scroll up, jump down, scroll up,
-    // jump down" seen on a fast mouse-wheel scroll. Clamp to phantomTopHeight so a
-    // negative delta keeps the viewport within the freshly loaded content (we just
-    // loaded older events, so it belongs there) rather than slipping back into the
-    // reserved region above.
-    if (prependCompensationPending) {
-      prependCompensationPending = false;
-      const delta = element.scrollHeight - scrollHeightBeforePrepend;
-      if (delta !== 0) {
-        element.scrollTop = Math.max(phantomTopHeight, element.scrollTop + delta);
-        scrollTop = element.scrollTop;
-        previousScrollTop = element.scrollTop;
-      }
+    // The app is the single owner of scrollTop (native scroll anchoring is turned
+    // off via `overflow-anchor: none` in the stylesheet). While scrolled up, hold
+    // the anchored row fixed against height changes above it; while following, pin
+    // to the tail. The two are mutually exclusive.
+    if (userScrolledUp) {
+      applyScrollAnchor(element);
+    } else {
+      applyTailFollow(element);
     }
+    lastScrollHeight = element.scrollHeight;
+  }
 
-    if (!userScrolledUp) {
-      scrollToBottom(element);
+  // Keep the anchored row visually fixed by shifting scrollTop by exactly the
+  // amount the row moved in scroll-content space since the anchor was captured.
+  // Relative (not absolute) so any user scroll since the last frame is preserved:
+  // an absolute re-set per redraw would erase in-flight wheel movement and bring
+  // back the fighting-the-scrollbar feel.
+  function applyScrollAnchor(element: HTMLElement): void {
+    if (scrollAnchor === null) {
+      return;
+    }
+    const currentTop = contentTopOfRow(element, scrollAnchor.key);
+    if (currentTop === null) {
+      // The anchor row is gone (re-keyed, evicted, or scrolled out of the window).
+      // Drop it; the next scroll event re-captures. Never treat "not found" as 0.
+      scrollAnchor = null;
+      return;
+    }
+    const delta = currentTop - scrollAnchor.contentTop;
+    if (delta !== 0) {
+      element.scrollTop = element.scrollTop + delta;
+    }
+    // Content-space top is invariant under the scrollTop write above, so it is the
+    // new baseline.
+    scrollAnchor = { key: scrollAnchor.key, contentTop: currentTop };
+    scrollTop = element.scrollTop;
+    previousScrollTop = element.scrollTop;
+  }
+
+  function applyTailFollow(element: HTMLElement): void {
+    // Mid-drag: hold position so a selection drag isn't chasing auto-scroll. Does
+    // not disengage follow -- it resumes on the next redraw once the button is up.
+    if (isPointerDown) {
+      return;
+    }
+    // Honor an unprocessed user wheel-up whose scroll event hasn't fired yet: if
+    // the live scrollTop sits above where we last pinned, the user is scrolling up,
+    // so stop pinning (otherwise a streaming redraw yanks it back before the scroll
+    // event registers -- input swallowed, "fighting the scrollbar"). The
+    // `min(scrollTop, maxScroll)` guard distinguishes this from the browser
+    // clamping scrollTop after the content shrank (eviction, a turn collapsing),
+    // which is still-at-bottom and must keep following.
+    const maxScroll = element.scrollHeight - element.clientHeight;
+    if (element.scrollTop < Math.min(scrollTop, maxScroll) - 1) {
+      userScrolledUp = true;
       scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
+      scrollAnchor = null;
+      return;
     }
+    scrollToBottom(element);
+    scrollTop = element.scrollTop;
+    previousScrollTop = element.scrollTop;
   }
 
   function handleScrollEvent(event: Event): void {
@@ -472,14 +544,26 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // applyScrollPosition keeps previousScrollTop in lockstep with its own
     // programmatic re-pins, so only a genuine user scroll registers as movement.
     const didScrollUp = element.scrollTop < previousScrollTop;
+    const atBottom = isNearBottom(element);
+    // A shrink-clamp: the content got shorter and the browser pushed scrollTop up
+    // to the new max. It looks like a scroll-up but carries no user intent, so the
+    // follow state must be preserved rather than re-derived (see scrollFollow).
+    const isClamp = didScrollUp && element.scrollHeight < lastScrollHeight && atBottom;
     previousScrollTop = element.scrollTop;
     scrollTop = element.scrollTop;
 
     userScrolledUp = nextUserScrolledUp({
       didScrollUp,
-      isNearBottom: isNearBottom(element),
+      isNearBottom: atBottom,
       hasMoreAfter: hasMoreAfter(currentAgentId ?? ""),
+      isClamp,
+      wasUserScrolledUp: userScrolledUp,
     });
+
+    // Re-anchor to the row now at the top of the viewport so later height changes
+    // above it keep it fixed; clear the anchor when following the tail.
+    scrollAnchor = userScrolledUp ? captureTopAnchor(element) : null;
+    lastScrollHeight = element.scrollHeight;
 
     if (currentAgentId !== null) {
       maybePage(currentAgentId, element);
@@ -498,6 +582,23 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       viewportHeight = scrollEl.clientHeight;
     }
     rowMeasurer.scheduleMeasure(() => scrollEl);
+  }
+
+  // Union the scroll-anchor row (while scrolled up) into a pinned range so it stays
+  // mounted for applyScrollAnchor to measure. The anchor is the top visible row, so
+  // it is never subject to the selection gap cap.
+  function withAnchorPinned(range: { start: number; end: number } | null): { start: number; end: number } | null {
+    if (!userScrolledUp || scrollAnchor === null) {
+      return range;
+    }
+    const anchorIndex = cachedKeyToIndex.get(scrollAnchor.key);
+    if (anchorIndex === undefined) {
+      return range;
+    }
+    if (range === null) {
+      return { start: anchorIndex, end: anchorIndex };
+    }
+    return { start: Math.min(range.start, anchorIndex), end: Math.max(range.end, anchorIndex) };
   }
 
   function renderMessages(agentId: string): m.Vnode {
@@ -570,13 +671,21 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       );
     }
 
+    // Whether a live text selection is anchored in this panel's transcript. Gates
+    // both eviction (below) and the tail-follow pin's effect on the window (via the
+    // selection pin further down): a selection must survive scrolling and streaming.
+    const selectionActive = isSelectionActiveWithin(selectionStateWithin(scrollEl));
+
     // Bound client memory while following the live tail: trim the oldest held
     // events once well over the cap. Only when at the bottom, so a scrolled-up
     // reader's rendered history is never yanked out from under them; the dropped
     // history is re-fetched via backfill on scroll-up (evictOldEvents advances the
     // window start so it reads as older history above). Re-pinned to the bottom by
-    // applyScrollPosition afterwards.
-    if (!userScrolledUp && getEventCount(agentId) > MAX_HELD_EVENTS) {
+    // applyScrollPosition afterwards. Also skipped while a selection is active:
+    // eviction deletes the underlying events, which no amount of DOM pinning can
+    // survive. This temporarily lifts the MAX_HELD_EVENTS bound while a selection
+    // is held; it is restored on the first redraw after the selection is dropped.
+    if (!userScrolledUp && !selectionActive && getEventCount(agentId) > MAX_HELD_EVENTS) {
       evictOldEvents(agentId);
     }
 
@@ -614,6 +723,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
       cachedRows = buildConversationRows(agentId, events, agentIsIdle);
+      cachedKeyToIndex = new Map(cachedRows.map((row, index) => [row.key, index]));
       rowMeasurer.prune(new Set(cachedRows.map((row) => row.key)));
       rowsCacheKey = renderKey;
     }
@@ -638,18 +748,49 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     phantomTopHeight = Math.round(olderUnloaded * ESTIMATED_EVENT_HEIGHT_PX);
     phantomBottomHeight = Math.round(newerUnloaded * ESTIMATED_EVENT_HEIGHT_PX);
 
-    const windowResult = computeVisibleWindow({
+    // The loaded rows start below the top phantom spacer, so shift the scroll
+    // position into the loaded rows' own coordinate space for the window math.
+    const adjustedScrollTop = Math.max(0, scrollTop - phantomTopHeight);
+    // Before the first measure viewportHeight is 0; fall back to the live
+    // clientHeight (or a large value) so the initial render is not a 1-row sliver
+    // that the post-mount measure then has to expand.
+    const effectiveViewportHeight = viewportHeight > 0 ? viewportHeight : (scrollEl?.clientHeight ?? 2000);
+    const baseWindow = computeVisibleWindow({
       count: rows.length,
       getHeight,
-      // The loaded rows start below the top phantom spacer, so shift the scroll
-      // position into the loaded rows' own coordinate space for the window math.
-      scrollTop: Math.max(0, scrollTop - phantomTopHeight),
-      // Before the first measure viewportHeight is 0; fall back to the live
-      // clientHeight (or a large value) so the initial render is not a 1-row
-      // sliver that the post-mount measure then has to expand.
-      viewportHeight: viewportHeight > 0 ? viewportHeight : (scrollEl?.clientHeight ?? 2000),
+      scrollTop: adjustedScrollTop,
+      viewportHeight: effectiveViewportHeight,
       overscanPx: OVERSCAN_PX,
     });
+    // Pin the rows holding a live selection into the window so scrolling or
+    // streaming past them doesn't unmount their DOM and collapse the selection.
+    // Abandon the pin once the selection is more than SELECTION_PIN_MAX_GAP_ROWS
+    // from the viewport, so a selection held through a long stream can't keep an
+    // unbounded span mounted (the selection then collapses -- a deliberate bound).
+    let pinnedRange = selectionActive ? resolveSelectionRowRange(scrollEl, cachedKeyToIndex) : null;
+    if (pinnedRange !== null) {
+      const gapAbove = baseWindow.startIndex - pinnedRange.end;
+      const gapBelow = pinnedRange.start - baseWindow.endIndex;
+      if (gapAbove > SELECTION_PIN_MAX_GAP_ROWS || gapBelow > SELECTION_PIN_MAX_GAP_ROWS) {
+        pinnedRange = null;
+      }
+    }
+    // Also keep the scroll-anchor row mounted while scrolled up, so applyScrollAnchor
+    // can always measure it and compensate for a prepend/measurement in the same
+    // frame -- otherwise a page that shrinks the top phantom more than its rows add
+    // could slide the window off the anchor for one frame and let the viewport jump.
+    pinnedRange = withAnchorPinned(pinnedRange);
+    const windowResult =
+      pinnedRange === null
+        ? baseWindow
+        : computeVisibleWindow({
+            count: rows.length,
+            getHeight,
+            scrollTop: adjustedScrollTop,
+            viewportHeight: effectiveViewportHeight,
+            overscanPx: OVERSCAN_PX,
+            pinnedRange,
+          });
 
     const visibleRows: m.Children[] = [];
     visibleRows.push(m("div", { key: "__spacer_top", style: `height: ${phantomTopHeight + windowResult.topPad}px` }));
@@ -673,6 +814,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       if (viewportResizeObserver !== null) {
         viewportResizeObserver.disconnect();
         viewportResizeObserver = null;
+      }
+      if (pointerReleaseListener !== null) {
+        window.removeEventListener("pointerup", pointerReleaseListener);
+        window.removeEventListener("pointercancel", pointerReleaseListener);
+        pointerReleaseListener = null;
       }
       scrollEl = null;
       if (currentAgentId !== null) {
@@ -706,9 +852,25 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           {
             class: "app-content flex-1 overflow-y-auto px-8 py-6",
             onscroll: handleScrollEvent,
+            // Mark the start of a drag (likely a selection) so the tail-follow pin
+            // defers while the button is held (see applyTailFollow).
+            onpointerdown: () => {
+              isPointerDown = true;
+            },
             oncreate: (mainVnode: m.VnodeDOM) => {
               scrollEl = mainVnode.dom as HTMLElement;
               viewportHeight = scrollEl.clientHeight;
+              // Clear the mid-drag flag on release. Listen on window, not the panel,
+              // because the pointer is often released outside the transcript; redraw
+              // so the deferred tail pin re-applies immediately.
+              pointerReleaseListener = () => {
+                if (isPointerDown) {
+                  isPointerDown = false;
+                  m.redraw();
+                }
+              };
+              window.addEventListener("pointerup", pointerReleaseListener);
+              window.addEventListener("pointercancel", pointerReleaseListener);
               // Recompute the window when the panel itself resizes (dockview
               // splits, window resize) since that changes the visible range. Skip
               // while hidden: dockview collapses an inactive tab's element to 0,
