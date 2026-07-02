@@ -45,7 +45,10 @@ export interface MessageAttachment {
 const SINGLE_ATTACHMENT_PREFIX = "See attachment here: ";
 const MULTIPLE_ATTACHMENT_PREFIX = "See attachments here: ";
 
-const IMAGE_EXTENSION_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg|ico|tiff?|heic|heif)$/i;
+// Only formats Chromium can decode inline: an image path renders as a bare <img>
+// with no error fallback, so a format the browser can't display (tiff, heic/heif)
+// would show a broken thumbnail instead of falling through to the file chip.
+const IMAGE_EXTENSION_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
 
 const ATTACHMENT_BLOCK_RE = /(?:^|\n\n)See attachments? here: ([^\n]+)\s*$/;
 

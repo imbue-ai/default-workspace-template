@@ -25,6 +25,7 @@ describe("isImagePath", () => {
     expect(isImagePath("a.jpeg")).toBe(true);
     expect(isImagePath("a.gif")).toBe(true);
     expect(isImagePath("a.webp")).toBe(true);
+    expect(isImagePath("a.avif")).toBe(true);
     expect(isImagePath("a.svg")).toBe(true);
   });
 
@@ -32,6 +33,14 @@ describe("isImagePath", () => {
     expect(isImagePath("a.pdf")).toBe(false);
     expect(isImagePath("a.txt")).toBe(false);
     expect(isImagePath("README")).toBe(false);
+  });
+
+  it("rejects image formats browsers cannot decode inline", () => {
+    // These render as a broken <img>, so they must fall through to the file chip.
+    expect(isImagePath("photo.heic")).toBe(false);
+    expect(isImagePath("photo.heif")).toBe(false);
+    expect(isImagePath("scan.tiff")).toBe(false);
+    expect(isImagePath("scan.tif")).toBe(false);
   });
 });
 
