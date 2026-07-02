@@ -14,6 +14,9 @@ from imbue.system_interface.file_serving import try_serve_file
         ("a/b/photo.jpeg", "image/jpeg"),
         ("a/b/anim.gif", "image/gif"),
         ("a/b/pic.webp", "image/webp"),
+        ("a/b/pic.avif", "image/avif"),
+        ("a/b/pic.bmp", "image/bmp"),
+        ("a/b/favicon.ico", "image/x-icon"),
         ("a/b/plot.svg", "image/svg+xml"),
         # Case-insensitive on the extension.
         ("a/b/SHOT.PNG", "image/png"),

@@ -30,7 +30,7 @@ any other file is offered as a download.
    The path must be absolute (start with `/`). A relative path such as
    `![x](runtime/chat-images/x.png)` will not render.
 
-Supported inline image formats: `.png`, `.jpg` / `.jpeg`, `.gif`, `.webp`, `.svg`.
+Supported inline image formats: `.png`, `.jpg` / `.jpeg`, `.gif`, `.webp`, `.avif`, `.bmp`, `.ico`, `.svg`.
 
 ## Offer a file for download
 
