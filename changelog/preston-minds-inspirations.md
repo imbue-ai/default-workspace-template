@@ -5,14 +5,14 @@
   manifest per inspiration at the repo root).
 
 - New **`/publish-inspiration`** skill. It asks what to include (no user data by
-  default), then delegates the assembly to a `launch-task` sub-agent on an
-  isolated worktree. The worker resets to the clean FCT version the mind was
-  based on (no upstream fetch -- provenance link only), overlays only the
-  selected paths, runs a hard-failing secret scan (aborts before commit on any
+  default), then assembles the snapshot in an isolated local `git worktree` in
+  the same container: it resets to the clean FCT version the mind was based on
+  (no upstream fetch -- provenance link only), overlays only the selected paths,
+  runs a hard-failing secret scan (aborts before commit on any
   token/credential), generates the manifest + a placeholder SVG thumbnail,
   rewrites the `/welcome` stable region, and does a side-effect-free boot check.
   The user then confirms/edits the title, description, repository name,
-  visibility, and thumbnail in a popup before the lead creates the repo and
+  visibility, and thumbnail in a popup before the skill creates the repo and
   pushes.
 
 - New **`/use-inspiration`** skill. Brings an existing inspiration into the
@@ -63,3 +63,39 @@
   with those variables scrubbed from the child environment (the parent process
   environment is untouched), and the publish skill scrubs them for its own
   `gh auth status` probe and final `gh repo create --push` too.
+
+- Made the publish/GitHub-login popups reliable and fast to fall back from.
+  Popup events were fire-and-forget over a transient WebSocket: if no live
+  client was connected at broadcast time, the popup silently never appeared and
+  the skill blind-polled for minutes. The backend now retains the pending
+  publish request and any unresolved GitHub-auth prompt and replays them to
+  every newly-connecting workspace client, and the trigger endpoints return a
+  `ws_client_count` so the skill can skip waiting entirely when nobody is
+  listening (one bounded ~90s wait otherwise, then an inline-chat / device-flow
+  fallback -- no more serial popup re-triggering).
+
+- Fixed base-commit resolution for multi-root mind repos. The publish skill's
+  fallback now uses the first-parent root (never a bare root-commit lookup,
+  which grabbed near-empty parallel roots from subtree merges), with a
+  mandatory seconds-cheap pre-check that the resolved base tree is a bootable
+  template (has `pyproject.toml` and `supervisord.conf`), walking forward along
+  the first-parent chain when it is not; `build_inspiration.sh` re-validates
+  and exits 5 with a clear message as a backstop.
+
+- The GitHub-auth web login now requests the `workflow` scope (the template
+  ships CI workflows, so pushing them requires it), the device-flow expect
+  logic was rebuilt against gh 2.95's real PTY transcript (it no longer times
+  out waiting for the one-time code), and the auth status surfaces the token's
+  scopes with a warning when `workflow` is missing.
+
+- A mind created from an inspiration repo now starts adapting immediately: the
+  welcome skill's inspiration region takes over the whole welcome (a custom
+  message naming the inspiration instead of the generic template greeting),
+  reads the manifest in the same turn, and asks the user how they want to adapt
+  it. The generated `inspiration-<slug>.md` manifest is now a thorough,
+  self-sufficient explainer (what it is, how it works, how to adapt it, holes,
+  permissions, adaptation history) with clearly-marked sections the publishing
+  agent fleshes out before confirming.
+
+- The confirmed thumbnail/manifest edits are committed before the push (no more
+  placeholder-then-re-push), with a clean-git-status pre-push check.

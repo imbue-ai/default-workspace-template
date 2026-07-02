@@ -15,10 +15,25 @@ Two sign-in paths:
    is asserted by `returncode == 0`, not by parsing output.
 2. Web/device flow: `start_web_login` drives `gh auth login --web` via pexpect.
    `gh` prints a `XXXX-XXXX` user code and a `github.com/login/device`
-   verification URL; the PTY subprocess is held on the `GitHubAuthService`
-   instance between `start_web_login` and `submit_code` so the UI can show the
-   code to the user in between. `gh` may print a "Press Enter to open in
-   browser" prompt before the code/URL, so a newline is sent first.
+   verification URL BEFORE any prompt (observed against gh 2.95 on a real
+   PTY); the PTY subprocess is held on the `GitHubAuthService` instance
+   between `start_web_login` and `submit_code` so the UI can show the code to
+   the user in between. Nothing is written to gh's stdin until the code and
+   URL have been captured: gh opens with a terminal-query handshake (an OSC 11
+   background-color query plus a DSR cursor-position query) that reads and
+   swallows any early input, so a preemptively-sent newline never reaches the
+   later "Press Enter to open ... in your browser" prompt and gh then sits at
+   that prompt forever without polling for the authorization. Once the code
+   and URL are captured, the prompt is answered with a newline (harmless when
+   gh skipped the prompt) so gh proceeds to poll.
+
+The web login passes `--scopes workflow` on top of gh's default scopes
+(`repo`, `read:org`, `gist` -- see `gh auth login --help`): the mind's repo
+ships CI workflows under `.github/workflows`, and GitHub rejects HTTPS pushes
+that touch workflow files unless the credential carries the `workflow` scope.
+The PAT path cannot add scopes to a pasted token, so `get_auth_status` parses
+the token scopes out of `gh auth status` and surfaces a human-readable warning
+on `GitHubAuthStatus.warning` when a classic token is missing `workflow`.
 
 After ANY successful login (PAT or web), `gh auth setup-git --hostname <host>`
 is run explicitly so the git credential helper is wired. This is what makes
@@ -106,6 +121,17 @@ _GH_VERIFICATION_URL_REGEX = re.compile(r"https://\S*?github\.com/login/device\S
 # (e.g. "(keyring)") is not captured.
 _GH_STATUS_LOGGED_IN_REGEX = re.compile(r"Logged in to \S+ (?:account|as) (\S+)")
 
+# `gh auth status` reports the classic OAuth scopes on a "  - Token scopes: %s"
+# line (format string verified in the gh 2.95 binary). Recent gh quotes each
+# scope ('gist', 'read:org', 'repo'); older gh printed them unquoted; a token
+# with no classic scopes (e.g. a fine-grained PAT) reports "none".
+_GH_STATUS_TOKEN_SCOPES_REGEX = re.compile(r"Token scopes: (.+)")
+
+# Classic-token scope required to push commits that touch .github/workflows.
+# The mind's repo ships CI workflows there, so a credential without it cannot
+# push the repo's own workflow files.
+_WORKFLOW_SCOPE: Final = "workflow"
+
 
 class GitHubAuthError(RuntimeError):
     """Raised when a GitHub auth flow operation cannot complete."""
@@ -185,6 +211,17 @@ class GitHubAuthStatus(FrozenModel):
     logged_in: bool = Field(description="Whether gh is authenticated for the host")
     username: str | None = Field(default=None, description="Authenticated GitHub login, if any")
     host: str = Field(default=_DEFAULT_HOST, description="gh host checked")
+    token_scopes: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Classic OAuth scopes reported by gh auth status; empty tuple when gh reports 'none' "
+            "(e.g. a fine-grained PAT), None when the scopes line is absent"
+        ),
+    )
+    warning: str | None = Field(
+        default=None,
+        description="Human-readable warning about the stored credential (e.g. missing workflow scope)",
+    )
 
 
 class GitHubAuthStartResult(FrozenModel):
@@ -208,8 +245,48 @@ class _GitHubSessionRecord(FrozenModel):
     verification_url: str
 
 
+def _parse_token_scopes(cleaned_status_output: str) -> tuple[str, ...] | None:
+    """Extract the classic OAuth scope list from ANSI-stripped `gh auth status` output.
+
+    gh 2.95 prints `  - Token scopes: 'gist', 'read:org', 'repo'` (each scope
+    single-quoted); older gh printed them unquoted, and a token with no
+    classic scopes (e.g. a fine-grained PAT) reports `none`. Handles all
+    three: quotes are stripped per scope and `none` parses to an empty tuple.
+    Returns None when no scopes line is present at all (unknown).
+    """
+    match = _GH_STATUS_TOKEN_SCOPES_REGEX.search(cleaned_status_output)
+    if match is None:
+        return None
+    scopes = tuple(part.strip().strip("'") for part in match.group(1).strip().split(",") if part.strip().strip("'"))
+    if scopes == ("none",):
+        return ()
+    return scopes
+
+
+def _workflow_scope_warning(token_scopes: tuple[str, ...] | None) -> str | None:
+    """Return a warning when a classic token is missing the `workflow` scope.
+
+    Pushing commits that add or modify `.github/workflows` files requires the
+    `workflow` scope on classic tokens, and the mind's repo ships CI
+    workflows, so a credential without it cannot push the repo. Only warns
+    when the scopes are known and non-empty: an empty tuple means gh reported
+    "none", which is how fine-grained PATs show up -- their workflow
+    permission is invisible to `gh auth status`, so warning would be a
+    guess.
+    """
+    if token_scopes is None or len(token_scopes) == 0:
+        return None
+    if _WORKFLOW_SCOPE in token_scopes:
+        return None
+    return (
+        f"The stored GitHub token is missing the '{_WORKFLOW_SCOPE}' scope, so pushes that add or modify "
+        "files under .github/workflows will be rejected by GitHub. Re-authenticate with the web sign-in "
+        f"(which requests the {_WORKFLOW_SCOPE} scope automatically) or paste a token that includes it."
+    )
+
+
 def _parse_status_output(raw_output: str, host: str) -> GitHubAuthStatus:
-    """Extract logged-in state + username from `gh auth status` output.
+    """Extract logged-in state + username + token scopes from `gh auth status` output.
 
     `gh auth status` writes its human-readable report to stderr, styled with
     ANSI. Strip the escapes first, then look for the "Logged in to ..." line.
@@ -218,7 +295,14 @@ def _parse_status_output(raw_output: str, host: str) -> GitHubAuthStatus:
     match = _GH_STATUS_LOGGED_IN_REGEX.search(cleaned)
     if match is None:
         return GitHubAuthStatus(logged_in=False, host=host)
-    return GitHubAuthStatus(logged_in=True, username=match.group(1), host=host)
+    token_scopes = _parse_token_scopes(cleaned)
+    return GitHubAuthStatus(
+        logged_in=True,
+        username=match.group(1),
+        host=host,
+        token_scopes=token_scopes,
+        warning=_workflow_scope_warning(token_scopes),
+    )
 
 
 def _safe_terminate(process: Any) -> None:
@@ -264,7 +348,10 @@ def _build_setup_git_command(host: str) -> list[str]:
 
 
 def _build_web_login_args(host: str) -> list[str]:
-    return ["auth", "login", "--hostname", host, "--web", "--git-protocol", "https"]
+    # --scopes workflow is ADDITIVE to gh's default scopes (repo, read:org,
+    # gist): without it, pushing commits that touch .github/workflows -- which
+    # the mind's repo ships -- is rejected by GitHub.
+    return ["auth", "login", "--hostname", host, "--web", "--git-protocol", "https", "--scopes", _WORKFLOW_SCOPE]
 
 
 class GitHubAuthService(MutableModel):
@@ -414,26 +501,51 @@ class GitHubAuthService(MutableModel):
             raise GitHubAuthError(f"gh auth setup-git failed (exit {setup_result.returncode}): {stderr}")
 
     def _spawn_web_and_parse(self, host: str) -> tuple[Any, str, str]:
+        """Spawn `gh auth login --web`, capture the code + URL, answer the prompt.
+
+        The real gh 2.95 PTY transcript (captured inside a minds container):
+
+            <OSC 11 query><DSR query>
+            ! First copy your one-time code: 2C66-E579
+            Press Enter to open https://github.com/login/device in your browser...
+
+        Three observed properties drive the logic:
+
+        1. The code and URL are printed BEFORE any prompt, so their patterns
+           are expected directly, each with the same generous wait -- no
+           prompt choreography.
+        2. gh opens with a terminal-query handshake (OSC 11 + DSR) that reads
+           stdin for the replies; anything sent during that window is
+           swallowed (a newline sent at spawn never reached the "Press Enter"
+           prompt, leaving gh stuck there, never polling). So nothing is sent
+           until the code and URL are captured. The handshake also delays the
+           first output by ~5s while gh waits out the unanswered queries.
+        3. The "Press Enter to open ... in your browser" prompt gates gh's
+           browser-open attempt and its authorization polling loop, so it is
+           answered with a newline right after capture. When gh skipped the
+           prompt (non-TTY stdout prints "Open this URL to continue..." and
+           polls immediately) the stray newline is harmless.
+        """
         process = self.pexpect_spawner("gh", _build_web_login_args(host), _GH_WEB_CODE_WAIT_SECONDS)
-        # gh may print "Press Enter to open github.com in your browser" before
-        # emitting the code/URL. Answer it with a bare newline so the flow
-        # proceeds; harmless if no such prompt is shown.
-        try:
-            process.sendline("")
-        except pexpect.ExceptionPexpect as e:
-            _safe_terminate(process)
-            _safe_close(process)
-            raise GitHubAuthError(f"gh auth login subprocess failed sending initial newline: {e}") from e
-        match_index = process.expect([_GH_USER_CODE_REGEX, pexpect.EOF, pexpect.TIMEOUT])
-        if match_index != 0:
-            _safe_terminate(process)
-            _safe_close(process)
-            if match_index == 1:
-                raise GitHubAuthError("gh auth login exited before printing the device code")
-            raise GitHubAuthError("Timed out waiting for the device code from gh auth login")
+        consumed_parts: list[str] = []
+        for pattern, description in (
+            (_GH_USER_CODE_REGEX, "one-time device code"),
+            (_GH_VERIFICATION_URL_REGEX, "verification URL"),
+        ):
+            match_index = process.expect([pattern, pexpect.EOF, pexpect.TIMEOUT])
+            consumed_parts.append(
+                (process.before if isinstance(process.before, str) else "")
+                + (process.after if isinstance(process.after, str) else "")
+            )
+            if match_index != 0:
+                _safe_terminate(process)
+                _safe_close(process)
+                if match_index == 1:
+                    raise GitHubAuthError(f"gh auth login exited before printing the {description}")
+                raise GitHubAuthError(f"Timed out waiting for the {description} from gh auth login")
         # The code and URL may be split across gh's output and are ANSI-styled;
         # re-extract both from the full consumed buffer with escapes stripped.
-        consumed = strip_ansi((process.before or "") + (process.after or ""))
+        consumed = strip_ansi("".join(consumed_parts))
         code_match = _GH_USER_CODE_REGEX.search(consumed)
         url_match = _GH_VERIFICATION_URL_REGEX.search(consumed)
         if code_match is None or url_match is None:
@@ -442,12 +554,33 @@ class GitHubAuthService(MutableModel):
             raise GitHubAuthError(
                 "Matched the device code in the stream but could not extract the code and verification URL"
             )
+        # Answer the "Press Enter to open ... in your browser" prompt so gh
+        # proceeds to its browser-open attempt (which fails harmlessly in a
+        # headless container) and starts polling for the authorization.
+        try:
+            process.sendline("")
+        except (OSError, pexpect.ExceptionPexpect) as e:
+            _safe_terminate(process)
+            _safe_close(process)
+            raise GitHubAuthError(f"gh auth login subprocess failed answering the browser prompt: {e}") from e
         return process, code_match.group(0), url_match.group(0)
 
 
 def _drive_web_completion(process: Any) -> None:
-    """Block on the web/device login subprocess reaching EOF (login complete)."""
+    """Block on the web/device login subprocess reaching EOF (login complete).
+
+    Sends one more defensive newline first: if the newline sent after code
+    capture was swallowed (e.g. by a late terminal query), gh would still be
+    sitting at its "Press Enter" prompt and would never poll for the
+    authorization. A stray newline is ignored once gh is already polling, and
+    a send failure just means the process already exited -- which is exactly
+    the EOF the expect below observes.
+    """
     process.timeout = _GH_WEB_COMPLETE_WAIT_SECONDS
+    try:
+        process.sendline("")
+    except (OSError, pexpect.ExceptionPexpect) as e:
+        logger.debug("gh auth login defensive newline failed (process likely exited): {}", e)
     try:
         result = process.expect([pexpect.EOF, pexpect.TIMEOUT])
     except pexpect.ExceptionPexpect as e:

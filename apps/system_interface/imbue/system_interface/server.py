@@ -2,9 +2,11 @@ import json
 import os
 import queue
 import socket
+import threading
 import traceback
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +18,12 @@ from flask import send_file
 from flask import send_from_directory
 from flask_sock import Sock
 from loguru import logger as _loguru_logger
+from pydantic import PrivateAttr
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import HTTPException
 
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.system_interface import claude_auth_endpoints
@@ -578,20 +582,73 @@ def _create_chat_agent() -> Response:
         return _json_response(error.model_dump(), status_code=400)
 
 
-def _ws_endpoint(websocket: Any) -> None:
-    """Unified WebSocket for agent state and application updates."""
-    state = get_state()
-    _run_ws_broadcast_loop(
-        websocket=websocket,
-        agent_manager=state.agent_manager,
-        ws_broadcaster=state.broadcaster,
-    )
+class WsConnectionCounter(MutableModel):
+    """Thread-safe count of currently-connected ``/api/ws`` clients.
+
+    Incremented/decremented by the ``/api/ws`` handler around each
+    connection's broadcast loop, and read by the inspiration and github-auth
+    endpoints so their fire-and-forget broadcast replies can report how many
+    live clients the broadcast could have reached (``ws_client_count``). A
+    count of 0 tells the calling skill that no UI was listening, so it can
+    skip a blind wait for a popup nobody saw.
+    """
+
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
+
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _count: int = PrivateAttr(default=0)
+
+    def increment(self) -> None:
+        with self._lock:
+            self._count += 1
+
+    def decrement(self) -> None:
+        with self._lock:
+            self._count -= 1
+
+    def count(self) -> int:
+        with self._lock:
+            return self._count
+
+
+def _ws_endpoint(
+    websocket: Any,
+    ws_connection_counter: WsConnectionCounter,
+    github_auth_required_notice: github_auth_endpoints.GitHubAuthRequiredNotice,
+) -> None:
+    """Unified WebSocket for agent state and application updates.
+
+    Brackets the broadcast loop with the app's connection counter (which
+    feeds ``ws_client_count`` in the popup-broadcast endpoints' replies) and
+    replays the app's still-pending user-action events (inspiration proposal,
+    github-auth prompt) to the newly-connected client.
+    """
+    ws_state = get_state()
+    pending_events = [
+        event
+        for event in (
+            ws_state.inspiration_service.pending_event(),
+            github_auth_required_notice.pending_event(),
+        )
+        if event is not None
+    ]
+    ws_connection_counter.increment()
+    try:
+        _run_ws_broadcast_loop(
+            websocket=websocket,
+            agent_manager=ws_state.agent_manager,
+            ws_broadcaster=ws_state.broadcaster,
+            pending_events=pending_events,
+        )
+    finally:
+        ws_connection_counter.decrement()
 
 
 def _run_ws_broadcast_loop(
     websocket: Any,
     agent_manager: AgentManager,
     ws_broadcaster: WebSocketBroadcaster,
+    pending_events: Sequence[dict[str, Any]] = (),
 ) -> None:
     """Stream broadcaster messages to ``websocket`` until the client disconnects.
 
@@ -601,6 +658,14 @@ def _run_ws_broadcast_loop(
     half-dead peer, surfacing as ``ConnectionClosed`` from ``send``; the
     broadcaster can also evict a hopelessly-behind client by pushing the
     shutdown sentinel (``None``) into the queue.
+
+    ``pending_events`` are replayed to the client right after the initial
+    state snapshots. Broadcasts themselves are fire-and-forget (a client that
+    is not connected -- or whose connection has silently died, e.g. a laptop
+    that went to sleep -- misses them permanently), so events that represent
+    a still-unresolved request for user action (a pending inspiration publish
+    proposal, a pending github-auth-required prompt) are re-sent to every
+    newly-connecting client until they are resolved.
     """
     client_queue = ws_broadcaster.register()
     try:
@@ -623,6 +688,9 @@ def _run_ws_broadcast_loop(
 
         for proto in agent_manager.get_proto_agents():
             websocket.send(json.dumps({"type": "proto_agent_created", **proto}))
+
+        for pending_event in pending_events:
+            websocket.send(json.dumps(pending_event))
 
         shutdown = False
         while not shutdown:
@@ -989,9 +1057,20 @@ def create_application(
     application.add_url_rule("/api/agents/<agent_id>/screen", view_func=_get_screen_capture, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
+    # Connection counter + durable github-auth notice for the popup-broadcast
+    # endpoints: the counter feeds ``ws_client_count`` in their replies, and
+    # the notice lets the ``/api/ws`` connect handler replay a still-pending
+    # ``github_auth_required`` prompt to late-connecting clients.
+    ws_connection_counter = WsConnectionCounter()
+    github_auth_required_notice = github_auth_endpoints.GitHubAuthRequiredNotice()
+
     claude_auth_endpoints.register_routes(application)
-    inspiration_endpoints.register_routes(application)
-    github_auth_endpoints.register_routes(application)
+    inspiration_endpoints.register_routes(application, get_ws_client_count=ws_connection_counter.count)
+    github_auth_endpoints.register_routes(
+        application,
+        auth_required_notice=github_auth_required_notice,
+        get_ws_client_count=ws_connection_counter.count,
+    )
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(
@@ -1004,7 +1083,9 @@ def create_application(
         view_func=_stream_subagent_events,
         methods=["GET"],
     )
-    sock.route("/api/ws")(_ws_endpoint)
+    sock.route("/api/ws")(
+        lambda websocket: _ws_endpoint(websocket, ws_connection_counter, github_auth_required_notice)
+    )
     sock.route("/api/proto-agents/<agent_id>/logs")(_proto_agent_logs_endpoint)
     application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
 
