@@ -4,6 +4,6 @@ Fix three chat-transcript bugs in the system interface: text selection was lost 
 
 - Auto-follow stays on while text is selected: the view keeps following the live tail, the selected text scrolls off-screen but stays selected, and copying still works. Making a selection during streaming no longer fights the auto-scroll -- the view holds still while the mouse button is held and snaps back to the tail on release.
 
-- Scrolling is smooth and stable. The transcript now solely owns its scroll position (native browser scroll anchoring is disabled), anchoring the viewport to a row so backfill loads and row measurement don't jolt it; the self-sustaining scroll-up "yank" loop and the at-bottom input-swallowing during streaming are gone.
+- Scrolling is smooth and stable, with no random snaps. While reading history, the transcript no longer writes the scroll position from JavaScript at all: it relies on the browser's native scroll anchoring (with the virtualization spacers opted out) to hold the viewport steady as older messages load or rows measure to their real height. The app only moves the scroll position for two deliberate actions -- following the live tail and landing a scrollbar jump. This removes the self-sustaining scroll-up "yank" loop, the at-bottom input-swallowing during streaming, and the per-frame position corrections that were themselves causing the view to jump.
 
 Design docs: `specs/chat-scroll-and-selection-bugs.md` (verified root-cause analysis) and `blueprint/chat-scroll-selection-fixes/plan-chat-scroll-selection-fixes.md` (phased plan).

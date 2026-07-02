@@ -27,14 +27,7 @@ import {
 import { computeVisibleWindow } from "../models/virtualWindow";
 import { nextUserScrolledUp, isSelectionActiveWithin } from "../models/scrollFollow";
 import { createRowMeasurer, OVERSCAN_PX } from "./row-measurement";
-import {
-  captureTopAnchor,
-  contentTopOfRow,
-  resolveSelectionRowRange,
-  selectionStateWithin,
-  SELECTION_PIN_MAX_GAP_ROWS,
-  type ScrollAnchor,
-} from "./scroll-selection";
+import { resolveSelectionRowRange, selectionStateWithin, SELECTION_PIN_MAX_GAP_ROWS } from "./scroll-selection";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
 import { openLoginModal } from "../models/ClaudeAuth";
@@ -155,14 +148,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // reserved heights now sized by a stable constant, the top of the loaded window
   // doesn't drift as rows measure, so a single pin suffices -- no timed settle.
   let pendingPinToWindowTop = false;
-  // Row-key scroll anchor for the scrolled-up case: keep the row at the top of
-  // the viewport visually fixed as content above it changes height (a backfill
-  // prepend landing, or an off-screen row measuring to its real height). This
-  // replaces the old "capture scrollHeight before the fetch, diff it after"
-  // compensation, which mis-attributed unrelated height changes (streaming tail
-  // appends, measure-pass corrections) to the prepend and could park the viewport
-  // exactly in the next backfill trigger band -- a self-sustaining up/down yank.
-  let scrollAnchor: ScrollAnchor | null = null;
   // Last observed scrollHeight, to distinguish a browser shrink-clamp (content got
   // shorter, so scrollTop was pushed up to the new max) from a genuine user
   // scroll-up when updating the follow state.
@@ -356,7 +341,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     previousScrollTop = 0;
     userScrolledUp = false;
     backfillInFlight = false;
-    scrollAnchor = null;
     lastScrollHeight = 0;
     rowMeasurer.reset();
     loadAgent(agentId);
@@ -425,8 +409,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       return;
     }
 
-    // Near the top of the loaded rows -> page older. The scroll anchor keeps the
-    // viewport fixed when the older page lands above (see applyScrollAnchor).
+    // Near the top of the loaded rows -> page older. Native scroll anchoring keeps
+    // the viewport fixed on the content being read when the older page lands above.
     if (hasMoreBefore(agentId) && element.scrollTop - phantomTopHeight < BACKFILL_TRIGGER_PX) {
       backfillInFlight = true;
       fetchBackfillEvents(agentId).finally(() => {
@@ -470,47 +454,22 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
       lastScrollHeight = element.scrollHeight;
-      scrollAnchor = null;
       return;
     }
 
-    // The app is the single owner of scrollTop (native scroll anchoring is turned
-    // off via `overflow-anchor: none` in the stylesheet). While scrolled up, hold
-    // the anchored row fixed against height changes above it; while following, pin
-    // to the tail. The two are mutually exclusive.
-    if (userScrolledUp) {
-      applyScrollAnchor(element);
-    } else {
+    // While scrolled up, the app writes NOTHING to scrollTop. Native scroll
+    // anchoring keeps the viewport pinned to the content the user is reading as
+    // rows above it load (backfill) or measure to their real height: the scroll
+    // container keeps its default `overflow-anchor`, and only the spacer divs opt
+    // out so the browser anchors to a real row. Hand-rolled per-frame compensation
+    // here is what produced the random snaps -- a compensating write that landed
+    // near the bottom flipped the view back into follow mode, and each write fired
+    // its own scroll event. The browser does this frame-perfectly. The only
+    // scrollTop writes left are the discrete tail-follow and jump pins.
+    if (!userScrolledUp) {
       applyTailFollow(element);
     }
     lastScrollHeight = element.scrollHeight;
-  }
-
-  // Keep the anchored row visually fixed by shifting scrollTop by exactly the
-  // amount the row moved in scroll-content space since the anchor was captured.
-  // Relative (not absolute) so any user scroll since the last frame is preserved:
-  // an absolute re-set per redraw would erase in-flight wheel movement and bring
-  // back the fighting-the-scrollbar feel.
-  function applyScrollAnchor(element: HTMLElement): void {
-    if (scrollAnchor === null) {
-      return;
-    }
-    const currentTop = contentTopOfRow(element, scrollAnchor.key);
-    if (currentTop === null) {
-      // The anchor row is gone (re-keyed, evicted, or scrolled out of the window).
-      // Drop it; the next scroll event re-captures. Never treat "not found" as 0.
-      scrollAnchor = null;
-      return;
-    }
-    const delta = currentTop - scrollAnchor.contentTop;
-    if (delta !== 0) {
-      element.scrollTop = element.scrollTop + delta;
-    }
-    // Content-space top is invariant under the scrollTop write above, so it is the
-    // new baseline.
-    scrollAnchor = { key: scrollAnchor.key, contentTop: currentTop };
-    scrollTop = element.scrollTop;
-    previousScrollTop = element.scrollTop;
   }
 
   function applyTailFollow(element: HTMLElement): void {
@@ -531,7 +490,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       userScrolledUp = true;
       scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
-      scrollAnchor = null;
       return;
     }
     scrollToBottom(element);
@@ -560,9 +518,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       wasUserScrolledUp: userScrolledUp,
     });
 
-    // Re-anchor to the row now at the top of the viewport so later height changes
-    // above it keep it fixed; clear the anchor when following the tail.
-    scrollAnchor = userScrolledUp ? captureTopAnchor(element) : null;
     lastScrollHeight = element.scrollHeight;
 
     if (currentAgentId !== null) {
@@ -582,23 +537,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       viewportHeight = scrollEl.clientHeight;
     }
     rowMeasurer.scheduleMeasure(() => scrollEl);
-  }
-
-  // Union the scroll-anchor row (while scrolled up) into a pinned range so it stays
-  // mounted for applyScrollAnchor to measure. The anchor is the top visible row, so
-  // it is never subject to the selection gap cap.
-  function withAnchorPinned(range: { start: number; end: number } | null): { start: number; end: number } | null {
-    if (!userScrolledUp || scrollAnchor === null) {
-      return range;
-    }
-    const anchorIndex = cachedKeyToIndex.get(scrollAnchor.key);
-    if (anchorIndex === undefined) {
-      return range;
-    }
-    if (range === null) {
-      return { start: anchorIndex, end: anchorIndex };
-    }
-    return { start: Math.min(range.start, anchorIndex), end: Math.max(range.end, anchorIndex) };
   }
 
   function renderMessages(agentId: string): m.Vnode {
@@ -775,11 +713,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         pinnedRange = null;
       }
     }
-    // Also keep the scroll-anchor row mounted while scrolled up, so applyScrollAnchor
-    // can always measure it and compensate for a prepend/measurement in the same
-    // frame -- otherwise a page that shrinks the top phantom more than its rows add
-    // could slide the window off the anchor for one frame and let the viewport jump.
-    pinnedRange = withAnchorPinned(pinnedRange);
     const windowResult =
       pinnedRange === null
         ? baseWindow
@@ -793,12 +726,25 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           });
 
     const visibleRows: m.Children[] = [];
-    visibleRows.push(m("div", { key: "__spacer_top", style: `height: ${phantomTopHeight + windowResult.topPad}px` }));
+    // `overflow-anchor: none` on the spacers keeps native scroll anchoring from
+    // choosing a spacer as its anchor: a spacer's height changes every time rows
+    // page in or measure, so anchoring to one would move the viewport. Excluding
+    // them makes the browser anchor to a real message row, holding the content the
+    // user is reading still as the spacers around it resize.
+    visibleRows.push(
+      m("div", {
+        key: "__spacer_top",
+        style: `height: ${phantomTopHeight + windowResult.topPad}px; overflow-anchor: none`,
+      }),
+    );
     for (let i = windowResult.startIndex; i < windowResult.endIndex; i++) {
       visibleRows.push(rows[i].render());
     }
     visibleRows.push(
-      m("div", { key: "__spacer_bottom", style: `height: ${windowResult.bottomPad + phantomBottomHeight}px` }),
+      m("div", {
+        key: "__spacer_bottom",
+        style: `height: ${windowResult.bottomPad + phantomBottomHeight}px; overflow-anchor: none`,
+      }),
     );
 
     return m("div", { class: "message-list-wrapper" }, [
