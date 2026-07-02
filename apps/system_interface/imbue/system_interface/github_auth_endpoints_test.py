@@ -151,6 +151,36 @@ class _FakeGitHubWebProcess:
         self.close_calls += 1
 
 
+class _TimeoutGitHubWebProcess:
+    """A pexpect-spawn stand-in that never matches, forcing `_spawn_web_and_parse`
+    to time out waiting for the one-time code -- the same `GitHubAuthError`
+    shape a real `gh auth login --web` hang produces.
+    """
+
+    def __init__(self) -> None:
+        self.terminate_calls = 0
+        self.close_calls = 0
+        self.before = ""
+        self.after = ""
+        self.timeout: float | None = None
+
+    def expect(self, patterns: list[object]) -> int:
+        # index 2 is always pexpect.TIMEOUT in this service's expect() calls.
+        return 2
+
+    def sendline(self, s: str) -> None:
+        pass
+
+    def isalive(self) -> bool:
+        return True
+
+    def terminate(self, force: bool = False) -> None:
+        self.terminate_calls += 1
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
 @contextmanager
 def _client(github_auth_service: GitHubAuthService) -> Iterator[FlaskClient]:
     """Build a Flask test client over an app wired with the given service."""
@@ -264,6 +294,28 @@ def test_start_web_sends_leading_newline_and_returns_parsed_code_and_url() -> No
     assert payload["session_id"]
     # The leading newline that answers gh's possible "Press Enter" prompt.
     assert fake_process.sendline_calls[:1] == [""]
+
+
+def test_start_web_failure_is_logged_server_side(loguru_records: list[str]) -> None:
+    """A `GitHubAuthError` from `start_web_login` is logged, not just returned.
+
+    Before this test, the endpoint's `except GitHubAuthError` branch only
+    turned the error into an HTTP 500 body -- nothing was written to the
+    container's logs, so a failed device-flow spawn was undiagnosable from
+    the log file alone (the request line showed a bare "500 -" with no
+    detail). Pin that the real error text now reaches loguru so it shows up
+    in `system_interface-stderr.log`.
+    """
+    runner = _RecordingCommandRunner()
+    service = GitHubAuthService(command_runner=runner, pexpect_spawner=lambda *_a, **_k: _TimeoutGitHubWebProcess())
+    with _client(service) as client:
+        response = client.post("/api/github-auth/start", json={})
+    assert response.status_code == 500
+    detail = response.get_json()["detail"]
+    assert "Timed out waiting for the one-time device code" in detail
+    warnings = [r for r in loguru_records if r.startswith("WARNING") and "/api/github-auth/start failed" in r]
+    assert warnings, f"Expected a logged warning for the start failure; got: {loguru_records}"
+    assert "Timed out waiting for the one-time device code" in warnings[0]
 
 
 def test_submit_code_wires_git_and_reports_status() -> None:

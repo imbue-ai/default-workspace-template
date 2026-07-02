@@ -137,6 +137,7 @@ def get_status(auth_required_notice: GitHubAuthRequiredNotice) -> Response:
     try:
         status = service.get_auth_status()
     except github_auth.GitHubAuthError as e:
+        logger.warning("GET /api/github-auth/status failed: {}", e)
         return _error_response(str(e), status_code=500)
     if status.logged_in:
         auth_required_notice.clear()
@@ -156,6 +157,11 @@ def start_web() -> Response:
     try:
         result = service.start_web_login(body.host)
     except github_auth.GitHubAuthError as e:
+        # The only server-side record of *why* the device flow failed to spawn
+        # -- the client only ever sees the `detail` string in the 500 body, so
+        # without this log line a failure here is undiagnosable from the
+        # container's logs alone.
+        logger.warning("POST /api/github-auth/start failed: {}", e)
         return _error_response(str(e), status_code=500)
     return _json_response(
         GitHubAuthStartResponse(
@@ -179,6 +185,7 @@ def submit_code(auth_required_notice: GitHubAuthRequiredNotice) -> Response:
     try:
         status = service.submit_code(body.session_id)
     except github_auth.GitHubAuthError as e:
+        logger.warning("POST /api/github-auth/submit-code failed: {}", e)
         return _error_response(str(e), status_code=400)
     if status.logged_in:
         auth_required_notice.clear()
@@ -200,6 +207,7 @@ def submit_raw_token(auth_required_notice: GitHubAuthRequiredNotice) -> Response
     try:
         status = service.submit_raw_token(body.token, body.host)
     except github_auth.GitHubAuthError as e:
+        logger.warning("POST /api/github-auth/submit-raw-token failed: {}", e)
         return _error_response(str(e), status_code=500)
     if status.logged_in:
         auth_required_notice.clear()

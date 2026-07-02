@@ -19,6 +19,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import { describeRequestError } from "../models/request-error";
 
 const _GITHUB_HOST = "github.com";
 
@@ -264,8 +265,7 @@ export function GitHubLoginModal(): m.Component<GitHubLoginModalAttrs> {
       mode = "awaiting_device_code";
       m.redraw();
     } catch (error) {
-      const errResp = (error as { response?: { detail?: string } }).response;
-      setError(errResp?.detail ?? "Failed to start GitHub login");
+      setError(describeRequestError(error));
     }
   }
 
@@ -298,11 +298,10 @@ export function GitHubLoginModal(): m.Component<GitHubLoginModalAttrs> {
         setError("Authentication did not succeed.");
       }
     } catch (error) {
-      const errResp = (error as { response?: { detail?: string } }).response;
       // Same single-use-session reasoning as the branch above: the device
       // session is already gone, so send the user to the "Start over" error
       // screen rather than back to the code screen.
-      setError(errResp?.detail ?? "Failed to complete sign-in");
+      setError(describeRequestError(error));
     }
   }
 
@@ -327,8 +326,7 @@ export function GitHubLoginModal(): m.Component<GitHubLoginModalAttrs> {
         setInlineTokenError("GitHub did not accept the token. Double-check and try again.");
       }
     } catch (error) {
-      const errResp = (error as { response?: { detail?: string } }).response;
-      setInlineTokenError(errResp?.detail ?? "Failed to save token");
+      setInlineTokenError(describeRequestError(error));
     }
   }
 

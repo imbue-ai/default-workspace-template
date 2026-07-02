@@ -99,3 +99,22 @@
 
 - The confirmed thumbnail/manifest edits are committed before the push (no more
   placeholder-then-re-push), with a clean-git-status pre-push check.
+
+- **Fixed a data-loss bug**: publishing could reset the live mind's own branch
+  to an old inspiration base. The assembly worktree's commit has the live
+  mind's HEAD as its parent but a tree fully reset to a (possibly much older)
+  base; merging that branch into the live mind's checkout with `git merge`
+  made git treat everything the old base lacked as an intentional deletion,
+  wiping real content (in one incident, `vendor/mngr/src` and other live
+  files). The publish skill no longer merges anything into the live mind: the
+  assembly worktree's tree is pushed directly as the new repo, and the live
+  checkout is never written to again after assembly starts. The base-ref
+  pre-check also now requires the `/welcome` takeover markers, so a stale base
+  is rejected before assembly rather than silently degrading later.
+
+- Fixed silent 500s from the GitHub-login popup. A failed device-flow spawn or
+  status check raised `GitHubAuthError`, which the backend turned into an HTTP
+  error response without ever logging it -- so a failure was undiagnosable
+  from the container's logs. Failures are now logged server-side, and the
+  modal surfaces the real error detail (via the same error-parsing helper
+  other views use) instead of a generic "Failed to start GitHub login" string.

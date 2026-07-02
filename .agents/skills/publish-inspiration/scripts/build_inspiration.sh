@@ -126,6 +126,33 @@ if [ -n "$base_missing" ]; then
     exit 5
 fi
 
+# A bootable base can still predate the /welcome inspiration-takeover markers
+# (added in a later FCT commit than some older bootable bases), which would
+# silently degrade step 8's welcome rewrite: the rewrite would be skipped, so
+# a mind created from this inspiration would get the generic welcome instead
+# of taking over into the adaptation conversation. Require the markers as
+# exact whole lines in the base's welcome skill, the same way step 8 matches
+# them, so a too-old base is caught here -- before any destructive read-tree --
+# rather than surfacing as a benign-sounding warning after the commit.
+WELCOME_CHECK_FILE=".agents/skills/welcome/SKILL.md"
+welcome_missing=""
+welcome_content="$(git show "${BASE_REF}:${WELCOME_CHECK_FILE}" 2> /dev/null || true)"
+if [ -z "$welcome_content" ]; then
+    welcome_missing="${WELCOME_CHECK_FILE} (not present in base tree)"
+else
+    if ! printf '%s\n' "$welcome_content" | grep -qxF -- '<!-- INSPIRATION:BEGIN -->'; then
+        welcome_missing="${welcome_missing} <!-- INSPIRATION:BEGIN -->"
+    fi
+    if ! printf '%s\n' "$welcome_content" | grep -qxF -- '<!-- INSPIRATION:END -->'; then
+        welcome_missing="${welcome_missing} <!-- INSPIRATION:END -->"
+    fi
+fi
+if [ -n "$welcome_missing" ]; then
+    echo "build_inspiration.sh: BASE REF INVALID: the tree of '${BASE_REF}' is missing the /welcome inspiration-takeover markers:${welcome_missing}" >&2
+    echo "build_inspiration.sh: '${BASE_REF}' predates the welcome-takeover feature -- a mind created from this inspiration would not adapt on boot; walk forward along the first-parent chain to a newer base, or ask the user" >&2
+    exit 5
+fi
+
 # --- 1. stage the selected paths out of the LIVE worktree BEFORE the reset ----
 
 # rsync -R preserves each relative path so it lands at the same location under

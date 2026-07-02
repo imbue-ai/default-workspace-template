@@ -12,10 +12,27 @@ inspiration, all at the repo root). This skill assembles the snapshot on a
 clean template base, shows the user a confirmation popup, and (on confirm)
 creates the repo and pushes.
 
-All commands run with **cwd = repo root** (`/code` inside a running mind). You
-own the popup, the GitHub login, and the push; the assembly + smoke-check run in
-an isolated local `git worktree` in this same container (no sub-agent -- it is a
-fast, deterministic script, not work that warrants delegation).
+The assembly + smoke-check run in an isolated local `git worktree` in this same
+container (no sub-agent -- it is a fast, deterministic script, not work that
+warrants delegation). You own the popup, the GitHub login, and the push.
+
+> **CWD INVARIANT -- read this before running anything in §§6-8.** From the
+> moment §3's `git worktree add` succeeds, the live mind's checkout at `/code`
+> is DONE being touched for the rest of this skill. Every command in §6
+> (popup), §7 (GitHub auth), and §8 (create repo + push) -- including any
+> follow-up commit that writes the popup-confirmed thumbnail/title/description
+> -- runs with **cwd = `$WT`** (the assembly worktree), NEVER `/code`. There is
+> no merge-back step: `$WT`'s tree, built by `build_inspiration.sh` on top of
+> `BASE_REF`, IS the tree that gets pushed, as-is. `/code`'s branch and working
+> tree are never modified, merged into, or pushed from. This is the single most
+> important invariant in this skill: a prior version of this skill merged the
+> assembly branch into `/code`'s current branch before pushing, which one time
+> silently reset `/code`'s entire live tree to an old base (a normal 3-way
+> merge diffs from the merge-base, and the assembled tree looks nothing like
+> `/code`'s HEAD, so git read everything present in HEAD but absent from the
+> old base as an intentional deletion). Do not reintroduce a merge, a
+> `git checkout mngr/<slug>` in `/code`, or any other step that runs from
+> `/code` after assembly.
 
 ## Shared conventions
 
@@ -77,19 +94,27 @@ only.
 
 **Mandatory pre-check (before ANY assembly).** Verify the resolved base is a
 bootable template -- its tree must name both `pyproject.toml` and
-`supervisord.conf`:
+`supervisord.conf` -- AND that it already carries the `/welcome` inspiration
+takeover markers (`<!-- INSPIRATION:BEGIN -->` / `<!-- INSPIRATION:END -->` as
+exact whole lines in `.agents/skills/welcome/SKILL.md`), since the assembly
+script's `/welcome` rewrite (§4's item 9, "the assembly script" section below)
+needs them to drive round-2 adaptation on boot -- a base that predates the
+markers silently degrades that feature even though it still boots:
 
 ```bash
 git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx pyproject.toml \
-  && git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx supervisord.conf
+  && git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx supervisord.conf \
+  && git show "<BASE_REF>:.agents/skills/welcome/SKILL.md" 2>/dev/null | grep -qxF -- '<!-- INSPIRATION:BEGIN -->' \
+  && git show "<BASE_REF>:.agents/skills/welcome/SKILL.md" 2>/dev/null | grep -qxF -- '<!-- INSPIRATION:END -->'
 ```
 
 If the check fails, STOP and reconsider the base (e.g. walk forward along the
-first-parent chain to the earliest commit that passes, or ask the user) rather
-than launching assembly -- this catches the wrong-root problem in seconds
-instead of a full assembly round-trip. `build_inspiration.sh` re-validates this
-itself and exits 5 with a clear message (see §5), but that is a backstop, not a
-substitute for the pre-check.
+first-parent chain to the earliest commit that passes all four checks, or ask
+the user) rather than launching assembly -- this catches the wrong-root and
+too-old-base problems in seconds instead of a full assembly round-trip.
+`build_inspiration.sh` re-validates all four conditions itself and exits 5 with
+a clear message (see §5), but that is a backstop, not a substitute for the
+pre-check.
 
 ## 3. Assemble on a local git worktree (same container, no sub-agent)
 
@@ -127,8 +152,11 @@ git worktree add -q -b "mngr/<slug>" "$WT" HEAD
 
 Check the subshell's exit code and handle the guard rails directly (§5): a
 non-zero exit means nothing was committed -- surface the reason to the user and
-stop. On success the assembled commit is on `mngr/<slug>`; proceed to §6 to merge
-it. You own the popup, GitHub login, and push (§§6-9).
+stop. On success the assembled commit is on `mngr/<slug>`, checked out at
+`$WT`, and `$WT` is HEAD -- there is no merge-back into `/code`. Close the
+assembly step, then proceed straight to §6 (the publish popup), §7 (GitHub
+auth), and §8 (create repo + push), ALL running with **cwd = `$WT`** (see the
+callout above).
 
 ## 4. What the assembly does
 
@@ -149,25 +177,19 @@ otherwise (see §5). It prints a summary of what it assembled to stderr.
   BEFORE any repo creation. Selected apps having holes is expected and does NOT
   fail the check.
 - **Non-template base (exit 5).** The `--base-ref` does not resolve to a tree
-  in the repo, or its tree is not a bootable template (it lacks
-  `pyproject.toml` and/or `supervisord.conf` -- e.g. a parallel subtree root
-  was picked instead of the real seed). Nothing was committed; re-resolve
-  `BASE_REF` per §2 (its pre-check should have caught this before assembly).
+  in the repo, or its tree is not a bootable template: it lacks
+  `pyproject.toml` and/or `supervisord.conf` (e.g. a parallel subtree root was
+  picked instead of the real seed), or it lacks the `/welcome` inspiration
+  takeover markers (`<!-- INSPIRATION:BEGIN -->` / `<!-- INSPIRATION:END -->`
+  as exact whole lines in `.agents/skills/welcome/SKILL.md`) needed to drive
+  round-2 adaptation on boot. Nothing was committed; re-resolve `BASE_REF` per
+  §2 (its pre-check should have caught this before assembly).
 
-## 6. Merge the assembly branch and clean up
+## 6. Raise the publish popup
 
-Merge the assembled commit (manifest, thumbnail, rewritten `/welcome`) into your
-current working branch so it is present for the push, then remove the throwaway
-worktree:
-
-```bash
-git merge --no-ff mngr/<slug>
-git worktree remove --force "/tmp/inspiration-<slug>"
-```
-
-Resolve any conflicts manually, then close the assembly step.
-
-## 7. Raise the publish popup
+**cwd = `$WT` for this and every remaining section.** The manifest/thumbnail
+files referenced below (`inspiration-<slug>.md` / `.svg`) live at `$WT`'s repo
+root, not `/code`'s.
 
 Build the request from the assembled values and POST it:
 
@@ -206,8 +228,9 @@ On a response file, read the `InspirationPublishResponse`:
   user may have edited them, so the skill MUST use the response fields, not the
   values it originally proposed. The backend already stripped `<script>` / `on*`
   handlers / `<foreignObject>` from `thumbnail_svg`; write that sanitized value
-  into `inspiration-<slug>.svg`, and re-commit the manifest/thumbnail if the
-  confirmed title/description/thumbnail differ from what the assembly generated.
+  into `$WT/inspiration-<slug>.svg`, and re-commit the manifest/thumbnail IN
+  `$WT` if the confirmed title/description/thumbnail differ from what the
+  assembly generated.
 
 **Inline-chat fallback (no popup).** Confirm in chat instead: present the
 proposed title, description, repo name, and visibility; let the user edit any
@@ -216,13 +239,15 @@ the confirmed response fields. The one exception is the thumbnail: the popup
 path depends on the backend's SVG sanitization, so never accept raw SVG through
 chat -- keep the placeholder SVG the assembly generated.
 
-**Commit before §9's push.** Once you have confirmed values (popup or
+**Commit before §8's push.** Once you have confirmed values (popup or
 fallback), write the sanitized SVG and any edited title/description into
-`inspiration-<slug>.svg` / `inspiration-<slug>.md` and COMMIT that change
-before proceeding to §8/§9. Never push first and fix up the thumbnail or
-manifest with a second commit-and-re-push.
+`$WT/inspiration-<slug>.svg` / `$WT/inspiration-<slug>.md` and COMMIT that
+change with cwd = `$WT` before proceeding to §7/§8. Never push first and fix up
+the thumbnail or manifest with a second commit-and-re-push. This commit -- like
+everything else in this skill after assembly -- happens IN `$WT`, never
+`/code`.
 
-## 8. Ensure GitHub auth (no agent restart)
+## 7. Ensure GitHub auth (no agent restart)
 
 Check whether `gh` is authenticated. Run it with the token env vars scrubbed:
 your agent shell inherits `GH_TOKEN`, and `gh` prioritizes that over its stored
@@ -277,17 +302,21 @@ The modal backend wires the git credential helper in place (`gh auth login`
 followed by `gh auth setup-git`), so your subsequent `gh` / `git push` picks it
 up at push time. Do NOT restart the agent or re-source the environment.
 
-## 9. Create the repo and push
+## 8. Create the repo and push
+
+**cwd = `$WT`.** This is the step that actually publishes -- it MUST run from
+the assembly worktree so `gh repo create --source=.` picks up `$WT`'s tree
+(the clean assembled snapshot), never `/code`'s.
 
 With `repo_name` / `visibility` taken from the confirmed response:
 
-- **Pre-push checklist:** `git status` must be clean -- the confirmed
-  thumbnail/manifest edits from §7 are already committed, nothing uncommitted
-  remains. If anything is dirty, commit it first; never push and then fix up
-  with a re-push.
+- **Pre-push checklist:** `(cd "$WT" && git status)` must be clean -- the
+  confirmed thumbnail/manifest edits from §6 are already committed in `$WT`,
+  nothing uncommitted remains. If anything is dirty, commit it first (in
+  `$WT`); never push and then fix up with a re-push.
 
 ```bash
-env -u GH_TOKEN -u GITHUB_TOKEN gh repo create "<repo_name>" --<visibility> --source=. --remote=inspiration --push
+( cd "$WT" && env -u GH_TOKEN -u GITHUB_TOKEN gh repo create "<repo_name>" --<visibility> --source=. --remote=inspiration --push )
 ```
 
 (`--private` or `--public` per `visibility`. `repo_name` is validated
@@ -295,22 +324,36 @@ env -u GH_TOKEN -u GITHUB_TOKEN gh repo create "<repo_name>" --<visibility> --so
 it as a single argv element -- never interpolate it into a shell string. The
 `env -u GH_TOKEN -u GITHUB_TOKEN` prefix is load-bearing: it forces `gh`/`git` to
 use the credential the login modal just stored via `setup-git`, not a stale
-`GH_TOKEN` inherited by your agent shell.)
+`GH_TOKEN` inherited by your agent shell. `--source=.` resolves relative to the
+`cd "$WT"` in the same subshell, so it always means `$WT`, never `/code`.)
 
 **Failure handling.** If `gh repo create` fails (e.g. the name is taken, or the
 token lacks the `workflow` scope needed to push `.github/workflows/` -- see
-§8), report it to the user and re-open the publish popup (step 7)
-for a new name / visibility, keeping the assembled commit intact. Loop until it
-succeeds or the user aborts.
+§7), report it to the user and re-open the publish popup (§6)
+for a new name / visibility, keeping the assembled commit intact in `$WT`. Loop
+until it succeeds or the user aborts.
 
-## 10. Accumulation
+## 9. Accumulation
 
 Publishing a mind that already holds `inspiration-*.md` manifests plus their app
 dirs carries ALL of them forward into the new repo alongside the newly-published
 one -- they are part of the assembled tree. The `/welcome` rewrite targets only
 the newly-published slug (the latest).
 
-## 11. Close out
+## 10. Close out
+
+On a successful push, remove the throwaway worktree and its branch -- the
+commit is fully preserved on the new remote, so keeping a stray local branch of
+an old snapshot around in `/code` is just clutter:
+
+```bash
+git worktree remove --force "$WT"
+git branch -D "mngr/<slug>"
+```
+
+If the push failed and you are stopping (user aborted, unrecoverable error),
+leave `$WT` and the `mngr/<slug>` branch intact instead -- do not delete work
+the user may want to retry or reassemble from.
 
 Close the assembly step with a work-summary line. Report the new repo URL in
 your final assistant message to the user (not in the step summary).
@@ -334,8 +377,10 @@ VM). Interface (cwd = worktree repo root):
 What it does, in order (see the script for the exact commands):
 
 1. Validates that the `--base-ref` tree names `pyproject.toml` and
-   `supervisord.conf` (a bootable template base); exits 5 with a clear message
-   otherwise, before touching the worktree (see §5).
+   `supervisord.conf` (a bootable template base) AND carries the `/welcome`
+   inspiration takeover markers in `.agents/skills/welcome/SKILL.md` (needed
+   for round-2 adaptation on boot); exits 5 with a clear message otherwise,
+   before touching the worktree (see §5).
 2. Stages the selected paths out of the current live-mind worktree into a
    scratch dir (preserving relative paths) BEFORE resetting.
 3. Resets the worktree to the clean base with
