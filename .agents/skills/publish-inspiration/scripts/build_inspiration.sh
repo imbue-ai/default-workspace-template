@@ -19,6 +19,10 @@
 #   - Boot smoke-check via the supervisor python lib (realize/process_config),
 #     NEVER `supervisord -t` (in supervisord, -t means --strip_ansi and LAUNCHES
 #     the daemon).
+#
+# Exit codes: 0 = success; 1 = secret scan hit; 2 = usage error; 3 = nothing to
+# publish beyond the base; 4 = boot smoke-check failed; 5 = --base-ref does not
+# resolve to a bootable template tree.
 
 set -euo pipefail
 
@@ -97,6 +101,30 @@ cd "$REPO"
 
 MANIFEST="inspiration-${SLUG}.md"
 THUMBNAIL="inspiration-${SLUG}.svg"
+
+# --- 0. validate that BASE_REF is a real, bootable FCT template tree ---------
+
+# Guard against a wrong --base-ref: minds assembled via subtree merges can have
+# several parallel root commits, and a naive fallback can land on a near-empty
+# one instead of the real FCT seed. Any bootable template tree must contain
+# pyproject.toml and supervisord.conf, so require both in BASE_REF's tree. This
+# runs BEFORE the destructive read-tree in step 2 so a bad ref aborts cleanly
+# without touching the worktree.
+if ! git rev-parse --verify --quiet "${BASE_REF}^{tree}" > /dev/null; then
+    echo "build_inspiration.sh: BASE REF INVALID: '${BASE_REF}' does not resolve to a tree in this repo" >&2
+    exit 5
+fi
+base_missing=""
+for required in pyproject.toml supervisord.conf; do
+    if [ -z "$(git ls-tree --name-only "${BASE_REF}^{tree}" -- "$required")" ]; then
+        base_missing="${base_missing} ${required}"
+    fi
+done
+if [ -n "$base_missing" ]; then
+    echo "build_inspiration.sh: BASE REF INVALID: the tree of '${BASE_REF}' is missing:${base_missing}" >&2
+    echo "build_inspiration.sh: '${BASE_REF}' does not look like a bootable forever-claude-template base (a wrong root commit from a subtree merge?) -- pass the real FCT seed commit as --base-ref" >&2
+    exit 5
+fi
 
 # --- 1. stage the selected paths out of the LIVE worktree BEFORE the reset ----
 
@@ -275,11 +303,21 @@ fi
 
 # --- 6. generate the manifest ------------------------------------------------
 
-# Build a human-readable "Apps included" list from the include paths (grouped by
-# top-level dir for a light touch; the worker can enrich the prose sections).
-apps_included=""
+# The manifest is the single document the NEXT agent (in a mind created from
+# this inspiration) reads to understand, present, and adapt the inspiration.
+# The deterministic parts (front-matter, included-path list, the "How to adapt
+# it" script, section skeletons) are generated here; the prose that requires
+# knowledge of the live mind is left as clearly-marked FILL-IN blocks that the
+# publishing agent MUST replace before the popup/confirmation step.
+
+# Human-readable list of what the snapshot includes, derived from the include
+# paths (data includes are labeled as such).
+included_paths_block=""
 for rel in "${INCLUDE_PATHS[@]}"; do
-    apps_included+="- \`${rel}\`"$'\n'
+    included_paths_block+="- \`${rel}\`"$'\n'
+done
+for rel in "${DATA_INCLUDE_PATHS[@]}"; do
+    included_paths_block+="- \`${rel}\` (data, explicitly opted in)"$'\n'
 done
 
 manifest_description="$DESCRIPTION"
@@ -296,21 +334,73 @@ thumbnail: ${THUMBNAIL}
 
 # ${TITLE}
 
+This file is the manifest for the **${TITLE}** inspiration (slug:
+\`${SLUG}\`). It is the one document a future agent reads to understand,
+present, and adapt this inspiration. If you are an agent in a mind that was
+created from this inspiration, this file is your script: read all of it, then
+follow "How to adapt it" below.
+
 ## What it is
+
 ${manifest_description}
 
-## Apps included
-${apps_included}
+<!-- FILL-IN (publishing agent): BEFORE the popup step, replace this comment
+with a one-paragraph overview of what this inspiration does for its user: the
+problem it solves, the main things it produces (pages, reports, automations),
+and what the user sees when it is running. Write for a reader who has never
+seen the original mind. -->
+
+## How it works
+
+The snapshot includes these paths (each is a repo-root-relative path copied
+from the original mind onto a clean forever-claude-template base):
+
+${included_paths_block}
+<!-- FILL-IN (publishing agent): BEFORE the popup step, replace this comment
+with prose that makes the list above self-explanatory: for each included path,
+say what it is (an app or lib with code, a skill, data) and what role it plays.
+Then describe how the pieces wire together at runtime: which supervisord
+programs (in supervisord.conf) run them, which ports they listen on and how
+those are registered in forward_port.py (if applicable), and any scripts or
+services that connect them. -->
+
+## How to adapt it
+
+Instructions for the NEXT agent -- the one adapting this inspiration into a
+new mind. This is the \`use-inspiration\` skill's template path; in short:
+
+1. Read this entire file first, especially "Holes" and "Permissions it may
+   need" below -- they are your agenda for the conversation.
+2. Present the inspiration to the user in plain, non-technical language: what
+   it is, what it does, and what it needs from them.
+3. Ask the user directly: "How do you want to adapt it?" Do not start changing
+   anything before having this conversation.
+4. Work through each hole interactively, one at a time. Translate each into
+   plain language, ask for a decision only when you genuinely need one, and
+   resolve the obvious ones yourself.
+5. When done, append a dated entry to "Adaptation history" below (never
+   rewrite earlier entries) and commit.
+
 ## Holes
-What is missing, stubbed, or must be wired by the adapter goes here (for
-example, external integrations that ship as placeholders and need the adapter's
-own account or channel).
+
+<!-- FILL-IN (publishing agent): BEFORE the popup step, replace this comment
+with one bullet per hole: every part the adapter must supply or rewire --
+stubbed integrations, hardcoded accounts/channels/ids, data that was not
+included, anything that will not work out of the box. For each, say what is
+missing and what a working replacement looks like. If there are genuinely no
+holes, say so explicitly. -->
 
 ## Permissions it may need
-Tokens, scopes, or external accounts the adapter must supply go here (for
-example, an API token with a specific scope).
+
+<!-- FILL-IN (publishing agent): BEFORE the popup step, replace this comment
+with the tokens, scopes, or external accounts the adapter must supply (for
+example, an API token with a specific scope, or a Slack app installed in their
+workspace). If none are needed, say so explicitly. -->
 
 ## Adaptation history
+
+Each mind that adapts this inspiration appends one dated entry below. Earlier
+entries are never rewritten.
 MANIFEST_EOF
 
 # --- 7. generate a placeholder thumbnail (mock data only) --------------------
@@ -331,31 +421,46 @@ THUMB_EOF
 # --- 8. rewrite the /welcome stable region -----------------------------------
 
 # Replace everything BETWEEN the two markers (exclusive of the markers
-# themselves) with an inspiration-specific welcome that names this inspiration.
-# Deterministic (awk on the two markers), never an LLM freeform edit. The
-# markers, the "Welcome to Minds" opening, and the suggestions list are
-# preserved.
+# themselves) with the inspiration takeover region: the title, slug, one-line
+# description, and manifest path, plus the instruction to take over the
+# welcome (custom greeting instead of the generic one) and immediately start
+# the adaptation conversation. Deterministic (awk on the two markers), never
+# an LLM freeform edit. The markers and everything outside them (the generic
+# welcome, the takeover instructions, the marker contract) are preserved.
+# Markers are matched as EXACT WHOLE LINES (grep -x, awk string equality), so
+# prose elsewhere in the file that merely mentions the marker text can never
+# trigger the rewrite.
 WELCOME_FILE=".agents/skills/welcome/SKILL.md"
 if [ -f "$WELCOME_FILE" ] \
-    && grep -q '<!-- INSPIRATION:BEGIN -->' "$WELCOME_FILE" \
-    && grep -q '<!-- INSPIRATION:END -->' "$WELCOME_FILE"; then
+    && grep -qxF -- '<!-- INSPIRATION:BEGIN -->' "$WELCOME_FILE" \
+    && grep -qxF -- '<!-- INSPIRATION:END -->' "$WELCOME_FILE"; then
     NEW_REGION_FILE="$(mktemp)"
     cat > "$NEW_REGION_FILE" <<WELCOME_REGION_EOF
 
-This project was created from the **${TITLE}** inspiration (slug: \`${SLUG}\`).
-Its manifest is at \`inspiration-${SLUG}.md\`. To adapt it into this mind --
-filling in its holes with the user -- follow the \`use-inspiration\` skill
-(template path) on \`inspiration-${SLUG}.md\`.
+This mind was created from an inspiration, so the **Inspiration takeover**
+path of this skill applies -- NOT the generic welcome.
+
+- Title: ${TITLE}
+- Slug: \`${SLUG}\`
+- Description: ${manifest_description}
+- Manifest: \`inspiration-${SLUG}.md\` (at the repo root)
+
+In your FIRST response: output a CUSTOM welcome that names **${TITLE}** and
+gives the one-line description above, INSTEAD of the generic "Welcome to
+Minds" message. Then, in the SAME turn and without waiting to be asked, read
+\`inspiration-${SLUG}.md\` and begin the adaptation conversation by asking the
+user how they want to adapt it -- the \`use-inspiration\` skill's template
+path, with the manifest's "How to adapt it" section as the script.
 WELCOME_REGION_EOF
     awk -v regionfile="$NEW_REGION_FILE" '
-        /<!-- INSPIRATION:BEGIN -->/ {
+        $0 == "<!-- INSPIRATION:BEGIN -->" {
             print
             while ((getline line < regionfile) > 0) print line
             close(regionfile)
             skip = 1
             next
         }
-        /<!-- INSPIRATION:END -->/ {
+        $0 == "<!-- INSPIRATION:END -->" {
             skip = 0
             print
             next

@@ -21,6 +21,7 @@ derives the endpoint from `view_func.__name__`, so without an explicit
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from flask import Flask
 from flask import Response
@@ -57,12 +58,19 @@ def _require_loopback() -> Response | None:
     return None
 
 
-def publish_request() -> Response:
+def publish_request(get_ws_client_count: Callable[[], int]) -> Response:
     """POST /api/inspiration/publish-request -- record a pending proposal.
 
-    Posted by the /publish-inspiration skill. Stores the pending slug, clears
-    any stale response file, and broadcasts `inspiration_publish_requested` so
-    the frontend opens the publish modal.
+    Posted by the /publish-inspiration skill. Stores the pending request,
+    clears any stale response file, and broadcasts
+    `inspiration_publish_requested` so the frontend opens the publish modal.
+
+    The 200 reply carries `ws_client_count`: the number of currently-connected
+    `/api/ws` clients at broadcast time. The broadcast is fire-and-forget, so
+    the skill uses this to skip (or shorten) its response-file poll when
+    nobody was listening -- a count of 0 means no live UI could have shown
+    the modal at this instant (though a client that connects later still
+    receives the pending proposal via the connect-time replay).
     """
     guard = _require_loopback()
     if guard is not None:
@@ -73,7 +81,7 @@ def publish_request() -> Response:
     except (ValueError, TypeError) as e:
         return _error_response(f"Invalid request body: {e}")
     service.record_request(body)
-    return _json_response({"status": "ok"})
+    return _json_response({"status": "ok", "ws_client_count": get_ws_client_count()})
 
 
 def publish_confirm() -> Response:
@@ -124,18 +132,22 @@ def get_status() -> Response:
     return _json_response(service.status().model_dump())
 
 
-def register_routes(application: Flask) -> None:
+def register_routes(application: Flask, get_ws_client_count: Callable[[], int]) -> None:
     """Wire `/api/inspiration/*` endpoints onto the Flask application.
 
     The handlers read the `InspirationService` from the app's
     `SystemInterfaceState`; `create_application` is responsible for placing it
-    there before the app serves requests. Every rule sets an explicit
-    namespaced `endpoint=` to avoid a Flask endpoint-name collision with the
-    other modules' `get_status` view functions.
+    there before the app serves requests. `get_ws_client_count` is injected by
+    `create_application` (bound to the `/api/ws` connection counter) so the
+    publish-request reply can report how many live WebSocket clients the
+    broadcast could have reached. Every rule sets an explicit namespaced
+    `endpoint=` to avoid a Flask endpoint-name collision with the other
+    modules' `get_status` view functions (the explicit names also let
+    lambda views register without a `__name__`).
     """
     application.add_url_rule(
         "/api/inspiration/publish-request",
-        view_func=publish_request,
+        view_func=lambda: publish_request(get_ws_client_count),
         methods=["POST"],
         endpoint="inspiration_publish_request",
     )

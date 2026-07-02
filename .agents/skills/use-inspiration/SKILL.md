@@ -21,15 +21,20 @@ anything else.
 
 **A. Template path — this mind was created from an inspiration repo.** The mind
 already has the inspiration's tree at its root (it *is* the inspiration repo), so
-there is nothing to fetch. The rewritten `/welcome` stable region (between the
-`<!-- INSPIRATION:BEGIN -->` / `<!-- INSPIRATION:END -->` markers in
-`.agents/skills/welcome/SKILL.md`) drives adaptation on startup and names the
-latest inspiration's title and slug. Default to adapting the **latest**
-inspiration — the `inspiration-<slug>.md` for the most-recently-published slug
-recorded in that welcome region. Older `inspiration-*.md` manifests are reference
-material and were likely already adapted by an earlier mind. If more than one
-manifest is present, you may ask the user which one they want to adapt. Skip
-step 1 below (the tree is already here) and go straight to reading the manifest.
+there is nothing to fetch. On this path adaptation starts IMMEDIATELY at boot:
+the rewritten `/welcome` region (between the `<!-- INSPIRATION:BEGIN -->` /
+`<!-- INSPIRATION:END -->` markers in `.agents/skills/welcome/SKILL.md`) takes
+over the welcome, so the booting agent's first response is a custom welcome
+naming the inspiration's title and one-line description (instead of the generic
+"Welcome to Minds" message), followed in the same turn — without waiting to be
+asked — by reading the manifest and asking the user how they want to adapt it.
+The manifest's "How to adapt it" section is the script for that conversation.
+Default to adapting the **latest** inspiration — the `inspiration-<slug>.md` for
+the most-recently-published slug recorded in that welcome region. Older
+`inspiration-*.md` manifests are reference material and were likely already
+adapted by an earlier mind. If more than one manifest is present, you may ask
+the user which one they want to adapt. Skip step 1 below (the tree is already
+here) and go straight to reading the manifest.
 
 **B. Merge path — the user gave you an inspiration's git URL.** Bring the
 inspiration into the *current* mind at the repo root, then adapt it. Do step 1
@@ -71,10 +76,11 @@ Locate the manifest at the repo root:
   `/welcome` stable region (or the one the user chose).
 
 Read its front-matter (`title`, `description`, `thumbnail`) and its body sections:
-`What it is`, `Apps included`, `Holes`, and `Permissions it may need`. These four
-sections are your agenda for the conversation — especially `Holes` and
-`Permissions it may need`, which tell you exactly what the original author left
-for the adapter to fill in.
+`What it is`, `How it works`, `How to adapt it`, `Holes`, and `Permissions it
+may need` (older manifests may have `Apps included` instead of `How it works`
+and no `How to adapt it`). `How to adapt it` is the script for the conversation;
+`Holes` and `Permissions it may need` are its agenda — they tell you exactly
+what the original author left for the adapter to fill in.
 
 ## 3. Ask the user how to adapt
 

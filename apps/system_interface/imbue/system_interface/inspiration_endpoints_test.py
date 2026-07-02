@@ -18,16 +18,24 @@ request and confirm bodies.
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
+import simple_websocket
+from flask import Flask
 from flask.testing import FlaskClient
+from werkzeug.serving import BaseWSGIServer
 
+from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.inspiration import InspirationService
 from imbue.system_interface.inspiration import _RESPONSE_FILENAME
 from imbue.system_interface.server import create_application
+from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
+from imbue.system_interface.wsgi import make_threaded_server
 
 # A non-loopback client address; the loopback-guarded handlers must reject it.
 _NON_LOOPBACK_ENVIRON = {"REMOTE_ADDR": "10.0.0.5"}
@@ -40,7 +48,7 @@ _SLUG = "slack-inbox"
 _DIRTY_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" onload="steal()">'
     '<script>fetch("//evil")</script>'
-    '<foreignObject><div>x</div></foreignObject>'
+    "<foreignObject><div>x</div></foreignObject>"
     '<rect width="10" height="10" />'
     "</svg>"
 )
@@ -66,6 +74,80 @@ def _client(service: InspirationService) -> Iterator[FlaskClient]:
     """Build a Flask test client over an app wired with the given service."""
     app = create_application(inspiration_service=service)
     yield app.test_client()
+
+
+# How long a WebSocket client waits for the next frame in the real-server
+# tests. Frames arrive over loopback within milliseconds; the margin only
+# matters on a heavily-loaded CI box.
+_WS_RECEIVE_TIMEOUT_SECONDS = 5.0
+
+# How long the no-replay assertions wait to prove no further frame arrives.
+# Kept short: this bounds the runtime of every negative check.
+_WS_QUIET_TIMEOUT_SECONDS = 0.5
+
+
+def _build_production_wired_app(tmp_path: Path) -> Flask:
+    """Build an app whose InspirationService broadcasts over the app's real broadcaster.
+
+    The unit-style tests above inject a recording `broadcast` to assert on
+    events without sockets; the real-server tests below instead need the
+    production wiring (`InspirationService.broadcast` -> the same
+    `WebSocketBroadcaster` the `/api/ws` connections drain), because they
+    assert on frames arriving at a real WebSocket client. Only `response_dir`
+    is redirected, into the test's `tmp_path`.
+    """
+    broadcaster = WebSocketBroadcaster()
+    agent_manager = AgentManager.build(broadcaster)
+    service = InspirationService(response_dir=tmp_path, broadcast=broadcaster.broadcast)
+    return create_application(agent_manager=agent_manager, inspiration_service=service)
+
+
+@contextmanager
+def _real_server(app: Flask) -> Iterator[str]:
+    """Serve ``app`` on a real loopback port; yield the ``http://...`` base URL.
+
+    The threaded server matches production (`make_threaded_server` is what
+    `main` runs), which is what makes real WebSocket connections -- and
+    therefore the `/api/ws` connection counter and connect-time replay --
+    testable end-to-end.
+    """
+    server: BaseWSGIServer = make_threaded_server("127.0.0.1", 0, app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+
+
+def _connect_ws(base_url: str) -> simple_websocket.Client:
+    """Open a real WebSocket connection to the app's ``/api/ws`` endpoint."""
+    ws_url = base_url.replace("http://", "ws://") + "/api/ws"
+    return simple_websocket.Client.connect(ws_url)
+
+
+def _receive_event(ws: simple_websocket.Client) -> dict[str, Any] | None:
+    """Receive and decode one JSON frame, or None if nothing arrives in time."""
+    data = ws.receive(timeout=_WS_RECEIVE_TIMEOUT_SECONDS)
+    if data is None:
+        return None
+    return json.loads(data)
+
+
+def _receive_until_type(ws: simple_websocket.Client, event_type: str, max_frames: int = 10) -> dict[str, Any] | None:
+    """Read frames until one of ``event_type`` arrives; None if it never does.
+
+    Skips over the connect-time snapshot frames (``agents_updated``,
+    ``applications_updated``, proto-agent replays) that precede the frame
+    under test.
+    """
+    for _ in range(max_frames):
+        event = _receive_event(ws)
+        if event is None:
+            return None
+        if event["type"] == event_type:
+            return event
+    return None
 
 
 def _build_service(tmp_path: Path) -> tuple[InspirationService, _RecordingBroadcaster]:
@@ -120,6 +202,10 @@ def test_publish_request_records_pending_and_broadcasts(tmp_path: Path) -> None:
     with _client(service) as client:
         response = client.post("/api/inspiration/publish-request", json=_request_body())
         assert response.status_code == 200
+        # The broadcast is fire-and-forget, so the reply reports how many
+        # live /api/ws clients it could have reached. The Flask test client
+        # carries no WebSocket connections, so the count is 0 here.
+        assert response.get_json() == {"status": "ok", "ws_client_count": 0}
 
         status = client.get("/api/inspiration/status")
     assert status.status_code == 200
@@ -328,6 +414,81 @@ def test_publish_confirm_rejects_slug_mismatch(tmp_path: Path) -> None:
         )
     assert response.status_code == 400
     assert not (tmp_path / _RESPONSE_FILENAME).exists()
+
+
+def test_publish_request_reaches_connected_ws_client_and_counts_it(tmp_path: Path) -> None:
+    """A live /api/ws client receives the broadcast, and the reply counts it.
+
+    End-to-end over a real socket (threaded server + real WebSocket client),
+    because this is exactly the path that silently failed in production: a
+    200 OK publish-request whose broadcast never rendered a modal. The reply's
+    `ws_client_count` must be 1 (one live client) and the client must receive
+    the `inspiration_publish_requested` frame with the full proposal.
+    """
+    app = _build_production_wired_app(tmp_path)
+    with _real_server(app) as base_url:
+        ws = _connect_ws(base_url)
+        try:
+            # Wait for the connect-time snapshot: once it arrives, the server-side
+            # handler is registered and counted, so the POST below cannot race it.
+            first = _receive_event(ws)
+            assert first is not None
+            assert first["type"] == "agents_updated"
+
+            response = httpx.post(f"{base_url}/api/inspiration/publish-request", json=_request_body())
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok", "ws_client_count": 1}
+
+            event = _receive_until_type(ws, "inspiration_publish_requested")
+            assert event is not None
+            assert event["slug"] == _SLUG
+            assert event["title"] == "Slack Inbox"
+        finally:
+            ws.close()
+
+
+def test_pending_publish_request_is_replayed_to_late_connecting_ws_client(tmp_path: Path) -> None:
+    """A proposal recorded with nobody listening reaches the next client to connect.
+
+    The original broadcast is fire-and-forget; if no live client was connected
+    (reply reports `ws_client_count` 0), the pending proposal must be replayed
+    as part of the connect-time snapshot so the publish modal still opens as
+    soon as a UI connects.
+    """
+    app = _build_production_wired_app(tmp_path)
+    with _real_server(app) as base_url:
+        response = httpx.post(f"{base_url}/api/inspiration/publish-request", json=_request_body())
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "ws_client_count": 0}
+
+        ws = _connect_ws(base_url)
+        try:
+            event = _receive_until_type(ws, "inspiration_publish_requested")
+            assert event is not None
+            assert event["slug"] == _SLUG
+            assert event["thumbnail_svg"] == "<svg></svg>"
+        finally:
+            ws.close()
+
+
+def test_resolved_publish_request_is_not_replayed_on_connect(tmp_path: Path) -> None:
+    """After an abort resolves the proposal, new connections get no replay."""
+    app = _build_production_wired_app(tmp_path)
+    with _real_server(app) as base_url:
+        httpx.post(f"{base_url}/api/inspiration/publish-request", json=_request_body())
+        httpx.post(f"{base_url}/api/inspiration/abort", json={})
+
+        ws = _connect_ws(base_url)
+        try:
+            # Connect snapshot: agents_updated then applications_updated, then
+            # nothing -- the resolved proposal must not be replayed.
+            first = _receive_event(ws)
+            second = _receive_event(ws)
+            assert first is not None and first["type"] == "agents_updated"
+            assert second is not None and second["type"] == "applications_updated"
+            assert ws.receive(timeout=_WS_QUIET_TIMEOUT_SECONDS) is None
+        finally:
+            ws.close()
 
 
 def test_all_inspiration_routes_reject_non_loopback(tmp_path: Path) -> None:

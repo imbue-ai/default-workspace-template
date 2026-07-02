@@ -281,6 +281,17 @@ class GitHubAuthStatusResponse(FrozenModel):
     logged_in: bool = Field(description="Whether gh is authenticated for github.com")
     username: str | None = Field(default=None, description="Authenticated GitHub login, if any")
     host: str = Field(default="github.com", description="gh host checked")
+    token_scopes: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Classic OAuth scopes reported by gh auth status; empty tuple when gh reports 'none' "
+            "(e.g. a fine-grained PAT), None when the scopes line is absent"
+        ),
+    )
+    warning: str | None = Field(
+        default=None,
+        description="Human-readable warning about the stored credential (e.g. missing workflow scope)",
+    )
 
 
 class GitHubAuthStartRequest(FrozenModel):

@@ -29,16 +29,22 @@ from __future__ import annotations
 
 import json
 import queue
+import threading
 from collections.abc import Iterator
 from collections.abc import Mapping
 from contextlib import contextmanager
 
+import httpx
+import simple_websocket
+from flask import Flask
 from flask.testing import FlaskClient
+from werkzeug.serving import BaseWSGIServer
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.github_auth import GitHubAuthService
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import FakeFinishedProcess
+from imbue.system_interface.wsgi import make_threaded_server
 
 # A token the PAT path pipes over stdin; the test asserts it arrives verbatim
 # (with the trailing newline `gh auth login --with-token` reads to EOF).
@@ -297,9 +303,135 @@ def test_require_broadcasts_github_auth_required() -> None:
     client_queue = broadcaster.register()
     response = app.test_client().post("/api/github-auth/require", json={})
     assert response.status_code == 200
+    # The broadcast is fire-and-forget, so the reply reports how many live
+    # /api/ws clients it could have reached. The queue registered above is
+    # not a real /api/ws connection, so the count here is 0 -- the skill uses
+    # this to skip a blind wait when no UI is listening.
+    assert response.get_json() == {"status": "ok", "ws_client_count": 0}
     messages = _drain(client_queue)
     broadcaster.unregister(client_queue)
     assert {"type": "github_auth_required"} in messages
+
+
+# How long a WebSocket client waits for the next frame in the real-server
+# tests. Frames arrive over loopback within milliseconds; the margin only
+# matters on a heavily-loaded CI box.
+_WS_RECEIVE_TIMEOUT_SECONDS = 5.0
+
+# How long the no-replay assertion waits to prove no further frame arrives.
+_WS_QUIET_TIMEOUT_SECONDS = 0.5
+
+
+@contextmanager
+def _real_server(app: Flask) -> Iterator[str]:
+    """Serve ``app`` on a real loopback port; yield the ``http://...`` base URL.
+
+    The threaded server matches production (`make_threaded_server` is what
+    `main` runs), which is what makes real WebSocket connections -- and
+    therefore the `/api/ws` connect-time replay of a pending
+    `github_auth_required` prompt -- testable end-to-end.
+    """
+    server: BaseWSGIServer = make_threaded_server("127.0.0.1", 0, app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+
+
+def _connect_ws(base_url: str) -> simple_websocket.Client:
+    """Open a real WebSocket connection to the app's ``/api/ws`` endpoint."""
+    ws_url = base_url.replace("http://", "ws://") + "/api/ws"
+    return simple_websocket.Client.connect(ws_url)
+
+
+def _receive_connect_event_types(ws: simple_websocket.Client) -> list[str]:
+    """Collect the event types of every connect-time frame the server pushes.
+
+    Reads the two guaranteed snapshot frames (``agents_updated``,
+    ``applications_updated``) with a generous timeout, then keeps reading with
+    a short quiet-window timeout until the stream goes silent -- which is how
+    the "no replay" cases terminate.
+    """
+    types: list[str] = []
+    for _ in range(2):
+        data = ws.receive(timeout=_WS_RECEIVE_TIMEOUT_SECONDS)
+        if data is None:
+            return types
+        types.append(json.loads(data)["type"])
+    is_quiet = False
+    while not is_quiet:
+        data = ws.receive(timeout=_WS_QUIET_TIMEOUT_SECONDS)
+        if data is None:
+            is_quiet = True
+        else:
+            types.append(json.loads(data)["type"])
+    return types
+
+
+def test_pending_auth_requirement_is_replayed_to_late_connecting_ws_client() -> None:
+    """A require posted with nobody listening reaches the next client to connect.
+
+    The `github_auth_required` broadcast is fire-and-forget; if no live
+    /api/ws client was connected (the reply reports `ws_client_count` 0), the
+    prompt must be replayed as part of the connect-time snapshot so the login
+    modal still opens as soon as a UI connects.
+    """
+    runner = _RecordingCommandRunner()
+    service = GitHubAuthService(command_runner=runner)
+    app = create_application(github_auth_service=service)
+    with _real_server(app) as base_url:
+        response = httpx.post(f"{base_url}/api/github-auth/require", json={})
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "ws_client_count": 0}
+
+        ws = _connect_ws(base_url)
+        try:
+            assert "github_auth_required" in _receive_connect_event_types(ws)
+        finally:
+            ws.close()
+
+
+def test_aborted_auth_requirement_is_not_replayed_on_connect() -> None:
+    """After the user dismisses the login modal (abort), new connections get no replay."""
+    runner = _RecordingCommandRunner()
+    service = GitHubAuthService(command_runner=runner)
+    app = create_application(github_auth_service=service)
+    with _real_server(app) as base_url:
+        httpx.post(f"{base_url}/api/github-auth/require", json={})
+        httpx.post(f"{base_url}/api/github-auth/abort", json={})
+
+        ws = _connect_ws(base_url)
+        try:
+            assert "github_auth_required" not in _receive_connect_event_types(ws)
+        finally:
+            ws.close()
+
+
+def test_logged_in_status_clears_auth_requirement_replay() -> None:
+    """A status check that reports logged-in resolves the pending prompt.
+
+    The user may log in out-of-band (e.g. `gh auth login` in a terminal);
+    once any status check observes `logged_in`, the login modal must stop
+    being replayed to newly-connecting clients.
+    """
+    # The recording runner's `gh auth status` fake reports a logged-in user.
+    runner = _RecordingCommandRunner()
+    service = GitHubAuthService(command_runner=runner)
+    app = create_application(github_auth_service=service)
+    with _real_server(app) as base_url:
+        httpx.post(f"{base_url}/api/github-auth/require", json={})
+        # This test pins only the replay-clearing side effect of the status
+        # check; the status endpoint's own reply contract is pinned by
+        # test_status_endpoint_returns_parsed_status.
+        httpx.get(f"{base_url}/api/github-auth/status")
+
+        ws = _connect_ws(base_url)
+        try:
+            assert "github_auth_required" not in _receive_connect_event_types(ws)
+        finally:
+            ws.close()
 
 
 def test_status_endpoint_returns_parsed_status() -> None:

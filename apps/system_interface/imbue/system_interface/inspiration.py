@@ -135,7 +135,7 @@ def _publish_aborted_event(slug: str | None) -> dict[str, Any]:
 class InspirationService(MutableModel):
     """Coordinates the inspiration publish request/confirm handshake.
 
-    Holds the single pending proposal slug (only one publish proposal can be
+    Holds the single pending proposal (only one publish proposal can be
     open at a time, matching the single-mind / single-user deployment model)
     and writes the confirm/abort outcome to the fixed response file the polling
     skill reads. One instance is created per application and stored on
@@ -148,11 +148,16 @@ class InspirationService(MutableModel):
     response_dir: Path = _RESPONSE_DIR
     broadcast: Callable[[dict[str, Any]], None]
 
-    # The pending slug and the lock guarding it are private runtime state, not
-    # configuration data. A single lock serializes record/confirm/abort so the
-    # response file and the pending slug never disagree.
+    # The pending request and the lock guarding it are private runtime state,
+    # not configuration data. A single lock serializes record/confirm/abort so
+    # the response file and the pending request never disagree. The FULL
+    # request (not just the slug) is retained so the broadcast can be replayed
+    # to WebSocket clients that connect after (or reconnect around) the
+    # original `inspiration_publish_requested` broadcast -- the broadcast
+    # itself is fire-and-forget, so without replay a client that wasn't
+    # live at that instant would never see the publish modal.
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _pending_slug: str | None = PrivateAttr(default=None)
+    _pending_request: InspirationPublishRequest | None = PrivateAttr(default=None)
 
     def _response_path(self) -> Path:
         return self.response_dir / _RESPONSE_FILENAME
@@ -174,15 +179,29 @@ class InspirationService(MutableModel):
 
         Deletes any stale response file from a prior proposal (so the skill's
         poll for *this* proposal doesn't immediately read an old outcome),
-        stores the pending slug, then broadcasts `inspiration_publish_requested`
+        stores the pending request, then broadcasts `inspiration_publish_requested`
         so the modal opens pre-filled. A new request supersedes any prior one.
         """
         with self._lock:
-            self._pending_slug = req.slug
+            self._pending_request = req
             stale = self._response_path()
             if stale.exists():
                 stale.unlink()
         self.broadcast(_publish_requested_event(req))
+
+    def pending_event(self) -> dict[str, Any] | None:
+        """Return the `inspiration_publish_requested` event for the pending proposal.
+
+        None when nothing is pending. Sent to every newly-connecting WebSocket
+        client (see the `/api/ws` handler) so a proposal recorded while no
+        live client was listening still opens the publish modal as soon as a
+        client connects or reconnects.
+        """
+        with self._lock:
+            pending = self._pending_request
+        if pending is None:
+            return None
+        return _publish_requested_event(pending)
 
     def confirm(self, confirm: InspirationPublishConfirm) -> InspirationPublishResponse:
         """Persist the user-confirmed (sanitized) values for the skill to read.
@@ -193,10 +212,10 @@ class InspirationService(MutableModel):
         already clean. Clears the pending slug on success.
         """
         with self._lock:
-            if self._pending_slug is None or confirm.slug != self._pending_slug:
+            pending_slug = self._pending_request.slug if self._pending_request is not None else None
+            if pending_slug is None or confirm.slug != pending_slug:
                 raise InspirationError(
-                    f"No pending inspiration proposal matches slug {confirm.slug!r}"
-                    f" (pending: {self._pending_slug!r})"
+                    f"No pending inspiration proposal matches slug {confirm.slug!r} (pending: {pending_slug!r})"
                 )
             response = InspirationPublishResponse(
                 status="confirmed",
@@ -208,7 +227,7 @@ class InspirationService(MutableModel):
                 thumbnail_svg=sanitize_svg(confirm.thumbnail_svg),
             )
             self._write_response_file(response)
-            self._pending_slug = None
+            self._pending_request = None
         return response
 
     def abort(self, slug: str | None = None) -> None:
@@ -220,13 +239,14 @@ class InspirationService(MutableModel):
         the pending slug.
         """
         with self._lock:
-            aborted_slug = slug if slug is not None else self._pending_slug
+            pending_slug = self._pending_request.slug if self._pending_request is not None else None
+            aborted_slug = slug if slug is not None else pending_slug
             self._write_response_file(InspirationPublishResponse(status="aborted", slug=aborted_slug or ""))
-            self._pending_slug = None
+            self._pending_request = None
         self.broadcast(_publish_aborted_event(aborted_slug))
 
     def status(self) -> InspirationStatusResponse:
         """Report whether a publish proposal is currently awaiting user action."""
         with self._lock:
-            pending = self._pending_slug
+            pending = self._pending_request.slug if self._pending_request is not None else None
         return InspirationStatusResponse(pending_slug=pending, has_pending=pending is not None)
