@@ -160,10 +160,32 @@ rsync -a "$STAGE/" "$REPO/"
 
 scan_failed=0
 
-# Files to scan: everything tracked-or-untracked under the assembled tree,
-# excluding the .git dir. Use git to enumerate so we respect nothing and see
-# every real file that would be committed.
-mapfile -d '' ALL_FILES < <(find "$REPO" -type f -not -path "$REPO/.git/*" -print0)
+# Files to scan: ONLY the content overlaid out of the live mind (the selected
+# --include / --data-include paths, plus any carried-forward inspiration-*.md /
+# .svg). The clean base is the trusted, public FCT template -- it cannot contain
+# the user's secrets, and its own test fixtures legitimately hold placeholder
+# token strings (e.g. "sk-ant-test"), so scanning it only produces false
+# positives that block every publish. The real risk is a secret riding in from
+# the live mind's overlaid paths, so that is exactly what we scan. Enumerating
+# only the overlay also keeps the scan cheap regardless of how large the base is
+# (never traverses vendor/, the base's fixtures, etc.).
+#
+# SCAN_ROOTS holds the repo-root-relative paths that were overlaid; ALL_FILES is
+# every file under them that now exists in the assembled tree.
+SCAN_ROOTS=()
+for rel in "${INCLUDE_PATHS[@]}" "${DATA_INCLUDE_PATHS[@]}"; do
+    [ -e "$rel" ] && SCAN_ROOTS+=("$rel")
+done
+shopt -s nullglob
+for existing in inspiration-*.md inspiration-*.svg; do
+    SCAN_ROOTS+=("$existing")
+done
+shopt -u nullglob
+
+ALL_FILES=()
+if [ "${#SCAN_ROOTS[@]}" -gt 0 ]; then
+    mapfile -d '' ALL_FILES < <(find "${SCAN_ROOTS[@]}" -type f -print0)
+fi
 
 # 5a. credential filenames (basename or path-suffix match).
 CREDENTIAL_BASENAMES=(
@@ -177,18 +199,20 @@ CREDENTIAL_BASENAMES=(
 CREDENTIAL_SUFFIXES=(
     ".config/gh/hosts.yml"
 )
+# Paths in ALL_FILES are already repo-root-relative (that is how they were
+# overlaid), so they can be printed as-is.
 for f in "${ALL_FILES[@]}"; do
     base="$(basename "$f")"
     for bad in "${CREDENTIAL_BASENAMES[@]}"; do
         if [ "$base" = "$bad" ]; then
-            echo "build_inspiration.sh: SECRET SCAN FAILED: credential file present: ${f#"$REPO"/}" >&2
+            echo "build_inspiration.sh: SECRET SCAN FAILED: credential file present: ${f}" >&2
             scan_failed=1
         fi
     done
     for suffix in "${CREDENTIAL_SUFFIXES[@]}"; do
         case "$f" in
             *"$suffix")
-                echo "build_inspiration.sh: SECRET SCAN FAILED: credential file present: ${f#"$REPO"/}" >&2
+                echo "build_inspiration.sh: SECRET SCAN FAILED: credential file present: ${f}" >&2
                 scan_failed=1
                 ;;
         esac
@@ -200,7 +224,7 @@ for f in "${ALL_FILES[@]}"; do
             case "$base" in
                 .env.example | .env.sample | .env.template) ;;
                 *)
-                    echo "build_inspiration.sh: SECRET SCAN FAILED: env file present: ${f#"$REPO"/}" >&2
+                    echo "build_inspiration.sh: SECRET SCAN FAILED: env file present: ${f}" >&2
                     scan_failed=1
                     ;;
             esac
@@ -209,17 +233,26 @@ for f in "${ALL_FILES[@]}"; do
 done
 
 # 5b. token / key value patterns inside file contents.
-# Patterns: GitHub tokens (ghp_, github_pat_, gho_), Anthropic keys (sk-ant-),
-# AWS access key ids (AKIA + 16 upper alnum), and PEM private-key headers.
-TOKEN_PATTERN='ghp_|github_pat_|gho_|sk-ant-|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
-for f in "${ALL_FILES[@]}"; do
-    # Skip binary files: grep -I treats them as non-matching, but we also want to
-    # avoid huge assets. -I skips binary; -E enables the alternation.
-    if grep -IEl -- "$TOKEN_PATTERN" "$f" >/dev/null 2>&1; then
-        echo "build_inspiration.sh: SECRET SCAN FAILED: token/key pattern in: ${f#"$REPO"/} (value redacted)" >&2
+# Patterns match the token PREFIX immediately followed by enough secret-body
+# characters to be a real credential, so short placeholder values that share a
+# prefix (e.g. "sk-ant-test", "ghp_example") do NOT fire:
+#   - GitHub PATs:    ghp_ / gho_ + 36 base62 chars; github_pat_ + 22+ base62/_.
+#   - Anthropic keys: sk-ant- + 24+ chars of [A-Za-z0-9-_] (real keys are ~90+;
+#                     "sk-ant-test" is only 4 trailing chars and is skipped).
+#   - AWS access ids: AKIA + 16 upper alnum.
+#   - PEM headers:    a private-key header line.
+TOKEN_PATTERN='ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|sk-ant-[A-Za-z0-9_-]{24,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+if [ "${#ALL_FILES[@]}" -gt 0 ]; then
+    # -I skips binary files, -E enables the alternation, -l lists matching paths.
+    # One grep over the overlaid file list (not a fork per file). Paths are
+    # already repo-root-relative. grep exits 1 (no matches) or 2 (only
+    # unreadable-file warnings) harmlessly; a real hit prints the path here.
+    while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        echo "build_inspiration.sh: SECRET SCAN FAILED: token/key pattern in: ${hit} (value redacted)" >&2
         scan_failed=1
-    fi
-done
+    done < <(grep -IElE -- "$TOKEN_PATTERN" "${ALL_FILES[@]}" 2>/dev/null)
+fi
 
 if [ "$scan_failed" -ne 0 ]; then
     echo "build_inspiration.sh: aborting before commit -- secret scan found credentials or tokens in the assembled tree" >&2
@@ -342,15 +375,35 @@ fi
 # NEVER `supervisord -t`: in supervisord, -t means --strip_ansi and LAUNCHES the
 # daemon. If the lib is unavailable, skip the check (config holes in selected
 # apps are acceptable; the base booting is what matters).
+#
+# Run the check with the interpreter that already ships the supervisor lib --
+# the one behind the installed `supervisord` binary's shebang (system python) --
+# NOT `uv run`. `uv run` would resolve and BUILD the whole project environment
+# (workspace sources, native wheels like line-profiler) just to import one lib:
+# many seconds on a cold clean base, and it can fail outright on an unrelated
+# build error, spuriously aborting a publish that is otherwise fine. Deriving
+# the interpreter from the supervisord shebang keeps the check ~0.1s and robust.
 smoke_ok=1
 if [ -f "supervisord.conf" ]; then
-    if ! uv run python - <<'PYEOF'
+    SMOKE_PY="python3"
+    SUPERVISORD_BIN="$(command -v supervisord 2>/dev/null || true)"
+    if [ -n "$SUPERVISORD_BIN" ]; then
+        shebang="$(head -1 "$SUPERVISORD_BIN" 2>/dev/null || true)"
+        case "$shebang" in
+            '#!'*)
+                # First token after the "#!" is the interpreter path.
+                candidate="$(printf '%s' "${shebang#\#!}" | awk '{print $1}')"
+                [ -x "$candidate" ] && SMOKE_PY="$candidate"
+                ;;
+        esac
+    fi
+    if ! "$SMOKE_PY" - <<'PYEOF'
 import sys
 
 try:
     from supervisor.options import ServerOptions
 except Exception:
-    # supervisor lib unavailable in this environment -- skip the check.
+    # supervisor lib unavailable in this interpreter -- skip the check.
     sys.exit(0)
 
 options = ServerOptions()

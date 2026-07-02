@@ -36,3 +36,30 @@
 
 - Added a one-sentence note in `CLAUDE.md` that inspirations exist. Publishing
   is user-initiated; the agent does not proactively push the user to create one.
+
+- Made inspiration assembly fast and reliable. The secret scan in
+  `build_inspiration.sh` now scans only the paths overlaid out of the live mind
+  (the selected apps/data plus carried-forward manifests) instead of the whole
+  assembled tree; the clean FCT base is trusted and public, so scanning it only
+  produced false positives on its own test-fixture placeholder tokens (e.g.
+  `sk-ant-test`) that blocked every publish. The token patterns now also require
+  a realistic key length after each prefix, so short placeholder values do not
+  fire, and the single-pass scan no longer traverses `vendor/mngr` or the base's
+  fixtures. The boot smoke-check now runs on the interpreter that already ships
+  the supervisor library (the installed `supervisord` binary's shebang) rather
+  than `uv run`, which had to resolve and build the entire project environment
+  just to parse `supervisord.conf` -- slow on a cold base and prone to spurious
+  aborts on unrelated build errors. Assembly now runs directly in a local
+  throwaway `git worktree` in the same container instead of a `launch-task`
+  sub-agent, which added minutes of latency for a sub-second job without adding
+  isolation.
+
+- Fixed the in-mind GitHub-login modal so it can actually persist a credential.
+  The system_interface process inherits `GH_TOKEN` from the agent environment,
+  and `gh` prioritizes `GH_TOKEN` / `GITHUB_TOKEN` (and enterprise variants) over
+  its credential store -- so `gh auth login` refused to store the pasted/web
+  credential and `gh auth status` reported the env token, and the modal never
+  wrote anything durable. Every `gh` call in the GitHub-auth backend now runs
+  with those variables scrubbed from the child environment (the parent process
+  environment is untouched), and the publish skill scrubs them for its own
+  `gh auth status` probe and final `gh repo create --push` too.

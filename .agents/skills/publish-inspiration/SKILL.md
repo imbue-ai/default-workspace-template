@@ -12,9 +12,10 @@ inspiration, all at the repo root). This skill assembles the snapshot on a
 clean template base, shows the user a confirmation popup, and (on confirm)
 creates the repo and pushes.
 
-All commands run with **cwd = repo root** (`/code` inside a running mind). The
-lead owns the popup, the GitHub login, and the push; a `launch-task` worker
-does only the isolated assembly + smoke-check.
+All commands run with **cwd = repo root** (`/code` inside a running mind). You
+own the popup, the GitHub login, and the push; the assembly + smoke-check run in
+an isolated local `git worktree` in this same container (no sub-agent -- it is a
+fast, deterministic script, not work that warrants delegation).
 
 ## Shared conventions
 
@@ -34,8 +35,7 @@ does only the isolated assembly + smoke-check.
   start with `-` (the backend re-validates). `repo_name` defaults to `slug`;
   the popup may override it (the backend re-validates the override). The same
   slug names the manifest (`inspiration-<slug>.md`), the thumbnail
-  (`inspiration-<slug>.svg`), the worker (`$NAME` = `<slug>`), its branch
-  (`mngr/<slug>`), and the runtime dir (`runtime/launch-task/<slug>/`).
+  (`inspiration-<slug>.svg`), and the assembly branch (`mngr/<slug>`).
 - **`BASE_REF` (provenance + clean base).** The FCT commit this mind was
   created from. Resolve it **in-repo, with no network access** (see step 2); do
   NOT `git fetch`/`git pull` upstream. Pass it to `build_inspiration.sh` as
@@ -67,92 +67,76 @@ whose subject starts with `update-self:` and falling back to the root commit if
 there is none. Do NOT fetch or pull from upstream to obtain it -- `parent.toml`
 is a provenance link only.
 
-## 3. Delegate assembly to a launch-task worker
+## 3. Assemble on a local git worktree (same container, no sub-agent)
 
-Follow the `launch-task` skill (`.agents/skills/launch-task/SKILL.md`) verbatim
-for the worker lifecycle. Open one step:
+Assembly is a fast, deterministic script (`build_inspiration.sh`, ~a second), so
+run it yourself on a throwaway `git worktree` in THIS container. Do NOT delegate
+it to a `launch-task` sub-agent: that spins up a second agent with its own
+boot/read/report/poll loop -- minutes of latency for a sub-second job -- and adds
+no isolation, because a `git worktree` already gives a clean, separate working
+tree while leaving the live mind (`/code`) completely untouched. Open one step:
 
 ```bash
-tk create --step "Assemble the shareable inspiration snapshot with a sub-agent"
+tk create --step "Assemble the shareable inspiration snapshot"
 # -> Created cod-step-XXXX: ...
 tk start cod-step-XXXX
 ```
 
-Write `runtime/launch-task/<slug>/task.md` with frontmatter addressing yourself
-as the lead:
-
-```yaml
----
-lead_agent: $MNGR_AGENT_NAME
-finish_report_path: runtime/launch-task/<slug>/reports/report.md
----
-```
-
-The task body MUST instruct the worker to:
-
-- run `build_inspiration.sh` (this skill's script, below) on its isolated
-  worktree with the resolved `--base-ref <BASE_REF>`, `--slug <slug>`,
-  `--title "<title>"`, one `--include <path>` per resolved include path, and (only
-  if the user opted in) `--data-include <path>` entries;
-- report back per `.agents/shared/references/worker-reporting.md`, with valid
-  `name:` values `question` / `done` / `stuck`.
-
-Put the include paths and `BASE_REF` **inside the task body** (they are not
-gitignored artifacts, so no `source_artifacts_dir` is needed). Then launch:
+Use a **deterministic** worktree path (so later steps can find it) and a fresh
+`mngr/<slug>` branch, then run the assembly script inside it. The script `cd`s to
+its own worktree root, so its `git read-tree -u --reset` + `git clean -fdxq`
+rewrite ONLY that worktree, never `/code`:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
-    --name <slug> --template worker \
-    --runtime-dir runtime/launch-task/<slug>/ \
-    --task-file runtime/launch-task/<slug>/task.md
+WT="/tmp/inspiration-<slug>"
+git worktree remove --force "$WT" 2>/dev/null || rm -rf "$WT"   # clear any stale worktree
+git branch -D "mngr/<slug>" 2>/dev/null || true
+git worktree add -q -b "mngr/<slug>" "$WT" HEAD
+( cd "$WT" && bash /code/.agents/skills/publish-inspiration/scripts/build_inspiration.sh \
+    --base-ref <BASE_REF> \
+    --slug <slug> \
+    --title "<title>" \
+    --description "<description>" \
+    --include <path> [--include <path> ...] \
+    [--data-include <path> ...] )
 ```
 
-Background-poll for the report (`run_in_background: true`), per launch-task §3:
+Check the subshell's exit code and handle the guard rails directly (§5): a
+non-zero exit means nothing was committed -- surface the reason to the user and
+stop. On success the assembled commit is on `mngr/<slug>`; proceed to §6 to merge
+it. You own the popup, GitHub login, and push (§§6-9).
+
+## 4. What the assembly does
+
+`build_inspiration.sh` (documented below) does the whole assembly in the
+worktree: clean base + overlay + secret scan + manifest + thumbnail + `/welcome`
+rewrite + boot smoke-check + a single commit. It communicates purely via its
+exit code -- `0` on success (the assembled commit is on `mngr/<slug>`), non-zero
+otherwise (see §5). It prints a summary of what it assembled to stderr.
+
+## 5. Guard rails (the script's non-zero exits)
+
+- **Secret scan (exit 1).** A credential/token rode in on an overlaid path.
+  Nothing was committed; surface the flagged path (value redacted) and stop.
+- **No-diff guard (exit 3).** The resolved include set contributes nothing
+  beyond `BASE_REF` (the assembled tree equals the base tree). Tell the user
+  plainly and do NOT create a repo -- there are no empty inspiration repos.
+- **Boot smoke-check (exit 4).** The clean base does not boot at all; abort
+  BEFORE any repo creation. Selected apps having holes is expected and does NOT
+  fail the check.
+
+## 6. Merge the assembly branch and clean up
+
+Merge the assembled commit (manifest, thumbnail, rewritten `/welcome`) into your
+current working branch so it is present for the push, then remove the throwaway
+worktree:
 
 ```bash
-# Run with Bash run_in_background: true
-uv run .agents/skills/launch-task/scripts/create_worker.py await \
-    --task-file runtime/launch-task/<slug>/task.md
-```
-
-Handle the report per `.agents/shared/references/lead-proxy.md`: proxy a
-`question` gate to the user; on `done` proceed to step 6; on `stuck` or a poll
-timeout follow `.agents/skills/launch-task/references/worker-failure.md`. **The
-worker only assembles + smoke-checks in its isolated `mngr/<slug>` worktree.**
-The lead (you) owns the popup, GitHub login, and push (steps 6-9).
-
-## 4. Worker: clean base + overlay + secret scan + manifest + welcome + smoke-check
-
-The worker performs all of this by invoking `build_inspiration.sh` (documented
-below) on its isolated worktree. On success it reports `done` with a body
-summarizing what was assembled (the overlaid paths, the manifest path, the
-thumbnail path, and whether the boot smoke-check passed). Otherwise it reports
-`question` or `stuck`.
-
-## 5. Guard rails the worker reports back
-
-- **No-diff guard.** If the resolved include set contributes nothing beyond
-  `BASE_REF` (the assembled tree equals the base tree), `build_inspiration.sh`
-  fails and the worker reports `stuck` with reason "nothing to publish". Tell
-  the user plainly and do NOT create a repo -- there are no empty inspiration
-  repos.
-- **Boot smoke-check.** If the clean base does not boot at all
-  (`build_inspiration.sh` step 9 fails), the worker reports `stuck` "base does
-  not boot"; abort BEFORE any repo creation. Selected apps having holes is
-  expected and does NOT fail the check.
-
-## 6. Merge the worker branch
-
-On a `done` report, merge `mngr/<slug>` into your current working branch so the
-assembled commit, the manifest, the thumbnail, and the rewritten `/welcome` are
-present in your tree for the push:
-
-```bash
-git fetch . mngr/<slug>:mngr/<slug>
 git merge --no-ff mngr/<slug>
+git worktree remove --force "/tmp/inspiration-<slug>"
 ```
 
-Resolve any conflicts manually, then close the launch-task step.
+Resolve any conflicts manually, then close the assembly step.
 
 ## 7. Raise the publish popup
 
@@ -174,8 +158,7 @@ JSON
 ```
 
 Then poll `/code/runtime/inspiration/publish-response.json` until it exists
-(mirror `create_worker.py await`'s cadence: check, then sleep ~5s, bounded).
-Read the `InspirationPublishResponse`:
+(check, then sleep ~5s, bounded). Read the `InspirationPublishResponse`:
 
 - `status == "aborted"` -> stop. Leave the assembled commit intact and tell the
   user publishing was cancelled.
@@ -185,14 +168,18 @@ Read the `InspirationPublishResponse`:
   values it originally proposed. The backend already stripped `<script>` / `on*`
   handlers / `<foreignObject>` from `thumbnail_svg`; write that sanitized value
   into `inspiration-<slug>.svg`, and re-commit the manifest/thumbnail if the
-  confirmed title/description/thumbnail differ from what the worker generated.
+  confirmed title/description/thumbnail differ from what the assembly generated.
 
 ## 8. Ensure GitHub auth (no agent restart)
 
-Check whether `gh` is authenticated:
+Check whether `gh` is authenticated. Run it with the token env vars scrubbed:
+your agent shell inherits `GH_TOKEN`, and `gh` prioritizes that over its stored
+credential, so an unscrubbed probe can report a stale/invalid env token as
+"logged in" (and the later push would use that stale token instead of the
+credential the modal just stored):
 
 ```bash
-gh auth status --hostname github.com
+env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --hostname github.com
 ```
 
 On a non-zero exit (not logged in):
@@ -216,12 +203,15 @@ push time. Do NOT restart the agent or re-source the environment.
 With `repo_name` / `visibility` taken from the confirmed response:
 
 ```bash
-gh repo create "<repo_name>" --<visibility> --source=. --remote=inspiration --push
+env -u GH_TOKEN -u GITHUB_TOKEN gh repo create "<repo_name>" --<visibility> --source=. --remote=inspiration --push
 ```
 
 (`--private` or `--public` per `visibility`. `repo_name` is validated
 `^[A-Za-z0-9._-]+$` server-side, which blocks argument injection, but still pass
-it as a single argv element -- never interpolate it into a shell string.)
+it as a single argv element -- never interpolate it into a shell string. The
+`env -u GH_TOKEN -u GITHUB_TOKEN` prefix is load-bearing: it forces `gh`/`git` to
+use the credential the login modal just stored via `setup-git`, not a stale
+`GH_TOKEN` inherited by your agent shell.)
 
 **Failure handling.** If `gh repo create` fails (e.g. the name is taken or the
 token lacks scope), report it to the user and re-open the publish popup (step 7)
@@ -237,12 +227,12 @@ the newly-published slug (the latest).
 
 ## 11. Close out
 
-Close the launch-task step with a work-summary line. Report the new repo URL in
+Close the assembly step with a work-summary line. Report the new repo URL in
 your final assistant message to the user (not in the step summary).
 
 ## The assembly script: `scripts/build_inspiration.sh`
 
-The worker runs `scripts/build_inspiration.sh` on its isolated worktree. It is
+You run `scripts/build_inspiration.sh` inside the assembly worktree (§3). It is
 self-contained (the dev `create-new-mind-repo` recipe is NOT available in the
 VM). Interface (cwd = worktree repo root):
 

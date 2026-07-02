@@ -27,6 +27,15 @@ is run explicitly so the git credential helper is wired. This is what makes
 Claude API-key path): `gh` persists into its own credential store, which git
 consults per-invocation via the credential helper.
 
+Every `gh` invocation runs with the GitHub token environment variables
+(`GH_TOKEN` / `GITHUB_TOKEN` and their enterprise variants) scrubbed from the
+child environment. `gh` prioritizes those over its credential store, so an
+inherited `GH_TOKEN` (the system_interface process inherits one from the agent
+environment) would make `gh auth login` refuse to persist and `gh auth status`
+report the env token instead of the store -- the login modal could never write
+a durable credential. Scrubbing them for the child forces `gh` to read/write
+its store, which is the entire point of the modal. See `_gh_child_env`.
+
 Dependencies that touch the outside world (subprocess invocation and
 pexpect-driven PTY spawning) are injected into `GitHubAuthService` at
 construction so tests can substitute deterministic fakes without
@@ -68,6 +77,24 @@ _GH_SETUP_GIT_TIMEOUT_SECONDS: Final = 20.0
 _GH_WEB_CODE_WAIT_SECONDS: Final = 30.0
 _GH_WEB_COMPLETE_WAIT_SECONDS: Final = 60.0
 
+# `gh` gives these environment variables absolute priority over its credential
+# store: when any is set, `gh auth login` refuses to persist a new credential
+# ("The value of the GH_TOKEN environment variable is being used for
+# authentication. To have GitHub CLI store credentials instead, first clear the
+# value from the environment.") and `gh auth status` reports the env token
+# rather than the store. The system_interface process inherits `GH_TOKEN` from
+# the agent environment (see supervisord.conf), so every `gh` invocation in
+# this module MUST run with these scrubbed -- otherwise the login modal can
+# never write a credential the way its whole design intends (persist into the
+# store, wire git via setup-git, no agent restart). We scrub for the child only;
+# the parent process environment is untouched.
+_GH_TOKEN_ENV_VARS: Final = (
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+)
+
 # Lenient, non-greedy, no trailing punctuation: gh may wrap these in ANSI or
 # surrounding prose, so we match just the code/URL shape and nothing more.
 _GH_USER_CODE_REGEX = re.compile(r"[A-Z0-9]{4}-[A-Z0-9]{4}")
@@ -92,6 +119,22 @@ CommandRunner = Callable[..., Any]
 PexpectSpawner = Callable[..., Any]
 
 
+def _gh_child_env(overrides: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return the current environment with the GitHub token vars removed.
+
+    `gh` prioritizes `GH_TOKEN` / `GITHUB_TOKEN` (and enterprise variants) over
+    its credential store; leaving them set makes `gh auth login` refuse to
+    persist and `gh auth status` report the env token instead of the store.
+    Since the system_interface process inherits `GH_TOKEN`, every `gh` call in
+    this module runs with these scrubbed so gh reads and writes its store. The
+    returned dict is a fresh copy; `os.environ` is not mutated.
+    """
+    child_env = {key: value for key, value in os.environ.items() if key not in _GH_TOKEN_ENV_VARS}
+    if overrides is not None:
+        child_env.update(overrides)
+    return child_env
+
+
 def _default_command_runner(
     command: list[str],
     timeout: float,
@@ -106,16 +149,19 @@ def _default_command_runner(
     `input` is given we run the child directly so we can attach a real stdin
     pipe; otherwise we defer to the shared runner so status/setup-git calls go
     through the same code path the rest of the app uses.
+
+    The child always runs with the GitHub token env vars scrubbed (see
+    `_gh_child_env`) so `gh` reads and writes its credential store rather than
+    deferring to an inherited `GH_TOKEN`.
     """
     if input is not None:
-        runner_env = {**os.environ, **env} if env is not None else None
         completed = subprocess.run(
             command,
             input=input,
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=runner_env,
+            env=_gh_child_env(env),
         )
         return FinishedProcess(
             returncode=completed.returncode,
@@ -124,11 +170,13 @@ def _default_command_runner(
             command=tuple(command),
             is_output_already_logged=False,
         )
-    return run_local_command_modern_version(command=command, is_checked=False, timeout=timeout, cwd=None, env=env)
+    return run_local_command_modern_version(
+        command=command, is_checked=False, timeout=timeout, cwd=None, env=_gh_child_env(env)
+    )
 
 
 def _default_pexpect_spawner(executable: str, args: list[str], timeout: float) -> Any:
-    return pexpect.spawn(executable, args, timeout=timeout, encoding="utf-8")
+    return pexpect.spawn(executable, args, timeout=timeout, encoding="utf-8", env=_gh_child_env())
 
 
 class GitHubAuthStatus(FrozenModel):
