@@ -97,7 +97,7 @@ describe("computeVisibleWindow", () => {
     expect(offsetBeforeStart).toBeLessThanOrEqual(100);
   });
 
-  it("renders the last row when scrolled past the end", () => {
+  it("fills backward to cover the viewport when scrolled past the end", () => {
     const result = computeVisibleWindow({
       count: 10,
       getHeight: uniform(100),
@@ -105,9 +105,101 @@ describe("computeVisibleWindow", () => {
       viewportHeight: 500,
       overscanPx: 0,
     });
-    expect(result.startIndex).toBe(9);
+    // Coverage = viewport (500) + 2*overscan (0) = 500px -> the last 5 rows.
+    expect(result.startIndex).toBe(5);
     expect(result.endIndex).toBe(10);
     expect(result.bottomPad).toBe(0);
-    expect(result.topPad).toBe(900);
+    expect(result.topPad).toBe(500);
+    const rendered = (result.endIndex - result.startIndex) * 100;
+    expect(result.topPad + rendered + result.bottomPad).toBe(result.totalHeight);
+  });
+
+  it("includes overscan in the past-the-end backward fill", () => {
+    const result = computeVisibleWindow({
+      count: 10,
+      getHeight: uniform(100),
+      scrollTop: 100000,
+      viewportHeight: 500,
+      overscanPx: 200,
+    });
+    // Coverage = 500 + 2*200 = 900px -> the last 9 rows.
+    expect(result.startIndex).toBe(1);
+    expect(result.endIndex).toBe(10);
+    expect(result.bottomPad).toBe(0);
+  });
+
+  it("expands the window downward to keep a pinned row below the viewport mounted", () => {
+    const result = computeVisibleWindow({
+      count: 100,
+      getHeight: uniform(100),
+      scrollTop: 0,
+      viewportHeight: 500,
+      overscanPx: 0,
+      pinnedRange: { start: 80, end: 82 },
+    });
+    // Viewport alone would render rows 0..4; the pin drags the end out to 83.
+    expect(result.startIndex).toBe(0);
+    expect(result.endIndex).toBe(83);
+    expect(result.topPad).toBe(0);
+    expect(result.bottomPad).toBe((100 - 83) * 100);
+  });
+
+  it("expands the window upward to keep a pinned row above the viewport mounted", () => {
+    const result = computeVisibleWindow({
+      count: 100,
+      getHeight: uniform(100),
+      scrollTop: 5000,
+      viewportHeight: 500,
+      overscanPx: 0,
+      pinnedRange: { start: 10, end: 10 },
+    });
+    // Viewport alone would render rows 50..54; the pin drags the start up to 10.
+    expect(result.startIndex).toBe(10);
+    expect(result.endIndex).toBe(55);
+    expect(result.topPad).toBe(10 * 100);
+  });
+
+  it("leaves the window unchanged when the pinned range is already inside it", () => {
+    const withPin = computeVisibleWindow({
+      count: 100,
+      getHeight: uniform(100),
+      scrollTop: 5000,
+      viewportHeight: 500,
+      overscanPx: 0,
+      pinnedRange: { start: 51, end: 52 },
+    });
+    expect(withPin.startIndex).toBe(50);
+    expect(withPin.endIndex).toBe(55);
+  });
+
+  it("clamps an out-of-range pinned range instead of producing a bad slice", () => {
+    const result = computeVisibleWindow({
+      count: 10,
+      getHeight: uniform(100),
+      scrollTop: 0,
+      viewportHeight: 200,
+      overscanPx: 0,
+      pinnedRange: { start: -5, end: 999 },
+    });
+    expect(result.startIndex).toBe(0);
+    expect(result.endIndex).toBe(10);
+    expect(result.topPad).toBe(0);
+    expect(result.bottomPad).toBe(0);
+  });
+
+  it("keeps a pinned row mounted even past the end of the content", () => {
+    const result = computeVisibleWindow({
+      count: 20,
+      getHeight: uniform(100),
+      scrollTop: 100000,
+      viewportHeight: 300,
+      overscanPx: 0,
+      pinnedRange: { start: 2, end: 2 },
+    });
+    // Past-the-end backward fill covers the tail; the pin additionally holds row 2.
+    expect(result.startIndex).toBe(2);
+    expect(result.endIndex).toBe(20);
+    const rendered = (result.endIndex - result.startIndex) * 100;
+    expect(result.topPad + rendered + result.bottomPad).toBe(result.totalHeight);
   });
 });

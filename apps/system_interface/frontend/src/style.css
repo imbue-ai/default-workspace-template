@@ -89,6 +89,12 @@ body {
 /* ── Messages area ── */
 .app-content {
   background: var(--color-bg);
+  /* The transcript views (ChatPanel, SubagentView) own scrollTop themselves --
+     they anchor the viewport to a specific row and pin to the tail from JS.
+     Native scroll anchoring is a second, uncoordinated writer of scrollTop that
+     fights that logic (double-compensating prepends, nudging the position as
+     off-screen rows measure). Turn it off so the app is the single owner. */
+  overflow-anchor: none;
 }
 
 /* ── User bubble ── */

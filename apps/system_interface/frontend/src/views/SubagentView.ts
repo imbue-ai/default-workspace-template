@@ -6,6 +6,13 @@ import { computeVisibleWindow } from "../models/virtualWindow";
 import { nextUserScrolledUp } from "../models/scrollFollow";
 import { createRowMeasurer, OVERSCAN_PX } from "./row-measurement";
 import { buildConversationRows, isSubagentRunning, type RowDescriptor } from "./conversation-rows";
+import {
+  captureTopAnchor,
+  contentTopOfRow,
+  resolveSelectionRowRange,
+  SELECTION_PIN_MAX_GAP_ROWS,
+  type ScrollAnchor,
+} from "./scroll-selection";
 
 interface SubagentViewAttrs {
   agentId: string;
@@ -35,12 +42,22 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   let userScrolledUp = false;
   let previousScrollTop = 0;
   let viewportResizeObserver: ResizeObserver | null = null;
+  // Scroll-anchoring / follow-hardening / selection state, mirrored from ChatPanel
+  // (see there for the rationale). The subagent transcript has no phantom paging or
+  // eviction, so this is the simpler half: anchor while scrolled up, tail-pin
+  // otherwise, defer the pin mid-drag, and keep selected rows mounted.
+  let scrollAnchor: ScrollAnchor | null = null;
+  let lastScrollHeight = 0;
+  let isPointerDown = false;
+  let pointerReleaseListener: (() => void) | null = null;
   // Memoized rows. buildConversationRows walks the whole subagent transcript, so
   // it is recomputed only when the event set or idleness changes -- not on every
   // scroll redraw. The transcript is append-only here (no in-place upgrades, no
   // eviction), so the event count plus the idle flag is a sufficient cache key.
   let rowsCacheKey = "";
   let cachedRows: RowDescriptor[] = [];
+  // Row key -> index in cachedRows, for resolving a selection's DOM rows to pin.
+  let cachedKeyToIndex = new Map<string, number>();
 
   function addEvents(incoming: TranscriptEvent[]): boolean {
     let added = false;
@@ -112,26 +129,71 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   }
 
   function applyScrollPosition(element: HTMLElement): void {
-    if (!userScrolledUp) {
-      element.scrollTop = element.scrollHeight;
+    if (userScrolledUp) {
+      applyScrollAnchor(element);
+    } else {
+      applyTailFollow(element);
+    }
+    lastScrollHeight = element.scrollHeight;
+  }
+
+  // Hold the anchored row fixed against height changes above it (relative delta so
+  // in-flight user scrolling is preserved). See ChatPanel.applyScrollAnchor.
+  function applyScrollAnchor(element: HTMLElement): void {
+    if (scrollAnchor === null) {
+      return;
+    }
+    const currentTop = contentTopOfRow(element, scrollAnchor.key);
+    if (currentTop === null) {
+      scrollAnchor = null;
+      return;
+    }
+    const delta = currentTop - scrollAnchor.contentTop;
+    if (delta !== 0) {
+      element.scrollTop = element.scrollTop + delta;
+    }
+    scrollAnchor = { key: scrollAnchor.key, contentTop: currentTop };
+    scrollTop = element.scrollTop;
+    previousScrollTop = element.scrollTop;
+  }
+
+  function applyTailFollow(element: HTMLElement): void {
+    if (isPointerDown) {
+      return;
+    }
+    const maxScroll = element.scrollHeight - element.clientHeight;
+    if (element.scrollTop < Math.min(scrollTop, maxScroll) - 1) {
+      userScrolledUp = true;
       scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
+      scrollAnchor = null;
+      return;
     }
+    element.scrollTop = element.scrollHeight;
+    scrollTop = element.scrollTop;
+    previousScrollTop = element.scrollTop;
   }
 
   function handleScrollEvent(event: Event): void {
     const element = event.target as HTMLElement;
-    const currentScrollTop = element.scrollTop;
-    const didScrollUp = currentScrollTop < previousScrollTop;
-    previousScrollTop = currentScrollTop;
-    scrollTop = currentScrollTop;
+    const didScrollUp = element.scrollTop < previousScrollTop;
+    const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 40;
+    // A shrink-clamp looks like a scroll-up but carries no user intent; preserve
+    // the follow state rather than re-deriving it (see scrollFollow).
+    const isClamp = didScrollUp && element.scrollHeight < lastScrollHeight && atBottom;
+    previousScrollTop = element.scrollTop;
+    scrollTop = element.scrollTop;
     // A subagent transcript is a single loaded list with no off-tail jump, so
     // there is never newer unloaded history below: hasMoreAfter is always false.
     userScrolledUp = nextUserScrolledUp({
       didScrollUp,
-      isNearBottom: element.scrollHeight - element.scrollTop - element.clientHeight < 40,
+      isNearBottom: atBottom,
       hasMoreAfter: false,
+      isClamp,
+      wasUserScrolledUp: userScrolledUp,
     });
+    scrollAnchor = userScrolledUp ? captureTopAnchor(element) : null;
+    lastScrollHeight = element.scrollHeight;
   }
 
   // Refresh the cached viewport height and schedule a measure pass; the
@@ -154,18 +216,52 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       // subagent's conversation renders an identical progress timeline; only the
       // idle source differs (derived here rather than from activity_state).
       cachedRows = buildConversationRows(agentId, events, agentIsIdle);
+      cachedKeyToIndex = new Map(cachedRows.map((row, index) => [row.key, index]));
       rowMeasurer.prune(new Set(cachedRows.map((row) => row.key)));
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
     const getHeight = (index: number): number => rowMeasurer.getHeight(rows[index].key) ?? rows[index].estimate;
-    const windowResult = computeVisibleWindow({
+    const effectiveViewportHeight = viewportHeight > 0 ? viewportHeight : (scrollEl?.clientHeight ?? 2000);
+    const baseWindow = computeVisibleWindow({
       count: rows.length,
       getHeight,
       scrollTop,
-      viewportHeight: viewportHeight > 0 ? viewportHeight : (scrollEl?.clientHeight ?? 2000),
+      viewportHeight: effectiveViewportHeight,
       overscanPx: OVERSCAN_PX,
     });
+    // Keep the rows holding a live selection mounted so scrolling/streaming past
+    // them doesn't collapse the selection; drop the pin past the gap cap.
+    let pinnedRange = resolveSelectionRowRange(scrollEl, cachedKeyToIndex);
+    if (pinnedRange !== null) {
+      const gapAbove = baseWindow.startIndex - pinnedRange.end;
+      const gapBelow = pinnedRange.start - baseWindow.endIndex;
+      if (gapAbove > SELECTION_PIN_MAX_GAP_ROWS || gapBelow > SELECTION_PIN_MAX_GAP_ROWS) {
+        pinnedRange = null;
+      }
+    }
+    // Keep the scroll-anchor row mounted while scrolled up so applyScrollAnchor can
+    // always measure it (see ChatPanel.withAnchorPinned).
+    if (userScrolledUp && scrollAnchor !== null) {
+      const anchorIndex = cachedKeyToIndex.get(scrollAnchor.key);
+      if (anchorIndex !== undefined) {
+        pinnedRange =
+          pinnedRange === null
+            ? { start: anchorIndex, end: anchorIndex }
+            : { start: Math.min(pinnedRange.start, anchorIndex), end: Math.max(pinnedRange.end, anchorIndex) };
+      }
+    }
+    const windowResult =
+      pinnedRange === null
+        ? baseWindow
+        : computeVisibleWindow({
+            count: rows.length,
+            getHeight,
+            scrollTop,
+            viewportHeight: effectiveViewportHeight,
+            overscanPx: OVERSCAN_PX,
+            pinnedRange,
+          });
 
     const visibleRows: m.Children[] = [];
     visibleRows.push(m("div", { key: "__spacer_top", style: `height: ${windowResult.topPad}px` }));
@@ -196,6 +292,11 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       if (viewportResizeObserver !== null) {
         viewportResizeObserver.disconnect();
         viewportResizeObserver = null;
+      }
+      if (pointerReleaseListener !== null) {
+        window.removeEventListener("pointerup", pointerReleaseListener);
+        window.removeEventListener("pointercancel", pointerReleaseListener);
+        pointerReleaseListener = null;
       }
       scrollEl = null;
     },
@@ -241,9 +342,20 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
           {
             class: "app-content flex-1 overflow-y-auto px-8 py-6",
             onscroll: handleScrollEvent,
+            onpointerdown: () => {
+              isPointerDown = true;
+            },
             oncreate: (mainVnode: m.VnodeDOM) => {
               scrollEl = mainVnode.dom as HTMLElement;
               viewportHeight = scrollEl.clientHeight;
+              pointerReleaseListener = () => {
+                if (isPointerDown) {
+                  isPointerDown = false;
+                  m.redraw();
+                }
+              };
+              window.addEventListener("pointerup", pointerReleaseListener);
+              window.addEventListener("pointercancel", pointerReleaseListener);
               viewportResizeObserver = new ResizeObserver(() => {
                 if (scrollEl !== null && scrollEl.clientHeight !== viewportHeight) {
                   viewportHeight = scrollEl.clientHeight;
