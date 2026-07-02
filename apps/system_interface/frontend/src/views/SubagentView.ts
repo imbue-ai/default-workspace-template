@@ -6,13 +6,7 @@ import { computeVisibleWindow } from "../models/virtualWindow";
 import { nextUserScrolledUp } from "../models/scrollFollow";
 import { createRowMeasurer, OVERSCAN_PX } from "./row-measurement";
 import { buildConversationRows, isSubagentRunning, type RowDescriptor } from "./conversation-rows";
-import {
-  captureTopAnchor,
-  contentTopOfRow,
-  resolveSelectionRowRange,
-  SELECTION_PIN_MAX_GAP_ROWS,
-  type ScrollAnchor,
-} from "./scroll-selection";
+import { resolveSelectionRowRange, SELECTION_PIN_MAX_GAP_ROWS } from "./scroll-selection";
 
 interface SubagentViewAttrs {
   agentId: string;
@@ -42,11 +36,10 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   let userScrolledUp = false;
   let previousScrollTop = 0;
   let viewportResizeObserver: ResizeObserver | null = null;
-  // Scroll-anchoring / follow-hardening / selection state, mirrored from ChatPanel
-  // (see there for the rationale). The subagent transcript has no phantom paging or
-  // eviction, so this is the simpler half: anchor while scrolled up, tail-pin
-  // otherwise, defer the pin mid-drag, and keep selected rows mounted.
-  let scrollAnchor: ScrollAnchor | null = null;
+  // Follow-hardening / selection state, mirrored from ChatPanel (see there for the
+  // rationale). Scrolled-up stability comes from native scroll anchoring (spacers
+  // opt out below); the app only pins to the tail while following, defers that pin
+  // mid-drag, and keeps selected rows mounted.
   let lastScrollHeight = 0;
   let isPointerDown = false;
   let pointerReleaseListener: (() => void) | null = null;
@@ -129,32 +122,14 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   }
 
   function applyScrollPosition(element: HTMLElement): void {
-    if (userScrolledUp) {
-      applyScrollAnchor(element);
-    } else {
+    // While scrolled up the app writes nothing: native scroll anchoring holds the
+    // viewport (the spacers opt out so it anchors to a real row). Only the tail
+    // pin writes scrollTop, and only when following. See ChatPanel for the full
+    // rationale (per-frame JS compensation is what caused random snaps).
+    if (!userScrolledUp) {
       applyTailFollow(element);
     }
     lastScrollHeight = element.scrollHeight;
-  }
-
-  // Hold the anchored row fixed against height changes above it (relative delta so
-  // in-flight user scrolling is preserved). See ChatPanel.applyScrollAnchor.
-  function applyScrollAnchor(element: HTMLElement): void {
-    if (scrollAnchor === null) {
-      return;
-    }
-    const currentTop = contentTopOfRow(element, scrollAnchor.key);
-    if (currentTop === null) {
-      scrollAnchor = null;
-      return;
-    }
-    const delta = currentTop - scrollAnchor.contentTop;
-    if (delta !== 0) {
-      element.scrollTop = element.scrollTop + delta;
-    }
-    scrollAnchor = { key: scrollAnchor.key, contentTop: currentTop };
-    scrollTop = element.scrollTop;
-    previousScrollTop = element.scrollTop;
   }
 
   function applyTailFollow(element: HTMLElement): void {
@@ -166,7 +141,6 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       userScrolledUp = true;
       scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
-      scrollAnchor = null;
       return;
     }
     element.scrollTop = element.scrollHeight;
@@ -192,7 +166,6 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       isClamp,
       wasUserScrolledUp: userScrolledUp,
     });
-    scrollAnchor = userScrolledUp ? captureTopAnchor(element) : null;
     lastScrollHeight = element.scrollHeight;
   }
 
@@ -240,17 +213,6 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
         pinnedRange = null;
       }
     }
-    // Keep the scroll-anchor row mounted while scrolled up so applyScrollAnchor can
-    // always measure it (see ChatPanel.withAnchorPinned).
-    if (userScrolledUp && scrollAnchor !== null) {
-      const anchorIndex = cachedKeyToIndex.get(scrollAnchor.key);
-      if (anchorIndex !== undefined) {
-        pinnedRange =
-          pinnedRange === null
-            ? { start: anchorIndex, end: anchorIndex }
-            : { start: Math.min(pinnedRange.start, anchorIndex), end: Math.max(pinnedRange.end, anchorIndex) };
-      }
-    }
     const windowResult =
       pinnedRange === null
         ? baseWindow
@@ -263,12 +225,18 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
             pinnedRange,
           });
 
+    // Spacers opt out of native scroll anchoring so the browser anchors to a real
+    // message row rather than a resizing spacer (see ChatPanel for the rationale).
     const visibleRows: m.Children[] = [];
-    visibleRows.push(m("div", { key: "__spacer_top", style: `height: ${windowResult.topPad}px` }));
+    visibleRows.push(
+      m("div", { key: "__spacer_top", style: `height: ${windowResult.topPad}px; overflow-anchor: none` }),
+    );
     for (let i = windowResult.startIndex; i < windowResult.endIndex; i++) {
       visibleRows.push(rows[i].render());
     }
-    visibleRows.push(m("div", { key: "__spacer_bottom", style: `height: ${windowResult.bottomPad}px` }));
+    visibleRows.push(
+      m("div", { key: "__spacer_bottom", style: `height: ${windowResult.bottomPad}px; overflow-anchor: none` }),
+    );
 
     return m("div", { class: "message-list-wrapper" }, [
       m(
