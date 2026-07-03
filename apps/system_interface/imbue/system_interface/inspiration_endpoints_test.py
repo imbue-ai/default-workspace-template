@@ -447,6 +447,34 @@ def test_publish_request_reaches_connected_ws_client_and_counts_it(tmp_path: Pat
             ws.close()
 
 
+def test_publish_request_racing_ws_connect_still_reaches_client(tmp_path: Path) -> None:
+    """A publish-request fired the instant a client connects still reaches it.
+
+    Regression test for a race between `WsConnectionCounter.increment()` and
+    `WebSocketBroadcaster.register()`: opening the socket alone is enough for
+    the server to count and register the client, so a broadcast that lands
+    before the connect-time snapshot frames are even read must still be
+    delivered -- unlike `test_publish_request_reaches_connected_ws_client_and_counts_it`,
+    this does not wait for the first `agents_updated` frame first, so it would
+    have caught the client being counted (`ws_client_count: 1`) before it was
+    actually registered with the broadcaster.
+    """
+    app = _build_production_wired_app(tmp_path)
+    with _real_server(app) as base_url:
+        ws = _connect_ws(base_url)
+        try:
+            response = httpx.post(f"{base_url}/api/inspiration/publish-request", json=_request_body())
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok", "ws_client_count": 1}
+
+            event = _receive_until_type(ws, "inspiration_publish_requested")
+            assert event is not None
+            assert event["slug"] == _SLUG
+            assert event["title"] == "Slack Inbox"
+        finally:
+            ws.close()
+
+
 def test_pending_publish_request_is_replayed_to_late_connecting_ws_client(tmp_path: Path) -> None:
     """A proposal recorded with nobody listening reaches the next client to connect.
 

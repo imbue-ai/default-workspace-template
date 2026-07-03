@@ -422,6 +422,54 @@ def _receive_connect_event_types(ws: simple_websocket.Client) -> list[str]:
     return types
 
 
+def test_require_reaches_connected_ws_client_and_counts_it() -> None:
+    """A live /api/ws client receives the broadcast, and the reply counts it.
+
+    End-to-end over a real socket (threaded server + real WebSocket client) --
+    `test_require_broadcasts_github_auth_required` only registers a raw
+    broadcaster queue, which never exercises `WsConnectionCounter` or a real
+    `/api/ws` send. The reply's `ws_client_count` must be 1 (one live client)
+    and the client must actually receive the `github_auth_required` frame.
+    """
+    runner = _RecordingCommandRunner()
+    service = GitHubAuthService(command_runner=runner)
+    app = create_application(github_auth_service=service)
+    with _real_server(app) as base_url:
+        ws = _connect_ws(base_url)
+        try:
+            response = httpx.post(f"{base_url}/api/github-auth/require", json={})
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok", "ws_client_count": 1}
+            assert "github_auth_required" in _receive_connect_event_types(ws)
+        finally:
+            ws.close()
+
+
+def test_require_racing_ws_connect_still_reaches_client() -> None:
+    """A require fired the instant a client connects still reaches it.
+
+    Regression test for a race between `WsConnectionCounter.increment()` and
+    `WebSocketBroadcaster.register()`: opening the socket alone is enough for
+    the server to count and register the client, so a broadcast that lands
+    before the connect-time snapshot frames are even read must still be
+    delivered. This does not wait for any connect-time frame before POSTing,
+    so it would have caught the client being counted (`ws_client_count: 1`)
+    before it was actually registered with the broadcaster.
+    """
+    runner = _RecordingCommandRunner()
+    service = GitHubAuthService(command_runner=runner)
+    app = create_application(github_auth_service=service)
+    with _real_server(app) as base_url:
+        ws = _connect_ws(base_url)
+        try:
+            response = httpx.post(f"{base_url}/api/github-auth/require", json={})
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok", "ws_client_count": 1}
+            assert "github_auth_required" in _receive_connect_event_types(ws)
+        finally:
+            ws.close()
+
+
 def test_pending_auth_requirement_is_replayed_to_late_connecting_ws_client() -> None:
     """A require posted with nobody listening reaches the next client to connect.
 

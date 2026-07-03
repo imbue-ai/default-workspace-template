@@ -622,6 +622,14 @@ def _ws_endpoint(
     feeds ``ws_client_count`` in the popup-broadcast endpoints' replies) and
     replays the app's still-pending user-action events (inspiration proposal,
     github-auth prompt) to the newly-connected client.
+
+    Registers the client with the broadcaster and increments the counter
+    together, as the very first thing this handler does -- before any
+    ``websocket.send()`` call. See ``_run_ws_broadcast_loop``'s docstring for
+    why the two must be inseparable: a popup-broadcast endpoint reads the
+    counter to decide whether anyone is listening, so a client must never be
+    countable without also already being registered to actually receive a
+    broadcast.
     """
     ws_state = get_state()
     pending_events = [
@@ -632,12 +640,14 @@ def _ws_endpoint(
         )
         if event is not None
     ]
+    client_queue = ws_state.broadcaster.register()
     ws_connection_counter.increment()
     try:
         _run_ws_broadcast_loop(
             websocket=websocket,
             agent_manager=ws_state.agent_manager,
             ws_broadcaster=ws_state.broadcaster,
+            client_queue=client_queue,
             pending_events=pending_events,
         )
     finally:
@@ -648,6 +658,7 @@ def _run_ws_broadcast_loop(
     websocket: Any,
     agent_manager: AgentManager,
     ws_broadcaster: WebSocketBroadcaster,
+    client_queue: "queue.Queue[str | None]",
     pending_events: Sequence[dict[str, Any]] = (),
 ) -> None:
     """Stream broadcaster messages to ``websocket`` until the client disconnects.
@@ -659,6 +670,21 @@ def _run_ws_broadcast_loop(
     broadcaster can also evict a hopelessly-behind client by pushing the
     shutdown sentinel (``None``) into the queue.
 
+    ``client_queue`` must already be registered with ``ws_broadcaster`` (and
+    ``WsConnectionCounter`` already incremented) by the caller, ``_ws_endpoint``,
+    before any ``websocket.send()`` runs here. Previously this function called
+    ``ws_broadcaster.register()`` itself, *after* ``_ws_endpoint`` had already
+    incremented the counter -- leaving a window where a connecting client was
+    countable (``ws_client_count: 1``) but not yet broadcaster-registered. A
+    concurrent ``/api/github-auth/require`` or ``/api/inspiration/publish-request``
+    broadcast landing in that window reported a live listener while silently
+    reaching zero actual queues, permanently dropping the popup for that
+    client (the durable ``pending_events`` replay below only protects a
+    request that is already pending *before* a client starts connecting, not
+    one racing an in-flight connect). Registering before counting closes the
+    gap: a client is never countable without also being able to receive a
+    broadcast.
+
     ``pending_events`` are replayed to the client right after the initial
     state snapshots. Broadcasts themselves are fire-and-forget (a client that
     is not connected -- or whose connection has silently died, e.g. a laptop
@@ -667,7 +693,6 @@ def _run_ws_broadcast_loop(
     proposal, a pending github-auth-required prompt) are re-sent to every
     newly-connecting client until they are resolved.
     """
-    client_queue = ws_broadcaster.register()
     try:
         websocket.send(
             json.dumps(

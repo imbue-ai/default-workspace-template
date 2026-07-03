@@ -154,3 +154,25 @@
   always real descendants of their base (it never resets a worktree's tree to
   an unrelated older commit the way the destructive-merge bug required), and it
   has no `gh repo create`-style primitive the FCT skill could have reused.
+
+- Fixed the popups never actually rendering despite the backend reporting a
+  connected client (`ws_client_count: 1`). Root cause: a race in the WebSocket
+  connect handshake -- the connection counter was incremented before the client
+  was registered with the broadcaster (registration used to happen after the
+  connect-time snapshot sends), so a publish-request or github-auth-require
+  broadcast landing in that window truthfully counted a live socket while
+  reaching zero registered listeners, permanently dropping the popup event.
+  Reproduced empirically by widening the window, then closed it: a client is
+  now registered with the broadcaster before it is ever countable. Added
+  real-socket regression tests for both popup types, including race-timing
+  tests that POST the instant the socket connects.
+
+- The publish skill's popup/auth status polls now run as background tasks
+  (mirroring launch-task's await pattern) instead of blocking foreground
+  loops, which the calling agent's own tool-execution timeout could kill
+  partway through the ~90s wait.
+
+- Every published inspiration repo is now tagged with the `minds-inspiration`
+  GitHub topic (a repo topic, not description text) right after the push, and
+  the repo's description is set from the confirmed description -- making
+  published inspirations discoverable as a group via GitHub topic search.

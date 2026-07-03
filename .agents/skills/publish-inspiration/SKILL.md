@@ -269,6 +269,16 @@ number of live frontend websocket clients that received the broadcast:
   expires with no response file, fall back to inline chat. One mechanism at a
   time, bounded, no serial thrash.
 
+  **Run this poll loop as a BACKGROUND task, not a blocking foreground
+  command** (mirror `launch-task`'s own await pattern, §3 of
+  `.agents/skills/launch-task/SKILL.md`: "Background-poll ... never block on
+  it"). A single foreground `while` loop sleeping for up to ~90s can exceed
+  the calling agent's own tool-execution timeout and get killed (exit
+  137/144) partway through, silently abandoning the wait. Launch the poll
+  with Bash `run_in_background: true` (or an equivalent backgrounded
+  script), then continue -- handle the result when the background job
+  reports back, exactly as you would not block on a launch-task worker.
+
 On a response file, read the `InspirationPublishResponse`:
 
 - `status == "aborted"` -> stop. Leave the assembled commit intact and tell the
@@ -332,6 +342,14 @@ GitHub-login modal).
   require and do NOT start a second wait; if the window expires, fall back to
   the device flow. One mechanism at a time, bounded, no serial thrash.
 
+  **Run this poll loop as a BACKGROUND task, not a blocking foreground
+  command** -- same reasoning as §6's poll: mirror `launch-task`'s
+  background-await pattern (§3 of `.agents/skills/launch-task/SKILL.md`)
+  rather than a foreground `while` loop, which can be killed by the calling
+  agent's own tool-execution timeout partway through a ~90s wait (exit
+  137/144). Launch with Bash `run_in_background: true`, then continue; handle
+  the result when it reports back.
+
 **Device-flow fallback (no modal).** Log in via `gh` directly:
 
 ```bash
@@ -376,6 +394,23 @@ it as a single argv element -- never interpolate it into a shell string. The
 use the credential the login modal just stored via `setup-git`, not a stale
 `GH_TOKEN` inherited by your agent shell. `--source=.` resolves relative to the
 `cd "$WT"` in the same subshell, so it always means `$WT`, never `/code`.)
+
+**Tag the repo (immediately after a successful create+push).** Every published
+inspiration carries the `minds-inspiration` GitHub topic -- a repo topic, NOT
+part of the description -- so inspirations are discoverable as a group (e.g.
+`gh search repos --topic minds-inspiration`, or GitHub's topic page). Also set
+the repo's description from the confirmed `description`:
+
+```bash
+( cd "$WT" && env -u GH_TOKEN -u GITHUB_TOKEN gh repo edit "<owner>/<repo_name>" --add-topic minds-inspiration --description "<description>" )
+```
+
+(GitHub topic rules: lowercase letters, digits, and hyphens only -- the fixed
+literal `minds-inspiration` already conforms; do not prefix it with `#`. Take
+`<owner>` from the `gh repo create` output or `gh repo view --json owner`. If
+this edit fails, the publish itself already succeeded -- retry the edit once,
+and if it still fails, report it as a minor follow-up rather than treating the
+publish as failed.)
 
 **Failure handling.** If `gh repo create` fails (e.g. the name is taken, or the
 token lacks the `workflow` scope needed to push `.github/workflows/` -- see
