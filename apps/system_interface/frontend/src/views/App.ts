@@ -26,15 +26,23 @@ export function App(): m.Component {
         isGitHubLoginModalOpen() ? m(GitHubLoginModal, { onDismiss: closeGitHubLoginModal }) : null,
         // Inspiration publish modal: keyed by proposal slug so a superseding
         // proposal (new slug) forces a fresh instance that re-prefills its form.
+        // The keyed vnode MUST be wrapped in its own single-child fragment
+        // (the nested array): mithril requires a children list to be either
+        // all-keyed or all-unkeyed, and this app-level children array is
+        // unkeyed. A bare keyed child here makes every redraw throw
+        // "In fragments, vnodes must either all have keys or none have keys"
+        // the moment a proposal arrives, so the modal never renders.
         getInspirationProposal()
-          ? m(InspirationPublishModal, {
-              // The modal only renders when a proposal is present, so the slug
-              // is always a string here; coerce the nullable accessor to
-              // `undefined` to satisfy mithril's `key: string | number`.
-              key: getInspirationProposalSlug() ?? undefined,
-              proposal: getInspirationProposal()!,
-              onDismiss: () => closeInspirationModal(getInspirationProposalSlug()),
-            })
+          ? [
+              m(InspirationPublishModal, {
+                // The modal only renders when a proposal is present, so the slug
+                // is always a string here; coerce the nullable accessor to
+                // `undefined` to satisfy mithril's `key: string | number`.
+                key: getInspirationProposalSlug() ?? undefined,
+                proposal: getInspirationProposal()!,
+                onDismiss: () => closeInspirationModal(getInspirationProposalSlug()),
+              }),
+            ]
           : null,
       ]);
     },

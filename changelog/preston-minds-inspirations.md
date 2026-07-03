@@ -176,3 +176,20 @@
   GitHub topic (a repo topic, not description text) right after the push, and
   the repo's description is set from the confirmed description -- making
   published inspirations discoverable as a group via GitHub topic search.
+
+- Found and fixed the actual reason popups never rendered in the real UI even
+  after the WebSocket delivery fixes: a mithril rendering fatal in the app
+  shell. The publish modal's vnode was rendered with a key (the proposal slug,
+  added for the re-prefill-on-supersede behavior) directly inside the app's
+  unkeyed top-level children array; mithril requires a children list to be
+  all-keyed or all-unkeyed, so the moment a publish proposal arrived, every
+  redraw of the entire app threw "In fragments, vnodes must either all have
+  keys or none have keys" and neither the publish popup nor the GitHub-login
+  modal (nor any other subsequent render) could appear -- while chat kept
+  working because it streams over SSE independently of redraws already on
+  screen. Reproduced and verified end to end with a real headless browser
+  against the real server and built bundle: before the fix the browser showed
+  ws_client_count 1, the delivered broadcast, the exact TypeError, and no
+  modal; after the fix the modal renders fully. The keyed vnode is now wrapped
+  in its own single-child fragment (the standard mithril pattern), with a
+  regression test that renders the real app shell with a proposal open.
