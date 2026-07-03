@@ -118,3 +118,14 @@
   from the container's logs. Failures are now logged server-side, and the
   modal surfaces the real error detail (via the same error-parsing helper
   other views use) instead of a generic "Failed to start GitHub login" string.
+
+- Hardened the publish skill against publishing a non-bootable "inspiration."
+  A mind that hit the (now-fixed) destructive-merge bug on an older skill
+  version worked around it by pushing just the app code plus a README directly
+  via the GitHub API, bypassing the documented flow entirely -- producing a
+  repo that `/use-inspiration`'s template path cannot boot from. Added a
+  prominent callout making explicit that a valid inspiration is always the
+  full assembled tree (the clean FCT base plus the selected paths, never a
+  hand-picked subset), and that any failure in assembly, the popup/auth, or
+  the push must be fixed-and-retried or reported to the user -- never worked
+  around with an ad-hoc alternate publish mechanism.
