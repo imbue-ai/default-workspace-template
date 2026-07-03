@@ -302,7 +302,7 @@ You can (and should) modify your own configuration to improve yourself:
 
 Commit your changes to git after making modifications.
 
-Inspirations are a publishable, reusable snapshot of the apps and features a mind has built (one repo can accumulate several); another mind can adapt one into itself.
+Inspirations are a publishable, reusable, bootable snapshot of the apps and features a mind has built (one repo can accumulate several); another mind can adapt one into itself.
 
 # Updates
 

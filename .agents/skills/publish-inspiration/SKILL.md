@@ -5,12 +5,12 @@ description: Publish a clean, shareable snapshot of the apps/features this mind 
 
 # Publish an inspiration
 
-An "inspiration" is a clean, shareable snapshot of the apps and features this
-mind built, published to a new GitHub repo so another mind can adapt it. One
-repo can accumulate several inspirations (one manifest + thumbnail per
-inspiration, all at the repo root). This skill assembles the snapshot on a
-clean template base, shows the user a confirmation popup, and (on confirm)
-creates the repo and pushes.
+An "inspiration" is a clean, shareable, **bootable** snapshot of the apps and
+features this mind built, published to a new GitHub repo so another mind can
+be created FROM it (not just read its app code). One repo can accumulate
+several inspirations (one manifest + thumbnail per inspiration, all at the
+repo root). This skill assembles the snapshot on a clean template base, shows
+the user a confirmation popup, and (on confirm) creates the repo and pushes.
 
 The assembly + smoke-check run in an isolated local `git worktree` in this same
 container (no sub-agent -- it is a fast, deterministic script, not work that
@@ -33,6 +33,25 @@ warrants delegation). You own the popup, the GitHub login, and the push.
 > old base as an intentional deletion). Do not reintroduce a merge, a
 > `git checkout mngr/<slug>` in `/code`, or any other step that runs from
 > `/code` after assembly.
+
+> **AN INSPIRATION MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
+> valid inspiration is always the FULL tree `build_inspiration.sh` assembles on
+> `mngr/<slug>`: the clean FCT base (`pyproject.toml`, `supervisord.conf`,
+> `.mngr/`, `.agents/skills/` including the rewritten `/welcome`, `parent.toml`,
+> etc.) plus the selected app/feature paths -- never just the app code plus a
+> README. That full tree is what makes `/use-inspiration`'s template path work:
+> another mind must be creatable FROM the published repo, not merely able to
+> read its source. If assembly (§3), the popup or GitHub auth (§6-§7), or the
+> push (§8) fails for ANY reason, do NOT invent an alternate publish mechanism
+> -- do not push a hand-assembled subset of files via `gh api`, a plain `git
+> init` of just the app directory, or any other ad-hoc path outside this
+> skill's documented flow. A non-bootable "inspiration" silently defeats the
+> whole feature and is strictly worse than no publish at all. Instead: diagnose
+> and fix the actual blocker (e.g. re-resolve `BASE_REF` per §2, retry
+> assembly, pick a different repo name) and retry the documented flow from the
+> failed step, or STOP and clearly tell the user what failed, why, and that you
+> did not publish -- never silently redefine what "publishing an inspiration"
+> means.
 
 ## Shared conventions
 
@@ -185,6 +204,10 @@ otherwise (see §5). It prints a summary of what it assembled to stderr.
   round-2 adaptation on boot. Nothing was committed; re-resolve `BASE_REF` per
   §2 (its pre-check should have caught this before assembly).
 
+Every one of these is a "fix the input and retry the script" situation, never
+a "publish something smaller instead" situation -- see the "MUST BE BOOTABLE"
+callout at the top of this skill.
+
 ## 6. Raise the publish popup
 
 **cwd = `$WT` for this and every remaining section.** The manifest/thumbnail
@@ -331,7 +354,11 @@ use the credential the login modal just stored via `setup-git`, not a stale
 token lacks the `workflow` scope needed to push `.github/workflows/` -- see
 §7), report it to the user and re-open the publish popup (§6)
 for a new name / visibility, keeping the assembled commit intact in `$WT`. Loop
-until it succeeds or the user aborts.
+until it succeeds or the user aborts. **Never fall back to publishing a
+different, non-bootable thing** (e.g. pushing just the selected app files via
+`gh api` instead of `$WT`'s full assembled tree) -- see the "MUST BE BOOTABLE"
+callout at the top of this skill. If you cannot get the documented flow to
+succeed, stop and report the blocker; do not improvise a substitute publish.
 
 ## 9. Accumulation
 
