@@ -79,3 +79,18 @@
   bootstrap and runtime-backup git invocations now run with
   `GIT_TERMINAL_PROMPT=0`, turning any credential prompt into the fast,
   already-handled failure the best-effort design intended.
+
+- Prerequisites are now a first-class, actionable manifest section. A real
+  adoption got stuck because the adopting agent mentioned a needed Slack
+  permission but never initiated it. The manifest's "Permissions it may need"
+  prose section is replaced by "Prerequisites" -- machine-readable
+  `requires_permission: <scope> / <schema>` and `requires_secret:` lines that
+  state plainly the adopting agent must initiate each one itself (via a
+  latchkey permission request) during setup. The use-inspiration flow is now
+  activation-first: if the user keeps the same connectors, the agent sends the
+  permission requests, wires secrets, and gets the app showing the user's OWN
+  data -- the explicit definition of done for a data-backed app (a running
+  service or a 200 response is not done) -- and invites them to try it BEFORE
+  asking how they want to adapt it. The generated welcome ends its first
+  response on the connect-your-accounts question instead of the adaptation
+  question; "Holes" is now strictly the adaptation agenda.

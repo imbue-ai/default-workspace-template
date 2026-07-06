@@ -368,38 +368,63 @@ programs (in supervisord.conf) run them, which ports they listen on and how
 those are registered in forward_port.py (if applicable), and any scripts or
 services that connect them. -->
 
+## Prerequisites
+
+Activation requirements: what the adopting agent must SET UP -- and must
+INITIATE ITSELF during setup, before asking how to adapt -- for this
+inspiration to run against the new user's own accounts/data. One line per
+requirement, in this machine-readable form (greppable by \`requires_\`):
+
+<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
+with one line per requirement, using exactly these forms:
+
+- requires_permission: <latchkey scope> / <permission schema> (user-approved;
+  the adopting agent initiates this via a latchkey permission request during
+  setup -- it must not merely mention it)
+- requires_secret: <ENV_VAR or config key> (what it is for and where to put it)
+
+Derive the real values from the included code (e.g. every service the app
+calls through \`latchkey curl\`). Example:
+- requires_permission: slack-api / slack-read-all (user-approved; adopting
+  agent initiates during setup)
+If nothing is required, write exactly: "No prerequisites -- runs with no
+external permissions or secrets." -->
+
 ## How to adapt it
 
 Instructions for the NEXT agent -- the one adapting this inspiration into a
 new mind. This is the \`use-inspiration\` skill's template path; in short:
 
-1. Read this entire file first, especially "Holes" and "Permissions it may
-   need" below -- they are your agenda for the conversation.
+1. Read this entire file first, especially "Prerequisites" and "Holes"
+   below -- Prerequisites are your SETUP agenda, Holes are your ADAPTATION
+   agenda.
 2. Present the inspiration to the user in plain, non-technical language: what
-   it is, what it does, and what it needs from them.
-3. Ask the user directly: "How do you want to adapt it?" Do not start changing
-   anything before having this conversation.
-4. Work through each hole interactively, one at a time. Translate each into
+   it is, what it does, and what it needs from them (name the Prerequisites).
+3. Ask whether they want to use the same connectors (e.g. their own Slack).
+   If YES: ACTIVATE FIRST -- initiate every \`requires_permission\` line NOW
+   via a latchkey permission request (see the \`latchkey\` skill; the request
+   opens the approval/login flow in the minds app), wire up any
+   \`requires_secret\` values, start the services, and get the app showing
+   THE USER'S OWN DATA. Done for a data-backed app means the user can open it
+   and see their own data -- NOT that a service starts or an endpoint returns
+   200. Then tell them it is live and to take a look.
+4. Only AFTER that (or immediately, if they chose different connectors -- the
+   swap is then the first adaptation) ask: "How do you want to adapt it?"
+5. Work through each hole interactively, one at a time. Translate each into
    plain language, ask for a decision only when you genuinely need one, and
    resolve the obvious ones yourself.
-5. When done, append a dated entry to "Adaptation history" below (never
+6. When done, append a dated entry to "Adaptation history" below (never
    rewrite earlier entries) and commit.
 
 ## Holes
 
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with one bullet per hole: every part the adapter must supply or rewire --
-stubbed integrations, hardcoded accounts/channels/ids, data that was not
-included, anything that will not work out of the box. For each, say what is
-missing and what a working replacement looks like. If there are genuinely no
-holes, say so explicitly. -->
-
-## Permissions it may need
-
-<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with the tokens, scopes, or external accounts the adapter must supply (for
-example, an API token with a specific scope, or a Slack app installed in their
-workspace). If none are needed, say so explicitly. -->
+with one bullet per hole: every ADAPTATION gap the adapter must decide or
+rewire -- stubbed integrations, hardcoded accounts/channels/ids, data that was
+not included, anything that will not work out of the box. For each, say what
+is missing and what a working replacement looks like. Do NOT list activation
+requirements here (permissions, tokens, accounts) -- those belong in
+"Prerequisites" above. If there are genuinely no holes, say so explicitly. -->
 
 ## Adaptation history
 
@@ -460,12 +485,17 @@ waiting to be asked:
    greeting and do NOT offer a generic suggestions list.
 2. Immediately read \`inspiration-${SLUG}.md\` at the repo root (reading the
    manifest in the first turn is required).
-3. Begin the adaptation conversation: in plain, non-technical language,
-   present what the inspiration is and what it needs from the user, then ask
-   the user how they want to adapt it. This is the \`use-inspiration\` skill's
-   template path; the manifest's "How to adapt it" section is the script for
-   the conversation. Do not start changing anything before having this
-   conversation -- end your first response on the question.
+3. In plain, non-technical language, present what the inspiration is and
+   what it needs from the user -- name the manifest's "Prerequisites" (the
+   connectors/permissions it runs on). Then ask whether they want to hook it
+   up to their own accounts now (e.g. "Want me to connect this to your own
+   Slack?"). End your first response on THAT question. This is the
+   \`use-inspiration\` skill's template path; the manifest's "How to adapt
+   it" section is the full script: if they say yes, ACTIVATE FIRST -- initiate
+   each \`requires_permission\` via a latchkey permission request, get the
+   app showing THEIR OWN DATA (that is the definition of working; a running
+   service is not), invite them to take a look -- and only then ask how they
+   want to adapt it.
 
 If this repo has accumulated several \`inspiration-*.md\` manifests, the one
 named above is the latest; treat the others as reference (they were likely
