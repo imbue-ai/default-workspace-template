@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Assemble a clean, shareable "inspiration" snapshot on top of the FCT base the
-# mind was created from, then commit it. Run directly by the publish-inspiration
-# skill (no launch-task sub-agent) on an ISOLATED git worktree it creates in
-# the same container (cwd = worktree repo root).
+# mind was created from, then commit it. Run by the launch-task WORKER the
+# publish-inspiration skill dispatches, from the worker's own git worktree
+# (cwd = worktree repo root); the live mind's /code is never touched.
 #
 # The dev `create-new-mind-repo` recipe is NOT available in the VM, so this is
 # self-contained. It does the assembly + secret scan + manifest/thumbnail +
 # /welcome rewrite + boot smoke-check + single commit. It does NOT create the
-# GitHub repo or push -- the lead owns the popup, GitHub login, and push.
+# GitHub repo or push, and it deliberately leaves two things unfinished for the
+# worker to complete before reporting done: the manifest's FILL-IN blocks (real
+# prose) and the placeholder thumbnail (a bespoke, app-specific SVG). The lead
+# owns the chat confirmation, GitHub login, and push.
 #
 # Known-correct methods embedded here (a prior build got these wrong):
 #   - Clean base via `git read-tree -u --reset` + `git clean -fdxq`, NEVER
@@ -336,7 +339,7 @@ fi
 # The deterministic parts (front-matter, included-path list, the "How to adapt
 # it" script, section skeletons) are generated here; the prose that requires
 # knowledge of the live mind is left as clearly-marked FILL-IN blocks that the
-# publishing agent MUST replace before the popup/confirmation step.
+# worker MUST replace before reporting done.
 
 # Human-readable list of what the snapshot includes, derived from the include
 # paths (data includes are labeled as such).
@@ -372,7 +375,7 @@ follow "How to adapt it" below.
 
 ${manifest_description}
 
-<!-- FILL-IN (publishing agent): BEFORE the popup step, replace this comment
+<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
 with a one-paragraph overview of what this inspiration does for its user: the
 problem it solves, the main things it produces (pages, reports, automations),
 and what the user sees when it is running. Write for a reader who has never
@@ -384,7 +387,7 @@ The snapshot includes these paths (each is a repo-root-relative path copied
 from the original mind onto a clean forever-claude-template base):
 
 ${included_paths_block}
-<!-- FILL-IN (publishing agent): BEFORE the popup step, replace this comment
+<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
 with prose that makes the list above self-explanatory: for each included path,
 say what it is (an app or lib with code, a skill, data) and what role it plays.
 Then describe how the pieces wire together at runtime: which supervisord
@@ -411,7 +414,7 @@ new mind. This is the \`use-inspiration\` skill's template path; in short:
 
 ## Holes
 
-<!-- FILL-IN (publishing agent): BEFORE the popup step, replace this comment
+<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
 with one bullet per hole: every part the adapter must supply or rewire --
 stubbed integrations, hardcoded accounts/channels/ids, data that was not
 included, anything that will not work out of the box. For each, say what is
@@ -420,7 +423,7 @@ holes, say so explicitly. -->
 
 ## Permissions it may need
 
-<!-- FILL-IN (publishing agent): BEFORE the popup step, replace this comment
+<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
 with the tokens, scopes, or external accounts the adapter must supply (for
 example, an API token with a specific scope, or a Slack app installed in their
 workspace). If none are needed, say so explicitly. -->
@@ -434,9 +437,12 @@ MANIFEST_EOF
 # --- 7. generate a placeholder thumbnail (mock data only) --------------------
 
 # A neutral placeholder SVG using MOCK data only -- never real user data. The
-# lead may overwrite this with the popup-confirmed, server-sanitized SVG.
+# marker comment makes "placeholder still in place" a deterministic grep: the
+# worker MUST replace this whole file with a bespoke, app-specific SVG before
+# reporting done, and the lead's pre-push gate blocks on the marker.
 cat > "$THUMBNAIL" <<THUMB_EOF
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="${TITLE}">
+  <!-- minds-placeholder-thumbnail: replace with a bespoke SVG before publishing -->
   <rect width="240" height="160" rx="12" fill="#1f2933"/>
   <rect x="20" y="24" width="200" height="20" rx="6" fill="#3e4c59"/>
   <rect x="20" y="60" width="140" height="12" rx="6" fill="#52606d"/>
@@ -579,5 +585,7 @@ echo "  manifest:  ${MANIFEST}"
 echo "  thumbnail: ${THUMBNAIL}"
 echo "  boot smoke-check: passed"
 echo "  NEXT: ${MANIFEST} still has <!-- FILL-IN (publishing agent): ... --> placeholders in"
-echo "  'What it is', 'How it works', 'Holes', and 'Permissions it may need' -- replace ALL of"
-echo "  them with real content (or explicit 'none' prose) before opening the publish popup."
+echo "  'What it is', 'How it works', 'Holes', and 'Permissions it may need', and ${THUMBNAIL}"
+echo "  is a generic placeholder (marker comment inside). Replace ALL FILL-INs with real content"
+echo "  (or explicit 'none' prose) AND replace the placeholder with a bespoke SVG for this app,"
+echo "  then commit and self-check before reporting done."

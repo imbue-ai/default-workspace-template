@@ -9,30 +9,31 @@ An "inspiration" is a clean, shareable, **bootable** snapshot of the apps and
 features this mind built, published to a new GitHub repo so another mind can
 be created FROM it (not just read its app code). One repo can accumulate
 several inspirations (one manifest + thumbnail per inspiration, all at the
-repo root). This skill assembles the snapshot on a clean template base, shows
-the user a confirmation popup, and (on confirm) creates the repo and pushes.
-
-The assembly + smoke-check run in an isolated local `git worktree` in this same
-container (no sub-agent -- it is a fast, deterministic script, not work that
-warrants delegation). You own the popup, the GitHub login, and the push.
+repo root). This skill delegates the assembly to a `launch-task` sub-agent
+worker (which builds the snapshot, finishes the manifest, and designs the
+thumbnail in its own git worktree), confirms the publish with the user in
+chat, logs into GitHub via the `gh` device flow in chat, and then creates the
+repo and pushes -- directly from the worker's worktree.
 
 > **CWD INVARIANT -- read this before running anything in §§6-8.** From the
-> moment §3's `git worktree add` succeeds, the live mind's checkout at `/code`
-> is DONE being touched for the rest of this skill. Every command in §6
-> (popup), §7 (GitHub auth), and §8 (create repo + push) -- including any
-> follow-up commit that writes the popup-confirmed thumbnail/title/description
-> -- runs with **cwd = `$WT`** (the assembly worktree), NEVER `/code`. There is
-> no merge-back step: `$WT`'s tree, built by `build_inspiration.sh` on top of
-> `BASE_REF`, IS the tree that gets pushed, as-is. `/code`'s branch and working
-> tree are never modified, merged into, or pushed from. This is the single most
-> important invariant in this skill: a prior version of this skill merged the
-> assembly branch into `/code`'s current branch before pushing, which one time
+> moment §3's worker reports `done`, the live mind's checkout at `/code` is
+> DONE being touched for the rest of this skill. Every command in §6 (chat
+> confirmation and any confirmed manifest/thumbnail edits), §7 (GitHub auth),
+> and §8 (create repo + push) runs with **cwd = `$WT`** (the worker's
+> worktree), NEVER `/code`. There is no merge-back step: `$WT`'s tree, built
+> by `build_inspiration.sh` on top of `BASE_REF` and finished by the worker,
+> IS the tree that gets pushed, as-is, by you, from `$WT`. In particular,
+> IGNORE `lead-proxy.md`'s default `done -> merge the worker's branch`
+> handling for this flow -- `/code`'s branch and working tree are never
+> modified, merged into, or pushed from. This is the single most important
+> invariant in this skill: a prior version of this skill merged the assembly
+> branch into `/code`'s current branch before pushing, which one time
 > silently reset `/code`'s entire live tree to an old base (a normal 3-way
 > merge diffs from the merge-base, and the assembled tree looks nothing like
 > `/code`'s HEAD, so git read everything present in HEAD but absent from the
-> old base as an intentional deletion). Do not reintroduce a merge, a
-> `git checkout mngr/<slug>` in `/code`, or any other step that runs from
-> `/code` after assembly.
+> old base as an intentional deletion -- 1400+ files gone from a live mind).
+> Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/code`, or any
+> other step that runs from `/code` after assembly.
 
 > **AN INSPIRATION MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
 > valid inspiration is always the FULL tree `build_inspiration.sh` assembles on
@@ -41,37 +42,33 @@ warrants delegation). You own the popup, the GitHub login, and the push.
 > etc.) plus the selected app/feature paths -- never just the app code plus a
 > README. That full tree is what makes `/use-inspiration`'s template path work:
 > another mind must be creatable FROM the published repo, not merely able to
-> read its source. If assembly (§3), the popup or GitHub auth (§6-§7), or the
-> push (§8) fails for ANY reason, do NOT invent an alternate publish mechanism
-> -- do not push a hand-assembled subset of files via `gh api`, a plain `git
-> init` of just the app directory, or any other ad-hoc path outside this
-> skill's documented flow. A non-bootable "inspiration" silently defeats the
-> whole feature and is strictly worse than no publish at all. Instead: diagnose
-> and fix the actual blocker (e.g. re-resolve `BASE_REF` per §2, retry
-> assembly, pick a different repo name) and retry the documented flow from the
-> failed step, or STOP and clearly tell the user what failed, why, and that you
-> did not publish -- never silently redefine what "publishing an inspiration"
-> means.
+> read its source. If assembly (§3), the chat confirmation or GitHub auth
+> (§6-§7), or the push (§8) fails for ANY reason, do NOT invent an alternate
+> publish mechanism -- do not push a hand-assembled subset of files via `gh
+> api`, a plain `git init` of just the app directory, or any other ad-hoc path
+> outside this skill's documented flow. A non-bootable "inspiration" silently
+> defeats the whole feature and is strictly worse than no publish at all.
+> Instead: diagnose and fix the actual blocker (e.g. re-resolve `BASE_REF` per
+> §2, relaunch the worker, pick a different repo name) and retry the
+> documented flow from the failed step, or STOP and clearly tell the user what
+> failed, why, and that you did not publish -- never silently redefine what
+> "publishing an inspiration" means.
 
 ## Shared conventions
 
-- **`$SI_BASE`** -- base URL of the in-container system_interface. Use
-  `http://127.0.0.1:$SYSTEM_INTERFACE_PORT`. If `SYSTEM_INTERFACE_PORT` is
-  unset, read the port from the running supervisord service definition (the
-  same source `forward_port.py` registers) rather than guessing silently. All
-  `/api/inspiration/*` and `/api/github-auth/*` routes are loopback-only, so
-  always call them from inside the container at `127.0.0.1` (the mind always
-  is).
-- **Response-file poll path (absolute, fixed regardless of port):**
-  `/code/runtime/inspiration/publish-response.json`. The server and this skill
-  both agree on exactly this path; it is not `cwd`-relative.
 - **Slug derivation.** `slug` = the user's title lowercased, with each run of
   characters outside `[A-Za-z0-9._-]` collapsed to a single `-`, and leading /
   trailing `-` stripped. The result MUST match `^[A-Za-z0-9._-]+$` and MUST NOT
-  start with `-` (the backend re-validates). `repo_name` defaults to `slug`;
-  the popup may override it (the backend re-validates the override). The same
-  slug names the manifest (`inspiration-<slug>.md`), the thumbnail
-  (`inspiration-<slug>.svg`), and the assembly branch (`mngr/<slug>`).
+  start with `-` (`build_inspiration.sh` re-validates). `repo_name` defaults to
+  `slug`; the user may override it in the chat confirmation (§6) -- validate
+  any override against the same pattern yourself. The same slug names the
+  manifest (`inspiration-<slug>.md`), the thumbnail (`inspiration-<slug>.svg`),
+  the assembly worker, and the worker's branch (`mngr/<slug>`).
+- **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees
+  under `/mngr/worktree/<name>-<uuid>/` (the `worktree_base_folder` in
+  `.mngr/settings.toml`; the `<uuid>` suffix is random), so the path cannot be
+  guessed -- resolve it after the worker's `done` report per §3. Everything
+  after assembly runs with cwd = `$WT` (see the callout above).
 - **`BASE_REF` (provenance + clean base).** The FCT commit this mind was
   created from. Resolve it **in-repo, with no network access** (see step 2); do
   NOT `git fetch`/`git pull` upstream. Pass it to `build_inspiration.sh` as
@@ -116,7 +113,7 @@ bootable template -- its tree must name both `pyproject.toml` and
 `supervisord.conf` -- AND that it already carries the `/welcome` inspiration
 takeover markers (`<!-- INSPIRATION:BEGIN -->` / `<!-- INSPIRATION:END -->` as
 exact whole lines in `.agents/skills/welcome/SKILL.md`), since the assembly
-script's `/welcome` rewrite (§4's item 9, "the assembly script" section below)
+script's `/welcome` rewrite (item 9 of "The assembly script" section below)
 needs them to drive round-2 adaptation on boot -- a base that predates the
 markers silently degrades that feature even though it still boots:
 
@@ -129,90 +126,223 @@ git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx pyproject.toml \
 
 If the check fails, STOP and reconsider the base (e.g. walk forward along the
 first-parent chain to the earliest commit that passes all four checks, or ask
-the user) rather than launching assembly -- this catches the wrong-root and
-too-old-base problems in seconds instead of a full assembly round-trip.
+the user) rather than launching the worker -- this catches the wrong-root and
+too-old-base problems in seconds instead of a full worker round-trip.
 `build_inspiration.sh` re-validates all four conditions itself and exits 5 with
 a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
 
-## 3. Assemble on a local git worktree (same container, no sub-agent)
+## 3. Delegate assembly to a launch-task worker
 
-Assembly is a fast, deterministic script (`build_inspiration.sh`, ~a second), so
-run it yourself on a throwaway `git worktree` in THIS container. Do NOT delegate
-it to a `launch-task` sub-agent: that spins up a second agent with its own
-boot/read/report/poll loop -- minutes of latency for a sub-second job -- and adds
-no isolation, because a `git worktree` already gives a clean, separate working
-tree while leaving the live mind (`/code`) completely untouched. Open one step:
+Assembly runs in a `launch-task` sub-agent worker. The worker gets a fresh git
+worktree on branch `mngr/<slug>`, runs `build_inspiration.sh` there, then --
+in the SAME run, no second round-trip -- fleshes out every manifest FILL-IN
+block and designs the bespoke thumbnail. `/code` is never modified.
+
+The worker name is `<slug>`. Names must be unique: if a previous attempt left
+a worker or branch with this name, clean it up first
+(`uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>`,
+then `git branch -D "mngr/<slug>"` once no worktree holds it).
+
+Per `launch-task`, the whole delegation is ONE step in your timeline:
 
 ```bash
-tk create --step "Assemble the shareable inspiration snapshot"
+tk create --step "Delegate assembling the shareable inspiration snapshot to a sub-agent"
 # -> Created cod-step-XXXX: ...
 tk start cod-step-XXXX
 ```
 
-Use a **deterministic** worktree path (so later steps can find it) and a fresh
-`mngr/<slug>` branch, then run the assembly script inside it. The script `cd`s to
-its own worktree root, so its `git read-tree -u --reset` + `git clean -fdxq`
-rewrite ONLY that worktree, never `/code`:
+**Write the task file.** Substitute the real `<slug>`, `<title>`,
+`<description>`, `<BASE_REF>`, and include paths into the body -- the worker
+must be able to run the script verbatim, with zero back-and-forth:
+
+````bash
+mkdir -p runtime/launch-task/<slug>
+{
+cat << FRONTMATTER_EOF
+---
+lead_agent: $MNGR_AGENT_NAME
+finish_report_path: runtime/launch-task/<slug>/reports/report.md
+---
+FRONTMATTER_EOF
+cat << 'BODY_EOF'
+
+# Task: Assemble the "<title>" inspiration snapshot
+
+## What to do
+
+Assemble a clean, bootable "inspiration" snapshot on your worktree's branch,
+then finish its manifest and thumbnail. Do ALL of it in this one run.
+
+**Before anything else**, extract `LEAD_AGENT` / `FINISH_REPORT_PATH` per
+`.agents/shared/references/worker-reporting.md`: step 1's script resets your
+worktree to a clean template base and deletes gitignored state -- including
+`runtime/` and this task file -- so parse the frontmatter FIRST.
+
+1. **Run the assembly script** from your worktree root, verbatim (every value
+   below was already resolved by the lead):
+
+   ```bash
+   bash .agents/skills/publish-inspiration/scripts/build_inspiration.sh \
+       --base-ref <BASE_REF> \
+       --slug <slug> \
+       --title "<title>" \
+       --description "<description>" \
+       --include <path> [--include <path> ...] \
+       [--data-include <path> ...]
+   ```
+
+   On ANY non-zero exit: nothing was committed; go straight to "Reporting
+   back" with a `stuck` report that quotes the script's stderr verbatim (the
+   exit code maps to a specific guard rail the lead knows how to handle). Do
+   NOT retry with different arguments and do NOT assemble anything by hand.
+
+2. **Flesh out the manifest.** `inspiration-<slug>.md` at the repo root has
+   `<!-- FILL-IN (publishing agent): ... -->` comment blocks in "What it is,"
+   "How it works," "Holes," and "Permissions it may need" -- generated
+   placeholders, not real content. Replace EVERY block with real, specific
+   prose: for "Holes" and "Permissions it may need" in particular, think
+   through what the included apps actually depend on -- an external API token,
+   an OAuth app, a Slack/Discord/etc. workspace installation, a hardcoded
+   account or channel -- and name it explicitly. If a section genuinely has
+   nothing to add, say so explicitly in prose; never leave a placeholder
+   comment in place and never leave a section blank. This manifest is the
+   next agent's entire agenda for the adaptation conversation -- an
+   inspiration that needs a Slack token but doesn't say so silently breaks
+   adoption.
+
+3. **Design the thumbnail.** `inspiration-<slug>.svg` at the repo root is a
+   generic placeholder the script generated -- it must never be published.
+   Replace its entire contents with a bespoke SVG you design for THIS app: a
+   clean, simple, iconic representation of what the app actually is and shows
+   (derive it from the app code and the manifest you just wrote -- e.g. a
+   stylized miniature of its main screen or its core object). Hard rules:
+   mock data only, never real user data; no `<script>`; no `on*=` event
+   attributes; no `<foreignObject>`; no external references (no href/src
+   pointing outside the file) -- fully self-contained. Keep the root
+   `viewBox` around 240x160.
+
+4. **Commit** the manifest + thumbnail edits as a follow-up commit on your
+   branch (`mngr/<slug>`), in your worktree.
+
+5. **Self-check, then report.** Both greps must print NOTHING before you may
+   report `done`:
+
+   ```bash
+   grep -n -- '<!-- FILL-IN (publishing agent)' inspiration-<slug>.md
+   grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' inspiration-<slug>.svg
+   ```
+
+   If either prints anything, fix and re-commit; do not report done until
+   both are clean and `git status` is clean.
+
+## Context
+
+- Your worktree is a fresh checkout on branch `mngr/<slug>`. The script
+  resets it to the clean template base `<BASE_REF>` and overlays only the
+  selected paths, so the final tree looks nothing like the live mind's HEAD
+  -- that is correct and expected. Do not "restore" anything it removes.
+- Included paths and what each one is:
+  <one line per include path: what it is and its role>
+- <extra context the lead has: what the app does for its user, known holes,
+  tokens/accounts it depends on -- everything the worker needs to write a
+  good manifest and a representative thumbnail>
+
+## Success criteria
+
+- `build_inspiration.sh` exited 0 and its commit is on `mngr/<slug>`.
+- Every FILL-IN block replaced with real prose (or an explicit "none").
+- `inspiration-<slug>.svg` is a bespoke design for this app; the placeholder
+  marker is gone and the safety grep is clean.
+- Follow-up edits committed on `mngr/<slug>`; `git status` clean.
+
+## Reporting back
+
+Follow `.agents/shared/references/worker-reporting.md` for the full report
+procedure. Substitutions for this task:
+
+- `<TASK_FILE_GLOB>` -> `runtime/launch-task/*/task.md`
+- `<RUNTIME_REPORTS_DIR>` -> `runtime/launch-task/<slug>/reports/` (recreate
+  it with `mkdir -p` -- the assembly script deleted `runtime/`)
+- Valid `name:` values: `question` (mid-flight gate), `done` / `stuck`
+  (terminal).
+
+In a `done` report body, include your worktree's absolute path (from
+`git rev-parse --show-toplevel`) and the branch `mngr/<slug>` -- the lead
+publishes directly from that worktree. In a `stuck` report, quote the
+assembly script's stderr verbatim.
+BODY_EOF
+} > runtime/launch-task/<slug>/task.md
+````
+
+**Launch** (foreground, so a failed launch surfaces immediately):
 
 ```bash
-WT="/tmp/inspiration-<slug>"
-git worktree remove --force "$WT" 2>/dev/null || rm -rf "$WT"   # clear any stale worktree
-git branch -D "mngr/<slug>" 2>/dev/null || true
-git worktree add -q -b "mngr/<slug>" "$WT" HEAD
-( cd "$WT" && bash /code/.agents/skills/publish-inspiration/scripts/build_inspiration.sh \
-    --base-ref <BASE_REF> \
-    --slug <slug> \
-    --title "<title>" \
-    --description "<description>" \
-    --include <path> [--include <path> ...] \
-    [--data-include <path> ...] )
+uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+    --name <slug> \
+    --template worker \
+    --runtime-dir runtime/launch-task/<slug>/ \
+    --task-file runtime/launch-task/<slug>/task.md
 ```
 
-Check the subshell's exit code and handle the guard rails directly (§5): a
-non-zero exit means nothing was committed -- surface the reason to the user and
-stop. On success the assembled commit is on `mngr/<slug>`, checked out at
-`$WT`, and `$WT` is HEAD -- there is no merge-back into `/code`.
-
-**Flesh out the manifest -- mandatory, before §6.** `$WT/inspiration-<slug>.md`
-has `<!-- FILL-IN (publishing agent): ... -->` comment blocks in "What it is,"
-"How it works," "Holes," and "Permissions it may need" -- these are generated
-placeholders, not real content, and the script's closing summary reminds you of
-this every time. Open the file and replace EVERY block with real, specific
-content: for "Holes" and "Permissions it may need" in particular, think through
-what the included apps actually depend on -- an external API token, an OAuth
-app, a Slack/Discord/etc. workspace installation, a hardcoded account or
-channel -- and name it explicitly. If a section genuinely has nothing to add
-(no holes, no permissions needed), say so explicitly in prose; never leave the
-placeholder comment in place and never leave a section blank. This is the next
-agent's entire agenda for the adaptation conversation (see the manifest's own
-"How to adapt it" section) -- an inspiration that needs a Slack token but
-doesn't say so silently breaks adoption. Commit this edit in `$WT` (cwd = `$WT`,
-same as everything else after assembly).
-
-**Mandatory check -- do not skip.** Before opening the popup (§6), confirm no
-placeholders remain:
+**Background-await the report** (Bash `run_in_background: true` -- never block
+on it), then continue with whatever else you were doing:
 
 ```bash
-grep -l -- '<!-- FILL-IN (publishing agent)' "$WT/inspiration-<slug>.md" \
-  && echo "STOP: finish every FILL-IN section in the manifest before publishing"
+# Run with Bash run_in_background: true
+uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    --task-file runtime/launch-task/<slug>/task.md
 ```
 
-If this reports a match, go back and finish the manifest -- do not proceed to
-§6 with unfinished sections. Once it reports nothing, close the assembly step
-and proceed straight to §6 (the publish popup), §7 (GitHub auth), and §8
-(create repo + push), ALL running with **cwd = `$WT`** (see the callout
-above).
+**Handle the report** per `.agents/shared/references/lead-proxy.md` (proxy or
+answer any `question` gate, consume reports into `consumed/`, diagnose
+liveness on a timeout) -- with one critical override:
+
+- `name: stuck` -> the assembly script refused for one of §5's reasons.
+  Surface the quoted stderr to the user plainly and stop (or fix the input --
+  e.g. re-resolve `BASE_REF` per §2 -- and relaunch). Do not publish anything.
+- `name: done` -> do **NOT** merge `mngr/<slug>` (that is `lead-proxy.md`'s
+  default `done` handling, and it is exactly the merge the CWD-INVARIANT
+  callout forbids -- the assembled tree diffs against `/code` as mass
+  deletions). Instead, resolve `$WT`:
+
+  ```bash
+  WT="$(git worktree list --porcelain | awk -v b='refs/heads/mngr/<slug>' '$1 == "worktree" { wt = $2 } $1 == "branch" && $2 == b { print wt }')"
+  ```
+
+  Cross-check it against the worktree path in the report body (worktrees live
+  under `/mngr/worktree/<slug>-<uuid>/`), then verify the worker's gates
+  yourself -- both greps must print nothing and `git -C "$WT" status` must be
+  clean:
+
+  ```bash
+  grep -n -- '<!-- FILL-IN (publishing agent)' "$WT/inspiration-<slug>.md"
+  grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' "$WT/inspiration-<slug>.svg"
+  ```
+
+  If either grep hits, message the worker to finish the job (per
+  `lead-proxy.md`'s gate mechanics) rather than finishing it yourself.
+  Once clean, close the delegation step and proceed to §6 (chat
+  confirmation), §7 (GitHub auth), and §8 (create repo + push), ALL running
+  with **cwd = `$WT`** (see the callout above).
+
+Leave the worker itself alone until §10 -- destroying it removes `$WT`, which
+you still need for the push.
 
 ## 4. What the assembly does
 
-`build_inspiration.sh` (documented below) does the whole assembly in the
-worktree: clean base + overlay + secret scan + manifest + thumbnail + `/welcome`
-rewrite + boot smoke-check + a single commit. It communicates purely via its
-exit code -- `0` on success (the assembled commit is on `mngr/<slug>`), non-zero
-otherwise (see §5). It prints a summary of what it assembled to stderr.
+`build_inspiration.sh` (documented below) does the whole mechanical assembly
+in the worker's worktree: clean base + overlay + secret scan + manifest +
+placeholder thumbnail + `/welcome` rewrite + boot smoke-check + a single
+commit. It communicates purely via its exit code -- `0` on success (the
+assembled commit is on `mngr/<slug>`), non-zero otherwise (see §5). It prints
+a summary of what it assembled to stderr. The worker then supplies the two
+things the script cannot: the manifest prose and the bespoke thumbnail.
 
 ## 5. Guard rails (the script's non-zero exits)
+
+The worker maps any non-zero exit to a `stuck` report quoting the script's
+stderr. What each exit means, and what you do:
 
 - **Secret scan (exit 1).** A credential/token rode in on an overlaid path.
   Nothing was committed; surface the flagged path (value redacted) and stop.
@@ -229,171 +359,144 @@ otherwise (see §5). It prints a summary of what it assembled to stderr.
   takeover markers (`<!-- INSPIRATION:BEGIN -->` / `<!-- INSPIRATION:END -->`
   as exact whole lines in `.agents/skills/welcome/SKILL.md`) needed to drive
   round-2 adaptation on boot. Nothing was committed; re-resolve `BASE_REF` per
-  §2 (its pre-check should have caught this before assembly).
+  §2 (its pre-check should have caught this before launch) and relaunch.
 
-Every one of these is a "fix the input and retry the script" situation, never
-a "publish something smaller instead" situation -- see the "MUST BE BOOTABLE"
-callout at the top of this skill.
+Every one of these is a "fix the input and relaunch the worker" situation,
+never a "publish something smaller instead" situation -- see the "MUST BE
+BOOTABLE" callout at the top of this skill.
 
-## 6. Raise the publish popup
+## 6. Confirm the publish in chat
 
 **cwd = `$WT` for this and every remaining section.** The manifest/thumbnail
 files referenced below (`inspiration-<slug>.md` / `.svg`) live at `$WT`'s repo
 root, not `/code`'s.
 
-Build the request from the assembled values and POST it:
+Confirmation happens inline in chat -- there is no other confirmation
+mechanism. Present the proposal to the user ONCE, in plain language:
 
-```bash
-curl -sS -X POST "$SI_BASE/api/inspiration/publish-request" \
-    -H 'Content-Type: application/json' \
-    -d @- <<JSON
-{
-  "slug": "<slug>",
-  "title": "<title>",
-  "description": "<description>",
-  "repo_name": "<slug>",
-  "visibility": "private",
-  "thumbnail_svg": <the JSON-encoded contents of inspiration-<slug>.svg>
-}
-JSON
-```
+- the **title** and **description**;
+- the **repo name** (defaults to `slug`);
+- the **visibility** (default: **private**);
+- that the sub-agent designed a **thumbnail** for the inspiration (it lives
+  at `$WT/inspiration-<slug>.svg`), and that you can describe or adjust it if
+  they'd like.
 
-**Fast-fallback rule.** The POST response includes `ws_client_count` -- the
-number of live frontend websocket clients that received the broadcast:
+Let the user edit any of these in their replies, then proceed with the agreed
+values. Do not re-ask what they already answered in §1; this is a
+confirm-and-adjust pass, not a second interview. If the user asks to abort,
+stop here and leave the assembled commit intact (§10's failure path).
 
-- `ws_client_count == 0` -> no UI is connected to show the popup. Do NOT poll
-  at all; go straight to the inline-chat fallback below.
-- otherwise -> poll `/code/runtime/inspiration/publish-response.json` until it
-  exists (check, then sleep ~5s) for a SINGLE bounded window of ~90 seconds.
-  Do NOT re-POST the request and do NOT start a second wait; if the window
-  expires with no response file, fall back to inline chat. One mechanism at a
-  time, bounded, no serial thrash.
+- Validate an edited repo name against `^[A-Za-z0-9._-]+$` (no leading `-`)
+  before using it.
+- If the user asks for thumbnail changes, YOU edit
+  `$WT/inspiration-<slug>.svg`, keeping the same safety rules the worker
+  followed: mock data only, no `<script>`, no `on*=` attributes, no
+  `<foreignObject>`, no external references. If the user pastes raw SVG
+  markup in chat, never write it into the file verbatim -- apply the same
+  rules first (strip anything that violates them, and tell the user what you
+  stripped).
 
-  **Run this poll loop as a BACKGROUND task, not a blocking foreground
-  command** (mirror `launch-task`'s own await pattern, §3 of
-  `.agents/skills/launch-task/SKILL.md`: "Background-poll ... never block on
-  it"). A single foreground `while` loop sleeping for up to ~90s can exceed
-  the calling agent's own tool-execution timeout and get killed (exit
-  137/144) partway through, silently abandoning the wait. Launch the poll
-  with Bash `run_in_background: true` (or an equivalent backgrounded
-  script), then continue -- handle the result when the background job
-  reports back, exactly as you would not block on a launch-task worker.
+**Commit before §8's push.** Write any confirmed title/description edits into
+`inspiration-<slug>.md`'s front-matter (and any thumbnail edits into the
+`.svg`), and COMMIT that change with cwd = `$WT` before proceeding to §7/§8.
+Never push first and fix up the manifest or thumbnail with a second
+commit-and-re-push. This commit -- like everything else in this skill after
+assembly -- happens IN `$WT`, never `/code`.
 
-On a response file, read the `InspirationPublishResponse`:
-
-- `status == "aborted"` -> stop. Leave the assembled commit intact and tell the
-  user publishing was cancelled.
-- `status == "confirmed"` -> use the RETURNED `title` / `description` /
-  `repo_name` / `visibility` / `thumbnail_svg` for everything downstream. The
-  user may have edited them, so the skill MUST use the response fields, not the
-  values it originally proposed. The backend already stripped `<script>` / `on*`
-  handlers / `<foreignObject>` from `thumbnail_svg`; write that sanitized value
-  into `$WT/inspiration-<slug>.svg`, and re-commit the manifest/thumbnail IN
-  `$WT` if the confirmed title/description/thumbnail differ from what the
-  assembly generated.
-
-**Inline-chat fallback (no popup).** Confirm in chat instead: present the
-proposed title, description, repo name, and visibility; let the user edit any
-of them in chat; then proceed with the agreed values exactly as if they were
-the confirmed response fields. The one exception is the thumbnail: the popup
-path depends on the backend's SVG sanitization, so never accept raw SVG through
-chat -- keep the placeholder SVG the assembly generated.
-
-**Commit before §8's push.** Once you have confirmed values (popup or
-fallback), write the sanitized SVG and any edited title/description into
-`$WT/inspiration-<slug>.svg` / `$WT/inspiration-<slug>.md` and COMMIT that
-change with cwd = `$WT` before proceeding to §7/§8. Never push first and fix up
-the thumbnail or manifest with a second commit-and-re-push. This commit -- like
-everything else in this skill after assembly -- happens IN `$WT`, never
-`/code`.
-
-## 7. Ensure GitHub auth (no agent restart)
+## 7. Ensure GitHub auth (chat device flow)
 
 Check whether `gh` is authenticated. Run it with the token env vars scrubbed:
 your agent shell inherits `GH_TOKEN`, and `gh` prioritizes that over its stored
 credential, so an unscrubbed probe can report a stale/invalid env token as
 "logged in" (and the later push would use that stale token instead of the
-credential the modal just stored):
+credential the device flow just stored):
 
 ```bash
 env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --hostname github.com
 ```
 
-Whichever login path runs, the token MUST carry the `workflow` scope: the
-template ships `.github/workflows/`, and pushing those files is rejected
-without it. The modal's web flow requests `workflow` itself; the device-flow
-fallback below passes `--scopes workflow` explicitly.
+Whichever way the user is logged in, the token MUST carry the `workflow`
+scope: the template ships `.github/workflows/`, and pushing those files is
+rejected without it. The device flow below passes `--scopes workflow`
+explicitly.
 
-On a non-zero exit (not logged in), trigger the login modal:
-
-```bash
-curl -sS -X POST "$SI_BASE/api/github-auth/require"
-```
-
-(the backend broadcasts `github_auth_required`; the frontend opens the
-GitHub-login modal).
-
-**Fast-fallback rule.** The POST response includes `ws_client_count`:
-
-- `ws_client_count == 0` -> no UI is connected to show the modal. Do NOT poll
-  at all; go straight to the device-flow fallback below.
-- otherwise -> poll `GET $SI_BASE/api/github-auth/status` until `logged_in` is
-  `true`, for a SINGLE bounded window of ~90 seconds. Do NOT re-POST the
-  require and do NOT start a second wait; if the window expires, fall back to
-  the device flow. One mechanism at a time, bounded, no serial thrash.
-
-  **Run this poll loop as a BACKGROUND task, not a blocking foreground
-  command** -- same reasoning as §6's poll: mirror `launch-task`'s
-  background-await pattern (§3 of `.agents/skills/launch-task/SKILL.md`)
-  rather than a foreground `while` loop, which can be killed by the calling
-  agent's own tool-execution timeout partway through a ~90s wait (exit
-  137/144). Launch with Bash `run_in_background: true`, then continue; handle
-  the result when it reports back.
-
-**Device-flow fallback (no modal).** Log in via `gh` directly:
+On a non-zero exit (not logged in), go straight to the `gh` device flow --
+auth is surfaced in chat, nothing else:
 
 ```bash
 env -u GH_TOKEN -u GITHUB_TOKEN gh auth login --hostname github.com \
     --git-protocol https --web --skip-ssh-key --scopes workflow
 ```
 
-Run it as a background/pty task (it blocks waiting for the browser step),
+Run it as a background/pty task (it blocks waiting for the browser step), and
 surface the printed one-time code and `https://github.com/login/device` to the
-user in chat, then poll `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status
---hostname github.com` (scrubbed, as above) until it reports authenticated
-(bounded wait). Then run `env -u GH_TOKEN -u GITHUB_TOKEN gh auth setup-git`
-to wire the git credential helper, mirroring what the modal backend does. If
-the user never completes either path, surface a clear message and stop,
-leaving the assembled commit intact.
+user in chat. Then poll for completion **as a background task, bounded** --
+mirror `launch-task`'s background-await pattern rather than a foreground
+`while` loop, which can be killed by your own tool-execution timeout partway
+through the wait (exit 137/144). Launch with Bash `run_in_background: true`
+and handle the result when it reports back; each probe is the same scrubbed
+status check:
 
-The modal backend wires the git credential helper in place (`gh auth login`
-followed by `gh auth setup-git`), so your subsequent `gh` / `git push` picks it
-up at push time. Do NOT restart the agent or re-source the environment.
+```bash
+# Run with Bash run_in_background: true -- bounded (~5 minutes), one wait, no re-arm thrash
+for _ in $(seq 1 30); do
+    if env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --hostname github.com >/dev/null 2>&1; then
+        echo "github auth: logged in"
+        exit 0
+    fi
+    sleep 10
+done
+echo "github auth: still not logged in" >&2
+exit 1
+```
+
+Once authenticated, wire the git credential helper so the push picks up the
+stored credential:
+
+```bash
+env -u GH_TOKEN -u GITHUB_TOKEN gh auth setup-git
+```
+
+Do NOT restart the agent or re-source the environment -- the credential store
+is picked up at push time. If the user never completes the device flow,
+surface a clear message and stop, leaving the assembled commit intact.
 
 ## 8. Create the repo and push
 
 **cwd = `$WT`.** This is the step that actually publishes -- it MUST run from
-the assembly worktree so `gh repo create --source=.` picks up `$WT`'s tree
+the worker's worktree so `gh repo create --source=.` picks up `$WT`'s tree
 (the clean assembled snapshot), never `/code`'s.
 
-With `repo_name` / `visibility` taken from the confirmed response:
+With `repo_name` / `visibility` taken from the chat confirmation:
 
-- **Pre-push checklist:** `(cd "$WT" && git status)` must be clean -- the
-  confirmed thumbnail/manifest edits from §6 are already committed in `$WT`,
-  nothing uncommitted remains. If anything is dirty, commit it first (in
-  `$WT`); never push and then fix up with a re-push.
+- **Pre-push checklist:**
+  - `(cd "$WT" && git status)` must be clean -- the confirmed
+    thumbnail/manifest edits from §6 are already committed in `$WT`, nothing
+    uncommitted remains. If anything is dirty, commit it first (in `$WT`);
+    never push and then fix up with a re-push.
+  - **Placeholder-thumbnail gate** -- this grep must print NOTHING:
+
+    ```bash
+    grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' "$WT/inspiration-<slug>.svg"
+    ```
+
+    A `minds-placeholder-thumbnail` hit means the script's placeholder is
+    still in place (the bespoke thumbnail never landed); the other patterns
+    are the SVG safety rules. On ANY hit, block the push, fix the file (a
+    real bespoke SVG, rules applied), commit in `$WT`, and re-run the gate.
 
 ```bash
 ( cd "$WT" && env -u GH_TOKEN -u GITHUB_TOKEN gh repo create "<repo_name>" --<visibility> --source=. --remote=inspiration --push )
 ```
 
-(`--private` or `--public` per `visibility`. `repo_name` is validated
-`^[A-Za-z0-9._-]+$` server-side, which blocks argument injection, but still pass
-it as a single argv element -- never interpolate it into a shell string. The
-`env -u GH_TOKEN -u GITHUB_TOKEN` prefix is load-bearing: it forces `gh`/`git` to
-use the credential the login modal just stored via `setup-git`, not a stale
-`GH_TOKEN` inherited by your agent shell. `--source=.` resolves relative to the
-`cd "$WT"` in the same subshell, so it always means `$WT`, never `/code`.)
+(`--private` or `--public` per the confirmed visibility. You already validated
+`repo_name` against `^[A-Za-z0-9._-]+$` in §6, which blocks argument
+injection, but still pass it as a single argv element -- never interpolate it
+into a shell string. The `env -u GH_TOKEN -u GITHUB_TOKEN` prefix is
+load-bearing: it forces `gh`/`git` to use the credential the device flow just
+stored via `setup-git`, not a stale `GH_TOKEN` inherited by your agent shell.
+`--source=.` resolves relative to the `cd "$WT"` in the same subshell, so it
+always means `$WT`, never `/code`.)
 
 **Tag the repo (immediately after a successful create+push).** Every published
 inspiration carries the `minds-inspiration` GitHub topic -- a repo topic, NOT
@@ -414,13 +517,13 @@ publish as failed.)
 
 **Failure handling.** If `gh repo create` fails (e.g. the name is taken, or the
 token lacks the `workflow` scope needed to push `.github/workflows/` -- see
-§7), report it to the user and re-open the publish popup (§6)
-for a new name / visibility, keeping the assembled commit intact in `$WT`. Loop
-until it succeeds or the user aborts. **Never fall back to publishing a
-different, non-bootable thing** (e.g. pushing just the selected app files via
-`gh api` instead of `$WT`'s full assembled tree) -- see the "MUST BE BOOTABLE"
-callout at the top of this skill. If you cannot get the documented flow to
-succeed, stop and report the blocker; do not improvise a substitute publish.
+§7), report it to the user and return to §6's chat confirmation for a new
+name / visibility, keeping the assembled commit intact in `$WT`. Loop until it
+succeeds or the user aborts. **Never fall back to publishing a different,
+non-bootable thing** (e.g. pushing just the selected app files via `gh api`
+instead of `$WT`'s full assembled tree) -- see the "MUST BE BOOTABLE" callout
+at the top of this skill. If you cannot get the documented flow to succeed,
+stop and report the blocker; do not improvise a substitute publish.
 
 ## 9. Accumulation
 
@@ -431,27 +534,28 @@ the newly-published slug (the latest).
 
 ## 10. Close out
 
-On a successful push, remove the throwaway worktree and its branch -- the
-commit is fully preserved on the new remote, so keeping a stray local branch of
-an old snapshot around in `/code` is just clutter:
+On a successful push, clean up per `launch-task`'s conventions: the worker can
+be destroyed now (destroying it removes its worktree, i.e. `$WT`), and the
+local branch can go too -- the commit is fully preserved on the new remote:
 
 ```bash
-git worktree remove --force "$WT"
+uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>
+git worktree prune
 git branch -D "mngr/<slug>"
 ```
 
 If the push failed and you are stopping (user aborted, unrecoverable error),
-leave `$WT` and the `mngr/<slug>` branch intact instead -- do not delete work
-the user may want to retry or reassemble from.
+leave the worker, `$WT`, and the `mngr/<slug>` branch intact instead -- do not
+delete work the user may want to retry or reassemble from.
 
-Close the assembly step with a work-summary line. Report the new repo URL in
+Close the delegation step with a work-summary line. Report the new repo URL in
 your final assistant message to the user (not in the step summary).
 
 ## The assembly script: `scripts/build_inspiration.sh`
 
-You run `scripts/build_inspiration.sh` inside the assembly worktree (§3). It is
-self-contained (the dev `create-new-mind-repo` recipe is NOT available in the
-VM). Interface (cwd = worktree repo root):
+The worker runs `scripts/build_inspiration.sh` from its worktree root (§3). It
+is self-contained (the dev `create-new-mind-repo` recipe is NOT available in
+the VM). Interface (cwd = worktree repo root):
 
 ```
 .agents/skills/publish-inspiration/scripts/build_inspiration.sh \
@@ -470,13 +574,14 @@ What it does, in order (see the script for the exact commands):
    inspiration takeover markers in `.agents/skills/welcome/SKILL.md` (needed
    for round-2 adaptation on boot); exits 5 with a clear message otherwise,
    before touching the worktree (see §5).
-2. Stages the selected paths out of the current live-mind worktree into a
-   scratch dir (preserving relative paths) BEFORE resetting.
+2. Stages the selected paths out of the worker's checkout into a scratch dir
+   (preserving relative paths) BEFORE resetting.
 3. Resets the worktree to the clean base with
    `git read-tree -u --reset <BASE_REF>` then `git clean -fdxq` -- this drops
-   tracked-but-not-in-base files AND gitignored cruft (secrets, runtime state).
-   It never `git checkout <ref> -- .` (that leaks the mind's whole committed
-   tree) and never fetches/pulls upstream.
+   tracked-but-not-in-base files AND gitignored cruft (secrets, runtime state,
+   including the worker's `runtime/` task file). It never
+   `git checkout <ref> -- .` (that leaks the mind's whole committed tree) and
+   never fetches/pulls upstream.
 4. Overlays the staged paths onto the clean base with
    `rsync -a "$STAGE/" "$REPO/"` (root-to-root contents merge) -- never a
    nesting copy like `cp -a "$STAGE/apps" "$REPO/apps"`.
@@ -485,9 +590,12 @@ What it does, in order (see the script for the exact commands):
 6. Runs a deterministic secret scan that HARD-FAILS (non-zero, abort before any
    commit/push) on token patterns and credential filenames. This is the
    authoritative blocker, not LLM prose.
-7. Generates the manifest `inspiration-<slug>.md` at the repo root.
-8. Generates a placeholder thumbnail `inspiration-<slug>.svg` (mock data only;
-   the lead may later overwrite it with the popup-confirmed sanitized SVG).
+7. Generates the manifest `inspiration-<slug>.md` at the repo root (with the
+   FILL-IN blocks the worker must replace).
+8. Generates a placeholder thumbnail `inspiration-<slug>.svg` carrying a
+   distinctive `minds-placeholder-thumbnail` marker comment; the worker MUST
+   replace the whole file with a bespoke SVG before reporting done, and the
+   marker makes §8's pre-push gate a deterministic grep.
 9. Rewrites only the marked stable region of `welcome/SKILL.md` to describe the
    newly-published inspiration.
 10. Validates `supervisord.conf` WITHOUT starting the daemon (never
