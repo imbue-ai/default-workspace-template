@@ -173,20 +173,6 @@ def _build_agent_match(agent: DiscoveredAgent) -> AgentMatch:
     )
 
 
-def _discovered_agent_state(agent: DiscoveredAgent) -> str:
-    """Lifecycle-state string to record for an agent seen in the discovery stream.
-
-    A full discovery snapshot carries the live lifecycle state (mngr probes every
-    agent's process when it lists them), so we use it directly -- that is what
-    lets the process-liveness indicator flip to "stopped" when an agent's claude
-    process dies. It is ``None`` only for an agent surfaced by an incremental
-    ``agent_discovered`` event (built from data.json without a liveness probe);
-    such an agent was just seen as present, so we default it to RUNNING and let
-    the next full snapshot correct the guess.
-    """
-    return agent.state.value if agent.state is not None else "RUNNING"
-
-
 def _safe_log_put(log_queue: queue.Queue[str | None], message: str | None) -> None:
     """Non-blocking put for a creation-log queue.
 
@@ -940,10 +926,14 @@ class AgentManager:
         new_agents: dict[str, AgentStateItem] = {}
         new_matches: dict[str, AgentMatch] = {}
         for agent_id, agent in agent_by_id.items():
+            # Every discovery event carries a real lifecycle state (mngr probes
+            # process-liveness for both snapshots and incremental events; UNKNOWN at
+            # worst), so record it directly -- this is what lets the process-liveness
+            # indicator flip to "stopped" when an agent's claude process dies.
             new_agents[agent_id] = AgentStateItem(
                 id=agent_id,
                 name=str(agent.agent_name),
-                state=_discovered_agent_state(agent),
+                state=agent.state.value,
                 labels=dict(agent.labels),
                 work_dir=str(agent.work_dir) if agent.work_dir else None,
             )

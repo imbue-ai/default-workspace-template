@@ -149,7 +149,7 @@ def discover_agents(
     for agent_details in result.agents:
         agent_id = str(agent_details.id)
         agent_name = str(agent_details.name)
-        state = str(agent_details.state.value) if agent_details.state else "unknown"
+        state = str(agent_details.state.value)
 
         # Compute agent state dir from the default host dir
         agent_state_dir = default_host_dir / "agents" / agent_id

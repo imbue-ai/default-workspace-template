@@ -380,19 +380,19 @@ def test_full_snapshot_lifecycle_state_reaches_payload(agent_manager: AgentManag
     assert by_name["dead"]["state"] == "DONE"
 
 
-def test_discovered_agent_without_state_defaults_to_running(agent_manager: AgentManager) -> None:
-    """An incremental ``agent_discovered`` event (built from data.json, no live
-    probe) carries no state; the agent was just seen as present, so it defaults
-    to running until the next full snapshot can correct it."""
+def test_discovered_agent_state_is_recorded_verbatim(agent_manager: AgentManager) -> None:
+    """The manager records the lifecycle state carried on a discovery event
+    directly onto the agent it serializes."""
     agent = DiscoveredAgent(
         host_id=HostId(),
         agent_id=MngrAgentId(),
         agent_name=MngrAgentName("fresh"),
         provider_name=ProviderInstanceName("local"),
         certified_data={"labels": {}, "work_dir": None},
+        state=AgentLifecycleState.WAITING,
     )
     agent_manager._handle_discovery_event(make_agent_discovery_event(agent))
-    assert agent_manager.get_agents_serialized()[0]["state"] == "RUNNING"
+    assert agent_manager.get_agents_serialized()[0]["state"] == "WAITING"
 
 
 def _layout_ops(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -550,13 +550,17 @@ def _discovered_agent(
     name: str,
     agent_id: MngrAgentId | None = None,
     host_id: HostId | None = None,
+    state: AgentLifecycleState = AgentLifecycleState.RUNNING,
 ) -> DiscoveredAgent:
+    # Real discovery events carry a probed lifecycle state; RUNNING models the
+    # common case of a live agent.
     return DiscoveredAgent(
         host_id=host_id if host_id is not None else HostId(),
         agent_id=agent_id if agent_id is not None else MngrAgentId(),
         agent_name=MngrAgentName(name),
         provider_name=ProviderInstanceName("local"),
         certified_data={"labels": {}, "work_dir": None},
+        state=state,
     )
 
 
@@ -1610,6 +1614,7 @@ def test_provider_snapshot_preserves_activity_state_for_tracked_agent(
         agent_name=MngrAgentName("snapshot-agent"),
         provider_name=ProviderInstanceName("local"),
         certified_data={"labels": {}, "work_dir": str(tmp_path / "work")},
+        state=AgentLifecycleState.RUNNING,
     )
     agent_manager._handle_discovery_event(make_agent_discovery_event(discovered))
     agent_manager.update_session_events(str_id, [{"type": "user_message", "content": "go"}])
