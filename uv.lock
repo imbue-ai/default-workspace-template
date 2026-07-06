@@ -343,7 +343,6 @@ source = { editable = "libs/bootstrap" }
 dependencies = [
     { name = "host-backup" },
     { name = "loguru" },
-    { name = "runtime-backup" },
     { name = "tomlkit" },
 ]
 
@@ -351,7 +350,6 @@ dependencies = [
 requires-dist = [
     { name = "host-backup", editable = "libs/host_backup" },
     { name = "loguru", specifier = ">=0.7.0" },
-    { name = "runtime-backup", editable = "libs/runtime_backup" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "tomlkit", specifier = ">=0.12" },
 ]

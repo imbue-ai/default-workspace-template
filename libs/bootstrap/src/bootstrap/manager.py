@@ -29,7 +29,6 @@ from host_backup.config import (
     write_default_restic_env_template,
 )
 from loguru import logger
-from runtime_backup.git_env import git_noninteractive_env
 
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
@@ -514,6 +513,21 @@ def _exec_supervisord() -> None:
     os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
 
 
+def _git_noninteractive_env() -> dict[str, str]:
+    """Environment for bootstrap git calls: never prompt for credentials.
+
+    Git prompts for a username/password on the controlling TTY (bypassing our
+    captured pipes) when a remote needs auth and no credential is available --
+    e.g. the "best-effort" fetch in _init_runtime_worktree against a PRIVATE
+    origin (a mind created from a private inspiration repo) with no GH_TOKEN.
+    That prompt blocks bootstrap forever, so supervisord never starts and the
+    workspace sits on "Loading workspace" indefinitely. GIT_TERMINAL_PROMPT=0
+    turns the prompt into a fast failure, which every caller here already
+    handles (all bootstrap git calls are best-effort by design).
+    """
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+
 def _git_main(*args: str) -> subprocess.CompletedProcess[str]:
     """Run a git command in the main checkout, never raising or prompting."""
     return subprocess.run(
@@ -521,7 +535,7 @@ def _git_main(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
-        env=git_noninteractive_env(),
+        env=_git_noninteractive_env(),
     )
 
 
@@ -532,7 +546,7 @@ def _git_runtime(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
-        env=git_noninteractive_env(),
+        env=_git_noninteractive_env(),
     )
 
 
