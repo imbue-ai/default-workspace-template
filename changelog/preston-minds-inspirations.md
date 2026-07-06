@@ -68,3 +68,13 @@
   the worktree (same full bootable tree) -- and cleans up the `inspiration`
   remote on close-out, since remotes live in the shared repo config and would
   otherwise linger in the live checkout and collide with the next publish.
+
+- Fixed first boot hanging forever on "Loading workspace" for minds created
+  from a private inspiration repo. Bootstrap's best-effort runtime-worktree
+  fetch ran git without disabling terminal prompts, so against a private
+  origin with no `GH_TOKEN` git prompted for a username on the tmux TTY and
+  blocked bootstrap before supervisord ever started (the public template repo
+  never triggered this, since anonymous fetches fail fast there). All
+  bootstrap and runtime-backup git invocations now run with
+  `GIT_TERMINAL_PROMPT=0`, turning any credential prompt into the fast,
+  already-handled failure the best-effort design intended.
