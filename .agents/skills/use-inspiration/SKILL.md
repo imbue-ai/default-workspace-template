@@ -76,20 +76,44 @@ Locate the manifest at the repo root:
   repo's `/welcome` skill (or the one the user chose).
 
 Read its front-matter (`title`, `description`, `thumbnail`) and its body sections:
-`What it is`, `How it works`, `How to adapt it`, `Holes`, and `Permissions it
-may need` (older manifests may have `Apps included` instead of `How it works`
-and no `How to adapt it`). `How to adapt it` is the script for the conversation;
-`Holes` and `Permissions it may need` are its agenda — they tell you exactly
-what the original author left for the adapter to fill in.
+`What it is`, `How it works`, `Prerequisites`, `How to adapt it`, `Holes`, and
+`Adaptation history` (older manifests may have `Apps included` instead of `How
+it works`, `Permissions it may need` instead of `Prerequisites`, and no `How to
+adapt it`). Two distinct agendas: `Prerequisites` is the SETUP agenda —
+machine-readable `requires_permission:` / `requires_secret:` lines you act on
+to activate the app; `Holes` is the ADAPTATION agenda — design gaps the
+original author left for the adapter.
 
-## 3. Ask the user how to adapt
+## 3. Activate first, then ask how to adapt
 
 In chat, in plain language, walk the user through what this inspiration provides
-and what it needs from them. Use the manifest's `Holes` and `Permissions it may
-need` as the agenda — do not enumerate file paths at the user. For example: "This
-uses Slack to pull in messages; do you want to keep Slack, or would you rather it
-read email?" or "This needs a token to talk to GitHub — do you have one, or should
-we set that up?"
+and what it needs from them — name the `Prerequisites` (do not enumerate file
+paths at the user). Then ask whether they want to run it on the same connectors:
+"This uses Slack to pull in messages — want me to connect it to your Slack now,
+or would you rather it read something else, like email?"
+
+**If they keep the same connectors — set it up BEFORE the adaptation
+conversation:**
+
+1. Initiate every `requires_permission:` line YOURSELF, now, via a latchkey
+   permission request (see the `latchkey` skill: `latchkey curl -XPOST
+   http://latchkey-self.invalid/permission-requests`; the request opens the
+   approval/login flow in the minds app). Do not merely tell the user a
+   permission is needed — send the request so it appears for them to approve.
+2. Wire up any `requires_secret:` values (ask the user for them), start the
+   services, and get the app running against THEIR data.
+3. **Definition of done for a data-backed app: the user can open it and see
+   their OWN data.** A service that starts cleanly or an endpoint that returns
+   200 is NOT done — open the app's actual output yourself and confirm it
+   shows the user's real content before saying it works.
+4. Tell them it is live and invite them to take a look and play with it.
+
+Only then ask: "Now — how would you like to adapt it?"
+
+**If they want different connectors** (e.g. email instead of Slack), skip
+activation and go straight to the adaptation conversation — the swap is the
+first adaptation, and its new prerequisites get initiated the same way once
+decided.
 
 ## 4. Fill holes interactively
 

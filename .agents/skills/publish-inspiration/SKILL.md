@@ -192,17 +192,21 @@ worktree to a clean template base and deletes gitignored state -- including
 
 2. **Flesh out the manifest.** `inspiration-<slug>.md` at the repo root has
    `<!-- FILL-IN (publishing agent): ... -->` comment blocks in "What it is,"
-   "How it works," "Holes," and "Permissions it may need" -- generated
-   placeholders, not real content. Replace EVERY block with real, specific
-   prose: for "Holes" and "Permissions it may need" in particular, think
-   through what the included apps actually depend on -- an external API token,
-   an OAuth app, a Slack/Discord/etc. workspace installation, a hardcoded
-   account or channel -- and name it explicitly. If a section genuinely has
+   "How it works," "Prerequisites," and "Holes" -- generated placeholders,
+   not real content. Replace EVERY block with real, specific content.
+   "Prerequisites" is the strictest: one machine-readable line per activation
+   requirement in the exact `requires_permission:` / `requires_secret:` forms
+   the template shows, derived from the included code (inspect every service
+   the app reaches through `latchkey curl` and name the real latchkey scope
+   and permission schema, e.g. `slack-api / slack-read-all`). These lines are
+   what the ADOPTING agent acts on during setup -- it initiates each one via
+   a latchkey permission request before asking how to adapt -- so a vague or
+   missing line silently breaks adoption (a real incident: an adopter never
+   prompted for a Slack permission the app needed). "Holes" is the
+   adaptation agenda only -- design gaps, stubbed integrations, hardcoded
+   accounts -- never activation requirements. If a section genuinely has
    nothing to add, say so explicitly in prose; never leave a placeholder
-   comment in place and never leave a section blank. This manifest is the
-   next agent's entire agenda for the adaptation conversation -- an
-   inspiration that needs a Slack token but doesn't say so silently breaks
-   adoption.
+   comment in place and never leave a section blank.
 
 3. **Design the thumbnail.** `inspiration-<slug>.svg` at the repo root is a
    generic placeholder the script generated -- it must never be published.
