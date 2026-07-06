@@ -639,7 +639,7 @@ function bindDetailActions(pr) {
 function renderDetailShell() {
   const pr = DETAIL.pr;
   const conv = DETAIL.conversation || { comments: [], reviews: [], review_comments: [] };
-  const convCount = conv.comments.length + conv.reviews.filter(r => r.body || r.state !== "COMMENTED").length + (conv.review_comments ? conv.review_comments.length : 0);
+  const convCount = conversationItemCount(conv);
   const d = document.getElementById("detail");
   d.innerHTML = `
     <div class="detail-head">
@@ -785,6 +785,15 @@ function reviewCommentThreads(conv) {
   return out;
 }
 
+// The number the Conversation tab shows: one per rendered card -- issue
+// comments, reviews with a body (or a non-"commented" verdict), and one per
+// code-comment thread (not per individual reply, so it matches the cards shown).
+function conversationItemCount(conv) {
+  const comments = (conv.comments || []).length;
+  const reviews = (conv.reviews || []).filter(r => r.body || r.state !== "COMMENTED").length;
+  return comments + reviews + reviewCommentThreads(conv).length;
+}
+
 // The last few lines of a diff hunk (nearest the commented line), sign-colored.
 function diffHunkSnippet(hunk, maxLines = 4) {
   if (!hunk) return "";
@@ -908,7 +917,7 @@ async function reloadConversation() {
   } catch (e) { /* keep old */ }
   // refresh the conversation tab count + pane
   const conv = DETAIL.conversation;
-  const convCount = conv.comments.length + conv.reviews.filter(r => r.body || r.state !== "COMMENTED").length + (conv.review_comments ? conv.review_comments.length : 0);
+  const convCount = conversationItemCount(conv);
   const tab = document.querySelector('.dtab[data-dtab="conversation"] .tcount');
   if (tab) tab.textContent = convCount;
   renderConversation();
