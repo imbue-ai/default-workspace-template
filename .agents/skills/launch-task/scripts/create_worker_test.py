@@ -99,7 +99,6 @@ def test_happy_path_no_artifacts(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         runner=runner,
     )
 
@@ -112,8 +111,6 @@ def test_happy_path_no_artifacts(tmp_path: Path) -> None:
             "demo-worker",
             "-t",
             "worker",
-            "--label",
-            "workspace=ws-1",
             "--label",
             "agent_created=true",
         ],
@@ -139,7 +136,6 @@ def test_source_artifacts_dir_synced_after_runtime(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         runner=runner,
     )
 
@@ -182,7 +178,6 @@ def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         runner=runner,
     )
 
@@ -222,7 +217,6 @@ def test_relative_runtime_dir_is_prefixed_for_local_source(
         template="worker",
         runtime_dir=rel_runtime,
         task_file=rel_task,
-        workspace="ws-1",
         runner=runner,
     )
 
@@ -252,7 +246,6 @@ def test_source_artifacts_dir_missing_is_fatal(
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws",
         runner=runner,
     )
 
@@ -276,7 +269,6 @@ def test_source_artifacts_dir_non_string_raises(tmp_path: Path) -> None:
             template="worker",
             runtime_dir=runtime,
             task_file=task,
-            workspace="ws",
             runner=runner,
         )
 
@@ -298,7 +290,6 @@ def test_invalid_frontmatter_yaml_raises(tmp_path: Path) -> None:
             template="worker",
             runtime_dir=runtime,
             task_file=task,
-            workspace="ws",
             runner=runner,
         )
 
@@ -317,7 +308,6 @@ def test_malformed_frontmatter_does_not_abort_launch(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         runner=runner,
     )
 
@@ -344,7 +334,6 @@ def test_runtime_dir_must_exist(
         template="worker",
         runtime_dir=tmp_path / "missing",
         task_file=task,
-        workspace="ws",
         runner=runner,
     )
     assert rc == 2
@@ -362,7 +351,6 @@ def test_task_file_must_exist(
         template="worker",
         runtime_dir=runtime,
         task_file=runtime / "missing.md",
-        workspace="ws",
         runner=runner,
     )
     assert rc == 2
@@ -383,7 +371,6 @@ def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
             template="worker",
             runtime_dir=runtime,
             task_file=task,
-            workspace="ws",
             runner=runner,
         )
 
@@ -402,35 +389,20 @@ def _launch_argv(runtime: Path, task: Path) -> list[str]:
     ]
 
 
-def test_main_uses_workspace_env(
+def test_main_create_carries_no_workspace_label(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Workers belong to their workspace by sharing the host; they carry no
+    # workspace label (the label was removed from the naming model).
     runtime, task, _ = _make_layout(tmp_path)
     runner = _RecordingRunner()
-    monkeypatch.setenv("MINDS_WORKSPACE_NAME", "alpha")
 
     rc = create_worker_mod.main(_launch_argv(runtime, task), runner=runner)
 
     assert rc == 0
     create_calls = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
     assert create_calls, runner.calls
-    assert "workspace=alpha" in create_calls[0]
-
-
-def test_main_workspace_defaults_when_env_unset(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime, task, _ = _make_layout(tmp_path)
-    runner = _RecordingRunner()
-    monkeypatch.delenv("MINDS_WORKSPACE_NAME", raising=False)
-
-    rc = create_worker_mod.main(_launch_argv(runtime, task), runner=runner)
-
-    assert rc == 0
-    create_calls = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
-    assert "workspace=default" in create_calls[0]
+    assert not any(arg.startswith("workspace=") for arg in create_calls[0])
 
 
 def _make_state_dir_with_converter(tmp_path: Path) -> Path:
@@ -453,7 +425,6 @@ def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         state_dir=state_dir,
         runner=runner,
     )
@@ -468,8 +439,6 @@ def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
             "demo-worker",
             "-t",
             "worker",
-            "--label",
-            "workspace=ws-1",
             "--label",
             "agent_created=true",
         ],
@@ -495,7 +464,6 @@ def test_common_transcript_skipped_when_state_dir_is_none(tmp_path: Path) -> Non
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         state_dir=None,
         runner=runner,
     )
@@ -518,7 +486,6 @@ def test_common_transcript_skipped_when_script_missing(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         state_dir=state_dir,
         runner=runner,
     )
@@ -545,7 +512,6 @@ def test_common_transcript_failure_does_not_abort_launch(
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         state_dir=state_dir,
         runner=runner,
     )
@@ -919,7 +885,6 @@ def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         timeout_seconds=1800,
         poll_interval_seconds=5,
         runner=runner,
@@ -958,7 +923,6 @@ def test_launch_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         timeout_seconds=1800,
         poll_interval_seconds=5,
         destroy_on_finish=False,
@@ -987,7 +951,6 @@ def test_launch_sync_timeout_keeps_worker_alive(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        workspace="ws-1",
         timeout_seconds=30,
         poll_interval_seconds=5,
         runner=runner,
@@ -1027,7 +990,6 @@ def test_launch_sync_surfaces_launch_failure(tmp_path: Path) -> None:
         template="worker",
         runtime_dir=tmp_path / "missing",
         task_file=task,
-        workspace="ws-1",
         timeout_seconds=30,
         poll_interval_seconds=5,
         runner=runner,
@@ -1055,7 +1017,6 @@ def test_launch_sync_missing_finish_report_path_raises_before_launch(
             template="worker",
             runtime_dir=runtime,
             task_file=task,
-            workspace="ws-1",
             timeout_seconds=30,
             poll_interval_seconds=5,
             runner=runner,
