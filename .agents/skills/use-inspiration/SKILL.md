@@ -22,15 +22,15 @@ anything else.
 **A. Template path — this mind was created from an inspiration repo.** The mind
 already has the inspiration's tree at its root (it *is* the inspiration repo), so
 there is nothing to fetch. On this path adaptation starts IMMEDIATELY at boot:
-the rewritten `/welcome` region (between the `<!-- INSPIRATION:BEGIN -->` /
-`<!-- INSPIRATION:END -->` markers in `.agents/skills/welcome/SKILL.md`) takes
-over the welcome, so the booting agent's first response is a custom welcome
+the published repo ships its own inspiration-specific `/welcome` skill
+(generated into the snapshot by the publish flow, replacing the template's
+generic welcome), so the booting agent's first response is a custom welcome
 naming the inspiration's title and one-line description (instead of the generic
 "Welcome to Minds" message), followed in the same turn — without waiting to be
 asked — by reading the manifest and asking the user how they want to adapt it.
 The manifest's "How to adapt it" section is the script for that conversation.
 Default to adapting the **latest** inspiration — the `inspiration-<slug>.md` for
-the most-recently-published slug recorded in that welcome region. Older
+the most-recently-published slug named in that welcome skill. Older
 `inspiration-*.md` manifests are reference material and were likely already
 adapted by an earlier mind. If more than one manifest is present, you may ask
 the user which one they want to adapt. Skip step 1 below (the tree is already
@@ -73,7 +73,7 @@ Locate the manifest at the repo root:
 
 - Merge path: `inspiration-<slug>.md` for the inspiration you just merged in.
 - Template path: `inspiration-<slug>.md` for the latest slug named in the
-  `/welcome` stable region (or the one the user chose).
+  repo's `/welcome` skill (or the one the user chose).
 
 Read its front-matter (`title`, `description`, `thumbnail`) and its body sections:
 `What it is`, `How it works`, `How to adapt it`, `Holes`, and `Permissions it

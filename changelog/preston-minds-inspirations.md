@@ -12,12 +12,12 @@
   (no user data by default), then dispatches ONE `launch-task` worker cycle.
   On its isolated worktree the worker runs `build_inspiration.sh` -- reset to
   the clean FCT base the mind was created from (first-parent-root fallback
-  plus a bootable-base pre-check covering `pyproject.toml`,
-  `supervisord.conf`, and the `/welcome` takeover markers; no upstream fetch,
-  provenance link only), overlay only the selected paths, hard-failing secret
-  scan scoped to the overlaid content, manifest + thumbnail generation,
-  `/welcome` stable-region rewrite, side-effect-free boot smoke-check, single
-  commit -- then fleshes out every manifest FILL-IN section with real prose
+  plus a bootable-base pre-check covering `pyproject.toml` and
+  `supervisord.conf`; no upstream fetch, provenance link only), overlay only
+  the selected paths, hard-failing secret scan scoped to the overlaid
+  content, manifest + thumbnail generation, an inspiration-specific
+  `/welcome` skill written into the snapshot, side-effect-free boot
+  smoke-check, single commit -- then fleshes out every manifest FILL-IN section with real prose
   and replaces the placeholder thumbnail with a **bespoke, app-relevant SVG**
   (mock data only) before reporting done. Deterministic grep gates block
   publishing while any FILL-IN block or the placeholder-thumbnail marker
@@ -50,10 +50,11 @@
   appends a dated adaptation record to the manifest.
 
 - A mind created from an inspiration repo starts adapting immediately: the
-  welcome skill's inspiration region takes over the whole welcome (a custom
-  message naming the inspiration instead of the generic template greeting),
-  reads the manifest in the same turn, and asks the user how they want to
-  adapt it. The generated manifest is a thorough, self-sufficient explainer
+  published repo ships its own generated `/welcome` skill (a custom greeting
+  naming the inspiration instead of the generic template greeting), which
+  reads the manifest in the same turn and asks the user how they want to
+  adapt it. The template's own welcome skill is untouched by this feature --
+  the publish flow changes the welcome only inside the published snapshot. The generated manifest is a thorough, self-sufficient explainer
   (what it is, how it works, how to adapt it, holes, permissions, adaptation
   history).
 

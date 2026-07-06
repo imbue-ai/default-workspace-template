@@ -38,7 +38,7 @@ repo and pushes -- directly from the worker's worktree.
 > **AN INSPIRATION MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
 > valid inspiration is always the FULL tree `build_inspiration.sh` assembles on
 > `mngr/<slug>`: the clean FCT base (`pyproject.toml`, `supervisord.conf`,
-> `.mngr/`, `.agents/skills/` including the rewritten `/welcome`, `parent.toml`,
+> `.mngr/`, `.agents/skills/` including the generated inspiration `/welcome`, `parent.toml`,
 > etc.) plus the selected app/feature paths -- never just the app code plus a
 > README. That full tree is what makes `/use-inspiration`'s template path work:
 > another mind must be creatable FROM the published repo, not merely able to
@@ -110,25 +110,18 @@ only.
 
 **Mandatory pre-check (before ANY assembly).** Verify the resolved base is a
 bootable template -- its tree must name both `pyproject.toml` and
-`supervisord.conf` -- AND that it already carries the `/welcome` inspiration
-takeover markers (`<!-- INSPIRATION:BEGIN -->` / `<!-- INSPIRATION:END -->` as
-exact whole lines in `.agents/skills/welcome/SKILL.md`), since the assembly
-script's `/welcome` rewrite (item 9 of "The assembly script" section below)
-needs them to drive round-2 adaptation on boot -- a base that predates the
-markers silently degrades that feature even though it still boots:
+`supervisord.conf`:
 
 ```bash
 git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx pyproject.toml \
-  && git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx supervisord.conf \
-  && git show "<BASE_REF>:.agents/skills/welcome/SKILL.md" 2>/dev/null | grep -qxF -- '<!-- INSPIRATION:BEGIN -->' \
-  && git show "<BASE_REF>:.agents/skills/welcome/SKILL.md" 2>/dev/null | grep -qxF -- '<!-- INSPIRATION:END -->'
+  && git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx supervisord.conf
 ```
 
 If the check fails, STOP and reconsider the base (e.g. walk forward along the
-first-parent chain to the earliest commit that passes all four checks, or ask
+first-parent chain to the earliest commit that passes both checks, or ask
 the user) rather than launching the worker -- this catches the wrong-root and
 too-old-base problems in seconds instead of a full worker round-trip.
-`build_inspiration.sh` re-validates all four conditions itself and exits 5 with
+`build_inspiration.sh` re-validates both conditions itself and exits 5 with
 a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
 
@@ -333,7 +326,8 @@ you still need for the push.
 
 `build_inspiration.sh` (documented below) does the whole mechanical assembly
 in the worker's worktree: clean base + overlay + secret scan + manifest +
-placeholder thumbnail + `/welcome` rewrite + boot smoke-check + a single
+placeholder thumbnail + an inspiration-specific `/welcome` written into the
+snapshot + boot smoke-check + a single
 commit. It communicates purely via its exit code -- `0` on success (the
 assembled commit is on `mngr/<slug>`), non-zero otherwise (see §5). It prints
 a summary of what it assembled to stderr. The worker then supplies the two
@@ -355,10 +349,8 @@ stderr. What each exit means, and what you do:
 - **Non-template base (exit 5).** The `--base-ref` does not resolve to a tree
   in the repo, or its tree is not a bootable template: it lacks
   `pyproject.toml` and/or `supervisord.conf` (e.g. a parallel subtree root was
-  picked instead of the real seed), or it lacks the `/welcome` inspiration
-  takeover markers (`<!-- INSPIRATION:BEGIN -->` / `<!-- INSPIRATION:END -->`
-  as exact whole lines in `.agents/skills/welcome/SKILL.md`) needed to drive
-  round-2 adaptation on boot. Nothing was committed; re-resolve `BASE_REF` per
+  picked instead of the real seed). Nothing was committed; re-resolve
+  `BASE_REF` per
   §2 (its pre-check should have caught this before launch) and relaunch.
 
 Every one of these is a "fix the input and relaunch the worker" situation,
@@ -544,8 +536,8 @@ stop and report the blocker; do not improvise a substitute publish.
 
 Publishing a mind that already holds `inspiration-*.md` manifests plus their app
 dirs carries ALL of them forward into the new repo alongside the newly-published
-one -- they are part of the assembled tree. The `/welcome` rewrite targets only
-the newly-published slug (the latest).
+one -- they are part of the assembled tree. The generated `/welcome` targets
+only the newly-published slug (the latest).
 
 ## 10. Close out
 
@@ -590,10 +582,8 @@ the VM). Interface (cwd = worktree repo root):
 What it does, in order (see the script for the exact commands):
 
 1. Validates that the `--base-ref` tree names `pyproject.toml` and
-   `supervisord.conf` (a bootable template base) AND carries the `/welcome`
-   inspiration takeover markers in `.agents/skills/welcome/SKILL.md` (needed
-   for round-2 adaptation on boot); exits 5 with a clear message otherwise,
-   before touching the worktree (see §5).
+   `supervisord.conf` (a bootable template base); exits 5 with a clear
+   message otherwise, before touching the worktree (see §5).
 2. Stages the selected paths out of the worker's checkout into a scratch dir
    (preserving relative paths) BEFORE resetting.
 3. Resets the worktree to the clean base with
@@ -616,7 +606,8 @@ What it does, in order (see the script for the exact commands):
    distinctive `minds-placeholder-thumbnail` marker comment; the worker MUST
    replace the whole file with a bespoke SVG before reporting done, and the
    marker makes §8's pre-push gate a deterministic grep.
-9. Rewrites only the marked stable region of `welcome/SKILL.md` to describe the
+9. Overwrites the snapshot's `welcome/SKILL.md` with a generated
+   inspiration-specific welcome describing the
    newly-published inspiration.
 10. Validates `supervisord.conf` WITHOUT starting the daemon (never
     `supervisord -t`), then makes a single commit for the assembled snapshot.

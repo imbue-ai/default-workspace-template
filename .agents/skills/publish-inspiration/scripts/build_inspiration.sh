@@ -130,33 +130,6 @@ if [ -n "$base_missing" ]; then
     exit 5
 fi
 
-# A bootable base can still predate the /welcome inspiration-takeover markers
-# (added in a later FCT commit than some older bootable bases), which would
-# silently degrade step 8's welcome rewrite: the rewrite would be skipped, so
-# a mind created from this inspiration would get the generic welcome instead
-# of taking over into the adaptation conversation. Require the markers as
-# exact whole lines in the base's welcome skill, the same way step 8 matches
-# them, so a too-old base is caught here -- before any destructive read-tree --
-# rather than surfacing as a benign-sounding warning after the commit.
-WELCOME_CHECK_FILE=".agents/skills/welcome/SKILL.md"
-welcome_missing=""
-welcome_content="$(git show "${BASE_REF}:${WELCOME_CHECK_FILE}" 2> /dev/null || true)"
-if [ -z "$welcome_content" ]; then
-    welcome_missing="${WELCOME_CHECK_FILE} (not present in base tree)"
-else
-    if ! printf '%s\n' "$welcome_content" | grep -qxF -- '<!-- INSPIRATION:BEGIN -->'; then
-        welcome_missing="${welcome_missing} <!-- INSPIRATION:BEGIN -->"
-    fi
-    if ! printf '%s\n' "$welcome_content" | grep -qxF -- '<!-- INSPIRATION:END -->'; then
-        welcome_missing="${welcome_missing} <!-- INSPIRATION:END -->"
-    fi
-fi
-if [ -n "$welcome_missing" ]; then
-    echo "build_inspiration.sh: BASE REF INVALID: the tree of '${BASE_REF}' is missing the /welcome inspiration-takeover markers:${welcome_missing}" >&2
-    echo "build_inspiration.sh: '${BASE_REF}' predates the welcome-takeover feature -- a mind created from this inspiration would not adapt on boot; walk forward along the first-parent chain to a newer base, or ask the user" >&2
-    exit 5
-fi
-
 # --- 1. stage the selected paths out of the LIVE worktree BEFORE the reset ----
 
 # rsync -R preserves each relative path so it lands at the same location under
@@ -452,60 +425,52 @@ cat > "$THUMBNAIL" <<THUMB_EOF
 </svg>
 THUMB_EOF
 
-# --- 8. rewrite the /welcome stable region -----------------------------------
+# --- 8. write the inspiration-specific /welcome into the SNAPSHOT ------------
 
-# Replace everything BETWEEN the two markers (exclusive of the markers
-# themselves) with the inspiration takeover region: the title, slug, one-line
-# description, and manifest path, plus the instruction to take over the
-# welcome (custom greeting instead of the generic one) and immediately start
-# the adaptation conversation. Deterministic (awk on the two markers), never
-# an LLM freeform edit. The markers and everything outside them (the generic
-# welcome, the takeover instructions, the marker contract) are preserved.
-# Markers are matched as EXACT WHOLE LINES (grep -x, awk string equality), so
-# prose elsewhere in the file that merely mentions the marker text can never
-# trigger the rewrite.
+# The published repo ships its OWN welcome skill, generated here by overwriting
+# .agents/skills/welcome/SKILL.md in the assembled tree. The TEMPLATE's welcome
+# skill is deliberately untouched by the inspirations feature -- no marker
+# region, no takeover branch; the inspiration handles changing the welcome
+# entirely within the snapshot it publishes. Deterministic full-file write,
+# never an LLM freeform edit; idempotent across accumulated publishes (each
+# publish regenerates it targeting the newly-published slug, the latest).
 WELCOME_FILE=".agents/skills/welcome/SKILL.md"
-if [ -f "$WELCOME_FILE" ] \
-    && grep -qxF -- '<!-- INSPIRATION:BEGIN -->' "$WELCOME_FILE" \
-    && grep -qxF -- '<!-- INSPIRATION:END -->' "$WELCOME_FILE"; then
-    NEW_REGION_FILE="$(mktemp)"
-    cat > "$NEW_REGION_FILE" <<WELCOME_REGION_EOF
+mkdir -p "$(dirname "$WELCOME_FILE")"
+cat > "$WELCOME_FILE" <<WELCOME_EOF
+---
+name: welcome
+description: Greet the user when a new project starts. This mind was created from the "${TITLE}" inspiration, so the welcome introduces that inspiration and immediately starts the adaptation conversation.
+---
 
-This mind was created from an inspiration, so the **Inspiration takeover**
-path of this skill applies -- NOT the generic welcome.
+# Welcome the user (inspiration: ${TITLE})
+
+This mind was created from an inspiration -- a published snapshot of apps
+another mind built:
 
 - Title: ${TITLE}
 - Slug: \`${SLUG}\`
 - Description: ${manifest_description}
 - Manifest: \`inspiration-${SLUG}.md\` (at the repo root)
 
-In your FIRST response: output a CUSTOM welcome that names **${TITLE}** and
-gives the one-line description above, INSTEAD of the generic "Welcome to
-Minds" message. Then, in the SAME turn and without waiting to be asked, read
-\`inspiration-${SLUG}.md\` and begin the adaptation conversation by asking the
-user how they want to adapt it -- the \`use-inspiration\` skill's template
-path, with the manifest's "How to adapt it" section as the script.
-WELCOME_REGION_EOF
-    awk -v regionfile="$NEW_REGION_FILE" '
-        $0 == "<!-- INSPIRATION:BEGIN -->" {
-            print
-            while ((getline line < regionfile) > 0) print line
-            close(regionfile)
-            skip = 1
-            next
-        }
-        $0 == "<!-- INSPIRATION:END -->" {
-            skip = 0
-            print
-            next
-        }
-        skip != 1 { print }
-    ' "$WELCOME_FILE" > "${WELCOME_FILE}.tmp"
-    mv "${WELCOME_FILE}.tmp" "$WELCOME_FILE"
-    rm -f "$NEW_REGION_FILE"
-else
-    echo "build_inspiration.sh: warning: /welcome stable markers not found; skipping welcome rewrite" >&2
-fi
+Do ALL of the following in your FIRST response, in the same turn, without
+waiting to be asked:
+
+1. Open with a short CUSTOM welcome that names **${TITLE}** and gives the
+   one-line description above. Do NOT use a generic "Welcome to Minds"
+   greeting and do NOT offer a generic suggestions list.
+2. Immediately read \`inspiration-${SLUG}.md\` at the repo root (reading the
+   manifest in the first turn is required).
+3. Begin the adaptation conversation: in plain, non-technical language,
+   present what the inspiration is and what it needs from the user, then ask
+   the user how they want to adapt it. This is the \`use-inspiration\` skill's
+   template path; the manifest's "How to adapt it" section is the script for
+   the conversation. Do not start changing anything before having this
+   conversation -- end your first response on the question.
+
+If this repo has accumulated several \`inspiration-*.md\` manifests, the one
+named above is the latest; treat the others as reference (they were likely
+already adapted upstream).
+WELCOME_EOF
 
 # --- 9. boot smoke-check WITHOUT side effects, then single commit -------------
 
