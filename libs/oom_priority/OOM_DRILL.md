@@ -22,8 +22,10 @@ Pick a live agent and its claude process, and a subprocess it spawned (run a
 # a subprocess it spawned via the Bash tool should sit at 900.
 cat /proc/<claude_pid>/oom_score_adj          # 300 or 600
 cat /proc/<subprocess_pid>/oom_score_adj      # 900
-# A protected service stays at 0:
-cat /proc/$(pgrep -f system-interface | head -1)/oom_score_adj   # 0
+# A built-in service sits at its SERVICE_BANDS value (system_interface = 20):
+cat /proc/$(pgrep -f system-interface | head -1)/oom_score_adj   # 20
+# The never-kill infra (sshd, supervisord, earlyoom, tini, tmux) stays at 0:
+cat /proc/$(pgrep -x supervisord | head -1)/oom_score_adj        # 0
 ```
 
 ## 2. Trigger a shed with a memory hog

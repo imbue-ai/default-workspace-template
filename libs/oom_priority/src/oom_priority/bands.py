@@ -7,11 +7,13 @@ process more likely to be shed first.
 
 Bands are positive-only. A negative ``oom_score_adj`` (true "never kill") would
 require ``CAP_SYS_RESOURCE``, which the container's default capability set does
-not grant; positive values still establish the relative ordering. Protected
-processes (the UI, the tunnel, the terminal, the backups, supervisord, sshd,
-tmux, and earlyoom itself) simply keep the inherited default of 0 -- nothing
-needs to tag them -- and are additionally shielded by earlyoom ``--avoid`` where
-they have a distinct process name.
+not grant; positive values still establish the relative ordering. The never-kill
+infrastructure (sshd, supervisord, earlyoom itself, tini, and tmux) keeps the
+inherited default of 0 -- nothing needs to tag it -- and is additionally shielded
+by earlyoom ``--avoid``. The supervisord services (the UI, the tunnel, the
+terminal, the backups, ...) are tagged into the low ``SERVICE_BANDS`` range so
+they stay well below the agent bands while remaining strictly ordered among
+themselves.
 
 Raising a process's own (or a descendant's) ``oom_score_adj`` is unprivileged,
 so the tagging hooks need no special capability.
@@ -29,6 +31,41 @@ PROTECTED: Final[int] = 0
 USER_AGENT: Final[int] = 300
 WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
+
+# Supervisord service bands, keyed by the service key passed to
+# ``scripts/oom_tag_service.py``. Every value sits strictly between PROTECTED (0)
+# and USER_AGENT (300), so a service is *less* expendable than any agent (an
+# agent's work revives on the next message, so it is shed first) but still
+# steerable relative to the other services.
+#
+# The built-in services are ordered from least- to most-expendable by how much
+# losing one hurts: the terminal (raw shell access) and the UI come first, then
+# the tunnel, then the two backups, then the app-watcher, then the placeholder
+# ``web`` example. ``user`` is the single band every *user-created* service
+# shares; it sits above every built-in service so a user's own service is shed
+# before any built-in one, while staying below USER_AGENT.
+#
+# sshd and the other never-kill infrastructure (supervisord, earlyoom, tini,
+# tmux) are deliberately absent: they keep the inherited PROTECTED default (0)
+# and are additionally shielded by earlyoom ``--avoid``.
+#
+# This is a best-effort steer, not a hard guarantee. earlyoom picks the highest
+# ``/proc/*/oom_score``, which folds each process's live memory usage in on top
+# of ``oom_score_adj``, so a large enough memory gap between two services can
+# still reorder adjacent bands. The order only decides which service goes when
+# earlyoom is forced to shed inside the protected pool -- i.e. once everything
+# more expendable (browsers, agent subprocesses, agents, user services) is gone.
+USER_SERVICE: Final[int] = 200
+SERVICE_BANDS: Final[dict[str, int]] = {
+    "terminal": 10,
+    "system_interface": 20,
+    "cloudflared": 30,
+    "runtime-backup": 40,
+    "host-backup": 50,
+    "app-watcher": 60,
+    "web": 70,
+    "user": USER_SERVICE,
+}
 
 _PROC_DIR: Final[Path] = Path("/proc")
 

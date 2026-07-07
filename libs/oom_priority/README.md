@@ -12,11 +12,16 @@ value -- which already folds in each process's `oom_score_adj`. So the whole
 priority scheme is just: set each process's `oom_score_adj` once, at startup,
 into one of a few bands.
 
-- **`bands`** -- the `oom_score_adj` value per band (protected = 0; user agent <
-  worker agent < agent subprocess) and the helper that writes it. Bands are
-  positive-only: a negative value (true "never kill") needs `CAP_SYS_RESOURCE`,
-  which the container does not have, so protected processes simply keep the
-  inherited default of 0 and are additionally shielded by earlyoom `--avoid`.
+- **`bands`** -- the `oom_score_adj` value per band and the helper that writes
+  it. From least- to most-expendable: never-kill infrastructure (0) < built-in
+  services (`SERVICE_BANDS`, 10-70) < user-created services (`USER_SERVICE`, 200)
+  < user agent (300) < worker agent (600) < agent subprocess (900) < shared
+  browser (1000). Bands are positive-only: a negative value (true "never kill")
+  needs `CAP_SYS_RESOURCE`, which the container does not have, so the never-kill
+  infrastructure (sshd, supervisord, earlyoom, tini, tmux) simply keeps the
+  inherited default of 0 and is additionally shielded by earlyoom `--avoid`. The
+  service order is a best-effort steer, not a hard guarantee -- see "Protection
+  is soft" below.
 - **`agent_identity`** -- decides whether an agent is a user or worker agent
   (from its label), used by the launch wrapper to pick the band.
 - **`registry`** -- one file per agent recording its main-process pid, so a
@@ -29,9 +34,22 @@ without inspecting the process tree:
 
 | What | When | Band | Set by |
 |---|---|---|---|
-| supervisord services | (inherited) | protected (0) | nothing -- 0 is the default |
+| never-kill infra (sshd, supervisord, earlyoom, tini, tmux) | (inherited) | protected (0) | nothing -- 0 is the default, plus earlyoom `--avoid` |
+| a built-in supervisord service | launch | its `SERVICE_BANDS` value | `scripts/oom_tag_service.py <service>` (command prefix) |
+| a user-created supervisord service | launch | user service (above every built-in) | `scripts/oom_tag_service.py user` (command prefix) |
 | an agent's main process | launch | user / worker agent | `scripts/claude_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `scripts/claude_oom_tag_subprocess.py` (PreToolUse) |
+| a shared browser | launch | 1000 (the ceiling) | inline `oom_score_adj` write in the `browser` program |
+
+Each supervisord service tags itself the same way an agent's main process does:
+its `command` in `supervisord.conf` runs `scripts/oom_tag_service.py <key> <the
+real command>`, which sets its own `oom_score_adj` from `SERVICE_BANDS` and then
+`exec`s the command in place (the band survives `execve` and is inherited by
+every child). Built-in services pass their own name; a **user-created** service
+(added via the `edit-services` skill) passes the `user` key so it is shed before
+any built-in service. A service whose command is not wrapped keeps the inherited
+default of 0, which fails safe -- it stays as protected as the never-kill infra
+rather than being shed early.
 
 The agent's main process tags *itself*: the `claude` and `worker` agent types'
 `command` (in `.mngr/settings.toml`) runs `scripts/claude_oom_launch.py`, which
@@ -68,8 +86,20 @@ every module here -- is stdlib-only, so the hooks (which run under a plain
 
 ## Protection is soft
 
-Positive-only bands plus `--avoid` keep the protected processes (UI, tunnel,
-terminal, backups, supervisord, sshd, tmux, earlyoom) very unlikely to be shed,
-but not impossible: under sustained pressure with nothing else to kill, earlyoom
-will eventually take one. Hard "never kill" protection (`oom_score_adj -1000`)
-needs `CAP_SYS_RESOURCE`, which is a deferred follow-up.
+Two things here are best-effort, not hard guarantees:
+
+- **The never-kill infrastructure isn't truly immortal.** Positive-only bands
+  plus `--avoid` keep sshd, supervisord, earlyoom, tini, and tmux very unlikely
+  to be shed, but under sustained pressure with nothing else to kill earlyoom
+  will eventually take one. Hard "never kill" protection (`oom_score_adj -1000`)
+  needs `CAP_SYS_RESOURCE`, which the container does not grant -- a deferred
+  follow-up.
+- **The service ordering can be reordered by memory usage.** earlyoom picks the
+  highest `/proc/*/oom_score`, which adds each process's live memory badness on
+  top of its `oom_score_adj`. The service bands are only ~10 apart, so a service
+  using enough more memory than the one below it can outweigh the band gap and be
+  shed first. The bands guarantee the ordering only when memory usage is
+  comparable; in the common case the services are lightweight and the order
+  holds. Widening the gaps would need to push the top service bands past the
+  agent bands, which would defeat the "services outlive agents" goal, so the
+  bands stay a steer rather than a strict priority.
