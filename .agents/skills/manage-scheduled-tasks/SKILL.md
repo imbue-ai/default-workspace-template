@@ -81,8 +81,8 @@ Append a line to `/etc/anacrontab`. Format: four fields --
 - `job-id` -- unique name; anacron tracks the last run date under
   `/var/spool/anacron/<job-id>`.
 
-Anacron re-reads `/etc/anacrontab` on every invocation, so a new entry takes
-effect within the hour with nothing to reload.
+Anacron re-reads `/etc/anacrontab` on every invocation (triggered every
+minute), so a new entry takes effect within minutes with nothing to reload.
 
 ## Add a cron job (precise schedule, no catch-up)
 
@@ -126,10 +126,10 @@ agent template; otherwise the generic `task_agent` template is used.
 
 The nightly Caretaker is exactly the task-agent pattern above, with a tailored
 agent template. Its entry is the `caretaker` line in `/etc/anacrontab` (period
-1 day, 5-minute delay, job id `caretaker`):
+1 day, no start delay, job id `caretaker`):
 
 ```
-1   5   caretaker   /mngr/code/scripts/with_agent_env.sh bash /mngr/code/scripts/run_task_agent.sh caretaker --template caretaker >> /var/log/supervisor/caretaker-job.log 2>&1
+1   0   caretaker   /mngr/code/scripts/with_agent_env.sh bash /mngr/code/scripts/run_task_agent.sh caretaker --template caretaker >> /var/log/supervisor/caretaker-job.log 2>&1
 ```
 
 - **What it runs:** the env wrapper around `bash scripts/run_task_agent.sh
@@ -144,7 +144,8 @@ agent template. Its entry is the `caretaker` line in `/etc/anacrontab` (period
   day. Anacron is not a daemon; each invocation runs whatever is due and exits.
   It is invoked once per boot by the `[program:anacron-boot]` supervisord
   one-shot (the catch-up path: a day missed while the container was off is run
-  at the next boot) and hourly by `/etc/cron.d/fct-anacron` (written by
+  at the next boot, immediately: the boot pass runs `anacron -n`, which skips
+  the per-job start delays) and every minute by `/etc/cron.d/fct-anacron` (written by
   `scripts/setup_system.sh`, which also installs the cron and anacron packages
   and removes Debian's stock anacron trigger).
 
@@ -163,7 +164,7 @@ The complete map of the scheduling machinery, for edits and debugging:
   (anacron re-reads it per invocation); the Caretaker's entry lives here.
 - `/etc/cron.d/` -- one drop-in file per precise or sub-daily job (cron
   rescans the directory within a minute).
-- `/etc/cron.d/fct-anacron` -- the hourly anacron trigger.
+- `/etc/cron.d/fct-anacron` -- the every-minute anacron trigger.
 - `supervisord.conf` -- `[program:cron]` is the cron daemon (check it with
   `supervisorctl status cron`); `[program:anacron-boot]` is the boot-time
   catch-up one-shot.
