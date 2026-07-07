@@ -58,6 +58,20 @@ This preserves both trees at the root. The inspiration's `inspiration-<slug>.md`
 manifest(s) and their `.svg` thumbnails land at the repo root alongside anything
 this mind already had.
 
+If the repo is private, the anonymous fetch above fails with an auth error.
+Route git through the latchkey gateway instead (it proxies GitHub's git
+endpoints with the credential injected server-side; needs the `github-git` /
+`github-git-read` permission -- initiate it yourself like any other latchkey
+permission request, see the `latchkey` skill). Fetch the URL directly rather
+than persisting a gateway-URL remote:
+
+```bash
+git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
+    -c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE" \
+    fetch "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" <branch>
+git merge --allow-unrelated-histories --no-edit FETCH_HEAD
+```
+
 If the merge reports conflicts, do NOT try to resolve them mechanically. Each
 conflict is a **hole**: a place where the inspiration and this mind's existing
 tree disagree. Surface it to the user in plain, non-technical language (step 4)
