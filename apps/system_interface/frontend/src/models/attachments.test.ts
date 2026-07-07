@@ -81,9 +81,9 @@ describe("buildMessageWithAttachments", () => {
     );
   });
 
-  it("appends a plural, comma-joined line mixing images and download links", () => {
+  it("appends a plural block with one attachment per line, mixing images and download links", () => {
     expect(buildMessageWithAttachments("look", [IMAGE_PATH, FILE_PATH])).toBe(
-      `look\n\nSee attachments here: ![${IMAGE_PATH}](${IMAGE_PATH}), [${FILE_PATH}](${FILE_PATH})`,
+      `look\n\nSee attachments here: ![${IMAGE_PATH}](${IMAGE_PATH})\n[${FILE_PATH}](${FILE_PATH})`,
     );
   });
 
@@ -106,7 +106,7 @@ describe("parseMessageAttachments", () => {
 
     expect(parsed.visibleText).toBe("look at these");
     expect(parsed.attachmentBlock).toBe(
-      `See attachments here: ![${IMAGE_PATH}](${IMAGE_PATH}), [${FILE_PATH}](${FILE_PATH})`,
+      `See attachments here: ![${IMAGE_PATH}](${IMAGE_PATH})\n[${FILE_PATH}](${FILE_PATH})`,
     );
   });
 

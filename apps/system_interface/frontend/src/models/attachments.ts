@@ -46,9 +46,11 @@ const MULTIPLE_ATTACHMENT_PREFIX = "See attachments here: ";
 const IMAGE_EXTENSION_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
 
 // Group 1 captures the whole "See attachment here: ..." block (rendered as
-// markdown by the bubble); group 2 captures just the comma-separated values,
-// used to verify the block is genuinely ours before treating it as one.
-const ATTACHMENT_BLOCK_RE = /(?:^|\n\n)(See attachments? here: ([^\n]+?))\s*$/;
+// markdown by the bubble); group 2 captures just the newline-separated values,
+// used to verify the block is genuinely ours before treating it as one. The
+// user text is set off by a blank line (\n\n), while the items within the block
+// are single-newline separated -- so ([\s\S]+?) may span lines to the end.
+const ATTACHMENT_BLOCK_RE = /(?:^|\n\n)(See attachments? here: ([\s\S]+?))\s*$/;
 
 export function isImagePath(path: string): boolean {
   return IMAGE_EXTENSION_RE.test(path);
@@ -87,16 +89,16 @@ export function attachmentMarkdown(path: string): string {
 
 /**
  * Build the message text delivered to the agent: the user's text followed by a
- * "See attachment here:" line whose comma-separated values are the markdown
- * (``attachmentMarkdown``) for each attached file. Returns the text unchanged
- * when there are no attachments.
+ * "See attachment here:" block whose values are the markdown (``attachmentMarkdown``)
+ * for each attached file, one per line. Returns the text unchanged when there
+ * are no attachments.
  */
 export function buildMessageWithAttachments(text: string, attachmentPaths: readonly string[]): string {
   if (attachmentPaths.length === 0) {
     return text;
   }
   const prefix = attachmentPaths.length === 1 ? SINGLE_ATTACHMENT_PREFIX : MULTIPLE_ATTACHMENT_PREFIX;
-  const block = prefix + attachmentPaths.map(attachmentMarkdown).join(", ");
+  const block = prefix + attachmentPaths.map(attachmentMarkdown).join("\n");
   return text.length > 0 ? `${text}\n\n${block}` : block;
 }
 
@@ -113,7 +115,7 @@ export function parseMessageAttachments(content: string): { visibleText: string;
   if (match === null) {
     return { visibleText: content, attachmentBlock: null };
   }
-  const items = match[2].split(", ").map((item) => item.trim());
+  const items = match[2].split("\n").map((item) => item.trim());
   if (!items.every((item) => item.includes(UPLOADS_PATH_MARKER))) {
     return { visibleText: content, attachmentBlock: null };
   }
