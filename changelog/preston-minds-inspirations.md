@@ -126,6 +126,19 @@
   represent their inspiration while confirming the title, description, repo
   name, and visibility.
 
+- The name is confirmed BEFORE assembly starts, and a rename never restarts
+  assembly. A live publish derived a title itself, dispatched the worker,
+  and then tore the worker down and relaunched it when the user renamed the
+  inspiration -- unnecessarily, since the worker's name and branch are
+  internal plumbing that appear nowhere in the published repo. Setup now
+  ends with a hard gate (the agent echoes the proposed title, repo name,
+  scope, and data inclusion and waits for the go-ahead before dispatching),
+  and the skill states explicitly that a post-dispatch rename is handled in
+  place: pass the new slug to the build script if it has not run yet,
+  otherwise `git mv` the slug-bearing files and fix the front-matter/welcome
+  references in the worker's worktree (preserving completed FILL-IN prose
+  and the bespoke SVG) -- never a teardown.
+
 - `BASE_REF` resolution is now fully deterministic -- no judgment call. A live
   publish from a fresh mind surfaced the gap: with no `update-self:` commits,
   the documented fallback (first-parent root) pointed at an ancient template
