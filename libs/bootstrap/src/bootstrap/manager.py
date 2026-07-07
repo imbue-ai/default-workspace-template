@@ -21,7 +21,10 @@ import shutil
 import subprocess
 import time
 import urllib.request
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from host_backup.config import (
     BACKUP_TOML_PATH,
@@ -73,6 +76,19 @@ _TIMEZONE_FETCH_TIMEOUT_SECONDS = 5.0
 # Conservative IANA-name shape (America/New_York, Etc/GMT+5, UTC). No dots, so
 # a hostile/broken response cannot traverse out of the zoneinfo dir.
 _TZ_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_+\-]+(/[A-Za-z0-9_+\-]+)*$")
+
+# The Caretaker's anacron spool stamp. anacron treats a job with no stamp as
+# immediately due, so a fresh workspace would spawn the Caretaker within the
+# first minute. On first boot (stamp absent) bootstrap writes today's date so
+# the first run lands at the NEXT day's 3 AM trigger window instead of at
+# creation time.
+_ANACRON_SPOOL_DIR = Path("/var/spool/anacron")
+_CARETAKER_STAMP_PATH = _ANACRON_SPOOL_DIR / "caretaker"
+# When the user's timezone cannot be fetched at first boot, pick a fixed-offset
+# zone that places the workspace's "local" clock at this hour at setup time.
+# With the anacron trigger window opening at 03:00, a 19:00 setup hour makes
+# the Caretaker's first run land roughly 8 hours after workspace setup.
+_TZ_UNKNOWN_SETUP_LOCAL_HOUR = 19
 
 # Signal file gating exactly-once creation of the initial chat agent. Lives
 # under runtime/ so the runtime-backup service replicates it to the
@@ -589,6 +605,55 @@ def _fetch_user_timezone() -> str:
     return ""
 
 
+def _fallback_timezone_for_unknown(now_utc: datetime) -> str:
+    """Fixed-offset zone placing the local clock at _TZ_UNKNOWN_SETUP_LOCAL_HOUR now.
+
+    Used only when the user's real timezone cannot be fetched at first boot: the
+    goal is not a correct wall clock (there is no correct answer) but a sensible
+    first Caretaker run -- "local" 19:00 at setup puts the next 03:00 trigger
+    window about 8 hours out. Note the POSIX sign inversion: Etc/GMT-9 means
+    UTC+9.
+    """
+    offset_hours = (_TZ_UNKNOWN_SETUP_LOCAL_HOUR - now_utc.hour) % 24
+    if offset_hours == 0:
+        return "Etc/GMT"
+    if offset_hours <= 14:
+        return f"Etc/GMT-{offset_hours}"
+    return f"Etc/GMT+{24 - offset_hours}"
+
+
+def _seed_caretaker_stamp(
+    tz_name: str,
+    stamp_path: Path = _CARETAKER_STAMP_PATH,
+    now_utc: datetime | None = None,
+) -> None:
+    """Suppress the Caretaker's creation-day run (first boot only).
+
+    anacron considers a job with no spool stamp immediately due, so without
+    this the Caretaker spawns within a minute of workspace creation. Writing
+    today's date (in the container's local timezone, ``tz_name``; UTC when
+    empty) makes the first run land at the next day's trigger window. Later
+    boots leave the stamp alone -- it is anacron's own state from then on.
+    Best-effort: logs and returns rather than raising.
+    """
+    if stamp_path.exists():
+        return
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    try:
+        local_date = now_utc.astimezone(ZoneInfo(tz_name)) if tz_name else now_utc
+    except (KeyError, ValueError, OSError):
+        local_date = now_utc
+    stamp = local_date.strftime("%Y%m%d")
+    try:
+        stamp_path.parent.mkdir(parents=True, exist_ok=True)
+        stamp_path.write_text(stamp + "\n")
+    except OSError as e:
+        logger.warning("Failed to seed the caretaker anacron stamp at {}: {}", stamp_path, e)
+        return
+    logger.info("Seeded caretaker anacron stamp {} (first run: next 3 AM window)", stamp)
+
+
 def _apply_container_timezone(
     tz_name: str,
     zoneinfo_dir: Path = Path("/usr/share/zoneinfo"),
@@ -1005,12 +1070,23 @@ def main() -> None:
     # Snapshot the agent environment for cron/anacron jobs (they get a scrubbed
     # env; scripts/with_agent_env.sh sources this snapshot), and set the
     # container clock to the user's timezone so schedules run in their local
-    # time. Both must precede _exec_supervisord: cron reads the timezone once
-    # at daemon start. When the fetch fails the container stays on UTC.
+    # time. All of this must precede _exec_supervisord: cron reads the timezone
+    # once at daemon start, and the Caretaker's anacron stamp must exist before
+    # the first trigger tick or the Caretaker spawns immediately on creation.
     _write_agent_env_snapshot()
     tz_name = _fetch_user_timezone()
-    if tz_name:
-        _apply_container_timezone(tz_name)
+    applied_tz = tz_name if tz_name and _apply_container_timezone(tz_name) else ""
+    if not applied_tz and not _CARETAKER_STAMP_PATH.exists():
+        # First boot with no known timezone: adopt a fixed-offset zone that
+        # makes the next 3 AM trigger window land about 8 hours from now, so
+        # the Caretaker's first run is neither immediate nor a day away. A
+        # later boot (or the manage-scheduled-tasks skill) replaces it with
+        # the real timezone once one is known; on non-first boots the clock
+        # is left exactly as it was.
+        fallback_tz = _fallback_timezone_for_unknown(datetime.now(timezone.utc))
+        if _apply_container_timezone(fallback_tz):
+            applied_tz = fallback_tz
+    _seed_caretaker_stamp(applied_tz)
 
     # Restore runtime/ FIRST so the initial_chat_created signal file (which
     # lives inside the worktree and is replicated to mindsbackup/$MNGR_AGENT_ID

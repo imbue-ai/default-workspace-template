@@ -42,6 +42,9 @@ latchkey curl http://latchkey-self.invalid/minds-api-proxy/api/v1/timezone
 cat /etc/timezone                          # what the container currently uses
 ```
 
+A fixed-offset `Etc/GMT*` value in `/etc/timezone` means the boot-time fetch
+failed and the bootstrap picked a placeholder (chosen so the Caretaker's first
+run landed about 8 hours after setup) -- replace it with the user's real zone.
 If they differ, update the container before writing the schedule entry:
 
 ```bash
@@ -82,7 +85,8 @@ Append a line to `/etc/anacrontab`. Format: four fields --
   `/var/spool/anacron/<job-id>`.
 
 Anacron re-reads `/etc/anacrontab` on every invocation (triggered every
-minute), so a new entry takes effect within minutes with nothing to reload.
+minute between 03:00 and 23:59), so a new entry takes effect with nothing to
+reload; a new daily job first fires at the next 3 AM.
 
 ## Add a cron job (precise schedule, no catch-up)
 
@@ -140,13 +144,21 @@ agent template. Its entry is the `caretaker` line in `/etc/anacrontab` (period
   script never duplicate it. The script does not run again during the
   container's life, so deleting the line is how the Caretaker is switched off
   -- and it stays off.
-- **When it fires:** once a day, at the first anacron invocation of the new
-  day. Anacron is not a daemon; each invocation runs whatever is due and exits.
-  There is exactly one trigger: `/etc/cron.d/fct-anacron` invokes it every
-  minute (written by `scripts/setup_system.sh`, which also installs the cron
-  and anacron packages and removes Debian's stock anacron trigger). The first
-  tick after boot doubles as catch-up -- a day missed while the container was
-  off runs within a minute of cron starting.
+- **When it fires:** once a day at 3 AM local time (never at workspace
+  creation). Anacron is not a daemon; each invocation runs whatever is due and
+  exits. There is exactly one trigger: `/etc/cron.d/fct-anacron` invokes it
+  every minute between 03:00 and 23:59 (written by `scripts/setup_system.sh`,
+  which also installs the cron and anacron packages and removes Debian's stock
+  anacron trigger), so a daily job first becomes eligible at 3 AM each day.
+  The first in-window tick after boot doubles as catch-up -- a day missed
+  while the container was off runs within a minute of cron starting.
+- **The first run:** at first boot the bootstrap seeds the caretaker's spool
+  stamp (`/var/spool/anacron/caretaker`) with today's date, so the Caretaker
+  never spawns on creation day; its first run is the next day's 3 AM. When the
+  user's timezone cannot be fetched at first boot, the bootstrap instead
+  adopts a fixed-offset `Etc/GMT*` zone that places the workspace's local
+  clock at 19:00 at setup, so the first 3 AM window lands about 8 hours after
+  setup; the real timezone replaces it once known.
 
 ## See, pause, or remove a job
 

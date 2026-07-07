@@ -10,10 +10,14 @@ skipped when the container was off -- it catches up missed runs at the next
 opportunity, coalescing several misses into one run -- and **cron**
 (`/etc/cron.d/` drop-ins) for precise times or sub-daily cadences, exact but
 never backfilled. The cron daemon runs under supervisord (`[program:cron]`);
-anacron has a single deliberately-simple trigger, an every-minute cron line
-(`/etc/cron.d/fct-anacron`), so a job missed while the container was off starts
-within a minute of boot and one coming due mid-uptime starts within a minute.
-Because cron and
+anacron has a single deliberately-simple trigger, a cron line firing every
+minute between 03:00 and 23:59 (`/etc/cron.d/fct-anacron`), so daily jobs run
+at 3 AM local time and a job missed while the container was off starts within
+a minute of the first in-window boot. The Caretaker never runs at workspace
+creation: the bootstrap seeds its anacron stamp at first boot, so its first run
+is the next day's 3 AM -- and when the user's timezone cannot be fetched, the
+bootstrap adopts a fixed-offset zone that lands that first run about 8 hours
+after setup instead. Because cron and
 anacron scrub the job environment, a small wrapper
 (`scripts/with_agent_env.sh`) restores the workspace environment from a snapshot
 the bootstrap writes each boot, and every scheduled job runs through it. The
