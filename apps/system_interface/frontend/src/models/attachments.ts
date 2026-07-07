@@ -2,15 +2,17 @@
  * Chat file attachments: the wire format shared between the composer and the
  * transcript renderer, plus the upload/serve/delete client.
  *
- * The composer appends a human-readable line naming each uploaded file by its
- * absolute path on the agent VM (e.g. "See attachment here: /code/uploads/<id>/
- * <name>") to the message it sends. Because the agent records that
- * text in its session transcript, the block is persisted for free: on render we
- * strip it back off (so the raw path never shows in the bubble) and rebuild the
- * image thumbnails / file chips from the parsed paths, whose preview URLs serve
- * the VM copy. Appending in the frontend (rather than server-side) keeps the
- * optimistic pending bubble's content identical to what the agent later records,
- * so the existing content-match reconciliation keeps working.
+ * The composer appends a "See attachment here:" line to the message it sends,
+ * whose comma-separated values are the markdown for each uploaded file: an
+ * inline image (``![path](path)``) for images, a download link (``[path](path)``)
+ * otherwise, each referencing the file by its absolute path on the agent VM
+ * (e.g. "/code/uploads/<id>/<name>"). The line stays visible in the bubble and
+ * renders through the shared markdown renderer -- the system interface serves
+ * the file at that absolute path -- so the attachment is transparent to both the
+ * reader and the agent (which records the same text in its transcript, and can
+ * open the file at the path it names). Appending in the frontend (rather than
+ * server-side) keeps the optimistic pending bubble's content identical to what
+ * the agent later records, so the existing content-match reconciliation works.
  */
 
 import { apiUrl } from "../base-path";
@@ -28,29 +30,25 @@ export interface UploadedAttachment {
   name: string;
   /** Size in bytes. */
   size: number;
-  /** Whether to render an image thumbnail (vs a file chip). */
+  /** Whether the composer preview shows an image thumbnail (vs a file icon). */
   isImage: boolean;
   /** Same-origin URL that serves the stored file for inline previews. */
-  url: string;
-}
-
-/** An attachment parsed back out of a sent message's content, for rendering. */
-export interface MessageAttachment {
-  path: string;
-  name: string;
-  isImage: boolean;
   url: string;
 }
 
 const SINGLE_ATTACHMENT_PREFIX = "See attachment here: ";
 const MULTIPLE_ATTACHMENT_PREFIX = "See attachments here: ";
 
-// Only formats Chromium can decode inline: an image path renders as a bare <img>
-// with no error fallback, so a format the browser can't display (tiff, heic/heif)
-// would show a broken thumbnail instead of falling through to the file chip.
+// Only formats browsers can decode inline: an image path becomes an inline
+// markdown image (``![]``), so a format the browser can't display (tiff,
+// heic/heif) would render a broken image -- those fall through to a download
+// link (``[]``) instead. Matches the inline formats the file server serves.
 const IMAGE_EXTENSION_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
 
-const ATTACHMENT_BLOCK_RE = /(?:^|\n\n)See attachments? here: ([^\n]+)\s*$/;
+// Group 1 captures the whole "See attachment here: ..." block (rendered as
+// markdown by the bubble); group 2 captures just the comma-separated values,
+// used to verify the block is genuinely ours before treating it as one.
+const ATTACHMENT_BLOCK_RE = /(?:^|\n\n)(See attachments? here: ([^\n]+?))\s*$/;
 
 export function isImagePath(path: string): boolean {
   return IMAGE_EXTENSION_RE.test(path);
@@ -72,8 +70,20 @@ export function attachmentServeUrl(path: string): string {
 }
 
 /**
+ * Markdown for one attachment, referencing the file by its absolute on-disk
+ * path. An image renders inline (``![path](path)``); any other file becomes a
+ * download link (``[path](path)``). The absolute path is used as both the label
+ * / alt text and the URL, so the system interface serves the file at that path
+ * and the path stays visible to the reader.
+ */
+export function attachmentMarkdown(path: string): string {
+  return isImagePath(path) ? `![${path}](${path})` : `[${path}](${path})`;
+}
+
+/**
  * Build the message text delivered to the agent: the user's text followed by a
- * human-readable line naming each attachment by path. Returns the text unchanged
+ * "See attachment here:" line whose comma-separated values are the markdown
+ * (``attachmentMarkdown``) for each attached file. Returns the text unchanged
  * when there are no attachments.
  */
 export function buildMessageWithAttachments(text: string, attachmentPaths: readonly string[]): string {
@@ -81,33 +91,29 @@ export function buildMessageWithAttachments(text: string, attachmentPaths: reado
     return text;
   }
   const prefix = attachmentPaths.length === 1 ? SINGLE_ATTACHMENT_PREFIX : MULTIPLE_ATTACHMENT_PREFIX;
-  const block = prefix + attachmentPaths.join(", ");
+  const block = prefix + attachmentPaths.map(attachmentMarkdown).join(", ");
   return text.length > 0 ? `${text}\n\n${block}` : block;
 }
 
 /**
- * Split a sent message's content into the user-visible text and the attachment
- * block appended by ``buildMessageWithAttachments``. The block is only stripped
- * when every listed path is an uploads path, so a user who merely types a
- * similar sentence is never misread.
+ * Split a sent message's content into the user-visible text and the trailing
+ * "See attachment here:" block built by ``buildMessageWithAttachments``. The
+ * block is recognized only when every listed item references an uploads path,
+ * so a user who merely types a similar sentence is never misread. The block is
+ * returned verbatim (its values are markdown) for the bubble to render inline;
+ * ``attachmentBlock`` is null when there is no block.
  */
-export function parseMessageAttachments(content: string): { visibleText: string; attachments: MessageAttachment[] } {
+export function parseMessageAttachments(content: string): { visibleText: string; attachmentBlock: string | null } {
   const match = content.match(ATTACHMENT_BLOCK_RE);
   if (match === null) {
-    return { visibleText: content, attachments: [] };
+    return { visibleText: content, attachmentBlock: null };
   }
-  const paths = match[1].split(", ").map((path) => path.trim());
-  if (!paths.every((path) => path.includes(UPLOADS_PATH_MARKER))) {
-    return { visibleText: content, attachments: [] };
+  const items = match[2].split(", ").map((item) => item.trim());
+  if (!items.every((item) => item.includes(UPLOADS_PATH_MARKER))) {
+    return { visibleText: content, attachmentBlock: null };
   }
   const visibleText = content.slice(0, match.index ?? 0).replace(/\s+$/, "");
-  const attachments = paths.map((path) => ({
-    path,
-    name: attachmentBasename(path),
-    isImage: isImagePath(path),
-    url: attachmentServeUrl(path),
-  }));
-  return { visibleText, attachments };
+  return { visibleText, attachmentBlock: match[1] };
 }
 
 export function formatFileSize(bytes: number): string {
@@ -125,45 +131,6 @@ export function formatFileSize(bytes: number): string {
   return `${rounded} ${units[unitIndex]}`;
 }
 
-// --- Stored-size cache + lazy HEAD lookup ----------------------------------
-//
-// The size of a freshly-uploaded file is known from the upload response and
-// cached here. After a page reload the cache is empty, so a file chip reads the
-// size from a one-off HEAD request to the serve endpoint (images show a
-// thumbnail instead and never need this).
-
-const _sizeByPath = new Map<string, number>();
-
-export function cacheAttachmentSize(path: string, size: number): void {
-  _sizeByPath.set(path, size);
-}
-
-export function getCachedAttachmentSize(path: string): number | undefined {
-  return _sizeByPath.get(path);
-}
-
-export async function fetchAttachmentSize(path: string): Promise<number | undefined> {
-  const cached = _sizeByPath.get(path);
-  if (cached !== undefined) {
-    return cached;
-  }
-  try {
-    const response = await fetch(attachmentServeUrl(path), { method: "HEAD" });
-    const lengthHeader = response.headers.get("Content-Length");
-    if (lengthHeader !== null) {
-      const size = Number.parseInt(lengthHeader, 10);
-      if (Number.isFinite(size)) {
-        _sizeByPath.set(path, size);
-        return size;
-      }
-    }
-  } catch (_error) {
-    // Network/HEAD failure: the chip simply renders without a size.
-    return undefined;
-  }
-  return undefined;
-}
-
 // --- Upload client ----------------------------------------------------------
 
 interface AttachmentUploadResponseBody {
@@ -172,7 +139,6 @@ interface AttachmentUploadResponseBody {
 }
 
 function makeUploadedAttachment(path: string, size: number): UploadedAttachment {
-  cacheAttachmentSize(path, size);
   return {
     path,
     name: attachmentBasename(path),

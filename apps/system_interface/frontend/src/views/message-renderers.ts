@@ -13,7 +13,6 @@ import type {
   ToolResultEvent,
   ToolCall,
 } from "../models/Response";
-import { renderMessageAttachments } from "./attachment-views";
 import { openSubagentTab } from "./DockviewWorkspace";
 import type { PermissionResolution } from "./message-classification";
 import {
@@ -131,9 +130,11 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       const event = vnode.attrs.event;
       renderedEventId = event.event_id;
       const content = event.content || "";
-      // The trailing "See attachment here: <path>" block is delivered to the
-      // agent but stripped from the bubble; its paths render as previews below.
-      const { visibleText, attachments } = parseMessageAttachments(content);
+      // The trailing "See attachment here: <markdown>" block is delivered to the
+      // agent and kept visible in the bubble, where it renders as markdown so its
+      // images show inline and other files as download links. Classification
+      // still runs on the text before the block (see below).
+      const { visibleText, attachmentBlock } = parseMessageAttachments(content);
       const collapsible = isCollapsibleUserMessage(visibleText);
 
       if (collapsible) {
@@ -161,9 +162,8 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (visibleText.length > 0) {
         bubbleChildren.push(m("div", { class: "message-content whitespace-pre-wrap" }, visibleText));
       }
-      const attachmentsNode = renderMessageAttachments(attachments);
-      if (attachmentsNode !== null) {
-        bubbleChildren.push(attachmentsNode);
+      if (attachmentBlock !== null) {
+        bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock }));
       }
       return m("div", { class: "message-user-bubble" }, bubbleChildren);
     },

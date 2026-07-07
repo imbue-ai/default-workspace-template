@@ -6,11 +6,10 @@ vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 
 import {
   attachmentBasename,
+  attachmentMarkdown,
   attachmentServeUrl,
   buildMessageWithAttachments,
-  cacheAttachmentSize,
   formatFileSize,
-  getCachedAttachmentSize,
   isImagePath,
   parseMessageAttachments,
 } from "./attachments";
@@ -36,7 +35,7 @@ describe("isImagePath", () => {
   });
 
   it("rejects image formats browsers cannot decode inline", () => {
-    // These render as a broken <img>, so they must fall through to the file chip.
+    // These render as a broken <img>, so they must fall through to a download link.
     expect(isImagePath("photo.heic")).toBe(false);
     expect(isImagePath("photo.heif")).toBe(false);
     expect(isImagePath("scan.tiff")).toBe(false);
@@ -61,23 +60,35 @@ describe("attachmentServeUrl", () => {
   });
 });
 
+describe("attachmentMarkdown", () => {
+  it("renders an image as inline image markdown, path in both alt text and URL", () => {
+    expect(attachmentMarkdown(IMAGE_PATH)).toBe(`![${IMAGE_PATH}](${IMAGE_PATH})`);
+  });
+
+  it("renders a non-image as a plain download link", () => {
+    expect(attachmentMarkdown(FILE_PATH)).toBe(`[${FILE_PATH}](${FILE_PATH})`);
+  });
+});
+
 describe("buildMessageWithAttachments", () => {
   it("returns the text unchanged when there are no attachments", () => {
     expect(buildMessageWithAttachments("hello", [])).toBe("hello");
   });
 
-  it("appends a singular line for one attachment", () => {
-    expect(buildMessageWithAttachments("look", [IMAGE_PATH])).toBe(`look\n\nSee attachment here: ${IMAGE_PATH}`);
+  it("appends a singular line whose value is the attachment markdown", () => {
+    expect(buildMessageWithAttachments("look", [IMAGE_PATH])).toBe(
+      `look\n\nSee attachment here: ![${IMAGE_PATH}](${IMAGE_PATH})`,
+    );
   });
 
-  it("appends a plural, comma-joined line for several attachments", () => {
+  it("appends a plural, comma-joined line mixing images and download links", () => {
     expect(buildMessageWithAttachments("look", [IMAGE_PATH, FILE_PATH])).toBe(
-      `look\n\nSee attachments here: ${IMAGE_PATH}, ${FILE_PATH}`,
+      `look\n\nSee attachments here: ![${IMAGE_PATH}](${IMAGE_PATH}), [${FILE_PATH}](${FILE_PATH})`,
     );
   });
 
   it("omits the leading text when the message is attachments only", () => {
-    expect(buildMessageWithAttachments("", [IMAGE_PATH])).toBe(`See attachment here: ${IMAGE_PATH}`);
+    expect(buildMessageWithAttachments("", [IMAGE_PATH])).toBe(`See attachment here: ![${IMAGE_PATH}](${IMAGE_PATH})`);
   });
 });
 
@@ -85,32 +96,31 @@ describe("parseMessageAttachments", () => {
   it("leaves a plain message untouched", () => {
     const parsed = parseMessageAttachments("just a normal message");
     expect(parsed.visibleText).toBe("just a normal message");
-    expect(parsed.attachments).toEqual([]);
+    expect(parsed.attachmentBlock).toBeNull();
   });
 
-  it("round-trips the build output back to text and attachment metadata", () => {
+  it("splits the build output into visible text and the verbatim markdown block", () => {
     const content = buildMessageWithAttachments("look at these", [IMAGE_PATH, FILE_PATH]);
 
     const parsed = parseMessageAttachments(content);
 
     expect(parsed.visibleText).toBe("look at these");
-    expect(parsed.attachments).toEqual([
-      { path: IMAGE_PATH, name: "diagram.png", isImage: true, url: "/api/uploads/aaa/diagram.png" },
-      { path: FILE_PATH, name: "notes.txt", isImage: false, url: "/api/uploads/bbb/notes.txt" },
-    ]);
+    expect(parsed.attachmentBlock).toBe(
+      `See attachments here: ![${IMAGE_PATH}](${IMAGE_PATH}), [${FILE_PATH}](${FILE_PATH})`,
+    );
   });
 
   it("yields empty visible text for an attachments-only message", () => {
     const parsed = parseMessageAttachments(buildMessageWithAttachments("", [IMAGE_PATH]));
     expect(parsed.visibleText).toBe("");
-    expect(parsed.attachments.map((a) => a.path)).toEqual([IMAGE_PATH]);
+    expect(parsed.attachmentBlock).toBe(`See attachment here: ![${IMAGE_PATH}](${IMAGE_PATH})`);
   });
 
-  it("does not strip a similar sentence whose paths are not uploads", () => {
+  it("does not treat a similar sentence whose paths are not uploads as a block", () => {
     const content = "See attachment here: /etc/passwd";
     const parsed = parseMessageAttachments(content);
     expect(parsed.visibleText).toBe(content);
-    expect(parsed.attachments).toEqual([]);
+    expect(parsed.attachmentBlock).toBeNull();
   });
 });
 
@@ -120,13 +130,5 @@ describe("formatFileSize", () => {
     expect(formatFileSize(1024)).toBe("1 KB");
     expect(formatFileSize(1536)).toBe("1.5 KB");
     expect(formatFileSize(1048576)).toBe("1 MB");
-  });
-});
-
-describe("attachment size cache", () => {
-  it("stores and returns a cached size", () => {
-    expect(getCachedAttachmentSize("/code/uploads/zzz/cached.bin")).toBeUndefined();
-    cacheAttachmentSize("/code/uploads/zzz/cached.bin", 4096);
-    expect(getCachedAttachmentSize("/code/uploads/zzz/cached.bin")).toBe(4096);
   });
 });
