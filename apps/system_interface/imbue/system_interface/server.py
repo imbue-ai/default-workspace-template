@@ -38,6 +38,7 @@ from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
@@ -182,6 +183,13 @@ def _index() -> Response:
 
 
 def _index_catch_all(path: str) -> Response:
+    # An agent-authored file is addressed by its absolute on-disk path, which
+    # lands here as a catch-all path; serve it (image inline, any other existing
+    # file as a download) before falling through to the single-page-app shell.
+    # Paths that match no file are client-side routes and render the app as before.
+    file_response = try_serve_file(path)
+    if file_response is not None:
+        return file_response
     return _index()
 
 
