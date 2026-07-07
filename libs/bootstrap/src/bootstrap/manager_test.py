@@ -8,7 +8,10 @@ import os
 import shlex
 import subprocess
 from contextlib import redirect_stdout
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from imbue.mngr.cli.output_helpers import write_json_line
@@ -17,6 +20,8 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from bootstrap.manager import (
     INITIAL_CHAT_AGENT_ID_FILENAME,
     _apply_container_timezone,
+    _fallback_timezone_for_unknown,
+    _seed_caretaker_stamp,
     _build_create_chat_command,
     _configure_git_global,
     _create_orphan_runtime_worktree,
@@ -740,6 +745,41 @@ from bootstrap.manager import (
     detect_snapshot_settings,
     init_backup_config_with_settings,
 )
+
+
+def test_fallback_timezone_places_local_clock_at_setup_hour() -> None:
+    """Every UTC hour maps to a real zone whose local time at setup is 19:xx."""
+    for hour in range(24):
+        now = datetime(2026, 7, 7, hour, 30, tzinfo=timezone.utc)
+        zone_name = _fallback_timezone_for_unknown(now)
+        local = now.astimezone(ZoneInfo(zone_name))
+        assert local.hour == 19, f"utc hour {hour} -> {zone_name} -> local {local.hour}"
+
+
+def test_seed_caretaker_stamp_writes_today_for_zone(tmp_path: Path) -> None:
+    """First boot writes today's local date so anacron skips the creation day."""
+    stamp = tmp_path / "spool" / "caretaker"
+    # 01:30 UTC on the 8th is still the evening of the 7th in Etc/GMT+5 (UTC-5),
+    # so the stamp must carry the LOCAL date, not the UTC one.
+    now = datetime(2026, 7, 8, 1, 30, tzinfo=timezone.utc)
+    _seed_caretaker_stamp("Etc/GMT+5", stamp_path=stamp, now_utc=now)
+    assert stamp.read_text() == "20260707\n"
+
+
+def test_seed_caretaker_stamp_uses_utc_when_zone_empty_or_bad(tmp_path: Path) -> None:
+    now = datetime(2026, 7, 8, 1, 30, tzinfo=timezone.utc)
+    for bad_zone in ("", "Not/AZone"):
+        stamp = tmp_path / f"spool-{bad_zone or 'empty'}".replace("/", "_") / "caretaker"
+        _seed_caretaker_stamp(bad_zone, stamp_path=stamp, now_utc=now)
+        assert stamp.read_text() == "20260708\n"
+
+
+def test_seed_caretaker_stamp_leaves_existing_stamp_alone(tmp_path: Path) -> None:
+    """Later boots must not touch anacron's own state."""
+    stamp = tmp_path / "caretaker"
+    stamp.write_text("20200101\n")
+    _seed_caretaker_stamp("UTC", stamp_path=stamp)
+    assert stamp.read_text() == "20200101\n"
 
 
 def test_detect_snapshot_settings_picks_outer_trigger_when_trigger_dir_present(

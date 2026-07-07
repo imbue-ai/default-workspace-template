@@ -55,15 +55,17 @@ fi
 # Replace the stock anacron trigger with our own. Debian's /etc/cron.d/anacron
 # only fires between 07:30 and 23:30 and only when systemd is NOT running
 # anacron.timer -- neither guard fits a container where our supervisord owns
-# cron. Trigger anacron every minute around the clock instead -- the ONLY
-# trigger, kept deliberately simple: the first tick after boot runs anything
-# missed while the container was off, and a job coming due mid-uptime (e.g. at
-# the midnight rollover) starts within a minute.
+# cron. Trigger anacron every minute from 03:00 to 23:59 instead -- the ONLY
+# trigger, kept deliberately simple. Daily jobs therefore run at 3 AM local
+# time (bootstrap sets the container clock from the user's timezone), and a
+# job missed while the container was off runs within a minute of the first
+# in-window boot. The 00:00-02:59 gap is what pins "daily" to 3 AM: without
+# it a daily job would fire right after midnight.
 # An idle `anacron -s` just compares the /var/spool/anacron date stamps and
 # exits in milliseconds, and per-job locks make overlapping invocations
 # harmless, so the frequent poll costs nothing.
 rm -f /etc/cron.d/anacron
-printf '%s\n' '* * * * *   root   /usr/sbin/anacron -s' > /etc/cron.d/fct-anacron
+printf '%s\n' '* 3-23 * * *   root   /usr/sbin/anacron -s' > /etc/cron.d/fct-anacron
 chmod 0644 /etc/cron.d/fct-anacron
 
 # ttyd (terminal-over-web) binary from GitHub releases (not in apt).
