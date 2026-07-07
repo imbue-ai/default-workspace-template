@@ -1444,23 +1444,54 @@ body {
 /* Per-agent liveness dot on chat tabs, reflecting the agent's mngr lifecycle
    state. Distinct from the chat's activity indicator, which tracks work within
    a running process. Grey (the default) is "dormant" -- the process is not
-   running (DONE/STOPPED/etc.) but revives on the next message. */
+   running (DONE/STOPPED/etc.) but revives on the next message.
+
+   Color (from data-liveness) is the primary signal; ``currentColor`` carries
+   the hue so the per-state shape variants below can render as a solid disc, a
+   hollow ring, or a ring-with-dot in that same color without repeating it. */
 .dv-tab-process-dot {
+  box-sizing: border-box;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: var(--color-text-secondary);
+  color: var(--color-text-secondary);
+  background: currentColor;
 }
 
 /* Process up and working (RUNNING) -- green, matching the activity indicator. */
 .dv-tab-process-dot[data-liveness="active"] {
-  background: var(--color-accent);
+  color: var(--color-accent);
 }
 
 /* Process up but idle, waiting on the user (WAITING) -- yellow. */
 .dv-tab-process-dot[data-liveness="waiting"] {
-  background: #ca8a04;
+  color: #ca8a04;
+}
+
+/* Within a color, subtly vary the shape so states that share a hue stay
+   distinguishable (color is still the primary signal; the tooltip names the
+   exact state). Solid disc = the "expected" state of each color: RUNNING
+   (green), WAITING (yellow), DONE (grey, a clean exit to the shell).
+
+   Hollow ring -- the process is up but its agent type is unconfirmed
+   (RUNNING_UNKNOWN_AGENT_TYPE, green), or dormant because its tmux window is
+   gone (STOPPED, grey). */
+.dv-tab-process-dot[data-lifecycle-state="RUNNING_UNKNOWN_AGENT_TYPE"],
+.dv-tab-process-dot[data-lifecycle-state="STOPPED"] {
+  background: transparent;
+  border: 1.5px solid currentColor;
+}
+
+/* Ring with a center dot -- REPLACED (superseded by a newer process). */
+.dv-tab-process-dot[data-lifecycle-state="REPLACED"] {
+  background: radial-gradient(currentColor 0 1px, transparent 1.4px);
+  border: 1.5px solid currentColor;
+}
+
+/* Faded solid -- UNKNOWN (dormant, exact state indeterminate). */
+.dv-tab-process-dot[data-lifecycle-state="UNKNOWN"] {
+  opacity: 0.45;
 }
 
 /* Hover tooltip for the liveness dot, appended to <body> and positioned (fixed)
