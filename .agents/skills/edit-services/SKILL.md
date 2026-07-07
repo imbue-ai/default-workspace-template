@@ -16,7 +16,7 @@ changes with `supervisorctl`.
 
 ```ini
 [program:my-service]
-command=uv run my-service
+command=python3 scripts/oom_tag_service.py user uv run my-service
 directory=/mngr/code
 autostart=true
 autorestart=true
@@ -38,8 +38,12 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=bash -c "python3 scripts/forward_port.py --url http://localhost:8090 --name foo && uv run foo"
+  command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:8090 --name foo && uv run foo"
   ```
+
+  The `python3 scripts/oom_tag_service.py user` prefix is the **OOM band tag**
+  (see below) -- keep it as the outermost command, in front of any `bash -c`
+  wrapper.
 - `directory=/mngr/code` -- run from the repo root, so cwd-relative paths
   (`runtime/...`, `scripts/...`) resolve. Set this on every program.
 - `autostart=true` -- start when supervisord boots.
@@ -59,6 +63,23 @@ Key fields:
 Services inherit the agent environment (`MNGR_AGENT_STATE_DIR`,
 `CLAUDE_CONFIG_DIR`, `MNGR_HOST_DIR`, `GH_TOKEN`, ...) from the bootstrap shell
 that launched supervisord -- you do not need a per-program `environment=`.
+
+## OOM priority (memory-pressure shedding)
+
+A background `earlyoom` daemon sheds processes when the container runs low on
+memory, most-expendable first (see `libs/oom_priority/README.md`). Prefix every
+service `command` with `python3 scripts/oom_tag_service.py user` so a
+**user-created** service is shed *before* any built-in service (the UI, tunnel,
+terminal, backups) under memory pressure -- those are the workspace's lifelines
+and should outlive a service you added. The wrapper sets the process's
+`oom_score_adj` and then `exec`s your real command, so it adds no runtime
+overhead.
+
+Only the built-in template services pass their own name instead of `user` (e.g.
+`... oom_tag_service.py system_interface ...`); anything you add should use
+`user`. If you omit the prefix entirely the service still runs, but it is treated
+as fully protected -- it would survive *longer* than the built-in services, which
+is backwards, so don't skip it.
 
 ## Adding a service
 
