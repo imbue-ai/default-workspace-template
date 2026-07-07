@@ -95,17 +95,30 @@
   response on the connect-your-accounts question instead of the adaptation
   question; "Holes" is now strictly the adaptation agenda.
 
-- GitHub access for publishing now goes through latchkey permissioning like
-  every other connector -- the `gh` CLI is banned from the flow entirely. The
-  agent probes `latchkey curl https://api.github.com/user`, initiates a
-  `github-rest-api` / `github-write-repos` permission request itself when
-  needed (approved by the user in the minds app), creates the repo with the
-  description and visibility in one API call, and sets the
-  `minds-inspiration` topic via the API. The git push itself authenticates
-  with the mind's standard `GH_TOKEN` (latchkey deliberately never hands raw
-  tokens to the container, and a push is not an HTTP call it can inject
-  into); if `GH_TOKEN` is absent the agent says so and stops rather than
-  improvising. No named remote is written, so no cleanup is needed.
+- GitHub access for publishing now goes through latchkey permissioning
+  end-to-end -- the `gh` CLI is banned from the flow entirely, and no GitHub
+  token ever enters the container. The agent probes access and initiates the
+  permission requests itself when needed (approved by the user in the minds
+  app): `github-rest-api` / `github-write-repos` for creating the repo (one
+  API call carrying name, description, and visibility) and setting the
+  `minds-inspiration` topic, plus `github-git` / `github-git-write` for the
+  push. The latchkey gateway natively proxies GitHub's git smart-HTTP
+  endpoints, so the push runs plain `git push` against the gateway's proxy
+  URL (`$LATCHKEY_GATEWAY/gateway/https://github.com/...`) with the
+  credential injected server-side -- an earlier iteration authenticated the
+  push with the mind's `GH_TOKEN` on the mistaken assumption that a push was
+  not something latchkey could carry. Permission-request bodies now use
+  latchkey's required four-field format (`agent_id` / `type` / `payload` /
+  `rationale`; the scope and permissions used to be sent at the top level).
+  No named remote and no credential is ever written to disk or git config,
+  so no cleanup is needed. (The matching gateway-side change -- raising the
+  gateway's request-body cap so full-history push packfiles fit -- lives in
+  the mngr repo's `mngr_latchkey` changelog.)
+
+- The `latchkey` skill now documents the general git-over-gateway pattern
+  (proxy URL + the two gateway auth headers, `github-git-read` /
+  `github-git-write`), and `/use-inspiration` uses it to fetch private
+  inspiration repos when the anonymous fetch fails.
 
 - The chat confirmation now embeds the designed thumbnail as a markdown image
   (the SVG's absolute worktree path), so the user sees exactly what will

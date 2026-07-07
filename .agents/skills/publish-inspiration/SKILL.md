@@ -414,32 +414,48 @@ the `gh` CLI anywhere in this flow -- no `gh auth`, no `gh repo` -- and do not
 run browser/device login flows. Latchkey keeps the credential outside the
 container and injects it per-request; the user approves once in the minds app.
 
-Probe whether GitHub API access is already permitted:
+The flow needs TWO github scopes, both approved once by the user in minds:
+
+- `github-rest-api` (`github-read-repos` + `github-write-repos`) -- the API
+  calls in §8: repo creation and the topic.
+- `github-git` (`github-git-write`) -- the `git push` itself. The gateway
+  natively proxies GitHub's git smart-HTTP endpoints (a push is just a `GET
+  info/refs?service=git-receive-pack` + a `POST git-receive-pack`), so the
+  push goes through latchkey too; no token ever enters this container.
+
+Probe both up front:
 
 ```bash
+# API access -- succeeds only when github-rest-api is permitted:
 latchkey curl https://api.github.com/user
+# Push access -- the github-git-write rule must already be granted:
+latchkey curl http://latchkey-self.invalid/permissions/self | grep -q '"github-git-write"' && echo "git push: permitted" || echo "git push: NOT permitted"
 ```
 
-If that fails with missing credentials or "request not permitted by the
-user", initiate a permission request for the github scope YOURSELF (the
-request opens the approval/login flow in the minds app):
+For whichever is missing, initiate the permission request YOURSELF (each
+request opens the approval/login flow in the minds app; the body must be
+exactly the four fields shown -- `agent_id`, `type`, `payload`, `rationale`):
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -H 'Content-Type: application/json' \
-    -d '{"scope": "github-rest-api", "permissions": ["github-read-repos", "github-write-repos"], "rationale": "Publish this inspiration as a new GitHub repo on your account."}'
+    -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-repos", "github-write-repos"]}, "rationale": "Publish this inspiration as a new GitHub repo on your account."}'
+latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
+    -H 'Content-Type: application/json' \
+    -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the published inspiration'"'"'s git history to the new repo."}'
 ```
 
 Tell the user in chat that a GitHub approval is waiting for them in minds,
-then poll the probe **as a background task, bounded** (mirror `launch-task`'s
+then poll the probes **as a background task, bounded** (mirror `launch-task`'s
 background-await pattern; a foreground `while` loop can be killed by your own
 tool-execution timeout):
 
 ```bash
 # Run with Bash run_in_background: true -- bounded (~5 minutes), one wait, no re-arm thrash
 for _ in $(seq 1 30); do
-    if latchkey curl https://api.github.com/user >/dev/null 2>&1; then
-        echo "github access: permitted"
+    if latchkey curl https://api.github.com/user >/dev/null 2>&1 \
+        && latchkey curl http://latchkey-self.invalid/permissions/self | grep -q '"github-git-write"'; then
+        echo "github access: permitted (api + git push)"
         exit 0
     fi
     sleep 10
@@ -449,25 +465,9 @@ exit 1
 ```
 
 If the user never approves, surface a clear message and stop, leaving the
-assembled commit intact.
-
-**The push credential is separate.** Latchkey covers every GitHub API call
-(repo creation, topics, description -- see §8), but a `git push` is not an
-HTTP API call latchkey can inject into, and latchkey deliberately never hands
-the raw token to the container. The push authenticates with the mind's
-standard `GH_TOKEN` (the same credential the post-commit auto-push hook
-uses). Check it now:
-
-```bash
-[ -n "$GH_TOKEN" ] && echo "GH_TOKEN present" || echo "GH_TOKEN MISSING"
-```
-
-If `GH_TOKEN` is missing, tell the user plainly: the repo and its metadata
-can be created via latchkey, but pushing the git history needs `GH_TOKEN`
-configured for this mind -- and stop rather than improvising (see the "MUST
-BE BOOTABLE" callout; never upload a partial tree through the API instead).
-Note the token must carry the `workflow` scope: the template ships
-`.github/workflows/`, and GitHub rejects pushes of those files without it.
+assembled commit intact. Do NOT fall back to any other credential or
+mechanism (no `GH_TOKEN`-in-URL pushes, no partial-tree API uploads -- see
+the "MUST BE BOOTABLE" callout).
 
 ## 8. Create the repo and push
 
@@ -512,17 +512,26 @@ the default private visibility, `false` only if the user chose public. You
 already validated `repo_name` against `^[A-Za-z0-9._-]+$` in §6; keep the
 JSON built from variables, never string-interpolated shell.
 
-**Step 2 -- push the assembled branch as `main` (git + `GH_TOKEN`):**
+**Step 2 -- push the assembled branch as `main` (git through the latchkey
+gateway):**
+
+The gateway proxies git's smart-HTTP endpoints, so git is pointed at the
+gateway's proxy URL and the GitHub credential is injected server-side (gated
+by the `github-git-write` permission from §7). The two extra headers are the
+gateway's own auth material, already present in this container's environment:
 
 ```bash
-( cd "$WT" && git push "https://x-access-token:${GH_TOKEN}@github.com/<owner>/<repo_name>.git" "mngr/<slug>:main" )
+( cd "$WT" && git \
+    -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
+    -c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE" \
+    push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo_name>.git" "mngr/<slug>:main" )
 ```
 
 The refspec `mngr/<slug>:main` pushes the assembled branch as the new repo's
 `main` regardless of anything else, so the published tree is exactly `$WT`'s
-snapshot. The token rides in the URL for this one command -- do not echo the
-URL, do not write it into git config or a named remote (nothing to clean up
-afterward, and the token never lands on disk).
+snapshot. No GitHub token appears anywhere -- not in the URL, not on disk --
+and nothing is written into git config or a named remote (the `-c` options
+apply to this one command only; nothing to clean up afterward).
 
 **Step 3 -- tag the repo (immediately after a successful push).** Every
 published inspiration carries the `minds-inspiration` GitHub topic -- a repo
@@ -542,9 +551,17 @@ it still fails, report it as a minor follow-up rather than treating the
 publish as failed.)
 
 **Failure handling.** If the create fails (e.g. the name is taken), ask in
-chat for a new name and retry step 1. If the push fails (e.g. `GH_TOKEN`
-missing the `workflow` scope needed for `.github/workflows/`), fix the cause
-and retry step 2 -- do NOT re-create the repo. Keep the assembled commit
+chat for a new name and retry step 1. If the push fails, diagnose before
+retrying step 2 -- do NOT re-create the repo:
+
+- "request not permitted by the user" means the `github-git-write` permission
+  is missing -- go back to §7.
+- A request-body-too-large rejection (HTTP 413) means the user's minds app is
+  older than the gateway's raised body cap and cannot proxy a push this size;
+  report that plainly and stop.
+- A rejection mentioning `workflow` scope means the stored GitHub credential
+  cannot push `.github/workflows/` files (the template ships them); report it
+  and stop rather than stripping files. Keep the assembled commit
 intact in `$WT` throughout; loop until it succeeds or the user aborts.
 **Never fall back to publishing a different, non-bootable thing** (e.g.
 uploading just the selected app files through the API instead of pushing
