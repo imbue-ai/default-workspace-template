@@ -125,3 +125,15 @@
   (the SVG's absolute worktree path), so the user sees exactly what will
   represent their inspiration while confirming the title, description, repo
   name, and visibility.
+
+- `BASE_REF` resolution is now fully deterministic -- no judgment call. A live
+  publish from a fresh mind surfaced the gap: with no `update-self:` commits,
+  the documented fallback (first-parent root) pointed at an ancient template
+  commit, and the publishing agent had to diverge by hand to the workspace's
+  actual creation snapshot. The rule is now: the newest first-parent commit
+  whose subject is a template-state marker -- `update-self: ...` or
+  bootstrap's `Initial workspace commit` (always present: created
+  `--allow-empty` at first boot, snapshotting exactly what the workspace
+  started from, including any uncommitted source state a dev-flow clone
+  carried). The first-parent root remains only as a last resort for repos
+  with no marker at all.

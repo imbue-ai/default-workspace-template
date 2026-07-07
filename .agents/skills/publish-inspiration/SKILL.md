@@ -69,9 +69,10 @@ and then creates the repo and pushes -- directly from the worker's worktree.
   `.mngr/settings.toml`; the `<uuid>` suffix is random), so the path cannot be
   guessed -- resolve it after the worker's `done` report per §3. Everything
   after assembly runs with cwd = `$WT` (see the callout above).
-- **`BASE_REF` (provenance + clean base).** The FCT commit this mind was
-  created from. Resolve it **in-repo, with no network access** (see step 2); do
-  NOT `git fetch`/`git pull` upstream. Pass it to `build_inspiration.sh` as
+- **`BASE_REF` (provenance + clean base).** The workspace's creation snapshot
+  -- the template state this mind started from (or last updated itself to).
+  Resolve it **in-repo, with no network access** (see step 2); do NOT
+  `git fetch`/`git pull` upstream. Pass it to `build_inspiration.sh` as
   `--base-ref`.
 
 ## 1. Setup Q&A (live in chat)
@@ -92,10 +93,32 @@ include paths yourself.
 
 ## 2. Resolve `BASE_REF` (in-repo, no network)
 
-`BASE_REF` is the FCT base commit this mind was created from -- the most recent
-commit whose subject starts with `update-self:` (the same `update-self:` subject
-convention `update-self` / `assist` rely on), or, if there is none, the
-**first-parent root**:
+`BASE_REF` is this workspace's **creation snapshot** -- the template state the
+mind started from (or last updated itself to). Resolve it deterministically as
+the NEWEST first-parent commit that is a template-state marker:
+
+```bash
+BASE_REF=$(git log --first-parent --format='%H %s' HEAD \
+    | awk '{h=$1; sub(/^[^ ]+ /,""); if ($0 ~ /^update-self:/ || $0 == "Initial workspace commit") {print h; exit}}')
+```
+
+Two marker kinds; the newest one on the first-parent chain wins:
+
+- **`update-self: ...`** -- the mind pulled a newer template version after
+  creation (the same subject convention `update-self` / `assist` rely on).
+- **`Initial workspace commit`** -- written by bootstrap on the mind's very
+  first boot (always present -- it is created `--allow-empty` by
+  `libs/bootstrap` -- and it snapshots exactly what the workspace started
+  from, including any uncommitted source state a dev-flow clone carried).
+  This is the normal answer for a mind that never ran `update-self`.
+
+This is NOT a judgment call -- do not go hunting for an older "clean template"
+commit past the marker. A full-history clone's first-parent ancestry reaches
+ancient template commits that have nothing to do with this mind; the marker is
+the mind's actual base.
+
+**Fallback (only if NO marker exists** -- a hand-made or pre-bootstrap repo):
+the **first-parent root**:
 
 ```bash
 git rev-list --first-parent HEAD | tail -1
@@ -105,8 +128,8 @@ The fallback MUST be the first-parent root, never a bare root-commit lookup
 (`git rev-list --max-parents=0 HEAD`): subtree merges add parallel root commits
 that are NOT the seed (a mind repo can have several near-empty roots), while
 the first-parent chain from HEAD always ends at the true template seed. Do NOT
-fetch or pull from upstream to obtain it -- `parent.toml` is a provenance link
-only.
+fetch or pull from upstream to obtain `BASE_REF` in any case -- `parent.toml`
+is a provenance link only.
 
 **Mandatory pre-check (before ANY assembly).** Verify the resolved base is a
 bootable template -- its tree must name both `pyproject.toml` and
