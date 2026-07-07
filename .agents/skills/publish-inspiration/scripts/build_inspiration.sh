@@ -554,14 +554,22 @@ if [ "$smoke_ok" -ne 1 ]; then
     exit 4
 fi
 
-# --- 10. single commit -------------------------------------------------------
+# --- 10. single commit, parented on BASE_REF (never on the mind's HEAD) ------
 
-# Record the provenance link to BASE_REF in the commit message. Do NOT add an
-# upstream remote and do NOT fetch/pull -- parent.toml is a provenance link only.
+# The snapshot commit's parent is BASE_REF, NOT the branch's previous HEAD.
+# This is a privacy invariant: the published repo's history must be the public
+# template's history plus the snapshot commits -- never the mind's own commit
+# history. Parenting on HEAD would ship every commit the mind ever made
+# (including any secret that was ever committed and later removed: history
+# keeps it retrievable), and would defeat published-version modifications
+# ("publish a secret-cleaned copy of this file") entirely. commit-tree writes
+# the already-validated assembled tree with the base as parent; reset --soft
+# moves the branch there without touching the worktree or index.
 git add -A
-git commit -q -m "inspiration: ${SLUG}
+SNAPSHOT_COMMIT="$(git commit-tree "$(git write-tree)" -p "$BASE_REF" -m "inspiration: ${SLUG}
 
-Assembled on clean FCT base ${BASE_REF} (provenance link only; no upstream fetch)."
+Assembled on clean FCT base ${BASE_REF} (provenance link only; no upstream fetch).")"
+git reset --soft "$SNAPSHOT_COMMIT"
 
 # --- 11. summary for the worker's done report --------------------------------
 

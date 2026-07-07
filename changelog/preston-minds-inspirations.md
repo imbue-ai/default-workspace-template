@@ -126,6 +126,35 @@
   represent their inspiration while confirming the title, description, repo
   name, and visibility.
 
+- The setup Q&A now ends in a SCOPE gate, not just a name check. A live
+  publish laid out its proposal and dispatched the assembly worker in the
+  same turn, declaring the include set "confirmed" without any user reply.
+  The gate now requires one plain-language message covering what will be
+  included, what will NOT be (data, other apps, secrets/config), any
+  published-version modifications, and the proposed (adjustable) name --
+  and an explicit user reply to THAT message before any assembly work or
+  dispatch; the skill spells out that confirmation is something the user
+  gives, never something the agent declares.
+
+- Published-version modifications are a first-class part of the flow: the
+  user can ask for files to be changed, generalized, or stripped in the
+  published snapshot only (a secret-cleaned copy, a removed personal
+  preference) -- confirmed at the scope gate, carried in the worker task
+  file, applied by the worker in its isolated worktree (the live mind's
+  files and history are untouched), re-scanned with the same secret-token
+  patterns the assembly script enforces, and recapped in the final chat
+  confirmation.
+
+- The published repo's HISTORY no longer contains the mind's own commits.
+  `build_inspiration.sh` used to parent the snapshot commit on the mind's
+  HEAD, which shipped the mind's entire commit history -- including anything
+  ever committed and later removed (a "secret-cleaned" file's dirty original
+  stayed retrievable from history). The snapshot commit is now parented on
+  `BASE_REF` via `git commit-tree`, so the published history is exactly the
+  public template's history plus the snapshot commits. Verified on a
+  synthetic repo: a committed-then-removed secret in the mind is unreachable
+  from the pushed branch.
+
 - The name is confirmed BEFORE assembly starts, and a rename never restarts
   assembly. A live publish derived a title itself, dispatched the worker,
   and then tore the worker down and relaunched it when the user renamed the

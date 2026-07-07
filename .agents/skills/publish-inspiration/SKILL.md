@@ -75,29 +75,46 @@ and then creates the repo and pushes -- directly from the worker's worktree.
   `git fetch`/`git pull` upstream. Pass it to `build_inspiration.sh` as
   `--base-ref`.
 
-## 1. Setup Q&A (live in chat)
+## 1. Setup Q&A and the scope gate (live in chat)
 
-Ask the user, in plain language, three things. Never enumerate files at them:
+Ask the user, in plain language. Never enumerate files at them:
 
-- a name for the inspiration (this becomes the title, and the slug is derived
-  from it);
 - which apps or features they want to include (you translate this into a set of
   repo-root-relative include paths, e.g. `apps/slack-inbox`, `libs/slack_inbox`,
   plus their service wiring -- you reason about the backing paths, the user does
   not);
 - whether any data should be included. **Default: NO user data.** Include data
-  paths only if the user explicitly asks for them.
+  paths only if the user explicitly asks for them;
+- whether anything should be **changed, removed, or generalized in the
+  published version only** -- hardcoded personal preferences, account or
+  channel names, anything they'd rather not ship. Their live files stay
+  untouched; the edits land only in the snapshot (see the modifications step
+  in §3);
+- a name for the inspiration (propose one yourself; it becomes the title, and
+  the slug derives from it -- naming is cheap to change later, so it never
+  needs to hold up the gate below).
 
 Derive `slug` and `repo_name` from the title. Resolve the concrete set of
 include paths yourself.
 
-**Confirm the name and scope BEFORE dispatching the worker (§3) -- this is a
-hard gate.** Even when the user's request already seems to name the
-inspiration, echo your proposal back in one short message -- the title, the
-derived repo name, what will be included (plain language, not file lists),
-and whether any data rides along -- and WAIT for their go-ahead. This keeps
-§6 a review rather than a rename, and spares rename churn on everything
-downstream that carries the slug.
+**The scope gate: confirm BEFORE any assembly work -- before treating the
+include set as final, and before dispatching the worker (§3). This is a hard
+gate.** Send ONE message that lays out, in plain language:
+
+- what WILL be included (apps/features, not file lists);
+- what will NOT be included that they might expect (their data, other apps
+  this mind has, secrets/config) -- so surprises surface now;
+- the published-version modifications you will apply (or "none");
+- the proposed title and repo name, marked as adjustable later;
+- the default private visibility.
+
+Then STOP your turn and WAIT for the user's reply. The go-ahead must be an
+explicit answer to THIS message -- the user's original "publish this" request
+is NOT it, however specific it was. Never announce anything as "confirmed"
+that the user has not themselves replied to: confirmation is something the
+user gives, not something you declare. (A real publish run declared "include
+set confirmed" and dispatched the worker in the same turn as its own
+proposal; this gate exists to prevent exactly that.)
 
 **A rename NEVER requires tearing down or relaunching the worker.** The
 worker's own name and its branch name are internal plumbing -- they appear
@@ -175,8 +192,9 @@ pre-check.
 
 ## 3. Delegate assembly to a launch-task worker
 
-Do NOT dispatch until the user has confirmed the name and scope (§1's hard
-gate). If a rename arrives after dispatch anyway, fix it in place per §1 --
+Do NOT dispatch until the user has explicitly replied to §1's scope-gate
+message confirming what goes in, what stays out, and the published-version
+modifications. If a rename arrives after dispatch anyway, fix it in place per §1 --
 never tear down or relaunch the worker for a rename (its name and branch are
 internal and appear nowhere in the published repo).
 
@@ -199,8 +217,10 @@ tk start cod-step-XXXX
 ```
 
 **Write the task file.** Substitute the real `<slug>`, `<title>`,
-`<description>`, `<BASE_REF>`, and include paths into the body -- the worker
-must be able to run the script verbatim, with zero back-and-forth:
+`<description>`, `<BASE_REF>`, the include paths, and the user-confirmed
+published-version modifications list (from §1's scope gate; write "None
+requested." if there are none) into the body -- the worker must be able to
+run the script verbatim, with zero back-and-forth:
 
 ````bash
 mkdir -p runtime/launch-task/<slug>
@@ -243,7 +263,28 @@ worktree to a clean template base and deletes gitignored state -- including
    exit code maps to a specific guard rail the lead knows how to handle). Do
    NOT retry with different arguments and do NOT assemble anything by hand.
 
-2. **Flesh out the manifest.** `inspiration-<slug>.md` at the repo root has
+2. **Apply the published-version modifications** (skip if the list below
+   says none). These are user-confirmed edits that belong ONLY in the
+   published snapshot -- the live mind keeps its own versions, and nothing
+   you do here touches it:
+
+   <one line per modification: file + the change to make, e.g.
+   "libs/slack_zen_garden/config.py: replace the hardcoded '#team-garden'
+   channel with a neutral default the adopter sets" -- or the single line
+   "None requested.">
+
+   After applying them, re-run the secret token scan over every file you
+   modified (the same pattern the assembly script enforces); it must print
+   nothing:
+
+   ```bash
+   grep -nIE -- 'ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|sk-ant-[A-Za-z0-9_-]{24,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----' <each modified file>
+   ```
+
+   A hit means a modification did not fully remove a credential -- fix it or
+   report `stuck`; never leave it in.
+
+3. **Flesh out the manifest.** `inspiration-<slug>.md` at the repo root has
    `<!-- FILL-IN (publishing agent): ... -->` comment blocks in "What it is,"
    "How it works," "Prerequisites," and "Holes" -- generated placeholders,
    not real content. Replace EVERY block with real, specific content.
@@ -261,7 +302,7 @@ worktree to a clean template base and deletes gitignored state -- including
    nothing to add, say so explicitly in prose; never leave a placeholder
    comment in place and never leave a section blank.
 
-3. **Design the thumbnail.** `inspiration-<slug>.svg` at the repo root is a
+4. **Design the thumbnail.** `inspiration-<slug>.svg` at the repo root is a
    generic placeholder the script generated -- it must never be published.
    Replace its entire contents with a bespoke SVG you design for THIS app: a
    clean, simple, iconic representation of what the app actually is and shows
@@ -272,10 +313,10 @@ worktree to a clean template base and deletes gitignored state -- including
    pointing outside the file) -- fully self-contained. Keep the root
    `viewBox` around 240x160.
 
-4. **Commit** the manifest + thumbnail edits as a follow-up commit on your
-   branch (`mngr/<slug>`), in your worktree.
+5. **Commit** the modification + manifest + thumbnail edits as a follow-up
+   commit on your branch (`mngr/<slug>`), in your worktree.
 
-5. **Self-check, then report.** Both greps must print NOTHING before you may
+6. **Self-check, then report.** Both greps must print NOTHING before you may
    report `done`:
 
    ```bash
@@ -301,6 +342,7 @@ worktree to a clean template base and deletes gitignored state -- including
 ## Success criteria
 
 - `build_inspiration.sh` exited 0 and its commit is on `mngr/<slug>`.
+- Every published-version modification applied, its files re-scanned clean.
 - Every FILL-IN block replaced with real prose (or an explicit "none").
 - `inspiration-<slug>.svg` is a bespoke design for this app; the placeholder
   marker is gone and the safety grep is clean.
@@ -426,6 +468,9 @@ mechanism. Present the proposal to the user ONCE, in plain language:
 - the **title** and **description**;
 - the **repo name** (defaults to `slug`);
 - the **visibility** (default: **private**);
+- a short recap of the **published-version modifications** that were applied
+  (or that there were none), so the user can verify their requested removals
+  and changes actually happened;
 - the **thumbnail** the sub-agent designed -- EMBED it in the chat message
   as a markdown image so the user actually sees what will represent their
   inspiration, using the file's absolute path:
@@ -593,7 +638,11 @@ gateway's own auth material, already present in this container's environment:
 
 The refspec `mngr/<slug>:main` pushes the assembled branch as the new repo's
 `main` regardless of anything else, so the published tree is exactly `$WT`'s
-snapshot. No GitHub token appears anywhere -- not in the URL, not on disk --
+snapshot. The published HISTORY is only the public template's history plus
+the snapshot commits: `build_inspiration.sh` parents the assembly commit on
+`BASE_REF`, so the mind's own commit history -- including anything ever
+committed and later removed -- never leaves the machine. No GitHub token
+appears anywhere -- not in the URL, not on disk --
 and nothing is written into git config or a named remote (the `-c` options
 apply to this one command only; nothing to clean up afterward).
 
