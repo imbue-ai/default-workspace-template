@@ -62,9 +62,9 @@ service is healthy.
 
 **Surfacing scheduled agents in the workspace.** An agent a scheduled job creates
 now opens as its own tab in the main chat window (without stealing focus) and
-blinks until you open it, so a new run is never easy to miss. The blink uses the
-workspace's own accent color -- a sharp flash-then-fade on the whole clickable tab
-region -- and is driven by a generic `highlight` label any agent can carry:
+blinks until you open it, so a new run is never easy to miss. The blink is a
+yellow flash-then-fade on the whole clickable tab region, driven by a generic
+`highlight` label any agent can carry:
 bumping the label's value re-blinks the tab. The tab re-blinks for each genuinely
 new run whether it was left open or closed (a tab you're actively viewing is left
 alone), including runs picked up at startup after downtime; per-browser state
