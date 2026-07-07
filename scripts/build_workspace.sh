@@ -67,5 +67,5 @@ ln -sf "$REPO_ROOT/vendor/tk/ticket" /usr/local/bin/ticket
 # appending is enough; grep-guarded on the job id because this script reruns on
 # every Lima create. Deleting this line is how the Caretaker is switched off.
 if ! grep -q 'caretaker' /etc/anacrontab 2>/dev/null; then
-    printf '%s\n' '1   5   caretaker   /mngr/code/scripts/with_agent_env.sh bash /mngr/code/scripts/run_task_agent.sh caretaker --template caretaker >> /var/log/supervisor/caretaker-job.log 2>&1' >> /etc/anacrontab
+    printf '%s\n' '1   0   caretaker   /mngr/code/scripts/with_agent_env.sh bash /mngr/code/scripts/run_task_agent.sh caretaker --template caretaker >> /var/log/supervisor/caretaker-job.log 2>&1' >> /etc/anacrontab
 fi
