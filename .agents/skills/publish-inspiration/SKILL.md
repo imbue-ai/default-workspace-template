@@ -91,6 +91,31 @@ Ask the user, in plain language, three things. Never enumerate files at them:
 Derive `slug` and `repo_name` from the title. Resolve the concrete set of
 include paths yourself.
 
+**Confirm the name and scope BEFORE dispatching the worker (§3) -- this is a
+hard gate.** Even when the user's request already seems to name the
+inspiration, echo your proposal back in one short message -- the title, the
+derived repo name, what will be included (plain language, not file lists),
+and whether any data rides along -- and WAIT for their go-ahead. This keeps
+§6 a review rather than a rename, and spares rename churn on everything
+downstream that carries the slug.
+
+**A rename NEVER requires tearing down or relaunching the worker.** The
+worker's own name and its branch name are internal plumbing -- they appear
+nowhere in the published repo (§8 pushes whatever branch as `main` via the
+refspec), so a stale name there is irrelevant. If the user renames after
+dispatch anyway, handle it in place:
+
+- Renamed before the worker has run the script: just pass the new
+  `--slug`/`--title` to `build_inspiration.sh`.
+- Renamed after the script has run (worker mid-run or done): rename in
+  place -- `git mv` the manifest and thumbnail to the new slug names, update
+  the front-matter `title:` and the generated welcome's slug references,
+  commit (in the worker's worktree). This preserves any FILL-IN prose and
+  bespoke SVG already done. Do NOT re-run the script under a new slug in an
+  already-assembled worktree: its carry-forward step would keep the
+  old-slug files as if they were an accumulated earlier inspiration. A
+  display-title-only change is just the front-matter edit.
+
 ## 2. Resolve `BASE_REF` (in-repo, no network)
 
 `BASE_REF` is this workspace's **creation snapshot** -- the template state the
@@ -149,6 +174,11 @@ a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
 
 ## 3. Delegate assembly to a launch-task worker
+
+Do NOT dispatch until the user has confirmed the name and scope (§1's hard
+gate). If a rename arrives after dispatch anyway, fix it in place per §1 --
+never tear down or relaunch the worker for a rename (its name and branch are
+internal and appear nowhere in the published repo).
 
 Assembly runs in a `launch-task` sub-agent worker. The worker gets a fresh git
 worktree on branch `mngr/<slug>`, runs `build_inspiration.sh` there, then --
