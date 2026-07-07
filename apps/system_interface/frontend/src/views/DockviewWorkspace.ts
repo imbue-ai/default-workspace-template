@@ -372,7 +372,14 @@ function createCustomTab(options: { id: string; name: string }): {
           }
           const effective = effectiveLifecycleState(state, getEffectiveActivityState(chatAgentId));
           processDot.style.display = "";
+          // ``data-liveness`` drives the color (the primary signal). Several
+          // lifecycle states share a color (DONE/STOPPED/REPLACED/UNKNOWN are
+          // all grey "dormant"; RUNNING/RUNNING_UNKNOWN_AGENT_TYPE are both
+          // green), so ``data-lifecycle-state`` carries the exact state and the
+          // CSS gives each a subtly different circular treatment (solid / ring /
+          // ring-with-dot / faded) so same-color states stay tellable apart.
           processDot.setAttribute("data-liveness", livenessCategoryForState(effective));
+          processDot.setAttribute("data-lifecycle-state", effective);
           processDotTooltip.setText(effective);
         };
         updateProcessDot();
