@@ -6,8 +6,18 @@ import json
 import time
 from pathlib import Path
 
-from host_backup.config import BackupConfig, SnapshotMethod, SnapshotSettings
-from host_backup.runner import _LoopState, _should_tick_now, _take_snapshot
+from host_backup.capabilities import BackupCapabilities, SnapshotMethod
+from host_backup.config import BackupConfig
+from host_backup.runner import (
+    _load_config_if_changed,
+    _LoopState,
+    _should_tick_now,
+    _take_snapshot,
+)
+
+
+def _direct_capabilities() -> BackupCapabilities:
+    return BackupCapabilities(method=SnapshotMethod.DIRECT)
 
 
 def _build_config(
@@ -18,12 +28,11 @@ def _build_config(
     return BackupConfig(
         backup_interval_seconds=backup_interval_seconds,
         minimum_backup_gap_seconds=minimum_backup_gap_seconds,
-        snapshot=SnapshotSettings(method=SnapshotMethod.DIRECT),
     )
 
 
 def test_should_tick_now_fires_on_startup() -> None:
-    state = _LoopState()
+    state = _LoopState(_direct_capabilities())
     config = _build_config()
     decision, reason = _should_tick_now(
         state=state, config=config, backup_mtime=None, env_mtime=None
@@ -33,7 +42,7 @@ def test_should_tick_now_fires_on_startup() -> None:
 
 
 def test_should_tick_now_refuses_during_min_gap() -> None:
-    state = _LoopState()
+    state = _LoopState(_direct_capabilities())
     state.last_tick_end_monotonic = time.monotonic()
     config = _build_config(minimum_backup_gap_seconds=60.0)
     decision, reason = _should_tick_now(
@@ -44,7 +53,7 @@ def test_should_tick_now_refuses_during_min_gap() -> None:
 
 
 def test_should_tick_now_fires_on_config_mtime_change() -> None:
-    state = _LoopState()
+    state = _LoopState(_direct_capabilities())
     state.last_tick_end_monotonic = time.monotonic() - 120.0  # past the min gap
     state.last_backup_toml_mtime = 1000.0
     config = _build_config()
@@ -56,7 +65,7 @@ def test_should_tick_now_fires_on_config_mtime_change() -> None:
 
 
 def test_should_tick_now_fires_on_env_mtime_change() -> None:
-    state = _LoopState()
+    state = _LoopState(_direct_capabilities())
     state.last_tick_end_monotonic = time.monotonic() - 120.0
     state.last_restic_env_mtime = 500.0
     config = _build_config()
@@ -68,7 +77,7 @@ def test_should_tick_now_fires_on_env_mtime_change() -> None:
 
 
 def test_should_tick_now_refuses_before_interval_elapses() -> None:
-    state = _LoopState()
+    state = _LoopState(_direct_capabilities())
     state.last_tick_end_monotonic = time.monotonic() - 120.0
     state.last_backup_toml_mtime = 1000.0
     state.last_restic_env_mtime = 500.0
@@ -81,7 +90,7 @@ def test_should_tick_now_refuses_before_interval_elapses() -> None:
 
 
 def test_should_tick_now_fires_after_interval_elapses() -> None:
-    state = _LoopState()
+    state = _LoopState(_direct_capabilities())
     # Pretend the prior tick ended 4000 seconds ago (just over the default
     # 3600s interval).
     state.last_tick_end_monotonic = time.monotonic() - 4000.0
@@ -95,15 +104,6 @@ def test_should_tick_now_fires_after_interval_elapses() -> None:
     assert reason == "interval"
 
 
-def test_should_tick_now_refuses_when_config_unavailable() -> None:
-    state = _LoopState()
-    decision, reason = _should_tick_now(
-        state=state, config=None, backup_mtime=None, env_mtime=None
-    )
-    assert decision is False
-    assert reason == "no_config"
-
-
 def test_take_snapshot_emits_snapshot_failed_event_on_failure(tmp_path: Path) -> None:
     """A failed snapshot step writes a SNAPSHOT_FAILED event and returns None.
 
@@ -112,16 +112,13 @@ def test_take_snapshot_emits_snapshot_failed_event_on_failure(tmp_path: Path) ->
     restic failures.
     """
     events_dir = tmp_path / "events"
-    state = _LoopState()
-    state.events_dir = events_dir
-    state.current_tick_id = "tick-under-test"
     # OUTER_TRIGGER with no paths makes make_snapshot_taker raise SnapshotError,
     # exercising the failure branch without needing a (timing-dependent) helper.
-    config = BackupConfig(
-        snapshot=SnapshotSettings(method=SnapshotMethod.OUTER_TRIGGER)
-    )
+    state = _LoopState(BackupCapabilities(method=SnapshotMethod.OUTER_TRIGGER))
+    state.events_dir = events_dir
+    state.current_tick_id = "tick-under-test"
 
-    result = _take_snapshot(state=state, config=config)
+    result = _take_snapshot(state=state)
 
     assert result is None
     events = [
@@ -133,3 +130,28 @@ def test_take_snapshot_emits_snapshot_failed_event_on_failure(tmp_path: Path) ->
     assert failed_events[0]["tick_id"] == "tick-under-test"
     assert failed_events[0]["method"] == "OUTER_TRIGGER"
     assert failed_events[0]["error_message"]
+
+
+def test_load_config_if_changed_caches_until_mtime_moves() -> None:
+    """The config is re-parsed only when backup.toml's mtime changes.
+
+    (Keeps tolerant-parse warnings to one occurrence per edit rather than one
+    per poll.) Loading itself goes through the default BACKUP_TOML_PATH, which
+    does not exist in the test environment -- so the load yields defaults; the
+    caching contract is what's under test.
+    """
+    state = _LoopState(_direct_capabilities())
+
+    first = _load_config_if_changed(state, 111.0)
+    assert first == BackupConfig()
+    assert state.last_loaded_backup_toml_mtime == 111.0
+
+    # Same mtime: the exact cached object is returned.
+    state.last_known_config = _build_config(backup_interval_seconds=42.0)
+    cached = _load_config_if_changed(state, 111.0)
+    assert cached is state.last_known_config
+
+    # Mtime moved: reload happens (back to defaults, since the file is absent).
+    reloaded = _load_config_if_changed(state, 222.0)
+    assert reloaded == BackupConfig()
+    assert state.last_loaded_backup_toml_mtime == 222.0
