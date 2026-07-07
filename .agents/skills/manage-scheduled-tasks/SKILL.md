@@ -1,6 +1,6 @@
 ---
 name: manage-scheduled-tasks
-description: Query and edit the recurring scheduled jobs that run on this host. Use when you (or the user, via you) want to see what is scheduled, add a new recurring job, change when something runs, or stop a job from running. Jobs are plain cron and anacron entries -- anacron for daily jobs that must catch up after downtime, cron for precise or sub-daily schedules.
+description: Query and edit the recurring scheduled jobs that run on this host. Use when you (or the user, via you) want to see what is scheduled, add a new recurring job, change when something runs, or stop a job from running. Jobs are plain cron and anacron entries -- anacron for daily jobs that must catch up after downtime, cron for precise or sub-daily schedules. Also covers how the built-in daily Caretaker job is wired and where all the scheduling configuration lives.
 ---
 
 # Managing scheduled tasks
@@ -57,8 +57,7 @@ Anacron reads the clock per invocation, so it needs no restart.
 Cron and anacron give jobs a scrubbed, minimal environment -- none of the agent
 environment (PATH with `uv`, `MNGR_*`, `LATCHKEY_*`, `GH_TOKEN`, ...) survives.
 Prefix every job command with the wrapper, which restores the workspace
-environment (from the snapshot the bootstrap writes each boot) and runs the
-command from the repo root:
+environment and runs the command from the repo root:
 
 ```
 /mngr/code/scripts/with_agent_env.sh <command...>
@@ -82,9 +81,8 @@ Append a line to `/etc/anacrontab`. Format: four fields --
 - `job-id` -- unique name; anacron tracks the last run date under
   `/var/spool/anacron/<job-id>`.
 
-Anacron re-reads `/etc/anacrontab` on every invocation -- it is triggered once
-per boot and hourly (via `/etc/cron.d/fct-anacron`), so a new entry takes effect
-within the hour with nothing to reload.
+Anacron re-reads `/etc/anacrontab` on every invocation, so a new entry takes
+effect within the hour with nothing to reload.
 
 ## Add a cron job (precise schedule, no catch-up)
 
@@ -104,8 +102,8 @@ One quirk: `%` is special in cron commands (means newline) -- escape it as `\%`
 ## Set up an agent task (run a skill on a schedule)
 
 A **task agent** is a scheduled job that, instead of running a plain script,
-wakes a dedicated agent to run one skill in its own chat tab. The nightly
-Caretaker is the built-in example. To add your own -- say a morning news digest:
+wakes a dedicated agent to run one skill in its own chat tab. To add one -- say
+a morning news digest:
 
 1. **Write the skill** at `.agents/skills/<name>/SKILL.md` -- the instructions
    the agent follows on each run (see the existing skills for the shape).
@@ -121,30 +119,61 @@ That is all -- no new agent template is required. `scripts/run_task_agent.sh
 <skill>` creates a persistent singleton agent (labelled `task_agent=<skill>`),
 keeps it alive across runs, and on each run clears its chat and re-sends
 `/<skill>`, so the skill runs fresh. The agent surfaces as a tab in the minds UI
-and re-flashes on each run.
+and re-flashes on each run. Pass `--template <t>` only when you want a custom
+agent template; otherwise the generic `task_agent` template is used.
 
-The Caretaker is just this pattern with a tailored agent template: the
-`caretaker` line in `/etc/anacrontab` runs
-`scripts/run_task_agent.sh caretaker --template caretaker` once a day. Pass
-`--template <t>` only when you want a custom agent template; otherwise the
-generic `task_agent` template is used.
+## How the Caretaker is wired (the built-in example)
+
+The nightly Caretaker is exactly the task-agent pattern above, with a tailored
+agent template. Its entry is the `caretaker` line in `/etc/anacrontab` (period
+1 day, 5-minute delay, job id `caretaker`):
+
+```
+1   5   caretaker   /mngr/code/scripts/with_agent_env.sh bash /mngr/code/scripts/run_task_agent.sh caretaker --template caretaker >> /var/log/supervisor/caretaker-job.log 2>&1
+```
+
+- **What it runs:** the env wrapper around `bash scripts/run_task_agent.sh
+  caretaker --template caretaker` (wake the singleton Caretaker agent for one
+  run), with output appended to `/var/log/supervisor/caretaker-job.log`.
+- **How it got there:** appended to `/etc/anacrontab` at image build by
+  `scripts/build_workspace.sh`, grep-guarded on the job id so re-runs of that
+  script never duplicate it. The script does not run again during the
+  container's life, so deleting the line is how the Caretaker is switched off
+  -- and it stays off.
+- **When it fires:** once a day, at the first anacron invocation of the new
+  day. Anacron is not a daemon; each invocation runs whatever is due and exits.
+  It is invoked once per boot by the `[program:anacron-boot]` supervisord
+  one-shot (the catch-up path: a day missed while the container was off is run
+  at the next boot) and hourly by `/etc/cron.d/fct-anacron` (written by
+  `scripts/setup_system.sh`, which also installs the cron and anacron packages
+  and removes Debian's stock anacron trigger).
 
 ## See, pause, or remove a job
 
 - **List:** `cat /etc/anacrontab` and `ls /etc/cron.d/` (read the files -- they
   are the complete truth about what is scheduled).
 - **Remove:** delete the anacrontab line or the `/etc/cron.d/<job-name>` file.
-  This is also how the user switches the Caretaker off: delete the `caretaker`
-  line from `/etc/anacrontab`.
 - **Pause without losing the definition:** comment the line out with `#`.
-- **Run history:** each job's own log under `/var/log/supervisor/<job-name>.log`;
-  anacron's last-run dates in `/var/spool/anacron/`.
 
-## How the machinery runs (for debugging)
+## Where the configuration lives
 
-The cron daemon runs under supervisord (`[program:cron]` -- check
-`supervisorctl status cron`, logs at `/var/log/supervisor/cron-*.log`). Anacron
-is not a daemon: it is invoked once per boot by the `[program:anacron-boot]`
-one-shot (this is what catches up jobs missed while the container was off) and
-hourly by `/etc/cron.d/fct-anacron`; each invocation runs whatever is due and
-exits.
+The complete map of the scheduling machinery, for edits and debugging:
+
+- `/etc/anacrontab` -- daily-and-coarser jobs with missed-run catch-up
+  (anacron re-reads it per invocation); the Caretaker's entry lives here.
+- `/etc/cron.d/` -- one drop-in file per precise or sub-daily job (cron
+  rescans the directory within a minute).
+- `/etc/cron.d/fct-anacron` -- the hourly anacron trigger.
+- `supervisord.conf` -- `[program:cron]` is the cron daemon (check it with
+  `supervisorctl status cron`); `[program:anacron-boot]` is the boot-time
+  catch-up one-shot.
+- `/var/spool/anacron/<job-id>` -- anacron's per-job last-run stamps (how it
+  knows a period has lapsed).
+- `/var/log/supervisor/<job>.log` -- each job's own output (per the redirect
+  on its entry); `/var/log/supervisor/cron-*.log` and
+  `/var/log/supervisor/anacron-boot-*.log` -- the daemons' logs.
+- `/run/fct-agent-env` -- the per-boot agent-environment snapshot that
+  `scripts/with_agent_env.sh` sources.
+- `/etc/localtime` + `/etc/timezone` -- the container clock, set from the
+  user's timezone at each boot by the bootstrap (see the timezone section
+  above for re-checking it).
