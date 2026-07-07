@@ -33,14 +33,12 @@
 - Publish confirmation is **inline in chat**: the lead presents the proposed
   title, description, repo name, and visibility (private default) once, takes
   edits in replies, commits any confirmed changes in the worker's worktree,
-  and only then creates the repo. GitHub auth, when needed, is the **`gh`
-  device flow surfaced in chat** (one-time code + github.com/login/device
-  link, `workflow` scope requested up front, `GH_TOKEN`/`GITHUB_TOKEN`
-  scrubbed from every `gh` invocation so the credential persists to gh's
-  store, `gh auth setup-git` afterward) -- no agent restart. After a
-  successful push the repo is tagged with the `minds-inspiration` GitHub
-  topic and its description is set, so published inspirations are
-  discoverable as a group.
+  and only then creates the repo. After a successful push the repo is tagged
+  with the `minds-inspiration` GitHub topic and its description is set, so
+  published inspirations are discoverable as a group. (GitHub auth went
+  through two earlier iterations -- a system_interface login modal, then a
+  chat-surfaced `gh` device flow -- before landing on latchkey permissioning
+  end-to-end; see the latchkey bullet below.)
 
 - New **`/use-inspiration`** skill. Brings an existing inspiration into the
   current mind -- either as the template a new mind is created from, or by
@@ -66,9 +64,9 @@
   inside a worktree (its `.git` is a file, not a directory), which a real
   publish run hit. The skill now publishes in two steps -- create the empty
   repo, then push the assembled `mngr/<slug>` branch as `main` directly from
-  the worktree (same full bootable tree) -- and cleans up the `inspiration`
-  remote on close-out, since remotes live in the shared repo config and would
-  otherwise linger in the live checkout and collide with the next publish.
+  the worktree (same full bootable tree). (An interim version added a named
+  `inspiration` remote and cleaned it up on close-out; the final flow writes
+  no named remote at all, so there is nothing to clean up.)
 
 - Fixed first boot hanging forever on "Loading workspace" for minds created
   from a private inspiration repo. Bootstrap's best-effort runtime-worktree
@@ -99,10 +97,13 @@
   end-to-end -- the `gh` CLI is banned from the flow entirely, and no GitHub
   token ever enters the container. The agent probes access and initiates the
   permission requests itself when needed (approved by the user in the minds
-  app): `github-rest-api` / `github-write-repos` for creating the repo (one
-  API call carrying name, description, and visibility) and setting the
-  `minds-inspiration` topic, plus `github-git` / `github-git-write` for the
-  push. The latchkey gateway natively proxies GitHub's git smart-HTTP
+  app): `github-rest-api` (`github-read-user` + `github-write-all` -- repo
+  creation is `POST /user/repos`, which the narrower `github-write-repos`
+  path schema does not cover) for creating the repo (one API call carrying
+  name, description, and visibility) and setting the `minds-inspiration`
+  topic, plus `github-git` / `github-git-write` for the push. The access
+  probes pass `-f`, since `latchkey curl` exits with curl's own code and the
+  gateway's 403 denial would otherwise read as success. The latchkey gateway natively proxies GitHub's git smart-HTTP
   endpoints, so the push runs plain `git push` against the gateway's proxy
   URL (`$LATCHKEY_GATEWAY/gateway/https://github.com/...`) with the
   credential injected server-side -- an earlier iteration authenticated the

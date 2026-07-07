@@ -416,8 +416,13 @@ container and injects it per-request; the user approves once in the minds app.
 
 The flow needs TWO github scopes, both approved once by the user in minds:
 
-- `github-rest-api` (`github-read-repos` + `github-write-repos`) -- the API
-  calls in §8: repo creation and the topic.
+- `github-rest-api` (`github-read-user` + `github-write-all`) -- the API
+  calls in §8: repo creation and the topic. The names matter: repo creation
+  is `POST /user/repos`, whose path the narrower `github-write-repos`
+  permission does NOT match (its schema covers `/repos/...` paths only), and
+  the `/user` probe needs `github-read-user`. Requesting narrower names
+  produces a grant that 403s the flow's own calls even after the user
+  approves.
 - `github-git` (`github-git-write`) -- the `git push` itself. The gateway
   natively proxies GitHub's git smart-HTTP endpoints (a push is just a `GET
   info/refs?service=git-receive-pack` + a `POST git-receive-pack`), so the
@@ -426,8 +431,10 @@ The flow needs TWO github scopes, both approved once by the user in minds:
 Probe both up front:
 
 ```bash
-# API access -- succeeds only when github-rest-api is permitted:
-latchkey curl https://api.github.com/user
+# API access. The -f matters: latchkey curl exits with curl's own code, and
+# the gateway rejects unpermitted requests with an HTTP 403 (a completed
+# exchange, so exit 0 without -f); -f turns a denial into exit 22:
+latchkey curl -sf https://api.github.com/user
 # Push access -- a github-git (or catch-all) rule granting github-git-write
 # (or "any") must exist; grants can take either form, so check both:
 latchkey curl http://latchkey-self.invalid/permissions/self \
@@ -442,7 +449,7 @@ exactly the four fields shown -- `agent_id`, `type`, `payload`, `rationale`):
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -H 'Content-Type: application/json' \
-    -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-repos", "github-write-repos"]}, "rationale": "Publish this inspiration as a new GitHub repo on your account."}'
+    -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-write-all"]}, "rationale": "Publish this inspiration as a new GitHub repo on your account."}'
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -H 'Content-Type: application/json' \
     -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the published inspiration'"'"'s git history to the new repo."}'
@@ -456,7 +463,7 @@ tool-execution timeout):
 ```bash
 # Run with Bash run_in_background: true -- bounded (~5 minutes), one wait, no re-arm thrash
 for _ in $(seq 1 30); do
-    if latchkey curl https://api.github.com/user >/dev/null 2>&1 \
+    if latchkey curl -sf https://api.github.com/user >/dev/null 2>&1 \
         && latchkey curl http://latchkey-self.invalid/permissions/self \
            | jq -e '[.rules[]? | to_entries[] | select(.key == "github-git" or .key == "any") | select(any(.value[]?; . == "github-git-write" or . == "any"))] | length > 0' >/dev/null; then
         echo "github access: permitted (api + git push)"
@@ -554,9 +561,11 @@ this call fails, the publish itself already succeeded -- retry once, and if
 it still fails, report it as a minor follow-up rather than treating the
 publish as failed.)
 
-**Failure handling.** If the create fails (e.g. the name is taken), ask in
-chat for a new name and retry step 1. If the push fails, diagnose before
-retrying step 2 -- do NOT re-create the repo:
+**Failure handling.** If the create fails, read the response body: a
+`"request not permitted by the user"` error means the `github-rest-api`
+grant is missing or too narrow -- go back to §7; a name-taken error means
+asking in chat for a new name and retrying step 1. If the push fails,
+diagnose before retrying step 2 -- do NOT re-create the repo:
 
 - "request not permitted by the user" means the `github-git-write` permission
   is missing -- go back to §7.
@@ -565,8 +574,11 @@ retrying step 2 -- do NOT re-create the repo:
   report that plainly and stop.
 - A rejection mentioning `workflow` scope means the stored GitHub credential
   cannot push `.github/workflows/` files (the template ships them); report it
-  and stop rather than stripping files. Keep the assembled commit
-intact in `$WT` throughout; loop until it succeeds or the user aborts.
+  and stop rather than stripping files.
+
+Keep the assembled commit intact in `$WT` throughout. For fixable causes,
+fix and retry the failed step until it succeeds or the user aborts; for the
+stop-and-report cases above, stop.
 **Never fall back to publishing a different, non-bootable thing** (e.g.
 uploading just the selected app files through the API instead of pushing
 `$WT`'s full assembled tree) -- see the "MUST BE BOOTABLE" callout at the top
