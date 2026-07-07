@@ -197,8 +197,8 @@ const OPEN_TAB_SPLIT_FRACTION = 0.6;
 
 // --- Highlighted agent tabs (e.g. the nightly Caretaker) ----------------
 // An agent carrying a non-empty ``highlight`` label gets its own tab surfaced
-// automatically whenever it is not already open, flashing in the workspace accent
-// color until the user opens it. The VALUE of the ``highlight`` label is a key
+// automatically whenever it is not already open, flashing yellow until the user
+// opens it. The VALUE of the ``highlight`` label is a key
 // that mngr bumps whenever the agent has something new to show (e.g. each
 // Caretaker run); when that key changes we re-surface the tab if it is closed, or
 // re-flash it if it is open in the background -- so the tab blinks again on every
@@ -493,7 +493,7 @@ function createCustomTab(options: { id: string; name: string }): {
       );
 
       // Show/hide actions based on active state. A highlighted agent tab
-      // (e.g. the nightly Caretaker) blinks in the accent color whenever the
+      // (e.g. the nightly Caretaker) blinks yellow whenever the
       // agent has an unacknowledged highlight; viewing the tab acknowledges the
       // current highlight and stops the blink. Evaluating shouldFlashHighlight at
       // render time is what makes a restored-open tab blink again for a new run.

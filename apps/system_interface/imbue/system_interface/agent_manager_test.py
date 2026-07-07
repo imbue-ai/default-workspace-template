@@ -359,7 +359,7 @@ def test_discovered_agent_labels_come_from_discovery(agent_manager: AgentManager
         },
     )
 
-    agent_manager._handle_full_snapshot(make_full_discovery_snapshot_event([agent], []))
+    agent_manager._handle_discovery_event(_provider_snapshot([agent]))
 
     agents = agent_manager.get_agents()
     assert len(agents) == 1
@@ -378,7 +378,7 @@ def test_discovered_agent_with_no_labels_has_empty_labels(
         certified_data={"work_dir": None},
     )
 
-    agent_manager._handle_full_snapshot(make_full_discovery_snapshot_event([agent], []))
+    agent_manager._handle_discovery_event(_provider_snapshot([agent]))
 
     agents = agent_manager.get_agents()
     assert len(agents) == 1
