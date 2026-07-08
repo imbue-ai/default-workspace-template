@@ -160,5 +160,13 @@ def _findmnt_fstype(path: Path) -> str:
         logger.warning("findmnt failed for {}: {}", path, e)
         return ""
     if result.returncode != 0:
+        # Same rationale as above: a nonzero exit silently downgrades a
+        # snapshot-capable host to `direct`, so say why.
+        logger.warning(
+            "findmnt exited {} for {}: {}",
+            result.returncode,
+            path,
+            result.stderr.strip(),
+        )
         return ""
     return result.stdout.strip()
