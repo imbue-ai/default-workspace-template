@@ -64,10 +64,8 @@ re-check the user's current timezone (via the minds timezone endpoint) before
 scheduling anything, updating the container clock if the user has moved.
 The full scheduling detail (anacron vs. cron, entry formats, the
 env wrapper, the timezone check, the Caretaker wiring) lives in the
-manage-scheduled-tasks skill; CLAUDE.md keeps only a short "Scheduled tasks"
-pointer (when to use cron/anacron vs. a long-running supervisord service) plus a
-reminder to check `/var/log/supervisor/` after building or editing any service,
-since a clean exit code does not mean a service is healthy.
+manage-scheduled-tasks skill; CLAUDE.md gains just one sentence pointing at the
+manage-scheduled-tasks and check-app-errors skills.
 
 **Surfacing scheduled agents in the workspace.** An agent a scheduled job creates
 now opens as its own tab in the main chat window (without stealing focus) and
