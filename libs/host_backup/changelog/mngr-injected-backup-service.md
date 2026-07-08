@@ -6,6 +6,8 @@ Refactored host_backup so the minds desktop app can idempotently inject/update t
 
 - A missing `runtime/secrets/restic.env` simply means backups are not configured; the minds app is the only writer (bootstrap no longer seeds a template).
 
+- A config file *appearing* (or disappearing) now counts as a config change: since neither file is seeded anymore, the runner fires a prompt backup tick when minds first injects `restic.env` into a running workspace, or when `host-backup-now` creates an absent `backup.toml` -- instead of waiting out the full backup interval.
+
 - `host_backup.config` keeps no-op backwards-compatibility shims (`SnapshotSettings`, `merge_snapshot_into_existing_toml`, `render_default_backup_toml`, `write_default_restic_env_template`) for the names pre-refactor bootstraps import at container boot; removable once all pre-refactor hosts rotate out.
 
 - Documented the stable contract relied on by minds backup-service updates (the `[program:host-backup]` supervisord block, root pyproject registration, and `uv run host-backup` entry points never change via injection; updates land as `backup-update: minds-v<X>` commits).

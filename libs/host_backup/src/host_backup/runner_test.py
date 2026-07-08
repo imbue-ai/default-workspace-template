@@ -76,6 +76,43 @@ def test_should_tick_now_fires_on_env_mtime_change() -> None:
     assert reason == "config_change"
 
 
+def test_should_tick_now_fires_when_backup_toml_first_appears() -> None:
+    """backup.toml appearing (mtime None -> value) counts as a config change.
+
+    bootstrap no longer seeds backup.toml, so this transition is exactly what
+    `host-backup-now` produces when it creates the file to force a tick.
+    """
+    state = _LoopState(_direct_capabilities())
+    state.last_tick_end_monotonic = time.monotonic() - 120.0
+    state.last_backup_toml_mtime = None
+    state.last_restic_env_mtime = 500.0
+    config = _build_config()
+    decision, reason = _should_tick_now(
+        state=state, config=config, backup_mtime=1000.0, env_mtime=500.0
+    )
+    assert decision is True
+    assert reason == "config_change"
+
+
+def test_should_tick_now_fires_when_restic_env_first_appears() -> None:
+    """restic.env appearing (mtime None -> value) counts as a config change.
+
+    minds injects restic.env into a running workspace to enable backups (no
+    template is seeded anymore), so the first backup must fire promptly rather
+    than waiting out backup_interval_seconds.
+    """
+    state = _LoopState(_direct_capabilities())
+    state.last_tick_end_monotonic = time.monotonic() - 120.0
+    state.last_backup_toml_mtime = 1000.0
+    state.last_restic_env_mtime = None
+    config = _build_config()
+    decision, reason = _should_tick_now(
+        state=state, config=config, backup_mtime=1000.0, env_mtime=800.0
+    )
+    assert decision is True
+    assert reason == "config_change"
+
+
 def test_should_tick_now_refuses_before_interval_elapses() -> None:
     state = _LoopState(_direct_capabilities())
     state.last_tick_end_monotonic = time.monotonic() - 120.0

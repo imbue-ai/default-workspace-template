@@ -157,25 +157,19 @@ def _should_tick_now(
     """Decide whether to fire a tick now; returns (decision, reason_string).
 
     Reasons: 'startup' (first tick after process start), 'config_change'
-    (either file's mtime differs from last seen), 'interval' (the
-    wall-clock backup interval elapsed).
+    (either file's mtime differs from last seen -- including the file
+    appearing or disappearing, since neither file exists until written:
+    minds injects restic.env and host-backup-now may create backup.toml),
+    'interval' (the wall-clock backup interval elapsed).
     """
     if state.last_tick_end_monotonic is None:
         return True, "startup"
     elapsed_since_last_tick_end = time.monotonic() - state.last_tick_end_monotonic
     if elapsed_since_last_tick_end < config.minimum_backup_gap_seconds:
         return False, "min_gap_not_elapsed"
-    if (
-        backup_mtime is not None
-        and state.last_backup_toml_mtime is not None
-        and backup_mtime != state.last_backup_toml_mtime
-    ):
+    if backup_mtime != state.last_backup_toml_mtime:
         return True, "config_change"
-    if (
-        env_mtime is not None
-        and state.last_restic_env_mtime is not None
-        and env_mtime != state.last_restic_env_mtime
-    ):
+    if env_mtime != state.last_restic_env_mtime:
         return True, "config_change"
     if elapsed_since_last_tick_end >= config.backup_interval_seconds:
         return True, "interval"
