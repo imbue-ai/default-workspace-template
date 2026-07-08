@@ -22,6 +22,7 @@ provision_skip_if_done setup_system
 : "${MODAL_VERSION:=1.4.2}"
 : "${NODE_MAJOR:=20}"
 : "${LATCHKEY_VERSION:=2.19.1}"
+: "${FRANKWEILER_VERSION:=latest}"
 
 # System packages (tini for signal handling; supervisor runs our background
 # services; the rest are agent/runtime deps). supervisor provides the system
@@ -117,6 +118,16 @@ chmod 600 /root/.ssh/known_hosts
 # latchkey (gateway CLI) and modal (python tool).
 npm install -g "latchkey@${LATCHKEY_VERSION}"
 uv tool install "modal==${MODAL_VERSION}"
+
+# datalib (frankweiler): mirrors the user's personal data (Slack, email, Notion,
+# GitHub, chat history, ...) into a local searchable store. Installs
+# frankweiler-sync, frankweiler-http, and the latchkey curl shim into
+# ~/.local/bin (already on PATH). The agent drives these via the `datalib` skill;
+# web-API sources authenticate through the same latchkey gateway as everything
+# else. FRANKWEILER_ROOT (the data root) is set on the agent env in
+# .mngr/settings.toml. Pin FRANKWEILER_VERSION above for a reproducible image.
+curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/install.sh \
+    | FRANKWEILER_VERSION="${FRANKWEILER_VERSION}" FRANKWEILER_INSTALL_DIR=/root/.local/bin sh
 
 # Playwright + Chromium is deliberately NOT installed here; the deferred-install
 # service installs it idempotently on first boot.

@@ -281,6 +281,12 @@ unless context indicates otherwise, assume they mean their local
 disk, not the one in your sandbox. (Use the file-sharing skill to
 bridge the two if needed.)
 
+If the user asks about their own history or personal data -- past
+conversations (Claude, ChatGPT), Slack messages, email, GitHub, Notion,
+contacts -- use the `datalib` skill to search their local data mirror
+rather than scraping or re-downloading the original services. It is also
+how you import more of their data.
+
 # Work delegation
 
 You can delegate larger tasks to sub-agents using the `launch-task` skill.
