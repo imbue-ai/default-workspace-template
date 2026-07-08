@@ -121,10 +121,10 @@ def load_backup_config(path: Path = BACKUP_TOML_PATH) -> BackupConfig:
     except (OSError, tomllib.TOMLDecodeError) as e:
         logger.warning("Ignoring unparseable backup config at {}: {}", path, e)
         return BackupConfig()
-    return build_backup_config_tolerantly(raw, source=str(path))
+    return _build_backup_config_tolerantly(raw, source=str(path))
 
 
-def build_backup_config_tolerantly(
+def _build_backup_config_tolerantly(
     raw: dict[str, object], *, source: str
 ) -> BackupConfig:
     """Build a BackupConfig from raw toml data, warning on (and skipping) bad input."""
