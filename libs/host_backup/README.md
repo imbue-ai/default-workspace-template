@@ -116,9 +116,16 @@ running workspace by checking out `libs/host_backup/**` at the `minds-v<X>`
 tag matching the app version, committing it with the subject
 `backup-update: minds-v<X>` (a convention like `update-self:` -- tools that
 classify built-in vs. user code match on it), running `uv sync`, and
-restarting the `host-backup` supervisord program. For that mechanism to stay
-sound, the following are stable contracts that must NOT be changed by edits
-to this library alone:
+restarting the `host-backup` supervisord program. Tags are fetched from a
+minds-owned `official` git remote that always points at the canonical
+template repository (`https://github.com/imbue-ai/forever-claude-template.git`);
+minds creates or repoints that remote idempotently, and the `upstream` remote
+name stays reserved for the update-self machinery. Drift *detection* compares
+against a fixed minimum required tag (bumped by minds only when a newer
+service is actually required), so a workspace at or above the minimum is
+never flagged even when the app is newer. For that mechanism to stay sound,
+the following are stable contracts that must NOT be changed by edits to this
+library alone:
 
 - the `[program:host-backup]` block in `supervisord.conf`,
 - this package's registration in the root `pyproject.toml` uv workspace,
