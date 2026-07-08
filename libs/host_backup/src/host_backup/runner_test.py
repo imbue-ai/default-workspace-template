@@ -132,26 +132,29 @@ def test_take_snapshot_emits_snapshot_failed_event_on_failure(tmp_path: Path) ->
     assert failed_events[0]["error_message"]
 
 
-def test_load_config_if_changed_caches_until_mtime_moves() -> None:
+def test_load_config_if_changed_caches_until_mtime_moves(tmp_path: Path) -> None:
     """The config is re-parsed only when backup.toml's mtime changes.
 
     (Keeps tolerant-parse warnings to one occurrence per edit rather than one
-    per poll.) Loading itself goes through the default BACKUP_TOML_PATH, which
-    does not exist in the test environment -- so the load yields defaults; the
-    caching contract is what's under test.
+    per poll.) The function trusts the caller-supplied mtime, so the test
+    drives it with sentinel values while changing the file's content on disk.
     """
+    path = tmp_path / "backup.toml"
+    path.write_text("backup_interval_seconds = 1800\n")
     state = _LoopState(_direct_capabilities())
 
-    first = _load_config_if_changed(state, 111.0)
-    assert first == BackupConfig()
+    first = _load_config_if_changed(state, 111.0, path)
+    assert first.backup_interval_seconds == 1800.0
     assert state.last_loaded_backup_toml_mtime == 111.0
 
-    # Same mtime: the exact cached object is returned.
-    state.last_known_config = _build_config(backup_interval_seconds=42.0)
-    cached = _load_config_if_changed(state, 111.0)
-    assert cached is state.last_known_config
+    # Same mtime: the exact cached object is returned, even though the file's
+    # content changed on disk (no re-parse happens).
+    path.write_text("backup_interval_seconds = 900\n")
+    cached = _load_config_if_changed(state, 111.0, path)
+    assert cached is first
+    assert cached.backup_interval_seconds == 1800.0
 
-    # Mtime moved: reload happens (back to defaults, since the file is absent).
-    reloaded = _load_config_if_changed(state, 222.0)
-    assert reloaded == BackupConfig()
+    # Mtime moved: reload happens and picks up the new content.
+    reloaded = _load_config_if_changed(state, 222.0, path)
+    assert reloaded.backup_interval_seconds == 900.0
     assert state.last_loaded_backup_toml_mtime == 222.0

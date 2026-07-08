@@ -128,7 +128,7 @@ def _service_iteration(state: _LoopState) -> None:
 
 
 def _load_config_if_changed(
-    state: _LoopState, backup_mtime: float | None
+    state: _LoopState, backup_mtime: float | None, path: Path = BACKUP_TOML_PATH
 ) -> BackupConfig:
     """(Re)load backup.toml only when its mtime moved since the last load.
 
@@ -141,7 +141,7 @@ def _load_config_if_changed(
         and backup_mtime == state.last_loaded_backup_toml_mtime
     ):
         return state.last_known_config
-    config = load_backup_config()
+    config = load_backup_config(path)
     state.last_known_config = config
     state.last_loaded_backup_toml_mtime = backup_mtime
     return config
