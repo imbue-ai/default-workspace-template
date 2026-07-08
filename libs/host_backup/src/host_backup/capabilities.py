@@ -26,6 +26,7 @@ from typing import Final
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from loguru import logger
 from pydantic import Field
 
 # Well-known in-container paths probed by detection. The outer helper resolves
@@ -153,7 +154,10 @@ def _findmnt_fstype(path: Path) -> str:
             check=False,
             timeout=_FINDMNT_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as e:
+        # An unexpected findmnt failure downgrades detection to `direct` (no
+        # snapshots), so surface why rather than falling back silently.
+        logger.warning("findmnt failed for {}: {}", path, e)
         return ""
     if result.returncode != 0:
         return ""
