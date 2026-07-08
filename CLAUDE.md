@@ -236,7 +236,7 @@ Supervisord (launched by `bootstrap` after first-boot setup) supervises them; ea
 To add, change, or remove a service, edit `supervisord.conf` and run `supervisorctl reread && supervisorctl update` (and `supervisorctl restart <name>` to bounce one). Inspect with `supervisorctl status` / `supervisorctl tail -f <name> stderr`.
 See the `edit-services` skill for details.
 
-For routine jobs that run on a cadence and then exit (backups, health checks, the daily Caretaker), use cron/anacron via the **`manage-scheduled-tasks`** skill rather than a supervisord program; and after building or editing any service, use the `check-app-errors` skill to scan `/var/log/supervisor/` for errors (a clean exit code does not mean the service is healthy).
+For routine jobs that run on a cadence and then exit (backups, health checks, the daily Caretaker), use cron via the **`manage-scheduled-tasks`** skill rather than a supervisord program; and after building or editing any service, use the `check-app-errors` skill to scan `/var/log/supervisor/` for errors (a clean exit code does not mean the service is healthy).
 
 # Git
 

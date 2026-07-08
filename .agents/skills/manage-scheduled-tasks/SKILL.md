@@ -1,33 +1,35 @@
 ---
 name: manage-scheduled-tasks
-description: Query and edit the recurring scheduled jobs that run on this host. Use when you (or the user, via you) want to see what is scheduled, add a new recurring job, change when something runs, or stop a job from running. Jobs are plain cron and anacron entries -- anacron for daily jobs that must catch up after downtime, cron for precise or sub-daily schedules. Also covers how the built-in daily Caretaker job is wired and where all the scheduling configuration lives.
+description: Query and edit the recurring scheduled jobs that run on this host. Use when you (or the user, via you) want to see what is scheduled, add a new recurring job, change when something runs, or stop a job from running. Jobs are plain cron entries in /etc/cron.d/ -- daily jobs that must catch up after downtime tick every minute through the run_daily_job.sh due-checker, precise or sub-daily schedules are ordinary cron lines. Also covers how the built-in daily Caretaker job is wired and where all the scheduling configuration lives.
 ---
 
 # Managing scheduled tasks
 
-Recurring jobs on this host run through the stock OS tools, **cron** and
-**anacron**. There is no custom scheduler: what runs and when is exactly what
-`/etc/anacrontab` and `/etc/cron.d/` say.
+Recurring jobs on this host run through the stock **cron** daemon plus one
+small helper script. There is no other scheduler: what runs and when is
+exactly what the drop-in files in `/etc/cron.d/` say. Daily jobs get
+missed-run catch-up from `scripts/run_daily_job.sh`, a due-checker that an
+every-minute cron line ticks.
 
-## First: choose anacron or cron
+## First: choose the daily-job pattern or a plain cron line
 
 Pick per job, based on what matters more:
 
-- **anacron** -- for jobs that should run **about once a day (or coarser)** and
-  **must not be skipped** when the machine was off or asleep at the scheduled
-  moment. Anacron tracks the last run date per job; whenever it is triggered it
-  runs any job whose period has lapsed, so a missed day is made up at the next
-  opportunity (and several missed days collapse into one run). The cost: you
-  cannot pick a precise time of day -- a daily job runs at the first trigger of
-  the new day (usually shortly after local midnight, or at boot).
-- **cron** -- for jobs that need a **precise time or a sub-daily cadence**
-  (every 15 minutes, 9:30 on Mondays, ...). Cron fires exactly on schedule --
-  but **only if the machine is up at that moment**; a missed run is simply
-  skipped, never made up.
+- **daily job with catch-up** (`run_daily_job.sh`) -- for jobs that should run
+  **about once a day (or coarser)** at a due hour and **must not be skipped**
+  when the container was off or asleep at that moment. A cron line ticks every
+  minute and hands the decision to the checker, which runs the job at most
+  once per calendar day: at the due hour when the container is up, or the
+  first minute the container is back up after a missed day -- at any hour.
+- **plain cron line** -- for jobs that need a **precise time or a sub-daily
+  cadence** (every 15 minutes, 9:30 on Mondays, ...). Cron fires exactly on
+  schedule -- but **only if the machine is up at that moment**; a missed run
+  is simply skipped, never made up.
 
-If the user asks for "daily-ish and reliable", use anacron. If they ask for "at
-exactly HH:MM" or "every N minutes/hours", use cron -- and if the job also must
-not be missed, say so: with cron it will be skipped when the machine is off.
+If the user asks for "daily-ish and reliable", use the daily-job pattern. If
+they ask for "at exactly HH:MM" or "every N minutes/hours", use a plain cron
+line -- and if the job also must not be missed, say so: with a plain cron line
+it will be skipped when the machine is off.
 
 ## Timezone: confirm it before scheduling anything
 
@@ -50,14 +52,16 @@ If they differ, update the container before writing the schedule entry:
 ```bash
 ln -sf "/usr/share/zoneinfo/<Area/City>" /etc/localtime
 echo "<Area/City>" > /etc/timezone
-supervisorctl restart cron    # cron caches the timezone at daemon start
 ```
 
-Anacron reads the clock per invocation, so it needs no restart.
+Daily jobs pick the change up immediately -- `run_daily_job.sh` reads the
+clock on every tick. Precise cron schedule lines additionally need
+`supervisorctl restart cron`: the cron daemon caches the timezone it uses to
+match those.
 
 ## Every job needs the env wrapper
 
-Cron and anacron give jobs a scrubbed, minimal environment -- none of the agent
+Cron gives jobs a scrubbed, minimal environment -- none of the agent
 environment (PATH with `uv`, `MNGR_*`, `LATCHKEY_*`, `GH_TOKEN`, ...) survives.
 Prefix every job command with the wrapper, which restores the workspace
 environment and runs the command from the repo root:
@@ -69,24 +73,41 @@ environment and runs the command from the repo root:
 Also redirect output to a log file (cron would otherwise try to mail it):
 `>> /var/log/supervisor/<job-name>.log 2>&1`.
 
-## Add an anacron job (daily+, catches up)
+## Add a daily job (with catch-up)
 
-Append a line to `/etc/anacrontab`. Format: four fields --
-`<period-days> <delay-minutes> <unique-job-id> <command>`:
+Drop a file in `/etc/cron.d/<job-name>` (mode 0644) with a line that ticks
+every minute through the wrapper and the checker:
 
 ```
-1   5   backup-notes   /mngr/code/scripts/with_agent_env.sh bash scripts/backup_notes.sh >> /var/log/supervisor/backup-notes.log 2>&1
+* * * * *   root   /mngr/code/scripts/with_agent_env.sh /mngr/code/scripts/run_daily_job.sh <job-id> <due-hour> <command...> >> /var/log/supervisor/<job>.log 2>&1
 ```
 
-- `period-days` -- `1` = daily, `7` = weekly (or `@monthly`).
-- `delay-minutes` -- wait this many minutes after the trigger before starting
-  (staggers jobs; pick a small unique value).
-- `job-id` -- unique name; anacron tracks the last run date under
-  `/var/spool/anacron/<job-id>`.
+- `job-id` -- unique name; the checker records the last covered date under
+  `/var/lib/fct/daily-stamps/<job-id>`.
+- `due-hour` -- the local hour (0-23) the job is due.
 
-Anacron re-reads `/etc/anacrontab` on every invocation (triggered every
-minute between 03:00 and 23:59), so a new entry takes effect with nothing to
-reload; a new daily job first fires at the next 3 AM.
+The every-minute tick is what makes catch-up possible: the checker exits
+instantly on every tick where nothing is due, and a flock held for the job's
+whole duration makes overlapping ticks skip. The semantics:
+
+- **At most one run per calendar day** -- the stamp marks the day covered.
+- **Runs at the due hour** when the container is up at that moment.
+- **Catch-up at any hour:** if a whole day was missed while the container was
+  off, the job runs within the first minute the container is up again --
+  whatever the hour.
+- **Silent after a covered day:** the night after a successful run, nothing
+  fires at midnight (nothing was missed).
+- **Failures retry daily, not every minute:** the stamp is written before the
+  job starts, so a failing run is retried the next day; look for failures in
+  the job's log.
+
+A job with no stamp yet runs at the first tick at or after its due hour -- so
+a job added in the afternoon with a morning due hour fires within a minute. To
+make it wait for tomorrow instead, seed the stamp with today's date first:
+`mkdir -p /var/lib/fct/daily-stamps && date +%F > /var/lib/fct/daily-stamps/<job-id>`
+(exactly what the bootstrap does for the Caretaker). Cron rescans
+`/etc/cron.d/` within a minute, so a new drop-in takes effect with nothing to
+reload.
 
 ## Add a cron job (precise schedule, no catch-up)
 
@@ -111,12 +132,13 @@ a morning news digest:
 
 1. **Write the skill** at `.agents/skills/<name>/SKILL.md` -- the instructions
    the agent follows on each run (see the existing skills for the shape).
-2. **Schedule the shared runner** with the skill name as its argument -- as an
-   anacron entry (daily, catch-up) or a cron entry (precise time), per the
-   choice above. For example, daily via anacron:
+2. **Schedule the shared runner** with the skill name as its argument --
+   through the daily-job checker (daily, catch-up) or as a plain cron line
+   (precise time), per the choice above. For example, daily at 9 AM with
+   catch-up, in `/etc/cron.d/news`:
 
    ```
-   1   10   news   /mngr/code/scripts/with_agent_env.sh bash scripts/run_task_agent.sh news >> /var/log/supervisor/news-job.log 2>&1
+   * * * * *   root   /mngr/code/scripts/with_agent_env.sh /mngr/code/scripts/run_daily_job.sh news 9 bash /mngr/code/scripts/run_task_agent.sh news >> /var/log/supervisor/news-job.log 2>&1
    ```
 
 That is all -- no new agent template is required. `scripts/run_task_agent.sh
@@ -129,57 +151,56 @@ agent template; otherwise the generic `task_agent` template is used.
 ## How the Caretaker is wired (the built-in example)
 
 The nightly Caretaker is exactly the task-agent pattern above, with a tailored
-agent template. Its entry is the `caretaker` line in `/etc/anacrontab` (period
-1 day, no start delay, job id `caretaker`):
+agent template. Its entry is the single line in `/etc/cron.d/fct-caretaker`
+(job id `caretaker`, due hour 3):
 
 ```
-1   0   caretaker   /mngr/code/scripts/with_agent_env.sh bash /mngr/code/scripts/run_task_agent.sh caretaker --template caretaker >> /var/log/supervisor/caretaker-job.log 2>&1
+* * * * *   root   /mngr/code/scripts/with_agent_env.sh /mngr/code/scripts/run_daily_job.sh caretaker 3 bash /mngr/code/scripts/run_task_agent.sh caretaker --template caretaker >> /var/log/supervisor/caretaker-job.log 2>&1
 ```
 
-- **What it runs:** the env wrapper around `bash scripts/run_task_agent.sh
-  caretaker --template caretaker` (wake the singleton Caretaker agent for one
-  run), with output appended to `/var/log/supervisor/caretaker-job.log`.
-- **How it got there:** appended to `/etc/anacrontab` at image build by
-  `scripts/build_workspace.sh`, grep-guarded on the job id so re-runs of that
-  script never duplicate it. The script does not run again during the
-  container's life, so deleting the line is how the Caretaker is switched off
-  -- and it stays off.
-- **When it fires:** once a day at 3 AM local time (never at workspace
-  creation). Anacron is not a daemon; each invocation runs whatever is due and
-  exits. There is exactly one trigger: `/etc/cron.d/fct-anacron` invokes it
-  every minute between 03:00 and 23:59 (written by `scripts/setup_system.sh`,
-  which also installs the cron and anacron packages and removes Debian's stock
-  anacron trigger), so a daily job first becomes eligible at 3 AM each day.
-  The first in-window tick after boot doubles as catch-up -- a day missed
-  while the container was off runs within a minute of cron starting.
-- **The first run:** at first boot the bootstrap seeds the caretaker's spool
-  stamp (`/var/spool/anacron/caretaker`) with today's date, so the Caretaker
+- **What it runs:** the env wrapper, then the due-checker (job id `caretaker`,
+  due hour 3), then `bash scripts/run_task_agent.sh caretaker --template
+  caretaker` (wake the singleton Caretaker agent for one run), with output
+  appended to `/var/log/supervisor/caretaker-job.log`.
+- **How it got there:** written to `/etc/cron.d/fct-caretaker` at image build
+  by `scripts/build_workspace.sh`, guarded on the file's existence so re-runs
+  of that script never recreate it. Deleting the file is how the Caretaker is
+  switched off -- and it stays off.
+- **When it fires:** once a day at 3 AM local time when the container is up at
+  that moment; after a fully missed day, within the first minute the container
+  is up again, at any hour. Never at workspace creation.
+- **The first run:** at first boot the bootstrap seeds the Caretaker's stamp
+  (`/var/lib/fct/daily-stamps/caretaker`) with today's date, so the Caretaker
   never spawns on creation day; its first run is the next day's 3 AM. When the
   user's timezone cannot be fetched at first boot, the bootstrap instead
   adopts a fixed-offset `Etc/GMT*` zone that places the workspace's local
-  clock at 19:00 at setup, so the first 3 AM window lands about 8 hours after
-  setup; the real timezone replaces it once known.
+  clock at 19:00 at setup, so the first 3 AM due hour lands about 8 hours
+  after setup; the real timezone replaces it once known.
 
 ## See, pause, or remove a job
 
-- **List:** `cat /etc/anacrontab` and `ls /etc/cron.d/` (read the files -- they
-  are the complete truth about what is scheduled).
-- **Remove:** delete the anacrontab line or the `/etc/cron.d/<job-name>` file.
+- **List:** `ls /etc/cron.d/` and read the files -- they are the complete
+  truth about what is scheduled.
+- **Remove:** delete the `/etc/cron.d/<job-name>` file.
 - **Pause without losing the definition:** comment the line out with `#`.
+- **Check a daily job's state:** read `/var/lib/fct/daily-stamps/<job-id>` --
+  the last date the job covered. Deleting the stamp makes today eligible
+  again (the job runs at the next tick at or after its due hour).
 
 ## Where the configuration lives
 
 The complete map of the scheduling machinery, for edits and debugging:
 
-- `/etc/anacrontab` -- daily-and-coarser jobs with missed-run catch-up
-  (anacron re-reads it per invocation); the Caretaker's entry lives here.
-- `/etc/cron.d/` -- one drop-in file per precise or sub-daily job (cron
-  rescans the directory within a minute).
-- `/etc/cron.d/fct-anacron` -- the every-minute anacron trigger.
+- `/etc/cron.d/` -- one drop-in file per job, both kinds: daily jobs are
+  every-minute lines through `run_daily_job.sh`, precise jobs are ordinary
+  schedule lines (cron rescans the directory within a minute).
+- `/etc/cron.d/fct-caretaker` -- the Caretaker's drop-in.
+- `/mngr/code/scripts/run_daily_job.sh` -- the daily-job due-checker (all of
+  the daily-scheduling logic, about 50 lines).
+- `/var/lib/fct/daily-stamps/<job-id>` -- each daily job's last covered date
+  (how the checker knows whether today has run and whether a day was missed).
 - `supervisord.conf` -- `[program:cron]` is the cron daemon (check it with
   `supervisorctl status cron`).
-- `/var/spool/anacron/<job-id>` -- anacron's per-job last-run stamps (how it
-  knows a period has lapsed).
 - `/var/log/supervisor/<job>.log` -- each job's own output (per the redirect
   on its entry); `/var/log/supervisor/cron-*.log` -- the cron daemon's logs.
 - `/run/fct-agent-env` -- the per-boot agent-environment snapshot that

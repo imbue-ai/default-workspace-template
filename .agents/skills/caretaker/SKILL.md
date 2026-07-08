@@ -193,5 +193,5 @@ over.
 ## If the user never answers
 
 Keep doing only a cheap survey each night (no scan, no fix) and gently re-offer.
-The user can switch you off entirely by removing your daily job (delete the
-`caretaker` line from `/etc/anacrontab`), or pause you by commenting it out.
+The user can switch you off entirely by removing your daily job (delete
+`/etc/cron.d/fct-caretaker`), or pause you by commenting out its line.
