@@ -75,8 +75,11 @@ yellow flash-then-fade on the whole clickable tab region, driven by a generic
 `highlight` label any agent can carry:
 bumping the label's value re-blinks the tab. The tab re-blinks for each genuinely
 new run whether it was left open or closed (a tab you're actively viewing is left
-alone), including runs picked up at startup after downtime; per-browser state
-remembers which run you've acknowledged so it neither re-opens a tab you closed nor
-blinks one you've already seen. The system interface reads each agent's labels
-straight from the discovery stream, so the Caretaker is reliably recognized and the
-hidden services agent stays hidden.
+alone). Surfacing is driven entirely by one persisted signal -- the run you last
+acknowledged (by viewing or closing the tab) versus the run currently showing --
+so it is idempotent on reconnect: a run that fired while your laptop was asleep
+(e.g. the nightly Caretaker at 3 AM) surfaces and blinks the moment the workspace's
+web UI reconnects, with no need to reopen anything. Closing a blinking tab dismisses
+that run (it will not immediately reopen), and a genuinely newer run brings it back.
+The system interface reads each agent's labels straight from the discovery stream,
+so the Caretaker is reliably recognized and the hidden services agent stays hidden.
