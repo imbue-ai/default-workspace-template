@@ -1,45 +1,48 @@
-Recurring jobs via cron/anacron, and the Caretaker. Adds recurring-job scheduling
-to every workspace using the stock OS tools, a daily **Caretaker** agent built on
-top of it, and the supporting skills, docs, and in-workspace tab behavior that
-make scheduled agents visible.
+Recurring jobs via cron, and the Caretaker. Adds recurring-job scheduling
+to every workspace using cron plus a tiny daily due-checker, a daily
+**Caretaker** agent built on top of it, and the supporting skills, docs, and
+in-workspace tab behavior that make scheduled agents visible.
 
-**Recurring jobs with cron + anacron.** Workspaces schedule recurring work with
-the standard OS tools instead of a custom service: **anacron**
-(`/etc/anacrontab`) for jobs that run about once a day or coarser and must not be
-skipped when the container was off -- it catches up missed runs at the next
-opportunity, coalescing several misses into one run -- and **cron**
-(`/etc/cron.d/` drop-ins) for precise times or sub-daily cadences, exact but
-never backfilled. The cron daemon runs under supervisord (`[program:cron]`);
-anacron has a single deliberately-simple trigger, a cron line firing every
-minute between 03:00 and 23:59 (`/etc/cron.d/fct-anacron`), so daily jobs run
-at 3 AM local time and a job missed while the container was off starts within
-a minute of the first in-window boot. The Caretaker never runs at workspace
-creation: the bootstrap seeds its anacron stamp at first boot, so its first run
-is the next day's 3 AM -- and when the user's timezone cannot be fetched, the
-bootstrap adopts a fixed-offset zone that lands that first run about 8 hours
-after setup instead. Because cron and
-anacron scrub the job environment, a small wrapper
-(`scripts/with_agent_env.sh`) restores the workspace environment from a snapshot
-the bootstrap writes each boot, and every scheduled job runs through it. The
-container's clock is set to the user's local timezone at each boot: the
-bootstrap pulls it from the minds desktop client's `GET /api/v1/timezone`
-through the latchkey gateway (falling back to UTC when unreachable), so
-schedules run in the user's local time. (An earlier iteration of this branch
-built a custom `libs/scheduler` service for the catch-up behavior; it was
-removed in favor of anacron, which provides the same missed-run semantics with
-zero code to maintain -- the trade-off being that anacron is day-granularity, so
-the Caretaker runs "once a day, shortly after local midnight or on the first
-boot of the day" rather than at a fixed 3 AM.)
+**Recurring jobs with cron + a daily due-checker.** Workspaces schedule
+recurring work with **cron** (`/etc/cron.d/` drop-ins, the daemon running
+under supervisord as `[program:cron]`): plain cron lines for precise times or
+sub-daily cadences, exact but never backfilled, and a daily-job pattern for
+jobs that must not be skipped when the container was off -- an every-minute
+cron line hands the decision to `scripts/run_daily_job.sh`, a ~50-line
+due-checker that stamps the last covered date per job and runs each job at
+most once per calendar day: at its due hour (3 AM local for the Caretaker)
+when the container is up, or within the first minute the container is back up
+after a fully missed day, at any hour -- and the night after a successful run,
+nothing fires at midnight. The stamp is written before the job starts, so a
+failed run retries the next day rather than every minute. Anacron is no longer
+installed: its day-granular stamps cannot express "due at 3 AM, but catch up a
+missed day the first minute the container is back, at any hour" -- any anacron
+wiring gives one of those up, with either a midnight false-fire, a catch-up
+dead zone, or a start delay that also postpones catch-up. The Caretaker never
+runs at workspace creation: the bootstrap seeds its stamp with today's date at
+first boot, so its first run is the next day's 3 AM -- and when the user's
+timezone cannot be fetched, the bootstrap adopts a fixed-offset zone that
+lands that first run about 8 hours after setup instead. Because cron scrubs
+the job environment, a small wrapper (`scripts/with_agent_env.sh`) restores
+the workspace environment from a snapshot the bootstrap writes each boot, and
+every scheduled job runs through it. The container's clock is set to the
+user's local timezone at each boot: the bootstrap pulls it from the minds
+desktop client's `GET /api/v1/timezone` through the latchkey gateway (falling
+back to UTC when unreachable), so schedules run in the user's local time. (An
+earlier iteration of this branch built a custom `libs/scheduler` service for
+the catch-up behavior, and a later one used anacron; both were replaced by the
+checker, which keeps the near-zero-maintenance shape -- about 50 lines of
+shell -- while reading the clock, the one thing anacron cannot do.)
 
 **Scheduled agent tasks and the Caretaker.** A scheduled job can wake an agent
 that runs a skill on a cadence, in its own chat tab. `scripts/run_task_agent.sh
 <skill>` spawns a single persistent agent for that skill; on each run mngr clears
 the agent's session and re-sends `/<skill>` so the skill runs fresh, with no memory
 of the previous run.
-A new scheduled agent (e.g. a morning news digest) needs only a skill plus an
-anacron or cron entry -- no new agent template. The daily **Caretaker** is the
-built-in instance, baked into `/etc/anacrontab` at image build (delete its line
-to switch it off): once a night it quietly checks the apps and services in your
+A new scheduled agent (e.g. a morning news digest) needs only a skill plus a
+cron entry -- no new agent template. The daily **Caretaker** is the
+built-in instance, baked into `/etc/cron.d/fct-caretaker` at image build (delete
+that file to switch it off): once a night it quietly checks the apps and services in your
 workspace for problems -- a page that stopped loading, a service that crashed,
 errors piling up -- and either fixes them or explains what it found, always in
 plain, non-technical language. On its very first night it does one look-only scan
@@ -58,10 +61,11 @@ entirely.
 `supervisorctl status`, scan `/var/log/supervisor/` for errors and tracebacks,
 summarize what's wrong and where), reusable by both day-to-day chat agents and the
 Caretaker's nightly scan; and a `manage-scheduled-tasks` skill that teaches agents
-to choose anacron vs. cron per job, the entry formats, the env wrapper, and to
+to choose between the daily catch-up pattern and plain cron lines per job, the
+entry formats, the env wrapper, and to
 re-check the user's current timezone (via the minds timezone endpoint) before
 scheduling anything, updating the container clock if the user has moved.
-The full scheduling detail (anacron vs. cron, entry formats, the
+The full scheduling detail (daily catch-up vs. plain cron, entry formats, the
 env wrapper, the timezone check, the Caretaker wiring) lives in the
 manage-scheduled-tasks skill; CLAUDE.md gains just one sentence pointing at the
 manage-scheduled-tasks and check-app-errors skills.

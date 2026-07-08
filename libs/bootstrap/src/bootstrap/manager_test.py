@@ -757,29 +757,29 @@ def test_fallback_timezone_places_local_clock_at_setup_hour() -> None:
 
 
 def test_seed_caretaker_stamp_writes_today_for_zone(tmp_path: Path) -> None:
-    """First boot writes today's local date so anacron skips the creation day."""
-    stamp = tmp_path / "spool" / "caretaker"
+    """First boot writes today's local date so run_daily_job.sh skips the creation day."""
+    stamp = tmp_path / "stamps" / "caretaker"
     # 01:30 UTC on the 8th is still the evening of the 7th in Etc/GMT+5 (UTC-5),
     # so the stamp must carry the LOCAL date, not the UTC one.
     now = datetime(2026, 7, 8, 1, 30, tzinfo=timezone.utc)
     _seed_caretaker_stamp("Etc/GMT+5", stamp_path=stamp, now_utc=now)
-    assert stamp.read_text() == "20260707\n"
+    assert stamp.read_text() == "2026-07-07\n"
 
 
 def test_seed_caretaker_stamp_uses_utc_when_zone_empty_or_bad(tmp_path: Path) -> None:
     now = datetime(2026, 7, 8, 1, 30, tzinfo=timezone.utc)
     for bad_zone in ("", "Not/AZone"):
-        stamp = tmp_path / f"spool-{bad_zone or 'empty'}".replace("/", "_") / "caretaker"
+        stamp = tmp_path / f"stamps-{bad_zone or 'empty'}".replace("/", "_") / "caretaker"
         _seed_caretaker_stamp(bad_zone, stamp_path=stamp, now_utc=now)
-        assert stamp.read_text() == "20260708\n"
+        assert stamp.read_text() == "2026-07-08\n"
 
 
 def test_seed_caretaker_stamp_leaves_existing_stamp_alone(tmp_path: Path) -> None:
-    """Later boots must not touch anacron's own state."""
+    """Later boots must not touch the daily-job runner's own state."""
     stamp = tmp_path / "caretaker"
-    stamp.write_text("20200101\n")
+    stamp.write_text("2020-01-01\n")
     _seed_caretaker_stamp("UTC", stamp_path=stamp)
-    assert stamp.read_text() == "20200101\n"
+    assert stamp.read_text() == "2020-01-01\n"
 
 
 def test_detect_snapshot_settings_picks_outer_trigger_when_trigger_dir_present(

@@ -21,10 +21,11 @@
 #                    passes its own tailored template (`caretaker`).
 #   --agent-name <n> Agent name shown in the UI (default: the skill name).
 #
-# Invoked by the daily caretaker anacron job (see /etc/anacrontab) or any other
-# cron/anacron entry, through scripts/with_agent_env.sh so it runs from the repo
-# root (/mngr/code) with the services agent's environment (MNGR_HOST_DIR,
-# MNGR_AGENT_ID, ... -- cron/anacron scrub the env otherwise).
+# Invoked by the daily caretaker job (the /etc/cron.d/fct-caretaker line, via
+# scripts/run_daily_job.sh) or any other cron entry, through
+# scripts/with_agent_env.sh so it runs from the repo root (/mngr/code) with the
+# services agent's environment (MNGR_HOST_DIR, MNGR_AGENT_ID, ... -- cron
+# scrubs the env otherwise).
 #
 # On each run:
 #   - No agent yet (first run ever) -> create the persistent agent whose first
