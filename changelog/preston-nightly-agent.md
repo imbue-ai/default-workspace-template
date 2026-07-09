@@ -86,6 +86,22 @@ that run (it will not immediately reopen), and a genuinely newer run brings it b
 The system interface reads each agent's labels straight from the discovery stream,
 so the Caretaker is reliably recognized and the hidden services agent stays hidden.
 
+**Reconnecting on wake so overnight runs actually surface.** The workspace UI
+now reconnects its live-updates WebSocket whenever the machine wakes from
+sleep, the window refocuses, or the network returns. That connection rides an
+SSH tunnel from the webview to the workspace's system interface; on sleep the
+tunnel dies but the browser never fires a close event -- it leaves the socket
+in a phantom "OPEN" state -- so the close-driven auto-reconnect never ran, and
+a Caretaker run that fired overnight stayed invisible until a manual reload.
+Returning to the workspace now drops the stale socket and opens a fresh one,
+whose snapshot re-surfaces (and blinks) anything missed. Because reconnects
+replay pending proto-agent creations but not completions, the reconnect also
+rebuilds the local proto-agent set from the fresh snapshot, so an agent that
+finished building while the laptop slept can no longer strand a tab on
+"Creating agent...". A server heartbeat plus client silence-watchdog (for a
+connection that dies while the window stays open and focused -- only a real
+concern for remote-host workspaces) remains a known follow-up.
+
 **Fixed: a fresh mind could deadlock on "No events yet" with no way to sign in.**
 When a workspace's first boot ran with no Claude credentials, claude sat at its
 interactive login screen and never signalled ready, so the bootstrap's
