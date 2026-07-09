@@ -171,7 +171,10 @@ agent template. Its entry is the single line in `/etc/cron.d/fct-caretaker`
   is up again, at any hour. Never at workspace creation.
 - **The first run:** at first boot the bootstrap seeds the Caretaker's stamp
   (`/var/lib/fct/daily-stamps/caretaker`) with today's date, so the Caretaker
-  never spawns on creation day; its first run is the next day's 3 AM. When the
+  never spawns on creation day; its first run is the next day's 3 AM. The
+  seeding happens exactly once, tracked by a `caretaker.seeded` marker beside
+  the stamp -- so deleting the stamp to force a same-day run keeps working
+  even if the container reboots before the run fires. When the
   user's timezone cannot be fetched at first boot, the bootstrap instead
   adopts a fixed-offset `Etc/GMT*` zone that places the workspace's local
   clock at 19:00 at setup, so the first 3 AM due hour lands about 8 hours

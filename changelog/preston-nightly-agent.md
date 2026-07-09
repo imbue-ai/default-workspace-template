@@ -22,7 +22,11 @@ dead zone, or a start delay that also postpones catch-up. The Caretaker never
 runs at workspace creation: the bootstrap seeds its stamp with today's date at
 first boot, so its first run is the next day's 3 AM -- and when the user's
 timezone cannot be fetched, the bootstrap adopts a fixed-offset zone that
-lands that first run about 8 hours after setup instead. Because cron scrubs
+lands that first run about 8 hours after setup instead. The seeding happens
+exactly once per workspace, tracked by a sidecar marker rather than by the
+stamp's absence: a missing stamp also means "an operator deleted it to force
+a run today", and before the marker any reboot between that deletion and the
+due hour re-seeded today's date and silently cancelled the forced run. Because cron scrubs
 the job environment, a small wrapper (`scripts/with_agent_env.sh`) restores
 the workspace environment from a snapshot the bootstrap writes each boot, and
 every scheduled job runs through it. The container's clock is set to the

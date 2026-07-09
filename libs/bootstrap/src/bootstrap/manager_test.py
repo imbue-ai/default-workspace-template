@@ -847,6 +847,30 @@ def test_seed_caretaker_stamp_leaves_existing_stamp_alone(tmp_path: Path) -> Non
     stamp.write_text("2020-01-01\n")
     _seed_caretaker_stamp("UTC", stamp_path=stamp)
     assert stamp.read_text() == "2020-01-01\n"
+    # A pre-marker workspace gets the marker backfilled so later boots
+    # short-circuit on it rather than on the stamp's presence.
+    assert (tmp_path / "caretaker.seeded").exists()
+
+
+def test_seed_caretaker_stamp_writes_marker_on_first_seed(tmp_path: Path) -> None:
+    stamp = tmp_path / "stamps" / "caretaker"
+    _seed_caretaker_stamp("UTC", stamp_path=stamp)
+    assert (tmp_path / "stamps" / "caretaker.seeded").exists()
+
+
+def test_seed_caretaker_stamp_does_not_reseed_deleted_stamp(tmp_path: Path) -> None:
+    """A deliberately deleted stamp (forcing a run today) must survive a reboot.
+
+    Stamp absence is the operator's tool for scheduling a same-day run; the
+    one-time marker is what records 'this workspace was already seeded', so a
+    reboot between the deletion and the due hour cannot re-seed today's date
+    and silently cancel the forced run.
+    """
+    stamp = tmp_path / "stamps" / "caretaker"
+    _seed_caretaker_stamp("UTC", stamp_path=stamp)
+    stamp.unlink()
+    _seed_caretaker_stamp("UTC", stamp_path=stamp)
+    assert not stamp.exists()
 
 
 def test_detect_snapshot_settings_picks_outer_trigger_when_trigger_dir_present(
