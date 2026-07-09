@@ -11,7 +11,7 @@
    supervisorctl reread && supervisorctl update
    ```
 
-   (See `update-service`'s `service-processes.md` reference for the
+   (See `.agents/shared/references/service-processes.md` for the
    mechanics.)
 3. If you scaffolded a lib, also: `rm -rf libs/<package>/` and revert
    the matching diff in the root `pyproject.toml` (drop from

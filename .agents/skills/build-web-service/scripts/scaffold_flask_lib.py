@@ -141,6 +141,7 @@ packages = ["src/{package}"]
 
 def _lib_runner(name: str, package: str, description: str, port: int) -> str:
     env_var = f"{package.upper()}_DATA_DIR"
+    port_env_var = f"{package.upper()}_PORT"
     return f'''"""{description}.
 
 Services run from /mngr/code (the repo root). Conventions:
@@ -158,6 +159,11 @@ Services run from /mngr/code (the repo root). Conventions:
 - Static assets shipped alongside this file (templates, default
   configs, bundled JSON): ``Path(__file__).parent / "assets/..."`` is
   fine and is the right pattern.
+- Listen port: bind ``PORT`` (defined below), which defaults to this
+  service's assigned port but honors the ``{port_env_var}`` env var, so
+  an editing agent can boot a throwaway instance on a *spare* port
+  alongside the live one (see the update-service skill). Never hardcode
+  the port at the ``run_simple`` call.
 
 This is a synchronous Flask app served by the threaded Werkzeug server.
 The system_interface proxy at ``/service/{name}/`` rewrites absolute
@@ -181,6 +187,12 @@ from werkzeug.serving import run_simple
 # exist_ok=True)`` before writing.
 DATA_DIR = Path(os.environ.get("{env_var}", "runtime/{name}"))
 
+# Listen port. Defaults to this service's assigned port but is overridable via
+# the ``{port_env_var}`` env var so an editing agent can boot a throwaway
+# instance on a spare port next to the live one (see the update-service skill).
+# Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
+PORT = int(os.environ.get("{port_env_var}", "{port}"))
+
 app = Flask("{package}", static_folder=None)
 
 
@@ -202,7 +214,7 @@ def health() -> Response:
 
 def main() -> None:
     run_simple(
-        "127.0.0.1", {port}, app, threaded=True, use_reloader=False, use_debugger=False
+        "127.0.0.1", PORT, app, threaded=True, use_reloader=False, use_debugger=False
     )
 
 
