@@ -498,21 +498,32 @@ function createCustomTab(options: { id: string; name: string }): {
       // Show/hide actions based on active state. A highlighted agent tab
       // (e.g. the nightly Caretaker) blinks yellow whenever the
       // agent has an unacknowledged highlight; viewing the tab acknowledges the
-      // current highlight and stops the blink. Evaluating shouldFlashHighlight at
-      // render time is what makes a restored-open tab blink again for a new run.
+      // current highlight and stops the blink. Highlight state is looked up at
+      // EVENT time, never captured at tab creation: a tab restored from the
+      // saved layout is created before the first agents_updated snapshot has
+      // arrived, so a creation-time getAgentById() lookup would come back empty
+      // and permanently misclassify the tab as non-highlighted.
       const chatAgentForTab = pp?.chatAgentId ?? pp?.agentId;
-      const isHighlightTab =
-        panelType === "chat" && !!chatAgentForTab && isHighlightedAgent(getAgentById(chatAgentForTab));
-      if (isHighlightTab && chatAgentForTab && shouldFlashHighlight(getAgentById(chatAgentForTab))) {
+      const isChatTab = panelType === "chat" && !!chatAgentForTab;
+      if (isChatTab && chatAgentForTab && shouldFlashHighlight(getAgentById(chatAgentForTab))) {
         element.classList.add("dv-tab-new");
+      }
+
+      // Record the user as having seen this agent's current highlight (they are
+      // viewing the tab), and stop the blink. No-ops the acknowledgement when the
+      // agent is not (yet) known or not highlighted.
+      function acknowledgeCurrentHighlight(agentId: string): void {
+        const agent = getAgentById(agentId);
+        if (agent && isHighlightedAgent(agent)) {
+          acknowledgeHighlight(agentId, highlightKey(agent));
+        }
+        element.classList.remove("dv-tab-new");
       }
 
       function handleActiveChange(isActive: boolean): void {
         actions.style.display = isActive ? "flex" : "none";
-        if (isActive && isHighlightTab && chatAgentForTab) {
-          const agent = getAgentById(chatAgentForTab);
-          acknowledgeHighlight(chatAgentForTab, agent ? highlightKey(agent) : "");
-          element.classList.remove("dv-tab-new");
+        if (isActive && isChatTab && chatAgentForTab) {
+          acknowledgeCurrentHighlight(chatAgentForTab);
         }
       }
       handleActiveChange(params.api.isActive);
@@ -524,12 +535,19 @@ function createCustomTab(options: { id: string; name: string }): {
 
       // Let surfaceHighlightedAgents() re-blink this tab in place when the agent
       // gets a new highlight (e.g. a new Caretaker run) while the tab is already
-      // open in the background. Re-armed unless the user is currently viewing this
-      // tab -- no point blinking what they're already looking at.
-      if (isHighlightTab && chatAgentForTab) {
+      // open in the background. Registered for EVERY chat tab -- the caller
+      // decides highlight-ness at fire time -- because a tab restored from the
+      // saved layout is created before the agent list is known, so registration
+      // cannot depend on a creation-time lookup. When the user is currently
+      // viewing this tab there is no point blinking it: viewing IS the
+      // acknowledgement, so record it instead.
+      if (isChatTab && chatAgentForTab) {
         const reflashAgentId = chatAgentForTab;
         const reflash = (): void => {
-          if (params.api.isActive) return;
+          if (params.api.isActive) {
+            acknowledgeCurrentHighlight(reflashAgentId);
+            return;
+          }
           element.classList.add("dv-tab-new");
         };
         reflashByAgentId.set(reflashAgentId, reflash);
