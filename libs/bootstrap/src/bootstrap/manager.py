@@ -21,8 +21,7 @@ import shutil
 import subprocess
 import time
 import urllib.request
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -356,11 +355,22 @@ def _find_existing_chat_agent_id(host_name: str) -> str | None:
     and never signalled ready. The agent survives with no recorded id, and
     re-running `mngr create` would fail with a name collision on every
     subsequent boot, so the retry must adopt the survivor instead. Mirrors
-    the lookup-first shape of scripts/run_task_agent.sh. Returns None on
-    lookup failure or ambiguity, keeping the caller on the plain create path.
+    the lookup-first shape of scripts/run_task_agent.sh, including --active,
+    so an archived leftover (or one on a dead host) is never adopted as the
+    welcome-resend target. Returns None on lookup failure or ambiguity,
+    keeping the caller on the plain create path.
     """
     result = subprocess.run(
-        ["mngr", "list", "--include", f'name == "{host_name}"', "--ids", "--on-error", "continue"],
+        [
+            "mngr",
+            "list",
+            "--active",
+            "--include",
+            f'name == "{host_name}"',
+            "--ids",
+            "--on-error",
+            "continue",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -648,9 +658,9 @@ def _fetch_user_timezone() -> str:
             # ValueError covers a non-JSON or non-UTF-8 body.
             last_error = e
             continue
-        timezone = payload.get("timezone") if isinstance(payload, dict) else None
-        if isinstance(timezone, str) and timezone:
-            return timezone
+        timezone_name = payload.get("timezone") if isinstance(payload, dict) else None
+        if isinstance(timezone_name, str) and timezone_name:
+            return timezone_name
         last_error = ValueError(f"unexpected timezone payload: {payload!r}")
     logger.warning(
         "Could not fetch the user timezone from the gateway after {} attempts "
@@ -675,6 +685,17 @@ def _fallback_timezone_for_unknown(now_utc: datetime) -> str:
     if offset_hours <= 14:
         return f"Etc/GMT-{offset_hours}"
     return f"Etc/GMT+{24 - offset_hours}"
+
+
+def _caretaker_seed_marker_path(stamp_path: Path) -> Path:
+    """The sidecar marker recording that the caretaker stamp was seeded once.
+
+    Its existence -- not the stamp's -- is what identifies a workspace as
+    already past its first boot: a missing stamp alone is ambiguous, because
+    deleting the stamp is the documented way to force a same-day run (see
+    _seed_caretaker_stamp).
+    """
+    return stamp_path.with_name(stamp_path.name + ".seeded")
 
 
 def _seed_caretaker_stamp(
@@ -702,7 +723,7 @@ def _seed_caretaker_stamp(
     alongside the first seed, or backfilled when a pre-marker workspace
     already carries a stamp -- and every later boot returns early on it.
     """
-    marker_path = stamp_path.with_name(stamp_path.name + ".seeded")
+    marker_path = _caretaker_seed_marker_path(stamp_path)
     if marker_path.exists():
         return
     if stamp_path.exists():
@@ -711,7 +732,9 @@ def _seed_caretaker_stamp(
             marker_path.parent.mkdir(parents=True, exist_ok=True)
             marker_path.write_text("")
         except OSError as e:
-            logger.warning("Failed to write the caretaker seed marker at {}: {}", marker_path, e)
+            logger.warning(
+                "Failed to write the caretaker seed marker at {}: {}", marker_path, e
+            )
         return
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
@@ -725,9 +748,14 @@ def _seed_caretaker_stamp(
         stamp_path.write_text(stamp + "\n")
         marker_path.write_text("")
     except OSError as e:
-        logger.warning("Failed to seed the caretaker daily-job stamp at {}: {}", stamp_path, e)
+        logger.warning(
+            "Failed to seed the caretaker daily-job stamp at {}: {}", stamp_path, e
+        )
         return
-    logger.info("Seeded caretaker daily-job stamp {} (first run: next day's 3 AM due hour)", stamp)
+    logger.info(
+        "Seeded caretaker daily-job stamp {} (first run: next day's 3 AM due hour)",
+        stamp,
+    )
 
 
 def _apply_container_timezone(
@@ -1153,13 +1181,21 @@ def main() -> None:
     _write_agent_env_snapshot()
     tz_name = _fetch_user_timezone()
     applied_tz = tz_name if tz_name and _apply_container_timezone(tz_name) else ""
-    if not applied_tz and not _CARETAKER_STAMP_PATH.exists():
+    is_first_boot = (
+        not _caretaker_seed_marker_path(_CARETAKER_STAMP_PATH).exists()
+        and not _CARETAKER_STAMP_PATH.exists()
+    )
+    if not applied_tz and is_first_boot:
         # First boot with no known timezone: adopt a fixed-offset zone that
         # makes the next 3 AM due hour land about 8 hours from now, so
         # the Caretaker's first run is neither immediate nor a day away. A
         # later boot (or the manage-scheduled-tasks skill) replaces it with
         # the real timezone once one is known; on non-first boots the clock
-        # is left exactly as it was.
+        # is left exactly as it was. First boot is "never seeded": the seed
+        # marker AND the stamp are both absent. Checking the stamp alone would
+        # misfire mid-life after an operator deletes it to force a same-day
+        # Caretaker run (a documented operation) -- a reboot with a failed
+        # timezone fetch would then clobber the real clock with this placeholder.
         fallback_tz = _fallback_timezone_for_unknown(datetime.now(timezone.utc))
         if _apply_container_timezone(fallback_tz):
             applied_tz = fallback_tz

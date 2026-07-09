@@ -8,8 +8,7 @@ import os
 import shlex
 import subprocess
 from contextlib import redirect_stdout
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -20,12 +19,11 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from bootstrap.manager import (
     INITIAL_CHAT_AGENT_ID_FILENAME,
     _apply_container_timezone,
-    _fallback_timezone_for_unknown,
-    _seed_caretaker_stamp,
     _build_create_chat_command,
     _configure_git_global,
     _create_orphan_runtime_worktree,
     _ensure_host_claude_config_dir,
+    _fallback_timezone_for_unknown,
     _fetch_user_timezone,
     _format_env_file,
     _initialize_workspace_main_branch,
@@ -36,6 +34,7 @@ from bootstrap.manager import (
     _read_host_name,
     _read_main_agent_labels,
     _resolve_services_claude_config_dir,
+    _seed_caretaker_stamp,
     _write_agent_env_snapshot,
 )
 
@@ -836,7 +835,9 @@ def test_seed_caretaker_stamp_writes_today_for_zone(tmp_path: Path) -> None:
 def test_seed_caretaker_stamp_uses_utc_when_zone_empty_or_bad(tmp_path: Path) -> None:
     now = datetime(2026, 7, 8, 1, 30, tzinfo=timezone.utc)
     for bad_zone in ("", "Not/AZone"):
-        stamp = tmp_path / f"stamps-{bad_zone or 'empty'}".replace("/", "_") / "caretaker"
+        stamp = (
+            tmp_path / f"stamps-{bad_zone or 'empty'}".replace("/", "_") / "caretaker"
+        )
         _seed_caretaker_stamp(bad_zone, stamp_path=stamp, now_utc=now)
         assert stamp.read_text() == "2026-07-08\n"
 
