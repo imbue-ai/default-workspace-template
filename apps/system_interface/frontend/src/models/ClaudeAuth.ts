@@ -12,11 +12,24 @@
  * auth-error -- live over the SSE stream, or detected when a panel loads a
  * snapshot. `closeLoginModal` is the modal's dismiss handler. A fresh
  * auth-error after a dismiss reopens the modal.
+ *
+ * The modal only knows how to drive `claude auth login` (see
+ * ClaudeLoginModal.ts), so callers must gate on harness first --
+ * `shouldOpenLoginModalForHarness` is that gate, kept pure and exported here
+ * (rather than inlined at each call site) so it's directly testable without
+ * mounting the mithril component that calls it.
  */
 
 import m from "mithril";
 
 let loginModalOpen = false;
+
+/** True for claude, or an unrecognized/missing harness (matches the backend's
+ * own `parse_harness` fallback) -- false for a known non-claude harness,
+ * where this modal would offer the wrong fix. */
+export function shouldOpenLoginModalForHarness(harness: string | null | undefined): boolean {
+  return harness == null || harness === "claude";
+}
 
 export function isLoginModalOpen(): boolean {
   return loginModalOpen;

@@ -99,6 +99,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Callable, Mapping, NamedTuple, Sequence, TextIO
@@ -107,6 +108,14 @@ import yaml
 
 _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
 
+# Module-level (not a local in launch()) so the test suite can import and
+# assert against this exact string instead of re-typing a copy that could
+# silently drift from the real value.
+LAUNCHED_BY_ANOTHER_AGENT_PREAMBLE = (
+    "You were launched by another agent. List any questions at the end of "
+    "your final response, along with the assumptions you made."
+)
+
 _DEFAULT_TIMEOUT = "30m"
 _DEFAULT_POLL_INTERVAL = "5s"
 
@@ -114,6 +123,62 @@ _DEFAULT_POLL_INTERVAL = "5s"
 # matching coreutils ``timeout``'s convention so the prose's mental model
 # carries over.
 _AWAIT_TIMEOUT_RC = 124
+
+# Mirrors apps/system_interface/imbue/system_interface/harness.py's Harness
+# enum and parse_harness role-suffix stripping. Duplicated (not imported)
+# because this script is a standalone `uv run --script` file (see the PEP
+# 723 header) with no dependency on the system_interface package -- this is
+# five lines, not worth a cross-package dependency.
+_KNOWN_HARNESSES = frozenset({"claude", "codex", "antigravity", "opencode"})
+_ROLE_SUFFIXES = ("-main", "-worker")
+
+
+def _parse_harness(raw_agent_type: str) -> str | None:
+    """Strip a `-main`/`-worker` role suffix and return it if it's a known harness."""
+    base = raw_agent_type
+    for suffix in _ROLE_SUFFIXES:
+        base = base.removesuffix(suffix)
+    return base if base in _KNOWN_HARNESSES else None
+
+
+def _resolve_delegating_harness(state_dir: Path | None) -> str | None:
+    """Return the calling agent's own harness, read from its `data.json`.
+
+    ``data.json``'s top-level `type` field is mngr's own record of the agent's
+    type (e.g. `"codex-worker"`) -- the same field `harness.py`'s
+    `parse_harness` reads server-side. Returns None (the caller falls back to
+    the bare, claude-shaped template -- today's unchanged behavior) when
+    `state_dir` is unset, `data.json` is missing/malformed, or the type isn't
+    one of the four known harnesses.
+    """
+    if state_dir is None:
+        return None
+    data_json = state_dir / "data.json"
+    try:
+        data = json.loads(data_json.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    raw_type = data.get("type")
+    if not isinstance(raw_type, str):
+        return None
+    return _parse_harness(raw_type)
+
+
+def _resolve_template(template: str, state_dir: Path | None) -> str:
+    """Return the harness-suffixed template name for the delegating agent.
+
+    A worker launched from a codex agent should itself be a codex worker, not
+    a claude one -- `.mngr/settings.toml` already has `<template>_<harness>`
+    variants for all four harnesses (e.g. `worker_codex`,
+    `subskill-worker_antigravity`); this picks the one matching the caller.
+    Falls back to `template` unchanged when the harness can't be determined,
+    which is exactly today's behavior (the bare template aliases to the
+    claude variant).
+    """
+    harness = _resolve_delegating_harness(state_dir)
+    if harness is None:
+        return template
+    return f"{template}_{harness}"
 
 
 def _normalize_dir(value: str) -> str:
@@ -321,7 +386,12 @@ def launch(
     ``state_dir`` is the lead's ``MNGR_AGENT_STATE_DIR``; when set, the
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
     before the task message lands so the worker's first transcript read
-    sees fresh events.
+    sees fresh events. It also resolves the worker's harness: ``template``
+    (e.g. ``"worker"``, ``"subskill-worker"``) is suffixed to match the
+    *lead's own* harness (``worker_codex`` for a codex lead, etc.) so a
+    delegated worker is never silently claude regardless of who delegated
+    it -- see ``_resolve_template``. Falls back to ``template`` unchanged
+    when the lead's harness can't be determined from its ``data.json``.
     """
     runner = runner or Runner()
 
@@ -347,13 +417,14 @@ def launch(
         )
         return 2
 
+    resolved_template = _resolve_template(template, state_dir)
     runner.run(
         [
             "mngr",
             "create",
             name,
             "-t",
-            template,
+            resolved_template,
         ],
         check=True,
     )
@@ -364,16 +435,47 @@ def launch(
 
     _flush_common_transcript(state_dir, runner)
 
-    runner.run(
-        [
-            "mngr",
-            "message",
-            name,
-            "--message-file",
-            str(task_file),
-        ],
-        check=True,
-    )
+    # A short preamble telling the worker it was launched by another agent,
+    # prepended to the task file's own content and sent as a single message
+    # -- rather than a CLI-flag mechanism like claude's --append-system-prompt
+    # (codex/antigravity/opencode have no confirmed equivalent flag, and even
+    # if one existed per harness it would need separate research and wiring
+    # for each). This single call, here, covers all four harnesses and all
+    # six calling skills at once, since create_worker.py is the one shared
+    # choke point they all launch workers through -- no per-skill or
+    # per-harness change needed.
+    #
+    # Written to a fresh temp file rather than mutating task_file on disk, to
+    # avoid touching a file with YAML frontmatter this script doesn't
+    # otherwise parse or own -- the worker re-reads its real task file (with
+    # real frontmatter) fresh from its own synced runtime dir via
+    # parse_task_frontmatter.py, so this message's exact content/positioning
+    # is not load-bearing the way the on-disk task_file's is. One `mngr
+    # message` call instead of two separate ones (an earlier version sent
+    # the preamble and the task file as two messages) -- each `mngr message`
+    # invocation pays for a full CLI startup (config + plugin loading) and
+    # re-resolves the agent's address; merging into one call halves that
+    # cost for every worker launch. Unlinked in a finally right after the
+    # (blocking) send -- runner.run() only returns once that call has
+    # finished (a real subprocess exits, or check=True raises), so by then
+    # the file has already been read; nothing needs it to survive longer.
+    combined_message = f"{LAUNCHED_BY_ANOTHER_AGENT_PREAMBLE}\n\n{task_file.read_text()}"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as combined_file:
+        combined_file.write(combined_message)
+        combined_path = Path(combined_file.name)
+    try:
+        runner.run(
+            [
+                "mngr",
+                "message",
+                name,
+                "--message-file",
+                str(combined_path),
+            ],
+            check=True,
+        )
+    finally:
+        combined_path.unlink(missing_ok=True)
 
     print(f"create_worker: worker {name} launched and runtime synced")
     return 0

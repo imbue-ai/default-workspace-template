@@ -2,6 +2,16 @@
 
 # Default create command settings -- apply to all mngr create from this repo
 [commands.create]
+# type = "claude": restored. An earlier pass of this file removed this
+# default on the theory that a silent fallback would mask a caller that
+# forgot to pass a type -- but real, existing callers depend on it and
+# never pass one explicitly: vendor/mngr/apps/minds/.../agent_creator.py
+# builds every Docker/Lima/Vultr/AWS/imbue_cloud create command as
+# `--template main --template <provider>` with no --type at all. Removing
+# this broke every real "create workspace" click in the minds desktop
+# client (caught by code review, not proactively). claude remains the
+# default harness when nothing else specifies one, matching every other
+# _DEFAULT_HARNESS reference in this repo (bootstrap/manager.py, etc.).
 type = "claude"
 connect = false
 ensure_clean = false
@@ -82,11 +92,14 @@ version = "2.1.160"
 # the per-agent config dir that everyone else points at.
 isolate_local_config_dir = false
 
-# The "main" (services) agent type -- inherits everything from claude, then
-# disables every path that pulls user-local content into the workspace. The
-# repo at the requested git ref is the canonical workspace definition;
+# The "claude-main" (services) agent type -- inherits everything from claude,
+# then disables every path that pulls user-local content into the workspace.
+# The repo at the requested git ref is the canonical workspace definition;
 # nothing from the invoking user's ~/.claude/ or ~/.mngr/ should leak in.
-[agent_types.main]
+# Named "claude-main" (not the bare "main") to stay symmetric with
+# codex-main/antigravity-main/opencode-main below -- claude gets no naming
+# privilege now that other harnesses exist.
+[agent_types.claude-main]
 parent_type = "claude"
 sync_home_settings = false
 sync_claude_json = false
@@ -96,19 +109,228 @@ sync_credentials_on_login = false
 # new shared-mode default). Every other agent in the workspace points at
 # *this* directory via the host env var the bootstrap writes.
 isolate_local_config_dir = true
-# Window 0 of the services agent must never actually run claude -- the bootstrap
-# window (extra_window) runs supervisord, which owns every background service,
-# and the real chat agents are spun up separately by the bootstrap. Making
-# window 0 a live claude is unsafe: the user could close it, tearing down the
-# tmux session (and supervisord with it). The trailing "&& claude" is
-# unreachable; it exists only so ClaudeAgent.assemble_command can still splice
-# --resume / --session-id onto a claude-shaped invocation without producing a
-# syntactically bogus command.
-command = "sleep infinity && claude"
+# Window 0 of the services agent must never actually run an interactive CLI --
+# the bootstrap window (extra_window) runs supervisord, which owns every
+# background service, and the real chat agents are spun up separately by the
+# bootstrap. Making window 0 a live agent is unsafe: the user could close it,
+# tearing down the tmux session (and supervisord with it). This no-op is
+# shared verbatim across all four harnesses (see codex-main/antigravity-main/
+# opencode-main below) -- the trailing `--` makes mngr's assemble_command
+# (which always appends cli_args after the base command) dump those args into
+# bash's unused positional params, silently discarded regardless of content.
+command = "bash -c 'exec sleep infinity' --"
 
-# the "worker" agent type -- the default for delegated tasks
-[agent_types.worker]
+# the "claude-worker" agent type -- the default for delegated claude tasks
+[agent_types.claude-worker]
 parent_type = "claude"
+
+# --- Agent types: codex ---
+
+# Agent type defaults -- apply to all codex agents created from this repo.
+[agent_types.codex]
+# codex's complete equivalent of claude's --dangerously-skip-permissions:
+# sets approval_policy="never" in the per-agent config.toml so codex never
+# prompts for tool approval. Codex honors approval_policy directly -- there
+# is no separate CLI-flag-level skip-all mechanism to also set.
+auto_allow_permissions = true
+# Auto-trust the source repo + allow the codex hook-review bypass without
+# prompting, mirroring claude's auto_dismiss_dialogs. Without this,
+# provisioning interactively click.confirm's before mutating global config,
+# which would hang an unattended agent.
+auto_dismiss_dialogs = true
+sandbox_mode = "workspace-write"
+# Shut-up settings, confirmed against the installed codex-cli binary
+# (`codex app-server --help`, `codex features list`) rather than docs alone:
+#  - analytics.enabled / feedback.enabled: telemetry + feedback-survey off
+#    (feedback.enabled also disables codex's bundled Sentry crash reporting).
+#  - check_for_update_on_startup: suppresses codex's own blocking
+#    "Update available!" startup prompt.
+#  - features.multi_agent: codex's own subagent-spawning capability, off --
+#    delegation should go through mngr/fct's own worker flow, not codex's
+#    native one (this is the real analog of blocking claude's
+#    TaskCreate/TaskList/TaskUpdate family).
+#  - features.apps: disables codex's plugin/connector marketplace entirely.
+# codex's own `update_plan` tool (its TodoWrite equivalent) has no dedicated
+# feature flag and cannot be individually disabled -- see CLAUDE.md for the
+# system-prompt-level mitigation (use tk instead).
+# model + model_reasoning_effort: both confirmed real, valid values --
+# this machine's own ~/.codex/config.toml already runs these exact settings.
+# xhigh mirrors claude's opus[1m] intent (opus is the top-tier model choice;
+# claude has no separate explicit effort-level field to mirror numerically,
+# since none is set today -- xhigh is codex's own max).
+# sandbox_workspace_write.network_access = true: without this, codex's
+# workspace-write sandbox blocks all network access at the OS level
+# (seccomp/landlock) independent of auto_allow_permissions/approval_policy --
+# confirmed real schema via developers.openai.com/codex/config-reference and
+# a live GitHub issue discussion (openai/codex#13373), not guessed. Without
+# it, `git push`/`uv sync`/package installs -- which AGENTS.md instructs
+# every agent to run -- would silently fail inside a codex agent's sandbox.
+# Caught by code review, not caught when sandbox_mode was first set.
+# KEEP IN SYNC: the memory MCP server def (command/args/MEMORY_FILE_PATH)
+# below is hand-duplicated 4x total -- here, at settings.toml:~199
+# (antigravity), settings.toml:~284 (opencode), and .mcp.json (claude).
+# TOML has no anchor/reference mechanism and .mcp.json is a separate JSON
+# file (which can't hold a comment pointing back here at all) -- a future
+# change to this server (version bump, path change) must be applied to all
+# 4 by hand. No test catches drift between them (untyped free-form blobs).
+config_overrides__extend = {model = "gpt-5.5", model_reasoning_effort = "xhigh", analytics = {enabled = false}, feedback = {enabled = false}, check_for_update_on_startup = false, features = {multi_agent = false, apps = false}, sandbox_workspace_write = {network_access = true}, mcp_servers = {memory = {command = "npx", args = ["-y", "@modelcontextprotocol/server-memory"], env = {MEMORY_FILE_PATH = "/mngr/code/runtime/memory/memory.jsonl"}}}}
+# Pin the codex CLI version; provisioning verifies the installed codex
+# matches, erroring on a mismatch. Bump deliberately, not by accident.
+version = "0.142.5"
+
+# The "codex-main" (services) agent type. Unlike claude, codex has NO
+# isolate_local_config_dir equivalent -- CODEX_HOME is always per-agent,
+# hardcoded, no toggle -- so there is nothing to flip here; every codex
+# agent (including this one) is permanently isolated. Only auth is ever
+# shared, via codex's own always-on auth.json symlink (not a toggle either).
+[agent_types.codex-main]
+parent_type = "codex"
+command = "bash -c 'exec sleep infinity' --"
+
+# the "codex-worker" agent type -- the default for delegated codex tasks
+[agent_types.codex-worker]
+parent_type = "codex"
+
+# --- Agent types: antigravity ---
+
+# Agent type defaults -- apply to all antigravity agents created from this repo.
+[agent_types.antigravity]
+# Shared memory MCP server (same one claude/codex/opencode use, see
+# .mcp.json). Requires a real mngr_antigravity code change (a new
+# mcp_servers field writing $HOME/.gemini/config/mcp_config.json -- a file
+# separate from settings_overrides' settings.json) since no field for this
+# existed before; see vendor/mngr/libs/mngr_antigravity's changelog.
+# KEEP IN SYNC: hand-duplicated 4x total -- also at settings.toml's codex
+# and opencode config_overrides__extend blocks, and .mcp.json (claude,
+# which can't hold a comment pointing back here at all since JSON has no
+# comment syntax). No test catches drift between them.
+mcp_servers = {memory = {command = "npx", args = ["-y", "@modelcontextprotocol/server-memory"], env = {MEMORY_FILE_PATH = "/mngr/code/runtime/memory/memory.jsonl"}}}
+# The only reliable skip-permissions mechanism for agy: adds
+# --dangerously-skip-permissions. NOT a hook -- agy's documented PreToolUse
+# {"decision":"allow"} output does not actually gate the run_command
+# confirmation dialog (verified live against agy 1.0.3), so this dedicated
+# field is the sole mechanism that reliably auto-approves.
+auto_allow_permissions = true
+# Auto-trust the source repo in agy's global trustedWorkspaces without
+# prompting, mirroring claude's/codex's auto_dismiss_dialogs.
+auto_dismiss_dialogs = true
+# Don't seed this agent's settings.json from the OPERATOR's real
+# ~/.gemini/antigravity-cli/settings.json -- the repo at the requested git
+# ref is the canonical workspace definition, same intent as claude-main's
+# sync_home_settings=false. Set at the base type (not a "-main" override)
+# because antigravity has no live-sharing "-main" role to scope it to --
+# every antigravity agent needs this, not just one.
+sync_home_settings = false
+# enableTelemetry is antigravity's entire opt-out surface -- confirmed live
+# against a real authenticated install; no autoUpdate/feedbackEnabled/
+# crashReport equivalents exist anywhere in the settings schema.
+# model: "Gemini 3.5 Flash (High)" -- confirmed real via a live `agy models`
+# call (re-checked, not stale). Note this is Flash-tier, not Pro-tier: the
+# only 3.5 option that exists is "Gemini 3.5 Flash"; "Gemini 3.5 Pro" is
+# not a real selectable value today, only "Gemini 3.1 Pro" is (the
+# previous pick here, before 3.5 was explicitly requested instead).
+# Antigravity encodes effort into the model name itself (no separate
+# effort field exists), so "(High)" is both the model pick and the effort
+# pick at once.
+settings_overrides__extend = {enableTelemetry = false, model = "Gemini 3.5 Flash (High)"}
+# agy has NO per-project AGENTS.md/CLAUDE.md auto-discovery of its own --
+# confirmed real, not assumed (it natively reads only a single global
+# $HOME/.gemini/GEMINI.md, unlike codex/opencode which walk up from cwd
+# looking for AGENTS.md automatically). This is the documented workaround:
+# a rule inside GEMINI.md instructing agy to also check the project
+# workspace for AGENTS.md. Requires a real mngr_antigravity code change
+# (a new global_instructions_md field writing $HOME/.gemini/GEMINI.md --
+# no field for this existed before), same pattern as the mcp_servers fix;
+# see vendor/mngr/libs/mngr_antigravity's changelog.
+global_instructions_md = "Check for the presence of an AGENTS.md file in the project workspace root and follow its instructions as if they were written here. There may be additional AGENTS.md files in sub-folders with instructions specific to that part of the codebase -- follow those too when working in that area."
+# agy has no version-pinning capability at all (Google's installer always
+# installs latest from a manifest); freeze the installed build instead.
+update_policy = "NEVER"
+
+# The "antigravity-main" (services) agent type. Like codex, antigravity has
+# NO isolate_local_config_dir equivalent -- per-agent $HOME relocation is
+# always unconditional, no toggle -- so every antigravity agent (including
+# this one) is permanently isolated. Only auth is shared, via agy's
+# symlink_oauth_token (on by default).
+[agent_types.antigravity-main]
+parent_type = "antigravity"
+command = "bash -c 'exec sleep infinity' --"
+
+# the "antigravity-worker" agent type -- the default for delegated antigravity tasks
+[agent_types.antigravity-worker]
+parent_type = "antigravity"
+
+# --- Agent types: opencode ---
+
+# Agent type defaults -- apply to all opencode agents created from this repo.
+[agent_types.opencode]
+# Dedicated field, confirmed to exist: auto-approves everything not
+# explicitly denied. The real analog of --dangerously-skip-permissions, not
+# just enumerating every action in config_overrides.permission by hand.
+auto_allow_permissions = true
+# Shut-up + tool-restriction settings, confirmed against the live schema at
+# opencode.ai/config.json:
+#  - autoupdate: solid, confirmed working.
+#  - experimental.openTelemetry / share: set, but openTelemetry suppression
+#    may still leak some traffic (reported in a live GitHub issue) -- no
+#    env-var kill switch exists for it specifically, unlike autoupdate/share
+#    which do have OPENCODE_DISABLE_* env var alternatives if ever needed.
+#  - tools: opencode's real disallow-list mechanism (the only one of the
+#    three non-claude harnesses that has one) -- todowrite/question/task
+#    are the closest real analogs to claude's TodoWrite/AskUserQuestion/
+#    Task-family, though the mapping is inexact by necessity (different
+#    tool surface); no ExitPlanMode analog exists to disable.
+# model: "openrouter/z-ai/glm-5.2" confirmed real via `opencode models` --
+# opencode also serves glm-5.2 through its own "opencode/" gateway, but
+# "openrouter/z-ai/glm-5.2" matches the actual OpenRouter routing requested.
+# No effort-level override set here: fetched opencode's real, current
+# config schema (opencode.ai/config.json) directly and confirmed there is
+# no "reasoningEffort" field at all (an earlier research pass claiming one
+# existed was wrong) -- the real per-agent field is "variant", with no
+# confirmed valid values for this model, so nothing was set rather than
+# guessing one.
+# KEEP IN SYNC: hand-duplicated 4x total -- also at settings.toml's codex
+# and antigravity blocks, and .mcp.json (claude, which can't hold a
+# comment pointing back here since JSON has no comment syntax). No test
+# catches drift between them.
+config_overrides__extend = {model = "openrouter/z-ai/glm-5.2", autoupdate = false, experimental = {openTelemetry = false}, share = "disabled", tools = {todowrite = false, question = false, task = false}, mcp = {memory = {type = "local", command = ["npx", "-y", "@modelcontextprotocol/server-memory"], environment = {MEMORY_FILE_PATH = "/mngr/code/runtime/memory/memory.jsonl"}}}}
+# Don't seed this agent's opencode.json from the operator's real
+# ~/.config/opencode/opencode.json -- same reproducibility intent as
+# claude-main's sync_home_settings=false / antigravity's sync_home_settings.
+sync_global_config = false
+# Pin the opencode version; provisioning verifies the installed opencode
+# matches, erroring on a mismatch.
+version = "1.17.13"
+# TEMPORARY: fetches the code-guardian review-gate opencode plugin from a
+# personal fork + PR branch (https://github.com/imbue-ai/code-guardian/pull/25),
+# not the canonical repo -- same reasoning as codex/antigravity's
+# *_update_plugin*.sh (see those files' headers). opencode has no
+# "install" ceremony of its own -- it just loads whatever .ts sits in
+# .opencode/plugin/ -- and bun (opencode's runtime) does NOT support
+# installing a git dependency from a subdirectory of a repo (confirmed via
+# an open, unresolved oven-sh/bun issue #15506), so an npm-style git
+# specifier can't target this nested plugin directly. Fetching the raw
+# file from GitHub's own first-party raw-content CDN sidesteps that
+# entirely -- no npm packaging, no third-party proxy service needed.
+# SWITCH BACK to a real published npm package (or the canonical repo's
+# raw URL once merged) as the follow-up.
+extra_provision_command__extend = [
+    "curl -fsSL https://raw.githubusercontent.com/minhtrinh-imbue/code-guardian/add-codex-opencode-antigravity-support/plugins/imbue-code-guardian-opencode/index.ts -o .opencode/plugin/imbue-code-guardian-reviewer-gate.ts",
+]
+
+# The "opencode-main" (services) agent type. Like codex/antigravity, opencode
+# has NO cross-agent OPENCODE_CONFIG_DIR sharing field -- sync_global_config
+# only seeds a one-time copy from the operator's real config, not a live
+# shared dir other agents point at -- so every opencode agent (including
+# this one) is permanently isolated. Only auth is shared, via opencode's
+# symlink_auth (on by default).
+[agent_types.opencode-main]
+parent_type = "opencode"
+command = "bash -c 'exec sleep infinity' --"
+
+# the "opencode-worker" agent type -- the default for delegated opencode tasks
+[agent_types.opencode-worker]
+parent_type = "opencode"
 
 # --- Provider configurations ---
 
@@ -184,13 +406,19 @@ docker_runtime = "runsc"
 
 ## these are all for launching the original agent (from outside the sandbox, in the first place)
 
-# the template that is shared across all agent types
+# The template shared across all agent types and all harnesses -- no `type`
+# here on purpose. mngr has no template-level inheritance (only agent_types
+# has parent_type), so a caller must stack this with a main_<harness>
+# overlay below to get a working "main"/services agent, e.g.
+# `--template main --template main_codex`. Both flags must be passed
+# explicitly, every time; nothing links them automatically.
 [create_templates.main]
-type = "main"
 # `/welcome` is still NOT set here: the services agent's window 0 sleeps forever
-# (see `[agent_types.main] command`) and never reaches claude. The bootstrap
-# creates a separate chat agent on first boot and passes `--message /welcome`
-# to it instead.
+# (see the claude-main/codex-main/antigravity-main/opencode-main `command`
+# fields) and never reaches an interactive CLI. The bootstrap creates a
+# separate chat agent on first boot and passes `--message /welcome` to it
+# instead (read FCT_HARNESS to know which harness's `chat_<harness>`
+# template and welcome behavior to use -- see libs/bootstrap).
 #
 # bootstrap is the only extra_window now. It runs first-boot setup (git config,
 # runtime worktree, CLAUDE_CONFIG_DIR host-env write, backup config, initial
@@ -220,7 +448,29 @@ extra_window = ["bootstrap='uv run bootstrap'"]
 # tracking hooks. It lives in its own file so those hook lines stay readable.
 extra_provision_command__extend = [
     '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' 'set -g set-clipboard on' 'set -as terminal-features ,*:clipboard' 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'if-shell "test -f /mngr/code/scripts/terminal_tmux.conf" "source-file /mngr/code/scripts/terminal_tmux.conf"' > "$HOME/.tmux.conf"''',
+    # Ensure the shared memory MCP server's data directory exists before any
+    # harness's memory-server subprocess tries to write memory.jsonl there.
+    "mkdir -p /mngr/code/runtime/memory",
 ]
+
+# Per-harness "-main" overlays -- each just sets `type` and FCT_HARNESS,
+# stacked on top of [create_templates.main] above (never used alone). All
+# four are the same shape; claude gets no naming privilege.
+[create_templates.main_claude]
+type = "claude-main"
+env = ["FCT_HARNESS=claude"]
+
+[create_templates.main_codex]
+type = "codex-main"
+env = ["FCT_HARNESS=codex"]
+
+[create_templates.main_antigravity]
+type = "antigravity-main"
+env = ["FCT_HARNESS=antigravity"]
+
+[create_templates.main_opencode]
+type = "opencode-main"
+env = ["FCT_HARNESS=opencode"]
 
 # Shared base template for the local docker provider. Used on its own for the
 # default (runc) runtime; stack `--template docker_runsc` on top of it to select
@@ -572,39 +822,115 @@ post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
 
 ## and these templates are for sub-agents created within the sandbox
 
-# Chat template: minimal agent for additional chat sessions in the same work directory
+# Chat templates: minimal agent for additional chat sessions in the same work
+# directory, one per harness. Worktree agents (below) run the plain harness
+# type (not the "-main" type), so they run a real CLI process and share the
+# services agent's config where that harness supports sharing (claude only).
 [create_templates.chat]
+# Bare-named alias to chat_claude, restored after code review found it
+# broke apps/system_interface/imbue/system_interface/agent_manager.py's
+# _build_chat_create_command, which hardcodes "--template chat" for the
+# "New chat" button (untouched by this session's harness work, out of
+# scope to rewrite here) -- and any other caller that predates the
+# harness-suffix convention. create_templates don't support inheritance
+# (unlike agent_types' parent_type), so this is a real duplicate of
+# chat_claude, not a reference -- keep both in sync if either changes.
 type = "claude"
 
-# Worktree template: agent in a new git worktree, no services by default --
-# creates its own as needed. Uses the plain `claude` type (not `main`), so
-# worktree agents run a real claude binary and share the services agent's
-# CLAUDE_CONFIG_DIR via the inherited host env var.
+[create_templates.chat_claude]
+type = "claude"
+
+[create_templates.chat_codex]
+type = "codex"
+
+[create_templates.chat_antigravity]
+type = "antigravity"
+
+[create_templates.chat_opencode]
+type = "opencode"
+
+# Worktree templates: agent in a new git worktree, no services by default --
+# creates its own as needed. One per harness, same shape as chat_<harness>.
 [create_templates.worktree]
+# Bare-named alias to worktree_claude -- same reasoning as create_templates.chat
+# above (agent_manager.py's _build_worktree_create_command hardcodes
+# "--template worktree" for the "New worktree agent" button).
 type = "claude"
 
-# Worker template: general purpose sub agent for doing tasks reliably (and ensuring that they are verified)
+[create_templates.worktree_claude]
+type = "claude"
+
+[create_templates.worktree_codex]
+type = "codex"
+
+[create_templates.worktree_antigravity]
+type = "antigravity"
+
+[create_templates.worktree_opencode]
+type = "opencode"
+
+# Worker templates: general purpose sub agent for doing tasks reliably (and
+# ensuring that they are verified), one per harness. Reviewer window/env is
+# identical across all four; agent_args is only needed on claude/antigravity
+# to add the skip-permissions CLI flag -- codex/opencode's base
+# auto_allow_permissions already covers it, no flag needed on invocation.
+# The "you were launched by another agent" instruction used to be delivered
+# here too, via claude's --append-system-prompt -- but codex/antigravity/
+# opencode have no confirmed equivalent CLI flag (found during the
+# functionality-matrix audit), and even where a candidate exists
+# (opencode's AgentConfig.prompt) its append-vs-replace semantics are
+# undocumented, too risky to set blind. Moved to a real, harness-agnostic
+# mechanism instead: .agents/skills/launch-task/scripts/create_worker.py's
+# launch() now prepends it to the task message it already sends (one
+# merged `mngr message --message-file`, not a separate call -- avoids
+# paying CLI startup + agent resolution twice), for every worker on every
+# harness, from the one shared choke point all six delegation skills
+# launch workers through -- no per-harness CLI flag needed at all.
 [create_templates.worker]
-type = "worker"
+# Bare-named alias to worker_claude, restored after code review found it
+# broke six delegation skills (launch-task, crystallize-artifact,
+# update-artifact, heal-artifact, update-system-interface, use-ai-integration)
+# that hardcode "--template worker" in their SKILL.md-driven scripts,
+# predating the harness-suffix convention and out of scope to rewrite here.
+type = "claude-worker"
 extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
-agent_args = [
-    "--dangerously-skip-permissions",
-    "--append-system-prompt",
-    "You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made.",
-]
+agent_args = ["--dangerously-skip-permissions"]
 
-# Subskill-worker template: sub-agent for any flow that hands its worker the
+[create_templates.worker_claude]
+type = "claude-worker"
+extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
+agent_args = ["--dangerously-skip-permissions"]
+
+[create_templates.worker_codex]
+type = "codex-worker"
+extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
+
+[create_templates.worker_antigravity]
+type = "antigravity-worker"
+extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
+
+[create_templates.worker_opencode]
+type = "opencode-worker"
+extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
+
+# Subskill-worker templates: sub-agent for any flow that hands its worker the
 # generic harden worker -- the crystallize-artifact / update-artifact /
 # heal-artifact lifecycle (across skills, services, and the system interface).
-# Inherits from `worker`, adds:
+# Same shape as worker_<harness> above, plus:
 #  - MNGR_AGENT_ROLE=worker so the harden Stop hook skips in-worker.
 #  - A pre-provision step that installs the single generic worker sub-skill from
 #    .agents/shared/worker/ into the worker's .agents/skills/ tree as
 #    `harden-worker`. The worker reads the operation + artifact from its task
 #    file and composes the matching references.
 [create_templates.subskill-worker]
-type = "worker"
+# Bare-named alias to subskill-worker_claude -- same reasoning as
+# create_templates.worker above.
+type = "claude-worker"
 extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
 extra_provision_command = [
@@ -612,4 +938,39 @@ extra_provision_command = [
 ]
 agent_args = [
     "--dangerously-skip-permissions",
+]
+
+[create_templates.subskill-worker_claude]
+type = "claude-worker"
+extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
+extra_provision_command = [
+    "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills",
+]
+agent_args = [
+    "--dangerously-skip-permissions",
+]
+
+[create_templates.subskill-worker_codex]
+type = "codex-worker"
+extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
+extra_provision_command = [
+    "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills",
+]
+
+[create_templates.subskill-worker_antigravity]
+type = "antigravity-worker"
+extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
+extra_provision_command = [
+    "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills",
+]
+
+[create_templates.subskill-worker_opencode]
+type = "opencode-worker"
+extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env = ["REVIEWER_AUTOFIX_ENABLE=1", "REVIEWER_CI_ENABLE=1", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=1", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
+extra_provision_command = [
+    "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills",
 ]

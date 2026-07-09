@@ -31,7 +31,7 @@ import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selecti
 import { createTranscriptScroll } from "./transcript-scroll";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
-import { openLoginModal } from "../models/ClaudeAuth";
+import { openLoginModal, shouldOpenLoginModalForHarness } from "../models/ClaudeAuth";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { MessageInput } from "./MessageInput";
@@ -154,12 +154,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // only an agent whose current state is broken does. The modal itself is
   // a single app-level instance driven by global auth state (see
   // models/ClaudeAuth.ts), so this just flips that shared flag.
+  //
+  // The modal only knows how to drive `claude auth login` -- opening it for
+  // a codex/antigravity/opencode auth error would offer the wrong fix; see
+  // shouldOpenLoginModalForHarness.
   function checkLatestAssistantForAuthError(agentId: string): void {
     const events = getEventsForAgent(agentId);
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i];
       if (event.type === "assistant_message") {
-        if (event.is_auth_error === true) {
+        if (event.is_auth_error === true && shouldOpenLoginModalForHarness(getAgentById(agentId)?.harness)) {
           openLoginModal();
         }
         return;
@@ -229,7 +233,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     logWs.onmessage = (event: MessageEvent) => {
       const data = JSON.parse(event.data as string) as
-        { line: string } | { done: true; success: boolean; error: string | null };
+        | { line: string }
+        | { done: true; success: boolean; error: string | null };
 
       if ("line" in data) {
         logLines.push(data.line);

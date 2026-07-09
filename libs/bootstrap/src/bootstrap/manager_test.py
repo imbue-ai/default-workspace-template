@@ -26,7 +26,9 @@ from bootstrap.manager import (
     _persist_initial_chat_agent_id,
     _read_host_name,
     _read_main_agent_labels,
+    _resolve_chat_template,
     _resolve_services_claude_config_dir,
+    _resolve_welcome_message,
 )
 
 # --- _configure_git_global ---
@@ -227,17 +229,65 @@ def test_read_main_agent_labels_returns_empty_when_labels_field_absent(
     assert _read_main_agent_labels() == {}
 
 
+# --- _resolve_chat_template / _resolve_welcome_message ---
+
+
+@pytest.mark.parametrize(
+    ("harness", "expected_template", "expected_message"),
+    [
+        ("claude", "chat_claude", "/welcome"),
+        ("codex", "chat_codex", "$welcome"),
+        ("antigravity", "chat_antigravity", "/welcome"),
+        ("opencode", "chat_opencode", "Use the welcome skill to greet the user."),
+    ],
+)
+def test_resolve_chat_template_and_welcome_message_per_harness(
+    monkeypatch: pytest.MonkeyPatch, harness: str, expected_template: str, expected_message: str
+) -> None:
+    monkeypatch.setenv("FCT_HARNESS", harness)
+    assert _resolve_chat_template() == expected_template
+    assert _resolve_welcome_message() == expected_message
+
+
+def test_resolve_chat_template_and_welcome_message_default_to_claude_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FCT_HARNESS", raising=False)
+    assert _resolve_chat_template() == "chat_claude"
+    assert _resolve_welcome_message() == "/welcome"
+
+
+def test_resolve_chat_template_and_welcome_message_default_to_claude_on_garbage_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FCT_HARNESS", "not-a-real-harness")
+    assert _resolve_chat_template() == "chat_claude"
+    assert _resolve_welcome_message() == "/welcome"
+
+
 # --- _build_create_chat_command ---
 
 
-def test_build_create_chat_command_includes_welcome_and_template() -> None:
+def test_build_create_chat_command_includes_welcome_and_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FCT_HARNESS", "claude")
     cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
     assert cmd[:3] == ["mngr", "create", "my-workspace"]
     assert "--template" in cmd
-    assert cmd[cmd.index("--template") + 1] == "chat"
+    assert cmd[cmd.index("--template") + 1] == "chat_claude"
     assert "--message" in cmd
     assert cmd[cmd.index("--message") + 1] == "/welcome"
     assert "--no-connect" in cmd
+
+
+def test_build_create_chat_command_uses_codex_welcome_message_for_codex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FCT_HARNESS", "codex")
+    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    assert cmd[cmd.index("--template") + 1] == "chat_codex"
+    assert cmd[cmd.index("--message") + 1] == "$welcome"
 
 
 def test_build_create_chat_command_includes_transfer_none() -> None:

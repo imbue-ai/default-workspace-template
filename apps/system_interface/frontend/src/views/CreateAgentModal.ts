@@ -8,6 +8,10 @@ import { apiUrl, getPrimaryAgentId } from "../base-path";
 
 interface CreateAgentModalAttrs {
   mode: "worktree" | "chat";
+  // The harness picked from the "New chat"/"New agent" submenu (see
+  // DockviewWorkspace.ts's HARNESS_OPTIONS). null falls back to the
+  // backend's own default (claude), matching pre-harness-picker behavior.
+  harness: string | null;
   onCreated: (agentId: string, agentName: string) => void;
   onCancel: () => void;
 }
@@ -46,6 +50,9 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
         attrs.mode === "worktree"
           ? { name: name.trim(), selected_agent_id: getPrimaryAgentId() }
           : { name: name.trim() };
+      if (attrs.harness) {
+        body.harness = attrs.harness;
+      }
 
       const response = await m.request<{ agent_id: string }>({
         method: "POST",
@@ -68,7 +75,9 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
 
     view(vnode) {
       const attrs = vnode.attrs;
-      const title = attrs.mode === "worktree" ? "Create Worktree Agent" : "Create Chat Agent";
+      const harnessLabel = attrs.harness ? `${attrs.harness.charAt(0).toUpperCase()}${attrs.harness.slice(1)} ` : "";
+      const title =
+        attrs.mode === "worktree" ? `Create ${harnessLabel}Worktree Agent` : `Create ${harnessLabel}Chat Agent`;
 
       return m(
         "div.custom-url-dialog-overlay",

@@ -262,7 +262,11 @@ def test_prevent_init_methods_in_non_exception_classes() -> None:
     # (a ``threading.Lock`` and a holder dict mutated under that lock) that
     # is not a natural fit for a Pydantic model, matching the precedent
     # already set by session_watcher / event_queues entries here.
-    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(5))
+    # +1 for common_transcript_watcher.CommonTranscriptWatcher.__init__: the
+    # same watcher shape as AgentSessionWatcher (a background thread plus a
+    # lock-guarded dict/set of accumulated state), so it follows the same
+    # hand-rolled-__init__ precedent rather than a Pydantic model.
+    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(6))
 
 
 def test_prevent_cast_usage() -> None:

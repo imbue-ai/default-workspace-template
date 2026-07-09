@@ -1,0 +1,74 @@
+{
+  "mngr-tk-steps": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "command": "./scripts/antigravity_flag_missing_step_posttooluse.sh"
+          }
+        ]
+      }
+    ],
+    "PostInvocation": [
+      {
+        "command": "./scripts/antigravity_require_steps_postinvocation.sh"
+      }
+    ]
+  },
+  "mngr-prevent-commit-rewrite": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "command": "./scripts/antigravity_prevent_commit_rewrite.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "mngr-tk-standalone": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "command": "./scripts/antigravity_tk_standalone.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "mngr-stop-nudge": {
+    "Stop": [
+      {
+        "command": "./scripts/antigravity_ensure_repo_root_stop.sh"
+      },
+      {
+        "command": "./scripts/antigravity_open_tickets_stop_nudge.sh"
+      }
+    ]
+  },
+  "mngr-open-tickets-reminder": {
+    "PreInvocation": [
+      {
+        "command": "./scripts/antigravity_open_tickets_reminder_preinvocation.sh"
+      }
+    ]
+  },
+  "mngr-plugin-update": {
+    "PreInvocation": [
+      {
+        "command": "./scripts/antigravity_update_plugin_preinvocation.sh"
+      }
+    ]
+  },
+  "mngr-memory-reminder": {
+    "PreInvocation": [
+      {
+        "command": "./scripts/antigravity_memory_reminder_preinvocation.sh"
+      }
+    ]
+  }
+}
