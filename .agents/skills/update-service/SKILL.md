@@ -57,6 +57,14 @@ the request is -- it changes what you do *before* touching code:
   usable state. Do not do the heavy build against an unconfirmed shape --
   the same tripwire the create flow exists to prevent applies to edits.
 
+  When a hand-built mock won't convince -- a redesign, a data-touching change
+  -- you can instead boot the *actually changed* service as a labeled preview
+  tab beside the live one, via the shared `serve_isolated_instance.py` script
+  (see "Protect the user's data while you verify" for the exact invocation).
+  That is the same preview mechanism the system-interface flow uses; reach for
+  it when the user needs to click the real thing, and keep the lighter hand
+  mock for quick look-and-feel loops.
+
   A new view or capability bolted onto an existing service is its own
   delivery with its own feedback gate (interactive-delivery phase 8):
   confirm and ship it on its own rather than bundling it with unrelated
@@ -102,7 +110,7 @@ process restarts:
   config, or adding/removing a program): edit `supervisord.conf`, then
   `supervisorctl reread && supervisorctl update`. The full program schema,
   the add/remove/inspect mechanics, and the `forward_port.py` wiring live
-  in [references/service-processes.md](references/service-processes.md).
+  in [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
 
 If it doesn't come back `RUNNING`, read
 `/var/log/supervisor/<name>-stderr.log` or
@@ -153,21 +161,38 @@ where the data dies. Encode these, cheapest first:
 
 - **If exercising the change must write, mutate, or delete data, never
   point it at the live store.** Copy the store to a scratch path *outside*
-  `runtime/` (so it is neither served nor swept into runtime-backup), run a
-  throwaway instance -- or the data-writing code -- against the copy via the
-  override, exercise it there, then delete the *copy*:
+  `runtime/` (so it is neither served nor swept into runtime-backup), boot a
+  throwaway instance against the copy on a *spare* port, exercise it there,
+  then delete the *copy*. The shared
+  [`serve_isolated_instance.py`](../../shared/scripts/serve_isolated_instance.py)
+  script owns the boot + teardown -- it picks a free port, injects it (via the
+  `<PACKAGE_UPPER>_PORT` override) plus your data-dir override, waits for the
+  instance to answer, and prints its URL:
 
   ```bash
   cp -r runtime/<name> /tmp/<name>-scratch
-  <PACKAGE_UPPER>_DATA_DIR=/tmp/<name>-scratch uv run <name>   # spare port if the live one is bound
-  # ...exercise the change against the throwaway instance...
+  URL=$(python3 .agents/shared/scripts/serve_isolated_instance.py up \
+      --name <name>-test --cwd . \
+      --port-env <PACKAGE_UPPER>_PORT \
+      --env <PACKAGE_UPPER>_DATA_DIR=/tmp/<name>-scratch \
+      --health-path /health \
+      -- uv run <name>)
+  # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
+  python3 .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
   rm -rf /tmp/<name>-scratch      # deleting a copy can't harm real data
   ```
 
-  This is the point of the `DATA_DIR` override: the isolation you need is
-  **data isolation, not code isolation**, and it's a two-command setup, not
-  a worktree. The live store is only ever *read* (once, to make the copy);
-  the only delete lands on a disposable path where real data never lived.
+  This is the point of the `DATA_DIR` + `<PACKAGE_UPPER>_PORT` overrides: the
+  isolation you need is **data isolation, not code isolation**, and it's a
+  copy-plus-one-command setup, not a worktree. The live store is only ever
+  *read* (once, to make the copy); the only delete lands on a disposable path
+  where real data never lived. If you want the user to *see* the throwaway
+  instance -- a redesign, or a risky change where a hand mock won't convince --
+  add `--service-name <name>-preview-app --preview-service-name <name>-preview
+  --preview-title "<change>"` to the `up` call to surface it as a labeled
+  "preview" tab (open it with `python3 scripts/layout.py open <name>-preview`);
+  that is the same machinery the system-interface flow uses. Use judgment on
+  when that is worth it.
 
 - **Never "clean up" test data by deleting from the live store.** If you
   did leave a stray test record in it, leave it -- an additive junk record
@@ -184,12 +209,14 @@ where the data dies. Encode these, cheapest first:
   are silently lost on restore.
 
 - **Retrofit older services when you touch them.** A service that predates
-  this convention hardcodes `runtime/<name>/` at its call sites. Add the
-  `DATA_DIR` override (the same one-liner the scaffold emits --
-  `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "runtime/<name>"))`,
-  then route reads/writes through it) as part of your change, so this
-  isolation is available. If you genuinely can't, fall back to read-only
-  verification plus the snapshot net.
+  this convention hardcodes `runtime/<name>/` and its listen port at its call
+  sites. Add both overrides the scaffold now emits, as part of your change, so
+  the throwaway instance above works: the data-dir override
+  `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "runtime/<name>"))`
+  (route reads/writes through it), and the port override
+  `PORT = int(os.environ.get("<PACKAGE_UPPER>_PORT", "<assigned-port>"))`
+  (bind `PORT` in `run_simple`, never a hardcoded literal). If you genuinely
+  can't, fall back to read-only verification plus the snapshot net.
 
 - **The copy isolates local state, not external effects.** Pointing at a
   data copy does not stop a test run from really posting to Slack, calling a
@@ -202,7 +229,7 @@ Dropping a service is the definition-level case of step 2: remove its
 `[program:<name>]` block, `supervisorctl reread && supervisorctl update`,
 and (for a web service) `python3 scripts/forward_port.py --name <name>
 --remove` plus reverting the scaffolded lib. The mechanics are in
-[references/service-processes.md](references/service-processes.md); for a
+[`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md); for a
 scaffolded web lib, `build-web-service`'s `cleanup.md` reference has the
 full teardown.
 

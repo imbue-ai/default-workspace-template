@@ -1,10 +1,10 @@
 # Service process mechanics (supervisord)
 
-Reference for the `update-service` skill: the supervisord layer beneath a
-service -- its `[program:<name>]` definition, and how to add, remove,
-modify, or inspect a program. Reach for this when a change touches *how a
-service runs* (its port, command, logs) or adds/removes a program, rather
-than only its code.
+Shared reference for the supervisord layer beneath a service -- its
+`[program:<name>]` definition, and how to add, remove, modify, or inspect a
+program. Reach for this from any service flow (`update-service`,
+`build-web-service`) when a change touches *how a service runs* (its port,
+command, logs) or adds/removes a program, rather than only its code.
 
 Background services are defined as `[program:<name>]` sections in
 `supervisord.conf` at the repo root. `uv run bootstrap` runs first-boot

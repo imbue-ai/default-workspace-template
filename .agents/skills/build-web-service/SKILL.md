@@ -141,7 +141,11 @@ What gets generated:
   so no `root_path`/`ROOT_PATH` is needed. It also defines a `DATA_DIR`
   constant (defaults to `runtime/<name>/`, overridable via the
   `<PACKAGE_UPPER>_DATA_DIR` env var) -- route all persistent state
-  through it (see File-path conventions below).
+  through it (see File-path conventions below) -- and a `PORT` constant
+  (defaults to this service's assigned port, overridable via the
+  `<PACKAGE_UPPER>_PORT` env var) bound in `run_simple`. Both overrides
+  are what let a future edit boot a throwaway instance on a spare port
+  against a data copy (see `update-service`).
 - `libs/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
 - `libs/<package>/README.md` -- one-line description.
@@ -450,8 +454,8 @@ The `forward_port.py` call MUST come first in the command -- the port
 must be registered before the app starts listening, otherwise the
 app-watcher races with the backend coming up.
 
-For the full program schema and logging knobs, see the `update-service`
-skill's [service-processes reference](../update-service/references/service-processes.md).
+For the full program schema and logging knobs, see the shared
+[`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
 
 Verification and gotchas references apply identically to this path.
 
