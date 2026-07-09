@@ -138,7 +138,10 @@ What gets generated:
   Builds a `Flask` app and serves it with
   `werkzeug.serving.run_simple(..., threaded=True)`. It serves at `/`;
   the system_interface proxy handles the `/service/<name>/` prefixing,
-  so no `root_path`/`ROOT_PATH` is needed.
+  so no `root_path`/`ROOT_PATH` is needed. It also defines a `DATA_DIR`
+  constant (defaults to `runtime/<name>/`, overridable via the
+  `<PACKAGE_UPPER>_DATA_DIR` env var) -- route all persistent state
+  through it (see File-path conventions below).
 - `libs/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
 - `libs/<package>/README.md` -- one-line description.
@@ -283,11 +286,18 @@ announced.
 
 Two cases, two patterns:
 
-- **Runtime state files** (caches, cursors, last-visit timestamps,
-  JSON snapshots written and read across runs): use cwd-relative
-  paths like `Path("runtime/<name>/...")`. The supervisord-managed
-  services run from `/mngr/code` (repo root), so this resolves
-  consistently. Do NOT use `Path(__file__)`-based paths for runtime
+- **Persistent state** (caches, cursors, last-visit timestamps, JSON
+  snapshots, user records -- anything written and read across runs):
+  read and write it under the generated `DATA_DIR` constant, never a
+  hardcoded `runtime/<name>/` at the call site. `DATA_DIR` defaults to
+  `runtime/<name>/` (cwd-relative, resolved from `/mngr/code` where the
+  supervisord-managed service runs) but honors the
+  `<PACKAGE_UPPER>_DATA_DIR` env var. That override is what makes a
+  future edit safe: an agent changing the service can run a throwaway
+  instance against a *copy* of the data instead of the live store (see
+  `update-service`), so keep every read/write going through `DATA_DIR`
+  -- a hardcoded `runtime/<name>/` silently bypasses the override and
+  re-exposes the live data. Do NOT use `Path(__file__)`-based paths for
   state.
 - **Static assets shipped alongside the .py file** (templates,
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`

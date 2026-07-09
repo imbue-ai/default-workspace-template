@@ -50,7 +50,9 @@ the request is -- it changes what you do *before* touching code:
   first place. **Read `.agents/shared/references/interactive-delivery.md`**,
   then follow `build-web-service`'s mock-confirm loop: put a cheap,
   throwaway version of the *proposed* change in front of the user (render it
-  against the service's real data/state where you can), loop until they
+  against the service's real data/state where you can -- *reading* the live
+  store to preview is fine; never let a preview or verification *write* to it,
+  see "Protect the user's data while you verify" below), loop until they
   **explicitly confirm** the shape, and only then build the real thing to a
   usable state. Do not do the heavy build against an unconfirmed shape --
   the same tripwire the create flow exists to prevent applies to edits.
@@ -135,6 +137,65 @@ would (not just "the process is up"):
 - **Daemon**: watch its log (`supervisorctl tail -f <name> stderr`) and
   confirm the new behavior actually fires.
 
+### Protect the user's data while you verify
+
+The service's persistent store -- `runtime/<name>/` (whatever `DATA_DIR`
+resolves to) -- **is the user's real data**. The recurring, expensive
+failure mode is not the code edit: it is *verifying* a change by writing
+test data into the live store and then "cleaning up" with a delete/reset
+whose predicate is too broad and takes real records with it. The delete is
+where the data dies. Encode these, cheapest first:
+
+- **Read-only verification needs no ceremony.** Most changes (UI, copy, a
+  backend read path) can be exercised by curl/Playwright against the live
+  service without writing anything. Reading the live store -- including to
+  *render* a preview -- is fine; the danger is only writes.
+
+- **If exercising the change must write, mutate, or delete data, never
+  point it at the live store.** Copy the store to a scratch path *outside*
+  `runtime/` (so it is neither served nor swept into runtime-backup), run a
+  throwaway instance -- or the data-writing code -- against the copy via the
+  override, exercise it there, then delete the *copy*:
+
+  ```bash
+  cp -r runtime/<name> /tmp/<name>-scratch
+  <PACKAGE_UPPER>_DATA_DIR=/tmp/<name>-scratch uv run <name>   # spare port if the live one is bound
+  # ...exercise the change against the throwaway instance...
+  rm -rf /tmp/<name>-scratch      # deleting a copy can't harm real data
+  ```
+
+  This is the point of the `DATA_DIR` override: the isolation you need is
+  **data isolation, not code isolation**, and it's a two-command setup, not
+  a worktree. The live store is only ever *read* (once, to make the copy);
+  the only delete lands on a disposable path where real data never lived.
+
+- **Never "clean up" test data by deleting from the live store.** If you
+  did leave a stray test record in it, leave it -- an additive junk record
+  is a far cheaper mistake than a broad delete. Better: don't write to the
+  live store in the first place (use the copy above).
+
+- **Snapshot before any genuinely in-place change to the real store.** If a
+  change truly must rewrite the live store (a data migration you can't run
+  on a copy), `cp -r runtime/<name> /tmp/<name>-pre-<change>` first, run the
+  change, confirm the real data survived, and only then remove the snapshot.
+  The snapshot is a *recovery net* -- do **not** turn it into a routine
+  "wipe live and restore backup" step: overwriting a running service's store
+  tears its state, and any real writes that landed during your test window
+  are silently lost on restore.
+
+- **Retrofit older services when you touch them.** A service that predates
+  this convention hardcodes `runtime/<name>/` at its call sites. Add the
+  `DATA_DIR` override (the same one-liner the scaffold emits --
+  `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "runtime/<name>"))`,
+  then route reads/writes through it) as part of your change, so this
+  isolation is available. If you genuinely can't, fall back to read-only
+  verification plus the snapshot net.
+
+- **The copy isolates local state, not external effects.** Pointing at a
+  data copy does not stop a test run from really posting to Slack, calling a
+  remote API, or sending a message. Guard those separately (a dry-run flag,
+  test credentials) -- the data copy only protects the local store.
+
 ## Removing a service
 
 Dropping a service is the definition-level case of step 2: remove its
@@ -144,6 +205,11 @@ and (for a web service) `python3 scripts/forward_port.py --name <name>
 [references/service-processes.md](references/service-processes.md); for a
 scaffolded web lib, `build-web-service`'s `cleanup.md` reference has the
 full teardown.
+
+Teardown stops at the code and the process. **Leave the service's data
+(`runtime/<name>/`) in place** -- removing a service is not license to
+delete the user's records. Delete the data dir only if the user explicitly
+asks, and confirm before you do.
 
 ## Turn-end: harden the change
 
