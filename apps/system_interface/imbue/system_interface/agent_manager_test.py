@@ -948,11 +948,6 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
     assert_mngr_argv_valid(argv)
 
 
-# The observe argv now uses ``--stream-events``, which the vendored mngr CLI does
-# not yet expose (it lands when Part 1 is vendored). ``assert_mngr_argv_valid``
-# validates against that live CLI, so until then this contract check can only fail
-# on the missing flag -- skip it rather than assert a flag the CLI cannot know.
-@pytest.mark.skip(reason="requires mngr --stream-events, lands when Part 1 is vendored")
 def test_observe_argv_accepted_by_live_cli() -> None:
     argv = _build_observe_command_argv("mngr")
     assert_mngr_argv_valid(argv)
