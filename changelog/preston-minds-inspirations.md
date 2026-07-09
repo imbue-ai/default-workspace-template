@@ -157,6 +157,18 @@
   patterns the assembly script enforces, and recapped in the final chat
   confirmation.
 
+- The published history is now EXACTLY ONE snapshot commit on the template
+  base. Pushing the worker's branch shipped its intermediate commits, so a
+  published-version modification leaked the very thing it removed -- the
+  real megabox publish generalized a personal email in a follow-up commit,
+  leaving the pre-cleanup assembly commit (with the email) in the published
+  history. The push step now mints a fresh commit from the final tree with
+  `git commit-tree` (parented on `BASE_REF`) and pushes that commit's SHA to
+  `refs/heads/main`; the branch itself is never pushed, so no intermediate
+  assembly state leaves the machine, while the worker branch keeps its
+  granular history locally for debugging. Verified on a synthetic repo:
+  `git log -S` for the cleaned value finds nothing in the published clone.
+
 - The published repo's HISTORY no longer contains the mind's own commits.
   `build_inspiration.sh` used to parent the snapshot commit on the mind's
   HEAD, which shipped the mind's entire commit history -- including anything

@@ -118,8 +118,9 @@ proposal; this gate exists to prevent exactly that.)
 
 **A rename NEVER requires tearing down or relaunching the worker.** The
 worker's own name and its branch name are internal plumbing -- they appear
-nowhere in the published repo (§8 pushes whatever branch as `main` via the
-refspec), so a stale name there is irrelevant. If the user renames after
+nowhere in the published repo (§8 mints a single snapshot commit from the
+final tree and pushes that commit, never the branch), so a stale name there
+is irrelevant. If the user renames after
 dispatch anyway, handle it in place:
 
 - Renamed before the worker has run the script: just pass the new
@@ -636,30 +637,42 @@ the default private visibility, `false` only if the user chose public. You
 already validated `repo_name` against `^[A-Za-z0-9._-]+$` in §6; keep the
 JSON built from variables, never string-interpolated shell.
 
-**Step 2 -- push the assembled branch as `main` (git through the latchkey
-gateway):**
+**Step 2 -- mint ONE snapshot commit and push it as `main` (git through the
+latchkey gateway):**
 
-The gateway proxies git's smart-HTTP endpoints, so git is pointed at the
-gateway's proxy URL and the GitHub credential is injected server-side (gated
-by the `github-git-write` permission from §7). The two extra headers are the
-gateway's own auth material, already present in this container's environment:
+The published history must be the public template's history plus EXACTLY ONE
+snapshot commit. The worker's branch accumulates intermediate commits (the
+raw assembly, then the modification/manifest/thumbnail follow-ups, then any
+§6 edits) -- pushing the branch would publish every intermediate state, and
+a published-version modification would leak the very thing it removed (a
+real publish leaked a personal email exactly this way: it was generalized in
+a follow-up commit, so the pre-cleanup assembly commit shipped too). So mint
+a fresh commit from the FINAL tree, parented directly on `BASE_REF`, and
+push that commit -- the branch itself is never pushed:
 
 ```bash
-( cd "$WT" && git \
+( cd "$WT" \
+    && SNAPSHOT_COMMIT="$(git commit-tree 'HEAD^{tree}' -p <BASE_REF> -m "inspiration: <slug>
+
+Assembled on clean FCT base <BASE_REF> (provenance link only; no upstream fetch).")" \
+    && git \
     -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
     -c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE" \
-    push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo_name>.git" "mngr/<slug>:main" )
+    push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo_name>.git" "${SNAPSHOT_COMMIT}:refs/heads/main" )
 ```
 
-The refspec `mngr/<slug>:main` pushes the assembled branch as the new repo's
-`main` regardless of anything else, so the published tree is exactly `$WT`'s
-snapshot. The published HISTORY is only the public template's history plus
-the snapshot commits: `build_inspiration.sh` parents the assembly commit on
-`BASE_REF`, so the mind's own commit history -- including anything ever
-committed and later removed -- never leaves the machine. No GitHub token
-appears anywhere -- not in the URL, not on disk --
-and nothing is written into git config or a named remote (the `-c` options
-apply to this one command only; nothing to clean up afterward).
+Pushing `<sha>:refs/heads/main` publishes only that one commit plus the base
+history it is parented on, so the published tree is exactly `$WT`'s final
+state and NO intermediate assembly state exists anywhere off this machine.
+The gateway proxies git's smart-HTTP endpoints and injects the GitHub
+credential server-side (gated by the `github-git-write` permission from §7);
+the two extra headers are the gateway's own auth material, already in this
+container's environment. The mind's own commit history never leaves the
+machine either (`build_inspiration.sh` parents the assembly commit on
+`BASE_REF`; the minted commit here is parented there directly). No GitHub
+token appears anywhere -- not in the URL, not on disk -- and nothing is
+written into git config or a named remote (the `-c` options apply to this
+one command only; nothing to clean up afterward).
 
 **Step 3 -- tag the repo (immediately after a successful push).** Every
 published inspiration carries the `minds-inspiration` GitHub topic -- a repo
@@ -713,7 +726,9 @@ only the newly-published slug (the latest).
 
 On a successful push, clean up per `launch-task`'s conventions: the worker can
 be destroyed now (destroying it removes its worktree, i.e. `$WT`), and the
-local branch can go too -- the commit is fully preserved on the new remote:
+local branch can go too -- the published snapshot commit was minted from the
+branch's final tree and lives on the new remote (the branch's intermediate
+commits were never pushed, by design):
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>
