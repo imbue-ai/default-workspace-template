@@ -155,6 +155,21 @@ let newBrowserError: string | null = null;
 // flow was started from the empty-state overlay (no host group).
 let newTabTargetGroup: DockviewGroupPanel | null = null;
 
+// The harness picked from the "New chat"/"New agent" submenu (see
+// buildDropdownItems), consumed when the name-input modal opens. Cleared
+// alongside newTabTargetGroup on cancel/create so a stale value can't leak
+// into an unrelated later flow.
+let newAgentHarness: string | null = null;
+
+// Harnesses offered in the "New chat"/"New agent" submenus, and their
+// display labels. Backend values must match imbue.system_interface.harness.Harness.
+const HARNESS_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "claude", label: "Claude" },
+  { value: "codex", label: "Codex" },
+  { value: "antigravity", label: "Antigravity" },
+  { value: "opencode", label: "Opencode" },
+];
+
 // Destroy dialog state
 let showDestroyDialog = false;
 let destroyTargetAgentId: string | null = null;
@@ -545,16 +560,33 @@ function closeBrowserSessionTab(name: string): void {
   if (panel) dockview.removePanel(panel);
 }
 
-function buildDropdownItems(
-  targetGroup?: DockviewGroupPanel,
-): Array<{ label: string; action: () => void; dividerAfter?: boolean; disabled?: boolean; disabledReason?: string }> {
-  const items: Array<{
-    label: string;
-    action: () => void;
-    dividerAfter?: boolean;
-    disabled?: boolean;
-    disabledReason?: string;
-  }> = [];
+/** Open the New chat/New agent name-input modal for a specific harness. */
+function openNewAgentModal(mode: "chat" | "worktree", harness: string, targetGroup?: DockviewGroupPanel): void {
+  newTabTargetGroup = targetGroup ?? null;
+  newAgentHarness = harness;
+  if (mode === "chat") {
+    showNewChatModal = true;
+  } else {
+    showNewAgentModal = true;
+  }
+  m.redraw();
+}
+
+// A leaf item runs `action` on click. A parent item (`children` set) has no
+// action of its own -- it's ambiguous which harness "New chat" alone would
+// mean -- and instead expands a submenu of leaf items on hover; see
+// renderDropdownItems.
+interface DropdownItem {
+  label: string;
+  action?: () => void;
+  children?: DropdownItem[];
+  dividerAfter?: boolean;
+  disabled?: boolean;
+  disabledReason?: string;
+}
+
+function buildDropdownItems(targetGroup?: DockviewGroupPanel): DropdownItem[] {
+  const items: DropdownItem[] = [];
   const openChatIds = getOpenChatAgentIds();
   const openAppNames = getOpenAppNames();
 
@@ -636,11 +668,10 @@ function buildDropdownItems(
 
   items.push({
     label: "New chat",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewChatModal = true;
-      m.redraw();
-    },
+    children: HARNESS_OPTIONS.map((harness) => ({
+      label: harness.label,
+      action: () => openNewAgentModal("chat", harness.value, targetGroup),
+    })),
   });
 
   // New terminal -- allocates a fresh named tmux session anchored at the
@@ -674,14 +705,73 @@ function buildDropdownItems(
 
   items.push({
     label: "New agent",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewAgentModal = true;
-      m.redraw();
-    },
+    children: HARNESS_OPTIONS.map((harness) => ({
+      label: harness.label,
+      action: () => openNewAgentModal("worktree", harness.value, targetGroup),
+    })),
   });
 
   return items;
+}
+
+/** Build one leaf menu item: click runs `item.action` and closes the whole
+ *  (root) dropdown, including any open submenu it's nested in. */
+function buildLeafMenuItem(item: DropdownItem, rootDropdown: HTMLElement): HTMLElement {
+  const menuItem = document.createElement("div");
+  menuItem.className = "dockview-add-tab-dropdown-item";
+  menuItem.textContent = item.label;
+  if (item.disabled) {
+    menuItem.style.opacity = "0.5";
+    menuItem.style.cursor = "not-allowed";
+  }
+  menuItem.addEventListener("click", (clickEvent) => {
+    clickEvent.stopPropagation();
+    rootDropdown.style.display = "none";
+    // A disabled item doesn't run its action; if it has a reason, surface it (the
+    // "click pops a modal explaining why" path). Without this a disabled item would
+    // still fire -- only visually greyed.
+    if (item.disabled) {
+      if (item.disabledReason) alert(item.disabledReason);
+      return;
+    }
+    item.action?.();
+  });
+  return menuItem;
+}
+
+/** Build one submenu-parent item: hover-only (see .dockview-add-tab-dropdown-item.has-submenu's
+ *  CSS `:hover` rule), no click action of its own -- "New chat" alone is
+ *  ambiguous about which harness, so only its children are actionable. */
+function buildSubmenuParentItem(item: DropdownItem, rootDropdown: HTMLElement): HTMLElement {
+  const parent = document.createElement("div");
+  parent.className = "dockview-add-tab-dropdown-item has-submenu";
+  const label = document.createElement("span");
+  label.textContent = item.label;
+  parent.appendChild(label);
+  const caret = document.createElement("span");
+  caret.className = "dockview-add-tab-submenu-caret";
+  caret.textContent = "›"; // single right-pointing angle quotation mark
+  parent.appendChild(caret);
+  // Clicks on the parent shouldn't bubble to the document click-outside
+  // handler and close the whole dropdown while the user is still choosing --
+  // and, since ":hover" alone never fires on a touch/tap-only input, also
+  // toggle the submenu open directly so the harness picker is reachable
+  // without a mouse (see the paired CSS rule for ".submenu-open"). The
+  // parent itself still isn't a "create" action either way -- only a leaf
+  // item is.
+  parent.addEventListener("click", (clickEvent) => {
+    clickEvent.stopPropagation();
+    parent.classList.toggle("submenu-open");
+  });
+
+  const submenu = document.createElement("div");
+  submenu.className = "dockview-add-tab-submenu";
+  for (const child of item.children ?? []) {
+    submenu.appendChild(buildLeafMenuItem(child, rootDropdown));
+  }
+  parent.appendChild(submenu);
+
+  return parent;
 }
 
 /** Render ``buildDropdownItems(targetGroup)`` into ``dropdown`` (clearing it
@@ -693,25 +783,7 @@ function renderDropdownItems(dropdown: HTMLElement, targetGroup?: DockviewGroupP
   dropdown.innerHTML = "";
   const items = buildDropdownItems(targetGroup);
   for (const item of items) {
-    const menuItem = document.createElement("div");
-    menuItem.className = "dockview-add-tab-dropdown-item";
-    menuItem.textContent = item.label;
-    if (item.disabled) {
-      menuItem.style.opacity = "0.5";
-      menuItem.style.cursor = "not-allowed";
-    }
-    menuItem.addEventListener("click", (clickEvent) => {
-      clickEvent.stopPropagation();
-      dropdown.style.display = "none";
-      // A disabled item doesn't run its action; if it has a reason, surface it (the
-      // "click pops a modal explaining why" path). Without this a disabled item would
-      // still fire -- only visually greyed.
-      if (item.disabled) {
-        if (item.disabledReason) alert(item.disabledReason);
-        return;
-      }
-      item.action();
-    });
+    const menuItem = item.children ? buildSubmenuParentItem(item, dropdown) : buildLeafMenuItem(item, dropdown);
     dropdown.appendChild(menuItem);
 
     if (item.dividerAfter) {
@@ -2428,15 +2500,18 @@ export const DockviewWorkspace: m.Component = {
         showNewChatModal
           ? m(CreateAgentModal, {
               mode: "chat",
+              harness: newAgentHarness,
               onCreated(newAgentId: string, newAgentName: string) {
                 showNewChatModal = false;
                 const targetGroup = newTabTargetGroup;
                 newTabTargetGroup = null;
+                newAgentHarness = null;
                 focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
               },
               onCancel() {
                 showNewChatModal = false;
                 newTabTargetGroup = null;
+                newAgentHarness = null;
               },
             })
           : null,
@@ -2444,15 +2519,18 @@ export const DockviewWorkspace: m.Component = {
         showNewAgentModal
           ? m(CreateAgentModal, {
               mode: "worktree",
+              harness: newAgentHarness,
               onCreated(newAgentId: string, newAgentName: string) {
                 showNewAgentModal = false;
                 const targetGroup = newTabTargetGroup;
                 newTabTargetGroup = null;
+                newAgentHarness = null;
                 focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
               },
               onCancel() {
                 showNewAgentModal = false;
                 newTabTargetGroup = null;
+                newAgentHarness = null;
               },
             })
           : null,

@@ -1,14 +1,26 @@
 FROM python:3.12.13-slim-bookworm
 
-# /root/.local/bin holds uv + claude (installed by scripts/setup_system.sh); put
-# it on PATH for every build layer and at runtime.
-ENV PATH="/root/.local/bin:$PATH"
+# /root/.local/bin holds uv + claude + agy (installed by scripts/setup_system.sh);
+# /root/.opencode/bin holds opencode, which installs there instead of
+# ~/.local/bin like the others. Both on PATH for every build layer and at runtime.
+# (Restored after code review found this line and the two ARGs below had been
+# silently lost as a side effect of an earlier scratch-git-branch test during
+# this session -- an uncommitted working-tree change got carried onto a
+# throwaway branch via `git checkout -b`, committed there, then lost when that
+# branch was deleted after switching back to main.)
+ENV PATH="/root/.local/bin:/root/.opencode/bin:$PATH"
 
-# Pin Claude Code; passed to setup_system.sh and recorded for the runtime version
-# check. Keep in sync with agent_types.claude.version in .mngr/settings.toml and
-# the default in scripts/setup_system.sh. Bump deliberately, not by accident.
+# Pin each harness's CLI; passed to setup_system.sh and recorded for the runtime
+# version check. Keep in sync with agent_types.<harness>.version in
+# .mngr/settings.toml and the defaults in scripts/setup_system.sh. Bump
+# deliberately, not by accident. Antigravity has no version-pinning capability
+# (Google's installer always installs latest), so there is no ARG for it.
 ARG CLAUDE_CODE_VERSION=2.1.160
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
+ARG CODEX_CLI_VERSION=0.142.5
+ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION}
+ARG OPENCODE_CLI_VERSION=1.17.13
+ENV OPENCODE_CLI_VERSION=${OPENCODE_CLI_VERSION}
 
 # ============================================================================
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
@@ -55,10 +67,18 @@ COPY apps/system_interface/pyproject.toml /mngr/code/apps/system_interface/pypro
 # needs each pyproject.toml present to resolve the workspace. mngr_modal
 # and mngr_wait are also workspace members whose transitive deps benefit
 # from pre-warming even though only mngr_wait is registered post-COPY
-# (as a mngr plugin, not a tool install).
+# (as a mngr plugin, not a tool install). mngr_codex/mngr_antigravity/
+# mngr_opencode restored here after code review found they had gone
+# missing -- lost as a side effect of an earlier scratch-git-branch test
+# during this session (an uncommitted working-tree change got carried onto
+# a throwaway branch via `git checkout -b`, committed there, then lost when
+# that branch was deleted after switching back to main).
 COPY vendor/mngr/libs/imbue_common/pyproject.toml /mngr/code/vendor/mngr/libs/imbue_common/pyproject.toml
 COPY vendor/mngr/libs/mngr/pyproject.toml /mngr/code/vendor/mngr/libs/mngr/pyproject.toml
 COPY vendor/mngr/libs/mngr_claude/pyproject.toml /mngr/code/vendor/mngr/libs/mngr_claude/pyproject.toml
+COPY vendor/mngr/libs/mngr_codex/pyproject.toml /mngr/code/vendor/mngr/libs/mngr_codex/pyproject.toml
+COPY vendor/mngr/libs/mngr_antigravity/pyproject.toml /mngr/code/vendor/mngr/libs/mngr_antigravity/pyproject.toml
+COPY vendor/mngr/libs/mngr_opencode/pyproject.toml /mngr/code/vendor/mngr/libs/mngr_opencode/pyproject.toml
 COPY vendor/mngr/libs/mngr_modal/pyproject.toml /mngr/code/vendor/mngr/libs/mngr_modal/pyproject.toml
 COPY vendor/mngr/libs/mngr_wait/pyproject.toml /mngr/code/vendor/mngr/libs/mngr_wait/pyproject.toml
 COPY vendor/mngr/libs/resource_guards/pyproject.toml /mngr/code/vendor/mngr/libs/resource_guards/pyproject.toml

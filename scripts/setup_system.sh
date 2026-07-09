@@ -14,11 +14,16 @@ export DEBIAN_FRONTEND=noninteractive
 provision_skip_if_done setup_system
 
 # Pinned versions (single source of truth; override via env if needed). Keep
-# CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
+# CLAUDE_CODE_VERSION / CODEX_CLI_VERSION / OPENCODE_CLI_VERSION in sync with
+# agent_types.<harness>.version in .mngr/settings.toml. Antigravity has no
+# version-pinning capability (Google's installer always installs latest from
+# a manifest) so there is no ANTIGRAVITY_*_VERSION var here.
 : "${TTYD_VERSION:=1.7.7}"
 : "${CLOUDFLARED_VERSION:=2026.3.0}"
 : "${UV_VERSION:=0.11.7}"
 : "${CLAUDE_CODE_VERSION:=2.1.160}"
+: "${CODEX_CLI_VERSION:=0.142.5}"
+: "${OPENCODE_CLI_VERSION:=1.17.13}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${NODE_MAJOR:=20}"
 : "${LATCHKEY_VERSION:=2.20.0}"
@@ -82,12 +87,13 @@ if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 
     uv python install 3.12
 fi
 
-# Make /root/.local/bin discoverable in login and interactive shells. The docker
-# image also sets ENV PATH; the Lima VM relies on these profile writes.
+# Make /root/.local/bin and /root/.opencode/bin (opencode installs there, not
+# ~/.local/bin like the others) discoverable in login and interactive shells.
+# The docker image also sets ENV PATH; the Lima VM relies on these profile writes.
 if ! grep -q '/root/.local/bin' /root/.bashrc 2>/dev/null; then
-    echo 'PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
+    echo 'PATH="/root/.local/bin:/root/.opencode/bin:$PATH"' >> /root/.bashrc
 fi
-printf '%s\n' 'PATH="/root/.local/bin:$PATH"' > /etc/profile.d/fct_path.sh
+printf '%s\n' 'PATH="/root/.local/bin:/root/.opencode/bin:$PATH"' > /etc/profile.d/fct_path.sh
 
 # Source /mngr/env (when present) for interactive bash sessions so terminals can
 # run mngr commands without manual setup.
@@ -100,10 +106,30 @@ curl -fsSL https://claude.ai/install.sh > /tmp/install_claude.sh
 bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"
 test -x /root/.local/bin/claude
 
+# Antigravity CLI (agy). No version pin possible -- Google's installer always
+# installs the latest build from a manifest, no version arg or env var exists.
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+test -x /root/.local/bin/agy
+
+# OpenCode CLI (pinned; the provisioning-time version check expects this exact
+# version). Installs to ~/.opencode/bin, NOT ~/.local/bin like the others --
+# see the /root/.opencode/bin PATH additions above.
+export PATH="/root/.opencode/bin:$PATH"
+curl -fsSL https://opencode.ai/install | VERSION="${OPENCODE_CLI_VERSION}" bash
+test -x /root/.opencode/bin/opencode
+
 # Node.js (NodeSource pins the major; apt resolves within it).
 curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
 apt-get install -y nodejs
 rm -rf /var/lib/apt/lists/*
+
+# Codex CLI (pinned; the provisioning-time version check expects this exact
+# version). Installed via npm, so this must run after Node.js above. npm's
+# global bin dir is already on PATH here (the latchkey npm install below
+# works the same way), so `command -v` is enough to verify -- no fixed path
+# to test -x against like the curl-installed CLIs above.
+npm install -g "@openai/codex@${CODEX_CLI_VERSION}"
+command -v codex
 
 # Pre-seed github.com SSH host keys so git operations don't block on interactive
 # host-key confirmation. Idempotent: only added when absent.

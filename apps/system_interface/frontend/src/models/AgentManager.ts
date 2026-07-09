@@ -19,6 +19,9 @@ export interface AgentState {
   // remote agents whose state directory is not present on this host,
   // proto-agents, non-Claude agent types).
   activity_state?: string | null;
+  // The base coding-agent harness ("claude"/"codex"/"antigravity"/"opencode"),
+  // or null/absent for an unrecognized agent type. Backend: AgentStateItem.harness.
+  harness?: string | null;
 }
 
 export interface ApplicationEntry {

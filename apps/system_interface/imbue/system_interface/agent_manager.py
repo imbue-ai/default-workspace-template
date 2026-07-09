@@ -23,6 +23,7 @@ from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.local_process import RunningProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.discovery_aggregator import DiscoveryStateAggregator
 from imbue.mngr.api.discovery_events import DiscoveryEvent
@@ -46,6 +47,8 @@ from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.system_interface.harness import Harness
+from imbue.system_interface.harness import parse_harness
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import ApplicationEntry
@@ -67,6 +70,19 @@ _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
 _ASSIST_AUTO_OPEN_LABEL = "assist"
 
 
+def _resolve_create_template(base: str, harness: Harness | None) -> str:
+    """Return the harness-suffixed template name (e.g. ``worktree_codex``).
+
+    Falls back to the bare ``base`` template (aliases to claude, see
+    ``.mngr/settings.toml``) when no harness is given -- the New-chat/
+    New-agent submenu (frontend/src/views/DockviewWorkspace.ts) always
+    supplies one, but a harness-unaware caller keeps working unchanged.
+    """
+    if harness is None:
+        return base
+    return f"{base}_{harness.value}"
+
+
 def _build_worktree_create_command(
     mngr_binary: str,
     name: str,
@@ -74,6 +90,7 @@ def _build_worktree_create_command(
     current_branch: str,
     new_branch: str,
     parent_labels: dict[str, str],
+    harness: Harness | None = None,
 ) -> list[str]:
     """Build the ``mngr create`` argv for a worktree agent.
 
@@ -92,7 +109,7 @@ def _build_worktree_create_command(
         "--branch",
         f"{current_branch}:{new_branch}",
         "--template",
-        "worktree",
+        _resolve_create_template("worktree", harness),
         "--label",
         "user_created=true",
         "--no-connect",
@@ -109,6 +126,7 @@ def _build_chat_create_command(
     name: str,
     agent_id: str,
     primary_labels: dict[str, str],
+    harness: Harness | None = None,
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent. Pure (see above)."""
     cmd = [
@@ -120,7 +138,7 @@ def _build_chat_create_command(
         "--transfer",
         "none",
         "--template",
-        "chat",
+        _resolve_create_template("chat", harness),
         "--no-connect",
     ]
     # Inherit the project label from the primary agent. The chat agent belongs to
@@ -313,6 +331,13 @@ class AgentManager:
     _last_event_type_by_agent: dict[str, str | None]
     _last_event_timestamp_by_agent: dict[str, str | None]
     _activity_state_by_agent: dict[str, ActivityState]
+    # An agent's harness never changes after creation, so this is populated
+    # once (the first time an agent id is seen in _handle_discovery_event)
+    # rather than re-parsed from the raw type string on every discovery
+    # event -- that loop already rebuilds AgentStateItem for every tracked
+    # agent on every event, so re-deriving an invariant value there would
+    # repeat the same computation indefinitely for no reason.
+    _harness_by_agent_id: dict[str, Harness | None]
     # Assist chats whose tab we have already auto-opened (or that existed at
     # startup, seeded by ``_initial_discover`` so we never auto-open them). Lets
     # both discovery paths -- the per-agent delta and the full snapshot -- open
@@ -359,6 +384,7 @@ class AgentManager:
         manager._last_event_type_by_agent = {}
         manager._last_event_timestamp_by_agent = {}
         manager._activity_state_by_agent = {}
+        manager._harness_by_agent_id = {}
         manager._auto_opened_assist_ids = set()
         return manager
 
@@ -426,6 +452,7 @@ class AgentManager:
             claude_config_dir=read_claude_config_dir_from_env_file(agent_state_dir),
             labels=agent_state.labels,
             work_dir=agent_state.work_dir,
+            harness=agent_state.harness,
         )
 
     def get_agent_matches_by_id(self, agent_id: str) -> list[AgentMatch]:
@@ -519,7 +546,7 @@ class AgentManager:
         """Generate a random agent name using mngr's name generator."""
         return str(generate_agent_name(AgentNameStyle.COOLNAME))
 
-    def create_worktree_agent(self, name: str, selected_agent_id: str) -> str:
+    def create_worktree_agent(self, name: str, selected_agent_id: str, harness: Harness | None = None) -> str:
         """Create a new worktree agent. Returns the pre-generated agent ID."""
         agent_id = str(AgentId())
 
@@ -536,7 +563,7 @@ class AgentManager:
         new_branch = f"mngr/{name}"
 
         cmd = _build_worktree_create_command(
-            self._mngr_binary, name, agent_id, current_branch, new_branch, parent_labels
+            self._mngr_binary, name, agent_id, current_branch, new_branch, parent_labels, harness
         )
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
@@ -561,11 +588,11 @@ class AgentManager:
         labels = {"user_created": "true"}
         if "project" in parent_labels:
             labels["project"] = parent_labels["project"]
-        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels)
+        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels, harness)
 
         return agent_id
 
-    def create_chat_agent(self, name: str) -> str:
+    def create_chat_agent(self, name: str, harness: Harness | None = None) -> str:
         """Create a new chat agent in the primary agent's work dir. Returns the pre-generated agent ID."""
         agent_id = str(AgentId())
 
@@ -578,7 +605,7 @@ class AgentManager:
             msg = f"Cannot determine work directory for primary agent {self._own_agent_id}"
             raise AgentCreationError(msg)
 
-        cmd = _build_chat_create_command(self._mngr_binary, name, agent_id, primary_labels)
+        cmd = _build_chat_create_command(self._mngr_binary, name, agent_id, primary_labels, harness)
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
 
@@ -602,7 +629,7 @@ class AgentManager:
         labels: dict[str, str] = {}
         if "project" in primary_labels:
             labels["project"] = primary_labels["project"]
-        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels)
+        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels, harness)
 
         return agent_id
 
@@ -614,11 +641,12 @@ class AgentManager:
         work_dir: Path,
         log_queue: queue.Queue[str | None],
         labels: dict[str, str],
+        harness: Harness | None = None,
     ) -> None:
         """Start a background thread to run agent creation and stream logs."""
         self._creation_cg.start_new_thread(
             target=self._run_creation,
-            args=(agent_id, agent_name, cmd, work_dir, log_queue, labels),
+            args=(agent_id, agent_name, cmd, work_dir, log_queue, labels, harness),
             name=f"create-{agent_id[:8]}",
             is_checked=False,
         )
@@ -649,6 +677,7 @@ class AgentManager:
         work_dir: Path,
         log_queue: queue.Queue[str | None],
         labels: dict[str, str],
+        harness: Harness | None = None,
     ) -> None:
         """Run mngr create in the background, capture output, and always emit completion.
 
@@ -699,6 +728,11 @@ class AgentManager:
                         state="RUNNING",
                         labels=labels,
                         work_dir=str(work_dir),
+                        # The harness the caller requested (from the New-chat/
+                        # New-agent submenu), or claude if none was given --
+                        # matching the bare "worktree"/"chat" template's own
+                        # claude alias (see .mngr/settings.toml).
+                        harness=harness or Harness.CLAUDE,
                     )
         except Exception as e:
             # Force-demote success: the happy path sets success=True before
@@ -742,6 +776,7 @@ class AgentManager:
                         state=agent_info.state,
                         labels=agent_info.labels,
                         work_dir=agent_info.work_dir,
+                        harness=agent_info.harness,
                     )
                     self._agents[agent_info.id] = agent_state
                     # Treat assist chats that already exist at startup as already-handled
@@ -768,6 +803,7 @@ class AgentManager:
                     state=agent_info.state,
                     labels=agent_info.labels,
                     work_dir=agent_info.work_dir,
+                    harness=agent_info.harness,
                 )
 
             with self._lock:
@@ -921,12 +957,24 @@ class AgentManager:
         new_agents: dict[str, AgentStateItem] = {}
         new_matches: dict[str, AgentMatch] = {}
         for agent_id, agent in agent_by_id.items():
+            # Cache once resolved, but keep retrying while unresolved: an
+            # agent's first discovery event(s) can land before its data.json's
+            # `type` field is populated (DiscoveredAgent.agent_type is legitimately
+            # None until then), so caching that transient None permanently would
+            # mislabel the agent -- and misroute its transcript watcher -- for the
+            # rest of its tracked lifetime. The dict therefore only ever holds
+            # real resolutions, never a None placeholder.
+            cached_harness = self._harness_by_agent_id.get(agent_id)
+            if cached_harness is None and agent.agent_type:
+                cached_harness = parse_harness(agent.agent_type)
+                self._harness_by_agent_id[agent_id] = cached_harness
             new_agents[agent_id] = AgentStateItem(
                 id=agent_id,
                 name=str(agent.agent_name),
                 state="RUNNING",
                 labels=dict(agent.labels),
                 work_dir=str(agent.work_dir) if agent.work_dir else None,
+                harness=cached_harness,
             )
             new_matches[agent_id] = _build_agent_match(agent)
 
@@ -940,13 +988,8 @@ class AgentManager:
             for agent_id, agent_state in new_agents.items():
                 cached_state = self._activity_state_by_agent.get(agent_id)
                 if cached_state is not None:
-                    new_agents[agent_id] = AgentStateItem(
-                        id=agent_state.id,
-                        name=agent_state.name,
-                        state=agent_state.state,
-                        labels=agent_state.labels,
-                        work_dir=agent_state.work_dir,
-                        activity_state=cached_state.value,
+                    new_agents[agent_id] = agent_state.model_copy_update(
+                        to_update(agent_state.field_ref().activity_state, cached_state.value)
                     )
             self._agents = new_agents
             self._match_by_agent_id = new_matches
@@ -1132,13 +1175,8 @@ class AgentManager:
             if old_state == new_state and agent_state.activity_state == new_state.value:
                 return
             self._activity_state_by_agent[agent_id] = new_state
-            self._agents[agent_id] = AgentStateItem(
-                id=agent_state.id,
-                name=agent_state.name,
-                state=agent_state.state,
-                labels=agent_state.labels,
-                work_dir=agent_state.work_dir,
-                activity_state=new_state.value,
+            self._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().activity_state, new_state.value)
             )
 
         if broadcast_on_change:
@@ -1147,10 +1185,10 @@ class AgentManager:
     def update_session_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
         """Recompute transcript-derived activity signals from the full event list.
 
-        Called by ``server._get_or_create_watcher`` whenever the
-        :class:`AgentSessionWatcher` learns of new events. Cheap to call: short
-        circuits when both the unmatched-tool-use boolean and the last event
-        type are unchanged.
+        Called by ``server._get_or_create_watcher`` whenever the agent's
+        :class:`~imbue.system_interface.transcript_watcher.TranscriptWatcher`
+        learns of new events. Cheap to call: short circuits when both the
+        unmatched-tool-use boolean and the last event type are unchanged.
 
         No-op for agents not being tracked for activity (e.g. remote agents, or
         stale callbacks for an agent that was just destroyed).

@@ -34,6 +34,12 @@ _spec.loader.exec_module(create_worker_mod)
 class _RecordedCall:
     argv: list[str]
     kwargs: dict[str, Any]
+    # Snapshot of a `--message-file` argument's content, taken at record time --
+    # mirroring when a real subprocess would read it. launch() unlinks that file
+    # right after this call returns (it's a real subprocess consuming it in
+    # production), so the path itself may no longer exist by the time a test
+    # inspects `calls` after `launch()` has already returned.
+    message_file_content: str | None = None
 
 
 @dataclass
@@ -57,7 +63,11 @@ class _RecordingRunner(create_worker_mod.Runner):
 
     def run(self, argv: Sequence[str], **kwargs):
         argv_list = list(argv)
-        self.calls.append(_RecordedCall(argv=argv_list, kwargs=kwargs))
+        message_file_content = None
+        if "--message-file" in argv_list:
+            message_file_path = Path(argv_list[argv_list.index("--message-file") + 1])
+            message_file_content = message_file_path.read_text()
+        self.calls.append(_RecordedCall(argv=argv_list, kwargs=kwargs, message_file_content=message_file_content))
         key = tuple(argv_list[:2])
         canned = self._responses.get(key, _StubResult())
         if isinstance(canned, BaseException):
@@ -103,17 +113,46 @@ def test_happy_path_no_artifacts(tmp_path: Path) -> None:
 
     assert rc == 0
     argvs = [c.argv for c in runner.calls]
-    assert argvs == [
-        ["mngr", "create", "demo-worker", "-t", "worker"],
-        [
-            "mngr",
-            "rsync",
-            f"{runtime}/",
-            f"demo-worker:{runtime}/",
-            "--uncommitted-changes=merge",
-        ],
-        ["mngr", "message", "demo-worker", "--message-file", str(task)],
+    assert len(argvs) == 3
+    assert argvs[0] == ["mngr", "create", "demo-worker", "-t", "worker"]
+    assert argvs[1] == [
+        "mngr",
+        "rsync",
+        f"{runtime}/",
+        f"demo-worker:{runtime}/",
+        "--uncommitted-changes=merge",
     ]
+    # A single merged message (preamble + task content), not two separate
+    # calls -- see launch()'s own comment for why. The file path is a fresh
+    # tempfile, not task_file itself, so assert on its content instead of a
+    # literal path. launch() unlinks that tempfile once this call returns, so
+    # assert against the runner's snapshot (taken at call time), not a fresh
+    # read of message_argv[4] -- the path may no longer exist by now.
+    message_argv = argvs[2]
+    assert message_argv[:3] == ["mngr", "message", "demo-worker"]
+    assert message_argv[3] == "--message-file"
+    assert runner.calls[2].message_file_content == (
+        f"{create_worker_mod.LAUNCHED_BY_ANOTHER_AGENT_PREAMBLE}\n\n{task.read_text()}"
+    )
+
+
+def test_combined_message_tempfile_is_cleaned_up(tmp_path: Path) -> None:
+    """The merged preamble+task tempfile does not leak past a successful launch."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    message_argv = runner.calls[-1].argv
+    combined_path = Path(message_argv[message_argv.index("--message-file") + 1])
+    assert not combined_path.exists()
 
 
 def test_source_artifacts_dir_synced_after_runtime(tmp_path: Path) -> None:
@@ -158,7 +197,7 @@ def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
     production assumption and so can never catch a divergence when vendor/mngr
     changes its CLI), we take exactly what ``launch`` hands the runner and
     confront it with ``imbue.mngr.main.cli``. It exercises the broadest argv set
-    (create + two rsyncs + message) by declaring a ``source_artifacts_dir``.
+    (create + two rsyncs + the merged message) by declaring a ``source_artifacts_dir``.
     """
     runtime, task, artifacts = _make_layout(tmp_path)
     _write_task(task, str(artifacts))
@@ -174,12 +213,13 @@ def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
 
     assert rc == 0
     mngr_calls = [c.argv for c in runner.calls if c.argv[:1] == ["mngr"]]
-    # Vacuity guard: the full lifecycle is create + two rsyncs + message, so we
-    # know the loop below actually validates four real invocations rather than
-    # passing on an empty list. This counts steps; it deliberately does NOT pin
-    # the subcommand names (that would re-introduce the hand-mirrored
-    # expectation this test exists to replace) -- assert_mngr_argv_valid is what
-    # confronts each argv with the live CLI.
+    # Vacuity guard: the full lifecycle is create + two rsyncs + the merged
+    # launched-by-another-agent-preamble-plus-task-content message, so we
+    # know the loop below actually validates four real invocations rather
+    # than passing on an empty list. This counts steps; it deliberately does
+    # NOT pin the subcommand names (that would re-introduce the hand-mirrored
+    # expectation this test exists to replace) -- assert_mngr_argv_valid is
+    # what confronts each argv with the live CLI.
     assert len(mngr_calls) == 4
     for argv in mngr_calls:
         assert_mngr_argv_valid(argv)
@@ -405,6 +445,109 @@ def _make_state_dir_with_converter(tmp_path: Path) -> Path:
     return state_dir
 
 
+def _make_state_dir_with_type(tmp_path: Path, agent_type: str) -> Path:
+    """Create a state_dir whose data.json declares `agent_type`."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "data.json").write_text(json.dumps({"type": agent_type}))
+    return state_dir
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("claude", "claude"),
+        ("claude-main", "claude"),
+        ("claude-worker", "claude"),
+        ("codex", "codex"),
+        ("codex-worker", "codex"),
+        ("antigravity-main", "antigravity"),
+        ("opencode-worker", "opencode"),
+        ("some-future-harness", None),
+        ("", None),
+    ],
+)
+def test_parse_harness(raw: str, expected: str | None) -> None:
+    assert create_worker_mod._parse_harness(raw) == expected
+
+
+def test_resolve_delegating_harness_reads_data_json(tmp_path: Path) -> None:
+    state_dir = _make_state_dir_with_type(tmp_path, "codex-worker")
+    assert create_worker_mod._resolve_delegating_harness(state_dir) == "codex"
+
+
+@pytest.mark.parametrize(
+    "make_state_dir",
+    [
+        lambda tmp_path: None,
+        lambda tmp_path: tmp_path / "does-not-exist",
+        lambda tmp_path: _make_state_dir_with_converter(tmp_path),  # no data.json
+    ],
+)
+def test_resolve_delegating_harness_falls_back_to_none(
+    tmp_path: Path, make_state_dir: Any
+) -> None:
+    assert create_worker_mod._resolve_delegating_harness(make_state_dir(tmp_path)) is None
+
+
+def test_resolve_delegating_harness_malformed_json_falls_back_to_none(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "data.json").write_text("not valid json")
+    assert create_worker_mod._resolve_delegating_harness(state_dir) is None
+
+
+def test_resolve_delegating_harness_unrecognized_type_falls_back_to_none(tmp_path: Path) -> None:
+    state_dir = _make_state_dir_with_type(tmp_path, "some-future-harness")
+    assert create_worker_mod._resolve_delegating_harness(state_dir) is None
+
+
+def test_resolve_template_suffixes_by_harness(tmp_path: Path) -> None:
+    state_dir = _make_state_dir_with_type(tmp_path, "antigravity-worker")
+    assert create_worker_mod._resolve_template("subskill-worker", state_dir) == "subskill-worker_antigravity"
+
+
+def test_resolve_template_falls_back_unchanged_when_harness_unknown() -> None:
+    assert create_worker_mod._resolve_template("worker", None) == "worker"
+
+
+def test_launch_routes_to_harness_suffixed_template(tmp_path: Path) -> None:
+    """A worker launched by a codex lead becomes a codex worker, not claude."""
+    runtime, task, _ = _make_layout(tmp_path)
+    state_dir = _make_state_dir_with_type(tmp_path, "codex-worker")
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        state_dir=state_dir,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert runner.calls[0].argv == ["mngr", "create", "demo-worker", "-t", "worker_codex"]
+
+
+def test_launch_keeps_bare_template_when_harness_undetected(tmp_path: Path) -> None:
+    """No data.json (e.g. tests, non-mngr envs) -> unchanged, today's behavior."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="subskill-worker",
+        runtime_dir=runtime,
+        task_file=task,
+        state_dir=None,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert runner.calls[0].argv == ["mngr", "create", "demo-worker", "-t", "subskill-worker"]
+
+
 def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
     """When state_dir has the converter, launch flushes it right before the message."""
     runtime, task, _ = _make_layout(tmp_path)
@@ -423,18 +566,22 @@ def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
     assert rc == 0
     argvs = [c.argv for c in runner.calls]
     expected_script = str(state_dir / "commands" / "common_transcript.sh")
-    assert argvs == [
-        ["mngr", "create", "demo-worker", "-t", "worker"],
-        [
-            "mngr",
-            "rsync",
-            f"{runtime}/",
-            f"demo-worker:{runtime}/",
-            "--uncommitted-changes=merge",
-        ],
-        [expected_script, "--single-pass"],
-        ["mngr", "message", "demo-worker", "--message-file", str(task)],
+    assert len(argvs) == 4
+    assert argvs[0] == ["mngr", "create", "demo-worker", "-t", "worker"]
+    assert argvs[1] == [
+        "mngr",
+        "rsync",
+        f"{runtime}/",
+        f"demo-worker:{runtime}/",
+        "--uncommitted-changes=merge",
     ]
+    assert argvs[2] == [expected_script, "--single-pass"]
+    message_argv = argvs[3]
+    assert message_argv[:3] == ["mngr", "message", "demo-worker"]
+    assert message_argv[3] == "--message-file"
+    assert runner.calls[3].message_file_content == (
+        f"{create_worker_mod.LAUNCHED_BY_ANOTHER_AGENT_PREAMBLE}\n\n{task.read_text()}"
+    )
 
 
 def test_common_transcript_skipped_when_state_dir_is_none(tmp_path: Path) -> None:
@@ -501,13 +648,9 @@ def test_common_transcript_failure_does_not_abort_launch(
 
     assert rc == 0
     # The subsequent message send must still run.
-    assert [c.argv for c in runner.calls][-1] == [
-        "mngr",
-        "message",
-        "demo-worker",
-        "--message-file",
-        str(task),
-    ]
+    last_argv = [c.argv for c in runner.calls][-1]
+    assert last_argv[:3] == ["mngr", "message", "demo-worker"]
+    assert last_argv[3] == "--message-file"
     err = capsys.readouterr().err
     assert "common_transcript.sh" in err
     assert "exited 2" in err

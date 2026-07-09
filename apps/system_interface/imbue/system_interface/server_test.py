@@ -566,11 +566,47 @@ def test_create_chat_agent_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> 
     assert response.status_code == 400
 
 
+def test_create_chat_agent_with_harness_parses_and_reaches_same_precondition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A harness field is accepted by request parsing -- same 400 as the no-harness
+    case (missing primary agent work dir), proving the new field doesn't change
+    what fails or crash the handler; the harness itself is exercised end-to-end
+    by _build_chat_create_command / _run_creation's own tests in agent_manager_test.py."""
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    test_client = create_application(build_test_state()).test_client()
+    response = test_client.post(
+        "/api/agents/create-chat",
+        json={"name": "test-chat", "harness": "codex"},
+    )
+    assert response.status_code == 400
+    assert "work directory" in response.get_json()["detail"]
+
+
+def test_create_chat_agent_rejects_unknown_harness(client: FlaskClient) -> None:
+    """An unrecognized harness value fails Pydantic validation with a 400, not a 500."""
+    response = client.post(
+        "/api/agents/create-chat",
+        json={"name": "test-chat", "harness": "not-a-real-harness"},
+    )
+    assert response.status_code == 400
+
+
 def test_create_worktree_agent_missing_agent(client: FlaskClient) -> None:
     """Creating a worktree agent with an unknown selected agent returns 400."""
     response = client.post(
         "/api/agents/create-worktree",
         json={"name": "test-worktree", "selected_agent_id": "nonexistent"},
+    )
+    assert response.status_code == 400
+
+
+def test_create_worktree_agent_with_harness_rejects_unknown_value(client: FlaskClient) -> None:
+    """An unrecognized harness value fails Pydantic validation with a 400, not a 500."""
+    response = client.post(
+        "/api/agents/create-worktree",
+        json={"name": "test-worktree", "selected_agent_id": "nonexistent", "harness": "not-a-real-harness"},
     )
     assert response.status_code == 400
 

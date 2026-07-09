@@ -27,6 +27,8 @@ from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.utils.env_utils import parse_env_file
+from imbue.system_interface.harness import Harness
+from imbue.system_interface.harness import parse_harness
 
 logger = _loguru_logger
 
@@ -51,9 +53,13 @@ class AgentInfo(FrozenModel):
     claude_config_dir: Path = Field(description="Path to the Claude config directory for this agent")
     labels: dict[str, str] = Field(default_factory=dict, description="Agent labels")
     work_dir: str | None = Field(default=None, description="Agent working directory path")
+    harness: Harness | None = Field(
+        default=None,
+        description="The base coding-agent harness (claude/codex/antigravity/opencode), parsed from mngr's raw AgentDetails.type. None for an unrecognized/non-harness agent type.",
+    )
 
 
-def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
+def get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
     cg = ConcurrencyGroup(name="system-interface")
     cg.__enter__()
     try:
@@ -129,7 +135,7 @@ def discover_agents(
     exclude_filters: tuple[str, ...] = (),
 ) -> list[AgentInfo]:
     """List all mngr-managed agents."""
-    mngr_ctx, cg = _get_mngr_context()
+    mngr_ctx, cg = get_mngr_context()
     try:
         result = list_agents(
             mngr_ctx=mngr_ctx,
@@ -166,6 +172,7 @@ def discover_agents(
                 claude_config_dir=claude_config_dir,
                 labels=dict(agent_details.labels),
                 work_dir=str(agent_details.work_dir),
+                harness=parse_harness(agent_details.type),
             )
         )
 
@@ -222,7 +229,7 @@ class MngrMessenger(FrozenModel):
         resolves to exactly the intended agent, never fanning out across same-named
         agents on other hosts. STOPPED agents are auto-started (`is_start_desired=True`).
         """
-        mngr_ctx, cg = _get_mngr_context()
+        mngr_ctx, cg = get_mngr_context()
         try:
             if known_locations and self.send(known_locations, message, mngr_ctx).successful_agents:
                 return True
@@ -251,7 +258,7 @@ def start_agent(agent_name: str) -> None:
     Raises ``MngrError`` (e.g. ``AgentNotFoundError`` if the agent does
     not exist, or a start failure) -- callers surface these to the user.
     """
-    mngr_ctx, cg = _get_mngr_context()
+    mngr_ctx, cg = get_mngr_context()
     try:
         address = AgentAddress(agent=AgentName(agent_name))
         host_ref, agent_ref = find_one_agent(address, mngr_ctx)

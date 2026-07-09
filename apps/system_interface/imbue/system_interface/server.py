@@ -212,7 +212,7 @@ def _discover_with_filters() -> list[AgentInfo]:
 def _list_agents_endpoint() -> Response:
     """List all mngr-managed agents."""
     agents = _discover_with_filters()
-    items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state) for agent in agents]
+    items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state, harness=agent.harness) for agent in agents]
     return _json_response(AgentListResponse(agents=items).model_dump())
 
 
@@ -767,7 +767,7 @@ def _create_worktree_agent() -> Response:
         create_request = CreateWorktreeRequest(**body)
         agent_name = create_request.name
         selected_agent_id = create_request.selected_agent_id or agent_manager.get_own_agent_id()
-        agent_id = agent_manager.create_worktree_agent(agent_name, selected_agent_id)
+        agent_id = agent_manager.create_worktree_agent(agent_name, selected_agent_id, create_request.harness)
         return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))
@@ -781,7 +781,7 @@ def _create_chat_agent() -> Response:
 
     try:
         create_request = CreateChatRequest(**body)
-        agent_id = agent_manager.create_chat_agent(create_request.name)
+        agent_id = agent_manager.create_chat_agent(create_request.name, create_request.harness)
         return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))

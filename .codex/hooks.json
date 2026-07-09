@@ -1,0 +1,65 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/codex_update_plugin.sh"
+          },
+          {
+            "type": "command",
+            "command": "./scripts/codex_memory_reminder_sessionstart.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/codex_prevent_commit_rewrite.sh"
+          },
+          {
+            "type": "command",
+            "command": "./scripts/codex_tk_standalone.sh"
+          },
+          {
+            "type": "command",
+            "command": "./scripts/codex_require_steps_pretool.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/codex_open_tickets_reminder.sh"
+          },
+          {
+            "type": "command",
+            "command": "./scripts/codex_memory_reminder_userpromptsubmit.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -e .git ] || { echo \"Be sure to return to the repo root when you finish! Otherwise the other stop hooks cannot run correctly.\" >&2; exit 2; }"
+          },
+          {
+            "type": "command",
+            "command": "./scripts/codex_open_tickets_stop_nudge.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

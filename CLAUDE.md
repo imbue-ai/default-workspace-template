@@ -198,7 +198,7 @@ checking first. Use the `find-past-transcripts` skill to find and read them.
 
 You can (and should) modify your own configuration to improve yourself:
 
-- **CLAUDE.md**: (this file) update these instructions if you discover better ways to operate.
+- **CLAUDE.md**: (this file) update these instructions if you discover better ways to operate. Note: `AGENTS.md` is a separate copy of most of this same content for codex/antigravity/opencode -- if a change applies to all harnesses, make it in both files.
 - **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file. (Also symlinked from `.claude/skills/`.)
 - **supervisord.conf**: Add, modify, or remove background services. See the `edit-services` skill.
 - **scripts/**: Add utility scripts that help you accomplish your purpose.
@@ -226,8 +226,8 @@ The upstream is defined in `parent.toml`.
 
 # Memory
 
-Use Claude's built-in memory system. Your memory directory is `runtime/memory/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
-Memory is gitignored from the main branch but is backed up automatically by the runtime-backup service onto the `mindsbackup/$MNGR_AGENT_ID` branch when `GH_TOKEN` is set, so it survives container loss.
+Use the `memory` MCP server (`.mcp.json`) to remember facts, decisions, and context across sessions -- call its tools (`create_entities`, `add_observations`, `search_nodes`, etc.) rather than writing your own memory files. This is shared: every agent in this workspace, regardless of which harness (claude/codex/antigravity/opencode) is running it, reads and writes the same memory, so a fact one agent learns is available to any other agent later, not just to you.
+The underlying data lives at `runtime/memory/memory.jsonl`. It's gitignored from the main branch but is backed up automatically by the runtime-backup service onto the `mindsbackup/$MNGR_AGENT_ID` branch when `GH_TOKEN` is set, so it survives container loss.
 
 # Services
 

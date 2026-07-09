@@ -1345,6 +1345,43 @@ body {
   background: var(--color-bg-hover);
 }
 
+/* A submenu-parent item ("New chat", "New agent") is itself not clickable --
+ * which harness it means is ambiguous -- only its leaf children are. Opens
+ * leftward (`right: 100%`) since the dropdown itself is right-aligned under
+ * the header "+" button, so a rightward flyout would tend to run off-screen. */
+.dockview-add-tab-dropdown-item.has-submenu {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: relative;
+  cursor: default;
+}
+
+.dockview-add-tab-submenu-caret {
+  color: var(--color-text-secondary);
+}
+
+.dockview-add-tab-submenu {
+  display: none;
+  position: absolute;
+  top: -4px;
+  right: 100%;
+  min-width: 140px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  box-shadow:
+    0 4px 16px rgba(55, 53, 47, 0.1),
+    0 1px 4px rgba(55, 53, 47, 0.06);
+  padding: 4px;
+}
+
+.dockview-add-tab-dropdown-item.has-submenu:hover > .dockview-add-tab-submenu,
+.dockview-add-tab-dropdown-item.has-submenu.submenu-open > .dockview-add-tab-submenu {
+  display: block;
+}
+
 /* ── Custom URL dialog ── */
 .custom-url-dialog-overlay {
   position: fixed;

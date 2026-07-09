@@ -49,8 +49,18 @@ git config --global --add safe.directory "$REPO_ROOT"
 uv tool install -e "$REPO_ROOT/vendor/mngr/libs/mngr"
 uv tool install -e "$REPO_ROOT/apps/system_interface" \
     --with-editable "$REPO_ROOT/vendor/mngr/libs/mngr_claude"
+# mngr_codex/mngr_antigravity/mngr_opencode must be registered here too --
+# without this, the `mngr` CLI tool itself (not just this repo's own uv
+# workspace) can't parse .mngr/settings.toml's agent_types.codex/antigravity/
+# opencode blocks (unknown-field error), since pluggy discovers a plugin's
+# config schema from its registration with THIS tool, not from the
+# workspace's own pyproject.toml dependency list. Caught by code review, not
+# caught when those agent_types blocks were first added.
 mngr plugin add \
     --path vendor/mngr/libs/mngr_claude \
+    --path vendor/mngr/libs/mngr_codex \
+    --path vendor/mngr/libs/mngr_antigravity \
+    --path vendor/mngr/libs/mngr_opencode \
     --path vendor/mngr/libs/mngr_wait
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen

@@ -56,6 +56,103 @@ _AGENT_STATE_DIR_ENV_VAR = "MNGR_AGENT_STATE_DIR"
 _HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
 _CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
+# Set by whichever main_<harness> create-template overlay created this
+# workspace (.mngr/settings.toml). Tells bootstrap which harness's chat
+# template to invoke and whether a shared-config-dir write applies.
+_FCT_HARNESS_ENV_VAR = "FCT_HARNESS"
+_DEFAULT_HARNESS = "claude"
+
+# create_templates.chat_<harness> name for each harness, keyed by FCT_HARNESS.
+_CHAT_TEMPLATE_BY_HARNESS = {
+    "claude": "chat_claude",
+    "codex": "chat_codex",
+    "antigravity": "chat_antigravity",
+    "opencode": "chat_opencode",
+}
+
+# The initial chat agent's first message, keyed by FCT_HARNESS -- how to
+# invoke the `welcome` skill (.agents/skills/welcome) differs by harness,
+# confirmed per-harness rather than assumed uniform:
+#   - claude: `/<skill-name>` is Claude Code's own established slash-command
+#     convention (a skill's frontmatter `name` becomes `/name`).
+#   - antigravity: confirmed the SAME convention (a skill's `name` field
+#     "dictates your slash command" -- verified via a real source, not
+#     assumed just because claude works this way).
+#   - codex: does NOT support `/<skill-name>`; confirmed via
+#     developers.openai.com/codex/skills that codex's explicit-invocation
+#     syntax is `$<skill-name>` (a mention), with `/skills` opening a
+#     picker rather than directly invoking one by name.
+#   - opencode: confirmed NO manual slash/mention invocation exists at all
+#     (developers.openai.com/codex/skills's opencode counterpart -- skills
+#     load only via the model calling a `skill({name: ...})` tool itself,
+#     driven by automatic relevance-matching against the skill's
+#     description). Sending literal skill-invocation syntax here would do
+#     nothing useful, so this sends a plain-English instruction that
+#     directly echoes the welcome skill's own description instead, to
+#     maximize the chance opencode's automatic matching picks it up --
+#     this is inherently less deterministic than the other three, and
+#     that's a real, stated limitation, not a confirmed-working mechanism.
+_WELCOME_MESSAGE_BY_HARNESS = {
+    "claude": "/welcome",
+    "codex": "$welcome",
+    "antigravity": "/welcome",
+    "opencode": "Use the welcome skill to greet the user.",
+}
+
+
+def _read_fct_harness() -> str:
+    """Return FCT_HARNESS, defaulting to claude (with a warning) if unset.
+
+    Unset only happens on a workspace created before FCT_HARNESS existed, or
+    a broken container -- default to claude rather than raising, since a
+    failure here must not block supervisord from starting.
+    """
+    harness = os.environ.get(_FCT_HARNESS_ENV_VAR, "")
+    if not harness:
+        logger.warning(
+            "{} is unset; defaulting to {!r}", _FCT_HARNESS_ENV_VAR, _DEFAULT_HARNESS
+        )
+        return _DEFAULT_HARNESS
+    return harness
+
+
+def _resolve_chat_template() -> str:
+    """Return the create_templates.chat_<harness> name for the current FCT_HARNESS.
+
+    Falls back to claude's template (with a warning) on an unrecognized
+    value, same non-fatal philosophy as `_read_fct_harness`.
+    """
+    harness = _read_fct_harness()
+    template = _CHAT_TEMPLATE_BY_HARNESS.get(harness)
+    if template is None:
+        logger.warning(
+            "Unrecognized {}={!r}; defaulting to the {} chat template",
+            _FCT_HARNESS_ENV_VAR,
+            harness,
+            _DEFAULT_HARNESS,
+        )
+        return _CHAT_TEMPLATE_BY_HARNESS[_DEFAULT_HARNESS]
+    return template
+
+
+def _resolve_welcome_message() -> str:
+    """Return the initial chat agent's first message for the current FCT_HARNESS.
+
+    Falls back to claude's `/welcome` (with a warning) on an unrecognized
+    value, same non-fatal philosophy as `_resolve_chat_template`.
+    """
+    harness = _read_fct_harness()
+    message = _WELCOME_MESSAGE_BY_HARNESS.get(harness)
+    if message is None:
+        logger.warning(
+            "Unrecognized {}={!r}; defaulting to the {} welcome message",
+            _FCT_HARNESS_ENV_VAR,
+            harness,
+            _DEFAULT_HARNESS,
+        )
+        return _WELCOME_MESSAGE_BY_HARNESS[_DEFAULT_HARNESS]
+    return message
+
 # Global git config the old git_auth_setup extra_window used to apply (minus the
 # retired `gh auth setup-git`): rewrite git@ / ssh:// GitHub remotes to https and
 # point core.hooksPath at the repo's git_hooks.
@@ -224,9 +321,11 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
     Mirrors the New Agent button's create path (see
     apps/system_interface/.../agent_manager.py:create_chat_agent): the
     `chat` template, no-connect, and the inherited `project` label when
-    present on the services agent. Adds `--message /welcome`, which used to
-    live on `create_templates.main`. The chat agent belongs to its workspace
-    by virtue of sharing the host; it carries no `workspace` label.
+    present on the services agent. Adds a `--message` invoking the
+    `welcome` skill (see `_resolve_welcome_message`), which used to live on
+    `create_templates.main` as a hardcoded `/welcome`. The chat agent
+    belongs to its workspace by virtue of sharing the host; it carries no
+    `workspace` label.
     """
     cmd: list[str] = [
         "mngr",
@@ -245,9 +344,12 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
         "--transfer",
         "none",
         "--template",
-        "chat",
+        _resolve_chat_template(),
+        # How to invoke the `welcome` skill differs per harness -- see
+        # `_WELCOME_MESSAGE_BY_HARNESS`'s own comment for what's confirmed
+        # vs. best-effort per harness.
         "--message",
-        "/welcome",
+        _resolve_welcome_message(),
         "--no-connect",
         "--format",
         "json",
@@ -443,16 +545,23 @@ def _maybe_create_initial_chat() -> None:
 
 
 def _bootstrap_init_chat_dir() -> None:
-    """Write CLAUDE_CONFIG_DIR to host env, then create initial chat if needed.
+    """Write CLAUDE_CONFIG_DIR to host env (claude only), then create initial chat if needed.
 
     Ordering matters: the env write must precede the chat-agent create so
     the new agent's claude binary sees CLAUDE_CONFIG_DIR via the host env
     file mngr sources at agent startup. Failures in either step are
     non-fatal so services still come up and the user has a working UI.
+
+    The env write only applies to claude: codex/antigravity/opencode have no
+    shared-config-dir mechanism at all (confirmed architectural, not a
+    missing toggle -- see CHANGELOG_multi_harness_support.md), so there is no
+    env var to write for those three; every agent under those harnesses
+    provisions its own isolated config independently regardless.
     """
-    config_dir = _resolve_services_claude_config_dir()
-    if config_dir is not None:
-        _ensure_host_claude_config_dir(config_dir)
+    if _read_fct_harness() == "claude":
+        config_dir = _resolve_services_claude_config_dir()
+        if config_dir is not None:
+            _ensure_host_claude_config_dir(config_dir)
     _maybe_create_initial_chat()
 
 

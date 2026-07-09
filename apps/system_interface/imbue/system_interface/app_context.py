@@ -14,7 +14,8 @@ from imbue.system_interface.claude_auth import ClaudeAuthService
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.session_watcher import AgentSessionWatcher
+from imbue.system_interface.transcript_watcher import TranscriptWatcher
+from imbue.system_interface.transcript_watcher import build_transcript_watcher
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -51,7 +52,7 @@ class SystemInterfaceState(MutableModel):
     welcome_resender: WelcomeResender
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
-    watchers: dict[str, AgentSessionWatcher] = {}
+    watchers: dict[str, TranscriptWatcher] = {}
     latchkey_catalog_cache: dict[str, Any] = {}
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
@@ -73,7 +74,7 @@ class SystemInterfaceState(MutableModel):
         """Serializes concurrent latchkey catalog fetches across request threads."""
         return self._latchkey_lock
 
-    def get_or_create_watcher(self, agent_info: AgentInfo) -> AgentSessionWatcher:
+    def get_or_create_watcher(self, agent_info: AgentInfo) -> TranscriptWatcher:
         """Get the existing session watcher for an agent, or create and start one.
 
         Guarded by a lock so two concurrent request threads cannot both build a
@@ -90,7 +91,7 @@ class SystemInterfaceState(MutableModel):
             # callback self-contained: it cannot KeyError if the dict entry has
             # since been removed, and does not depend on the entry already
             # existing before the first event fires.
-            watcher_holder: list[AgentSessionWatcher] = []
+            watcher_holder: list[TranscriptWatcher] = []
 
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
                 # IGNORE: session events are persisted in JSONL and recoverable
@@ -104,12 +105,7 @@ class SystemInterfaceState(MutableModel):
                 # read the last event's type.
                 self.agent_manager.update_session_events(agent_id, watcher_holder[0].get_all_events())
 
-            watcher = AgentSessionWatcher(
-                agent_id=agent_info.id,
-                agent_state_dir=agent_info.agent_state_dir,
-                claude_config_dir=agent_info.claude_config_dir,
-                on_events=on_events,
-            )
+            watcher = build_transcript_watcher(agent_info, on_events)
             watcher_holder.append(watcher)
             self.watchers[agent_info.id] = watcher
             watcher.start()

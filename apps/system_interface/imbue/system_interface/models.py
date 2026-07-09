@@ -2,6 +2,7 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.system_interface.harness import Harness
 
 
 class AgentCreationError(ValueError):
@@ -16,6 +17,10 @@ class AgentListItem(FrozenModel):
     id: str = Field(description="The agent's unique identifier")
     name: str = Field(description="The agent's human-readable name")
     state: str = Field(description="The agent's lifecycle state")
+    harness: Harness | None = Field(
+        default=None,
+        description="The coding-agent harness (claude/codex/antigravity/opencode) this agent runs, or None if unrecognized.",
+    )
 
 
 class AgentListResponse(FrozenModel):
@@ -64,6 +69,10 @@ class AgentStateItem(FrozenModel):
             "agent."
         ),
     )
+    harness: Harness | None = Field(
+        default=None,
+        description="The coding-agent harness (claude/codex/antigravity/opencode) this agent runs, or None if unrecognized.",
+    )
 
 
 class ApplicationEntry(FrozenModel):
@@ -89,12 +98,20 @@ class CreateWorktreeRequest(FrozenModel):
         default="",
         description="ID of the agent whose work dir to create the worktree from",
     )
+    harness: Harness | None = Field(
+        default=None,
+        description="Harness for the new agent (claude/codex/antigravity/opencode). None defaults to claude.",
+    )
 
 
 class CreateChatRequest(FrozenModel):
     """Request body for creating a chat agent."""
 
     name: str = Field(description="Name for the new chat agent")
+    harness: Harness | None = Field(
+        default=None,
+        description="Harness for the new agent (claude/codex/antigravity/opencode). None defaults to claude.",
+    )
 
 
 class CreateAgentResponse(FrozenModel):

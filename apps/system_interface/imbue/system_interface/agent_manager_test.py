@@ -40,6 +40,8 @@ from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _build_worktree_create_command
 from imbue.system_interface.agent_manager import _make_applications_file_handler
+from imbue.system_interface.agent_manager import _resolve_create_template
+from imbue.system_interface.harness import Harness
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import ApplicationEntry
@@ -821,6 +823,42 @@ def test_run_creation_logs_header_and_completion(agent_manager: AgentManager, tm
     assert done_msgs[0]["success"] is True
 
 
+def test_run_creation_records_requested_harness(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """The resulting AgentStateItem carries the harness the caller requested, not a hardcoded claude."""
+    log_q: queue.Queue[str | None] = queue.Queue(maxsize=10000)
+    done_event = threading.Event()
+
+    def run_and_signal() -> None:
+        agent_manager._run_creation("codex-id", "codex-agent", ["true"], tmp_path, log_q, {}, Harness.CODEX)
+        done_event.set()
+
+    t = threading.Thread(target=run_and_signal, daemon=True)
+    t.start()
+    done_event.wait(timeout=10)
+
+    info = agent_manager.get_agent_info_by_id("codex-id")
+    assert info is not None
+    assert info.harness is Harness.CODEX
+
+
+def test_run_creation_defaults_to_claude_when_harness_none(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """No harness given (a harness-unaware caller) -> claude, matching pre-harness-picker behavior."""
+    log_q: queue.Queue[str | None] = queue.Queue(maxsize=10000)
+    done_event = threading.Event()
+
+    def run_and_signal() -> None:
+        agent_manager._run_creation("claude-id", "claude-agent", ["true"], tmp_path, log_q, {})
+        done_event.set()
+
+    t = threading.Thread(target=run_and_signal, daemon=True)
+    t.start()
+    done_event.wait(timeout=10)
+
+    info = agent_manager.get_agent_info_by_id("claude-id")
+    assert info is not None
+    assert info.harness is Harness.CLAUDE
+
+
 def test_log_queue_callback_puts_json_line(
     agent_manager: AgentManager,
 ) -> None:
@@ -907,6 +945,43 @@ def test_handle_discovery_event_dispatches_agent_discovered(
     agents = agent_manager.get_agents()
     assert len(agents) == 1
     assert agents[0].id == str(test_agent_id)
+
+
+def test_handle_discovery_event_resolves_harness_once_type_becomes_available(
+    agent_manager: AgentManager,
+) -> None:
+    """A transient first-sight None (agent_type not yet populated) must not stick.
+
+    DiscoveredAgent.agent_type is None whenever certified_data has no `type`
+    key yet -- a real, expected state on an agent's first discovery event(s),
+    not a permanent "unknown harness". Once a later event carries the real
+    type, the cached harness must update rather than staying stuck at None.
+    """
+    test_agent_id = MngrAgentId()
+    host_id = HostId()
+    no_type_yet = DiscoveredAgent(
+        host_id=host_id,
+        agent_id=test_agent_id,
+        agent_name=MngrAgentName("codex-agent"),
+        provider_name=ProviderInstanceName("local"),
+        certified_data={"labels": {}, "work_dir": None},
+    )
+    agent_manager._handle_discovery_event(make_agent_discovery_event(no_type_yet))
+    agents = agent_manager.get_agents()
+    assert len(agents) == 1
+    assert agents[0].harness is None
+
+    now_has_type = DiscoveredAgent(
+        host_id=host_id,
+        agent_id=test_agent_id,
+        agent_name=MngrAgentName("codex-agent"),
+        provider_name=ProviderInstanceName("local"),
+        certified_data={"labels": {}, "work_dir": None, "type": "codex"},
+    )
+    agent_manager._handle_discovery_event(make_agent_discovery_event(now_has_type))
+    agents = agent_manager.get_agents()
+    assert len(agents) == 1
+    assert agents[0].harness is Harness.CODEX
 
 
 def _make_agent_destroyed_event(agent_id: MngrAgentId, host_id: HostId) -> AgentDestroyedEvent:
@@ -1064,6 +1139,47 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
         agent_id="agent-123",
         primary_labels={"workspace": "ws", "project": "proj"},
     )
+    assert_mngr_argv_valid(argv)
+
+
+@pytest.mark.parametrize("harness", list(Harness))
+def test_resolve_create_template_suffixes_by_harness(harness: Harness) -> None:
+    assert _resolve_create_template("chat", harness) == f"chat_{harness.value}"
+    assert _resolve_create_template("worktree", harness) == f"worktree_{harness.value}"
+
+
+def test_resolve_create_template_falls_back_unchanged_when_harness_none() -> None:
+    assert _resolve_create_template("chat", None) == "chat"
+    assert _resolve_create_template("worktree", None) == "worktree"
+
+
+@pytest.mark.parametrize("harness", list(Harness))
+def test_worktree_create_argv_harness_suffixed_template_accepted_by_live_cli(harness: Harness) -> None:
+    argv = _build_worktree_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        current_branch="main",
+        new_branch="mngr/demo",
+        parent_labels={},
+        harness=harness,
+    )
+    assert "--template" in argv
+    assert argv[argv.index("--template") + 1] == f"worktree_{harness.value}"
+    assert_mngr_argv_valid(argv)
+
+
+@pytest.mark.parametrize("harness", list(Harness))
+def test_chat_create_argv_harness_suffixed_template_accepted_by_live_cli(harness: Harness) -> None:
+    argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={},
+        harness=harness,
+    )
+    assert "--template" in argv
+    assert argv[argv.index("--template") + 1] == f"chat_{harness.value}"
     assert_mngr_argv_valid(argv)
 
 
