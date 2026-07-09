@@ -692,8 +692,26 @@ def _seed_caretaker_stamp(
     covered, so the first run lands at the next day's 3 AM due hour. Later
     boots leave the stamp alone -- it is the runner's own state from then on.
     Best-effort: logs and returns rather than raising.
+
+    "First boot" is tracked by a sidecar marker (``<stamp>.seeded``), NOT by
+    the stamp's absence. A missing stamp is ambiguous: it also means "an
+    operator deleted the stamp to force a run today" (the documented way to
+    test the Caretaker at a near-term hour). Before the marker existed, any
+    reboot between that deletion and the due hour re-seeded today's date and
+    silently cancelled the forced run. The marker is written exactly once --
+    alongside the first seed, or backfilled when a pre-marker workspace
+    already carries a stamp -- and every later boot returns early on it.
     """
+    marker_path = stamp_path.with_name(stamp_path.name + ".seeded")
+    if marker_path.exists():
+        return
     if stamp_path.exists():
+        # Pre-marker workspace mid-life: adopt it without touching the stamp.
+        try:
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.write_text("")
+        except OSError as e:
+            logger.warning("Failed to write the caretaker seed marker at {}: {}", marker_path, e)
         return
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
@@ -705,6 +723,7 @@ def _seed_caretaker_stamp(
     try:
         stamp_path.parent.mkdir(parents=True, exist_ok=True)
         stamp_path.write_text(stamp + "\n")
+        marker_path.write_text("")
     except OSError as e:
         logger.warning("Failed to seed the caretaker daily-job stamp at {}: {}", stamp_path, e)
         return
