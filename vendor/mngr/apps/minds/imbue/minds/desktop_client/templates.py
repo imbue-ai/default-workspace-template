@@ -14,6 +14,7 @@ Jinja2 macros + ``{% extends %}`` to JinjaX components.
 
 import html
 import os
+import re
 from collections.abc import Collection
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -39,6 +40,7 @@ from imbue.minds.primitives import OneTimeCode
 from imbue.minds.utils.sentry.frontend import frontend_sentry_browser_payload
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import InvalidName
 from imbue.mngr_forward.loading_page import render_loading_page
 
 TEMPLATE_DIR: Final[Path] = Path(__file__).resolve().parent / "templates"
@@ -275,11 +277,14 @@ def render_landing_page(
 # Hardcoded fallbacks for the workspace-creation form. Overridable via the
 # MINDS_WORKSPACE_* env vars only when the operator explicitly opts in -- see
 # ``_operator_workspace_default`` for the gating rationale.
-_FALLBACK_GIT_URL: Final[str] = "https://github.com/imbue-ai/forever-claude-template.git"
+# Public alias: the default forever-claude-template repo URL. The pre-baked Lima
+# image gate (lima_image_prefetch) keys on this to recognize the default workspace.
+DEFAULT_FOREVER_CLAUDE_GIT_URL: Final[str] = "https://github.com/imbue-ai/forever-claude-template.git"
+_FALLBACK_GIT_URL: Final[str] = DEFAULT_FOREVER_CLAUDE_GIT_URL
 # Pin to an annotated FCT tag so a shipped binary clones the exact FCT
 # snapshot it was verified against. Bump to a newer tag only after
 # re-verifying launch-to-msg CI against (this binary, the new tag).
-FALLBACK_BRANCH: Final[str] = "minds-v0.3.4"
+FALLBACK_BRANCH: Final[str] = "minds-v0.3.6"
 
 # Env var (set by ``just minds-start`` and the e2e workspace runner) that opts a
 # launch into the operator's local-worktree create-form defaults. Gating on an
@@ -291,6 +296,16 @@ FALLBACK_BRANCH: Final[str] = "minds-v0.3.4"
 # form back to the public GitHub FCT on ``main``) while leaving dev tiers exposed
 # to stray vars.
 _WORKSPACE_DEFAULTS_OPT_IN_ENV_VAR: Final[str] = "MINDS_USE_LOCAL_WORKSPACE_DEFAULTS"
+
+
+def is_local_workspace_defaults_opt_in() -> bool:
+    """Return whether the operator opted into local-worktree create-form defaults (the dev loop).
+
+    True when ``MINDS_USE_LOCAL_WORKSPACE_DEFAULTS=1`` -- the same signal that
+    routes the create form at the operator's local FCT worktree. The pre-baked
+    image gate treats this as "dev loop" and falls back to build-in-VM.
+    """
+    return os.environ.get(_WORKSPACE_DEFAULTS_OPT_IN_ENV_VAR) == "1"
 
 
 def _operator_workspace_default(env_var: str, fallback: str) -> str:
@@ -318,6 +333,27 @@ def _operator_workspace_default(env_var: str, fallback: str) -> str:
 # Base for auto-generated workspace host names. The generic default is never
 # used bare -- it is always numbered (``workspace-1``, ``workspace-2``, ...).
 _DEFAULT_HOST_NAME_BASE: Final[str] = "workspace"
+
+# Minds derives a short, pretty host-name slug from the user's arbitrary
+# display name. The slug target is well under mngr's ``HostName`` hard cap.
+_MINDS_HOST_NAME_SLUG_MAX_LENGTH: Final[int] = 32
+_NON_SLUG_CHARS_RE: Final = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_host_name_slug(text: str) -> HostName:
+    """Convert an arbitrary human-readable name into a normalized host-name slug.
+
+    Lowercases, replaces every run of non-alphanumeric characters with a single
+    dash, trims leading/trailing dashes, and truncates to the slug length cap.
+    Raises ``InvalidName`` if the result is empty (e.g. the input was all
+    emoji/punctuation).
+    """
+    lowered = text.strip().lower()
+    collapsed = _NON_SLUG_CHARS_RE.sub("-", lowered).strip("-")
+    truncated = collapsed[:_MINDS_HOST_NAME_SLUG_MAX_LENGTH].strip("-")
+    if not truncated:
+        raise InvalidName("Workspace name must include at least one letter or number.")
+    return HostName(truncated)
 
 
 @pure
@@ -352,23 +388,23 @@ def resolve_create_host_name(submitted_host_name: str, existing_host_names: Coll
     """Resolve the host name for a new workspace.
 
     The name defaults to an automatic ``workspace-N`` unless the operator types
-    one into the create form's advanced "Name" field. Resolution order:
+    one into the create form's "Name" field. Resolution order:
 
-    1. the user-submitted name, if any, used verbatim (validated as a
-       ``HostName``);
+    1. the user-submitted name, if any, normalized into a host-name slug
+       (lowercased, non-alphanumeric runs collapsed to dashes, truncated);
     2. the next free ``workspace-N`` name (smallest positive ``N`` whose
        ``workspace-N`` is not already in ``existing_host_names``).
 
-    The submitted name is used verbatim and never uniquified -- an explicit
-    collision is the API's 409 to reject, not ours to silently rename (a
-    duplicate name fails the ``mngr create`` pre-flight). Only the generated
-    ``workspace-N`` fallback consults ``existing_host_names`` to pick a free name.
+    The normalized submitted name is never uniquified -- an explicit collision
+    is the API's 409 to reject, not ours to silently rename (a duplicate name
+    fails the ``mngr create`` pre-flight). Only the generated ``workspace-N``
+    fallback consults ``existing_host_names`` to pick a free name.
 
-    Raises ``InvalidName`` if a non-empty submitted name is not a valid host
-    name; the generated fallback is always valid.
+    Raises ``InvalidName`` if a non-empty submitted name normalizes to an empty
+    slug (e.g. all punctuation/emoji); the generated fallback is always valid.
     """
     if submitted_host_name:
-        return HostName(submitted_host_name)
+        return normalize_host_name_slug(submitted_host_name)
     return make_unique_host_name(_DEFAULT_HOST_NAME_BASE, existing_host_names, always_number=True)
 
 
@@ -607,17 +643,36 @@ def render_consent_page(report_unexpected_errors: bool, include_logs: bool) -> s
 
 
 @pure
-def render_help_page(include_logs_setting: bool, workspace_agent_id: str) -> str:
-    """Render the get-help modal page (report a bug; agent help disabled for now).
+def render_help_page(
+    include_logs_setting: bool,
+    workspace_agent_id: str,
+    assist_available: bool = False,
+    description: str = "",
+    is_agent_report: bool = False,
+    workspace_name: str = "",
+) -> str:
+    """Render the get-help modal page (report a bug + optional agent help).
 
     ``include_logs_setting`` is the persistent include-logs preference: when on, logs are always
     attached and the form hides its one-off "include logs" checkbox. ``workspace_agent_id`` is the
     workspace the help flow was opened from ("" on a general screen), enabling workspace-scoped options.
+    ``assist_available`` enables the "have an agent help" option; it is set only when the workspace is
+    reachable/healthy enough to host an ``/assist`` chat (an unreachable workspace's chat couldn't be
+    seen or used), so it is distinct from ``workspace_agent_id``, which still scopes a bug report to a
+    stuck workspace. ``description`` pre-fills the report textarea -- non-empty when an in-workspace
+    ``/assist`` agent asked the app to open the modal with its diagnosis already written in.
+    ``is_agent_report`` is set for that agent-escalation flow: the modal then frames the pre-filled
+    report as the agent's submission (titled with ``workspace_name``, when known) and hides the mode
+    choice, since a report is already underway.
     """
     return CATALOG.render(
         "pages.Help",
         include_logs_setting=include_logs_setting,
         workspace_agent_id=workspace_agent_id,
+        assist_available=assist_available,
+        description=description,
+        is_agent_report=is_agent_report,
+        workspace_name=workspace_name,
     )
 
 
@@ -890,10 +945,11 @@ _RECOVERY_STYLE: Final[str] = """\
       #copy-diagnostics-btn:hover,
       #copy-ssh-btn:hover { background: #f4f4f5; }
 
-      /* A quiet "Report a problem" link under the primary action, always visible
-         so the user can open the bug-report modal from any recovery state. Kept
-         de-emphasized (text-only) so it never competes with the restart/retry
-         button above it. */
+      /* A quiet "Report a problem" link under the primary action, shown only on
+         the terminal recovery states that offer a restart/retry (not the
+         transient "Loading workspace" spinner, where there is nothing to report
+         yet). Kept de-emphasized (text-only) so it never competes with the
+         restart/retry button above it. */
       #recovery-report-btn {
         margin-top: 12px;
         align-self: center;
@@ -909,9 +965,11 @@ _RECOVERY_STYLE: Final[str] = """\
 
 # The recovery page's behavior. It drives the shared loading card (toggling
 # the spinner, heading and message) plus the recovery-only restart button and
-# error <details>. While a restart is in flight it auto-refreshes itself:
-# _handle_recovery_page re-renders from the live tracker state on every GET,
-# so a timed reload is the whole "is it healthy yet?" check.
+# error <details>. While a restart is in flight it polls the recovery route in
+# the background (so it does not steal focus from any overlaid view) and only
+# reloads once the state actually changes: _handle_recovery_page re-renders from
+# the live tracker state on every GET and exposes it via the X-Recovery-Status
+# header, which scheduleRefresh reads to decide "keep waiting" vs. "reload".
 _RECOVERY_SCRIPT: Final[str] = """\
       (function () {
         var root = document.querySelector('[data-agent-id]');
@@ -929,6 +987,9 @@ _RECOVERY_SCRIPT: Final[str] = """\
         // workspace-unreachable states, where a restart cannot help; re-runs the
         // host-health probe so the user can re-check reachability on demand.
         var retryBtn = document.getElementById('recovery-retry-btn');
+        // The "Report a problem" link. Hidden on the transient loading spinner;
+        // shown only on the terminal states that offer a restart or retry.
+        var reportBtn = document.getElementById('recovery-report-btn');
         // Holds the verbatim provider error on the backend-unreachable state;
         // hidden (and emptied) on every other state. Populated by
         // renderBackendUnreachable from the response's ``unreachable_reason``.
@@ -943,12 +1004,12 @@ _RECOVERY_SCRIPT: Final[str] = """\
 
         var latestHealth = null;
 
-        // A timed reload restarts the spinner's CSS animation from 0deg, so the
-        // interval must be a whole multiple of the spinner's 1s rotation period
-        // (see LOADING_PAGE_CSS' ``spin`` keyframe) -- otherwise the spinner
-        // visibly jumps back mid-rotation on every refresh. 1000ms also matches
-        // the mngr_forward proxy loader's 1s meta refresh, keeping the two
-        // loading pages a user may see during recovery in lockstep.
+        // The background convergence/healthy polls below run on this cadence.
+        // 1000ms matches the mngr_forward proxy loader's poll interval, keeping
+        // the two loading pages a user may see during recovery in lockstep, and
+        // is a whole multiple of the spinner's 1s rotation period (see
+        // LOADING_PAGE_CSS' ``spin`` keyframe) so the one eventual state-change
+        // reload lands at the animation's cycle boundary rather than mid-spin.
         var REFRESH_INTERVAL_MS = 1000;
 
         function show(el, visible) {
@@ -1010,15 +1071,40 @@ _RECOVERY_SCRIPT: Final[str] = """\
           if (returnTo) u += '?return_to=' + encodeURIComponent(returnTo);
           return u;
         }
+        // Convergence poll while a restart is in flight (the RESTARTING state).
+        // A full-page reload here would steal OS focus from any Electron view
+        // layered over this one -- e.g. the bug-report modal opened from
+        // "Report a problem" -- on every tick, making its inputs impossible to
+        // type into (Electron has no per-WebContentsView focus-on-navigation
+        // control; see https://github.com/electron/electron/issues/42578). So
+        // poll in the background instead: a HEALTHY tracker 302s back to the
+        // workspace (an opaque redirect, which we follow), and any non-restarting
+        // status (e.g. restart_failed) means we reload to render that state.
+        // While the status stays 'restarting' we leave the page -- and any
+        // focused overlay -- untouched and just poll again.
         function scheduleRefresh() {
-          setTimeout(function () { window.location.assign(pollUrl()); }, REFRESH_INTERVAL_MS);
+          setTimeout(function () {
+            fetch(pollUrl(), { credentials: 'same-origin', redirect: 'manual', cache: 'no-store' }).then(function (resp) {
+              if (resp.type === 'opaqueredirect' || (resp.status >= 300 && resp.status < 400)) {
+                window.location.assign(pollUrl());
+                return;
+              }
+              if ((resp.headers.get('X-Recovery-Status') || '') === 'restarting') {
+                scheduleRefresh();
+                return;
+              }
+              window.location.assign(pollUrl());
+            }, function () {
+              scheduleRefresh();
+            });
+          }, REFRESH_INTERVAL_MS);
         }
-        // Background convergence poll for the restart_failed state. Unlike
-        // scheduleRefresh (which reloads the whole page), this fetches pollUrl
-        // with manual redirect handling: while the workspace is still down the
-        // server returns the recovery HTML (200), which we discard so the
-        // displayed failure reason + diagnostics stay put and the heavy
-        // host-health probe is not re-run. Once the background probe loop flips
+        // Background convergence poll for the restart_failed state. Like
+        // scheduleRefresh it polls in the background rather than reloading, but
+        // it only ever navigates on a healthy redirect: while the workspace is
+        // still down the server returns the recovery HTML (200), which we
+        // discard so the displayed failure reason + diagnostics stay put and the
+        // heavy host-health probe is not re-run. Once the background probe loop flips
         // the tracker to HEALTHY the server starts 302ing to return_to, which
         // surfaces as an opaque-redirect response; we then follow it to send
         // the user back to the now-recovered workspace.
@@ -1035,6 +1121,38 @@ _RECOVERY_SCRIPT: Final[str] = """\
             });
           }, REFRESH_INTERVAL_MS);
         }
+        // The cheap liveness poll, idempotently armed. scheduleHealthyPoll re-hits
+        // the recovery route on a ~1s cadence; the route 302s to return_to the
+        // instant the background probe loop flips the tracker HEALTHY, so this sends
+        // the user home the moment the workspace answers -- regardless of which
+        // verdict (if any) is on screen. Every terminal state arms this, and the
+        // stuck entry arms it before the slow in-container probe even runs, so a
+        // healthy or self-recovering workspace is never stranded. A no-op when
+        // there is no return_to to go home to.
+        var healthyPollArmed = false;
+        function armHealthyPoll() {
+          if (healthyPollArmed || !returnTo) return;
+          healthyPollArmed = true;
+          scheduleHealthyPoll();
+        }
+        // While INDETERMINATE (no trustworthy evidence to classify), or after a
+        // probe request was dropped entirely (see runProbe), re-run the heavy probe
+        // on a slow cadence so we still converge to a real verdict if the workspace
+        // is genuinely wedged but host-reachable. Slow on purpose: each heavy probe
+        // can take tens of seconds, and the cheap liveness poll above already does
+        // the fast recovery work -- this is only the slow convergence path.
+        // Re-render via applyHealth (not renderLoading) so the "Reconnecting" state
+        // stays put while the background probe is in flight. ``autoDispatch`` is
+        // threaded through so a reprobe on the restart_failed entry (autoDispatch
+        // off) never starts auto-dispatching the restarts that entry suppresses.
+        var INDETERMINATE_REPROBE_MS = 8000;
+        function scheduleIndeterminateReprobe(autoDispatch) {
+          setTimeout(function () {
+            fetchHealth().then(function (data) { applyHealth(data, autoDispatch); }, function () {
+              scheduleIndeterminateReprobe(autoDispatch);
+            });
+          }, INDETERMINATE_REPROBE_MS);
+        }
 
 
         function renderLoading() {
@@ -1044,6 +1162,7 @@ _RECOVERY_SCRIPT: Final[str] = """\
           show(errorEl, false);
           show(hostBtn, false);
           show(retryBtn, false);
+          show(reportBtn, false);
           // A stale diagnostic from the previous tick would be misleading
           // while we're in flight to a fresh check; hide it and drop the
           // cached payload so renderDebugMenu starts blank next time.
@@ -1067,6 +1186,33 @@ _RECOVERY_SCRIPT: Final[str] = """\
           hostBtn.textContent = 'Restart workspace';
           hostBtn.classList.remove('secondary');
           show(hostBtn, true);
+          show(reportBtn, true);
+          // Keep watching for self-recovery: the workspace may come back on its own
+          // (a slow cold boot, a healed network) while this consent page is shown,
+          // and the cheap liveness poll returns the user home the moment it does.
+          armHealthyPoll();
+        }
+        // INDETERMINATE: we lack trustworthy evidence to classify -- the
+        // in-container probe timed out (observed nothing), or discovery has not
+        // re-observed the host since the outage began, so its host state may be
+        // stale. Render neither a verdict nor a restart button, just a live
+        // "reconnecting" spinner. The cheap liveness poll (armed here) returns the
+        // user home the instant the workspace answers; a slow heavy re-probe
+        // converges to a real tier if it is genuinely down and a fresh snapshot
+        // later lands. A live GET / 200 short-circuits to HEALTHY upstream, so we
+        // only reach here without direct positive evidence.
+        function renderReconnecting() {
+          titleEl.textContent = 'Reconnecting to your workspace';
+          messageEl.textContent =
+            'This is taking longer than usual. We\\'ll reconnect you automatically as soon '
+            + 'as your workspace responds.';
+          show(spinnerEl, true);
+          show(errorEl, false);
+          show(hostBtn, false);
+          show(retryBtn, false);
+          show(reportBtn, true);
+          if (providerReasonEl) { providerReasonEl.textContent = ''; show(providerReasonEl, false); }
+          armHealthyPoll();
         }
         function renderDispatchError() {
           titleEl.textContent = 'Workspace unresponsive';
@@ -1076,6 +1222,8 @@ _RECOVERY_SCRIPT: Final[str] = """\
           hostBtn.textContent = 'Restart workspace';
           hostBtn.classList.remove('secondary');
           show(hostBtn, true);
+          show(reportBtn, true);
+          armHealthyPoll();
         }
         // The provider/backend hosting this workspace is unreachable or rejected
         // us (connector down, docker daemon stopped or paused, expired login,
@@ -1102,10 +1250,15 @@ _RECOVERY_SCRIPT: Final[str] = """\
           show(errorEl, false);
           show(hostBtn, false);
           show(retryBtn, true);
+          show(reportBtn, true);
           // No diagnostics here: when the backend itself is unreachable the
           // in-container probes are moot -- the cause is the provider's own
           // error, shown verbatim above -- so suppress the Diagnostics disclosure.
           show(debugDetailsEl, false);
+          // Return the user to the workspace automatically once the backend
+          // recovers and the tracker flips HEALTHY (a resumed daemon, a restored
+          // login, a healed network all recover identically).
+          armHealthyPoll();
         }
 
         function postRestart(body) {
@@ -1133,22 +1286,21 @@ _RECOVERY_SCRIPT: Final[str] = """\
         }
 
         // Render (and, when ``autoDispatch``, dispatch a restart for) the tier in
-        // a host-health payload. The recovery page is only reached once discovery
-        // is fresh (the redirect is gated on freshness), so the classification is
-        // trustworthy and there is no transient awaiting-discovery state to
-        // converge through.
+        // a host-health payload. The page can be reached before discovery has
+        // re-observed the host after an outage (the STUCK redirect is no longer
+        // gated on freshness), so a classification the backend cannot yet trust
+        // arrives as the ``indeterminate`` tier -- handled below as a live
+        // "reconnecting" state rather than a verdict.
         function applyHealth(data, autoDispatch) {
           latestHealth = data || null;
           renderDebugMenu(latestHealth);
           var tier = data && data.dispatch_tier;
           // A backend-unreachable outcome short-circuits before any restart
           // dispatch on EVERY entry path: no restart can or should fire while the
-          // backend is unreachable or rejecting us. Render-only, and arm the
-          // background healthy-poll so the page auto-returns once the backend
-          // recovers (a resumed daemon and a restored login recover identically).
+          // backend is unreachable or rejecting us. Render-only; renderBackendUnreachable
+          // arms the healthy-poll so the page auto-returns once the backend recovers.
           if (tier === 'backend_unreachable') {
             renderBackendUnreachable(data);
-            scheduleHealthyPoll();
             return;
           }
           // The in-container probe shows the interface is actually answering
@@ -1163,9 +1315,24 @@ _RECOVERY_SCRIPT: Final[str] = """\
             scheduleRefresh();
             return;
           }
+          // No trustworthy evidence to classify (probe timed out, or discovery has
+          // not re-observed the host since the outage). Show a live "reconnecting"
+          // state and keep checking -- never a verdict or an auto-restart off
+          // non-evidence -- on EITHER entry path. Checked before the restart_failed
+          // branch below so an indeterminate result there also keeps checking
+          // rather than rendering a dead "Workspace unresponsive" verdict off
+          // non-evidence. The cheap liveness poll (armed by renderReconnecting)
+          // does the fast recovery; the slow re-probe converges to a real tier,
+          // preserving autoDispatch so the restart_failed entry stays no-dispatch.
+          if (tier === 'indeterminate') {
+            renderReconnecting();
+            scheduleIndeterminateReprobe(autoDispatch);
+            return;
+          }
           if (!autoDispatch) {
             // restart_failed entry: render unresponsive so the failure reason and
-            // the diagnostics list both stay visible.
+            // the diagnostics list both stay visible (renderUnresponsive keeps the
+            // healthy-poll running so a self-recovery still returns the user home).
             renderUnresponsive();
             return;
           }
@@ -1198,7 +1365,16 @@ _RECOVERY_SCRIPT: Final[str] = """\
           fetchHealth().then(function (data) {
             applyHealth(data, autoDispatch);
           }, function () {
-            renderUnresponsive();
+            // The probe request itself failed -- most often the machine slept and
+            // Chromium aborted the in-flight fetch (a dropped request is absence of
+            // evidence, not proof the workspace is down). Treat it exactly like an
+            // INDETERMINATE verdict: render the live "reconnecting" state and retry
+            // the probe on the slow cadence (preserving autoDispatch), while the
+            // cheap liveness poll armed by renderReconnecting returns the user home
+            // the instant the workspace answers. This is the post-sleep strand fix:
+            // a dropped request no longer dead-ends on a static unresponsive verdict.
+            renderReconnecting();
+            scheduleIndeterminateReprobe(autoDispatch);
           });
         }
 
@@ -1216,7 +1392,6 @@ _RECOVERY_SCRIPT: Final[str] = """\
         if (copyBtn) {
           copyBtn.addEventListener('click', copyDiagnostics);
         }
-        var reportBtn = document.getElementById('recovery-report-btn');
         if (reportBtn) {
           reportBtn.addEventListener('click', function () {
             // Ask the shell to open the get-help / report-a-bug modal, scoped to this
@@ -1243,21 +1418,24 @@ _RECOVERY_SCRIPT: Final[str] = """\
           renderLoading();
           scheduleRefresh();
         } else if (initialStatus === 'restart_failed') {
-          // Show the failure reason AND the diagnostic together: re-run
-          // the probe with auto-dispatch off so the renderUnresponsive path
-          // also has the diagnostics populated.
+          // Show the failure reason AND the diagnostic together: re-run the probe
+          // with auto-dispatch off so the renderUnresponsive path also has the
+          // diagnostics populated. renderUnresponsive arms the healthy-poll, so a
+          // failed restart is not terminal -- if the background probe loop recovers
+          // the workspace on its own (e.g. a cold boot that finished just after the
+          // restart worker's bounded wait elapsed) the user is returned home.
           runProbe(false);
-          // A failed restart is not necessarily terminal: the background probe
-          // loop keeps polling the workspace and may recover it on its own
-          // (e.g. a cold container boot that finished just after the restart
-          // worker's bounded wait elapsed). Watch for that recovery so we can
-          // return the user to the workspace without them having to act.
-          scheduleHealthyPoll();
         } else if (initialStatus === 'healthy') {
           // Degenerate: rendered HEALTHY with no return_to to 302 to. Offer a
           // manual restart rather than auto-dispatching one on a healthy page.
           renderUnresponsive();
         } else {
+          // Cheap-probe-first: start the liveness poll immediately so a workspace
+          // that is actually healthy (or recovers while the slow in-container probe
+          // is in flight) returns the user home within ~1s, without waiting on the
+          // heavy diagnosis probe. The heavy probe still runs to populate
+          // diagnostics and pick a restart tier, but it can no longer strand anyone.
+          armHealthyPoll();
           runProbe(true);
         }
       })();
@@ -1324,7 +1502,7 @@ def render_recovery_page(
         '      <p id="recovery-provider-reason" class="recovery-provider-reason hidden"></p>\n'
         '      <button id="recovery-host-btn" class="hidden">Restart workspace</button>\n'
         '      <button id="recovery-retry-btn" class="hidden">Retry</button>\n'
-        '      <button type="button" id="recovery-report-btn">Report a problem</button>\n'
+        '      <button type="button" id="recovery-report-btn" class="hidden">Report a problem</button>\n'
         '      <div class="recovery-troubleshooting">\n'
         '        <p class="recovery-troubleshooting-label">Troubleshooting</p>\n'
         + error_block
@@ -1437,6 +1615,20 @@ def render_sidebar_page(
         offset_x=offset_x,
         offset_y=offset_y,
     )
+
+
+@pure
+def render_overlay_host_page() -> str:
+    """Render the always-warm overlay host page loaded into the shared modal WebContentsView.
+
+    The page is a transparent shell hosting the overlay manager (overlay.js).
+    Every overlay -- the migrated workspace menu / inbox / help / sign-in modals
+    (as mount-on-demand iframes, created when opened and destroyed when closed)
+    and hover tooltips -- is in-page DOM driven over IPC, so opening an overlay
+    never costs a per-open page load. main.js loads this once at window creation
+    and keeps it mounted for the window's life.
+    """
+    return CATALOG.render("pages.OverlayHost")
 
 
 # -- Workspace/settings/sharing/accounts --
