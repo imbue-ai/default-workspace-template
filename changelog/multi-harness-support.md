@@ -1008,6 +1008,55 @@ flag exists on `mngr create`, and a real Modal sandbox is a genuine
 provisioning side effect, not a config check) -- that first real create is
 still the one thing only a live click-through proves.
 
+## Bug: `build_arg__extend` used docker's positional `.`, which Modal doesn't have
+
+That "first real create is still the one thing only a live click-through
+proves" line above was right -- it surfaced this immediately. The template
+above shipped with `build_arg__extend = ["--file=Dockerfile", "."]`, copied
+from docker/vultr/aws where `"."` is the real `docker build -f Dockerfile .`
+CLI convention (a positional build-context argument). A live `mngr create`
+against a real Modal environment failed at the build-arg-parsing step with
+`Error: Unknown build arguments: ['.']`.
+
+Root cause, and why `mngr config get` didn't catch it: `build_arg` is a
+generic, provider-agnostic field at the `CreateTemplate` schema level --
+`mngr config get` only validates that the TOML key/value resolves against
+that Pydantic model, not that the *contents* of a `build_arg` string list
+are valid input to whichever provider-specific parser eventually consumes
+them. Modal's own parser (`mngr_modal/instance.py::_parse_build_args`) is
+`argparse`-based with `--gpu`/`--cpu`/`--file`/`--context-dir`/etc named
+flags and **no positional argument defined at all**; it runs
+`parser.parse_known_args(...)` and raises `Unknown build arguments: {unknown}`
+for anything left over -- so the bare `"."` had nowhere to land.
+
+This is an avoidable mistake, not a fresh unknown: the exact parser code
+above had already been read once earlier in the same session (while
+building the template) and still wasn't cross-checked against the value
+being written.
+
+Fix: drop the `"."` entirely rather than translate it to
+`--context-dir=.`. `_get_modal_image_definition` (`instance.py:902`) already
+does `context_dir if context_dir is not None else dockerfile.parent` -- when
+`--context-dir` is omitted, it defaults to the Dockerfile's own parent
+directory, which is `.` here since `--file=Dockerfile` is a bare relative
+filename. So `build_arg__extend = ["--file=Dockerfile"]` alone reproduces
+the exact same effective context dir with one less thing to get subtly
+wrong later.
+
+Verified for real this time, not just via `mngr config get`:
+- Extracted `_parse_build_args`'s exact logic verbatim and ran it standalone
+  against both the old value (reproduced `Unknown build arguments: ['.']`,
+  the precise error reported) and the new value (parses clean, resolves to
+  the same effective context dir).
+- Then re-ran it through the actual code, not a standalone copy: mngr_modal's
+  real `instance_test.py` build-arg test suite (44 tests, mocked Modal SDK,
+  no network) passes against this checkout, and a one-off test built on its
+  own `make_modal_provider_with_mocks` fixture called the real
+  `ModalProviderInstance._parse_build_args` with the literal
+  `["--file=Dockerfile"]` and `["--file=Dockerfile", "."]` values now/previously
+  in `settings.toml`, confirming the same result against the live class, not
+  a reimplementation of it.
+
 ## Open issues
 
 Genuine dead ends, confirmed by testing against the live installed CLIs
