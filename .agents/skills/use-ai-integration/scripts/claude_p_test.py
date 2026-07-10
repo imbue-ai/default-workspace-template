@@ -44,6 +44,8 @@ def test_build_argv_completion_disables_tools_and_sets_system() -> None:
     assert argv[argv.index("--tools") + 1] == ""
     assert "--append-system-prompt" not in argv
     assert "--permission-mode" not in argv
+    # Only user settings load, so the repo's project/local hooks never fire.
+    assert argv[argv.index("--setting-sources") + 1] == "user"
 
 
 def test_build_argv_task_keeps_tools_and_sets_permission_mode() -> None:
@@ -60,6 +62,22 @@ def test_build_argv_task_keeps_tools_and_sets_permission_mode() -> None:
     assert argv[argv.index("--append-system-prompt") + 1] == "Only touch runtime/."
     assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
     assert "--system-prompt" not in argv
+    # A task also loads only user settings, so a repo's Stop hook cannot hang it.
+    assert argv[argv.index("--setting-sources") + 1] == "user"
+
+
+def test_build_argv_setting_sources_can_be_disabled() -> None:
+    # Passing None omits the flag (opt back into the repo's settings, rarely).
+    argv = claude_p._build_argv(
+        "do work",
+        model="claude-haiku-4-5",
+        system=None,
+        append_system=None,
+        tools=None,
+        permission_mode="bypassPermissions",
+        setting_sources=None,
+    )
+    assert "--setting-sources" not in argv
 
 
 def _success_payload(**overrides: object) -> dict[str, object]:
@@ -176,6 +194,8 @@ def test_child_env_unsets_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MNGR_AGENT_NAME", "lead")
     env = claude_p._child_env()
     assert claude_p._MAIN_CLAUDE_SESSION_ID not in env
+    # The child is marked a proxied subagent so mngr's Stop hooks skip themselves.
+    assert env.get(claude_p._MNGR_PROXY_CHILD_VAR) == "1"
     # Without the opt-in, the mngr identity vars are left in place.
     assert env.get("MNGR_AGENT_NAME") == "lead"
 
