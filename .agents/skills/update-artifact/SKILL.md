@@ -25,6 +25,15 @@ Pick **committed** when the user was explicitly in the design loop *and* the
 change is already committed. Otherwise **emergent** (the safe default; its
 Gate 1 re-surfaces the design for an approval pass).
 
+**Confirm the user actually wants the change before you dispatch (committed
+origin).** Applying a change live is not the user approving it. Do not launch
+the hardening worker in the same turn you made the change: end that turn by
+surfacing the change and asking whether it's what they wanted, and only invoke
+this flow once they've given a clear go-ahead. If they ask for adjustments,
+make them live and ask again -- the worker hardens only a version the user has
+signed off on. (The emergent origin is transparent work with no live change to
+approve, so this gate doesn't apply there; its Gate 1 covers design approval.)
+
 "Repeatable" covers deterministic extensions (an extra flag, a new output
 format), model-judgement extensions (an additional judgement step with a stable
 recipe, scripted as `[ai-script]`), and executor meta-work. One-off creative or
