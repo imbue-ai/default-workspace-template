@@ -2,7 +2,9 @@
 # Assemble a clean, shareable "inspiration" snapshot on top of the FCT base the
 # mind was created from, then commit it. Run by the launch-task WORKER the
 # publish-inspiration skill dispatches, from the worker's own git worktree
-# (cwd = worktree repo root); the live mind's /code is never touched.
+# (cwd = worktree repo root); the live mind's /code is never touched. This is
+# v1 of the inspirations flow (see INSPIRATION_FLOW_VERSION below); the
+# generated manifest records it as `format: v1` in its front-matter.
 #
 # The dev `create-new-mind-repo` recipe is NOT available in the VM, so this is
 # self-contained. It does the assembly + secret scan + manifest/thumbnail +
@@ -29,6 +31,10 @@
 # resolve to a bootable template tree.
 
 set -euo pipefail
+
+# Version of the inspirations flow (and of the manifest format this script
+# writes into the generated manifest's `format:` front-matter key).
+INSPIRATION_FLOW_VERSION="v1"
 
 # --- argument parsing --------------------------------------------------------
 
@@ -334,6 +340,7 @@ cat > "$MANIFEST" <<MANIFEST_EOF
 title: ${TITLE}
 description: ${manifest_description}
 thumbnail: ${THUMBNAIL}
+format: ${INSPIRATION_FLOW_VERSION}
 ---
 
 # ${TITLE}

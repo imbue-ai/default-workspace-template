@@ -121,6 +121,14 @@
   `github-git-write`), and `/use-inspiration` uses it to fetch private
   inspiration repos when the anonymous fetch fails.
 
+- The inspirations flow is tagged **v1** so future revisions are
+  distinguishable: both skills carry a version line under their titles, the
+  generated manifest front-matter gains a `format: v1` key (manifests
+  published before versioning have no `format:` key and are treated as v1),
+  `build_inspiration.sh` records `INSPIRATION_FLOW_VERSION="v1"`, and every
+  published repo's GitHub description ends with the literal marker
+  `(minds inspiration v1)`.
+
 - The chat confirmation now embeds the designed thumbnail as a markdown image
   (the SVG's absolute worktree path), so the user sees exactly what will
   represent their inspiration while confirming the title, description, repo
