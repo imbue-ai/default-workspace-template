@@ -99,11 +99,70 @@ function relInside(fileName) {
   return { inRepo, rel };
 }
 
+// Smallest node covering pos, then climb to the statement whose leading trivia
+// holds the doc comment (function/class/var declaration at block/module level).
+function declNodeAt(sf, pos) {
+  function find(node) {
+    if (pos < node.getStart(sf) || pos >= node.getEnd()) return undefined;
+    for (const child of node.getChildren(sf)) {
+      const hit = find(child);
+      if (hit) return hit;
+    }
+    return node;
+  }
+  let node = find(sf);
+  if (!node) return undefined;
+  while (node.parent && !ts.isSourceFile(node.parent) && !ts.isBlock(node.parent) && !ts.isModuleBlock(node.parent)) {
+    node = node.parent;
+  }
+  return node;
+}
+
+// The leading comment block above a declaration -- including plain `//` runs,
+// which tsserver's quickInfo documentation (JSDoc only) drops. Cleans comment
+// markers and keeps the block adjacent to the declaration (stops at a blank line).
+function leadingCommentBlock(sf, pos) {
+  const node = declNodeAt(sf, pos);
+  if (!node) return "";
+  const text = sf.getFullText();
+  const ranges = ts.getLeadingCommentRanges(text, node.getFullStart()) || [];
+  if (!ranges.length) return "";
+  const lines = [];
+  let prevEndLine = null;
+  for (const r of ranges) {
+    const startLine = sf.getLineAndCharacterOfPosition(r.pos).line;
+    if (prevEndLine !== null && startLine - prevEndLine > 1) lines.length = 0; // blank gap: keep only the adjacent block
+    let raw = text.slice(r.pos, r.end).trim();
+    if (raw.startsWith("/*")) {
+      raw = raw.replace(/^\/\*+/, "").replace(/\*+\/$/, "");
+      for (const ln of raw.split("\n")) {
+        const s = ln.trim().replace(/^\*+/, "").trim();
+        if (s) lines.push(s);
+      }
+    } else if (raw.startsWith("//")) {
+      const s = raw.replace(/^\/+/, "").trim();
+      if (s) lines.push(s);
+    }
+    prevEndLine = sf.getLineAndCharacterOfPosition(r.end).line;
+  }
+  return lines.join("\n");
+}
+
 function doHover(fileName, pos) {
   const info = service.getQuickInfoAtPosition(fileName, pos);
   if (!info) return { contents: "" };
   const sig = ts.displayPartsToString(info.displayParts || []);
-  const doc = ts.displayPartsToString(info.documentation || []);
+  let doc = ts.displayPartsToString(info.documentation || []);
+  if (!doc) {
+    // tsserver only surfaces JSDoc; fall back to the raw leading comment block
+    // (e.g. `//` lines) at the symbol's definition, matching the tree-sitter engine.
+    const defs = service.getDefinitionAtPosition(fileName, pos);
+    const program = service.getProgram();
+    if (defs && defs.length && program) {
+      const targetSf = program.getSourceFile(defs[0].fileName);
+      if (targetSf) doc = leadingCommentBlock(targetSf, defs[0].textSpan.start);
+    }
+  }
   let contents = "";
   if (sig) contents += "```typescript\n" + sig + "\n```";
   if (doc) contents += (contents ? "\n\n" : "") + doc;
