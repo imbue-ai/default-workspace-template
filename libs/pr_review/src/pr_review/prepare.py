@@ -215,42 +215,116 @@ def _run_prepare(tree: RepoTree) -> None:
     _write_status(tree, status)
 
 
+def _first_line(text: str, width: int) -> str:
+    line = text.strip().splitlines()[0] if text.strip() else ""
+    return line if len(line) <= width else line[:width] + " …"
+
+
+def _tail_lines(text: str, count: int, width: int) -> list[str]:
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    tail = lines[-count:]
+    return [ln if len(ln) <= width else ln[:width] + " …" for ln in tail]
+
+
+def _render_stream_event(ev: dict) -> list[str]:
+    """Turn one ``claude -p`` stream-json event into human-readable log lines.
+
+    Surfaces what the user cares about while waiting -- the shell commands the
+    agent runs (npm/pnpm installs) and their output, plus the agent's own
+    narration -- and drops the noise (hooks, thinking, token counters).
+    """
+    out: list[str] = []
+    etype = ev.get("type")
+    if etype == "assistant":
+        for block in (ev.get("message") or {}).get("content") or []:
+            btype = block.get("type")
+            if btype == "text":
+                text = (block.get("text") or "").strip()
+                if text:
+                    out.append(text)
+            elif btype == "tool_use":
+                name = block.get("name") or "tool"
+                inp = block.get("input") or {}
+                if name == "Bash":
+                    out.append("$ " + _first_line(inp.get("command") or "", 300))
+                else:
+                    target = inp.get("file_path") or inp.get("path") or inp.get("description") or ""
+                    out.append(f"[{name}] {_first_line(str(target), 200)}".rstrip())
+    elif etype == "user":
+        text = ""
+        result = ev.get("tool_use_result")
+        if isinstance(result, dict):
+            text = result.get("stdout") or ""
+            if result.get("stderr"):
+                text += ("\n" if text else "") + result["stderr"]
+        if not text:
+            for block in (ev.get("message") or {}).get("content") or []:
+                if block.get("type") == "tool_result":
+                    content = block.get("content")
+                    if isinstance(content, str):
+                        text += content
+                    elif isinstance(content, list):
+                        text += "".join(p.get("text", "") for p in content if isinstance(p, dict))
+        out.extend(_tail_lines(text, 12, 300))
+    return out
+
+
 def _run_agent(tree: RepoTree) -> _AgentRun:
-    """Run the headless prepare agent in the tree; write its output to the log."""
+    """Run the headless prepare agent in the tree, streaming its activity to the
+    log line-by-line so the UI can show live progress while it installs."""
     argv = [
         "claude", "-p", _AGENT_PROMPT,
-        "--output-format", "json",
+        "--output-format", "stream-json", "--verbose",
         "--model", _AGENT_MODEL,
         "--permission-mode", "bypassPermissions",
         "--append-system-prompt", _AGENT_APPEND_SYSTEM,
     ]
     env = dict(os.environ)
     env.pop("MAIN_CLAUDE_SESSION_ID", None)
-    proc = subprocess.run(
+    log_path = _log_path(tree)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
         argv,
         cwd=str(tree.root),
         stdin=subprocess.DEVNULL,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
         text=True,
+        bufsize=1,
         env=env,
-        check=False,
-        timeout=_AGENT_TIMEOUT_S,
     )
-    text, cost = "", 0.0
+    killer = threading.Timer(_AGENT_TIMEOUT_S, proc.kill)
+    killer.start()
+    result_text, cost = "", 0.0
     try:
-        data = json.loads(proc.stdout)
-        text = (data.get("result") or "") if isinstance(data, dict) else ""
-        cost = float(data.get("total_cost_usd") or 0.0) if isinstance(data, dict) else 0.0
-    except ValueError:
-        text = proc.stdout[-4000:]
-    log = text
-    if proc.stderr.strip():
-        log += "\n\n[stderr]\n" + proc.stderr[-2000:]
-    _log_path(tree).parent.mkdir(parents=True, exist_ok=True)
-    _log_path(tree).write_text(log)
-    if proc.returncode != 0:
-        raise PrepareError(f"prepare agent exited {proc.returncode}: {proc.stderr.strip()[:300]}")
-    return _AgentRun(text=text, cost_usd=cost)
+        with open(log_path, "w") as log:
+            log.write(f"Preparing rich types for {tree.repo} — this can take a few minutes.\n")
+            log.flush()
+            for raw in proc.stdout or []:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                for entry in _render_stream_event(ev):
+                    log.write(entry + "\n")
+                log.flush()
+                if ev.get("type") == "result":
+                    result_text = ev.get("result") or ""
+                    try:
+                        cost = float(ev.get("total_cost_usd") or 0.0)
+                    except (TypeError, ValueError):
+                        cost = 0.0
+        proc.wait()
+    finally:
+        killer.cancel()
+    if proc.returncode not in (0, None):
+        raise PrepareError(f"prepare agent exited {proc.returncode}")
+    return _AgentRun(text=result_text, cost_usd=cost)
 
 
 def _read_agent_findings(tree: RepoTree) -> dict:

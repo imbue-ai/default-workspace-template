@@ -174,9 +174,12 @@ header.top{position:sticky;top:0;z-index:20;background:rgba(10,13,19,.78);backdr
 .types-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border-soft);border-radius:999px;padding:3px 10px;font-size:11px;font-family:var(--sans);color:var(--faint);cursor:pointer;user-select:none}
 .types-pill:hover{border-color:var(--border);color:var(--muted)}
 .types-pill.ready{color:var(--ok);border-color:var(--ok-soft)}
-.types-pill.installing{color:var(--warn);border-color:var(--warn-soft)}
+.types-pill.installing{color:var(--warn);border-color:var(--warn-soft);animation:types-pulse 1.4s ease-in-out infinite}
 .types-pill.failed{color:var(--danger);border-color:var(--danger-soft)}
 .types-pill .types-cta{color:var(--accent);font-weight:600}
+@keyframes types-pulse{0%,100%{opacity:1}50%{opacity:.5}}
+/* live install log while preparing */
+.types-log{margin:9px 0 0;padding:8px 11px;max-height:150px;overflow:auto;background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--r-sm);font-family:var(--mono);font-size:11px;line-height:1.5;color:var(--muted);white-space:pre-wrap;word-break:break-word}
 .statusbadge .dot{width:8px;height:8px;border-radius:50%}
 .detail-title-edit{font-family:var(--display);font-size:20px;font-weight:600;width:100%;background:var(--bg);border:1px solid var(--accent);border-radius:var(--r-sm);color:var(--text);padding:6px 10px}
 .detail-title-edit:focus{outline:none;box-shadow:0 0 0 3px var(--accent-soft)}

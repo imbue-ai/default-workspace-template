@@ -685,6 +685,7 @@ function renderDetailShell() {
         <span class="diffstat"><span class="add">+${pr.diffstat.additions}</span> <span class="del">&minus;${pr.diffstat.deletions}</span> &middot; ${pr.diffstat.changed_files} files</span>
         <span class="types-pill" id="typesPill" hidden></span>
       </div>
+      <pre class="types-log" id="typesLog" hidden></pre>
       <div class="detail-tabs">
         <button class="dtab on" data-dtab="files">Files changed <span class="tcount">${DETAIL.files.length}</span></button>
         <button class="dtab" data-dtab="conversation">Conversation <span class="tcount">${convCount}</span></button>
@@ -729,8 +730,24 @@ function typesBase() {
   const [owner, name] = pr.head_repo.split("/");
   return `api/repo/${owner}/${name}/${pr.head_sha}/prepare`;
 }
-function startTypesPoll() { if (!TYPES_POLL) TYPES_POLL = setInterval(refreshTypesPill, 4000); }
+function startTypesPoll() { if (!TYPES_POLL) TYPES_POLL = setInterval(refreshTypesPill, 2500); }
 function stopTypesPoll() { if (TYPES_POLL) { clearInterval(TYPES_POLL); TYPES_POLL = null; } }
+
+// Show the live install log while preparing (and on failure, so the error is
+// visible); hide it once basic/ready.
+function updateTypesLog(state, tail) {
+  const box = document.getElementById("typesLog");
+  if (!box) return;
+  if (state === "installing" || state === "failed") {
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+    box.textContent = tail || (state === "installing" ? "Starting…" : "");
+    box.hidden = false;
+    if (atBottom) box.scrollTop = box.scrollHeight;  // keep pinned to newest unless scrolled up
+  } else {
+    box.hidden = true;
+    box.textContent = "";
+  }
+}
 
 async function refreshTypesPill() {
   const pill = document.getElementById("typesPill");
@@ -740,6 +757,7 @@ async function refreshTypesPill() {
   const state = st.state || "absent";
   if (TYPES_LAST_STATE === "installing" && state === "ready") flashNote("Rich types are ready — hover to see resolved types.");
   TYPES_LAST_STATE = state;
+  updateTypesLog(state, st.log_tail);
   pill.hidden = false;
   pill.className = "types-pill " + state;
   if (state === "ready") {
