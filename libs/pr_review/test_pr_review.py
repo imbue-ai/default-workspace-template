@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 from flask.testing import FlaskClient
-from pr_review import github, prepare
+from pr_review import ask, github, prepare
 from pr_review.runner import app
 from pr_review.testing import seed_repo_cache
 
@@ -272,3 +272,70 @@ def test_prepare_clear_resets_state(client: FlaskClient, tmp_path: Path, monkeyp
         assert status.get_json()["state"] == "absent"
     finally:
         app.config.pop("PREPARE_LAUNCHER", None)
+
+
+# --- ask-an-agent (per-line questions) ---
+
+
+def test_ask_requires_question(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed(tmp_path, monkeypatch)
+    resp = client.post(f"/api/pr/{_REPO}/1/ask", json={"path": "main.py", "line": 3, "head_sha": _SHA})
+    assert resp.status_code == 400
+    assert "required" in resp.get_json()["error"]
+
+
+def test_ask_requires_head_sha(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed(tmp_path, monkeypatch)
+    resp = client.post(f"/api/pr/{_REPO}/1/ask", json={"path": "main.py", "line": 3, "question": "why?"})
+    assert resp.status_code == 400
+
+
+def test_ask_rejects_bad_side(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed(tmp_path, monkeypatch)
+    resp = client.post(
+        f"/api/pr/{_REPO}/1/ask",
+        json={"path": "main.py", "line": 3, "question": "why?", "head_sha": _SHA, "side": "MIDDLE"},
+    )
+    assert resp.status_code == 400
+
+
+def test_ask_launches_and_persists(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed(tmp_path, monkeypatch)
+    launched: list = []
+    app.config["ASK_LAUNCHER"] = launched.append
+    try:
+        resp = client.post(
+            f"/api/pr/{_REPO}/7/ask",
+            json={"path": "main.py", "line": 3, "question": "what runs here?", "head_sha": _SHA},
+        )
+        assert resp.status_code == 200
+        rec = resp.get_json()
+        assert rec["state"] == "running"
+        assert len(launched) == 1
+        # Listable and fetchable by id.
+        listed = client.get(f"/api/pr/{_REPO}/7/questions").get_json()["questions"]
+        assert [r["id"] for r in listed] == [rec["id"]]
+        status = client.get(f"/api/pr/{_REPO}/7/questions/{rec['id']}")
+        assert status.status_code == 200
+        assert status.get_json()["question"] == "what runs here?"
+    finally:
+        app.config.pop("ASK_LAUNCHER", None)
+
+
+def test_question_status_unknown_is_404(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed(tmp_path, monkeypatch)
+    resp = client.get(f"/api/pr/{_REPO}/7/questions/nope123")
+    assert resp.status_code == 404
+
+
+def test_delete_question(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed(tmp_path, monkeypatch)
+    tree = github.ensure_repo_tree(_REPO, _SHA)
+    rec = ask.create_question(
+        tree, _REPO, 8, path="main.py", line=3, side="RIGHT",
+        question="q", launcher=lambda _t: None,
+    )
+    resp = client.post(f"/api/pr/{_REPO}/8/questions/{rec['id']}/delete", json={})
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert client.get(f"/api/pr/{_REPO}/8/questions").get_json()["questions"] == []

@@ -602,6 +602,12 @@ let pendingComments = [];        // { path, line, side, body }
 let CZ_MOD = [];                 // thread view-zone ids on the modified editor
 let CZ_ORIG = [];                // thread view-zone ids on the original editor
 let VIEWER = "";
+// "Ask an agent": per-line questions answered by a read-only local agent,
+// shown inline at their line (separate view zones from review comments).
+let ASK_QUESTIONS = [];          // saved question records for the current PR
+let AZ_MOD = [];                 // ask view-zone ids on the modified editor
+let AZ_ORIG = [];                // ask view-zone ids on the original editor
+const ASK_POLLS = {};            // qid -> poll interval id, for running questions
 function makeModel(content, path, side) {
   const uri = monaco.Uri.parse("pr://" + (modelSeq++) + "/" + encodeURI(path));
   const model = monaco.editor.createModel(content, langFor(path), uri);
@@ -633,6 +639,9 @@ async function openDetail(repo, number) {
   } catch (e) {
     DETAIL.conversation = { comments: [], reviews: [], review_comments: [] };
   }
+  try {
+    ASK_QUESTIONS = (await api(`api/pr/${owner}/${name}/${number}/questions`)).questions || [];
+  } catch (e) { ASK_QUESTIONS = []; }
   renderDetailShell();
   if (DETAIL.files.length) selectChangedFile(DETAIL.files[0].path);
 }
@@ -1097,7 +1106,9 @@ function disposeEditors() {
   for (const m of CREATED_MODELS) { MODEL_META.delete(m.uri.toString()); m.dispose(); }
   CREATED_MODELS = [];
   CZ_MOD = []; CZ_ORIG = [];   // zones die with their editor
+  AZ_MOD = []; AZ_ORIG = [];
   closeCommentDock();
+  closeAskDock();
   document.getElementById("editor").innerHTML = "";
 }
 
@@ -1252,6 +1263,156 @@ async function submitReview() {
   }
 }
 
+// ---- ask an agent (per-line questions answered by a read-only local agent) ----
+// A right-click "Ask an agent" opens a composer; on submit the backend launches
+// a read-only agent inside the PR checkout, and its streamed investigation +
+// answer show inline at the line (persisted, so they survive a reopen).
+const ASK_MODELS = TYPES_MODELS;   // same model choices as the rich-types setup
+function lastAskModel() {
+  try { return localStorage.getItem("prr.askModel") || "claude-sonnet-4-6"; } catch (_e) { return "claude-sonnet-4-6"; }
+}
+
+function attachAskAction(editor, side) {
+  editor.addAction({
+    id: "pr-ask-agent-" + side,
+    label: "Ask an agent",
+    contextMenuGroupId: "1_modification",
+    contextMenuOrder: 1,
+    run: (ed) => openAskComposer(ed, ed.getPosition().lineNumber, side),
+  });
+}
+
+function closeAskDock() {
+  const dock = document.getElementById("askDock");
+  if (dock) dock.remove();
+}
+
+// Docked below the editor -- a textarea inside a Monaco view zone can't take
+// keyboard focus -- mirroring the review-comment composer.
+function openAskComposer(editor, line, side) {
+  closeCommentDock();
+  closeAskDock();
+  const sel = lastAskModel();
+  const opts = ASK_MODELS.map(m => `<option value="${m.id}"${m.id === sel ? " selected" : ""}>${esc(m.label)}</option>`).join("");
+  const dock = document.createElement("div");
+  dock.id = "askDock";
+  dock.className = "comment-dock ask-dock";
+  dock.innerHTML = `<div class="cd-head">Ask an agent about <code>${esc(activeFile)}:${line}</code> · ${side === "LEFT" ? "old" : "new"} side
+      <span class="spacer" style="flex:1"></span><button class="btn ghost sm" id="adCancel">Cancel</button></div>
+    <textarea class="composer" id="adText" placeholder="Ask a question about this line — a local agent reads the code and answers here…"></textarea>
+    <div class="composer-actions">
+      <select id="adModel" class="ask-model">${opts}</select>
+      <button class="btn primary sm" id="adAsk">Ask agent</button>
+    </div>`;
+  document.querySelector(".editor-wrap").appendChild(dock);
+  const reviewBar = document.getElementById("reviewBar");
+  if (reviewBar) dock.style.marginBottom = reviewBar.offsetHeight + 10 + "px";
+  const ta = dock.querySelector("#adText");
+  ta.focus();
+  dock.querySelector("#adCancel").onclick = closeAskDock;
+  dock.querySelector("#adAsk").onclick = () => submitAsk(line, side);
+}
+
+async function submitAsk(line, side) {
+  const dock = document.getElementById("askDock");
+  if (!dock) return;
+  const question = dock.querySelector("#adText").value.trim();
+  if (!question) { closeAskDock(); return; }
+  const model = dock.querySelector("#adModel").value;
+  try { localStorage.setItem("prr.askModel", model); } catch (_e) { /* not persisted */ }
+  const pr = DETAIL.pr;
+  const path = activeFile;
+  let rec;
+  try {
+    rec = await api2(`api/pr/${repoPath()}/${pr.number}/ask`, {
+      path, line, side, head_repo: pr.head_repo, head_sha: pr.head_sha, question, model,
+    });
+  } catch (e) { flashNote("Couldn't ask the agent: " + e.message); return; }
+  closeAskDock();
+  ASK_QUESTIONS.push(rec);
+  renderFileAsks(path);
+  startAskPoll(rec.id);
+  flashNote("The agent is investigating your question…");
+}
+
+// Render one investigation log line, styled by its kind marker (shared with the
+// rich-types log): "● " narration, "$ " a command, "» " a call, else output.
+function askBodyHTML(rec) {
+  const logHtml = rec.log_tail ? rec.log_tail.split("\n").map(typesLogLineHTML).join("\n") : "";
+  if (rec.state === "running") {
+    return `<div class="az-status">Investigating…</div><pre class="az-log types-log">${logHtml || "Starting…"}</pre>`;
+  }
+  if (rec.state === "failed") {
+    return `<div class="az-status az-fail">Couldn't finish${rec.error ? ": " + esc(rec.error) : ""}.</div>`
+      + (logHtml ? `<details class="az-details"><summary>Investigation log</summary><pre class="az-log types-log">${logHtml}</pre></details>` : "");
+  }
+  return `<div class="az-answer">${mdLite(rec.answer || "(no answer)")}</div>`
+    + (logHtml ? `<details class="az-details"><summary>Investigation</summary><pre class="az-log types-log">${logHtml}</pre></details>` : "");
+}
+
+function askNode(rec) {
+  const wrap = document.createElement("div");
+  wrap.className = "cz az" + (rec.state === "running" ? " running" : "");
+  wrap.dataset.qid = rec.id;
+  wrap.innerHTML = `<div class="az-head"><span class="az-badge">Agent</span>
+      <span class="az-q">${esc(rec.question)}</span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn ghost sm az-remove" title="Remove this question">&times;</button></div>
+    <div class="az-body">${askBodyHTML(rec)}</div>`;
+  wrap.querySelector(".az-remove").onclick = () => removeAsk(rec.id);
+  return wrap;
+}
+
+function renderFileAsks(path) {
+  if (!diffEditor) return;
+  const me = diffEditor.getModifiedEditor();
+  const orig = diffEditor.getOriginalEditor();
+  clearZones(me, AZ_MOD);
+  clearZones(orig, AZ_ORIG);
+  for (const rec of ASK_QUESTIONS.filter(q => q.path === path && q.line)) {
+    const onLeft = rec.side === "LEFT";
+    addZone(onLeft ? orig : me, rec.line, askNode(rec), onLeft ? AZ_ORIG : AZ_MOD);
+  }
+  // Pin any running log to its newest line once the zone is laid out.
+  requestAnimationFrame(() => document.querySelectorAll(".az.running .az-log").forEach(l => { l.scrollTop = l.scrollHeight; }));
+}
+
+async function removeAsk(qid) {
+  stopAskPoll(qid);
+  const idx = ASK_QUESTIONS.findIndex(q => q.id === qid);
+  const path = idx >= 0 ? ASK_QUESTIONS[idx].path : activeFile;
+  if (idx >= 0) ASK_QUESTIONS.splice(idx, 1);
+  renderFileAsks(path);
+  try { await api2(`api/pr/${repoPath()}/${DETAIL.pr.number}/questions/${qid}/delete`, {}); }
+  catch (e) { flashNote("Couldn't remove: " + e.message); }
+}
+
+function startAskPoll(qid) {
+  if (ASK_POLLS[qid]) return;
+  ASK_POLLS[qid] = setInterval(() => pollAsk(qid), 2500);
+}
+function stopAskPoll(qid) {
+  if (ASK_POLLS[qid]) { clearInterval(ASK_POLLS[qid]); delete ASK_POLLS[qid]; }
+}
+function stopAllAskPolls() { Object.keys(ASK_POLLS).forEach(stopAskPoll); }
+function resumeAskPolls() {
+  for (const rec of ASK_QUESTIONS) if (rec.state === "running") startAskPoll(rec.id);
+}
+
+async function pollAsk(qid) {
+  if (!DETAIL) { stopAskPoll(qid); return; }
+  let rec;
+  try { rec = await api(`api/pr/${repoPath()}/${DETAIL.pr.number}/questions/${qid}`); }
+  catch (e) { return; }
+  const i = ASK_QUESTIONS.findIndex(q => q.id === qid);
+  if (i >= 0) ASK_QUESTIONS[i] = rec; else ASK_QUESTIONS.push(rec);
+  if (rec.path === activeFile) renderFileAsks(activeFile);
+  if (rec.state !== "running") {
+    stopAskPoll(qid);
+    flashNote(rec.state === "done" ? "The agent answered your question." : "The agent couldn't finish investigating.");
+  }
+}
+
 async function selectChangedFile(path) {
   activeFile = path;
   setActiveFitem("sb-changed", path);
@@ -1288,13 +1449,25 @@ async function selectChangedFile(path) {
     hideUnchangedRegions: { enabled: true, contextLineCount: 3, minimumLineCount: 4 },
     scrollBeyondLastLine: false, renderOverviewRuler: true, wordWrap: wrapValue(),
   });
+  // Inline overlays (review-comment threads + agent Q&A) attach as Monaco view
+  // zones. The diff editor discards modified-side view zones added before its
+  // first diff computation completes, so (re)render them whenever the diff
+  // updates. Subscribe BEFORE setModel so the first diff event is never missed.
+  const renderOverlays = () => { renderFileComments(path); renderFileAsks(path); };
+  // One-shot: render once the first diff computation lands (repeated re-renders
+  // would churn the zones), then stop listening. Subscribe before setModel so
+  // the event is never missed.
+  const diffSub = diffEditor.onDidUpdateDiff(() => { diffSub.dispose(); renderOverlays(); });
   diffEditor.setModel({ original, modified });
   attachUsageAction(diffEditor.getModifiedEditor());
   attachUsageAction(diffEditor.getOriginalEditor());
   attachPyDefAction(diffEditor.getModifiedEditor());
   attachCommentAction(diffEditor.getModifiedEditor(), "RIGHT");
   attachCommentAction(diffEditor.getOriginalEditor(), "LEFT");
-  renderFileComments(path);
+  attachAskAction(diffEditor.getModifiedEditor(), "RIGHT");
+  attachAskAction(diffEditor.getOriginalEditor(), "LEFT");
+  renderOverlays();
+  resumeAskPolls();
 }
 
 // ---- go-to-definition (Python via Jedi, JS/TS via tree-sitter) ----
@@ -1514,6 +1687,8 @@ function closeDetail() {
   const bar = document.getElementById("reviewBar");
   if (bar) bar.remove();
   pendingComments = [];
+  stopAllAskPolls();
+  ASK_QUESTIONS = [];
   DETAIL = null; BROWSE_FILES = null; activeFile = null;
   document.getElementById("detail").classList.add("hidden");
   document.getElementById("list").classList.remove("hidden");
