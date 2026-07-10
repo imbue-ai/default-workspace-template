@@ -24,16 +24,37 @@ handles the things that are easy to get wrong by hand:
   without an API key, so the isolated cwd is the keyless workaround.)
 
 - ``claude_p_task(prompt, *, append_system=None, system=None, model=...,
-  permission_mode="bypassPermissions")`` -- a one-shot agentic task that needs
-  tools / file access. Tools stay enabled and it runs in the current working
-  directory (the repo). ``bypassPermissions`` is load-bearing: a headless run has
-  no human to approve tool use, so otherwise Read/Write/Bash are auto-denied.
+  permission_mode="bypassPermissions", work_dir=None)`` -- a one-shot agentic
+  task that needs tools / file access. Tools stay enabled. ``bypassPermissions``
+  is load-bearing: a headless run has no human to approve tool use, so otherwise
+  Read/Write/Bash are auto-denied. By default it runs in the caller's current
+  working directory; pass ``work_dir`` to root it elsewhere (e.g. an isolated
+  temp dir, referencing target files by absolute path) -- see the hook note.
 
-Both unset ``MAIN_CLAUDE_SESSION_ID`` in the child environment (an inherited value
-makes the child look like mngr's managed main session and trips its
-stop/readiness hooks), request ``--output-format json``, run the blocking
-subprocess synchronously, and raise on a non-zero exit or a ``claude -p`` error
-result rather than silently returning empty text.
+Both harden the child against the surrounding repo's agent harness, which is the
+recurring footgun for headless runs -- without this the child inherits the repo's
+Stop hooks and hangs (a mngr Stop hook fires ``exit 2`` when a headless child
+tries to stop), or follows the repo's ``CLAUDE.md`` (e.g. "commit your changes")
+and starts doing git/tk work. Both entry points therefore:
+
+- Pass ``--setting-sources user`` so only user-level settings load; the repo's
+  **project/local hooks never load, regardless of the working directory**. This
+  is the auth-safe way to disable hooks -- ``--bare`` also drops them but forces
+  ``ANTHROPIC_API_KEY`` auth, which the keyless path does not have.
+- Set ``MNGR_CLAUDE_SUBAGENT_PROXY_CHILD=1`` in the child env (the marker mngr's
+  own hooks honor to skip) as defense in depth, and unset ``MAIN_CLAUDE_SESSION_ID``
+  (an inherited value makes the child look like mngr's managed main session).
+
+Hooks are dropped by the two measures above no matter the cwd. ``CLAUDE.md`` is
+*memory*, not a setting source, so it is still auto-discovered from the working
+directory: ``claude_p_completion`` sidesteps it with an isolated temp cwd, and a
+``claude_p_task`` rooted in a repo still sees that repo's ``CLAUDE.md`` -- counter
+it with a firm ``append_system``/``system``, or pass an isolated ``work_dir`` and
+reference files by absolute path (do this when pointing at an untrusted checkout).
+
+Both request ``--output-format json``, run the blocking subprocess synchronously,
+and raise on a non-zero exit or a ``claude -p`` error result rather than silently
+returning empty text.
 """
 
 from __future__ import annotations
@@ -48,9 +69,20 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 _MAIN_CLAUDE_SESSION_ID = "MAIN_CLAUDE_SESSION_ID"
+# The marker mngr's own hooks check to skip themselves for a proxied subagent.
+# Setting it makes the mngr Stop hooks (which otherwise `exit 2` and hang a
+# headless child that has no `.git` in its cwd) no-op. Defense in depth alongside
+# `--setting-sources user`, which already keeps project/local hooks from loading.
+_MNGR_PROXY_CHILD_VAR = "MNGR_CLAUDE_SUBAGENT_PROXY_CHILD"
 # mngr identity vars its own subagent proxy strips; dropping them is defense in
 # depth (the session-hook fix only needs MAIN_CLAUDE_SESSION_ID unset).
 _MNGR_AGENT_VARS = ("MNGR_AGENT_STATE_DIR", "MNGR_AGENT_NAME", "MNGR_HOST_DIR")
+
+# Load only user-level settings so the repo's project/local hooks (Stop hooks,
+# PreToolUse gates, etc.) never load, regardless of the working directory. This
+# is the auth-safe hook switch: `--bare` also disables hooks but forces API-key
+# auth, which the keyless path lacks.
+_SETTING_SOURCES = "user"
 
 _DEFAULT_MODEL = "claude-haiku-4-5"
 
@@ -80,9 +112,11 @@ class ClaudeResult:
 
 
 def _child_env(strip_mngr_agent_vars: bool = False) -> dict[str, str]:
-    """Build the child environment: a copy of os.environ minus the session var."""
+    """Build the child environment: os.environ minus the session var, plus the
+    proxied-subagent marker so mngr's own Stop hooks skip themselves."""
     env = dict(os.environ)
     env.pop(_MAIN_CLAUDE_SESSION_ID, None)
+    env[_MNGR_PROXY_CHILD_VAR] = "1"
     if strip_mngr_agent_vars:
         for var in _MNGR_AGENT_VARS:
             env.pop(var, None)
@@ -97,14 +131,21 @@ def _build_argv(
     append_system: str | None,
     tools: str | None,
     permission_mode: str | None,
+    setting_sources: str | None = _SETTING_SOURCES,
 ) -> list[str]:
     """Assemble the ``claude -p`` argv. Pure, so flag emission is unit-testable.
 
     ``tools`` is checked against ``None`` (not falsiness): the empty string is the
     meaningful "disable every tool" value, distinct from "leave the flag off and
     inherit the default tool set".
+
+    ``setting_sources`` defaults to ``"user"`` so no project/local hooks load; pass
+    ``None`` only if you deliberately want the repo's settings (rare, and risky for
+    a headless run).
     """
     argv = ["claude", "-p", prompt, "--output-format", "json"]
+    if setting_sources is not None:
+        argv += ["--setting-sources", setting_sources]
     if model:
         argv += ["--model", model]
     if system is not None:
@@ -249,9 +290,18 @@ def claude_p_task(
     append_system: str | None = None,
     model: str = _DEFAULT_MODEL,
     permission_mode: str | None = "bypassPermissions",
+    work_dir: str | None = None,
     strip_mngr_agent_vars: bool = False,
 ) -> ClaudeResult:
-    """One agentic task: tools enabled, run in the current (repo) working dir.
+    """One agentic task: tools enabled. Hooks are dropped (``--setting-sources
+    user`` + the proxy-child env marker) so the run cannot inherit the repo's
+    Stop hooks and hang.
+
+    ``work_dir`` sets the child's cwd (``None`` = the caller's cwd, i.e. the repo).
+    The cwd's ``CLAUDE.md`` is still discovered (it is memory, not a setting
+    source), so when pointing at an untrusted checkout, pass an isolated
+    ``work_dir`` and reference target files by absolute path in the prompt rather
+    than running inside the tree.
 
     ``append_system`` layers task instructions on Claude Code's default agent
     prompt; pass ``system`` to replace it outright (rare -- you usually want the
@@ -266,4 +316,4 @@ def claude_p_task(
         tools=None,
         permission_mode=permission_mode,
     )
-    return _run_blocking(argv, env=env, cwd=None)
+    return _run_blocking(argv, env=env, cwd=work_dir)
