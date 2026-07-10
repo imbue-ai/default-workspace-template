@@ -314,6 +314,22 @@ mechanical bug — documented there as an explicit open decision.
   symlink aside, which was Claude-implementation detail not relevant to
   the others). The two files now cross-reference each other in their
   self-modification sections so a shared-content change gets made in both.
+
+  **CORRECTION (2026-07-10, superseding the paragraph above):** the
+  `global_instructions_md`/`GEMINI.md`-relay approach described above was
+  wrong and has been fully removed (mngr commit `8031b80`, fct vendor copy
+  synced). Direct inspection of the real installed `agy` binary (`strings`
+  on the binary, per explicit user instruction to verify against real CLIs
+  rather than assume) showed agy already natively discovers `AGENTS.md`
+  walking up from cwd to repo root, same as codex/opencode — no relay
+  needed at all. This was the **second** time this exact wrong claim was
+  made and "fixed" in this project; the first "fix" (earlier in the same
+  session, described in the paragraph above) was itself never checked
+  against the real binary either. No fct-side code is needed for
+  antigravity's `AGENTS.md` discovery — it just works, same as the other
+  two. See `changelog/multi-harness-support.md`'s "Correction:
+  antigravity's `global_instructions_md` was never needed" entry for full
+  detail.
 - **code-guardian** (adjacent, not formally in Phase 3): reverted an
   earlier attempt to embed a port directly in fct. Instead opened
   https://github.com/imbue-ai/code-guardian/pull/25 (draft) adding real
@@ -496,6 +512,178 @@ mind) -- confirmed with the user before proceeding. Could not verify the
 hover submenu visually (no browser tooling available this session);
 flagged as a real gap rather than skipped silently. See
 `changelog/multi-harness-support.md` for full detail.
+
+---
+
+## Live create-testing pass (started 2026-07-09, IN PROGRESS — real blocking bug, unresolved)
+
+Everything above (Phases 1-7) was built and reviewed but, until this pass,
+never taken through a real `mngr create` end-to-end for anything but
+docker. This pass is that: actually creating real agents against real
+providers and fixing what breaks. **Pick up here.**
+
+### Branch / repo state
+
+- `imbue-ai/forever-claude-template@multi-harness-support` — pushed, latest
+  commit `6cedb231`.
+- `imbue-ai/mngr@multi-harness-support` — pushed, latest commit `8031b80`.
+- **These two branches are mutually required.** fct's Docker/Modal build
+  does an `ADD https://api.github.com/repos/imbue-ai/mngr/git/refs/heads/<branch>`
+  instruction during build (a cache-busting ref-check against the live
+  GitHub branch, exact downstream use not fully traced this session) — this
+  404s if the mngr-side branch doesn't exist upstream. If you branch either
+  repo again (e.g. rename `multi-harness-support`), branch the other one to
+  match and push both, or this same 404 recurs.
+- Minds environment this was tested against: **`minds-staging`** (Modal
+  environment name `minds-staging-2925fe0a3b6b4fe1ba1f5b1beb98104b`), not
+  the local `minds-eval-box` container — this answers an earlier open
+  question in this project about which orchestrator was stale.
+
+### Verification standard (explicit, repeated user instruction — follow this)
+
+Do not guess CLI flags, config schemas, or provider behavior from memory or
+by pattern-matching a sibling provider's config. Check against the real
+installed CLI binaries (`agy`, `codex`, `opencode`, `mngr`) or real source
+before shipping a config change. Specifically: `mngr config get <path>`
+**only** validates that a TOML key/value resolves against the generic
+`CreateTemplate` Pydantic schema — it does **not** validate the *contents*
+of list/string fields (like `build_arg`) against whatever provider-specific
+parser eventually consumes them. That exact gap shipped a real bug this
+session (bug 3 below); `mngr config get` said it was fine, a real `mngr
+create` proved it wasn't. Where possible, actually execute the real parser
+function against your exact configured value (see bug 3's fix for the
+pattern: extract/import the real function, feed it the literal value going
+into `settings.toml`, assert on the result) rather than reasoning about it
+from reading the source.
+
+### Bugs found and fixed this session (real `mngr create` failures, not review findings)
+
+1. **Antigravity `global_instructions_md`** — added, then found wrong via
+   direct `agy` binary inspection, fully removed. See the CORRECTION note
+   inline in Phase 3 status above for full detail. **Second time this exact
+   wrong claim was shipped in this project** — first "fix" was also never
+   checked against the real binary.
+2. **Missing `[create_templates.modal]`** in fct's `.mngr/settings.toml` —
+   `mngr create --template modal` failed with "Template 'modal' not found."
+   Added, modeled on vultr/aws (`agent_creator.py`'s own comment: "same
+   remote shape"), minus their VM-specific `start_arg`/
+   `post_host_create_outer_command` fields (Modal has no persistent
+   VM/SSH layer to reboot-recover). Verified only via `mngr config get`
+   at the time — insufficient, see bug 3.
+3. **Modal `build_arg__extend` used docker's bare `"."` positional** —
+   `["--file=Dockerfile", "."]`, copied from docker/vultr/aws where `"."`
+   is the real `docker build -f Dockerfile .` CLI convention. Modal's own
+   parser (`mngr_modal/instance.py::_parse_build_args`, argparse-based) has
+   **no positional argument at all**, only named flags — the bare `"."`
+   was rejected: `Error: Unknown build arguments: ['.']`. Fixed by
+   dropping it entirely (not translating to `--context-dir=.`): when
+   `--context-dir` is omitted, `_get_modal_image_definition`
+   (`instance.py:902`) already defaults it to the Dockerfile's own parent
+   directory, which is `.` here since `--file=Dockerfile` is a bare
+   relative filename — one less thing to get wrong later. Verified for
+   real, not just `mngr config get`: extracted `_parse_build_args`'s exact
+   logic and ran it standalone against old/new values (reproduced the
+   precise user-reported error on old, clean pass on new, matching
+   effective context dir), then re-ran through the real
+   `ModalProviderInstance._parse_build_args` via its own mocked test
+   fixture (`make_modal_provider_with_mocks`) — 44 existing unit tests
+   plus one new ad-hoc check against the literal `settings.toml` value,
+   all pass. Committed as fct `1baaf912` (fix) + `6cedb231` (changelog).
+
+### CURRENT BLOCKING BUG — unresolved, start here
+
+After fixing bug 3, a real `mngr create --template modal` against
+`minds-staging` got much further — past build-arg parsing, through
+installing claude/codex/antigravity/opencode CLIs, through `uv sync`
+(181 + 68 + 86 + 19 packages across the various pyproject layers), through
+`scripts/build_workspace.sh` (frontend build + all workspace packages) —
+but failed on the **last** image layer:
+
+```
+Building image im-gR1Ep1HkLkwFBKdeGUbFp8
+=> Step 0: FROM base
+=> Step 1: COPY scripts/fct_seed.sh /usr/local/bin/fct-seed
+Built image im-gR1Ep1HkLkwFBKdeGUbFp8 in 4.43s
+
+Building image im-whSbrm85dBPhMam5Vq8e6s
+=> Step 0: FROM base
+=> Step 1: RUN chmod +x /usr/local/bin/fct-seed
+running container: starting container: starting root container: starting sandbox: failed to create process working directory "/mngr/code/": failed to create directory "/mngr/code/": file exists
+Terminating task due to error: failed to run builder command "chmod +x /usr/local/bin/fct-seed": container exit status: 128
+Error: Failed to create Modal sandbox: Image build for im-whSbrm85dBPhMam5Vq8e6s failed.
+```
+
+Context that matters for diagnosis: an earlier layer in the same build
+(`im-buA1oIeeIFQgTuiOB94gFj`, `RUN mv /mngr/code /docker_build_code`, took
+64s) relocates the build output before final assembly — presumably a
+convention shared with docker/vultr/aws's Dockerfile stages, not modal-
+specific. `WORKDIR /mngr/code/` was set many layers earlier
+(`im-zcCgVkyfGuyrhjPsoxWYAB`). Modal's build log shows it materializes
+**every single Dockerfile instruction as its own chained Sandbox** (`=>
+Step 0: FROM base` / `=> Step 1: <one instruction>` / `Saving image...`,
+repeated ~40 times across this build) — i.e. each layer boots a fresh
+sandbox from the previous saved image and runs exactly one instruction.
+The failure is that instruction-sandbox's own creation logic trying to
+(re)materialize `/mngr/code/` as the new sandbox's process working
+directory (because `WORKDIR` still points there from many layers back) and
+finding the path already occupied — immediately after the prior layer
+moved the original directory away with `mv`.
+
+Not yet root-caused. Hypotheses, in the order worth checking:
+1. Modal's per-layer-cached sandbox snapshotting doesn't correctly carry
+   forward a `mv`'d-away directory's absence into the next layer's sandbox
+   (a caching/snapshot bug or an artifact of how `_build_image_from_
+   dockerfile_contents` applies each instruction — re-read that function
+   in full, not just the `context_dir` logic already read this session, at
+   `libs/mngr_modal/imbue/mngr_modal/instance.py` around lines 860-910 and
+   wherever the per-instruction sandbox loop itself lives).
+2. Docker/vultr/aws build as one continuous container (real `docker build`
+   or equivalent), so a mid-Dockerfile `mv` of the WORKDIR target has never
+   been exercised against Modal's structurally different per-layer-sandbox
+   model before now — this may be a genuine, previously-undiscovered
+   incompatibility between the shared Dockerfile and Modal's build
+   mechanism, not a simple config mistake like bugs 1-3 above.
+3. If so, the fix is likely either: a Modal-specific adjustment to
+   `_build_image_from_dockerfile_contents`'s WORKDIR-recreation step (skip
+   recreating it if the parent already resolved a `mv` away from it), or
+   restructuring the shared Dockerfile so the `mv /mngr/code
+   /docker_build_code` step doesn't leave a dangling `WORKDIR` reference at
+   all (e.g. an explicit `WORKDIR /` before the `mv`, or moving the `mv` to
+   the very last instruction so nothing after it depends on the old
+   WORKDIR). Check whether docker/vultr/aws's Dockerfile stage even needs
+   this `mv` step for modal specifically, or whether it can be skipped/
+   reordered for modal only, before assuming a fix to shared code is
+   required.
+
+### Explicit authorization for the next agent (from the user, verbatim intent)
+
+"You have permission to directly do `mngr create` with docker and test
+everything until we have ported stuff over 1:1 to the other harnesses per
+our plan document." Concretely:
+
+- **Docker provider creates are pre-authorized**, repeatedly, for iterative
+  testing — don't ask before running `mngr create --template docker
+  --template docker_<harness>` (or whatever the correct template chain is
+  per `agent_creator.py`) for any of the four harnesses. Docker is local,
+  free, and the fast iteration loop for this work.
+- **Cloud providers (modal/vultr/aws/imbue_cloud) are NOT blanket-
+  authorized** for repeated real creates — those provision real, billed
+  infrastructure. The modal create that surfaced the bug above was run by
+  the user through minds' own UI, not something to keep re-triggering
+  directly without asking. If the docker-provider pass reveals the same
+  class of bug likely also affects a cloud provider, say so and ask before
+  spending real cloud resources to confirm it.
+- **Goal**: all four harnesses (claude/codex/antigravity/opencode) working
+  1:1 through a real, live `mngr create` → running agent → renders
+  correctly in minds' UI, per every phase above. Iterate on real failures
+  as they surface, fixing each with the verification standard above (real
+  code execution, not pattern-matched guesses) — this is exactly the kind
+  of "test everything, don't guess" work the user has been asking for
+  across this whole session.
+- **Do not lose branch state again.** Commit and push incrementally as
+  fixes land, on both repos as needed — the single biggest, most avoidable
+  failure of this whole project so far was two separate sessions' worth of
+  real work sitting uncommitted/unpushed until a live error surfaced it.
 
 ---
 
