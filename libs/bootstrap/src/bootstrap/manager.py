@@ -23,7 +23,7 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 
@@ -63,9 +63,6 @@ _ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TIMEZONE_FETCH_ATTEMPTS = 3
 _TIMEZONE_FETCH_RETRY_SECONDS = 3.0
 _TIMEZONE_FETCH_TIMEOUT_SECONDS = 5.0
-# Conservative IANA-name shape (America/New_York, Etc/GMT+5, UTC). No dots, so
-# a hostile/broken response cannot traverse out of the zoneinfo dir.
-_TZ_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_+\-]+(/[A-Za-z0-9_+\-]+)*$")
 
 # The Caretaker's daily-job stamp, checked every minute by
 # scripts/run_daily_job.sh (invoked from /etc/cron.d). The script treats a
@@ -757,14 +754,20 @@ def _apply_container_timezone(
 ) -> bool:
     """Point /etc/localtime and /etc/timezone at the named IANA zone.
 
-    The name must match _TZ_NAME_PATTERN and resolve to an existing zoneinfo
-    file (together these also guard against path traversal from a malicious
-    response). The localtime swap is a temp symlink + os.replace so a concurrent
-    reader never sees the file missing. Must run before supervisord starts cron:
-    cron reads the timezone once at daemon start. Best-effort: returns False
-    with a warning on any failure.
+    The name is validated by loading it with ``ZoneInfo`` -- the same check the
+    minds desktop client applies before serving the value -- which by spec
+    rejects absolute paths and ``..`` components (so a malicious response
+    cannot traverse out of the zoneinfo dir) and proves the zone is real. The
+    ``is_file`` check below still matters: ZoneInfo may resolve a zone from
+    elsewhere on TZPATH, but the symlink must point into ``zoneinfo_dir``
+    specifically. The localtime swap is a temp symlink + os.replace so a
+    concurrent reader never sees the file missing. Must run before supervisord
+    starts cron: cron reads the timezone once at daemon start. Best-effort:
+    returns False with a warning on any failure.
     """
-    if not _TZ_NAME_PATTERN.fullmatch(tz_name):
+    try:
+        ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError, KeyError, OSError):
         logger.warning("Ignoring invalid timezone name {!r}", tz_name)
         return False
     zone_file = zoneinfo_dir / tz_name
