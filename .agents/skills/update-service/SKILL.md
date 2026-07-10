@@ -76,6 +76,54 @@ change that only alters behavior behind an unchanged surface as contained.
 Either way, the mechanics of surfacing the change to the user are the same
 live loop:
 
+## One editor at a time: the service lease
+
+Every chat shares this one working tree and this one live process, so two
+agents editing the same service at the same time interleave destructively --
+there is no merge step where that could be reconciled. Concurrent edits must
+be *serialized*, and the serialization token is an advisory lease held as a
+regular `tk` ticket (regular tickets are visible across agents).
+
+**Pre-flight, before touching the service's code or config:**
+
+1. Check whether another agent is mid-edit:
+
+   ```bash
+   tk ready > /tmp/service-leases.txt
+   grep "editing service <name>" /tmp/service-leases.txt
+   ```
+
+   If a lease exists and `tk show <id>` says it is not yours, do **not**
+   silently proceed: tell the user another chat is currently modifying this
+   service and let them decide (wait, or explicitly override). If the holder
+   looks abandoned -- its agent is no longer running, or the lease is hours
+   old with no notes -- say that too and offer to break it. The lease is
+   advisory: it is broken deliberately by the user's call, never silently.
+
+2. Take your own lease:
+
+   ```bash
+   LEASE_ID=$(tk create "editing service <name>" -t chore \
+       -d "Held by $MNGR_AGENT_NAME while editing this service; released at turn end.")
+   ```
+
+   then `tk start "$LEASE_ID"` (as its own command).
+
+**Release the lease at the end of every editing turn** with
+`tk close "$LEASE_ID" "Done editing for this turn."` -- never hold it across
+an idle wait for user feedback. On the next feedback round, take a fresh
+lease before editing again. Between turns the changes are committed, so
+another chat editing sequentially on top is safe; only *simultaneous* editing
+needs the lease.
+
+**An in-flight harden pass does not block you -- the foreground wins.** If
+`tk ready` also shows an in-progress `update <name>` or `heal <name>` ticket
+(a background pass hardening an earlier change to this service), proceed with
+your edit; your change simply makes that pass stale. Leave a note on that
+ticket (`tk add-note <id> "..."`) so its owner coalesces at merge time. The
+full contention rules live in
+[`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).
+
 ## The live change loop
 
 Make the change interactive and keep the user's view in sync as you go.
@@ -276,3 +324,9 @@ working site.)
 `update-artifact` and `heal-artifact` also stand on their own as turn-end
 skills; this skill's turn-end step is just the service-shaped entry into
 them.
+
+Both flows enforce single-flight per artifact: if another chat already has a
+harden pass in flight for this service, they leave a note on its ticket
+instead of dispatching a sibling, and the eventual superseding pass covers
+both changes. See
+[`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).
