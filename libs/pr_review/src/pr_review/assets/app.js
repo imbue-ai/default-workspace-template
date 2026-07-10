@@ -766,7 +766,13 @@ async function refreshTypesPill() {
 }
 
 async function enableRichTypes(isRetry) {
-  const ok = confirm("Enable rich types for this repo?\n\nThis launches an agent that installs the repo's dependencies (running their install scripts) so a TypeScript language server can resolve real types. It can take a few minutes and uses your Claude usage.");
+  // Use the in-app modal, not window.confirm() -- the app runs in a sandboxed
+  // iframe (no allow-modals), so confirm()/alert()/prompt() are ignored.
+  const ok = await confirmDialog({
+    title: "Enable rich types?",
+    message: "This launches an agent that installs this repo's dependencies (running their install scripts) so a TypeScript language server can resolve real types. It can take a few minutes and uses your Claude usage.",
+    confirmLabel: "Enable",
+  });
   if (!ok) return;
   try { await api2(typesBase(), isRetry ? { force: true } : {}); }
   catch (e) { flashNote("Couldn't start: " + e.message); return; }
