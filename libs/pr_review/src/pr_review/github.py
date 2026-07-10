@@ -10,6 +10,7 @@ files in full context and let the user open any file in the repo.
 
 import base64
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -19,7 +20,11 @@ from pathlib import Path
 from typing import NamedTuple
 
 API = "https://api.github.com"
-REPO_CACHE = Path("runtime/pr-review/repos")
+# All persistent state lives under DATA_DIR; the env override lets a throwaway
+# instance run against a copied store on a spare port without touching the live
+# one (see the update-service skill's data-isolation flow).
+DATA_DIR = Path(os.environ.get("PR_REVIEW_DATA_DIR", "runtime/pr-review"))
+REPO_CACHE = DATA_DIR / "repos"
 
 # The transport seam: a callable that runs ``latchkey curl`` with the given
 # argument list and returns stdout bytes. Every network function takes one as an

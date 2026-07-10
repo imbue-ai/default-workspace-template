@@ -15,12 +15,13 @@ page's own fetches, so the app serves at ``/`` and its frontend uses
 *relative* fetch URLs (no leading slash) to stay behind the proxy.
 """
 
+import os
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request
 from werkzeug.serving import run_simple
 
-from pr_review import github, jsintel, prepare, pyintel, tsintel
+from pr_review import ask, github, jsintel, prepare, pyintel, tsintel
 
 app = Flask("pr_review", static_folder=None)
 
@@ -157,6 +158,60 @@ def api_create_review(owner: str, repo: str, number: int) -> Response:
         return jsonify(github.create_review(f"{owner}/{repo}", number, commit_id, body, event, comments))
     except github.GitHubError as exc:
         return _err(str(exc))
+
+
+@app.route("/api/pr/<owner>/<repo>/<int:number>/questions")
+def api_list_questions(owner: str, repo: str, number: int) -> Response:
+    """Every saved "ask an agent" question for a PR (to restore them in the diff)."""
+    return jsonify({"questions": ask.list_questions(f"{owner}/{repo}", number)})
+
+
+@app.route("/api/pr/<owner>/<repo>/<int:number>/ask", methods=["POST"])
+def api_ask(owner: str, repo: str, number: int) -> Response:
+    """Launch a read-only local agent to investigate a question about a diff line."""
+    full = f"{owner}/{repo}"
+    payload = request.get_json(silent=True) or {}
+    path = (payload.get("path") or "").strip()
+    question = (payload.get("question") or "").strip()
+    head_repo = payload.get("head_repo") or full
+    head_sha = payload.get("head_sha") or ""
+    side = payload.get("side") or "RIGHT"
+    model = payload.get("model")
+    try:
+        line = int(payload.get("line", 0))
+    except (TypeError, ValueError):
+        return _err("line must be an integer", status=400)
+    if not path or not question:
+        return _err("path and question are required", status=400)
+    if not head_sha:
+        return _err("head_sha is required", status=400)
+    if side not in ("LEFT", "RIGHT"):
+        return _err("side must be 'LEFT' or 'RIGHT'", status=400)
+    try:
+        tree = github.ensure_repo_tree(head_repo, head_sha)
+        # ASK_LAUNCHER lets tests inject a fake launcher; None -> real agent.
+        launcher = app.config.get("ASK_LAUNCHER")
+        return jsonify(ask.create_question(
+            tree, full, number, path=path, line=line, side=side,
+            question=question, model=model, launcher=launcher,
+        ))
+    except github.GitHubError as exc:
+        return _err(str(exc))
+
+
+@app.route("/api/pr/<owner>/<repo>/<int:number>/questions/<qid>")
+def api_question_status(owner: str, repo: str, number: int, qid: str) -> Response:
+    """One question's current state + streamed investigation log (for polling)."""
+    result = ask.question_status(f"{owner}/{repo}", number, qid)
+    if result is None:
+        return _err("question not found", status=404)
+    return jsonify(result)
+
+
+@app.route("/api/pr/<owner>/<repo>/<int:number>/questions/<qid>/delete", methods=["POST"])
+def api_delete_question(owner: str, repo: str, number: int, qid: str) -> Response:
+    """Remove a saved question (its record and log)."""
+    return jsonify(ask.delete_question(f"{owner}/{repo}", number, qid))
 
 
 @app.route("/api/pr/<owner>/<repo>/<int:number>/file")
@@ -354,7 +409,8 @@ def api_repo_file(owner: str, repo: str, sha: str) -> Response:
 
 
 def main() -> None:
-    run_simple("127.0.0.1", 8082, app, threaded=True, use_reloader=False, use_debugger=False)
+    port = int(os.environ.get("PR_REVIEW_PORT", "8082"))
+    run_simple("127.0.0.1", port, app, threaded=True, use_reloader=False, use_debugger=False)
 
 
 if __name__ == "__main__":
