@@ -89,6 +89,33 @@ def render_stream_event(ev: dict) -> list[str]:
     return out
 
 
+# Load only user-level settings so a reviewed repo's project/local hooks never
+# load, even when the agent runs with its cwd inside a checked-out tree (as
+# prepare does, to install deps). This is the auth-safe hook switch -- `--bare`
+# also disables hooks but forces API-key auth, which the keyless run lacks. mngr's
+# own hooks are handled separately by the proxy-child env marker (see _agent_env).
+_SETTING_SOURCES = "user"
+
+
+def _build_argv(
+    prompt: str,
+    *,
+    model: str,
+    append_system_prompt: str,
+    permission_mode: str,
+    setting_sources: str = _SETTING_SOURCES,
+) -> list[str]:
+    """Assemble the ``claude -p`` argv. Pure, so flag emission is unit-testable."""
+    return [
+        "claude", "-p", prompt,
+        "--output-format", "stream-json", "--verbose",
+        "--setting-sources", setting_sources,
+        "--model", model,
+        "--permission-mode", permission_mode,
+        "--append-system-prompt", append_system_prompt,
+    ]
+
+
 def _agent_env() -> dict:
     env = dict(os.environ)
     # The child must not be mistaken for the managed main session.
@@ -120,13 +147,12 @@ def run_streaming_agent(
     happening" banner). Returns the agent's final result text and total cost.
     Raises :class:`AgentError` if the process exits non-zero (e.g. timed out).
     """
-    argv = [
-        "claude", "-p", prompt,
-        "--output-format", "stream-json", "--verbose",
-        "--model", model,
-        "--permission-mode", permission_mode,
-        "--append-system-prompt", append_system_prompt,
-    ]
+    argv = _build_argv(
+        prompt,
+        model=model,
+        append_system_prompt=append_system_prompt,
+        permission_mode=permission_mode,
+    )
     log_path.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
         argv,
