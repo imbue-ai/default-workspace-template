@@ -81,6 +81,29 @@ def test_clear_prepared_removes_state_and_node_modules(tmp_path: Path) -> None:
     assert prepare.prepare_status(tree) == {"state": "absent"}
 
 
+def test_render_stream_event_logs_bash_command() -> None:
+    ev = {"type": "assistant", "message": {"content": [
+        {"type": "thinking", "thinking": "hmm"},
+        {"type": "tool_use", "name": "Bash", "input": {"command": "npm install", "description": "Install"}},
+    ]}}
+    assert prepare._render_stream_event(ev) == ["$ npm install"]
+
+
+def test_render_stream_event_logs_assistant_text() -> None:
+    ev = {"type": "assistant", "message": {"content": [{"type": "text", "text": "Installing dependencies now."}]}}
+    assert prepare._render_stream_event(ev) == ["Installing dependencies now."]
+
+
+def test_render_stream_event_logs_tool_output_tail() -> None:
+    ev = {"type": "user", "tool_use_result": {"stdout": "line1\nline2\nline3", "stderr": ""}}
+    assert prepare._render_stream_event(ev) == ["line1", "line2", "line3"]
+
+
+def test_render_stream_event_ignores_noise() -> None:
+    assert prepare._render_stream_event({"type": "system", "subtype": "init"}) == []
+    assert prepare._render_stream_event({"type": "result", "result": "done"}) == []
+
+
 def test_log_tail_reads_recent_lines(tmp_path: Path) -> None:
     tree = _tree(tmp_path)
     prep = tree.root / prepare.PREP_DIRNAME
