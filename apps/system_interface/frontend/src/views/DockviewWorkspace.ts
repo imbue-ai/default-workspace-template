@@ -22,6 +22,8 @@ import { CreateBrowserModal } from "./CreateBrowserModal";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { ShareModal } from "./ShareModal";
 import { reloadInterface } from "../reload";
+import { icon } from "./icons";
+import type { IconName } from "./icons";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
 import {
   addAgentsUpdatedListener,
@@ -43,15 +45,6 @@ import {
 } from "../models/AgentManager";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
-
-// SVG path constants for tab action icons
-const SVG_CLOSE = '<line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/>';
-const SVG_TRASH =
-  '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>';
-const SVG_SHARE =
-  '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>';
-const SVG_REFRESH =
-  '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>';
 
 // Every non-system_interface service is reached at /service/<name>/ on the
 // same origin as the dockview UI itself. The system_interface's service
@@ -236,20 +229,17 @@ function createMithrilRenderer(
   };
 }
 
-function makeSvgIcon(pathContent: string, viewBox: string = "0 0 24 24"): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${pathContent}</svg>`;
-}
-
 function createTabActionButton(
   title: string,
-  svgPath: string,
+  iconName: IconName,
   onClick: (ev: MouseEvent) => void,
   className: string = "",
 ): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.className = `dv-custom-tab-action ${className}`.trim();
   btn.title = title;
-  btn.innerHTML = makeSvgIcon(svgPath);
+  // No explicit size: `.dv-custom-tab-action svg` sizes these to 12px in CSS.
+  btn.innerHTML = icon(iconName);
   btn.addEventListener("pointerdown", (ev) => ev.preventDefault());
   btn.addEventListener("click", (ev) => {
     ev.preventDefault();
@@ -316,13 +306,13 @@ function createCustomTab(options: { id: string; name: string }): {
         if (pp?.serviceName && pp.serviceName !== "browser") {
           const serviceName = pp.serviceName;
           actions.appendChild(
-            createTabActionButton("Refresh", SVG_REFRESH, () => {
+            createTabActionButton("Refresh", "refresh", () => {
               reloadIframesForService(serviceName);
             }),
           );
         }
         actions.appendChild(
-          createTabActionButton("Share", SVG_SHARE, () => {
+          createTabActionButton("Share", "share", () => {
             shareServiceName = shareName;
             showShareModal = true;
             m.redraw();
@@ -338,7 +328,7 @@ function createCustomTab(options: { id: string; name: string }): {
 
         const destroyBtn = createTabActionButton(
           isPrimary ? "Cannot destroy the primary agent" : "Destroy agent",
-          SVG_TRASH,
+          "trash",
           () => {
             if (isPrimary) return;
             const agent = getAgentById(chatAgentId);
@@ -363,7 +353,7 @@ function createCustomTab(options: { id: string; name: string }): {
         actions.appendChild(
           createTabActionButton(
             "Destroy terminal",
-            SVG_TRASH,
+            "trash",
             () => {
               const sessionName = pp?.terminalSessionName;
               if (!sessionName) {
@@ -382,7 +372,7 @@ function createCustomTab(options: { id: string; name: string }): {
 
       // Close button -- on all tab types
       actions.appendChild(
-        createTabActionButton("Close tab", SVG_CLOSE, () => {
+        createTabActionButton("Close tab", "close", () => {
           params.api.close();
         }),
       );
