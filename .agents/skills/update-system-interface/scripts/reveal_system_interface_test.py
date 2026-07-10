@@ -489,6 +489,41 @@ def test_preview_rejects_a_work_dir_without_the_app(tmp_path: Path) -> None:
     assert not runner.argvs_starting(*_SERVE_UP)
 
 
+def _make_preview_state(repo_root: Path, slug: str) -> None:
+    """File a live preview instance the way the shared script does."""
+    state_dir = (
+        repo_root / reveal_mod._INSTANCES_ROOT / reveal_mod._preview_instance_name(slug)
+    )
+    state_dir.mkdir(parents=True)
+    (state_dir / reveal_mod._INSTANCE_STATE_FILENAME).write_text("{}")
+
+
+def test_preview_refuses_to_hijack_another_slugs_live_preview(tmp_path: Path) -> None:
+    # The registered service names are fixed, so a second slug's preview would
+    # silently take over the tab of the one already up. It must refuse instead.
+    work_dir = _make_work_dir(tmp_path)
+    runner = _RecordingRunner()
+    _make_preview_state(tmp_path, "earlier-change")
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), tmp_path, runner=runner)
+
+    assert code == 1
+    assert not runner.argvs_starting(*_SERVE_UP)
+
+
+def test_preview_allows_rerunning_the_same_slug(tmp_path: Path) -> None:
+    # A stale instance of the *same* slug is the normal retry path -- the shared
+    # script clears it itself, so the guard must not block it.
+    work_dir = _make_work_dir(tmp_path)
+    runner = _RecordingRunner()
+    _make_preview_state(tmp_path, _SLUG)
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), tmp_path, runner=runner)
+
+    assert code == 0
+    assert len(runner.argvs_starting(*_SERVE_UP)) == 1
+
+
 def test_preview_propagates_a_shared_script_failure(tmp_path: Path) -> None:
     work_dir = _make_work_dir(tmp_path)
     runner = _RecordingRunner()

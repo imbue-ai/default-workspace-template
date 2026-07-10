@@ -31,3 +31,18 @@
 
 - `lead-proxy.md`'s merge step now defers to a calling skill's staleness rule
   on conflict instead of unconditionally saying "resolve manually".
+
+- `update-system-interface` applies the same rules at its own contention
+  points. Its passes never edit the served tree (workers are isolated), so the
+  lease guards the merge + reveal motion instead of the editing: Step 4 takes
+  the `editing service system_interface` lease before capturing the rollback
+  revision and releases it after the Step 5 teardown, and runs the same
+  freshness check over `apps/system_interface/` (stale -> re-brief the worker
+  to rebase and re-verify, never hand-merge). Dispatch warns when another
+  system-interface pass is already in flight (passes are named per-slug, so
+  they don't collide on names -- but the second merge is guaranteed stale).
+  `reveal_system_interface.py preview` now refuses to boot when a different
+  slug's preview is live, since the registered `si-preview` service names are
+  fixed and a second boot would silently hijack the first pass's preview tab.
+  `build-web-service` deliberately takes no lease: it creates a brand-new lib
+  and program that nothing else is editing concurrently.

@@ -119,9 +119,18 @@ _SHARED_SERVE_SCRIPT = (
 )
 # The proxied service names the preview registers: the inner booted app and the
 # outer wrapper the user actually opens. Fixed because the flow runs one preview
-# at a time; the shared script clears any stale instance of the same name first.
+# at a time -- enforced by the guard in ``preview`` (a different slug's live
+# preview refuses to boot); a re-run of the *same* slug is fine because the
+# shared script clears its own stale instance first.
 PREVIEW_INNER_SERVICE_NAME = "si-preview-app"
 PREVIEW_SERVICE_NAME = "si-preview"
+# Where the shared script files each instance's state (mirrors its STATE_ROOT /
+# STATE_FILENAME). Used only to detect a different slug's live preview: because
+# the service names above are fixed, a second concurrent preview would silently
+# hijack the tab of the one already up, and its teardown would later deregister
+# the service out from under it.
+_INSTANCES_ROOT = "runtime/isolated-instances"
+_INSTANCE_STATE_FILENAME = "instance.json"
 # The system interface reads its bind host/port from the environment; the shared
 # script injects the free port into PORT and 127.0.0.1 into HOST.
 PREVIEW_PORT_ENV = "SYSTEM_INTERFACE_PORT"
@@ -668,6 +677,27 @@ def _preview_instance_name(slug: str) -> str:
     return f"{PREVIEW_SERVICE_NAME}-{slug}"
 
 
+def _find_other_preview(repo_root: Path, slug: str) -> str | None:
+    """Return another slug's live preview instance name, or ``None``.
+
+    Only a *different* slug's preview blocks: both would register the same fixed
+    service names, so booting a second one hijacks the first's tab. Re-running
+    the same slug stays allowed -- the shared script clears its own stale
+    instance, which is the normal retry path.
+    """
+    instances_root = repo_root / _INSTANCES_ROOT
+    if not instances_root.is_dir():
+        return None
+    own_name = _preview_instance_name(slug)
+    prefix = f"{PREVIEW_SERVICE_NAME}-"
+    for state_dir in sorted(instances_root.iterdir()):
+        if not state_dir.name.startswith(prefix) or state_dir.name == own_name:
+            continue
+        if (state_dir / _INSTANCE_STATE_FILENAME).exists():
+            return state_dir.name
+    return None
+
+
 def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int:
     """Stand up a pre-merge preview of the worker's ``work_dir``.
 
@@ -688,6 +718,17 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
         sys.stderr.write(
             f"preview: {worker_app_dir} is not a directory; is --work-dir correct "
             "and is the worker still alive (not destroyed)?\n"
+        )
+        return 1
+    other = _find_other_preview(repo_root, slug)
+    if other is not None:
+        other_slug = other.removeprefix(f"{PREVIEW_SERVICE_NAME}-")
+        sys.stderr.write(
+            f"preview: another pass's preview is already up ({other}); the "
+            f"'{PREVIEW_SERVICE_NAME}' tab can only show one at a time, so booting "
+            "this one would hijack it. Surface this to the user and coordinate "
+            "with that pass -- or, if it is abandoned, tear it down first with "
+            f"'unpreview --slug {other_slug}'.\n"
         )
         return 1
     result = runner.run(

@@ -77,9 +77,11 @@ Run these in order before `git merge`:
    `<ARTIFACT_PATHS>` is the artifact's whole footprint, not just the files
    the worker touched: for a service, `libs/<package>/ supervisord.conf`;
    for a skill, `.agents/skills/<name>/`; for a shared script or reference,
-   its path. Empty output means fresh: merge normally. Any output means the
-   base moved under the worker: the pass is stale -- do not merge; supersede
-   it (below).
+   its path; for the system interface, `apps/system_interface/` (that
+   artifact's merge lives in `update-system-interface` Step 4, which applies
+   this same check). Empty output means fresh: merge normally. Any output
+   means the base moved under the worker: the pass is stale -- do not merge;
+   supersede it (below).
 
 3. **Never hand-resolve a conflicted hardened branch.** If the merge itself
    conflicts, `git merge --abort` and treat the pass as stale. Resolving the
