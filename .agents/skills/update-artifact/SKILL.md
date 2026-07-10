@@ -60,6 +60,13 @@ Use `$TARGET` for the artifact (e.g. `migrate-config`, a service name). Then:
 
 ## Step 1: Open a tracking ticket
 
+**Single-flight check first.** At most one harden pass per artifact may be in
+flight (counting `heal` passes on the same target). Run the pre-dispatch check
+in [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md);
+if another agent's pass is live, leave the note it describes on their ticket
+and stop -- the superseding pass forced at their merge time covers your change.
+Only dispatch if no pass is live (or you took over an abandoned one).
+
 ```bash
 mkdir -p runtime/harden/update-$TARGET
 TICKET_ID=$(tk create "update $TARGET" -t task \
@@ -155,7 +162,15 @@ Flow-specific substitutions:
 
 ## Step 4: Merge and go live
 
-On `done`, merge `mngr/update-$TARGET`, then go live by artifact:
+On `done`, first run the merge-time checks in
+[`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md):
+wait out any foreground editing lease on the service, confirm the branch is
+still fresh (the artifact's footprint has not changed since the worker
+branched), and never hand-resolve a conflicted merge -- a stale or conflicted
+pass is discarded and superseded by one new pass covering everything since the
+last hardened merge.
+
+Then merge `mngr/update-$TARGET` and go live by artifact:
 
 - **skill**: nothing beyond the merge (the worker's cross-reference sweep is part
   of the change). If the target is a built-in upstream skill, note the local
