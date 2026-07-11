@@ -226,14 +226,14 @@ def test_page_loads_and_shows_title(e2e_server: tuple[str, list[AgentInfo], Path
 
 
 def test_chat_transcript_area_is_pure_white(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
-    """The chat transcript area (``.app-content``) renders on a pure-white background.
+    """The chat conversation panel renders on a pure-white background.
 
-    Regression test for the request to make the conversation area exactly
-    ``#ffffff`` (it was previously the shared off-white ``--color-bg``). The
-    change is scoped to the transcript area only: the surrounding shell chrome
-    (the ``.app-footer`` composer strip and the dockview tab bar) must keep the
-    off-white shell color, so this also guards against a future edit accidentally
-    whitening the whole shell via the shared variable.
+    Regression test for making the chat area exactly ``#ffffff`` -- both the
+    transcript (``.app-content``) and the composer footer strip (``.app-footer``),
+    which were previously the shared off-white ``--color-bg``. The change is
+    scoped to the chat panel via the dedicated ``--color-bg-chat`` token: the
+    shared shell background token ``--color-bg`` must stay off-white, so this also
+    guards against a future edit whitening the whole shell via the shared variable.
     """
     base_url, _, _ = e2e_server
     page.goto(base_url)
@@ -247,11 +247,16 @@ def test_chat_transcript_area_is_pure_white(e2e_server: tuple[str, list[AgentInf
     content_bg = page.eval_on_selector(".app-content", "e => getComputedStyle(e).backgroundColor")
     assert content_bg == "rgb(255, 255, 255)", f"chat transcript area should be pure white, got {content_bg}"
 
-    # Scoping guard: the composer footer stays on the off-white shell color, i.e.
-    # the change did not leak onto the shared shell background.
+    # The composer footer strip is now unified with the transcript -- also pure white.
     footer_bg = page.eval_on_selector(".app-footer", "e => getComputedStyle(e).backgroundColor")
-    assert footer_bg != "rgb(255, 255, 255)", (
-        f"footer should keep the off-white shell color, not turn white too, got {footer_bg}"
+    assert footer_bg == "rgb(255, 255, 255)", f"composer footer should be pure white, got {footer_bg}"
+
+    # Scoping guard: the whitening went through --color-bg-chat, so the shared
+    # shell background token must stay off-white (the tab bar / other panels rely
+    # on it). This catches a future edit that whitens the whole shell instead.
+    shell_bg = page.eval_on_selector("html", "e => getComputedStyle(e).getPropertyValue('--color-bg').trim()")
+    assert shell_bg not in ("#ffffff", "#fff", "rgb(255, 255, 255)"), (
+        f"shared shell --color-bg should stay off-white, got {shell_bg}"
     )
 
 
