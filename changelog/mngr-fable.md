@@ -1,0 +1,1 @@
+Bump the pinned Claude Code version from 2.1.160 to 2.1.207 (Dockerfile, setup_system.sh, and the `[agent_types.claude].version` pin in .mngr/settings.toml), enabling the Claude Fable 5 model in workspaces. Lands together with the matching mngr PR that bumps the release Dockerfile pin and adds `claude-fable-5` to the LiteLLM proxy.
