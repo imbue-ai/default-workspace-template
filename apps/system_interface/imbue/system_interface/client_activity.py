@@ -17,7 +17,6 @@ the layout involved. The file is append-only and unrotated.
 
 import json
 import threading
-import time
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
@@ -25,7 +24,6 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
-from uuid import uuid4
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
@@ -35,6 +33,8 @@ from imbue.imbue_common.event_envelope import EventId
 from imbue.imbue_common.event_envelope import EventSource
 from imbue.imbue_common.event_envelope import EventType
 from imbue.imbue_common.event_envelope import IsoTimestamp
+from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
+from imbue.imbue_common.logging import generate_log_event_id
 from imbue.imbue_common.pure import pure
 
 CLIENT_ACTIVITY_EVENT_SOURCE: Final[EventSource] = EventSource("client_activity")
@@ -89,14 +89,11 @@ def get_events_path(layout_dir: Path) -> Path:
 
 
 def _now_iso() -> IsoTimestamp:
-    nanoseconds = time.time_ns()
-    seconds, nanos_within_second = divmod(nanoseconds, 1_000_000_000)
-    moment = datetime.fromtimestamp(seconds, timezone.utc)
-    return IsoTimestamp(f"{moment.strftime('%Y-%m-%dT%H:%M:%S')}.{nanos_within_second:09d}Z")
+    return IsoTimestamp(format_nanosecond_iso_timestamp(datetime.now(timezone.utc)))
 
 
 def _new_event_id() -> EventId:
-    return EventId(f"evt-{uuid4().hex}")
+    return EventId(generate_log_event_id())
 
 
 @pure
