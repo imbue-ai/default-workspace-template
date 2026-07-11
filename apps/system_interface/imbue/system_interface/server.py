@@ -1341,14 +1341,14 @@ def _layout_broadcast_endpoint() -> Response:
         if layout_dir is None:
             error = ErrorResponse(detail="No primary agent configured for this workspace")
             return _json_response(error.model_dump(), status_code=500)
-        try:
-            slug = workspace_layouts.resolve_layout_slug(layout_dir, requested)
-        except workspace_layouts.LayoutNameError as e:
-            return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-        except workspace_layouts.LayoutNotFoundError:
-            known = ", ".join(info.display_name for info in workspace_layouts.list_layouts(layout_dir))
-            error = ErrorResponse(detail=f"Layout {requested!r} not found (known layouts: {known})")
-            return _json_response(error.model_dump(), status_code=404)
+        slug, error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
+        if error_response is not None:
+            return error_response
+        if slug is None:
+            # Unreachable: an explicit layout name (validated above) always
+            # resolves to a slug or an error response.
+            error = ErrorResponse(detail="Failed to resolve the requested layout")
+            return _json_response(error.model_dump(), status_code=500)
         display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
         # Target the explicitly-named client, else the client that most
         # recently messaged the requesting agent, else every client.
