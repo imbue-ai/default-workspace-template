@@ -37,7 +37,11 @@ from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
-_WS_RECEIVE_TIMEOUT = 5.0
+# Generous: the first receive occasionally exceeded the previous 5.0s cap on a
+# loaded machine (~1-in-8 locally, failing as ``json.loads(None)``) even though
+# passing runs complete in well under a second -- the wait is pure scheduling
+# delay, so a bigger cap costs nothing when healthy.
+_WS_RECEIVE_TIMEOUT = 15.0
 
 
 @pytest.fixture
