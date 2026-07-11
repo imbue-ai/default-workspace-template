@@ -13,6 +13,7 @@ import re
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
@@ -150,12 +152,18 @@ def _running_e2e_server(
     tmp_path: Path,
     port: int,
     session_events: list[dict[str, Any]] | None = None,
+    primary_agent_id: str = "",
 ) -> Generator[tuple[str, AgentInfo, Path], None, None]:
     """Run the web server with a single mock agent, ready for Playwright + layout ops.
 
     Yields ``(base_url, agent_info, session_file)``. Shared by the default
     ``e2e_server`` fixture and any test that needs a bespoke conversation
     (e.g. a long transcript) or a distinct port.
+
+    ``primary_agent_id`` controls layout persistence: empty (the default)
+    clears MNGR_AGENT_ID so the layout endpoints have no primary-agent dir
+    (nothing persists; the UI auto-opens the fixture chat); a non-empty id
+    persists named layouts under ``tmp_path/agents/<id>/workspace_layout``.
     """
     base_url = f"http://127.0.0.1:{port}"
     agent_info, session_file = _make_agent_fixture(tmp_path, session_events=session_events)
@@ -163,13 +171,12 @@ def _running_e2e_server(
 
     # Isolate the workspace environment: point MNGR_HOST_DIR at the fixture's
     # tmp tree so the session endpoint (_find_agent) resolves the fixture agent's
-    # state dir + env file, and clear MNGR_AGENT_ID so the layout endpoint has no
-    # primary-agent dir to read from (returns 404 -> the UI auto-opens the fixture
-    # chat) and never reads or writes the real workspace's layout.json. This
-    # overrides the autouse _isolate_system_interface_tests fixture's env for the
-    # duration of the test.
+    # state dir + env file, and set MNGR_AGENT_ID per ``primary_agent_id`` so
+    # the layout endpoints either run unpersisted or write under the tmp tree --
+    # never the real workspace's layout state. This overrides the autouse
+    # _isolate_system_interface_tests fixture's env for the duration of the test.
     with (
-        patch.dict(os.environ, {"MNGR_HOST_DIR": str(tmp_path), "MNGR_AGENT_ID": ""}),
+        patch.dict(os.environ, {"MNGR_HOST_DIR": str(tmp_path), "MNGR_AGENT_ID": primary_agent_id}),
         patch("imbue.system_interface.server.discover_agents", return_value=agents),
     ):
         # Seed the agent into a manager and inject it; the manager is never started,
@@ -427,16 +434,35 @@ def _broadcast_layout_op(base_url: str, op: str, args: dict[str, Any], agent_id:
     This is the same path ``scripts/layout.py`` drives, so issuing a ``split``
     here exercises the real frontend ``handleSplit`` handler (which carves the
     second group) rather than reaching into dockview internals from the test.
+
+    Mutating ops are layout-targeted: they carry the desktop layout (the one a
+    Playwright browser picks by default) and only succeed once the page's
+    ``client_state`` registration has landed, so a 412 is retried until the
+    registration catches up.
     """
-    payload = json.dumps({"op": op, "args": args, "agent_id": agent_id}).encode()
+    payload = json.dumps({"op": op, "args": {**args, "layout": "desktop"}, "agent_id": agent_id}).encode()
     request = urllib.request.Request(
         f"{base_url}/api/layout/broadcast",
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=5) as response:
-        assert response.status == 200, f"layout broadcast failed: {response.status}"
+
+    def _attempt() -> bool:
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return bool(response.status == 200)
+        except urllib.error.HTTPError as e:
+            if e.code == 412:
+                return False
+            raise
+
+    wait_for(
+        _attempt,
+        timeout=15.0,
+        poll_interval=0.2,
+        error_message=f"layout broadcast for op {op!r} never succeeded (client registration missing?)",
+    )
 
 
 # Selects "New terminal" from the add-tab dropdown, which spawns a real tmux
@@ -734,3 +760,80 @@ def test_no_agents_shows_empty_state(page: Page, tmp_path: Path) -> None:
         finally:
             server.shutdown()
             thread.join(timeout=5.0)
+
+
+_LAYOUT_DIALOG_PORT = 18867
+
+
+# Opening the "+" dropdown fetches the live terminal fleet, which shells out
+# to ``tmux list-sessions`` server-side -- hence the tmux mark.
+@pytest.mark.tmux
+@pytest.mark.timeout(120)
+def test_named_layout_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
+    """The "+" menu's Save/Load/Delete layout dialogs drive the named-layout registry.
+
+    End-to-end over the real frontend + server: initial UA-based selection
+    (desktop) with WebSocket registration, debounced autosave materializing
+    the fresh layout's file, save-as creating + switching to a new layout,
+    load switching to the (empty) mobile layout, and deleting the active
+    layout falling back to the first remaining one.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _LAYOUT_DIALOG_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        # The delete-fallback path surfaces a notice via alert(); auto-accept it.
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(base_url)
+
+        # Initial: desktop is chosen (desktop UA), the fixture chat auto-opens,
+        # and the debounced autosave materializes desktop.json.
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'desktop'", timeout=10000)
+        wait_for(
+            lambda: (layout_dir / "layouts" / "desktop.json").exists(),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="autosave never materialized desktop.json",
+        )
+
+        # Save layout...: prefilled with the current name; saving under a new
+        # name creates it and switches onto it.
+        page.locator(".dockview-add-tab-button").first.click()
+        page.locator(".dockview-add-tab-dropdown-item", has_text="Save layout...").click()
+        dialog_input = page.locator(".custom-url-dialog-input")
+        expect(dialog_input).to_be_visible(timeout=5000)
+        assert dialog_input.input_value() == "desktop"
+        assert "desktop (current)" in page.locator(".layout-dialog-list").inner_text()
+        dialog_input.fill("My Phone Setup")
+        page.locator(".custom-url-dialog-open").click()
+        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'my-phone-setup'", timeout=10000)
+        wait_for(
+            lambda: (layout_dir / "layouts" / "my-phone-setup.json").exists(),
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="save-as never wrote my-phone-setup.json",
+        )
+
+        # Load layout...: switching to the never-saved mobile layout renders
+        # the fresh state (the welcome chat auto-opens again).
+        page.locator(".dockview-add-tab-button").first.click()
+        page.locator(".dockview-add-tab-dropdown-item", has_text="Load layout...").click()
+        page.locator(".layout-dialog-item", has_text="mobile").click()
+        page.locator(".custom-url-dialog-open").click()
+        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'mobile'", timeout=10000)
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+
+        # Delete layout... on the active layout: the client auto-switches to
+        # the fallback and the registry drops the deleted entry.
+        page.locator(".dockview-add-tab-button").first.click()
+        page.locator(".dockview-add-tab-dropdown-item", has_text="Delete layout...").click()
+        page.locator(".layout-dialog-item", has_text="mobile (current)").click()
+        page.locator(".custom-url-dialog-open").click()
+        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'desktop'", timeout=10000)
+        registry = json.loads((layout_dir / "layouts_meta.json").read_text())
+        assert "mobile" not in registry["display_name_by_slug"]
+        assert "my-phone-setup" in registry["display_name_by_slug"]
