@@ -563,16 +563,8 @@ def _parse_json_object_body() -> dict[str, Any] | Response:
 def _default_layout_infos() -> list[dict[str, Any]]:
     """The two default layout names, for dev/test setups with no layout dir."""
     return [
-        {
-            "slug": workspace_layouts.DESKTOP_LAYOUT_SLUG,
-            "display_name": workspace_layouts.DESKTOP_LAYOUT_SLUG,
-            "has_content": False,
-        },
-        {
-            "slug": workspace_layouts.MOBILE_LAYOUT_SLUG,
-            "display_name": workspace_layouts.MOBILE_LAYOUT_SLUG,
-            "has_content": False,
-        },
+        workspace_layouts.LayoutInfo(slug=slug, display_name=slug, has_content=False).model_dump()
+        for slug in (workspace_layouts.DESKTOP_LAYOUT_SLUG, workspace_layouts.MOBILE_LAYOUT_SLUG)
     ]
 
 
