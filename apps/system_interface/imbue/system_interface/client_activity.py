@@ -83,6 +83,11 @@ class ClientConnectedEvent(EventEnvelope):
     layout_slug: str = Field(description="The client's active layout at connect time")
 
 
+def get_events_path(layout_dir: Path) -> Path:
+    """Where the client-activity event log lives under one workspace_layout dir."""
+    return layout_dir / "events" / "client_activity" / "events.jsonl"
+
+
 def _now_iso() -> IsoTimestamp:
     nanoseconds = time.time_ns()
     seconds, nanos_within_second = divmod(nanoseconds, 1_000_000_000)

@@ -543,7 +543,7 @@ def _client_activity_events_path() -> Path | None:
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         return None
-    return layout_dir / "events" / "client_activity" / "events.jsonl"
+    return client_activity.get_events_path(layout_dir)
 
 
 def _parse_json_object_body() -> dict[str, Any] | Response:
@@ -1006,7 +1006,7 @@ def _handle_client_state_message(
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is not None:
         workspace_layouts.set_last_active_slug(layout_dir, active_layout)
-        events_path = layout_dir / "events" / "client_activity" / "events.jsonl"
+        events_path = client_activity.get_events_path(layout_dir)
         if previous_layout and previous_layout != active_layout:
             client_activity.append_layout_switch_event(
                 events_path, client_id, device_kind, previous_layout, active_layout
