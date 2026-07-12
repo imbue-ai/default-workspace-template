@@ -63,7 +63,13 @@ def load_repo_url() -> str | None:
     # Strip any trailing slash before the .git suffix so a URL written as
     # ".../repo.git/" also normalizes fully (same order as the post-commit
     # hook's sed normalization).
-    return repo_url.rstrip("/").removesuffix(".git")
+    normalized_url = repo_url.rstrip("/").removesuffix(".git")
+    # Validate the full <owner>/<repo> shape here, at the single load point,
+    # so a malformed URL surfaces as a GithubSyncConfigError that every caller
+    # already handles -- rather than escaping later from
+    # parse_owner_and_name inside the service tick and crash-looping it.
+    parse_owner_and_name(normalized_url)
+    return normalized_url
 
 
 def parse_owner_and_name(repo_url: str) -> tuple[str, str]:

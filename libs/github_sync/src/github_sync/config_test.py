@@ -70,6 +70,22 @@ def test_load_repo_url_raises_when_repo_url_missing(
         load_repo_url()
 
 
+def test_load_repo_url_raises_when_owner_or_repo_segment_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A github.com URL without the full <owner>/<repo> shape must fail at load
+    # time (where callers handle GithubSyncConfigError), not later inside the
+    # service tick via parse_owner_and_name.
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "github_sync.toml"
+    config_path.write_text('repo_url = "https://github.com/just-an-owner"\n')
+    with pytest.raises(GithubSyncConfigError):
+        load_repo_url()
+    config_path.write_text('repo_url = "https://github.com/owner/repo/extra"\n')
+    with pytest.raises(GithubSyncConfigError):
+        load_repo_url()
+
+
 def test_parse_owner_and_name_splits_url() -> None:
     assert parse_owner_and_name("https://github.com/some-user/my-repo") == (
         "some-user",
