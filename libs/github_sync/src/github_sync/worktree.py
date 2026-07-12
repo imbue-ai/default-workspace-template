@@ -163,9 +163,7 @@ def init_runtime_worktree() -> bool:
 
     # Classify the remote state: branch exists (restore it), remote reachable
     # but branch absent (fresh orphan), or remote unreachable (retry later).
-    ls_remote = git_main(
-        "ls-remote", "--exit-code", "--heads", "origin", SYNC_BRANCH
-    )
+    ls_remote = git_main("ls-remote", "--exit-code", "--heads", "origin", SYNC_BRANCH)
     if ls_remote.returncode == 0:
         has_remote_branch = True
     elif ls_remote.returncode == _LS_REMOTE_NO_MATCHING_REFS:

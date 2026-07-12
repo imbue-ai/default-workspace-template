@@ -188,7 +188,10 @@ def _refresh_visibility(state: _SyncState, repo_url: str) -> None:
     leaves the previous answer in place and is retried next tick. Transitions
     are logged loudly since a repo flipping public is a security condition.
     """
-    if state.visibility_checked_at is not None and state.visibility != VISIBILITY_UNKNOWN:
+    if (
+        state.visibility_checked_at is not None
+        and state.visibility != VISIBILITY_UNKNOWN
+    ):
         age_seconds = (_now_utc() - state.visibility_checked_at).total_seconds()
         if age_seconds < VISIBILITY_CHECK_INTERVAL_SECONDS:
             return

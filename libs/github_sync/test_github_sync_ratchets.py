@@ -75,4 +75,3 @@ def test_prevent_asyncio_import() -> None:
 
 def test_prevent_dataclasses_import() -> None:
     rc.check_dataclasses_import(_DIR, snapshot(0))
-

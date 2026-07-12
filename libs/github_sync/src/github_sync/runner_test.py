@@ -133,7 +133,7 @@ def test_do_tick_commits_and_pushes_when_repo_private(
     """End to end against a local bare origin: new runtime state is committed
     on runtime-sync and pushed once the repo is confirmed private."""
     main, origin = _set_up_synced_workspace(tmp_path, monkeypatch)
-    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": true}\'')
+    install_fake_latchkey(fake_latchkey_bin, "echo '{\"private\": true}'")
     (main / "runtime" / "memory.txt").write_text("important state\n")
     state = _SyncState()
 
@@ -158,7 +158,7 @@ def test_do_tick_self_heals_stale_index_lock(
     """A stale index.lock from a killed prior tick must not wedge syncing:
     the next tick clears it and commits the pending runtime state."""
     main, _ = _set_up_synced_workspace(tmp_path, monkeypatch)
-    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": true}\'')
+    install_fake_latchkey(fake_latchkey_bin, "echo '{\"private\": true}'")
     lock_path = main / ".git" / "worktrees" / "runtime" / "index.lock"
     lock_path.write_text("")
     _age_lock(lock_path)
@@ -178,7 +178,7 @@ def test_do_tick_halts_pushes_when_repo_public(
 ) -> None:
     """Public repo => commit locally (nothing is lost) but never push."""
     main, origin = _set_up_synced_workspace(tmp_path, monkeypatch)
-    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": false}\'')
+    install_fake_latchkey(fake_latchkey_bin, "echo '{\"private\": false}'")
     (main / "runtime" / "memory.txt").write_text("important state\n")
     state = _SyncState()
 
@@ -233,7 +233,7 @@ def test_refresh_visibility_skips_recheck_while_confirmed_answer_is_fresh(
     """A confirmed answer younger than the check interval must be trusted
     without re-asking GitHub (the fake would answer public, so any re-check
     would flip the state and fail the assertion)."""
-    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": false}\'')
+    install_fake_latchkey(fake_latchkey_bin, "echo '{\"private\": false}'")
     state = _confirmed_private_state(age_seconds=1)
     checked_at_before = state.visibility_checked_at
 
@@ -252,9 +252,7 @@ def test_refresh_visibility_keeps_last_confirmed_answer_when_recheck_fails(
     state, so halting adds nothing -- and leave checked_at unchanged so the
     re-check is retried on the next tick rather than in 15 minutes."""
     install_fake_latchkey(fake_latchkey_bin, "exit 7")
-    state = _confirmed_private_state(
-        age_seconds=VISIBILITY_CHECK_INTERVAL_SECONDS + 60
-    )
+    state = _confirmed_private_state(age_seconds=VISIBILITY_CHECK_INTERVAL_SECONDS + 60)
     checked_at_before = state.visibility_checked_at
 
     _refresh_visibility(state, _REPO_URL)
@@ -269,10 +267,8 @@ def test_refresh_visibility_rechecks_stale_answer_and_halts_on_public(
 ) -> None:
     """Once the confirmed answer goes stale, a re-check happens and a repo
     that flipped public halts pushes."""
-    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": false}\'')
-    state = _confirmed_private_state(
-        age_seconds=VISIBILITY_CHECK_INTERVAL_SECONDS + 60
-    )
+    install_fake_latchkey(fake_latchkey_bin, "echo '{\"private\": false}'")
+    state = _confirmed_private_state(age_seconds=VISIBILITY_CHECK_INTERVAL_SECONDS + 60)
     checked_at_before = state.visibility_checked_at
     assert checked_at_before is not None
 
@@ -315,7 +311,7 @@ def test_do_tick_restores_missing_worktree_from_origin(
     (second_main / "github_sync.toml").write_text(
         'repo_url = "https://github.com/some-user/my-workspace"\n'
     )
-    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": true}\'')
+    install_fake_latchkey(fake_latchkey_bin, "echo '{\"private\": true}'")
     monkeypatch.chdir(second_main)
     state = _SyncState()
 

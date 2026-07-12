@@ -73,7 +73,9 @@ def _remove_gateway_entries(kept_gateway_url: str | None) -> None:
             _git_config("--unset-all", key)
 
     kept_header_key = (
-        f"http.{kept_gateway_url}/.extraheader" if kept_gateway_url is not None else None
+        f"http.{kept_gateway_url}/.extraheader"
+        if kept_gateway_url is not None
+        else None
     )
     for key, value in _list_global_config(r"http\..*\.extraheader"):
         is_gateway_header = value.startswith(

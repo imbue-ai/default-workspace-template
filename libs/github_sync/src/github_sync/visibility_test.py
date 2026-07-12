@@ -38,12 +38,12 @@ def test_parse_visibility_response_unknown_on_error_bodies() -> None:
 def test_check_repo_visibility_reads_private_from_latchkey(
     fake_latchkey_bin: Path,
 ) -> None:
-    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": true}\'')
+    install_fake_latchkey(fake_latchkey_bin, "echo '{\"private\": true}'")
     assert check_repo_visibility(_REPO_URL) == VISIBILITY_PRIVATE
 
 
 def test_check_repo_visibility_detects_public_repo(fake_latchkey_bin: Path) -> None:
-    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": false}\'')
+    install_fake_latchkey(fake_latchkey_bin, "echo '{\"private\": false}'")
     assert check_repo_visibility(_REPO_URL) == VISIBILITY_PUBLIC
 
 
