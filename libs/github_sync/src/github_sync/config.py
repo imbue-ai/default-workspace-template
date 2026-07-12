@@ -60,7 +60,10 @@ def load_repo_url() -> str | None:
             f"{CONFIG_PATH} must set repo_url to an "
             f"{GITHUB_URL_PREFIX}<owner>/<repo> URL, got {repo_url!r}"
         )
-    return repo_url.removesuffix(".git").rstrip("/")
+    # Strip any trailing slash before the .git suffix so a URL written as
+    # ".../repo.git/" also normalizes fully (same order as the post-commit
+    # hook's sed normalization).
+    return repo_url.rstrip("/").removesuffix(".git")
 
 
 def parse_owner_and_name(repo_url: str) -> tuple[str, str]:

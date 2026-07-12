@@ -28,8 +28,15 @@ def test_load_repo_url_normalizes_git_suffix_and_trailing_slash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "github_sync.toml").write_text(
+    config_path = tmp_path / "github_sync.toml"
+    config_path.write_text(
         'repo_url = "https://github.com/some-user/my-workspace.git"\n'
+    )
+    assert load_repo_url() == "https://github.com/some-user/my-workspace"
+    # A .git suffix followed by a trailing slash must also normalize fully
+    # (the slash has to come off before the suffix).
+    config_path.write_text(
+        'repo_url = "https://github.com/some-user/my-workspace.git/"\n'
     )
     assert load_repo_url() == "https://github.com/some-user/my-workspace"
 
