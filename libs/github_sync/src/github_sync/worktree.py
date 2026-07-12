@@ -250,6 +250,11 @@ def init_runtime_worktree() -> bool:
                 commit.returncode,
                 commit.stderr.strip(),
             )
+    else:
+        # Reattached to an existing local runtime-sync branch: its history
+        # (including the secrets .gitignore) is already in place, and there is
+        # no remote ref to track yet, so there is nothing to set up.
+        pass
 
     # Restore staged-aside content. Calling unconditionally (rather than
     # gating on the `staged_aside` flag) also recovers content left by a
