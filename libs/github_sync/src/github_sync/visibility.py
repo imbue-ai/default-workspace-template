@@ -2,8 +2,10 @@
 
 Public repos must never be synced to: agents might push secrets or other
 sensitive data without thinking about it. The skill verifies the repo is
-private at enable time, and the service re-checks periodically, halting
-pushes whenever the repo is public or its visibility cannot be established.
+private at enable time, and the service re-checks periodically: pushes are
+held until visibility is first confirmed private and halted whenever the
+repo is confirmed public, while a re-check that fails outright keeps the
+last confirmed answer (see runner._refresh_visibility for that policy).
 """
 
 import json
