@@ -42,8 +42,11 @@ _HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
 _CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
 # Global git config applied on every boot: rewrite git@ / ssh:// GitHub
-# remotes to https (there are no SSH credentials in the container; https is
-# what the latchkey gateway wiring rewrites when github-sync is enabled).
+# remotes to https (there are no SSH credentials in the container). Note that
+# git applies at most one insteadOf rewrite per URL, so this rewrite's output
+# is NOT further rewritten by github-sync's latchkey gateway wiring: only
+# remotes stored as https://github.com/ URLs (the shape the github-sync skill
+# always configures) route through the gateway.
 # core.hooksPath is deliberately NOT set here -- the post-commit auto-push
 # hook only becomes active when the github-sync skill wires it up.
 _GIT_GLOBAL_CONFIG_ARGVS = (
