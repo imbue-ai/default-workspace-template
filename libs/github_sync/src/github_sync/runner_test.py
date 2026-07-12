@@ -23,8 +23,13 @@ from github_sync.runner import (
     _SyncState,
     status_file_path,
 )
-from github_sync.testing import init_repo, init_repo_with_origin, install_fake_latchkey
-from github_sync.worktree import init_runtime_worktree
+from github_sync.testing import (
+    init_repo,
+    init_repo_with_origin,
+    install_fake_latchkey,
+    run_git,
+)
+from github_sync.worktree import init_runtime_worktree, is_runtime_worktree
 
 
 def _age_lock(lock_path: Path) -> None:
@@ -201,6 +206,79 @@ def test_do_tick_holds_pushes_while_visibility_unconfirmed(
     status = json.loads(status_file_path().read_text())
     assert status["is_push_allowed"] is False
     assert status["visibility"] == "unknown"
+
+
+def test_do_tick_restores_missing_worktree_from_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_git_and_gateway_env: Path,
+    fake_latchkey_bin: Path,
+) -> None:
+    """The recreated-workspace self-heal path: when runtime/ is not yet a
+    worktree, a tick restores it from origin's runtime-sync branch (prior
+    memory/tickets come back) and then syncs as usual."""
+    # A first workspace creates runtime state and pushes it to the origin.
+    first_base = tmp_path / "first"
+    first_base.mkdir()
+    first_main, origin = init_repo_with_origin(first_base)
+    monkeypatch.chdir(first_main)
+    assert init_runtime_worktree() is True
+    (first_main / "runtime" / "memory.md").write_text("remember me\n")
+    run_git(first_main / "runtime", "add", "-A")
+    run_git(first_main / "runtime", "commit", "-qm", "state")
+    run_git(first_main / "runtime", "push", "--set-upstream", "origin", "runtime-sync")
+
+    # A workspace recreated from the synced repo: github_sync.toml came along
+    # with the checkout, but the container-local runtime worktree did not.
+    second_main = tmp_path / "second"
+    init_repo(second_main)
+    (second_main / "seed.txt").write_text("seed\n")
+    run_git(second_main, "add", "-A")
+    run_git(second_main, "commit", "-qm", "seed")
+    run_git(second_main, "remote", "add", "origin", str(origin))
+    (second_main / "github_sync.toml").write_text(
+        'repo_url = "https://github.com/some-user/my-workspace"\n'
+    )
+    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": true}\'')
+    monkeypatch.chdir(second_main)
+    state = _SyncState()
+
+    _do_tick(state)
+
+    assert is_runtime_worktree()
+    assert (second_main / "runtime" / "memory.md").read_text() == "remember me\n"
+    status = json.loads(status_file_path().read_text())
+    assert status["is_push_allowed"] is True
+    assert status["last_push_ok"] is True
+
+
+def test_do_tick_defers_when_worktree_missing_and_origin_unreachable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_git_and_gateway_env: Path,
+) -> None:
+    """A recreated workspace whose origin cannot be reached yet (e.g. the
+    GitHub permissions have not been re-granted) must defer the worktree init
+    and report that in the status, not create a fresh orphan branch."""
+    main = tmp_path / "main"
+    init_repo(main)
+    (main / "seed.txt").write_text("seed\n")
+    run_git(main, "add", "-A")
+    run_git(main, "commit", "-qm", "seed")
+    run_git(main, "remote", "add", "origin", str(tmp_path / "does-not-exist.git"))
+    (main / "github_sync.toml").write_text(
+        'repo_url = "https://github.com/some-user/my-workspace"\n'
+    )
+    monkeypatch.chdir(main)
+    state = _SyncState()
+
+    _do_tick(state)
+
+    assert not is_runtime_worktree()
+    assert state.last_error is not None
+    assert "deferred" in state.last_error
+    status = json.loads(status_file_path().read_text())
+    assert "deferred" in status["last_error"]
 
 
 def test_do_tick_idles_when_sync_not_configured(
