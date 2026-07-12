@@ -73,6 +73,11 @@ fi
     if ! git push 2>&1; then
         if ! git push --set-upstream origin "$branch" 2>&1; then
             repo_url="$(sed -n 's/^repo_url *= *"\(.*\)".*/\1/p' "$CONFIG_FILE")"
+            # Normalize like github_sync.config.load_repo_url does, so a
+            # repo_url written with a trailing slash or .git suffix still
+            # composes a valid proxied URL below.
+            repo_url="${repo_url%/}"
+            repo_url="${repo_url%.git}"
             if [ -n "${LATCHKEY_GATEWAY_SECONDARY:-}" ] && [ -n "${LATCHKEY_GATEWAY_PASSWORD:-}" ] && [ -n "$repo_url" ]; then
                 git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
                     push "${LATCHKEY_GATEWAY_SECONDARY%/}/gateway/$repo_url.git" "$branch" 2>&1
