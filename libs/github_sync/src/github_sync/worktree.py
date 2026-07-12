@@ -157,7 +157,7 @@ def init_runtime_worktree() -> bool:
         _restore_preexisting_into_worktree()
         return True
 
-    local_branch_exists = (
+    has_local_branch = (
         git_main("rev-parse", "--verify", "--quiet", SYNC_BRANCH).returncode == 0
     )
 
@@ -170,7 +170,7 @@ def init_runtime_worktree() -> bool:
         has_remote_branch = True
     elif ls_remote.returncode == _LS_REMOTE_NO_MATCHING_REFS:
         has_remote_branch = False
-    elif local_branch_exists:
+    elif has_local_branch:
         # Offline, but a local runtime-sync branch already exists (e.g. a
         # prior init whose worktree was removed) -- reattaching to it cannot
         # diverge from origin any further than it already has.
@@ -209,7 +209,7 @@ def init_runtime_worktree() -> bool:
         result = git_main(
             "worktree", "add", "-B", SYNC_BRANCH, str(RUNTIME_DIR), remote_ref
         )
-    elif local_branch_exists:
+    elif has_local_branch:
         result = git_main("worktree", "add", str(RUNTIME_DIR), SYNC_BRANCH)
     else:
         result = _create_orphan_runtime_worktree(SYNC_BRANCH)
@@ -236,7 +236,7 @@ def init_runtime_worktree() -> bool:
         # Make sure the local branch tracks the remote (some git versions
         # don't set this automatically with -B + an explicit ref).
         git_runtime("branch", "--set-upstream-to", remote_ref)
-    elif not local_branch_exists:
+    elif not has_local_branch:
         # Fresh orphan branch: write the .gitignore for secrets and make an
         # initial commit so push has something to push. runtime/secrets holds
         # e.g. the Cloudflare tunnel token, which must never reach the remote.
