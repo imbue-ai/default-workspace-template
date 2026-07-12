@@ -1,9 +1,11 @@
 """Unit tests for the github-sync runner.
 
 Covers the stale-index-lock recovery (an interrupted commit must not wedge
-every future tick) and full ticks against a local bare origin: commit+push
-when the repo is confirmed private, and the push halt when it is public or
-unverifiable.
+every future tick), the visibility re-check policy (a confirmed answer is
+cached for the check interval; a failed re-check keeps the last confirmed
+answer and retries next tick), and full ticks against a local bare origin:
+commit+push when the repo is confirmed private, and the push halt when it is
+public or unverifiable.
 """
 
 from __future__ import annotations
@@ -12,14 +14,17 @@ import json
 import os
 import subprocess
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from github_sync.runner import (
     STALE_LOCK_MIN_AGE_SECONDS,
+    VISIBILITY_CHECK_INTERVAL_SECONDS,
     _clear_stale_index_lock,
     _do_tick,
+    _refresh_visibility,
     _SyncState,
     status_file_path,
 )
@@ -29,7 +34,10 @@ from github_sync.testing import (
     install_fake_latchkey,
     run_git,
 )
+from github_sync.visibility import VISIBILITY_PRIVATE, VISIBILITY_PUBLIC
 from github_sync.worktree import init_runtime_worktree, is_runtime_worktree
+
+_REPO_URL = "https://github.com/some-user/my-workspace"
 
 
 def _age_lock(lock_path: Path) -> None:
@@ -206,6 +214,74 @@ def test_do_tick_holds_pushes_while_visibility_unconfirmed(
     status = json.loads(status_file_path().read_text())
     assert status["is_push_allowed"] is False
     assert status["visibility"] == "unknown"
+
+
+def _confirmed_private_state(age_seconds: float) -> _SyncState:
+    """A state whose private confirmation is `age_seconds` old."""
+    state = _SyncState()
+    state.repo_url = _REPO_URL
+    state.visibility = VISIBILITY_PRIVATE
+    state.visibility_checked_at = datetime.now(timezone.utc) - timedelta(
+        seconds=age_seconds
+    )
+    return state
+
+
+def test_refresh_visibility_skips_recheck_while_confirmed_answer_is_fresh(
+    isolated_git_and_gateway_env: Path, fake_latchkey_bin: Path
+) -> None:
+    """A confirmed answer younger than the check interval must be trusted
+    without re-asking GitHub (the fake would answer public, so any re-check
+    would flip the state and fail the assertion)."""
+    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": false}\'')
+    state = _confirmed_private_state(age_seconds=1)
+    checked_at_before = state.visibility_checked_at
+
+    _refresh_visibility(state, _REPO_URL)
+
+    assert state.visibility == VISIBILITY_PRIVATE
+    assert state.is_push_allowed is True
+    assert state.visibility_checked_at == checked_at_before
+
+
+def test_refresh_visibility_keeps_last_confirmed_answer_when_recheck_fails(
+    isolated_git_and_gateway_env: Path, fake_latchkey_bin: Path
+) -> None:
+    """A stale confirmation whose re-check fails outright (gateway offline)
+    must keep the last confirmed answer -- pushes would fail too in that
+    state, so halting adds nothing -- and leave checked_at unchanged so the
+    re-check is retried on the next tick rather than in 15 minutes."""
+    install_fake_latchkey(fake_latchkey_bin, "exit 7")
+    state = _confirmed_private_state(
+        age_seconds=VISIBILITY_CHECK_INTERVAL_SECONDS + 60
+    )
+    checked_at_before = state.visibility_checked_at
+
+    _refresh_visibility(state, _REPO_URL)
+
+    assert state.visibility == VISIBILITY_PRIVATE
+    assert state.is_push_allowed is True
+    assert state.visibility_checked_at == checked_at_before
+
+
+def test_refresh_visibility_rechecks_stale_answer_and_halts_on_public(
+    isolated_git_and_gateway_env: Path, fake_latchkey_bin: Path
+) -> None:
+    """Once the confirmed answer goes stale, a re-check happens and a repo
+    that flipped public halts pushes."""
+    install_fake_latchkey(fake_latchkey_bin, 'echo \'{"private": false}\'')
+    state = _confirmed_private_state(
+        age_seconds=VISIBILITY_CHECK_INTERVAL_SECONDS + 60
+    )
+    checked_at_before = state.visibility_checked_at
+    assert checked_at_before is not None
+
+    _refresh_visibility(state, _REPO_URL)
+
+    assert state.visibility == VISIBILITY_PUBLIC
+    assert state.is_push_allowed is False
+    assert state.visibility_checked_at is not None
+    assert state.visibility_checked_at > checked_at_before
 
 
 def test_do_tick_restores_missing_worktree_from_origin(
