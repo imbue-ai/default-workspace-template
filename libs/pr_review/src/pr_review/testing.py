@@ -40,7 +40,9 @@ class FakeCurl(NamedTuple):
     def __call__(self, args: list[str]) -> bytes:
         self.calls.append(list(args))
         url = args[-1]
-        matches = [(needle, response) for needle, response in self.routes if needle in url]
+        matches = [
+            (needle, response) for needle, response in self.routes if needle in url
+        ]
         if not matches:
             raise AssertionError(f"FakeCurl: no route matched URL {url!r}")
         # Longest matching needle wins, so routing does not depend on the order
@@ -58,7 +60,9 @@ def make_curl(routes: dict[str, bytes], status: int = 200) -> FakeCurl:
 
 def json_route(routes: dict[str, object], status: int = 200) -> FakeCurl:
     """Like :func:`make_curl` but each route value is JSON-encoded for you."""
-    return make_curl({k: json.dumps(v).encode() for k, v in routes.items()}, status=status)
+    return make_curl(
+        {k: json.dumps(v).encode() for k, v in routes.items()}, status=status
+    )
 
 
 def parse_write_call(call: list[str]) -> dict:
@@ -148,7 +152,9 @@ def seed_prepared_state(
     ts = tree.root / prepare.PREP_DIRNAME / "node_modules" / "typescript"
     ts.mkdir(parents=True)
     (ts / "package.json").write_text('{"name":"typescript","version":"5.4.0"}')
-    (tree.root / prepare.PREP_DIRNAME / "package.json").write_text('{"dependencies":{"typescript":"5"}}')
+    (tree.root / prepare.PREP_DIRNAME / "package.json").write_text(
+        '{"dependencies":{"typescript":"5"}}'
+    )
     for root in roots:
         pkg = tree.root / root / "node_modules" / "left-pad"
         pkg.mkdir(parents=True)
