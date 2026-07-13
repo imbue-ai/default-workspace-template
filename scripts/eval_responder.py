@@ -47,6 +47,7 @@ def main() -> None:
 
     sink = AwsSink(config)
     sink.stop_host_backup()
+    sink.upload_restic_password()  # so restore can decrypt the repo after the box/sandbox are gone
 
     deadline = time.time() + OVERALL_TIMEOUT_SECONDS
     agent_id = watcher.resolve_chat_agent_id(deadline)
