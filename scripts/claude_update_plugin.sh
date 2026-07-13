@@ -31,5 +31,5 @@ rm -rf "$CACHE_DIR/imbue-mngr" "$CACHE_DIR/imbue-code-guardian" "$CACHE_DIR/clau
 # plugins project-scoped confines them to this repo's own agent.
 for plugin_id in "${PLUGIN_IDS[@]}"; do
     claude plugin install --scope project "$plugin_id" 2>/dev/null || true
-    claude plugin update "$plugin_id" 2>/dev/null || true
+    claude plugin update --scope project "$plugin_id" 2>/dev/null || true
 done
