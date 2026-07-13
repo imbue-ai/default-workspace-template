@@ -10,6 +10,12 @@ ENV PATH="/root/.local/bin:$PATH"
 ARG CLAUDE_CODE_VERSION=2.1.160
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 
+# Pin Codex CLI; passed to setup_system.sh. Keep in sync with the default in
+# scripts/setup_system.sh (and agent_types.codex.version once that's added to
+# .mngr/settings.toml). Bump deliberately, not by accident.
+ARG CODEX_VERSION=0.144.3
+ENV CODEX_VERSION=${CODEX_VERSION}
+
 # ============================================================================
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. Copied with its sibling
