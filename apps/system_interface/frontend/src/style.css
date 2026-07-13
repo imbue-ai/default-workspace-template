@@ -2409,7 +2409,10 @@ body {
 .pv-ungrouped {
   position: relative;
   z-index: 2;
-  margin: 6px 0 14px 0;
+  /* Top space as padding, not margin, so the white background extends up and
+     masks a bit of the timeline line above the ungrouped run. */
+  margin: 0 0 14px 0;
+  padding-top: 6px;
   background: var(--color-bg-chat);
 }
 
