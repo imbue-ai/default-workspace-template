@@ -837,3 +837,124 @@ def test_named_layout_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
         registry = json.loads((layout_dir / "layouts_meta.json").read_text())
         assert "mobile" not in registry["display_name_by_slug"]
         assert "my-phone-setup" in registry["display_name_by_slug"]
+
+
+_LAYOUT_RESTORE_PORT = 18868
+
+
+def _switch_layout_via_dialog(page: Page, layout_label: str) -> None:
+    """Drive the "+" menu's Load-layout dialog to switch onto ``layout_label``."""
+    page.locator(".dockview-add-tab-button").first.click()
+    page.locator(".dockview-add-tab-dropdown-item", has_text="Load layout...").click()
+    page.locator(".layout-dialog-item", has_text=layout_label).first.click()
+    page.locator(".custom-url-dialog-open").click()
+
+
+# Opening the "+" dropdown fetches the live terminal fleet, which shells out to
+# ``tmux list-sessions`` server-side -- hence the tmux mark.
+@pytest.mark.tmux
+@pytest.mark.timeout(120)
+def test_switching_layouts_preserves_chat_transcript(tmp_path: Path, page: Page) -> None:
+    """A chat pane restored by a layout switch still shows its own transcript.
+
+    Regression test: ``fromJSON`` disposes the outgoing panels before creating
+    the incoming ones, and the removal handler deletes their ``panelParams``.
+    Because panel ids are deterministic, a chat present in BOTH layouts had its
+    freshly-seeded params deleted mid-restore and came back bound to the primary
+    (services) agent -- the tab kept its title but showed an empty transcript.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _LAYOUT_RESTORE_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(base_url)
+
+        # The fixture chat auto-opens on the desktop layout and shows its transcript.
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'desktop'", timeout=10000)
+        wait_for(
+            lambda: (layout_dir / "layouts" / "desktop.json").exists(),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="autosave never materialized desktop.json",
+        )
+
+        # Away to the (empty) mobile layout, then back to desktop.
+        _switch_layout_via_dialog(page, "mobile")
+        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'mobile'", timeout=10000)
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+
+        _switch_layout_via_dialog(page, "desktop")
+        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'desktop'", timeout=10000)
+
+        # The restored chat must show ITS transcript -- not the primary agent's
+        # (which would render an empty / no-conversation state under the same tab).
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(page.locator(".message-list-empty")).to_have_count(0)
+        expect(page.locator(".message-list-not-found")).to_have_count(0)
+
+
+@pytest.mark.timeout(120)
+def test_layout_missing_panel_params_recovers_chat_binding(tmp_path: Path, page: Page) -> None:
+    """A saved layout whose panelParams are missing still binds the chat correctly.
+
+    Panel ids encode identity (``chat-<agent-id>``), so a params-less panel is
+    rebuilt from its id rather than silently defaulting to the primary agent.
+    This also self-heals layout files corrupted by the restore bug above.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _LAYOUT_RESTORE_PORT + 1, primary_agent_id=primary_agent_id) as (
+        base_url,
+        agent_info,
+        _session_file,
+    ):
+        # Hand-write a desktop layout holding the agent's chat panel with an
+        # EMPTY panelParams map -- the shape the restore bug used to persist.
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        layouts_dir = layout_dir / "layouts"
+        layouts_dir.mkdir(parents=True)
+        panel_id = f"chat-{agent_info.id}"
+        (layouts_dir / "desktop.json").write_text(
+            json.dumps(
+                {
+                    "dockview": {
+                        "activeGroup": "group-1",
+                        "grid": {
+                            "root": {
+                                "type": "branch",
+                                "data": [
+                                    {
+                                        "type": "leaf",
+                                        "data": {"views": [panel_id], "activeView": panel_id, "id": "group-1"},
+                                        "size": 1000,
+                                    }
+                                ],
+                            },
+                            "width": 1000,
+                            "height": 1000,
+                            "orientation": "HORIZONTAL",
+                        },
+                        "panels": {
+                            panel_id: {
+                                "id": panel_id,
+                                "contentComponent": "chat",
+                                "tabComponent": "custom",
+                                "title": agent_info.name,
+                            }
+                        },
+                    },
+                    "panelParams": {},
+                }
+            )
+        )
+
+        page.goto(base_url)
+
+        # The chat is rebuilt from its panel id, so it shows its own transcript.
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        expect(page.locator(".message-list-empty")).to_have_count(0)
+        expect(page.locator(".message-list-not-found")).to_have_count(0)

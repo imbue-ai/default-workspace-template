@@ -65,6 +65,15 @@ import {
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
 
+// Panel-id prefixes for the two panel kinds whose ids encode their identity:
+// a chat is ``chat-<agent-id>`` and a persistent terminal is
+// ``terminal-session-<tmux-session-name>``. Deterministic ids are what let
+// reopening the same chat / terminal focus the existing tab rather than stack a
+// duplicate -- and what lets ``derivePanelParamsFromId`` rebuild a panel's
+// params from its id alone when the bookkeeping entry is missing.
+const CHAT_PANEL_ID_PREFIX = "chat-";
+const TERMINAL_PANEL_ID_PREFIX = "terminal-session-";
+
 // SVG path constants for tab action icons
 const SVG_CLOSE = '<line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/>';
 const SVG_TRASH =
@@ -839,7 +848,7 @@ function focusOrCreateChatPanel(
   targetGroup?: DockviewGroupPanel | null,
 ): void {
   if (!dockview) return;
-  const panelId = `chat-${chatAgentId}`;
+  const panelId = chatPanelId(chatAgentId);
   const existingPanel = dockview.panels.find((p) => p.id === panelId);
   if (existingPanel) {
     if (!existingPanel.api.isActive) {
@@ -852,7 +861,7 @@ function focusOrCreateChatPanel(
 
 function addChatPanel(chatAgentId: string, chatAgentName: string, targetGroup?: DockviewGroupPanel | null): void {
   if (!dockview) return;
-  const panelId = `chat-${chatAgentId}`;
+  const panelId = chatPanelId(chatAgentId);
   const params: PanelParams = { panelType: "chat", agentId: chatAgentId, chatAgentId };
   panelParams.set(panelId, params);
   dockview.addPanel({
@@ -927,7 +936,7 @@ function openIframeTab(
 function findAnchorChatPanelId(requesterAgentId: string): string | null {
   if (!dockview) return null;
   if (!requesterAgentId) return null;
-  const candidate = `chat-${requesterAgentId}`;
+  const candidate = chatPanelId(requesterAgentId);
   return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
 }
 
@@ -994,11 +1003,90 @@ type AddPanelPlacementOptions = {
   panelIdHint?: string;
 };
 
+/** Deterministic dockview panel id for an agent's chat tab, so reopening the
+ *  same chat focuses the existing tab instead of stacking a duplicate. */
+function chatPanelId(chatAgentId: string): string {
+  return `${CHAT_PANEL_ID_PREFIX}${chatAgentId}`;
+}
+
 /** Deterministic dockview panel id for a named terminal session, so reopening
  *  the same session from the "+" menu (or a layout restore) focuses the
  *  existing tab instead of stacking a duplicate. */
 function terminalPanelId(sessionName: string): string {
-  return `terminal-session-${sessionName}`;
+  return `${TERMINAL_PANEL_ID_PREFIX}${sessionName}`;
+}
+
+/** Rebuild a panel's params from its (deterministic) panel id.
+ *
+ *  Chat and persistent-terminal panel ids encode their identity, so a panel
+ *  whose ``panelParams`` entry is missing at creation time -- a layout file
+ *  written by an older build, a hand-edited one, or a bookkeeping bug -- can
+ *  still be bound to the right agent / tmux session instead of silently
+ *  rendering someone else's (empty) transcript. Returns null for ids that
+ *  carry no recoverable identity (ad-hoc URL / service iframes, subagents),
+ *  whose params exist only in the map. */
+function derivePanelParamsFromId(panelId: string): PanelParams | null {
+  if (panelId.startsWith(CHAT_PANEL_ID_PREFIX)) {
+    const chatAgentId = panelId.substring(CHAT_PANEL_ID_PREFIX.length);
+    if (!chatAgentId) return null;
+    return { panelType: "chat", agentId: chatAgentId, chatAgentId };
+  }
+  if (panelId.startsWith(TERMINAL_PANEL_ID_PREFIX)) {
+    const sessionName = panelId.substring(TERMINAL_PANEL_ID_PREFIX.length);
+    if (!sessionName) return null;
+    const terminalId = mintTerminalId();
+    return {
+      panelType: "iframe",
+      agentId: getPrimaryAgentId(),
+      url: buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir()),
+      title: sessionName,
+      terminalSessionName: sessionName,
+      terminalId,
+    };
+  }
+  return null;
+}
+
+/** The params dockview should build a panel from: the ones it supplied, else
+ *  the stored entry, else a re-derivation from the panel id.
+ *
+ *  A recovered entry is written back into ``panelParams``, so the next autosave
+ *  also repairs the persisted layout. Returns null only when the panel's
+ *  identity cannot be recovered at all -- the caller then renders an explicit
+ *  placeholder rather than guessing an owner. */
+function resolvePanelParams(panelId: string, suppliedParams: PanelParams | undefined): PanelParams | null {
+  if (suppliedParams !== undefined) return suppliedParams;
+  const stored = panelParams.get(panelId);
+  if (stored !== undefined) return stored;
+  const derived = derivePanelParamsFromId(panelId);
+  if (derived === null) {
+    console.warn(`Dockview panel ${panelId} has no params and none can be derived from its id`);
+    return null;
+  }
+  console.warn(`Recovered missing params for dockview panel ${panelId} from its id`);
+  panelParams.set(panelId, derived);
+  return derived;
+}
+
+/** Content renderer for a panel whose params are missing and underivable. It
+ *  says so plainly instead of rendering a plausible-looking wrong panel (e.g.
+ *  the primary agent's empty transcript under another agent's tab title). */
+function createUnrecoverablePanelRenderer(panelId: string): IContentRenderer {
+  const element = document.createElement("div");
+  element.className = "dockview-panel-unrecoverable";
+  element.style.display = "flex";
+  element.style.alignItems = "center";
+  element.style.justifyContent = "center";
+  element.style.height = "100%";
+  element.style.padding = "16px";
+  element.style.textAlign = "center";
+  element.textContent = "This tab's contents could not be restored. Close it and open it again from the + menu.";
+  console.warn(`Rendering unrecoverable-panel placeholder for dockview panel ${panelId}`);
+  return {
+    element,
+    init() {},
+    dispose() {},
+  };
 }
 
 /** A panel is a persistent-terminal tab iff it carries terminal params.
@@ -1221,7 +1309,7 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
     const agentName = ref.substring("chat:".length);
     const agent = getAgents().find((a) => a.name === agentName);
     if (!agent) return null;
-    const panelId = `chat-${agent.id}`;
+    const panelId = chatPanelId(agent.id);
     const existing = dockview.panels.find((p) => p.id === panelId);
     if (existing) {
       dockview.setActivePanel(existing);
@@ -1549,8 +1637,19 @@ function displayNameForSlug(slug: string): string {
 function applyLayoutContent(saved: SavedLayout | null): void {
   if (!dockview) return;
   const dv = dockview;
-  panelParams.clear();
   awaitingInitialChat = false;
+
+  // Tear the outgoing layout down BEFORE seeding the incoming params.
+  // ``fromJSON`` disposes the current panels before creating the new ones, and
+  // ``onDidRemovePanel`` deletes each disposed panel's ``panelParams`` entry.
+  // Panel ids are deterministic (``chat-<agent-id>``,
+  // ``terminal-session-<name>``), so a panel present in BOTH layouts would have
+  // its freshly-seeded entry deleted mid-restore and come back with no params.
+  // Clearing first means every disposal fires against the outgoing state we are
+  // discarding anyway, and nothing can race the fresh map.
+  dv.clear();
+  panelParams.clear();
+
   let savedHadAnyPanels = false;
   if (saved) {
     for (const [id, params] of Object.entries(saved.panelParams)) {
@@ -1596,10 +1695,6 @@ function applyLayoutContent(saved: SavedLayout | null): void {
         }
       }
     }
-  } else {
-    // An empty layout: drop whatever the previously-active layout had
-    // mounted, leaving the fresh-workspace state.
-    dv.clear();
   }
 
   // Auto-open the initial chat tab when:
@@ -1776,7 +1871,7 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
     // honor this strict identity to avoid silently retargeting another
     // agent's chat.
     if (!requesterAgentId) return null;
-    const candidate = `chat-${requesterAgentId}`;
+    const candidate = chatPanelId(requesterAgentId);
     return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
   }
   if (ref.startsWith("service:")) {
@@ -1794,7 +1889,7 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
     const agentName = ref.substring("chat:".length);
     const agent = getAgents().find((a) => a.name === agentName);
     if (!agent) return null;
-    const candidate = `chat-${agent.id}`;
+    const candidate = chatPanelId(agent.id);
     return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
   }
   if (ref.startsWith("chat-terminal:")) {
@@ -2426,12 +2521,21 @@ function initializeDockview(parentElement: HTMLElement): void {
     defaultRenderer: "always",
     defaultTabComponent: "custom",
     createComponent(options) {
-      const params = (options as unknown as { params?: PanelParams }).params ?? panelParams.get(options.id);
+      // dockview supplies ``params`` for panels created through ``addPanel``,
+      // but NOT for panels it recreates from ``fromJSON`` -- those fall back to
+      // the stored entry, and to a re-derivation from the panel id when even
+      // that is missing. A panel whose identity cannot be recovered renders an
+      // explicit placeholder; it must never silently default to another agent.
+      const suppliedParams = (options as unknown as { params?: PanelParams }).params;
+      const params = resolvePanelParams(options.id, suppliedParams);
+      if (params === null) {
+        return createUnrecoverablePanelRenderer(options.id);
+      }
 
       switch (options.name) {
         case "chat":
           return createMithrilRenderer(ChatPanel, {
-            agentId: params?.chatAgentId ?? params?.agentId ?? getPrimaryAgentId(),
+            agentId: params.chatAgentId ?? params.agentId,
           });
 
         case "iframe": {
@@ -2442,7 +2546,7 @@ function initializeDockview(parentElement: HTMLElement): void {
           // constructs and no other iframe URL uses. Terminals are never the
           // target of an agent-driven ``replace-url``, so they don't need the
           // reactive renderer below.
-          const iframeUrl = params?.url ?? "";
+          const iframeUrl = params.url ?? "";
           // Persistent-terminal tabs render the lifecycle banner above a
           // reactive iframe (the url is filled in / rewritten after mount for
           // the agent-driven and layout-restore paths). Identified by the
@@ -2454,9 +2558,9 @@ function initializeDockview(parentElement: HTMLElement): void {
           const isAgentTerminal = iframeUrl.startsWith(getTerminalUrl()) && iframeUrl.includes("arg=agent");
           if (isAgentTerminal) {
             return createMithrilRenderer(AgentTerminalPanel, {
-              agentId: params?.agentId ?? "",
+              agentId: params.agentId,
               url: iframeUrl,
-              title: params?.title ?? "Tab",
+              title: params.title ?? "Tab",
             });
           }
           // Pull live values out of ``panelParams`` on every redraw so an
@@ -2468,12 +2572,15 @@ function initializeDockview(parentElement: HTMLElement): void {
 
         case "subagent":
           return createMithrilRenderer(SubagentView, {
-            agentId: params?.agentId ?? getPrimaryAgentId(),
-            subagentSessionId: params?.subagentSessionId ?? "",
+            agentId: params.agentId,
+            subagentSessionId: params.subagentSessionId ?? "",
           });
 
         default:
-          return createMithrilRenderer(ChatPanel, { agentId: getPrimaryAgentId() });
+          // An unknown component name: the layout references a panel kind this
+          // build does not have. Say so rather than rendering a chat for the
+          // wrong agent.
+          return createUnrecoverablePanelRenderer(options.id);
       }
     },
     createTabComponent(options) {
