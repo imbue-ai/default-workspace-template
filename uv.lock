@@ -28,7 +28,7 @@ members = [
     "bootstrap",
     "browser",
     "cloudflare-tunnel",
-    "forever-claude-template",
+    "default-workspace-template",
     "host-backup",
     "mngr-cli-contract",
     "runtime-backup",
@@ -341,17 +341,13 @@ name = "bootstrap"
 version = "0.1.0"
 source = { editable = "libs/bootstrap" }
 dependencies = [
-    { name = "host-backup" },
     { name = "loguru" },
-    { name = "tomlkit" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "host-backup", editable = "libs/host_backup" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
-    { name = "tomlkit", specifier = ">=0.12" },
 ]
 
 [[package]]
@@ -938,6 +934,71 @@ wheels = [
 ]
 
 [[package]]
+name = "default-workspace-template"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "app-watcher" },
+    { name = "bootstrap" },
+    { name = "browser" },
+    { name = "cloudflare-tunnel" },
+    { name = "host-backup" },
+    { name = "imbue-common" },
+    { name = "litellm" },
+    { name = "playwright" },
+    { name = "runtime-backup" },
+    { name = "tk-command-parsing" },
+    { name = "tomlkit" },
+    { name = "web-server" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "imbue-mngr" },
+    { name = "imbue-mngr-claude" },
+    { name = "import-linter" },
+    { name = "inline-snapshot" },
+    { name = "mngr-cli-contract" },
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pyyaml" },
+    { name = "ruff" },
+    { name = "tomlkit" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-watcher", editable = "libs/app_watcher" },
+    { name = "bootstrap", editable = "libs/bootstrap" },
+    { name = "browser", editable = "libs/browser" },
+    { name = "cloudflare-tunnel", editable = "libs/cloudflare_tunnel" },
+    { name = "host-backup", editable = "libs/host_backup" },
+    { name = "imbue-common", editable = "vendor/mngr/libs/imbue_common" },
+    { name = "litellm", specifier = ">=1.88.1" },
+    { name = "playwright", specifier = "==1.58.0" },
+    { name = "runtime-backup", editable = "libs/runtime_backup" },
+    { name = "tk-command-parsing", editable = "libs/tk_command_parsing" },
+    { name = "tomlkit", specifier = ">=0.12" },
+    { name = "web-server", editable = "libs/web_server" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "imbue-mngr", editable = "vendor/mngr/libs/mngr" },
+    { name = "imbue-mngr-claude", editable = "vendor/mngr/libs/mngr_claude" },
+    { name = "import-linter", specifier = ">=2.0" },
+    { name = "inline-snapshot", specifier = ">=0.31" },
+    { name = "mngr-cli-contract", editable = "libs/mngr_cli_contract" },
+    { name = "pyright", specifier = ">=1.1" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-timeout", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6" },
+    { name = "ruff", specifier = ">=0.4" },
+    { name = "tomlkit", specifier = ">=0.12" },
+]
+
+[[package]]
 name = "distro"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1065,71 +1126,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8d/8f/c6ab717dc90f4e46d1430335cd4ab13e3629410bb760c0ead6de476760fb/flask-sock-0.7.0.tar.gz", hash = "sha256:e023b578284195a443b8d8bdb4469e6a6acf694b89aeb51315b1a34fcf427b7d", size = 4334, upload-time = "2023-10-02T22:32:42.973Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d8/98/107728ce3f430b5481eb426ccc5e1f7c8ab0bd01eaf231c62a8d528ff721/flask_sock-0.7.0-py3-none-any.whl", hash = "sha256:caac4d679392aaf010d02fabcf73d52019f5bdaf1c9c131ec5a428cb3491204a", size = 3982, upload-time = "2023-10-02T22:32:41.778Z" },
-]
-
-[[package]]
-name = "forever-claude-template"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "app-watcher" },
-    { name = "bootstrap" },
-    { name = "browser" },
-    { name = "cloudflare-tunnel" },
-    { name = "host-backup" },
-    { name = "imbue-common" },
-    { name = "litellm" },
-    { name = "playwright" },
-    { name = "runtime-backup" },
-    { name = "tk-command-parsing" },
-    { name = "tomlkit" },
-    { name = "web-server" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "imbue-mngr" },
-    { name = "imbue-mngr-claude" },
-    { name = "import-linter" },
-    { name = "inline-snapshot" },
-    { name = "mngr-cli-contract" },
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "pytest-timeout" },
-    { name = "pyyaml" },
-    { name = "ruff" },
-    { name = "tomlkit" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "app-watcher", editable = "libs/app_watcher" },
-    { name = "bootstrap", editable = "libs/bootstrap" },
-    { name = "browser", editable = "libs/browser" },
-    { name = "cloudflare-tunnel", editable = "libs/cloudflare_tunnel" },
-    { name = "host-backup", editable = "libs/host_backup" },
-    { name = "imbue-common", editable = "vendor/mngr/libs/imbue_common" },
-    { name = "litellm", specifier = ">=1.88.1" },
-    { name = "playwright", specifier = "==1.58.0" },
-    { name = "runtime-backup", editable = "libs/runtime_backup" },
-    { name = "tk-command-parsing", editable = "libs/tk_command_parsing" },
-    { name = "tomlkit", specifier = ">=0.12" },
-    { name = "web-server", editable = "libs/web_server" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "imbue-mngr", editable = "vendor/mngr/libs/mngr" },
-    { name = "imbue-mngr-claude", editable = "vendor/mngr/libs/mngr_claude" },
-    { name = "import-linter", specifier = ">=2.0" },
-    { name = "inline-snapshot", specifier = ">=0.31" },
-    { name = "mngr-cli-contract", editable = "libs/mngr_cli_contract" },
-    { name = "pyright", specifier = ">=1.1" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-timeout", specifier = ">=2.0" },
-    { name = "pyyaml", specifier = ">=6" },
-    { name = "ruff", specifier = ">=0.4" },
-    { name = "tomlkit", specifier = ">=0.12" },
 ]
 
 [[package]]
@@ -1601,7 +1597,6 @@ dependencies = [
     { name = "click" },
     { name = "imbue-common" },
     { name = "loguru" },
-    { name = "tomlkit" },
 ]
 
 [package.metadata]
@@ -1609,7 +1604,6 @@ requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "imbue-common", editable = "vendor/mngr/libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7.0" },
-    { name = "tomlkit", specifier = ">=0.12" },
 ]
 
 [[package]]
