@@ -82,6 +82,13 @@ class AwsSink:
     def _put(self, key: str, data: bytes, content_type: str) -> None:
         self._s3.put_object(Bucket=self._bucket, Key="{}/{}".format(self._prefix, key), Body=data, ContentType=content_type)
 
+    def upload_restic_password(self) -> None:
+        """Persist minds' per-workspace restic password to S3 so restore can decrypt the repo even
+        after the box + sandbox are gone. (Same private, bucket-scoped store as the repo itself.)"""
+        password = self._restic_env.get("RESTIC_PASSWORD", "")
+        if password:
+            self._put("restic_password", password.encode("utf-8"), "text/plain")
+
     def write_state(self, waits_done: int, num_turns: int, test_state: str) -> None:
         payload = {
             "eval_name": self._config.get("eval_name"),
