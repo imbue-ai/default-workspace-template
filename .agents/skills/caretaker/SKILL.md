@@ -1,6 +1,6 @@
 ---
 name: caretaker
-description: The single idempotent Caretaker skill, invoked via /caretaker on every run. On the very first run it does one look-only scan (no fixes), then introduces itself with what it found and asks whether to keep checking each night; on every later run it does the nightly routine -- greets the user, scans the workspace's service logs for problems with permission, reviews the previous run, proposes (or, with permission, applies) fixes, and summarizes, always in plain user-experience terms.
+description: The single idempotent Caretaker skill, invoked via /caretaker on every run. On the very first run it does one look-only scan (no fixes), then introduces itself with what it found and asks whether to keep checking each night; on every later run it does the nightly routine -- greets the user, scans the workspace's service logs for problems and checks for finished-but-uncommitted work with permission, reviews the previous run, proposes (or, with permission, applies) fixes and commits, and summarizes, always in plain user-experience terms.
 ---
 
 # Caretaker
@@ -61,11 +61,16 @@ first impression of you is that single message.
 1. **Open a log.** Create `runtime/caretaker/<timestamp>.md` (format
    `YYYY-MM-DDTHH-MM-SS`) and note what you check and find as you go. This file is
    private -- none of it appears in the chat.
-2. **Scan, but change nothing.** Use the **`check-app-errors`** skill to look over
-   the workspace's services efficiently (`supervisorctl status` plus a few
-   targeted greps of `/var/log/supervisor/`), and note anything wrong in your log,
-   in plain terms. This first night is **look-only**: do not fix anything, even an
-   easy thing -- you do not have permission to fix yet.
+2. **Scan, but change nothing.** Two checks, both look-only:
+   - Use the **`check-app-errors`** skill to look over the workspace's services
+     efficiently (`supervisorctl status` plus a few targeted greps of
+     `/var/log/supervisor/`).
+   - Check for uncommitted work: `git status` in the workspace repo. Note
+     whether finished-looking work is sitting uncommitted.
+
+   Note anything found in your log, in plain terms. This first night is
+   **look-only**: do not fix or commit anything, even an easy thing -- you do
+   not have permission yet.
 3. **Send the welcome.** Your entire visible response is the message below,
    reproduced as written **except** for the "I took a first look tonight"
    section, which you fill in from what your scan turned up -- one or two warm,
@@ -162,9 +167,15 @@ record their answer and confirm; the daily job wakes you again on the next caden
    `runtime/caretaker/permissions.md`.
    - `no` or not set: do **not** scan (no permission yet). Skip to step 5; your
      hello already re-offered, so just close warmly.
-   - `yes`: use the **`check-app-errors`** skill to scan efficiently
-     (`supervisorctl status` + a few targeted greps of `/var/log/supervisor/`),
-     and note what is wrong **in your log**, in plain terms.
+   - `yes`: two checks, noting what you find **in your log**, in plain terms:
+     - use the **`check-app-errors`** skill to scan the services efficiently
+       (`supervisorctl status` + a few targeted greps of `/var/log/supervisor/`);
+     - check for uncommitted work with `git status` in the workspace repo.
+       Work that is finished but never committed is at risk and belongs in
+       history (committing also triggers the automatic backup push). Judge
+       what "should be committed": completed-looking changes qualify;
+       something that looks actively mid-edit (half-written code, debug
+       scaffolding) does not -- note those for the summary instead.
 4. **Review and fix.** Read the single most recent **prior** `runtime/caretaker/*.md`
    log for continuity. Plan fixes scoped to the "also take on bigger fixes" line in
    `runtime/caretaker/permissions.md`:
@@ -174,6 +185,12 @@ record their answer and confirm; the daily job wakes you again on the next caden
    - bigger fixes allowed (`yes`): you may also take on larger fixes directly.
    Apply a fix only if the "fix small things on its own, without asking" line is
    `yes` **and** the fix is within the scope above; otherwise propose it and wait.
+
+   **Committing uncommitted work counts as a small, low-risk action**: when the
+   scan found finished-but-uncommitted work and "fix small things on its own"
+   is `yes`, commit it with a clear, descriptive message (group unrelated
+   changes into separate commits; never amend or rebase). If that permission
+   is not `yes`, mention the uncommitted work in your closing summary instead.
 5. **Closing message to the user.** A short, friendly, non-technical summary of
    what you found and what you propose or did -- e.g. "Your notes page was briefly
    failing to load each morning; I restarted it and it's been fine since." If you
