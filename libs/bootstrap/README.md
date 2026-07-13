@@ -54,16 +54,26 @@ To add, change, or remove a service, edit `supervisord.conf` and run
 
 The `deferred-install` program in `supervisord.conf` runs
 `scripts/deferred_install.sh`, which installs packages that are too heavy to
-bake into the Docker image but aren't required by any boot-time service.
-Currently it covers:
+bake into the Docker image but aren't required by any boot-time service --
+plus a backstop for binaries that ARE baked into the image, for providers
+whose hosts are not built from the Dockerfile. Currently it covers:
 
 - Playwright's Chromium browser + its apt system libraries
   (`uv run playwright install --with-deps chromium`).
-- The `gitleaks` secret scanner (used by the publish-inspiration skill's
-  secret scan): a pinned release binary downloaded from GitHub, verified
-  against sha256 checksums hard-coded in the script (never fetched at install
-  time), and installed to `/usr/local/bin/gitleaks`. Consumers fall back to a
-  grep-based scan while the install has not finished.
+- The three secret-scanner binaries the publish-inspiration skill's scan gate
+  hard-requires: `betterleaks`, `trufflehog`, and `kingfisher`. These are
+  normally baked into the docker image at build time (the Dockerfile RUNs
+  `scripts/install_secret_scanners.sh` -- the single source of truth for the
+  version pins and per-arch sha256 checksums, which are hard-coded in that
+  script and never fetched at install time). The deferred-install wrappers
+  re-invoke the same script per tool as a backstop for non-Dockerfile
+  providers (e.g. Lima): on docker containers each call is an instant no-op
+  (the binary already exists at its pinned version) that just writes the
+  marker; elsewhere it downloads the pinned release into
+  `/usr/local/bin/<tool>` after verifying its checksum. There is no fallback
+  scanner: the publish-inspiration scan aborts if any of the three is
+  missing, so a failed install here blocks publishes rather than weakening
+  the scan.
 
 It is a one-shot supervisord program (`autorestart=false`, `startsecs=0`,
 `exitcodes=0`): supervisord starts it once on boot and leaves it stopped after a
