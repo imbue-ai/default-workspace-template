@@ -21,6 +21,20 @@ COPY scripts/setup_system.sh /usr/local/bin/default-workspace-template-setup-sys
 COPY scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 RUN chmod +x /usr/local/bin/default-workspace-template-setup-system && default-workspace-template-setup-system
 
+# ============================================================================
+# Secret-scanner binaries (repo-independent, pinned). Baked at image-build
+# time so the publish-inspiration skill's scan gate (scan_secrets.sh) can
+# hard-require betterleaks + trufflehog + kingfisher from the first second of
+# every docker-built container. The script is the single source of truth for
+# the version pins and per-arch sha256s, skips any scanner already present at
+# its pinned version, and is re-run by the deferred-install service as a
+# backstop on providers that do not build from this Dockerfile (e.g. Lima).
+# Kept above the `COPY . /mngr/code/` layer so it caches against the script
+# content (the pins live inside it), not application source.
+# ============================================================================
+COPY scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
+RUN chmod +x /usr/local/bin/default-workspace-template-install-secret-scanners && default-workspace-template-install-secret-scanners
+
 # Safety-net symlinks: /code -> /mngr/code and /worktree -> /mngr/worktree.
 # All default-workspace-template-owned paths are written as /mngr/code/... and /mngr/worktree/...
 # (so the workspace and worktrees ride the /mngr/ persistent volume for

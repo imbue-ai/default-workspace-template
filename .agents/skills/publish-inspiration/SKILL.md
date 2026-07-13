@@ -277,27 +277,21 @@ worktree to a clean template base and deletes gitignored state -- including
    channel with a neutral default the adopter sets" -- or the single line
    "None requested.">
 
-   After applying them, re-run the secret scan over every file you modified.
-   With gitleaks installed (the deferred-install service normally provides
-   it) and this skill's config present, each file must scan clean (gitleaks
-   exits 1 on a leak):
+   After applying them, re-run the secret scan over every file you modified,
+   with the same shared script the assembly's scan gate uses. It runs all
+   three scanners (betterleaks, trufflehog, kingfisher) and exits non-zero on
+   any finding, any scanner error, or any missing scanner -- there is no
+   fallback scanner:
 
    ```bash
-   CFG=.agents/skills/publish-inspiration/scripts/gitleaks.toml
-   for f in <each modified file>; do
-       gitleaks dir "$f" --config "$CFG" --redact --no-banner
-   done
+   bash .agents/skills/publish-inspiration/scripts/scan_secrets.sh <each modified file>
    ```
 
-   If gitleaks or the config is unavailable (older container or base), fall
-   back to the assembly script's grep pattern; it must print nothing:
-
-   ```bash
-   grep -nIE -- 'ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|sk-ant-[A-Za-z0-9_-]{24,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----' <each modified file>
-   ```
-
-   A hit means a modification did not fully remove a credential -- fix it or
-   report `stuck`; never leave it in.
+   A finding means a modification did not fully remove a credential -- fix
+   it or report `stuck`; never leave it in. If the script reports a missing
+   scanner, or the script itself is absent from your assembled tree (a
+   BASE_REF that predates it), report `stuck` -- do not substitute a weaker
+   ad-hoc scan.
 
 3. **Flesh out the manifest.** `inspiration-<slug>.md` at the repo root has
    `<!-- FILL-IN (publishing agent): ... -->` comment blocks in "What it is,"
@@ -452,8 +446,14 @@ things the script cannot: the manifest prose and the bespoke thumbnail.
 The worker maps any non-zero exit to a `stuck` report quoting the script's
 stderr. What each exit means, and what you do:
 
-- **Secret scan (exit 1).** A credential/token rode in on an overlaid path.
-  Nothing was committed; surface the flagged path (value redacted) and stop.
+- **Secret scan (exit 1).** A credential/token rode in on an overlaid path,
+  OR one of the three required scanners (betterleaks / trufflehog /
+  kingfisher) was missing or errored -- the stderr says which. Nothing was
+  committed; for a finding, surface the flagged path (value redacted) and
+  stop. For a missing/broken scanner, the environment is broken (the binaries
+  are baked into the docker image and backstopped by the deferred-install
+  service) -- check `supervisorctl status deferred-install` and its log
+  before relaunching; never publish around the gate.
 - **No-diff guard (exit 3).** The resolved include set contributes nothing
   beyond `BASE_REF` (the assembled tree equals the base tree). Tell the user
   plainly and do NOT create a repo -- there are no empty inspiration repos.
@@ -798,11 +798,13 @@ What it does, in order (see the script for the exact commands):
 5. Carries forward any existing accumulated `inspiration-*.md` + `.svg` at the
    repo root.
 6. Runs a deterministic secret scan that HARD-FAILS (non-zero, abort before any
-   commit/push). The scanner is gitleaks over the staged overlay (configured by
-   the sibling `gitleaks.toml`: gitleaks' default ruleset plus the
-   credential-filename blocklist and a broader Anthropic key rule), falling
-   back to the historical filename+grep scan when gitleaks is not installed
-   (e.g. the deferred install has not finished). This is the authoritative
+   commit/push). The scan is the sibling `scan_secrets.sh` over the staged
+   overlay: THREE scanners -- betterleaks (configured by the sibling
+   `betterleaks.toml`: its default ruleset plus the credential-filename
+   blocklist and a broader Anthropic key rule), trufflehog (always
+   `--no-verification`), and kingfisher (always `--no-validate`) -- where a
+   finding from ANY of them, any scanner error, or any missing scanner binary
+   fails the scan. There is no fallback scanner. This is the authoritative
    blocker, not LLM prose.
 7. Generates the manifest `inspiration-<slug>.md` at the repo root (with the
    FILL-IN blocks the worker must replace).

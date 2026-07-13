@@ -212,20 +212,40 @@
   carried). The first-parent root remains only as a last resort for repos
   with no marker at all.
 
-- The publish flow's secret scan is now gitleaks-first. After a survey of
-  standalone secret scanners, gitleaks (MIT, single static Go binary) was
-  chosen; the pinned release (v8.30.1) is delivered by the deferred-install
-  service (`scripts/deferred_install.sh` downloads the arch-appropriate
-  binary and verifies it against sha256 checksums hard-coded from the
-  release's checksums file). `build_inspiration.sh`'s section-5 scan now runs
-  `gitleaks dir` over the staged overlay with a skill-local `gitleaks.toml`
-  config: gitleaks' default ruleset extended with path-only rules replicating
-  the credential-filename blocklist (.env variants, .netrc,
-  .git-credentials, .claude.json, .pypirc, .sesskey, gh hosts.yml) and a
-  broader Anthropic key rule (any `sk-ant-*` shape, with placeholder
-  stopwords). Findings print rule + repo-relative path with values redacted
-  and abort before commit exactly as before. The historical filename+grep
-  scanner is retained as an explicit fallback (one warning line) for
-  containers where gitleaks is not yet installed, and the worker's
-  published-version-modification re-scan uses the same gitleaks-with-grep-
-  fallback contract.
+- The publish flow's secret scan is now a triple-scanner gate with no
+  fallback. The scan (extracted into the shared
+  `.agents/skills/publish-inspiration/scripts/scan_secrets.sh`, used both by
+  `build_inspiration.sh`'s section-5 gate over the staged overlay and by the
+  worker's published-version-modification re-scan) runs THREE independent
+  scanners over the same targets, and a finding from ANY of them aborts
+  before commit:
+
+  - **betterleaks** v1.6.1 (MIT; the gitleaks author's successor project,
+    replacing gitleaks here), configured by the skill-local
+    `betterleaks.toml` (replaces `gitleaks.toml`): its default ruleset
+    extended with path-only rules replicating the credential-filename
+    blocklist (.env variants minus .env.example/.sample/.template, .netrc,
+    .git-credentials, .claude.json, .pypirc, .sesskey, gh hosts.yml) and a
+    broader Anthropic key rule (any `sk-ant-*` shape with 24+ body chars, so
+    placeholders like `sk-ant-test` never fire). Betterleaks does not honor
+    gitleaks' `[[rules.allowlists]]`, so the false-positive exemptions are
+    expressed as Expr `prefilter`/`filter` expressions instead.
+
+  - **trufflehog** v3.95.9 (AGPL-3.0), always with `--no-verification`: its
+    verification feature would send candidate secrets to third-party APIs,
+    which must never happen with scanned content. Its raw JSON report (which
+    contains secret values) is parsed for detector+path only and deleted.
+
+  - **kingfisher** v1.106.0 (Apache-2.0), always with `--no-validate` (its
+    live-validation feature is disabled for the same reason) and `--redact`.
+
+  Findings print scanner + rule + repo-relative path with values redacted.
+  There is NO fallback scanner and no tolerance for a missing tool: the
+  historical filename+grep fallback is deleted, and a missing binary or a
+  scanner that errors at runtime fails the scan (exit 1 naming the tool) --
+  a broken scanner must never silently pass. All three binaries are baked
+  into the docker image at build time (a Dockerfile layer runs the new
+  `scripts/install_secret_scanners.sh`, the single source of truth for the
+  version pins and hard-coded per-arch sha256 checksums), with the
+  deferred-install service re-running the same script as a backstop on
+  providers not built from the Dockerfile (e.g. Lima).
