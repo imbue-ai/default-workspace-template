@@ -70,12 +70,13 @@ yes = true
 [agent_types.claude]
 auto_dismiss_dialogs = true
 auto_allow_permissions = true
-cli_args = """--dangerously-skip-permissions --disallowed-tools AskUserQuestion,ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
+auto_disable_questions = true
+cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
 settings_overrides__extend = {model = "opus[1m]", fastMode = true}
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with CLAUDE_CODE_VERSION in the Dockerfile.
-version = "2.1.160"
+version = "2.1.207"
 # Share the services agent's CLAUDE_CONFIG_DIR across every other agent so
 # auth, plugins, marketplaces, and settings are configured exactly once
 # (inside the services agent) and inherited via the host env file the
