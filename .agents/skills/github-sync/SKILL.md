@@ -46,7 +46,7 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
      -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-read", "github-git-write"]}, "rationale": "GitHub sync: push this workspace'"'"'s branches and runtime state to your private sync repo."}'
    latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
      -H 'Content-Type: application/json' \
-     -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-repos", "github-write-repos"]}, "rationale": "GitHub sync: create the private sync repo and verify it stays private."}'
+     -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-repos", "github-write-all"]}, "rationale": "GitHub sync: create the private sync repo (needs github-write-all) and verify it stays private (github-read-repos)."}'
    ```
 
    Wait for the approval system message before continuing.
@@ -72,6 +72,11 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
    name-taken error, append `-2`, `-3`, ... and retry. The response JSON must
    contain `"private": true` -- if it does not, delete/abandon the repo and
    stop; do not proceed with a public repo.
+
+   Repo creation (`POST /user/repos`) needs `github-write-all`, not
+   `github-write-repos`: the scoped `github-write-repos` permission only covers
+   existing-repo (`/repos/{owner}/{repo}`) paths, which is why step 2 requests
+   `github-write-all`.
 
 5. **Point origin at it and record the config**:
 
