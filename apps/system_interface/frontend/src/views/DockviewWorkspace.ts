@@ -21,7 +21,7 @@ import { CreateAgentModal } from "./CreateAgentModal";
 import { CreateBrowserModal } from "./CreateBrowserModal";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { LayoutDialog, type LayoutDialogMode } from "./LayoutDialog";
-import { MobileTabBar, isMobileViewport, type MobileTabInfo } from "./MobileTabBar";
+import { MobileTabBar, isMobileViewport, type MobileMenuRow } from "./MobileTabBar";
 import { ShareModal } from "./ShareModal";
 import { reloadInterface } from "../reload";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
@@ -612,27 +612,8 @@ function buildDropdownItems(
   const openAppNames = getOpenAppNames();
 
   // --- Existing items section ---
-
-  // Applications that don't have open tabs. Exclude "system_interface"
-  // (that's the surrounding chrome UI, not a tab-able app), "terminal"
-  // (reachable via the "New terminal" menu item further down), "browser"
-  // (the fleet has its own per-session items + "New browser" below; the bare
-  // ``/service/browser/`` app entry would open a session-less viewer that
-  // doesn't dedup against the fleet panes), and "web" (the placeholder example
-  // server -- the browser fleet is the real web surface, so it's just noise).
-  const apps = getApplications().filter(
-    (app) =>
-      app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser" && app.name !== "web",
-  );
-  for (const app of apps) {
-    if (!openAppNames.has(app.name)) {
-      const proxyUrl = getServiceUrl(app.name);
-      items.push({
-        label: app.name,
-        action: () => openIframeTab(proxyUrl, app.name, "iframe", app.name, targetGroup),
-      });
-    }
-  }
+  // Grouped by kind -- agents, then terminals, browsers, and apps -- matching
+  // the mobile menu's destination ordering so the two surfaces read the same.
 
   // Agents/chats that don't have open tabs
   const allAgents = getAgents();
@@ -656,17 +637,6 @@ function buildDropdownItems(
     }
   }
 
-  // Active browsers in the fleet -- one item each, labeled with the owner.
-  // Clicking focuses the pane if it's already open (``openBrowserSessionTab``
-  // dedups on the ``?session=<id>`` URL) or opens it otherwise. Built from
-  // the cached fleet snapshot the dropdown open-handler refreshed.
-  for (const browser of browserFleet) {
-    items.push({
-      label: `Browser ${browser.id}${browserOwnerLabel(browser)}`,
-      action: () => openBrowserSessionTab(browser.id, targetGroup),
-    });
-  }
-
   // Live terminal sessions (any non-mngr- tmux session) that don't have an
   // open tab. Selecting one reattaches -- the session keeps running after its
   // tab is closed, so this is how a closed-but-alive terminal is reopened.
@@ -680,12 +650,61 @@ function buildDropdownItems(
     }
   }
 
+  // Active browsers in the fleet -- one item each, labeled with the owner.
+  // Clicking focuses the pane if it's already open (``openBrowserSessionTab``
+  // dedups on the ``?session=<id>`` URL) or opens it otherwise. Built from
+  // the cached fleet snapshot the dropdown open-handler refreshed.
+  for (const browser of browserFleet) {
+    items.push({
+      label: `Browser ${browser.id}${browserOwnerLabel(browser)}`,
+      action: () => openBrowserSessionTab(browser.id, targetGroup),
+    });
+  }
+
+  // Applications that don't have open tabs. Exclude "system_interface"
+  // (that's the surrounding chrome UI, not a tab-able app), "terminal"
+  // (reachable via the "New terminal" menu item further down), "browser"
+  // (the fleet has its own per-session items + "New browser" below; the bare
+  // ``/service/browser/`` app entry would open a session-less viewer that
+  // doesn't dedup against the fleet panes), and "web" (the placeholder example
+  // server -- the browser fleet is the real web surface, so it's just noise).
+  const apps = getApplications().filter(
+    (app) =>
+      app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser" && app.name !== "web",
+  );
+  for (const app of apps) {
+    if (!openAppNames.has(app.name)) {
+      const proxyUrl = getServiceUrl(app.name);
+      items.push({
+        label: app.name,
+        action: () => openIframeTab(proxyUrl, app.name, "iframe", app.name, targetGroup),
+      });
+    }
+  }
+
   // Add divider if we had existing items
   if (items.length > 0) {
     items[items.length - 1].dividerAfter = true;
   }
 
-  // --- "New ..." items ---
+  items.push(...buildActionItems(targetGroup));
+
+  return items;
+}
+
+/** The creation ("New ...") and named-layout actions. The tail of the desktop
+ *  "+" dropdown, and the action section of the mobile menu (which builds its
+ *  own destination list instead of the dropdown's existing-items section). */
+function buildActionItems(
+  targetGroup?: DockviewGroupPanel,
+): Array<{ label: string; action: () => void; dividerAfter?: boolean; disabled?: boolean; disabledReason?: string }> {
+  const items: Array<{
+    label: string;
+    action: () => void;
+    dividerAfter?: boolean;
+    disabled?: boolean;
+    disabledReason?: string;
+  }> = [];
 
   items.push({
     label: "New chat",
@@ -2698,25 +2717,104 @@ async function executeTerminalDestroy(sessionName: string, panelId: string): Pro
   m.redraw();
 }
 
-/** Rows for the mobile tab switcher sheet, one per open dockview panel. */
-function getMobileTabs(): MobileTabInfo[] {
+/** The mobile menu's destination rows: everything the workspace can show,
+ *  as one flat list. Loaded panels come first (active on top, then dockview
+ *  order) and carry close/destroy handlers -- the close X doubles as the
+ *  "currently loaded" signal. Then the not-loaded destinations, grouped by
+ *  kind (agents, terminals, browsers, apps), whose select focus-or-creates
+ *  with default placement. */
+function buildMobileMenuRows(): MobileMenuRow[] {
   if (!dockview) return [];
+  const dv = dockview;
+  const rows: MobileMenuRow[] = [];
   const primaryId = getPrimaryAgentId();
-  return dockview.panels.map((panel) => {
+
+  // Stable sort: the active panel bubbles to the top, the rest keep
+  // dockview's panel order.
+  const openPanels = dv.panels.slice().sort((a, b) => Number(b.api.isActive) - Number(a.api.isActive));
+  for (const panel of openPanels) {
     const pp = panelParams.get(panel.id);
-    let destroyKind: MobileTabInfo["destroyKind"] = null;
+    const panelId = panel.id;
+    let onDestroy: (() => void) | undefined;
+    let destroyLabel: string | undefined;
     if (isTerminalPanelParams(pp)) {
-      destroyKind = "terminal";
+      onDestroy = () => requestDestroyForPanel(panelId);
+      destroyLabel = "Destroy terminal";
     } else if (pp?.panelType === "chat" && (pp.chatAgentId ?? pp.agentId) !== primaryId) {
-      destroyKind = "agent";
+      onDestroy = () => requestDestroyForPanel(panelId);
+      destroyLabel = "Destroy agent";
     }
-    return {
-      panelId: panel.id,
-      title: panel.title ?? pp?.title ?? "Tab",
+    rows.push({
+      key: `panel:${panelId}`,
+      label: panel.title ?? pp?.title ?? "Tab",
       isActive: panel.api.isActive,
-      destroyKind,
-    };
-  });
+      onSelect: () => {
+        const target = dv.panels.find((p) => p.id === panelId);
+        if (target) dv.setActivePanel(target);
+      },
+      onClose: () => {
+        const target = dv.panels.find((p) => p.id === panelId);
+        if (target) dv.removePanel(target);
+      },
+      onDestroy,
+      destroyLabel,
+    });
+  }
+
+  const openChatIds = getOpenChatAgentIds();
+  for (const agent of getAgents()) {
+    if (openChatIds.has(agent.id)) continue;
+    rows.push({
+      key: `chat:${agent.id}`,
+      label: agent.name,
+      isActive: false,
+      onSelect: () => focusOrCreateChatPanel(agent.id, agent.name),
+    });
+  }
+  for (const proto of getProtoAgents()) {
+    if (openChatIds.has(proto.agent_id)) continue;
+    rows.push({
+      key: `proto:${proto.agent_id}`,
+      label: `${proto.name} (creating...)`,
+      isActive: false,
+      onSelect: () => addChatPanel(proto.agent_id, proto.name),
+    });
+  }
+  const openTerminalNames = getOpenTerminalSessionNames();
+  for (const terminal of terminalFleet) {
+    if (openTerminalNames.has(terminal.session_name)) continue;
+    rows.push({
+      key: `terminal:${terminal.session_name}`,
+      label: terminal.session_name,
+      isActive: false,
+      onSelect: () => reattachTerminal(terminal.session_name),
+    });
+  }
+  for (const browser of browserFleet) {
+    if (findIframePanelIdForServiceRef(`browser?session=${browser.id}`) !== null) continue;
+    rows.push({
+      key: `browser:${browser.id}`,
+      label: `Browser ${browser.id}${browserOwnerLabel(browser)}`,
+      isActive: false,
+      onSelect: () => openBrowserSessionTab(browser.id),
+    });
+  }
+  const openAppNames = getOpenAppNames();
+  // Same app exclusions as the desktop dropdown (see buildDropdownItems).
+  const apps = getApplications().filter(
+    (app) =>
+      app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser" && app.name !== "web",
+  );
+  for (const app of apps) {
+    if (openAppNames.has(app.name)) continue;
+    rows.push({
+      key: `app:${app.name}`,
+      label: app.name,
+      isActive: false,
+      onSelect: () => openIframeTab(getServiceUrl(app.name), app.name, "iframe", app.name),
+    });
+  }
+  return rows;
 }
 
 /** Open the same destroy confirmation the desktop tab actions use, resolving
@@ -2772,27 +2870,19 @@ export const DockviewWorkspace: m.Component = {
       [
         // Phone-sized screens replace the dockview tab strip (hidden via
         // responsive.css) with a mobile tab bar: a hamburger button opening
-        // one bottom-sheet menu holding the open tabs plus the same "open
-        // new" items as the desktop dropdown, next to the active tab title.
+        // one bottom-sheet menu that lists every destination (loaded panels
+        // first, with close/destroy; then the rest) plus the same creation
+        // and layout actions as the desktop dropdown.
         isMobileViewport()
           ? m(MobileTabBar, {
-              tabs: getMobileTabs(),
-              buildAddItems: () => buildDropdownItems(),
+              rows: buildMobileMenuRows(),
+              buildActionItems: () => buildActionItems(),
               onMenuOpen: () => {
                 // Same open-refresh the desktop dropdown does: re-fetch the
                 // browser/terminal fleets and re-render when they land.
                 refreshBrowserFleet(() => m.redraw());
                 refreshTerminalFleet(() => m.redraw());
               },
-              onSelectTab: (panelId: string) => {
-                const panel = dockview?.panels.find((p) => p.id === panelId);
-                if (panel) dockview?.setActivePanel(panel);
-              },
-              onCloseTab: (panelId: string) => {
-                const panel = dockview?.panels.find((p) => p.id === panelId);
-                if (panel) dockview?.removePanel(panel);
-              },
-              onDestroyTab: requestDestroyForPanel,
             })
           : null,
 
