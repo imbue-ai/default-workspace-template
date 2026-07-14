@@ -3,8 +3,9 @@
  *
  * On small screens (see isMobileViewport) the dockview header is hidden and
  * this bar renders above the workspace instead: a hamburger button at the top
- * left and the active tab's title beside it. The hamburger opens a single
- * bottom-sheet menu.
+ * left and the active tab's title beside it. The hamburger opens a left-side
+ * drawer -- the conventional companion to a top-left hamburger -- sliding out
+ * from under the button that opened it.
  *
  * The menu is one flat list of destinations -- everything the workspace can
  * show (agent chats, terminal sessions, browsers, apps), not just what has an
@@ -98,27 +99,27 @@ export function MobileTabBar(): m.Component<MobileTabBarAttrs> {
 
   function renderDestinationRows(rows: MobileMenuRow[]): m.Children[] {
     if (rows.length === 0) {
-      return [m("div", { class: "mobile-sheet-empty" }, "Nothing to open yet")];
+      return [m("div", { class: "mobile-drawer-empty" }, "Nothing to open yet")];
     }
     return rows.map((row) =>
       m(
         "div",
         {
           key: row.key,
-          class: row.isActive ? "mobile-sheet-row mobile-sheet-row--active" : "mobile-sheet-row",
+          class: row.isActive ? "mobile-drawer-row mobile-drawer-row--active" : "mobile-drawer-row",
           onclick: () => {
             closeMenu();
             row.onSelect();
           },
         },
         [
-          m("span", { class: "mobile-sheet-row-label" }, row.label),
+          m("span", { class: "mobile-drawer-row-label" }, row.label),
           row.onDestroy !== undefined
             ? m(
                 "button",
                 {
                   type: "button",
-                  class: "mobile-sheet-row-action mobile-sheet-row-action--destructive",
+                  class: "mobile-drawer-row-action mobile-drawer-row-action--destructive",
                   title: row.destroyLabel ?? "Destroy",
                   "aria-label": row.destroyLabel ?? "Destroy",
                   onclick: (event: MouseEvent) => {
@@ -135,7 +136,7 @@ export function MobileTabBar(): m.Component<MobileTabBarAttrs> {
                 "button",
                 {
                   type: "button",
-                  class: "mobile-sheet-row-action",
+                  class: "mobile-drawer-row-action",
                   title: "Close tab",
                   "aria-label": "Close tab",
                   onclick: (event: MouseEvent) => {
@@ -159,7 +160,7 @@ export function MobileTabBar(): m.Component<MobileTabBarAttrs> {
         m(
           "div",
           {
-            class: item.disabled ? "mobile-sheet-row mobile-sheet-row--disabled" : "mobile-sheet-row",
+            class: item.disabled ? "mobile-drawer-row mobile-drawer-row--disabled" : "mobile-drawer-row",
             onclick: () => {
               if (item.disabled) {
                 if (item.disabledReason) alert(item.disabledReason);
@@ -169,27 +170,42 @@ export function MobileTabBar(): m.Component<MobileTabBarAttrs> {
               item.action();
             },
           },
-          m("span", { class: "mobile-sheet-row-label" }, item.label),
+          m("span", { class: "mobile-drawer-row-label" }, item.label),
         ),
       );
       if (item.dividerAfter) {
-        rows.push(m("div", { class: "mobile-sheet-divider" }));
+        rows.push(m("div", { class: "mobile-drawer-divider" }));
       }
     }
     return rows;
   }
 
-  function renderMenuSheet(attrs: MobileTabBarAttrs): m.Children {
+  function renderMenuDrawer(attrs: MobileTabBarAttrs): m.Children {
     return [
-      m("div", { class: "mobile-sheet-backdrop", onclick: closeMenu }),
-      m("div", { class: "mobile-sheet" }, [
-        m("div", { class: "mobile-sheet-grabber" }),
-        m("div", { class: "mobile-sheet-rows" }, [
+      m("div", { class: "mobile-drawer-backdrop", onclick: closeMenu }),
+      m("nav", { class: "mobile-drawer" }, [
+        // The close button sits where the hamburger is, so the pair reads as
+        // one control toggling the drawer (backdrop tap also dismisses).
+        m("div", { class: "mobile-drawer-header" }, [
+          m(
+            "button",
+            {
+              type: "button",
+              class: "mobile-drawer-close",
+              title: "Close menu",
+              "aria-label": "Close menu",
+              onclick: closeMenu,
+            },
+            m.trust(CLOSE_SVG),
+          ),
+          m("span", { class: "mobile-drawer-header-label" }, "Menu"),
+        ]),
+        m("div", { class: "mobile-drawer-rows" }, [
           // The destination rows stay a nested array: mithril normalizes it
           // into its own fragment, which keeps the keyed rows uniformly keyed
           // among themselves without keying these section siblings.
           renderDestinationRows(attrs.rows),
-          m("div", { class: "mobile-sheet-divider" }),
+          m("div", { class: "mobile-drawer-divider" }),
           ...renderActionRows(attrs),
         ]),
       ]),
@@ -220,7 +236,7 @@ export function MobileTabBar(): m.Component<MobileTabBarAttrs> {
           ),
           m("span", { class: "mobile-tab-bar-title" }, active?.label ?? "No tabs open"),
         ]),
-        menuOpen ? renderMenuSheet(attrs) : null,
+        menuOpen ? renderMenuDrawer(attrs) : null,
       ]);
     },
   };
