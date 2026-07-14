@@ -1,19 +1,24 @@
-"""Tail a codex agent's pre-converted common-transcript and emit UI events.
+"""Tail a codex agent's raw rollout and emit UI events.
 
-The codex analogue of :class:`session_watcher.AgentSessionWatcher`, but far
-simpler. mngr_codex runs an agent-side converter that already normalizes codex's
-native rollout into mngr's harness-agnostic common-transcript schema, appended to a
-single file:
+The codex analogue of :class:`claude_session_watcher.ClaudeSessionWatcher`, but far
+simpler. mngr_codex mirrors the live rollout verbatim (no reschematising) to a stable
+per-agent path:
 
-    <agent_state_dir>/events/codex/common_transcript/events.jsonl
+    <agent_state_dir>/logs/codex_transcript/events.jsonl
 
-So this watcher does not parse codex's native format, walk a ``projects/`` tree, or
-track subagent sessions (codex's common transcript has no subagent linkage). It just
-tails that one append-only file, adapts each record to the UI event schema via
-:func:`codex_session_parser.adapt_common_transcript_record`, dedups by ``event_id``,
-and fans new events out through ``on_events`` -- the same callback contract
-``AgentSessionWatcher`` uses, so :mod:`app_context`'s broadcast/SSE plumbing is
+This is the lossless raw codex format (the codex analogue of claude's
+``projects/<session>.jsonl``, and richer than the lossy common transcript we
+deliberately bypass -- same reason claude reparses its own raw JSONL). This watcher
+tails that one append-only file, parses each line to the UI event schema via
+:func:`codex_session_parser.parse_codex_rollout_line`, dedups by ``event_id``, and
+fans new events out through ``on_events`` -- the same callback contract
+``ClaudeSessionWatcher`` uses, so :mod:`app_context`'s broadcast/SSE plumbing is
 unchanged.
+
+Simpler than the claude watcher because there is no ``projects/`` tree to walk, no
+two-tier cache (the parser reads incrementally in order and never reparses a single
+line, so a plain in-memory list + physical-line-index event ids suffice), and (this
+first cut) no subagent-session tracking.
 
 It exposes the same read/pagination API the server calls on a watcher, backed by a
 simple in-memory ordered list. codex has a single logical session from the UI's
@@ -38,21 +43,23 @@ from typing import Callable
 
 from loguru import logger as _loguru_logger
 
-from imbue.system_interface.codex_session_parser import adapt_common_transcript_record
+from imbue.system_interface.codex_session_parser import parse_codex_rollout_line
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
 
 logger = _loguru_logger
 
-# Relative location of the codex common-transcript under an agent's state dir.
-# Mirrors mngr_codex.codex_config.COMMON_TRANSCRIPT_OUTPUT_RELATIVE; kept as a local
-# constant (rather than importing the plugin) so the web backend does not couple its
-# import graph to plugin internals -- the same reimplement-don't-import stance
-# session_parser takes toward mngr_claude's converter.
-_COMMON_TRANSCRIPT_RELATIVE = Path("events") / "codex" / "common_transcript" / "events.jsonl"
+# Relative location of the codex RAW rollout mirror under an agent's state dir.
+# mngr_codex's stream_transcript.sh tails the live rollout here verbatim (no
+# reschematising), so it's the lossless raw codex format at a stable path -- the
+# codex analogue of claude's projects/<session>.jsonl (and richer than the lossy
+# common transcript we deliberately do NOT read). Kept as a local constant rather
+# than importing the plugin, mirroring claude_session_parser's reimplement-don't-import
+# stance toward mngr_claude's converter.
+_RAW_TRANSCRIPT_RELATIVE = Path("logs") / "codex_transcript" / "events.jsonl"
 
 
 class CodexSessionWatcher:
-    """Watches a codex agent's common-transcript file and emits parsed UI events."""
+    """Watches a codex agent's raw rollout file and emits parsed UI events."""
 
     def __init__(
         self,
@@ -61,7 +68,7 @@ class CodexSessionWatcher:
         on_events: Callable[[str, list[dict[str, Any]]], None],
     ) -> None:
         self._agent_id = agent_id
-        self._transcript_path = agent_state_dir / _COMMON_TRANSCRIPT_RELATIVE
+        self._transcript_path = agent_state_dir / _RAW_TRANSCRIPT_RELATIVE
         self._on_events = on_events
 
         # Guards the in-memory transcript mirror and the tail cursor. Held across
@@ -77,6 +84,13 @@ class CodexSessionWatcher:
         self._byte_offset = 0
         # A trailing partial line (no newline yet) carried to the next read.
         self._partial = ""
+        # Stable physical line counter -> event-id synthesis (each rollout line is at
+        # most one UI event). Persisted across incremental reads; reset on truncation
+        # with the rest of the cursor state.
+        self._line_index = 0
+        # call_id -> tool_name, so a function_call_output can recover its tool name
+        # from the earlier function_call. Cross-line, persisted like the cursor.
+        self._tool_name_by_call_id: dict[str, str] = {}
 
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
@@ -130,6 +144,8 @@ class CodexSessionWatcher:
                 self._event_index.clear()
                 self._byte_offset = 0
                 self._partial = ""
+                self._line_index = 0
+                self._tool_name_by_call_id.clear()
             if size == self._byte_offset and not self._partial:
                 return []
 
@@ -149,10 +165,14 @@ class CodexSessionWatcher:
             self._partial = lines.pop()
 
             for line in lines:
-                line = line.strip()
-                if not line:
+                # Every physical line consumes an index (even blanks/skips) so a
+                # given line always maps to the same id across the run.
+                idx = self._line_index
+                self._line_index += 1
+                stripped = line.strip()
+                if not stripped:
                     continue
-                event = self._adapt_line(line)
+                event = self._adapt_line(stripped, idx)
                 if event is None:
                     continue
                 event_id = event["event_id"]
@@ -164,15 +184,15 @@ class CodexSessionWatcher:
 
         return new_events
 
-    def _adapt_line(self, line: str) -> dict[str, Any] | None:
+    def _adapt_line(self, line: str, line_index: int) -> dict[str, Any] | None:
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
-            logger.debug("codex watcher: skipping malformed transcript line")
+            logger.debug("codex watcher: skipping malformed rollout line")
             return None
         if not isinstance(record, dict):
             return None
-        return adapt_common_transcript_record(record)
+        return parse_codex_rollout_line(record, line_index, self._tool_name_by_call_id)
 
     # --- read API (mirrors AgentSessionWatcher) ----------------------------
     #

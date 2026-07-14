@@ -1,150 +1,198 @@
-"""Adapt mngr's codex *common-transcript* records into the web-UI event schema.
+"""Parse a codex agent's raw rollout JSONL into the web-UI event schema.
 
-mngr_codex's agent-side converter (``common_transcript_convert.py``) already
-normalizes codex's native rollout JSONL into mngr's harness-agnostic "common
-transcript" schema (``user_message`` / ``assistant_message`` / ``tool_result``),
-written append-only to
-``<agent_state_dir>/events/codex/common_transcript/events.jsonl``.
+Codex writes its conversation as a "rollout" -- append-only JSONL where each line
+is ``{"timestamp", "type", "payload": {"type", ...}}``. mngr_codex mirrors the live
+rollout verbatim (no reschematising) to a stable per-agent path
+``<agent_state_dir>/logs/codex_transcript/events.jsonl`` (its ``stream_transcript.sh``),
+which is what :class:`CodexSessionWatcher` tails.
 
-This module maps those already-parsed records into the *exact* dict shape the web
-UI consumes -- the same shape :mod:`session_parser` emits for claude -- so the
-transport (SSE), the frontend (``Response.ts``), and the activity tracker need no
-codex-specific branches. It is the codex analogue of :mod:`session_parser`, except
-the heavy lifting (native-format parsing) is already done on the agent side, so all
-that is left is a field-for-field remap.
+This module maps those raw rollout lines into the *exact* dict shape the web UI
+consumes -- the same shape ``claude_session_parser`` emits for claude -- so the
+transport (SSE), the frontend, and the activity tracker need no codex-specific
+branches. It is the codex analogue of ``claude_session_parser``.
 
-The remap is lossy by design for this first cut: codex's common transcript drops
-token usage, reasoning, and subagent linkage, so the UI fields those feed
-(``usage``, ``subagent_metadata``) are filled with nulls/omitted. ``is_auth_error``
-is always ``False`` here -- codex auth is done in the terminal for now, and
-surfacing codex auth errors in the UI is a later slice.
+Sourcing rule (confirmed against codex ``policy.rs`` + real rollouts, see
+blueprint/codex-rich-transcript): ``response_item`` lines are the canonical
+conversation state; ``event_msg`` lines are a derived live-display stream. We build
+the body from ``response_item`` -- **except user bubbles**, which come from
+``event_msg`` ``user_message`` (the clean human-typed prompt). ``response_item``
+role=user is the *model-facing* user role: the human prompt PLUS injected
+``AGENTS.md`` / ``<environment_context>`` / ``<turn_aborted>`` /
+``<subagent_notification>`` content, which we do not want as chat bubbles. Everything
+else in ``event_msg`` (``agent_message`` display echoes, ``token_count``, ``task_*``)
+is skipped in this core cut.
 
-Event ids are passed through unchanged: the converter derives them from the
-transcript's per-line ordinal (e.g. ``line-5-assistant``), which is stable for the
-whole-file reads :class:`CodexSessionWatcher` performs, and unique per record -- so
-the same id doubles as the UI ``message_uuid`` and drives the transport's dedup.
+Lossy by design for this first cut -- all deferred to later slices: ``usage``
+(``token_count`` -> Phase 2, and coarse), ``is_auth_error`` (lives in codex's
+``logs_2.sqlite``, never the transcript), subagent linkage, tk step-progress.
+``stop_reason`` is left null.
+
+Event ids are synthesized from the rollout's physical line index. Each rollout line
+is at most one UI event, so ``codex-<line>-<kind>`` is unique and stable for the
+in-order, never-reparse-a-single-line reads :class:`CodexSessionWatcher` performs
+(the trait that lets a line ordinal be a safe id here, unlike a single-line-reparse
+watcher).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-# Kept identical to the ``source`` mngr_codex stamps on every common-transcript
-# record. Nothing in the pipeline branches on this string today (the claude path
-# emits ``claude/common_transcript`` the same way); it is preserved verbatim so a
-# consumer that later wants to tell the harnesses apart can.
+# Kept as ``codex/common_transcript`` to match the ``<harness>/common_transcript``
+# label ``claude_session_parser`` stamps -- "common" here means the normalized/common
+# event *form*, not the on-disk common-transcript file (which we do NOT read).
+# Nothing in the pipeline branches on this string.
 _SOURCE = "codex/common_transcript"
 
-# Codex's common transcript never carries a model slug per message (it is null),
-# so we surface the same placeholder session_parser uses for claude when the model
-# is absent, keeping the frontend's non-optional ``model`` field populated.
+# Codex rollout messages never carry a per-message model slug, so surface the same
+# placeholder ``claude_session_parser`` uses when the model is absent, keeping the
+# frontend's non-optional ``model`` field populated.
 _UNKNOWN_MODEL = "unknown"
 
+_MAX_INPUT_PREVIEW_LENGTH = 200
+_MAX_OUTPUT_LENGTH = 2000
 
-def _assistant_text(record: dict[str, Any]) -> str:
-    """Return the assistant turn's text, falling back to the ordered text parts.
 
-    The converter always sets ``text`` for an assistant record, but a tool-call-only
-    turn has an empty ``text`` and carries the content in ``parts``; joining the
-    text parts is a defensive fallback so no visible text is dropped.
+def _join_content_text(content: Any, want_type: str) -> str:
+    """Join the ``text`` of ``content`` blocks whose ``type`` is ``want_type``."""
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == want_type and block.get("text")
+    )
+
+
+def _stringify_output(output: Any) -> str:
+    """A ``*_output.output`` is either a string or a list of content items; flatten
+    to a truncated string."""
+    if isinstance(output, str):
+        text = output
+    elif isinstance(output, list):
+        parts: list[str] = []
+        for item in output:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text") or item.get("output") or ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        text = "".join(parts)
+    else:
+        text = "" if output is None else str(output)
+    if len(text) > _MAX_OUTPUT_LENGTH:
+        return text[:_MAX_OUTPUT_LENGTH] + "..."
+    return text
+
+
+def _tool_call_input_preview(payload: dict[str, Any]) -> str:
+    """``function_call`` carries ``arguments`` (a JSON string); ``custom_tool_call``
+    carries ``input`` (raw text, e.g. an apply_patch body)."""
+    raw = payload.get("arguments")
+    if raw is None:
+        raw = payload.get("input")
+    text = "" if raw is None else str(raw)
+    if len(text) > _MAX_INPUT_PREVIEW_LENGTH:
+        return text[:_MAX_INPUT_PREVIEW_LENGTH] + "..."
+    return text
+
+
+def _assistant_event(timestamp: str, event_id: str, *, text: str, tool_calls: list[dict[str, str]]) -> dict[str, Any]:
+    return {
+        "timestamp": timestamp,
+        "type": "assistant_message",
+        "event_id": event_id,
+        "source": _SOURCE,
+        "role": "assistant",
+        "model": _UNKNOWN_MODEL,
+        "text": text,
+        "tool_calls": tool_calls,
+        "stop_reason": None,  # deferred (derive from task_complete later)
+        "usage": None,  # deferred (token_count -> Phase 2)
+        "message_uuid": event_id,
+        "is_auth_error": False,  # deferred (codex auth errors live in logs_2.sqlite)
+    }
+
+
+def parse_codex_rollout_line(
+    record: dict[str, Any],
+    line_index: int,
+    tool_name_by_call_id: dict[str, str],
+) -> dict[str, Any] | None:
+    """Map one codex rollout line to a UI event dict, or ``None`` to skip.
+
+    ``line_index`` is the stable physical line number (for event-id synthesis).
+    ``tool_name_by_call_id`` is a mutable cross-line map so a ``function_call_output``
+    can recover its tool name from the earlier ``function_call``.
     """
-    text = record.get("text")
-    if isinstance(text, str) and text:
-        return text
-    parts = record.get("parts")
-    if isinstance(parts, list):
-        chunks = [
-            part.get("content", "")
-            for part in parts
-            if isinstance(part, dict) and part.get("type") == "text" and part.get("content")
-        ]
-        if chunks:
-            return "\n".join(chunks)
-    return ""
+    outer = record.get("type")
+    payload = record.get("payload")
+    timestamp = record.get("timestamp", "")
+    if not isinstance(payload, dict) or not isinstance(timestamp, str):
+        return None
+    payload_type = payload.get("type")
 
-
-def _tool_calls(record: dict[str, Any]) -> list[dict[str, str]]:
-    """Normalize the record's ``tool_calls`` to the UI's ``ToolCall`` shape.
-
-    Reduces each entry to the three fields the frontend ``ToolCall`` interface
-    requires (``tool_call_id`` / ``tool_name`` / ``input_preview``); codex has no
-    Agent-tool / subagent concept, so the optional subagent fields are never added.
-    """
-    raw_calls = record.get("tool_calls")
-    if not isinstance(raw_calls, list):
-        return []
-    calls: list[dict[str, str]] = []
-    for raw in raw_calls:
-        if not isinstance(raw, dict):
-            continue
-        calls.append(
-            {
-                "tool_call_id": str(raw.get("tool_call_id", "")),
-                "tool_name": str(raw.get("tool_name", "")),
-                "input_preview": str(raw.get("input_preview", "")),
-            }
-        )
-    return calls
-
-
-def adapt_common_transcript_record(record: dict[str, Any]) -> dict[str, Any] | None:
-    """Map one codex common-transcript record to a UI event dict, or ``None`` to skip.
-
-    Returns ``None`` for records with no ``event_id`` or an unrecognized ``type``
-    (the converter only emits the three handled types, but we stay tolerant of
-    future additions rather than crashing the watcher).
-    """
-    event_id = record.get("event_id")
-    timestamp = record.get("timestamp")
-    if not isinstance(event_id, str) or not event_id or not isinstance(timestamp, str):
+    # --- event_msg: only the clean human prompt; the rest is display echoes / overlay ---
+    if outer == "event_msg":
+        if payload_type == "user_message":
+            text = payload.get("message")
+            if isinstance(text, str) and text:
+                event_id = f"codex-{line_index}-user"
+                return {
+                    "timestamp": timestamp,
+                    "type": "user_message",
+                    "event_id": event_id,
+                    "source": _SOURCE,
+                    "role": "user",
+                    "content": text,
+                    "message_uuid": event_id,
+                }
         return None
 
-    record_type = record.get("type")
+    if outer != "response_item":
+        return None  # session_meta, turn_context -> drop
 
-    if record_type == "user_message":
-        return {
-            "timestamp": timestamp,
-            "type": "user_message",
-            "event_id": event_id,
-            "source": _SOURCE,
-            "role": "user",
-            "content": str(record.get("content", "")),
-            # The converter's per-line event_id is already unique; reuse it as the
-            # message_uuid the frontend keys replay/scroll state on.
-            "message_uuid": event_id,
-        }
+    # --- response_item: assistant messages + tool calls/results ---
+    if payload_type == "message":
+        if payload.get("role") == "assistant":
+            return _assistant_event(
+                timestamp,
+                f"codex-{line_index}-assistant",
+                text=_join_content_text(payload.get("content"), "output_text"),
+                tool_calls=[],
+            )
+        # role=user (and developer/system) -> skip; user bubbles come from event_msg.
+        return None
 
-    if record_type == "assistant_message":
-        model = record.get("model")
-        return {
-            "timestamp": timestamp,
-            "type": "assistant_message",
-            "event_id": event_id,
-            "source": _SOURCE,
-            "role": "assistant",
-            "model": model if isinstance(model, str) and model else _UNKNOWN_MODEL,
-            "text": _assistant_text(record),
-            "tool_calls": _tool_calls(record),
-            # codex names it finish_reason; the UI schema calls it stop_reason.
-            "stop_reason": record.get("finish_reason"),
-            # Token usage is dropped by the common transcript (lossy v1).
-            "usage": None,
-            "message_uuid": event_id,
-            # Required by the frontend AssistantMessageEvent interface. codex auth
-            # is handled in the terminal for now, so never flag an auth error here.
-            "is_auth_error": False,
-        }
+    if payload_type in ("function_call", "custom_tool_call"):
+        call_id = str(payload.get("call_id", ""))
+        tool_name = str(payload.get("name", ""))
+        if call_id and tool_name:
+            tool_name_by_call_id[call_id] = tool_name
+        return _assistant_event(
+            timestamp,
+            f"codex-{line_index}-assistant",
+            text="",
+            tool_calls=[
+                {
+                    "tool_call_id": call_id,
+                    "tool_name": tool_name,
+                    "input_preview": _tool_call_input_preview(payload),
+                }
+            ],
+        )
 
-    if record_type == "tool_result":
+    if payload_type in ("function_call_output", "custom_tool_call_output"):
+        call_id = str(payload.get("call_id", ""))
+        event_id = f"codex-{line_index}-tool_result"
         return {
             "timestamp": timestamp,
             "type": "tool_result",
             "event_id": event_id,
             "source": _SOURCE,
-            "tool_call_id": str(record.get("tool_call_id", "")),
-            "tool_name": str(record.get("tool_name", "")),
-            "output": str(record.get("output", "")),
-            "is_error": bool(record.get("is_error", False)),
+            "tool_call_id": call_id,
+            "tool_name": tool_name_by_call_id.get(call_id, ""),
+            "output": _stringify_output(payload.get("output")),
+            "is_error": False,
             "message_uuid": event_id,
         }
 
