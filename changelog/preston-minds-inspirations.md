@@ -1,3 +1,13 @@
+- The published repo's `README.md` now describes the inspiration instead of
+  the generic workspace template. `build_inspiration.sh` overwrites the base
+  README with the inspiration's title, its one-line description, a short
+  overview (a FILL-IN the worker completes, gated like the manifest's), a
+  'how to use it' section (create a mind from the repo, or `/use-inspiration
+  <url>`), and a list of every `inspiration-*.md` in the repo (marking the
+  one just published) -- so a human landing on the repo sees what it is, not
+  'default-workspace-template'. The FILL-IN and pre-push gates now cover
+  README.md alongside the manifest.
+
 - Simplified the secret-scanner delivery to just two things: the scanners are
   baked into every workspace at build/provision time by the common
   scripts/setup_system.sh (which invokes the pinned

@@ -310,6 +310,13 @@ worktree to a clean template base and deletes gitignored state -- including
    nothing to add, say so explicitly in prose; never leave a placeholder
    comment in place and never leave a section blank.
 
+   The generated `README.md` at the repo root (the repo's GitHub landing
+   page) carries ONE `<!-- FILL-IN (publishing agent): ... -->` block too --
+   a short overview of this inspiration. Replace it with a GitHub-flavored
+   version of the manifest's "What it is" (2-4 sentences). The rest of the
+   README is generated correctly and describes this inspiration, not the
+   template -- do not revert it to the default-workspace-template README.
+
 4. **Design the thumbnail.** `inspiration-<slug>.svg` at the repo root is a
    generic placeholder the script generated -- it must never be published.
    Replace its entire contents with a bespoke SVG you design for THIS app: a
@@ -328,7 +335,7 @@ worktree to a clean template base and deletes gitignored state -- including
    report `done`:
 
    ```bash
-   grep -n -- '<!-- FILL-IN (publishing agent)' inspiration-<slug>.md
+   grep -n -- '<!-- FILL-IN (publishing agent)' inspiration-<slug>.md README.md
    grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' inspiration-<slug>.svg
    ```
 
@@ -351,7 +358,9 @@ worktree to a clean template base and deletes gitignored state -- including
 
 - `build_inspiration.sh` exited 0 and its commit is on `mngr/<slug>`.
 - Every published-version modification applied, its files re-scanned clean.
-- Every FILL-IN block replaced with real prose (or an explicit "none").
+- Every FILL-IN block replaced with real prose (or an explicit "none") -- in
+  BOTH `inspiration-<slug>.md` and `README.md`.
+- `README.md` describes this inspiration (not the default-workspace-template).
 - `inspiration-<slug>.svg` is a bespoke design for this app; the placeholder
   marker is gone and the safety grep is clean.
 - Follow-up edits committed on `mngr/<slug>`; `git status` clean.
@@ -416,7 +425,7 @@ liveness on a timeout) -- with one critical override:
   clean:
 
   ```bash
-  grep -n -- '<!-- FILL-IN (publishing agent)' "$WT/inspiration-<slug>.md"
+  grep -n -- '<!-- FILL-IN (publishing agent)' "$WT/inspiration-<slug>.md" "$WT/README.md"
   grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' "$WT/inspiration-<slug>.svg"
   ```
 
