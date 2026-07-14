@@ -7,7 +7,7 @@ ENV PATH="/root/.local/bin:$PATH"
 # Pin Claude Code; passed to setup_system.sh and recorded for the runtime version
 # check. Keep in sync with agent_types.claude.version in .mngr/settings.toml and
 # the default in scripts/setup_system.sh. Bump deliberately, not by accident.
-ARG CLAUDE_CODE_VERSION=2.1.160
+ARG CLAUDE_CODE_VERSION=2.1.207
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 
 # ============================================================================
@@ -45,7 +45,7 @@ COPY pyproject.toml uv.lock /mngr/code/
 COPY libs/app_watcher/pyproject.toml /mngr/code/libs/app_watcher/pyproject.toml
 COPY libs/bootstrap/pyproject.toml /mngr/code/libs/bootstrap/pyproject.toml
 COPY libs/cloudflare_tunnel/pyproject.toml /mngr/code/libs/cloudflare_tunnel/pyproject.toml
-COPY libs/runtime_backup/pyproject.toml /mngr/code/libs/runtime_backup/pyproject.toml
+COPY libs/github_sync/pyproject.toml /mngr/code/libs/github_sync/pyproject.toml
 COPY libs/web_server/pyproject.toml /mngr/code/libs/web_server/pyproject.toml
 COPY apps/system_interface/pyproject.toml /mngr/code/apps/system_interface/pyproject.toml
 

@@ -26,7 +26,10 @@ def test_prevent_while_true() -> None:
 
 
 def test_prevent_time_sleep() -> None:
-    rc.check_time_sleep(_DIR, snapshot(1))
+    # 1 = the service loop's tick interval; 1 = the bounded condition-poll in
+    # post_commit_hook_test.py waiting for the hook's intentionally-backgrounded
+    # push (the polling pattern the rule_description itself recommends).
+    rc.check_time_sleep(_DIR, snapshot(2))
 
 
 def test_prevent_global_keyword() -> None:
@@ -72,4 +75,3 @@ def test_prevent_asyncio_import() -> None:
 
 def test_prevent_dataclasses_import() -> None:
     rc.check_dataclasses_import(_DIR, snapshot(0))
-

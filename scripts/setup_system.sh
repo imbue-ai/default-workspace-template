@@ -18,7 +18,7 @@ provision_skip_if_done setup_system
 : "${TTYD_VERSION:=1.7.7}"
 : "${CLOUDFLARED_VERSION:=2026.3.0}"
 : "${UV_VERSION:=0.11.7}"
-: "${CLAUDE_CODE_VERSION:=2.1.160}"
+: "${CLAUDE_CODE_VERSION:=2.1.207}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${NODE_MAJOR:=20}"
 : "${LATCHKEY_VERSION:=2.20.0}"
