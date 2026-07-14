@@ -1,0 +1,1313 @@
+/* Transcript rendering: messages, markdown, tool calls, progress view, cards. */
+
+/* ── Title bar ── */
+.app-header {
+  padding: 14px 32px;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-shrink: 0;
+  background: var(--color-bg);
+}
+
+.app-header-title {
+  font-family: var(--font-family-heading);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.app-header-model-badge {
+  font-size: 12px;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-sidebar);
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+}
+/* ── Messages area ── */
+.app-content {
+  background: var(--color-bg);
+  /* Owned here (not by utility classes on the panels) so the mobile override
+     in responsive.css can shrink it. */
+  padding: 24px 32px;
+  /* Native scroll anchoring stays ON (the browser default) so the viewport holds
+     steady when rows above it load or measure to their real height, with no
+     per-frame JS scrollTop writes. The virtualization spacers opt out of anchoring
+     individually (see the spacer divs in ChatPanel / SubagentView) so the browser
+     anchors to a real message row rather than a resizing spacer. The app only
+     writes scrollTop for the discrete tail-follow and jump pins. */
+}
+
+/* ── User bubble ── */
+.message {
+  margin-bottom: 20px;
+}
+
+.message-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.message-user-bubble {
+  max-width: 80%;
+  background: var(--color-bg-user-bubble);
+  border-radius: var(--radius-bubble) var(--radius-bubble) 4px var(--radius-bubble);
+  padding: 12px 18px;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--color-text-primary);
+  /* Break long unbreakable tokens (e.g. API keys, URLs) so they wrap inside
+     the bubble instead of overflowing past its edge. */
+  overflow-wrap: break-word;
+}
+
+.message-user-bubble code {
+  font-family: var(--font-family-mono);
+  font-size: 0.85em;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* ── Optimistic (pending) message ── */
+/* An optimistic bubble for a message the user just sent. While the send request
+   is in flight it is dimmed and captioned "Sending…"; on success it settles to a
+   normal bubble (the opacity transition makes the confirmation feel smooth). */
+/* A plain block wrapper -- deliberately NOT a flex/align-items:flex-end column.
+   The inner .message-user must fill the full column width exactly as it does in
+   the main message list (which stretches its children); otherwise it would
+   shrink-wrap to its content and the bubble's max-width:80% would resolve
+   against that narrower base, capping the sending bubble narrower than a normal
+   message. Right alignment of the bubble comes from .message-user's own
+   align-items:flex-end, and of the caption from text-align below. */
+.pending-message {
+  /* Own the inter-message spacing here, and zero out the inner bubble's own
+     margin (below), so the "Sending…" caption hugs its own bubble rather than
+     being pushed 20px down by the bubble's margin and ending up flush against
+     the next message. */
+  margin-bottom: 20px;
+}
+
+.pending-message .message {
+  margin-bottom: 0;
+}
+
+.pending-message .message-user-bubble {
+  transition: opacity 0.2s ease;
+}
+
+.pending-message--sending .message-user-bubble {
+  opacity: 0.6;
+}
+
+.pending-message-status {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding-right: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* "Interrupt and send now" action on a queued message: a compact icon button
+   (up-arrow), styled as an understated secondary control, with a CSS tooltip
+   (native `title` is unreliable in the desktop webview). */
+.pending-message-interrupt {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.pending-message-interrupt:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+
+.pending-message-interrupt::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  /* Right-anchored (the button sits at the message column's right edge), so the
+     bubble extends leftward and never clips against the panel's right side. */
+  right: 0;
+  z-index: 1000;
+  width: max-content;
+  max-width: 240px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--color-text-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.pending-message-interrupt::before {
+  content: "";
+  position: absolute;
+  bottom: calc(100% + 2px);
+  /* Centre the little pointer under the button (which is ~24px wide). */
+  right: 7px;
+  z-index: 1000;
+  border: 5px solid transparent;
+  border-top-color: var(--color-text-primary);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+
+.pending-message-interrupt:hover::after,
+.pending-message-interrupt:focus-visible::after,
+.pending-message-interrupt:hover::before,
+.pending-message-interrupt:focus-visible::before {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* ── Assistant message ── */
+.message-assistant {
+  margin-bottom: 20px;
+}
+/* ── File attachments: chat drop overlay ── */
+
+.chat-drop-overlay {
+  z-index: 50;
+  background: color-mix(in srgb, var(--color-accent-light) 70%, transparent);
+  border: 2px dashed var(--color-accent);
+  border-radius: 12px;
+  margin: 8px;
+}
+
+.chat-drop-overlay-label {
+  padding: 10px 18px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent);
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-accent);
+  box-shadow: 0 2px 12px rgba(55, 53, 47, 0.12);
+}
+/* ── File attachments: message bubble ── */
+
+.message-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.message-attachment-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.message-attachment-image {
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  display: block;
+}
+
+.message-attachment-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.message-attachment-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  color: var(--color-text-primary);
+  text-decoration: none;
+  transition:
+    background 120ms,
+    border-color 120ms;
+}
+
+.message-attachment-file:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border);
+}
+
+.message-attachment-file-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.message-attachment-file-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.message-attachment-file-name {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.message-attachment-file-size {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+/* ── Markdown content styling ── */
+.markdown-content {
+  line-height: 1.75;
+  font-size: 15px;
+  color: var(--color-text-primary);
+}
+
+.markdown-content p {
+  margin-top: 0;
+  margin-bottom: 0.6em;
+}
+
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content strong {
+  font-weight: 600;
+}
+
+.markdown-content em {
+  font-style: italic;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  font-weight: 600;
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+  line-height: 1.3;
+}
+
+.markdown-content h1 {
+  font-size: 1.5em;
+}
+
+.markdown-content h2 {
+  font-size: 1.3em;
+}
+
+.markdown-content h3 {
+  font-size: 1.15em;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin-top: 0.5em;
+  margin-bottom: 0.75em;
+  padding-left: 1.5em;
+}
+
+.markdown-content ul {
+  list-style-type: disc;
+}
+
+.markdown-content ol {
+  list-style-type: decimal;
+}
+
+.markdown-content li {
+  margin-bottom: 0.25em;
+}
+
+.markdown-content li > ul,
+.markdown-content li > ol {
+  margin-top: 0.25em;
+  margin-bottom: 0;
+}
+
+.markdown-content code {
+  font-family: var(--font-family-mono);
+  font-size: 0.85em;
+  background-color: var(--color-bg-active);
+  border-radius: 3px;
+  padding: 2px 5px;
+}
+
+.markdown-content pre {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  padding: 14px 16px;
+  background-color: var(--color-bg-sidebar);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  overflow-x: auto;
+}
+
+.markdown-content pre code {
+  background-color: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.markdown-content blockquote {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  padding-left: 1em;
+  border-left: 3px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+/* ── Collapsible tool call blocks ── */
+.markdown-content .tool-call-block {
+  cursor: pointer;
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+}
+
+.markdown-content .tool-call-block pre {
+  margin: 0;
+  padding-left: 28px;
+  position: relative;
+}
+
+.markdown-content .tool-call-block pre::before {
+  content: "▸";
+  position: absolute;
+  left: 10px;
+  top: 14px;
+  font-family: var(--font-family-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-text-faint);
+  transition: transform 150ms;
+  pointer-events: none;
+}
+
+.markdown-content .tool-call-block--expanded pre::before {
+  transform: rotate(90deg);
+}
+
+.markdown-content .tool-call-block pre code {
+  display: block;
+}
+
+.markdown-content .tool-call-block:not(.tool-call-block--expanded) pre code {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 1.55em;
+}
+
+.markdown-content hr {
+  margin-top: 1.25em;
+  margin-bottom: 1.25em;
+  border: none;
+  border-top: 1px solid var(--color-border);
+}
+
+.markdown-content a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.markdown-content a:hover {
+  color: var(--color-accent-hover);
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  font-size: 0.875em;
+}
+
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid var(--color-border);
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+
+.markdown-content th {
+  font-weight: 600;
+  background-color: var(--color-surface-secondary);
+}
+/* ── Streaming indicator ── */
+@keyframes streaming-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.2;
+  }
+  30% {
+    opacity: 0.8;
+  }
+}
+
+.streaming-dot {
+  animation: streaming-bounce 1.2s ease-in-out infinite;
+}
+
+.streaming-dot-2 {
+  animation-delay: 0.15s;
+}
+
+.streaming-dot-3 {
+  animation-delay: 0.3s;
+}
+/* ── Scrollbar ── */
+.app-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.app-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-content::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+.app-content::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-faint);
+}
+/* ── Structured tool call blocks (non-markdown) ── */
+.tool-call-block {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  background: var(--color-bg-sidebar);
+  overflow: hidden;
+}
+
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  font-family: var(--font-family-mono);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background 100ms;
+}
+
+/* System/hook messages shown as collapsed blocks instead of user bubbles */
+.message-system-collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-bottom: 4px;
+}
+
+.message-system-collapsed .tool-call-block {
+  max-width: 80%;
+  margin: 0;
+}
+
+.tool-call-header:hover {
+  background: var(--color-bg-hover);
+}
+
+.tool-call-chevron {
+  font-size: 10px;
+  transition: transform 150ms;
+  display: inline-block;
+}
+
+.tool-call-block--expanded .tool-call-chevron {
+  transform: rotate(90deg);
+}
+
+.tool-call-details {
+  display: none;
+  border-top: 1px solid var(--color-border);
+}
+
+.tool-call-block--expanded .tool-call-details {
+  display: block;
+}
+
+.tool-call-input,
+.tool-call-output {
+  padding: 8px 12px;
+}
+
+.tool-call-input + .tool-call-output {
+  border-top: 1px solid var(--color-border-faint);
+}
+
+.tool-call-input pre,
+.tool-call-output pre {
+  margin: 0;
+  background: transparent;
+  border: none;
+  padding: 0;
+  overflow-x: auto;
+}
+
+.tool-call-input pre code,
+.tool-call-output pre code {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: transparent;
+  padding: 0;
+}
+
+.tool-call-output--error pre code {
+  color: #dc2626;
+}
+/* ── Sub-agent link card ── */
+.subagent-card {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-base);
+  background: var(--color-accent-light);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subagent-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Live status dot: pulsing green while the sub-agent works. Reuses the
+   agent-activity-pulse keyframes so it matches the main chat's activity dot. */
+.subagent-card-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.subagent-card-status-dot--running {
+  background: var(--color-accent);
+  animation: agent-activity-pulse 1.4s ease-in-out infinite;
+}
+
+/* Settled checkmark shown once the sub-agent finishes, mirroring a done progress step. */
+.subagent-card-status-check {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+}
+
+/* Once finished, the card drops its green accent for neutral grey -- green reads as active. */
+.subagent-card--done {
+  border-color: var(--color-border);
+  background: var(--color-surface-secondary);
+}
+
+.subagent-card-description {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-card-type-badge {
+  font-size: 11px;
+  font-family: var(--font-family-mono);
+  color: var(--color-accent);
+  background: var(--color-bg);
+  border: 1px solid var(--color-accent);
+  border-radius: 10px;
+  padding: 1px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.subagent-card-link {
+  font-size: 13px;
+  color: var(--color-accent);
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: color 120ms;
+}
+
+.subagent-card-link:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+/* The "View conversation" label before the subagent is linked to its session: there is no
+   conversation to open yet, so it renders muted and non-interactive until linkage lands. */
+.subagent-card-link--pending {
+  color: var(--color-text-faint);
+  cursor: default;
+}
+
+.subagent-card-link--pending:hover {
+  color: var(--color-text-secondary);
+  text-decoration: none;
+}
+/* ── Permission request card ──
+   An agent permission request, rendered as a standalone card (not a generic
+   tool block): the specific request, a button that opens the modal, and a
+   disclosure preserving the raw request/response. */
+.permission-request {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-composer);
+  padding: 12px 14px;
+  max-width: 560px;
+}
+
+.permission-request-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-primary);
+}
+
+.permission-request-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.permission-request-status {
+  margin-top: 9px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.permission-request-detail {
+  margin-top: 10px;
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+}
+
+.permission-request-detail-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.permission-request-detail-value {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+
+.permission-request-reason-value {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-primary);
+}
+
+.permission-request-actions {
+  margin-top: 12px;
+}
+
+.permission-request-raw {
+  margin-top: 10px;
+}
+
+.permission-request-raw > summary {
+  font-size: 12px;
+  color: var(--color-text-faint);
+  cursor: pointer;
+}
+
+.permission-request-raw > pre {
+  margin: 8px 0 0;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-sidebar);
+  border-radius: 6px;
+  padding: 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.permission-request-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-accent);
+  background: transparent;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-base);
+  padding: 5px 12px;
+  cursor: pointer;
+  transition:
+    background 120ms,
+    color 120ms;
+}
+
+.permission-request-button:hover {
+  color: var(--color-accent-hover);
+  background: #dfeee7;
+}
+
+.permission-request-icon {
+  flex-shrink: 0;
+}
+
+/* The granted/denied verdict shown in place of the action button once the user
+   has decided. Granted reads in the accent green; denied in the same red the
+   tool-call error output uses. */
+.permission-request-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.permission-request-verdict--granted {
+  color: var(--color-accent);
+}
+
+.permission-request-verdict--denied {
+  color: #dc2626;
+}
+
+.permission-request-verdict--error {
+  color: #b45309;
+}
+
+.permission-request-verdict-icon {
+  flex-shrink: 0;
+}
+
+/* A hyphenated token in the "Requesting" line (permission name, scope, or path).
+   `nowrap` keeps each on one line so a long name never breaks mid-name; the line
+   wraps between tokens instead. */
+.permission-request-token,
+.permission-request-perm {
+  white-space: nowrap;
+}
+
+/* A requested permission name, hoverable for its plain-English description. The
+   dotted underline signals it's interactive; the tooltip bubble is centered over
+   the name (mirrors the .pv-tl-missing CSS-tooltip pattern -- native `title` is
+   unreliable in the desktop webview). */
+.permission-request-perm {
+  position: relative;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+.permission-request-perm::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  width: max-content;
+  max-width: 280px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--color-text-primary);
+  color: #fff;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.permission-request-perm:hover::after,
+.permission-request-perm:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+/* ─────────────────────────────────────────────────────────────────────
+   PROGRESS VIEW (per-turn task timeline rendered from tk tickets)
+   ─────────────────────────────────────────────────────────────────── */
+
+.progress-block {
+  margin: 18px 0 28px;
+  --pv-fg: var(--color-text-primary);
+  --pv-fg-soft: #5a564a;
+  --pv-fg-muted: var(--color-text-secondary);
+  --pv-fg-faint: var(--color-text-faint);
+  --pv-line: var(--color-border);
+  --pv-line-faint: var(--color-border-faint);
+  --pv-active: var(--color-accent);
+  --pv-done: #5a564a;
+  --pv-pending: #c2bfb6;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--pv-fg);
+}
+
+/* Status icons */
+.pv-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.pv-icon--done {
+  color: var(--pv-done);
+}
+.pv-icon--active {
+  color: var(--pv-active);
+  width: 16px;
+  height: 16px;
+}
+.pv-icon--in-flight {
+  color: var(--pv-active);
+  width: 16px;
+  height: 16px;
+}
+.pv-icon--pending {
+  color: var(--pv-pending);
+}
+
+.pv-spinner {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  animation: pv-spin 0.9s linear infinite;
+}
+@keyframes pv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Chevron */
+.pv-chev {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 18px;
+  color: var(--pv-fg-muted);
+  transition: transform 0.15s ease;
+  font-weight: 400;
+}
+.pv-chev--open {
+  transform: rotate(90deg);
+  color: var(--pv-fg);
+}
+
+/* Title button reset (timeline variant) */
+.pv-tl-title {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--pv-fg);
+  line-height: 1.4;
+  display: inline-flex;
+  align-items: center;
+}
+.pv-tl-title:disabled {
+  cursor: default;
+}
+
+/* Timeline thread + nodes */
+.pv.pv--timeline {
+  position: relative;
+  padding-left: 0;
+}
+.pv-timeline-thread {
+  position: absolute;
+  left: 7.5px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--pv-line);
+}
+.pv-tl-node {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  padding: 0 0 18px 0;
+  align-items: flex-start;
+}
+.pv-tl-node--last {
+  padding-bottom: 0;
+}
+.pv-tl-bullet {
+  position: relative;
+  z-index: 1;
+  background: var(--color-bg);
+  padding: 1px 0;
+  flex-shrink: 0;
+  width: 16px;
+}
+.pv-tl-body {
+  flex: 1;
+  min-width: 0;
+}
+.pv-tl-node--done .pv-tl-title {
+  color: var(--pv-fg-soft);
+  font-weight: 400;
+}
+.pv-tl-node--pending .pv-tl-title {
+  color: var(--pv-fg-muted);
+  font-weight: 400;
+}
+.pv-tl-node--active .pv-tl-title {
+  color: var(--pv-active);
+  font-weight: 600;
+}
+
+.pv-tl-summary {
+  margin-top: 3px;
+  padding-left: 10px;
+  border-left: 2px solid var(--pv-line);
+  font-size: 13px;
+  color: var(--pv-fg-muted);
+  line-height: 1.55;
+}
+
+.pv-tl-narration {
+  margin-top: 3px;
+  padding-left: 10px;
+  border-left: 2px solid var(--pv-active);
+  font-size: 13px;
+  font-style: italic;
+  color: var(--pv-fg-muted);
+  line-height: 1.55;
+  background: linear-gradient(90deg, var(--pv-fg-muted) 0%, var(--pv-fg-faint) 40%, var(--pv-fg-muted) 80%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: pv-narration-shimmer 2.5s ease-in-out infinite;
+}
+@keyframes pv-narration-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+/* Static (settled) narration: an unclosed step that went idle still shows
+   its mid-work narration, but without the live shimmer -- muted italic, a
+   neutral left rule instead of the active-accent rule. The markdown child
+   styling below is shared with .pv-tl-narration via the grouped selectors. */
+.pv-tl-narration--static {
+  margin-top: 3px;
+  padding-left: 10px;
+  border-left: 2px solid var(--pv-line);
+  font-size: 13px;
+  font-style: italic;
+  color: var(--pv-fg-muted);
+  line-height: 1.55;
+}
+.pv-tl-narration p,
+.pv-tl-narration--static p {
+  margin: 0 0 0.4em;
+}
+.pv-tl-narration p:last-child,
+.pv-tl-narration--static p:last-child {
+  margin-bottom: 0;
+}
+.pv-tl-narration code,
+.pv-tl-narration--static code {
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
+  border-radius: 3px;
+  font-style: normal;
+  -webkit-text-fill-color: var(--pv-fg-muted);
+  -webkit-background-clip: padding-box;
+  background-clip: padding-box;
+}
+.pv-tl-narration pre,
+.pv-tl-narration--static pre {
+  margin: 0.4em 0;
+  padding: 0.5em 0.7em;
+  background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.9em;
+  font-style: normal;
+  -webkit-text-fill-color: var(--pv-fg-muted);
+  -webkit-background-clip: padding-box;
+  background-clip: padding-box;
+}
+.pv-tl-narration pre code,
+.pv-tl-narration--static pre code {
+  padding: 0;
+  background: none;
+}
+.pv-tl-narration a,
+.pv-tl-narration--static a {
+  color: var(--pv-fg-muted);
+  text-decoration: underline;
+}
+.pv-tl-narration ul,
+.pv-tl-narration ol,
+.pv-tl-narration--static ul,
+.pv-tl-narration--static ol {
+  margin: 0.3em 0;
+  padding-left: 1.5em;
+}
+.pv-tl-narration li,
+.pv-tl-narration--static li {
+  margin-bottom: 0.15em;
+}
+
+/* Id badge in front of regular-ticket titles. Visually subtle -- the
+   title is the primary thing the user reads; the badge is the secondary
+   "which tk ticket is this" handle for users / agents who care. */
+.pv-tl-id-badge {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 6px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--pv-fg-muted);
+  background: var(--pv-line-faint, rgba(127, 127, 127, 0.08));
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+/* Steps are creator-private progress markers -- they read like sub-items, so
+   we keep the title weight lighter and the typography slightly de-emphasized. */
+.pv-tl-node--step .pv-tl-title {
+  font-weight: 400;
+  font-size: 13.5px;
+  color: var(--pv-fg-soft);
+}
+
+.pv-tl-expanded {
+  margin-top: 6px;
+}
+
+/* Expanded panel: matches the rest of the chat -- interleaved markdown +
+   tool-call-blocks. We just contain it with a subtle indent + left rule
+   so it's visually distinct from the surrounding progress structure. */
+.pv-expanded {
+  margin-top: 10px;
+  padding: 4px 0 4px 14px;
+  border-left: 2px solid var(--pv-line-faint);
+  font-size: 14px;
+}
+.pv-expanded p {
+  margin: 0 0 0.6em;
+  line-height: 1.65;
+  color: var(--pv-fg);
+}
+.pv-expanded p:last-child {
+  margin-bottom: 0;
+}
+.pv-expanded .tool-call-block {
+  margin: 0.5em 0;
+}
+
+/* Final (trailing) assistant reply under the progress timeline */
+.pv-final {
+  margin-top: 16px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--pv-fg);
+}
+
+/* Leading prose: emitted before the first step, rendered ABOVE the timeline
+   as plain chat-style prose. */
+.pv-lead {
+  margin-bottom: 16px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--pv-fg);
+}
+
+/* Stop-hook chip woven into the timeline at the point the hook fired. Like
+   the ungrouped block it sits above the timeline thread (opaque background +
+   z-index) so the thread doesn't draw through the chip. The chip itself keeps
+   its own collapsible styling; this wrapper only handles positioning and
+   masking the thread. */
+.pv-stophook {
+  position: relative;
+  z-index: 2;
+  margin: 6px 0 14px 0;
+  background: var(--color-bg);
+}
+
+/* Ungrouped work/prose: real work the agent did with no step open (e.g.
+   before declaring the first step, or in a gap between steps). Rendered
+   inline as plain chat-style messages, sitting above the timeline thread
+   (opaque background + z-index) so the thread doesn't draw through it. */
+.pv-ungrouped {
+  position: relative;
+  z-index: 2;
+  margin: 6px 0 14px 0;
+  background: var(--color-bg);
+}
+
+/* Agent permission request, lifted out of any open step so it is always
+   directly visible and breaks the timeline flow. Positioned like an ungrouped
+   run (opaque background + z-index) so the timeline thread doesn't draw through
+   it; the request block carries its own permission-request styling and button. */
+.pv-permission {
+  position: relative;
+  z-index: 2;
+  margin: 6px 0 14px 0;
+  background: var(--color-bg);
+}
+/* ── Inline image lightbox ── */
+
+/* Inline chat images fit the message column and invite a click to enlarge. */
+.markdown-content img {
+  max-width: 100%;
+  height: auto;
+  cursor: zoom-in;
+}
+
+.image-lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.85);
+}
+
+/* Top bar: title centered, action icons pinned to the top right. */
+.image-lightbox-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 10px 16px;
+}
+
+.image-lightbox-title {
+  max-width: 60%;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-lightbox-actions {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 4px;
+}
+
+.image-lightbox-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.image-lightbox-iconbtn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.image-lightbox-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 0 2rem 2rem;
+}
+
+.image-lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-base);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}

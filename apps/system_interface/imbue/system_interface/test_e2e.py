@@ -318,6 +318,76 @@ def test_send_button_appears_on_input(e2e_server: tuple[str, list[AgentInfo], Pa
     expect(send_button).to_be_visible()
 
 
+def test_mobile_viewport_layout(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
+    """At a phone-sized viewport the mobile tab bar replaces the dockview tab
+    strip, the composer sits on screen, and inputs are zoom-proof."""
+    base_url, _, _ = e2e_server
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(base_url)
+
+    textarea = page.locator(".message-input-textbox")
+    expect(textarea).to_be_visible(timeout=5000)
+    box = textarea.bounding_box()
+    assert box is not None
+    assert box["y"] + box["height"] <= 844, "composer must sit fully inside the viewport"
+
+    # Inputs below 16px make iOS Safari zoom the page on focus -- the zoom is
+    # what used to push the composer out of view on phones.
+    font_size = textarea.evaluate("el => getComputedStyle(el).fontSize")
+    assert float(font_size.removesuffix("px")) >= 16
+
+    # The desktop tab strip is hidden; the mobile bar shows the active tab.
+    expect(page.locator(".mobile-tab-bar")).to_be_visible()
+    expect(page.locator(".dv-tabs-and-actions-container")).to_be_hidden()
+    expect(page.locator(".mobile-tab-bar-title")).to_have_text("test-agent")
+
+    # The tab switcher opens as a bottom sheet listing the open tab as active.
+    page.locator(".mobile-tab-bar-switcher").click()
+    active_row = page.locator(".mobile-sheet-row--active")
+    expect(active_row).to_be_visible()
+    expect(active_row).to_contain_text("test-agent")
+    page.locator(".mobile-sheet-backdrop").click()
+    expect(page.locator(".mobile-sheet")).to_have_count(0)
+
+
+# Opening the mobile "+" sheet refreshes the terminal fleet, which lists real
+# tmux sessions server-side, so this test must be marked ``tmux`` (the
+# resource_guards plugin blocks unmarked tmux invocations). The fetch is
+# asynchronous, so the test explicitly awaits the /api/terminals response --
+# otherwise the tmux call could land after the test body and trip the guard's
+# "marked but never invoked" side.
+@pytest.mark.tmux
+@pytest.mark.timeout(120)
+def test_mobile_add_sheet_lists_new_tab_actions(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
+    """The mobile "+" button opens a bottom sheet with the same actions as the
+    desktop add-tab dropdown."""
+    base_url, _, _ = e2e_server
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(base_url)
+    expect(page.locator(".mobile-tab-bar")).to_be_visible(timeout=5000)
+
+    with page.expect_response("**/api/terminals"):
+        page.locator(".mobile-tab-bar-add").click()
+    expect(page.locator(".mobile-sheet-row", has_text="New chat")).to_be_visible()
+    expect(page.locator(".mobile-sheet-row", has_text="New terminal")).to_be_visible()
+
+
+def test_desktop_viewport_keeps_default_chrome(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
+    """The mobile treatment is width-gated: a desktop-sized window keeps the
+    dockview tab strip and the default transcript padding, with no mobile bar."""
+    base_url, _, _ = e2e_server
+    page.set_viewport_size({"width": 1280, "height": 800})
+    page.goto(base_url)
+
+    textarea = page.locator(".message-input-textbox")
+    expect(textarea).to_be_visible(timeout=5000)
+
+    expect(page.locator(".mobile-tab-bar")).to_have_count(0)
+    expect(page.locator(".dv-tabs-and-actions-container").first).to_be_visible()
+    padding_left = page.locator(".app-content").first.evaluate("el => getComputedStyle(el).paddingLeft")
+    assert padding_left == "32px"
+
+
 @_STALE_DOCKVIEW_SKIP
 def test_tool_calls_render_as_collapsible(tmp_path: Path, page: Page) -> None:
     """Tool calls render as collapsible blocks."""

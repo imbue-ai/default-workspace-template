@@ -2,7 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover lets the app extend into the notch/home-indicator
+         areas (padded back via safe-area insets in CSS); interactive-widget=
+         resizes-content makes Android Chrome resize the layout viewport when
+         the on-screen keyboard opens, so the composer stays visible. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <link rel="icon" href="/favicon.ico" />
     <title>System Interface</title>
   </head>

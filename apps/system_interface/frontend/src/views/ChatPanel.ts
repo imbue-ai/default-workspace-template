@@ -722,7 +722,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           m(
             "main",
             {
-              class: "app-content flex-1 overflow-y-auto px-8 py-6",
+              class: "app-content flex-1 overflow-y-auto",
               onscroll: (event: Event) => scroll.onScroll(event),
               // Mark the start of a drag (likely a selection) so the tail-follow pin
               // defers while the button is held (see the controller's applyTailFollow).
