@@ -4,26 +4,39 @@
  * On small screens (see isMobileViewport) the dockview header is hidden and
  * this bar renders above the workspace instead: a hamburger button at the top
  * left and the active tab's title beside it. The hamburger opens a single
- * bottom-sheet menu with everything tab-related: the open tabs (tap to
- * switch, with close/destroy actions) followed by the same "open new" items
- * as the desktop "+" dropdown. A bottom sheet is the mobile idiom for this
- * menu: full-width, thumb-reachable, and scrollable when long.
+ * bottom-sheet menu.
  *
- * The component is pure presentation -- panel state, actions, and menu items
- * are supplied by DockviewWorkspace, which stays the single owner of dockview
+ * The menu is one flat list of destinations -- everything the workspace can
+ * show (agent chats, terminal sessions, browsers, apps), not just what has an
+ * open panel. Tapping a row goes there (focusing the existing panel or
+ * creating one); "open" is not a user-facing category on a single-pane
+ * screen. Rows that DO have a loaded panel carry a close X (and a destroy
+ * action where the underlying entity supports it) -- the X doubles as the
+ * "currently loaded" signal. Below the destinations sit the same creation and
+ * layout actions as the desktop "+" dropdown.
+ *
+ * The component is pure presentation -- rows, actions, and menu items are
+ * supplied by DockviewWorkspace, which stays the single owner of dockview
  * bookkeeping.
  */
 
 import m from "mithril";
 
-export interface MobileTabInfo {
-  panelId: string;
-  title: string;
+export interface MobileMenuRow {
+  // Stable identity for keyed list diffing: the panel id when open, else the
+  // destination's ref-like identity.
+  key: string;
+  label: string;
   isActive: boolean;
-  // What the row's trash action destroys: an mngr agent, a tmux session, or
-  // nothing (plain close-only tabs, and the primary agent which must never
-  // be destroyed).
-  destroyKind: "agent" | "terminal" | null;
+  onSelect: () => void;
+  // Present only when a dockview panel is currently loaded for this row; its
+  // presence is what renders the close X.
+  onClose?: () => void;
+  // Present only for loaded rows whose entity can be destroyed (an mngr
+  // agent, a tmux session). ``destroyLabel`` names the action for the
+  // button's tooltip/aria-label.
+  onDestroy?: () => void;
+  destroyLabel?: string;
 }
 
 export interface MobileAddMenuItem {
@@ -35,16 +48,13 @@ export interface MobileAddMenuItem {
 }
 
 export interface MobileTabBarAttrs {
-  tabs: MobileTabInfo[];
+  rows: MobileMenuRow[];
   // Built lazily on each redraw while the menu is open, so fleet refreshes
   // (browsers, terminals) show up as soon as they land.
-  buildAddItems: () => MobileAddMenuItem[];
+  buildActionItems: () => MobileAddMenuItem[];
   // Fired when the menu opens; the owner kicks off its async fleet refreshes
   // here (mirroring the desktop dropdown's open handler).
   onMenuOpen: () => void;
-  onSelectTab: (panelId: string) => void;
-  onCloseTab: (panelId: string) => void;
-  onDestroyTab: (panelId: string) => void;
 }
 
 // Media query mirroring the CSS breakpoint in responsive.css. Kept in one
@@ -86,61 +96,63 @@ export function MobileTabBar(): m.Component<MobileTabBarAttrs> {
     menuOpen = false;
   }
 
-  function renderTabRows(attrs: MobileTabBarAttrs): m.Children[] {
-    if (attrs.tabs.length === 0) {
-      return [m("div", { class: "mobile-sheet-empty" }, "No tabs open")];
+  function renderDestinationRows(rows: MobileMenuRow[]): m.Children[] {
+    if (rows.length === 0) {
+      return [m("div", { class: "mobile-sheet-empty" }, "Nothing to open yet")];
     }
-    return attrs.tabs.map((tab) =>
+    return rows.map((row) =>
       m(
         "div",
         {
-          key: tab.panelId,
-          class: tab.isActive ? "mobile-sheet-row mobile-sheet-row--active" : "mobile-sheet-row",
+          key: row.key,
+          class: row.isActive ? "mobile-sheet-row mobile-sheet-row--active" : "mobile-sheet-row",
           onclick: () => {
             closeMenu();
-            attrs.onSelectTab(tab.panelId);
+            row.onSelect();
           },
         },
         [
-          m("span", { class: "mobile-sheet-row-label" }, tab.title),
-          tab.destroyKind !== null
+          m("span", { class: "mobile-sheet-row-label" }, row.label),
+          row.onDestroy !== undefined
             ? m(
                 "button",
                 {
                   type: "button",
                   class: "mobile-sheet-row-action mobile-sheet-row-action--destructive",
-                  title: tab.destroyKind === "agent" ? "Destroy agent" : "Destroy terminal",
-                  "aria-label": tab.destroyKind === "agent" ? "Destroy agent" : "Destroy terminal",
+                  title: row.destroyLabel ?? "Destroy",
+                  "aria-label": row.destroyLabel ?? "Destroy",
                   onclick: (event: MouseEvent) => {
                     event.stopPropagation();
                     closeMenu();
-                    attrs.onDestroyTab(tab.panelId);
+                    row.onDestroy?.();
                   },
                 },
                 m.trust(TRASH_SVG),
               )
             : null,
-          m(
-            "button",
-            {
-              type: "button",
-              class: "mobile-sheet-row-action",
-              title: "Close tab",
-              "aria-label": "Close tab",
-              onclick: (event: MouseEvent) => {
-                event.stopPropagation();
-                attrs.onCloseTab(tab.panelId);
-              },
-            },
-            m.trust(CLOSE_SVG),
-          ),
+          row.onClose !== undefined
+            ? m(
+                "button",
+                {
+                  type: "button",
+                  class: "mobile-sheet-row-action",
+                  title: "Close tab",
+                  "aria-label": "Close tab",
+                  onclick: (event: MouseEvent) => {
+                    event.stopPropagation();
+                    row.onClose?.();
+                  },
+                },
+                m.trust(CLOSE_SVG),
+              )
+            : null,
         ],
       ),
     );
   }
 
-  function renderAddRows(attrs: MobileTabBarAttrs): m.Children[] {
-    const items = attrs.buildAddItems();
+  function renderActionRows(attrs: MobileTabBarAttrs): m.Children[] {
+    const items = attrs.buildActionItems();
     const rows: m.Children[] = [];
     for (const item of items) {
       rows.push(
@@ -173,14 +185,12 @@ export function MobileTabBar(): m.Component<MobileTabBarAttrs> {
       m("div", { class: "mobile-sheet" }, [
         m("div", { class: "mobile-sheet-grabber" }),
         m("div", { class: "mobile-sheet-rows" }, [
-          m("div", { class: "mobile-sheet-title" }, "Tabs"),
-          // The tab rows stay a nested array: mithril normalizes it into its
-          // own fragment, which keeps the keyed rows (by panel id) uniformly
-          // keyed among themselves without keying these section siblings.
-          renderTabRows(attrs),
+          // The destination rows stay a nested array: mithril normalizes it
+          // into its own fragment, which keeps the keyed rows uniformly keyed
+          // among themselves without keying these section siblings.
+          renderDestinationRows(attrs.rows),
           m("div", { class: "mobile-sheet-divider" }),
-          m("div", { class: "mobile-sheet-title" }, "Open new"),
-          ...renderAddRows(attrs),
+          ...renderActionRows(attrs),
         ]),
       ]),
     ];
@@ -189,7 +199,7 @@ export function MobileTabBar(): m.Component<MobileTabBarAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const active = attrs.tabs.find((tab) => tab.isActive);
+      const active = attrs.rows.find((row) => row.isActive);
       return m("div", { class: "mobile-tab-bar-root" }, [
         m("div", { class: "mobile-tab-bar" }, [
           m(
@@ -208,7 +218,7 @@ export function MobileTabBar(): m.Component<MobileTabBarAttrs> {
             },
             m.trust(HAMBURGER_SVG),
           ),
-          m("span", { class: "mobile-tab-bar-title" }, active?.title ?? "No tabs open"),
+          m("span", { class: "mobile-tab-bar-title" }, active?.label ?? "No tabs open"),
         ]),
         menuOpen ? renderMenuSheet(attrs) : null,
       ]);

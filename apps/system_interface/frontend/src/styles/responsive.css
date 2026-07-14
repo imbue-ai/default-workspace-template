@@ -129,16 +129,6 @@
     background: var(--color-border);
   }
 
-  /* Section label inside the sheet ("Tabs", "Open new"). */
-  .mobile-sheet-title {
-    padding: 8px 12px;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--color-text-secondary);
-  }
-
   .mobile-sheet-rows {
     min-height: 0;
     overflow-y: auto;
