@@ -15,27 +15,64 @@ import {
 import { ChatPanel } from "./ChatPanel";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { IframePanel, IFRAME_PANEL_PANEL_ID_ATTR, reloadIframesForService } from "./IframePanel";
+import { TerminalBanner } from "./TerminalBanner";
 import { SubagentView } from "./SubagentView";
 import { CreateAgentModal } from "./CreateAgentModal";
 import { CreateBrowserModal } from "./CreateBrowserModal";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
+import { LayoutDialog, type LayoutDialogMode } from "./LayoutDialog";
 import { ShareModal } from "./ShareModal";
 import { reloadInterface } from "../reload";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
 import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
+  addLayoutSyncListener,
+  addTerminalSessionListener,
+  allocateTerminalName,
+  buildSessionTerminalUrl,
+  fetchTerminalSessions,
   getAgentById,
   getAgents,
   getApplications,
   getProtoAgents,
   removeAgentLocally,
+  reportClientState,
   type AgentsUpdatedListener,
   type LayoutOpEvent,
   type LayoutOpListener,
+  type LayoutSyncEvent,
+  type LayoutSyncListener,
+  type TerminalSessionInfo,
+  type TerminalSessionListener,
 } from "../models/AgentManager";
+import {
+  getActiveLayoutSlug,
+  getClientId,
+  getDeviceKind,
+  getStoredLayoutSlug,
+  setActiveLayoutSlug,
+} from "../models/ClientIdentity";
+import {
+  autosaveLayout,
+  chooseInitialLayout,
+  deleteLayoutRequest,
+  fetchLayoutContent,
+  fetchLayoutsList,
+  saveLayoutAs,
+  type LayoutInfo,
+} from "../models/WorkspaceLayouts";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
+
+// Panel-id prefixes for the two panel kinds whose ids encode their identity:
+// a chat is ``chat-<agent-id>`` and a persistent terminal is
+// ``terminal-session-<tmux-session-name>``. Deterministic ids are what let
+// reopening the same chat / terminal focus the existing tab rather than stack a
+// duplicate -- and what lets ``derivePanelParamsFromId`` rebuild a panel's
+// params from its id alone when the bookkeeping entry is missing.
+const CHAT_PANEL_ID_PREFIX = "chat-";
+const TERMINAL_PANEL_ID_PREFIX = "terminal-session-";
 
 // SVG path constants for tab action icons
 const SVG_CLOSE = '<line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/>';
@@ -117,6 +154,16 @@ interface PanelParams {
   // Drives both the WS-driven `layout_op` (op="refresh") service-wide
   // reload match and the presence of the per-tab Refresh button.
   serviceName?: string;
+  // Set only on persistent-terminal iframe tabs. ``terminalSessionName`` is
+  // the named tmux session the tab attaches to (attach-or-create); its
+  // presence is what marks a panel as a terminal (drives the banner, the
+  // Destroy button, and layout-restore reattach). ``terminalId`` is a
+  // per-tab id passed into the ttyd URL so the backend can map this tab's
+  // tmux client back to us for live title tracking. ``terminalSessionId`` is
+  // the immutable ``#{session_id}`` used to reflect a rename onto the tab.
+  terminalSessionName?: string;
+  terminalId?: string;
+  terminalSessionId?: string;
 }
 
 // Modal state
@@ -144,6 +191,13 @@ let destroyTargetAgentId: string | null = null;
 let destroyTargetAgentName: string | null = null;
 let destroyTargetPanelId: string | null = null;
 
+// Terminal-destroy dialog state. Separate from the agent-destroy dialog above
+// because destroying a terminal kills its tmux session (via the terminals API)
+// rather than an mngr agent.
+let showTerminalDestroyDialog = false;
+let terminalDestroySessionName: string | null = null;
+let terminalDestroyPanelId: string | null = null;
+
 // Share modal state
 let showShareModal = false;
 let shareServiceName: string | null = null;
@@ -159,7 +213,30 @@ let dockviewContainer: HTMLElement | null = null;
 const panelParams = new Map<string, PanelParams>();
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let _layoutOpListener: LayoutOpListener | null = null;
+let _layoutSyncListener: LayoutSyncListener | null = null;
+let _terminalSessionListener: TerminalSessionListener | null = null;
 let initialized = false;
+
+// ---------- Named-layout state ----------
+
+// Which layout dialog ("+" menu: Save / Load / Delete) is open, if any.
+let layoutDialogMode: LayoutDialogMode | null = null;
+// Cached layout registry backing the dialogs; refreshed on dialog open and
+// on every layout_saved / layout_deleted broadcast.
+let availableLayouts: LayoutInfo[] = [];
+// Serialized form of the layout content last persisted to (or received
+// from) the server for the active layout. Autosave skips the POST when the
+// current serialization matches -- the content guard half of the live-sync
+// echo suppression.
+let lastPersistedLayoutJson: string | null = null;
+// Autosaves are suppressed until this timestamp while a remotely-received
+// layout is being applied: applying content fires onDidLayoutChange (and
+// post-apply resize events), and persisting/broadcasting those re-applies
+// would ping-pong saves between clients whose window sizes differ. The
+// window comfortably covers the debounce plus the resize settle.
+let suppressAutosaveUntilMs = 0;
+
+const REMOTE_APPLY_SUPPRESS_MS = AUTOSAVE_DEBOUNCE_MS * 2 + 1000;
 
 // Target fraction of horizontal space that the newly-opened service panel
 // takes when it splits alongside the primary agent's chat. Picked so the
@@ -273,6 +350,9 @@ function createCustomTab(options: { id: string; name: string }): {
 
       const pp = panelParams.get(options.id);
       const panelType = pp?.panelType ?? "chat";
+      // Terminal tabs are iframe panels but get their own action set (Destroy
+      // + Close, no Share/Refresh).
+      const isTerminal = isTerminalPanelParams(pp);
 
       // Share and Refresh buttons -- only on iframe/application tabs.
       // The Refresh button matches open iframes by their data-service-name
@@ -283,7 +363,7 @@ function createCustomTab(options: { id: string; name: string }): {
       // also excluded: reloading the pane just reconnects the live view (which
       // confuses people into thinking it restarts the browser) -- the viewer
       // has its own in-page Reload button for the actual page.
-      if (panelType === "iframe") {
+      if (panelType === "iframe" && !isTerminal) {
         const shareName = pp?.serviceName ?? pp?.title ?? "web";
         if (pp?.serviceName && pp.serviceName !== "browser") {
           const serviceName = pp.serviceName;
@@ -326,6 +406,30 @@ function createCustomTab(options: { id: string; name: string }): {
           destroyBtn.disabled = true;
         }
         actions.appendChild(destroyBtn);
+      }
+
+      // Destroy button -- on terminal tabs. Kills the tmux session (closing
+      // the tab alone only detaches). If the session name isn't known yet
+      // (agent-driven terminal mid-allocation), fall back to a plain close.
+      if (isTerminal) {
+        actions.appendChild(
+          createTabActionButton(
+            "Destroy terminal",
+            SVG_TRASH,
+            () => {
+              const sessionName = pp?.terminalSessionName;
+              if (!sessionName) {
+                params.api.close();
+                return;
+              }
+              terminalDestroySessionName = sessionName;
+              terminalDestroyPanelId = options.id;
+              showTerminalDestroyDialog = true;
+              m.redraw();
+            },
+            "dv-custom-tab-action-destructive",
+          ),
+        );
       }
 
       // Close button -- on all tab types
@@ -562,6 +666,19 @@ function buildDropdownItems(
     });
   }
 
+  // Live terminal sessions (any non-mngr- tmux session) that don't have an
+  // open tab. Selecting one reattaches -- the session keeps running after its
+  // tab is closed, so this is how a closed-but-alive terminal is reopened.
+  const openTerminalNames = getOpenTerminalSessionNames();
+  for (const terminal of terminalFleet) {
+    if (!openTerminalNames.has(terminal.session_name)) {
+      items.push({
+        label: terminal.session_name,
+        action: () => reattachTerminal(terminal.session_name, targetGroup),
+      });
+    }
+  }
+
   // Add divider if we had existing items
   if (items.length > 0) {
     items[items.length - 1].dividerAfter = true;
@@ -578,10 +695,13 @@ function buildDropdownItems(
     },
   });
 
-  // Terminal -- always primary agent's work_dir
+  // New terminal -- allocates a fresh named tmux session anchored at the
+  // primary agent's work_dir.
   items.push({
     label: "New terminal",
-    action: () => openIframeTab(buildTerminalUrl(), "terminal", "iframe", undefined, targetGroup),
+    action: () => {
+      void openNewTerminal(targetGroup);
+    },
   });
 
   // Direct control is keyless -- the agent (and you) drive the browser by hand.
@@ -611,7 +731,20 @@ function buildDropdownItems(
       showNewAgentModal = true;
       m.redraw();
     },
+    dividerAfter: true,
   });
+
+  // --- Named-layout section ---
+  // Each opens a dialog over the fresh registry (refreshed on open so a
+  // layout another client just saved shows up).
+  const openLayoutDialog = (mode: LayoutDialogMode) => {
+    layoutDialogMode = mode;
+    void refreshLayoutsList();
+    m.redraw();
+  };
+  items.push({ label: "Save layout...", action: () => openLayoutDialog("save") });
+  items.push({ label: "Load layout...", action: () => openLayoutDialog("load") });
+  items.push({ label: "Delete layout...", action: () => openLayoutDialog("delete") });
 
   return items;
 }
@@ -686,6 +819,9 @@ function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
       refreshBrowserFleet(() => {
         if (dropdown.style.display !== "none") renderDropdownItems(dropdown, group);
       });
+      refreshTerminalFleet(() => {
+        if (dropdown.style.display !== "none") renderDropdownItems(dropdown, group);
+      });
       dropdown.style.display = "block";
     }
   });
@@ -712,7 +848,7 @@ function focusOrCreateChatPanel(
   targetGroup?: DockviewGroupPanel | null,
 ): void {
   if (!dockview) return;
-  const panelId = `chat-${chatAgentId}`;
+  const panelId = chatPanelId(chatAgentId);
   const existingPanel = dockview.panels.find((p) => p.id === panelId);
   if (existingPanel) {
     if (!existingPanel.api.isActive) {
@@ -725,7 +861,7 @@ function focusOrCreateChatPanel(
 
 function addChatPanel(chatAgentId: string, chatAgentName: string, targetGroup?: DockviewGroupPanel | null): void {
   if (!dockview) return;
-  const panelId = `chat-${chatAgentId}`;
+  const panelId = chatPanelId(chatAgentId);
   const params: PanelParams = { panelType: "chat", agentId: chatAgentId, chatAgentId };
   panelParams.set(panelId, params);
   dockview.addPanel({
@@ -800,7 +936,7 @@ function openIframeTab(
 function findAnchorChatPanelId(requesterAgentId: string): string | null {
   if (!dockview) return null;
   if (!requesterAgentId) return null;
-  const candidate = `chat-${requesterAgentId}`;
+  const candidate = chatPanelId(requesterAgentId);
   return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
 }
 
@@ -867,16 +1003,196 @@ type AddPanelPlacementOptions = {
   panelIdHint?: string;
 };
 
-/** Build the URL the "New terminal" UI button (and agent-driven
- *  ``open terminal``) points iframes at. Anchors the terminal at the
- *  primary agent's work_dir when available; the ttyd backend interprets
- *  the bare base URL as "open in $HOME" so the fallback is benign. */
-function buildTerminalUrl(): string {
-  const primaryAgent = getAgentById(getPrimaryAgentId());
-  const baseUrl = getTerminalUrl();
-  return primaryAgent?.work_dir
-    ? `${baseUrl}?arg=_&arg=workdir&arg=${encodeURIComponent(primaryAgent.work_dir)}`
-    : baseUrl;
+/** Deterministic dockview panel id for an agent's chat tab, so reopening the
+ *  same chat focuses the existing tab instead of stacking a duplicate. */
+function chatPanelId(chatAgentId: string): string {
+  return `${CHAT_PANEL_ID_PREFIX}${chatAgentId}`;
+}
+
+/** Deterministic dockview panel id for a named terminal session, so reopening
+ *  the same session from the "+" menu (or a layout restore) focuses the
+ *  existing tab instead of stacking a duplicate. */
+function terminalPanelId(sessionName: string): string {
+  return `${TERMINAL_PANEL_ID_PREFIX}${sessionName}`;
+}
+
+/** Rebuild a panel's params from its (deterministic) panel id.
+ *
+ *  Chat and persistent-terminal panel ids encode their identity, so a panel
+ *  whose ``panelParams`` entry is missing at creation time -- a layout file
+ *  written by an older build, a hand-edited one, or a bookkeeping bug -- can
+ *  still be bound to the right agent / tmux session instead of silently
+ *  rendering someone else's (empty) transcript. Returns null for ids that
+ *  carry no recoverable identity (ad-hoc URL / service iframes, subagents),
+ *  whose params exist only in the map. */
+function derivePanelParamsFromId(panelId: string): PanelParams | null {
+  if (panelId.startsWith(CHAT_PANEL_ID_PREFIX)) {
+    const chatAgentId = panelId.substring(CHAT_PANEL_ID_PREFIX.length);
+    if (!chatAgentId) return null;
+    return { panelType: "chat", agentId: chatAgentId, chatAgentId };
+  }
+  if (panelId.startsWith(TERMINAL_PANEL_ID_PREFIX)) {
+    const sessionName = panelId.substring(TERMINAL_PANEL_ID_PREFIX.length);
+    if (!sessionName) return null;
+    const terminalId = mintTerminalId();
+    return {
+      panelType: "iframe",
+      agentId: getPrimaryAgentId(),
+      url: buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir()),
+      title: sessionName,
+      terminalSessionName: sessionName,
+      terminalId,
+    };
+  }
+  return null;
+}
+
+/** The params dockview should build a panel from: the ones it supplied, else
+ *  the stored entry, else a re-derivation from the panel id.
+ *
+ *  A recovered entry is written back into ``panelParams``, so the next autosave
+ *  also repairs the persisted layout. Returns null only when the panel's
+ *  identity cannot be recovered at all -- the caller then renders an explicit
+ *  placeholder rather than guessing an owner. */
+function resolvePanelParams(panelId: string, suppliedParams: PanelParams | undefined): PanelParams | null {
+  if (suppliedParams !== undefined) return suppliedParams;
+  const stored = panelParams.get(panelId);
+  if (stored !== undefined) return stored;
+  const derived = derivePanelParamsFromId(panelId);
+  if (derived === null) {
+    console.warn(`Dockview panel ${panelId} has no params and none can be derived from its id`);
+    return null;
+  }
+  console.warn(`Recovered missing params for dockview panel ${panelId} from its id`);
+  panelParams.set(panelId, derived);
+  return derived;
+}
+
+/** Content renderer for a panel whose params are missing and underivable. It
+ *  says so plainly instead of rendering a plausible-looking wrong panel (e.g.
+ *  the primary agent's empty transcript under another agent's tab title). */
+function createUnrecoverablePanelRenderer(panelId: string): IContentRenderer {
+  const element = document.createElement("div");
+  element.className = "dockview-panel-unrecoverable";
+  element.style.display = "flex";
+  element.style.alignItems = "center";
+  element.style.justifyContent = "center";
+  element.style.height = "100%";
+  element.style.padding = "16px";
+  element.style.textAlign = "center";
+  element.textContent = "This tab's contents could not be restored. Close it and open it again from the + menu.";
+  console.warn(`Rendering unrecoverable-panel placeholder for dockview panel ${panelId}`);
+  return {
+    element,
+    init() {},
+    dispose() {},
+  };
+}
+
+/** A panel is a persistent-terminal tab iff it carries terminal params.
+ *  ``terminalId`` is set synchronously at creation (even before the tmux session
+ *  name has been allocated), and ``terminalSessionName`` arrives with or after
+ *  it, so either one marks a terminal panel. Single source of truth for the
+ *  tab-action selection and the terminal-renderer choice. */
+function isTerminalPanelParams(pp: PanelParams | undefined): boolean {
+  return pp?.terminalSessionName !== undefined || pp?.terminalId !== undefined;
+}
+
+/** Mint a fresh per-tab terminal id. The backend maps this back to the tab's
+ *  tmux client (via the pty) for live title tracking. */
+function mintTerminalId(): string {
+  const unique = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now());
+  return `term-${unique}`;
+}
+
+/** The primary agent's work_dir, or "" (the ttyd dispatch treats an empty
+ *  work_dir as "start in $HOME"). New terminals anchor here. */
+function primaryWorkDir(): string {
+  return getAgentById(getPrimaryAgentId())?.work_dir ?? "";
+}
+
+// Cached snapshot of the live terminal-session fleet, refreshed each time the
+// "+" dropdown opens (mirrors ``browserFleet``). Drives one dropdown item per
+// non-open terminal session so a closed-but-alive terminal can be reattached.
+let terminalFleet: TerminalSessionInfo[] = [];
+
+function refreshTerminalFleet(onUpdate?: () => void): void {
+  fetchTerminalSessions()
+    .then((data) => {
+      terminalFleet = data.terminals;
+    })
+    .finally(() => {
+      onUpdate?.();
+    });
+}
+
+/** Session names of terminals currently open in a tab, so the "+" menu can
+ *  exclude them (mirrors ``getOpenAppNames`` for applications). */
+function getOpenTerminalSessionNames(): Set<string> {
+  const names = new Set<string>();
+  for (const [, pp] of panelParams) {
+    if (pp.terminalSessionName) names.add(pp.terminalSessionName);
+  }
+  return names;
+}
+
+/** Open (or focus, if already open) a tab attached to ``sessionName``. Shared
+ *  by "New terminal" (freshly allocated name) and the "+" menu reattach path
+ *  (existing name). ``panelIdOverride`` is used by the agent-driven
+ *  ``service:terminal`` path so the server-minted panel id (and thus its
+ *  ``terminal:<hash>`` ref) is preserved. */
+function addTerminalPanel(
+  sessionName: string,
+  options: { panelId?: string; targetGroup?: DockviewGroupPanel | null },
+): string | null {
+  if (!dockview) return null;
+  const panelId = options.panelId ?? terminalPanelId(sessionName);
+  const existing = dockview.panels.find((p) => p.id === panelId);
+  if (existing) {
+    dockview.setActivePanel(existing);
+    return panelId;
+  }
+  const terminalId = mintTerminalId();
+  const url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
+  const params: PanelParams = {
+    panelType: "iframe",
+    agentId: getPrimaryAgentId(),
+    url,
+    title: sessionName,
+    terminalSessionName: sessionName,
+    terminalId,
+  };
+  panelParams.set(panelId, params);
+  dockview.addPanel({
+    id: panelId,
+    component: "iframe",
+    title: sessionName,
+    params,
+    ...placementForGroup(options.targetGroup),
+  });
+  return panelId;
+}
+
+/** "New terminal" button: allocate the next free ``terminal-N`` name from the
+ *  backend, then open a tab attached to it. */
+async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise<void> {
+  if (!dockview) return;
+  let sessionName: string;
+  try {
+    sessionName = await allocateTerminalName();
+  } catch (e) {
+    // Allocation failed (backend unreachable); surface it rather than leaving
+    // the "New terminal" click with no visible effect (matches the alert used
+    // by the other terminal/agent actions in this file).
+    alert(`Failed to open terminal: ${(e as Error).message}`);
+    return;
+  }
+  addTerminalPanel(sessionName, { targetGroup });
+}
+
+/** "+" menu: reattach a tab to an already-running terminal session. */
+function reattachTerminal(sessionName: string, targetGroup?: DockviewGroupPanel | null): void {
+  addTerminalPanel(sessionName, { targetGroup });
 }
 
 /** Dedup-then-add for a ``service:``, ``chat:``, or ``https://`` ref.
@@ -905,16 +1221,23 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
 
   if (ref === "service:terminal") {
     const ownerId = requesterAgentId || getPrimaryAgentId();
+    // Keep the server-minted panel id verbatim so the ``terminal:<hash>`` ref
+    // the broadcast endpoint returned still resolves to this panel.
     const panelId = panelIdHint ?? `iframe-terminal-${Date.now()}`;
-    // Intentionally no ``serviceName``: terminals are addressed as
-    // ``terminal:<hash>`` via the URL-prefix branch of the server-side
-    // ref resolver, and ``serviceName`` would (a) wrongly route service
-    // dedup against this panel and (b) suppress the URL-prefix branch.
+    const terminalId = mintTerminalId();
+    // The tmux session name is allocated asynchronously; create the panel now
+    // (so the ref resolves immediately) with a placeholder url and fill it in
+    // once the backend hands back the next free ``terminal-N`` name. The
+    // reactive terminal renderer reads ``params.url`` on each redraw, so
+    // setting it after allocation swaps in the live session. ``terminalId``
+    // is set synchronously, which is what marks this as a terminal panel for
+    // the renderer + tab-action selection.
     const params: PanelParams = {
       panelType: "iframe",
       agentId: ownerId,
-      url: buildTerminalUrl(),
+      url: "",
       title: "terminal",
+      terminalId,
     };
     panelParams.set(panelId, params);
     dockview.addPanel({
@@ -924,6 +1247,20 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
       params,
       ...placement,
     });
+    void allocateTerminalName()
+      .then((sessionName) => {
+        const stored = panelParams.get(panelId);
+        if (!stored) return;
+        stored.terminalSessionName = sessionName;
+        stored.title = sessionName;
+        stored.url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
+        dockview?.panels.find((p) => p.id === panelId)?.api.setTitle(sessionName);
+        m.redraw();
+        scheduleSave();
+      })
+      .catch(() => {
+        // Allocation failed: leave the placeholder tab so the user can close it.
+      });
     return panelId;
   }
 
@@ -972,7 +1309,7 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
     const agentName = ref.substring("chat:".length);
     const agent = getAgents().find((a) => a.name === agentName);
     if (!agent) return null;
-    const panelId = `chat-${agent.id}`;
+    const panelId = chatPanelId(agent.id);
     const existing = dockview.panels.find((p) => p.id === panelId);
     if (existing) {
       dockview.setActivePanel(existing);
@@ -1213,24 +1550,33 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
   });
 }
 
-async function saveLayout(): Promise<void> {
-  if (!dockview) return;
-
-  const dockviewJson = dockview.toJSON();
+function buildLayoutPayload(): SavedLayout | null {
+  if (!dockview) return null;
   const serializedParams: Record<string, PanelParams> = {};
   for (const [id, params] of panelParams) {
     serializedParams[id] = params;
   }
-  const payload: SavedLayout = { dockview: dockviewJson, panelParams: serializedParams };
+  return { dockview: dockview.toJSON(), panelParams: serializedParams };
+}
+
+async function saveLayout(): Promise<void> {
+  if (!dockview) return;
+  const activeSlug = getActiveLayoutSlug();
+  if (!activeSlug) return;
+  if (Date.now() < suppressAutosaveUntilMs) return;
+  const payload = buildLayoutPayload();
+  if (payload === null) return;
+  const serialized = JSON.stringify(payload);
+  // Content guard: an unchanged layout is neither re-persisted nor
+  // re-broadcast, so remote re-applies cannot echo back and forth.
+  if (serialized === lastPersistedLayoutJson) return;
 
   try {
-    await fetch(apiUrl(`/api/layout`), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    await autosaveLayout(activeSlug, payload, getClientId());
+    lastPersistedLayoutJson = serialized;
   } catch {
-    // Layout save is best-effort
+    // Layout save is best-effort (e.g. the layout was deleted mid-flight;
+    // the deletion broadcast switches us to the fallback).
   }
 }
 
@@ -1244,13 +1590,238 @@ function scheduleSave(): void {
   }, AUTOSAVE_DEBOUNCE_MS);
 }
 
-async function loadLayout(): Promise<SavedLayout | null> {
+/** Flush a pending debounced autosave now. Called before switching layouts
+ *  so edits made just before the switch land in the layout they were made
+ *  in, never in the one being switched to. */
+async function flushPendingSave(): Promise<void> {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    await saveLayout();
+  }
+}
+
+/** Mark ``content`` as what the server currently holds for the active
+ *  layout, so the content guard in saveLayout can skip no-op persists. */
+function markServerContent(content: SavedLayout | null): void {
+  lastPersistedLayoutJson = content === null ? null : JSON.stringify(content);
+}
+
+/** Open the autosave-suppression window used when applying content that
+ *  arrived over a ``layout_saved`` broadcast: the apply (and its follow-on
+ *  resize events) must settle without re-persisting, or two clients with
+ *  different window sizes would ping-pong saves at each other. User-driven
+ *  applies (initial load, load/switch) do NOT suppress -- their follow-on
+ *  autosave is what materializes a fresh layout's content file. */
+function beginRemoteApplySuppression(): void {
+  suppressAutosaveUntilMs = Date.now() + REMOTE_APPLY_SUPPRESS_MS;
+}
+
+async function refreshLayoutsList(): Promise<void> {
+  const listResponse = await fetchLayoutsList();
+  availableLayouts = listResponse.layouts;
+  m.redraw();
+}
+
+function displayNameForSlug(slug: string): string {
+  return availableLayouts.find((layout) => layout.slug === slug)?.display_name ?? slug;
+}
+
+/**
+ * Mount ``saved`` into the dockview, replacing whatever is currently shown.
+ * ``null`` (a layout with no saved content, or none could be fetched)
+ * renders the fresh-workspace state: the initial welcome chat auto-opens
+ * (or the empty-state overlay waits for it). Mirrors the restore semantics
+ * that previously lived inline in ``initializeDockview``.
+ */
+function applyLayoutContent(saved: SavedLayout | null): void {
+  if (!dockview) return;
+  const dv = dockview;
+  awaitingInitialChat = false;
+
+  // Tear the outgoing layout down BEFORE seeding the incoming params.
+  // ``fromJSON`` disposes the current panels before creating the new ones, and
+  // ``onDidRemovePanel`` deletes each disposed panel's ``panelParams`` entry.
+  // Panel ids are deterministic (``chat-<agent-id>``,
+  // ``terminal-session-<name>``), so a panel present in BOTH layouts would have
+  // its freshly-seeded entry deleted mid-restore and come back with no params.
+  // Clearing first means every disposal fires against the outgoing state we are
+  // discarding anyway, and nothing can race the fresh map.
+  dv.clear();
+  panelParams.clear();
+
+  let savedHadAnyPanels = false;
+  if (saved) {
+    for (const [id, params] of Object.entries(saved.panelParams)) {
+      panelParams.set(id, params);
+    }
+    // Rebuild each restored terminal's ttyd url with a fresh per-tab id, so
+    // the ttyd ``session`` dispatch reattaches to the live tmux session -- or
+    // recreates it as a fresh shell if the tmux server was torn down since the
+    // layout was saved (e.g. a container restart). The fresh id keeps the
+    // pty->tab mapping (for live title tracking) accurate for this connection.
+    // Done before ``fromJSON`` so the terminal renderer mounts on the new url.
+    for (const [, params] of panelParams) {
+      if (params.terminalSessionName) {
+        params.terminalId = mintTerminalId();
+        params.url = buildSessionTerminalUrl(params.terminalSessionName, params.terminalId, primaryWorkDir());
+      }
+    }
+    try {
+      dv.fromJSON(saved.dockview);
+    } catch {
+      panelParams.clear();
+      dv.clear();
+    }
+    savedHadAnyPanels = dv.panels.length > 0;
+    // Strip any chat panels that point at the is_primary services agent.
+    // Older saved layouts (or layouts saved by the previous code path
+    // that auto-opened the primary agent's chat) may carry a chat-
+    // <services-agent-id> panel; we don't want to surface that ever.
+    //
+    // This MUST be limited to chat panels. Iframe tabs (terminals,
+    // applications, custom URLs) opened via openIframeTab() set
+    // `agentId` to the primary agent id as a placeholder owner, so a
+    // bare `agentId === primaryId` check would wrongly strip every
+    // terminal/application/URL tab on each restore.
+    const primaryId = getPrimaryAgentId();
+    if (primaryId) {
+      for (const panel of dv.panels.slice()) {
+        const params = panelParams.get(panel.id);
+        if (params?.panelType !== "chat") continue;
+        const targetId = params.chatAgentId ?? params.agentId;
+        if (targetId === primaryId) {
+          dv.removePanel(panel);
+        }
+      }
+    }
+  }
+
+  // Auto-open the initial chat tab when:
+  //   - the layout has no saved content yet (fresh layout), OR
+  //   - the saved content existed but all its panels were services-agent
+  //     panels we just stripped above.
+  // If the saved content was a non-empty layout that the user
+  // intentionally emptied (savedHadAnyPanels=false because saved
+  // existed but had zero panels), we respect that and leave the
+  // empty state visible.
+  const shouldAutoOpen = saved === null || (savedHadAnyPanels && dv.panels.length === 0);
+  if (shouldAutoOpen) {
+    if (!openInitialChatTab()) {
+      awaitingInitialChat = true;
+    }
+  }
+  updateEmptyState();
+}
+
+/**
+ * Pick this client's initial layout (stored per-browser choice, else the
+ * user-agent default, else the first layout), register it with the server,
+ * and mount its content. Runs once at startup, after the dockview exists.
+ */
+async function initializeActiveLayout(): Promise<void> {
+  const listResponse = await fetchLayoutsList();
+  availableLayouts = listResponse.layouts;
+  const chosen = chooseInitialLayout(availableLayouts, getStoredLayoutSlug(), getDeviceKind());
+  if (chosen === null) {
+    // No layouts at all (server unreachable / no primary agent): run with
+    // the fresh-workspace state; nothing persists.
+    applyLayoutContent(null);
+    m.redraw();
+    return;
+  }
+  setActiveLayoutSlug(chosen.slug);
+  reportClientState();
+  const saved = (await fetchLayoutContent(chosen.slug)) as SavedLayout | null;
+  markServerContent(saved);
+  applyLayoutContent(saved);
+  m.redraw();
+}
+
+/**
+ * Switch this client onto another named layout: flush pending edits into
+ * the old layout, repoint the autosave target, tell the server (which
+ * records the switch event), and mount the new layout's content.
+ */
+async function switchToLayout(slug: string): Promise<void> {
+  if (!dockview) return;
+  const previousSlug = getActiveLayoutSlug();
+  if (previousSlug === slug) return;
+  await flushPendingSave();
+  setActiveLayoutSlug(slug);
+  reportClientState(previousSlug);
+  const saved = (await fetchLayoutContent(slug)) as SavedLayout | null;
+  markServerContent(saved);
+  applyLayoutContent(saved);
+  m.redraw();
+}
+
+/** "Save layout..." confirm: persist the current on-screen state under
+ *  ``displayName``. After any save the client is on the layout it saved to
+ *  (uniform rule), so saving under another name switches the autosave
+ *  target without re-mounting anything. */
+async function saveLayoutUnderName(displayName: string): Promise<void> {
+  if (!dockview) return;
+  await flushPendingSave();
+  const payload = buildLayoutPayload();
+  if (payload === null) return;
   try {
-    const response = await fetch(apiUrl(`/api/layout`));
-    if (!response.ok) return null;
-    return (await response.json()) as SavedLayout;
-  } catch {
-    return null;
+    const result = await saveLayoutAs(displayName, payload, getClientId());
+    lastPersistedLayoutJson = JSON.stringify(payload);
+    const previousSlug = getActiveLayoutSlug();
+    if (result.slug !== previousSlug) {
+      setActiveLayoutSlug(result.slug);
+      reportClientState(previousSlug);
+    }
+    await refreshLayoutsList();
+  } catch (e) {
+    alert(`Failed to save layout: ${(e as Error).message}`);
+  }
+}
+
+/** "Delete layout..." confirm. The resulting ``layout_deleted`` broadcast
+ *  (which this client receives too) handles switching anyone who had the
+ *  deleted layout active onto the fallback. */
+async function deleteLayoutBySlug(slug: string): Promise<void> {
+  try {
+    await deleteLayoutRequest(slug);
+    await refreshLayoutsList();
+  } catch (e) {
+    alert(`Failed to delete layout: ${(e as Error).message}`);
+  }
+}
+
+/** React to layout registry / sync broadcasts from other clients + agents. */
+function handleLayoutSyncEvent(event: LayoutSyncEvent): void {
+  if (event.kind === "saved") {
+    void refreshLayoutsList();
+    // Live sync: another client saved the layout we're on -- re-apply it.
+    // Skipping our own saves (by client id) is the originator half of the
+    // echo suppression; the content guard in saveLayout is the other half.
+    if (event.layoutSlug === getActiveLayoutSlug() && event.savedByClientId !== getClientId()) {
+      void (async () => {
+        const saved = (await fetchLayoutContent(event.layoutSlug)) as SavedLayout | null;
+        markServerContent(saved);
+        beginRemoteApplySuppression();
+        applyLayoutContent(saved);
+        m.redraw();
+      })();
+    }
+    return;
+  }
+  if (event.kind === "deleted") {
+    void refreshLayoutsList();
+    if (event.layoutSlug === getActiveLayoutSlug()) {
+      const deletedName = displayNameForSlug(event.layoutSlug);
+      void switchToLayout(event.fallbackLayoutSlug).then(() => {
+        alert(`Layout "${deletedName}" was deleted; switched to "${displayNameForSlug(event.fallbackLayoutSlug)}".`);
+      });
+    }
+    return;
+  }
+  // Agent-driven load: switch when addressed to us (or to everyone).
+  if (event.targetClientId === null || event.targetClientId === getClientId()) {
+    void switchToLayout(event.layoutSlug);
   }
 }
 
@@ -1300,7 +1871,7 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
     // honor this strict identity to avoid silently retargeting another
     // agent's chat.
     if (!requesterAgentId) return null;
-    const candidate = `chat-${requesterAgentId}`;
+    const candidate = chatPanelId(requesterAgentId);
     return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
   }
   if (ref.startsWith("service:")) {
@@ -1318,7 +1889,7 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
     const agentName = ref.substring("chat:".length);
     const agent = getAgents().find((a) => a.name === agentName);
     if (!agent) return null;
-    const candidate = `chat-${agent.id}`;
+    const candidate = chatPanelId(agent.id);
     return dockview.panels.find((p) => p.id === candidate) ? candidate : null;
   }
   if (ref.startsWith("chat-terminal:")) {
@@ -1753,6 +2324,45 @@ function createReactiveIframeRenderer(panelId: string): IContentRenderer {
   };
 }
 
+/** Like ``createReactiveIframeRenderer`` but stacks the terminal lifecycle
+ *  banner above the iframe. Reads ``panelParams[panelId]`` live so the
+ *  async-allocated (agent-driven) and layout-restore url rewrites re-render
+ *  the iframe with the new src. */
+function createReactiveTerminalRenderer(panelId: string): IContentRenderer {
+  const element = document.createElement("div");
+  element.style.width = "100%";
+  element.style.height = "100%";
+  element.style.display = "flex";
+  element.style.flexDirection = "column";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const iframePanelComponent: m.ComponentTypes<any, any> = IframePanel;
+  return {
+    element,
+    init() {
+      m.mount(element, {
+        view: () => {
+          const p = panelParams.get(panelId);
+          return [
+            m(TerminalBanner),
+            m(
+              "div",
+              { style: "flex: 1 1 auto; min-height: 0;" },
+              m(iframePanelComponent, {
+                url: p?.url ?? "",
+                title: p?.title ?? "terminal",
+                panelId,
+              }),
+            ),
+          ];
+        },
+      });
+    },
+    dispose() {
+      m.mount(element, null);
+    },
+  };
+}
+
 // The empty-state overlay sits inside the dockview container as a sibling
 // to dockview's own DOM. Shown when panels.length === 0; hidden otherwise.
 // Its "+" button opens the SAME dropdown buildDropdownItems() backs in the
@@ -1837,6 +2447,9 @@ function createEmptyStateOverlay(): HTMLElement {
     refreshBrowserFleet(() => {
       if (dropdown.style.display !== "none") renderDropdownItems(dropdown);
     });
+    refreshTerminalFleet(() => {
+      if (dropdown.style.display !== "none") renderDropdownItems(dropdown);
+    });
     dropdown.style.display = "block";
   });
 
@@ -1908,12 +2521,21 @@ function initializeDockview(parentElement: HTMLElement): void {
     defaultRenderer: "always",
     defaultTabComponent: "custom",
     createComponent(options) {
-      const params = (options as unknown as { params?: PanelParams }).params ?? panelParams.get(options.id);
+      // dockview supplies ``params`` for panels created through ``addPanel``,
+      // but NOT for panels it recreates from ``fromJSON`` -- those fall back to
+      // the stored entry, and to a re-derivation from the panel id when even
+      // that is missing. A panel whose identity cannot be recovered renders an
+      // explicit placeholder; it must never silently default to another agent.
+      const suppliedParams = (options as unknown as { params?: PanelParams }).params;
+      const params = resolvePanelParams(options.id, suppliedParams);
+      if (params === null) {
+        return createUnrecoverablePanelRenderer(options.id);
+      }
 
       switch (options.name) {
         case "chat":
           return createMithrilRenderer(ChatPanel, {
-            agentId: params?.chatAgentId ?? params?.agentId ?? getPrimaryAgentId(),
+            agentId: params.chatAgentId ?? params.agentId,
           });
 
         case "iframe": {
@@ -1924,13 +2546,21 @@ function initializeDockview(parentElement: HTMLElement): void {
           // constructs and no other iframe URL uses. Terminals are never the
           // target of an agent-driven ``replace-url``, so they don't need the
           // reactive renderer below.
-          const iframeUrl = params?.url ?? "";
+          const iframeUrl = params.url ?? "";
+          // Persistent-terminal tabs render the lifecycle banner above a
+          // reactive iframe (the url is filled in / rewritten after mount for
+          // the agent-driven and layout-restore paths). Identified by the
+          // terminal-panel params, which no other iframe sets.
+          const isSessionTerminal = isTerminalPanelParams(params);
+          if (isSessionTerminal) {
+            return createReactiveTerminalRenderer(options.id);
+          }
           const isAgentTerminal = iframeUrl.startsWith(getTerminalUrl()) && iframeUrl.includes("arg=agent");
           if (isAgentTerminal) {
             return createMithrilRenderer(AgentTerminalPanel, {
-              agentId: params?.agentId ?? "",
+              agentId: params.agentId,
               url: iframeUrl,
-              title: params?.title ?? "Tab",
+              title: params.title ?? "Tab",
             });
           }
           // Pull live values out of ``panelParams`` on every redraw so an
@@ -1942,12 +2572,15 @@ function initializeDockview(parentElement: HTMLElement): void {
 
         case "subagent":
           return createMithrilRenderer(SubagentView, {
-            agentId: params?.agentId ?? getPrimaryAgentId(),
-            subagentSessionId: params?.subagentSessionId ?? "",
+            agentId: params.agentId,
+            subagentSessionId: params.subagentSessionId ?? "",
           });
 
         default:
-          return createMithrilRenderer(ChatPanel, { agentId: getPrimaryAgentId() });
+          // An unknown component name: the layout references a panel kind this
+          // build does not have. Say so rather than rendering a chat for the
+          // wrong agent.
+          return createUnrecoverablePanelRenderer(options.id);
       }
     },
     createTabComponent(options) {
@@ -1996,58 +2629,22 @@ function initializeDockview(parentElement: HTMLElement): void {
   };
   addLayoutOpListener(_layoutOpListener);
 
-  // Load saved layout or create default
-  loadLayout().then((saved) => {
-    let savedHadAnyPanels = false;
-    if (saved) {
-      for (const [id, params] of Object.entries(saved.panelParams)) {
-        panelParams.set(id, params);
-      }
-      try {
-        dv.fromJSON(saved.dockview);
-      } catch {
-        panelParams.clear();
-      }
-      savedHadAnyPanels = dv.panels.length > 0;
-      // Strip any chat panels that point at the is_primary services agent.
-      // Older saved layouts (or layouts saved by the previous code path
-      // that auto-opened the primary agent's chat) may carry a chat-
-      // <services-agent-id> panel; we don't want to surface that ever.
-      //
-      // This MUST be limited to chat panels. Iframe tabs (terminals,
-      // applications, custom URLs) opened via openIframeTab() set
-      // `agentId` to the primary agent id as a placeholder owner, so a
-      // bare `agentId === primaryId` check would wrongly strip every
-      // terminal/application/URL tab on each restore.
-      const primaryId = getPrimaryAgentId();
-      if (primaryId) {
-        for (const panel of dv.panels.slice()) {
-          const params = panelParams.get(panel.id);
-          if (params?.panelType !== "chat") continue;
-          const targetId = params.chatAgentId ?? params.agentId;
-          if (targetId === primaryId) {
-            dv.removePanel(panel);
-          }
-        }
-      }
-    }
+  // Terminal session updates (client switched session / session renamed) push
+  // over the same WebSocket; reflect them onto the owning tab's title.
+  _terminalSessionListener = (terminalId, sessionId, sessionName) => {
+    handleTerminalSessionUpdate(terminalId, sessionId, sessionName);
+  };
+  addTerminalSessionListener(_terminalSessionListener);
 
-    // Auto-open the initial chat tab when:
-    //   - no saved layout exists (first ever load), OR
-    //   - the saved layout existed but all its panels were services-agent
-    //     panels we just stripped above.
-    // If the saved layout was a non-empty layout that the user
-    // intentionally emptied (savedHadAnyPanels=false because saved
-    // existed but had zero panels), we respect that and leave the
-    // empty state visible.
-    const shouldAutoOpen = saved === null || (savedHadAnyPanels && dv.panels.length === 0);
-    if (shouldAutoOpen) {
-      if (!openInitialChatTab()) {
-        awaitingInitialChat = true;
-      }
-    }
-    updateEmptyState();
-  });
+  // Layout registry / sync broadcasts: another client saved or deleted a
+  // layout, or an agent asked a client to load one.
+  _layoutSyncListener = (event: LayoutSyncEvent) => {
+    handleLayoutSyncEvent(event);
+  };
+  addLayoutSyncListener(_layoutSyncListener);
+
+  // Pick this browser's active named layout and mount its content.
+  void initializeActiveLayout();
 }
 
 async function executeDestroy(agentId: string, panelId: string): Promise<void> {
@@ -2071,6 +2668,62 @@ async function executeDestroy(agentId: string, panelId: string): Promise<void> {
   removeAgentLocally(agentId);
 
   // Remove the panel from dockview
+  if (dockview) {
+    const panel = dockview.panels.find((p) => p.id === panelId);
+    if (panel) {
+      dockview.removePanel(panel);
+    }
+  }
+
+  m.redraw();
+}
+
+/** Reflect a live tmux session change onto the owning terminal tab. Matches by
+ *  ``terminalId`` when a client switched sessions, or by the immutable
+ *  ``session_id`` when a session was renamed (``terminalId`` null). Records the
+ *  ``session_id`` on first sight so later rename events can find the tab. */
+function handleTerminalSessionUpdate(terminalId: string | null, sessionId: string, sessionName: string): void {
+  if (!dockview) return;
+  let targetPanelId: string | null = null;
+  for (const [panelId, params] of panelParams) {
+    if (terminalId !== null) {
+      if (params.terminalId === terminalId) {
+        targetPanelId = panelId;
+        break;
+      }
+    } else if (params.terminalSessionId === sessionId) {
+      targetPanelId = panelId;
+      break;
+    }
+  }
+  if (targetPanelId === null) return;
+  const params = panelParams.get(targetPanelId);
+  if (!params) return;
+  params.terminalSessionName = sessionName;
+  params.terminalSessionId = sessionId;
+  params.title = sessionName;
+  dockview.panels.find((p) => p.id === targetPanelId)?.api.setTitle(sessionName);
+  m.redraw();
+  scheduleSave();
+}
+
+async function executeTerminalDestroy(sessionName: string, panelId: string): Promise<void> {
+  // Kill the tmux session via the terminals API, then drop the tab.
+  try {
+    const response = await fetch(apiUrl(`/api/terminals/${encodeURIComponent(sessionName)}/destroy`), {
+      method: "POST",
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const detail = (data as { detail?: string }).detail ?? "Unknown error";
+      alert(`Failed to destroy terminal: ${detail}`);
+      return;
+    }
+  } catch (e) {
+    alert(`Failed to destroy terminal: ${(e as Error).message}`);
+    return;
+  }
+
   if (dockview) {
     const panel = dockview.panels.find((p) => p.id === panelId);
     if (panel) {
@@ -2231,12 +2884,54 @@ export const DockviewWorkspace: m.Component = {
             })
           : null,
 
+        showTerminalDestroyDialog && terminalDestroySessionName
+          ? m(DestroyConfirmDialog, {
+              agentName: terminalDestroySessionName,
+              title: "Destroy terminal",
+              onConfirm() {
+                showTerminalDestroyDialog = false;
+                const sessionName = terminalDestroySessionName!;
+                const panelId = terminalDestroyPanelId!;
+                terminalDestroySessionName = null;
+                terminalDestroyPanelId = null;
+                executeTerminalDestroy(sessionName, panelId);
+              },
+              onCancel() {
+                showTerminalDestroyDialog = false;
+                terminalDestroySessionName = null;
+                terminalDestroyPanelId = null;
+              },
+            })
+          : null,
+
         showShareModal && shareServiceName
           ? m(ShareModal, {
               serviceName: shareServiceName,
               onClose() {
                 showShareModal = false;
                 shareServiceName = null;
+              },
+            })
+          : null,
+
+        layoutDialogMode !== null
+          ? m(LayoutDialog, {
+              mode: layoutDialogMode,
+              layouts: availableLayouts,
+              activeSlug: getActiveLayoutSlug(),
+              onConfirm(value: string) {
+                const mode = layoutDialogMode;
+                layoutDialogMode = null;
+                if (mode === "save") {
+                  void saveLayoutUnderName(value);
+                } else if (mode === "load") {
+                  void switchToLayout(value);
+                } else if (mode === "delete") {
+                  void deleteLayoutBySlug(value);
+                }
+              },
+              onCancel() {
+                layoutDialogMode = null;
               },
             })
           : null,

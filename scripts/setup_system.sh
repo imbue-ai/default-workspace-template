@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared system-toolchain setup for forever-claude-template hosts.
+# Shared system-toolchain setup for default-workspace-template hosts.
 #
 # Installs the repo-independent toolchain: system packages, language runtimes,
 # and pinned CLIs. This is the single source of truth for that setup -- the
@@ -21,7 +21,7 @@ provision_skip_if_done setup_system
 : "${CLAUDE_CODE_VERSION:=2.1.160}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${NODE_MAJOR:=20}"
-: "${LATCHKEY_VERSION:=2.19.1}"
+: "${LATCHKEY_VERSION:=2.20.0}"
 : "${FRANKWEILER_VERSION:=v0.16.0}"
 
 # System packages (tini for signal handling; supervisor runs our background
@@ -88,7 +88,7 @@ fi
 if ! grep -q '/root/.local/bin' /root/.bashrc 2>/dev/null; then
     echo 'PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
 fi
-printf '%s\n' 'PATH="/root/.local/bin:$PATH"' > /etc/profile.d/fct_path.sh
+printf '%s\n' 'PATH="/root/.local/bin:$PATH"' > /etc/profile.d/default_workspace_template_path.sh
 
 # Source /mngr/env (when present) for interactive bash sessions so terminals can
 # run mngr commands without manual setup.
@@ -125,9 +125,9 @@ uv tool install "modal==${MODAL_VERSION}"
 # ~/.local/bin (already on PATH) -- FRANKWEILER_LIBC=musl so they run as-is
 # regardless of the base image's libc. The agent drives these via the `datalib`
 # skill; web-API sources authenticate through the same latchkey gateway as
-# everything else. FRANKWEILER_ROOT (the data root) is set on the agent env in
-# .mngr/settings.toml. install.sh is fetched at the pinned tag so the whole
-# install is reproducible.
+# everything else. FRANKWEILER_CONFIG (the config path, whose parent is the data
+# root) is set on the agent env in .mngr/settings.toml. install.sh is fetched at
+# the pinned tag so the whole install is reproducible.
 curl -LsSf "https://raw.githubusercontent.com/imbue-ai/datalib/${FRANKWEILER_VERSION}/scripts/install.sh" \
     | FRANKWEILER_VERSION="${FRANKWEILER_VERSION}" FRANKWEILER_LIBC=musl FRANKWEILER_INSTALL_DIR=/root/.local/bin sh
 

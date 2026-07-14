@@ -1,9 +1,14 @@
 """Tests for the Flask server."""
 
+import io
 import json
+import os
 import queue
+import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
 from flask import Flask
@@ -12,6 +17,7 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.errors import AgentStartError
+from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
@@ -24,12 +30,18 @@ from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
+from imbue.system_interface.testing import RecordingMngrMessenger
+from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
-_WS_RECEIVE_TIMEOUT = 5.0
+# Generous: the first receive occasionally exceeded the previous 5.0s cap on a
+# loaded machine (~1-in-8 locally, failing as ``json.loads(None)``) even though
+# passing runs complete in well under a second -- the wait is pure scheduling
+# delay, so a bigger cap costs nothing when healthy.
+_WS_RECEIVE_TIMEOUT = 15.0
 
 
 @pytest.fixture
@@ -39,7 +51,7 @@ def config() -> Config:
 
 @pytest.fixture
 def app(config: Config) -> Flask:
-    return create_application(config)
+    return create_application(build_test_state(config=config))
 
 
 @pytest.fixture
@@ -54,7 +66,7 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
     (static_dir / "index.html").write_text("<html><body>test</body></html>")
 
     with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application().test_client()
+        test_client = create_application(build_test_state()).test_client()
         response = test_client.get("/")
         assert response.status_code == 200
         assert "test" in response.text
@@ -66,7 +78,7 @@ def test_index_returns_not_built_when_no_static(client: FlaskClient, tmp_path: P
     empty_dir.mkdir()
 
     with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application().test_client()
+        test_client = create_application(build_test_state()).test_client()
         response = test_client.get("/")
         assert response.status_code == 200
         assert "npm run build" in response.text
@@ -105,6 +117,80 @@ def test_send_message_for_unknown_agent(client: FlaskClient) -> None:
     with patch("imbue.system_interface.server.discover_agents", return_value=[]):
         response = client.post("/api/agents/nonexistent/message", json={"message": "hello"})
     assert response.status_code == 404
+
+
+def _upload_relative_path(stored_path: str) -> str:
+    """Extract the ``<subdir>/<name>`` part of an absolute upload path."""
+    return stored_path.split("/uploads/", 1)[1]
+
+
+def test_upload_attachment_stores_file_and_returns_path(client: FlaskClient) -> None:
+    """Uploading a file stores it under uploads/ and returns its path and size."""
+    response = client.post(
+        "/api/uploads",
+        data={"file": (io.BytesIO(b"image-bytes"), "diagram.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 201
+    data = response.get_json()
+    assert "/uploads/" in data["path"]
+    assert data["path"].endswith("/diagram.png")
+    assert data["size"] == len(b"image-bytes")
+    assert Path(data["path"]).read_bytes() == b"image-bytes"
+
+
+def test_upload_attachment_without_file_returns_400(client: FlaskClient) -> None:
+    """Posting with no file part is a 400."""
+    response = client.post("/api/uploads", data={}, content_type="multipart/form-data")
+
+    assert response.status_code == 400
+
+
+def test_serve_attachment_returns_stored_bytes(client: FlaskClient) -> None:
+    """A stored attachment can be fetched back for preview."""
+    upload = client.post(
+        "/api/uploads",
+        data={"file": (io.BytesIO(b"hello-bytes"), "note.txt")},
+        content_type="multipart/form-data",
+    )
+    relative_path = _upload_relative_path(upload.get_json()["path"])
+
+    response = client.get(f"/api/uploads/{relative_path}")
+
+    assert response.status_code == 200
+    assert response.data == b"hello-bytes"
+
+
+def test_serve_attachment_missing_returns_404(client: FlaskClient) -> None:
+    """Fetching an unknown attachment is a 404."""
+    response = client.get("/api/uploads/deadbeef/missing.png")
+
+    assert response.status_code == 404
+
+
+def test_delete_attachment_removes_stored_file(client: FlaskClient) -> None:
+    """Deleting an attachment removes it from disk and from later fetches."""
+    upload = client.post(
+        "/api/uploads",
+        data={"file": (io.BytesIO(b"bye-bytes"), "remove-me.txt")},
+        content_type="multipart/form-data",
+    )
+    stored_path = upload.get_json()["path"]
+    relative_path = _upload_relative_path(stored_path)
+
+    delete_response = client.delete(f"/api/uploads/{relative_path}")
+
+    assert delete_response.status_code == 200
+    assert not Path(stored_path).exists()
+    assert client.get(f"/api/uploads/{relative_path}").status_code == 404
+
+
+def test_delete_attachment_missing_is_ok(client: FlaskClient) -> None:
+    """Deleting an unknown attachment still reports success (idempotent)."""
+    response = client.delete("/api/uploads/deadbeef/missing.png")
+
+    assert response.status_code == 200
 
 
 def test_get_events_with_session_files(client: FlaskClient, tmp_path: Path) -> None:
@@ -257,7 +343,7 @@ def test_get_events_caps_initial_load_to_tail(client: FlaskClient, tmp_path: Pat
         assert len(zero_limit.get_json()["events"]) == _DEFAULT_TAIL_COUNT
 
 
-def test_send_message_success(client: FlaskClient) -> None:
+def test_send_message_success() -> None:
     """Sending a message to a known agent addresses it by id and succeeds."""
     agent_id = "agent-00000000000000000000000000000001"
     agent_info = AgentInfo(
@@ -267,19 +353,17 @@ def test_send_message_success(client: FlaskClient) -> None:
         agent_state_dir=Path("/tmp/test"),
         claude_config_dir=Path("/tmp/.claude"),
     )
-    with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch("imbue.system_interface.agent_manager.send_message", return_value=True) as mock_send,
-    ):
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hello"})
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "ok"
-    assert mock_send.call_count == 1
     # The endpoint routes through AgentManager.send_message_to_agent, which addresses
-    # the agent by id and supplies the live cache's known location as the 3rd arg.
-    assert mock_send.call_args.args[0] == agent_id
-    assert mock_send.call_args.args[1] == "hello"
+    # the agent by id (the live cache supplies the known location as the 3rd arg).
+    assert messenger.sent == [(agent_id, "hello")]
 
 
 def test_interrupt_agent_returns_404_for_unknown_agent(client: FlaskClient) -> None:
@@ -384,56 +468,287 @@ def test_interrupt_agent_returns_500_on_failure(client: FlaskClient) -> None:
     assert response.get_json()["detail"] == "Failed to interrupt agent 'claude-agent': mngr start failed"
 
 
-def test_get_layout_returns_404_when_no_layout_saved(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Getting layout returns 404 when no layout file exists."""
+def test_list_layouts_exposes_defaults(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fresh workspace lists the two default layout names, both empty."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    response = client.get("/api/layout")
+    response = client.get("/api/layouts")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert [layout["slug"] for layout in body["layouts"]] == ["desktop", "mobile"]
+    assert all(layout["has_content"] is False for layout in body["layouts"])
+    assert body["last_active_slug"] == "desktop"
+
+
+def test_get_empty_layout_returns_null_content(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registered-but-never-saved layout reports null content (fresh state)."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    response = client.get("/api/layouts/mobile")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"slug": "mobile", "display_name": "mobile", "layout": None}
+
+
+def test_get_unknown_layout_returns_404(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    response = client.get("/api/layouts/nonexistent")
 
     assert response.status_code == 404
 
 
-def test_save_and_get_layout(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Saving and retrieving a layout round-trips correctly."""
+def test_autosave_and_get_layout_round_trips(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
 
     layout_data = {"dockview": {"panels": {}}, "panelParams": {"chat-1": {"panelType": "chat"}}}
-
-    save_response = client.post("/api/layout", json=layout_data)
+    save_response = client.post("/api/layouts/desktop", json={"layout": layout_data, "client_id": "client-1"})
     assert save_response.status_code == 200
     assert save_response.get_json()["status"] == "ok"
 
-    get_response = client.get("/api/layout")
+    get_response = client.get("/api/layouts/desktop")
     assert get_response.status_code == 200
-    assert get_response.get_json() == layout_data
+    assert get_response.get_json()["layout"] == layout_data
+    assert (tmp_path / "agents" / "agent-123" / "workspace_layout" / "layouts" / "desktop.json").exists()
 
 
-def test_save_layout_creates_directory(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Saving a layout creates the workspace_layout directory if needed."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-
-    client.post("/api/layout", json={"test": True})
-
-    assert (tmp_path / "agents" / "agent-123" / "workspace_layout" / "layout.json").exists()
-
-
-def test_save_layout_rejects_invalid_json(
+def test_autosave_unknown_layout_returns_404(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Saving invalid JSON returns 400."""
+    """An autosave against a just-deleted layout must not resurrect it."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    response = client.post("/api/layouts/gone", json={"layout": {}, "client_id": "client-1"})
+
+    assert response.status_code == 404
+
+
+def test_save_layout_as_creates_and_reports_slug(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Save-as slugifies the display name server-side and registers the layout."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
     response = client.post(
-        "/api/layout",
-        data=b"not valid json",
-        content_type="application/json",
+        "/api/layouts",
+        json={"display_name": "My Fancy Setup!", "layout": {"dockview": {}}, "client_id": "client-1"},
     )
+    assert response.status_code == 200
+    assert response.get_json() == {"slug": "my-fancy-setup", "display_name": "My Fancy Setup!"}
+
+    list_response = client.get("/api/layouts")
+    slugs = [layout["slug"] for layout in list_response.get_json()["layouts"]]
+    assert "my-fancy-setup" in slugs
+
+
+def test_save_layout_as_rejects_slug_conflict(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two different display names that shorten to the same slug conflict."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    first = client.post("/api/layouts", json={"display_name": "My Setup", "layout": {}, "client_id": "c1"})
+    assert first.status_code == 200
+    second = client.post("/api/layouts", json={"display_name": "my setup", "layout": {}, "client_id": "c1"})
+
+    assert second.status_code == 409
+    assert "conflicts" in second.get_json()["detail"]
+
+
+def test_save_layout_as_rejects_unusable_name(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    response = client.post("/api/layouts", json={"display_name": "!!!", "layout": {}, "client_id": "c1"})
 
     assert response.status_code == 400
+
+
+def test_delete_layout_and_last_layout_guard(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting works down to the last layout, which is protected."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    delete_mobile = client.post("/api/layouts/mobile/delete")
+    assert delete_mobile.status_code == 200
+    assert delete_mobile.get_json()["fallback_layout_slug"] == "desktop"
+
+    delete_last = client.post("/api/layouts/desktop/delete")
+    assert delete_last.status_code == 409
+
+    delete_unknown = client.post("/api/layouts/mobile/delete")
+    assert delete_unknown.status_code == 404
+
+
+def test_legacy_layout_json_migrates_to_desktop(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-named-layouts layout.json becomes the desktop layout's content."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    layout_dir = tmp_path / "agents" / "agent-123" / "workspace_layout"
+    layout_dir.mkdir(parents=True)
+    legacy_content = {"dockview": {"panels": {}}, "panelParams": {"chat-old": {"panelType": "chat"}}}
+    (layout_dir / "layout.json").write_text(json.dumps(legacy_content))
+
+    response = client.get("/api/layouts/desktop")
+
+    assert response.status_code == 200
+    assert response.get_json()["layout"] == legacy_content
+    assert not (layout_dir / "layout.json").exists()
+    assert (layout_dir / "layout.json.migrated").exists()
+
+
+def test_send_message_records_client_activity_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A message POST carrying client metadata appends a message event."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    messenger = RecordingMngrMessenger(sent=[], succeeds=True)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    app = create_application(build_test_state(agent_manager=manager))
+    chat_agent_id = "agent-00000000000000000000000000000002"
+    agent_info = AgentInfo(
+        id=chat_agent_id,
+        name="chat-agent",
+        state="RUNNING",
+        agent_state_dir=tmp_path / "agents" / chat_agent_id,
+        claude_config_dir=tmp_path / ".claude",
+    )
+    try:
+        test_client = app.test_client()
+        with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+            response = test_client.post(
+                f"/api/agents/{chat_agent_id}/message",
+                json={
+                    "message": "hello " + "x" * 600,
+                    "client_id": "client-7",
+                    "active_layout": "mobile",
+                    "device_kind": "mobile",
+                },
+            )
+        assert response.status_code == 200
+
+        events_path = (
+            tmp_path / "agents" / "agent-123" / "workspace_layout" / "events" / "client_activity" / "events.jsonl"
+        )
+        assert events_path.exists()
+        event = json.loads(events_path.read_text().splitlines()[0])
+        assert event["type"] == "message"
+        assert event["client_id"] == "client-7"
+        assert event["layout_slug"] == "mobile"
+        assert event["device_kind"] == "mobile"
+        assert event["agent_name"] == "chat-agent"
+        assert event["is_message_truncated"] is True
+        assert len(event["message_text"]) == 500
+    finally:
+        manager.stop()
+
+
+def test_terminal_banner_defaults_to_not_dismissed(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no saved preference, the terminal banner reports not-dismissed."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    response = client.get("/api/terminals/banner-dismissed")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"dismissed": False}
+
+
+def test_terminal_banner_dismissal_round_trips(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persisted "never show again" is reflected on the next read."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    post_response = client.post("/api/terminals/banner-dismissed", json={"dismissed": True})
+    assert post_response.status_code == 200
+    assert post_response.get_json()["dismissed"] is True
+
+    get_response = client.get("/api/terminals/banner-dismissed")
+    assert get_response.get_json() == {"dismissed": True}
+
+
+def test_destroy_terminal_refuses_agent_prefixed_session(client: FlaskClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The destroy endpoint never kills an mngr agent's tmux session."""
+    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
+    response = client.post("/api/terminals/mngr-alice/destroy")
+
+    assert response.status_code == 400
+
+
+def test_terminal_notify_rejects_unknown_kind(client: FlaskClient) -> None:
+    """An unrecognized notify kind is a 400."""
+    response = client.post("/api/terminals/notify", json={"kind": "bogus"})
+
+    assert response.status_code == 400
+
+
+def test_terminal_notify_session_renamed_broadcasts(client: FlaskClient) -> None:
+    """A rename notification always broadcasts (matched by session_id downstream)."""
+    response = client.post(
+        "/api/terminals/notify",
+        json={"kind": "session-renamed", "session_name": "terminal-2", "session_id": "$4"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "broadcast": True}
+
+
+def test_terminal_notify_session_changed_skips_when_client_unresolved(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session switch from a client with no ttyd mapping does not broadcast."""
+    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
+    response = client.post(
+        "/api/terminals/notify",
+        json={
+            "kind": "session-changed",
+            "client_tty": "/dev/pts/9",
+            "session_name": "terminal-1",
+            "session_id": "$3",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "broadcast": False}
+
+
+def test_terminal_notify_session_changed_resolves_terminal_id_from_clients_map(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session switch broadcasts once the client tty maps to a known terminal tab."""
+    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
+    clients_dir = tmp_path / "commands" / "ttyd" / "clients"
+    clients_dir.mkdir(parents=True)
+    (clients_dir / "term-xyz").write_text("/dev/pts/7\n")
+
+    response = client.post(
+        "/api/terminals/notify",
+        json={
+            "kind": "session-changed",
+            "client_tty": "/dev/pts/7",
+            "session_name": "terminal-1",
+            "session_id": "$3",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "broadcast": True}
 
 
 def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
@@ -443,7 +758,7 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
     (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
 
     with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application().test_client()
+        test_client = create_application(build_test_state()).test_client()
         response = test_client.get("/")
         assert response.status_code == 200
         assert "system-interface-hostname" in response.text
@@ -462,7 +777,7 @@ def test_create_chat_agent_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> 
     """Creating a chat agent without a primary agent work dir returns 400."""
     monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
     monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
-    test_client = create_application().test_client()
+    test_client = create_application(build_test_state()).test_client()
     response = test_client.post(
         "/api/agents/create-chat",
         json={"name": "test-chat"},
@@ -495,33 +810,169 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert "applications_updated" in types
 
 
-@pytest.mark.timeout(15)
-def test_layout_broadcast_open_emits_ws_message(app: Flask) -> None:
-    """POST /api/layout/broadcast with op=open emits a layout_op WS message."""
+def _next_broadcast_message(client_queue: "queue.Queue[str | None]") -> dict[str, Any]:
+    """Pop the next broadcast off a fake client's queue as a parsed object."""
+    raw_message = client_queue.get_nowait()
+    assert raw_message is not None
+    parsed = json.loads(raw_message)
+    assert isinstance(parsed, dict)
+    return parsed
+
+
+def _register_fake_client(app: Flask, client_id: str, layout_slug: str) -> "queue.Queue[str | None]":
+    """Register a fake WS client on ``layout_slug`` and return its message queue.
+
+    Deterministic stand-in for the real WebSocket registration path: broadcast
+    messages land in the returned queue, so tests can assert targeted delivery
+    without a live socket or timing.
+    """
+    broadcaster = state_of(app).broadcaster
+    client_queue = broadcaster.register()
+    broadcaster.set_client_info(client_queue, client_id, layout_slug, "desktop")
+    return client_queue
+
+
+def test_layout_broadcast_open_emits_targeted_ws_message(app: Flask) -> None:
+    """op=open reaches exactly the clients whose active layout matches --layout."""
+    matching_queue = _register_fake_client(app, "client-on-desktop", "desktop")
+    other_queue = _register_fake_client(app, "client-on-mobile", "mobile")
+
     client = app.test_client()
-    with serve_app(app) as served:
-        ws = open_ws(served, "/api/ws")
-        try:
-            # Drain the initial snapshot messages.
-            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
-            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+    response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "open", "args": {"ref": "service:web", "layout": "desktop"}, "agent_id": "agent-42"},
+    )
+    assert response.status_code == 200
 
-            response = client.post(
-                "/api/layout/broadcast",
-                json={"op": "open", "args": {"ref": "service:web"}, "agent_id": "agent-42"},
-            )
-            assert response.status_code == 200
-
-            msg = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
-        finally:
-            close_ws(ws)
-
+    msg = _next_broadcast_message(matching_queue)
+    # The internal ``layout`` targeting arg is stripped before broadcast.
     assert msg == {
         "type": "layout_op",
         "op": "open",
         "args": {"ref": "service:web"},
         "requester_agent_id": "agent-42",
     }
+    assert other_queue.empty()
+
+
+def test_layout_broadcast_mutating_op_requires_layout(app: Flask) -> None:
+    """A mutating op without a target layout is a 400."""
+    _register_fake_client(app, "client-1", "desktop")
+    client = app.test_client()
+    response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "open", "args": {"ref": "service:web"}, "agent_id": "agent-42"},
+    )
+    assert response.status_code == 400
+    assert "requires a target layout" in response.get_json()["detail"]
+
+
+def test_layout_broadcast_mutating_op_without_matching_client_is_412(app: Flask) -> None:
+    """With no connected client on the target layout, the op fails loudly."""
+    _register_fake_client(app, "client-1", "desktop")
+    client = app.test_client()
+    response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "open", "args": {"ref": "service:web", "layout": "mobile"}, "agent_id": "agent-42"},
+    )
+    assert response.status_code == 412
+    assert "No connected client has layout" in response.get_json()["detail"]
+
+
+def test_layout_broadcast_mutating_op_unknown_layout_is_404(app: Flask) -> None:
+    client = app.test_client()
+    response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "open", "args": {"ref": "service:web", "layout": "no-such-layout"}, "agent_id": "agent-42"},
+    )
+    assert response.status_code == 404
+    assert "known layouts" in response.get_json()["detail"]
+
+
+def _isolated_client_activity_events_path() -> Path:
+    """The client-activity events file inside the autouse-isolated MNGR_HOST_DIR."""
+    return (
+        Path(os.environ["MNGR_HOST_DIR"])
+        / "agents"
+        / os.environ["MNGR_AGENT_ID"]
+        / "workspace_layout"
+        / "events"
+        / "client_activity"
+        / "events.jsonl"
+    )
+
+
+def test_layout_broadcast_load_targets_recent_messager(app: Flask) -> None:
+    """``load`` resolves the requesting client from the message-event log."""
+    events_path = _isolated_client_activity_events_path()
+    client_activity.append_message_event(
+        events_path,
+        client_id="client-7",
+        device_kind="mobile",
+        layout_slug="desktop",
+        agent_id="agent-42",
+        agent_name="chat-agent",
+        message_text="set up my mobile layout",
+    )
+    listener_queue = _register_fake_client(app, "client-7", "desktop")
+
+    client = app.test_client()
+    response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "load", "args": {"layout": "mobile"}, "agent_id": "agent-42"},
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["layout"] == "mobile"
+    assert body["target_client_id"] == "client-7"
+
+    msg = _next_broadcast_message(listener_queue)
+    assert msg == {
+        "type": "load_layout",
+        "layout_slug": "mobile",
+        "display_name": "mobile",
+        "target_client_id": "client-7",
+    }
+
+
+def test_layout_broadcast_load_unknown_layout_is_404(app: Flask) -> None:
+    client = app.test_client()
+    response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "load", "args": {"layout": "no-such-layout"}, "agent_id": "agent-42"},
+    )
+    assert response.status_code == 404
+
+
+def test_layout_broadcast_context_summarizes_clients(app: Flask) -> None:
+    """``context`` folds the event log + live registry into per-client summaries."""
+    events_path = _isolated_client_activity_events_path()
+    client_activity.append_message_event(
+        events_path,
+        client_id="client-7",
+        device_kind="mobile",
+        layout_slug="desktop",
+        agent_id="agent-42",
+        agent_name="chat-agent",
+        message_text="hello there",
+    )
+    # The live registry says the client has since switched to mobile; it
+    # overrides the event-derived layout.
+    _register_fake_client(app, "client-7", "mobile")
+
+    client = app.test_client()
+    response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "context", "args": {}, "agent_id": "agent-42"},
+    )
+    assert response.status_code == 200
+    clients = response.get_json()["clients"]
+    assert len(clients) == 1
+    summary = clients[0]
+    assert summary["client_id"] == "client-7"
+    assert summary["current_layout"] == "mobile"
+    assert summary["is_connected"] is True
+    assert summary["recent_messages"][0]["text"] == "hello there"
 
 
 @pytest.mark.timeout(15)
@@ -583,7 +1034,6 @@ def test_layout_broadcast_reload_system_interface_emits_ws_message(app: Flask) -
     }
 
 
-@pytest.mark.timeout(15)
 def test_layout_broadcast_open_terminal_allocates_panel_id_and_returns_ref(app: Flask) -> None:
     """``open service:terminal`` is the synchronous-ref-return path.
 
@@ -593,26 +1043,18 @@ def test_layout_broadcast_open_terminal_allocates_panel_id_and_returns_ref(app: 
     returns the ref in the HTTP response. Every other op leaves the
     args dict alone and returns just ``{ok: true}``.
     """
+    listener_queue = _register_fake_client(app, "client-1", "desktop")
     client = app.test_client()
-    with serve_app(app) as served:
-        ws = open_ws(served, "/api/ws")
-        try:
-            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
-            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+    response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "open", "args": {"ref": "service:terminal", "layout": "desktop"}, "agent_id": "agent-42"},
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    ref = body["ref"]
+    assert ref.startswith("terminal:")
 
-            response = client.post(
-                "/api/layout/broadcast",
-                json={"op": "open", "args": {"ref": "service:terminal"}, "agent_id": "agent-42"},
-            )
-            assert response.status_code == 200
-            body = response.get_json()
-            ref = body["ref"]
-            assert ref.startswith("terminal:")
-
-            msg = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
-        finally:
-            close_ws(ws)
-
+    msg = _next_broadcast_message(listener_queue)
     assert msg["op"] == "open"
     assert msg["requester_agent_id"] == "agent-42"
     # The frontend must receive the same panel id the server returned
@@ -622,16 +1064,74 @@ def test_layout_broadcast_open_terminal_allocates_panel_id_and_returns_ref(app: 
     assert msg["args"]["ref"] == "service:terminal"
 
 
-def test_layout_broadcast_open_non_terminal_returns_no_ref(client: FlaskClient) -> None:
+def test_layout_broadcast_open_non_terminal_returns_no_ref(app: Flask) -> None:
     """Non-terminal opens must NOT carry a ``ref`` in the response: the
     CLI uses presence-of-ref to decide whether to print to stdout, and a
     stray ref on a regular service open would mislead callers."""
+    _register_fake_client(app, "client-1", "desktop")
+    client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:web"}, "agent_id": "agent-42"},
+        json={"op": "open", "args": {"ref": "service:web", "layout": "desktop"}, "agent_id": "agent-42"},
     )
     assert response.status_code == 200
     assert "ref" not in response.get_json()
+
+
+@pytest.mark.timeout(15)
+def test_ws_client_state_registration_enables_targeted_ops(app: Flask) -> None:
+    """A real client_state message over the WebSocket registers the client.
+
+    Exercises the receive-poll path in the broadcast loop end to end: before
+    registration a desktop-targeted op is a 412; after the loop processes the
+    registration (at most one queue-poll later) the same op succeeds and the
+    layout_op arrives on this socket.
+    """
+    client = app.test_client()
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            # Drain the initial snapshot messages.
+            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+
+            ws.send(
+                json.dumps(
+                    {
+                        "type": "client_state",
+                        "client_id": "client-9",
+                        "active_layout": "desktop",
+                        "device_kind": "desktop",
+                    }
+                )
+            )
+            # Retry the op until the registration lands, using the socket's
+            # own receive timeout as the pacing delay (no time.sleep).
+            deadline = time.monotonic() + 10.0
+            status_code = 0
+            while time.monotonic() < deadline:
+                response = client.post(
+                    "/api/layout/broadcast",
+                    json={
+                        "op": "focus",
+                        "args": {"ref": "chat:someone", "layout": "desktop"},
+                        "agent_id": "agent-42",
+                    },
+                )
+                status_code = response.status_code
+                if status_code == 200:
+                    break
+                assert status_code == 412
+                ws.receive(timeout=0.05)
+            assert status_code == 200
+
+            msg = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+        finally:
+            close_ws(ws)
+
+    assert msg["type"] == "layout_op"
+    assert msg["op"] == "focus"
+    assert msg["args"] == {"ref": "chat:someone"}
 
 
 def test_layout_broadcast_rejects_non_loopback(client: FlaskClient) -> None:
@@ -697,7 +1197,7 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
         )
     manager._ensure_activity_tracking(agent_id)
 
-    app = create_application(agent_manager=manager)
+    app = create_application(build_test_state(agent_manager=manager))
     agent_info = AgentInfo(
         id=agent_id,
         name="seed-agent",
@@ -761,10 +1261,11 @@ def test_layout_broadcast_mutex_returns_409_with_holder_metadata(app: Flask) -> 
     held = mutex.try_acquire("agent-a", "move", {"ref": "service:web"})
     assert held is None
 
+    _register_fake_client(app, "client-1", "desktop")
     client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
-        json={"op": "split", "args": {"ref": "service:api"}, "agent_id": "agent-b"},
+        json={"op": "split", "args": {"ref": "service:api", "layout": "desktop"}, "agent_id": "agent-b"},
     )
     assert response.status_code == 409
     body = response.get_json()
@@ -989,3 +1490,166 @@ def test_destroy_argv_accepted_by_live_cli() -> None:
     tree, so a vendor/mngr rename of that subcommand/flag fails here at merge
     time rather than only surfacing at runtime."""
     assert_mngr_argv_valid(_build_destroy_command("demo"))
+
+
+# -- Agent file serving (markdown images + download links) --------------------
+#
+# An agent writes a file and references its absolute on-disk path in markdown;
+# the catch-all serves that file -- images inline so they render, any other file
+# as a download. These exercise the catch-all dispatch end to end via the Flask
+# test client.
+
+
+def test_serves_image_at_its_absolute_path(client: FlaskClient, tmp_path: Path) -> None:
+    """A request for an existing image file's absolute path streams its bytes inline."""
+    image_path = tmp_path / "chart.png"
+    image_bytes = b"fake-png-bytes"
+    image_path.write_bytes(image_bytes)
+
+    response = client.get(str(image_path))
+
+    assert response.status_code == 200
+    assert response.content_type == "image/png"
+    assert response.data == image_bytes
+    # Inline (rendered), not a forced download.
+    assert "attachment" not in response.headers.get("Content-Disposition", "")
+    # Cached aggressively: filenames are unique per image by convention.
+    assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+
+
+def test_serves_image_in_nested_subdirectory(client: FlaskClient, tmp_path: Path) -> None:
+    """Nested paths under the write directory are served (agents may organize per run)."""
+    nested_dir = tmp_path / "chat-images" / "run-3"
+    nested_dir.mkdir(parents=True)
+    image_path = nested_dir / "diagram.webp"
+    image_path.write_bytes(b"fake-webp-bytes")
+
+    response = client.get(str(image_path))
+
+    assert response.status_code == 200
+    assert response.content_type == "image/webp"
+
+
+def test_serves_image_with_uppercase_extension(client: FlaskClient, tmp_path: Path) -> None:
+    """Image extensions are matched case-insensitively."""
+    image_path = tmp_path / "SHOT.PNG"
+    image_path.write_bytes(b"fake-png-bytes")
+
+    response = client.get(str(image_path))
+
+    assert response.status_code == 200
+    assert response.content_type == "image/png"
+
+
+def test_serves_svg_with_hardened_headers(client: FlaskClient, tmp_path: Path) -> None:
+    """SVG is served as an image but locked down for direct navigation."""
+    image_path = tmp_path / "plot.svg"
+    image_path.write_bytes(b"<svg xmlns='http://www.w3.org/2000/svg'></svg>")
+
+    response = client.get(str(image_path))
+
+    assert response.status_code == 200
+    # Werkzeug appends "; charset=utf-8" to the XML-based svg type; harmless.
+    assert response.content_type.startswith("image/svg+xml")
+    assert response.headers["Content-Security-Policy"] == "default-src 'none'; style-src 'unsafe-inline'"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_missing_image_path_returns_404_not_app_shell(client: FlaskClient, tmp_path: Path) -> None:
+    """A typo'd image path renders a broken image (404), never the SPA shell."""
+    missing_path = tmp_path / "nope.png"
+
+    response = client.get(str(missing_path))
+
+    assert response.status_code == 404
+
+
+def test_directory_with_image_extension_returns_404(client: FlaskClient, tmp_path: Path) -> None:
+    """A directory whose name ends in an image extension is not a servable file."""
+    directory = tmp_path / "weird.png"
+    directory.mkdir()
+
+    response = client.get(str(directory))
+
+    assert response.status_code == 404
+
+
+def test_nonexistent_path_falls_through_to_app_shell(client: FlaskClient, tmp_path: Path) -> None:
+    """A path matching no file is a client-side route: it returns the app shell, not a 404.
+
+    Only paths that resolve to a real file are served; everything else falls
+    through so the single-page-app's client-side routing keeps working.
+    """
+    response = client.get(str(tmp_path / "some" / "client" / "route"))
+
+    assert response.status_code == 200
+    assert "text/html" in response.content_type
+
+
+def test_serves_image_with_spaces_in_filename(client: FlaskClient, tmp_path: Path) -> None:
+    """A descriptive filename with spaces (percent-encoded in the URL) still serves.
+
+    The whole feature relies on the framework percent-decoding the catch-all path
+    before the handler reconstructs the on-disk path; pin that for a filename an
+    agent told to use 'descriptive' names could realistically produce.
+    """
+    image_path = tmp_path / "my chart 2026.png"
+    image_bytes = b"fake-png-bytes"
+    image_path.write_bytes(image_bytes)
+
+    response = client.get(quote(str(image_path)))
+
+    assert response.status_code == 200
+    assert response.content_type == "image/png"
+    assert response.data == image_bytes
+
+
+def test_serves_image_with_unicode_filename(client: FlaskClient, tmp_path: Path) -> None:
+    """A non-ASCII filename (percent-encoded in the URL) serves the right bytes."""
+    image_path = tmp_path / "gráfico.png"
+    image_bytes = b"fake-png-bytes"
+    image_path.write_bytes(image_bytes)
+
+    response = client.get(quote(str(image_path)))
+
+    assert response.status_code == 200
+    assert response.data == image_bytes
+
+
+def test_serves_non_image_file_as_download(client: FlaskClient, tmp_path: Path) -> None:
+    """A non-image file is served as an attachment (download), not rendered inline."""
+    file_path = tmp_path / "q4-report.pdf"
+    file_bytes = b"%PDF-1.4 fake-pdf-bytes"
+    file_path.write_bytes(file_bytes)
+
+    response = client.get(str(file_path))
+
+    assert response.status_code == 200
+    assert response.data == file_bytes
+    disposition = response.headers.get("Content-Disposition", "")
+    assert "attachment" in disposition
+    assert "q4-report.pdf" in disposition
+    # Downloaded, not sniffed into an inline-executable type.
+    assert response.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+def test_serves_extensionless_file_as_download(client: FlaskClient, tmp_path: Path) -> None:
+    """A file with no extension is still served as a download when it exists."""
+    file_path = tmp_path / "server-log"
+    file_bytes = b"line one\nline two\n"
+    file_path.write_bytes(file_bytes)
+
+    response = client.get(str(file_path))
+
+    assert response.status_code == 200
+    assert response.data == file_bytes
+    assert "attachment" in response.headers.get("Content-Disposition", "")
+
+
+def test_missing_non_image_path_is_not_a_download(client: FlaskClient, tmp_path: Path) -> None:
+    """A non-image path with no file behind it falls through to the app shell, not a download."""
+    response = client.get(str(tmp_path / "does-not-exist.pdf"))
+
+    assert response.status_code == 200
+    assert "text/html" in response.content_type
+    assert "attachment" not in response.headers.get("Content-Disposition", "")
