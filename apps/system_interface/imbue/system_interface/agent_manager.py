@@ -351,9 +351,12 @@ class AgentManager:
     # each new assist chat exactly once without reopening it on later snapshots.
     _auto_opened_assist_ids: set[str]
     # Re-tags chat agents' OOM ``oom_score_adj`` from live UI activity (open /
-    # visible / recently-messaged). Fed by the ``/api/activity`` endpoint (via
-    # ``record_activity``) and reapplied each lifecycle-poll tick so a revived
-    # chat's freshly-spawned process is tagged despite the launch race.
+    # visible / recently-messaged). Driven purely by the ``/api/activity`` endpoint
+    # (via ``record_activity``): a chat launches at the expendable band and is
+    # protected only as engagement is reported, so no periodic re-tag is needed.
+    # The messaged-revive path is race-free without one -- the send blocks until
+    # the revived process is ready (and its pid is registered before that), and the
+    # frontend posts activity only after the send returns.
     _oom_prioritizer: ChatOomPrioritizer
 
     @classmethod
@@ -963,10 +966,6 @@ class AgentManager:
         while not self._lifecycle_poll_stop.wait(timeout=_LIFECYCLE_POLL_INTERVAL_SECONDS):
             try:
                 self._poll_lifecycle_states()
-                # Re-apply chat OOM bands each tick so a chat revived since the last
-                # activity report (its process spawned a beat after the message) is
-                # tagged, and a chat whose process just exited is dropped.
-                self._oom_prioritizer.reapply()
             except (OSError, ValueError, RuntimeError, MngrError) as e:
                 _loguru_logger.opt(exception=e).warning("Lifecycle poll iteration failed (continuing)")
 

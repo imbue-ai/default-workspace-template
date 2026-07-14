@@ -16,9 +16,17 @@ excluded by the caller's ``list_chat_agent_ids`` (they keep their launch bands -
 workers stay maximally expendable, the primary stays pinned), so opening,
 switching to, or messaging one of them never moves its score. A chat with no live
 process (dormant, revives on its next message) is simply skipped until its
-process exists; ``reapply`` is called both on every activity report and from the
-agent manager's lifecycle poll so a revived chat lands on the right band despite
-the launch race.
+process exists.
+
+Re-tagging is purely event-driven: ``reapply`` runs on every ``/api/activity``
+report and nowhere else. No periodic re-tag is needed because a chat *launches*
+at the most-expendable band (see ``oom_priority.bands``) and is only ever
+*protected* by a reported engagement -- so a chat that is never reported (dormant,
+or messaged outside the UI) safely stays maximally expendable rather than
+over-protected. The messaged-revive path is race-free without a poll: the send
+blocks until the revived process is ready (and the launch wrapper registers its
+pid before that), and the frontend reports activity only after the send returns,
+so ``reapply``'s pid lookup finds the live process.
 
 The band arithmetic lives in ``oom_priority.bands`` (the stdlib-only, testable
 policy); this engine only holds the activity state and drives the writes. All

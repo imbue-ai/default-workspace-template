@@ -16,14 +16,19 @@ into one of a few bands.
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
   services (`SERVICE_BANDS`, 10-70) < user-created services (`USER_SERVICE`, 200)
   < user agent (300) < worker agent (600) < agent subprocess (900) < shared
-  browser (1000). Bands are positive-only: a negative value (true "never kill")
+  browser (1000). Chat agents occupy a *dynamic* sub-range, `CHAT_AGENT_FLOOR`
+  (300, = an engaged chat) to `CHAT_AGENT_BASE` (560, an idle chat), always
+  between the service bands and the worker band; the system_interface prioritizer
+  moves a chat within it from live UI engagement (see "Dynamic chat band" below).
+  Bands are positive-only: a negative value (true "never kill")
   needs `CAP_SYS_RESOURCE`, which the container does not have, so the never-kill
   infrastructure (sshd, supervisord, earlyoom, tini, tmux) simply keeps the
   inherited default of 0 and is additionally shielded by earlyoom `--avoid`. The
   service order is a best-effort steer, not a hard guarantee -- see "Protection
   is soft" below.
-- **`agent_identity`** -- decides whether an agent is a user or worker agent
-  (from its label), used by the launch wrapper to pick the band.
+- **`agent_identity`** -- classifies an agent from its label (primary, chat, or
+  worker), used by the launch wrapper to pick the band. An agent whose record
+  can't be read matches none of these and is tagged least-protected (worker band).
 - **`registry`** -- one file per agent recording its main-process pid, so a
   killed pid can be mapped back to "which agent" (earlyoom's after-kill hook is
   handed only a pid that is already gone).
@@ -37,7 +42,7 @@ without inspecting the process tree:
 | never-kill infra (sshd, supervisord, earlyoom, tini, tmux) | (inherited) | protected (0) | nothing -- 0 is the default, plus earlyoom `--avoid` |
 | a built-in supervisord service | launch | its `SERVICE_BANDS` value | `scripts/oom_tag_service.py <service>` (command prefix) |
 | a user-created supervisord service | launch | user service (above every built-in) | `scripts/oom_tag_service.py user` (command prefix) |
-| an agent's main process | launch | user / worker agent | `scripts/claude_oom_launch.py` |
+| an agent's main process | launch | chat -> expendable chat band (560); worker or unidentifiable -> worker agent | `scripts/claude_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `scripts/claude_oom_tag_subprocess.py` (PreToolUse) |
 | a shared browser | launch | 1000 (the ceiling) | inline `oom_score_adj` write in the `browser` program |
 
@@ -66,6 +71,31 @@ Because the band and pid survive `execve`, the tagged process *is* the claude
 process, so its band is set before any subprocess exists. A subprocess inherits its
 agent's band by default; the PreToolUse hook raises it the rest of the way so a
 runaway build/test/browser is always shed first.
+
+## Dynamic chat band
+
+Every agent's band is set once at launch and never changes -- with one exception:
+**chat agents**. A chat is a user-facing agent (`user_created` label), and how
+expendable it should be depends on how engaged the user is with it, which is only
+known at runtime. So the launch wrapper tags a chat at `CHAT_AGENT_BASE` (the
+*most*-expendable chat band, 560), and the system_interface `ChatOomPrioritizer`
+re-tags it downward toward the protected floor (`CHAT_AGENT_FLOOR`, 300) as the
+user engages: `oom_score_adj` is a function of whether the chat's tab is open,
+whether it is visible, and how recently it was messaged relative to other chats.
+
+Starting at the expendable end is deliberate: a chat is only ever *protected* by a
+reported engagement, so a chat nobody is engaging with (dormant, or messaged
+outside the UI) stays maximally expendable rather than over-protected -- and a
+shed chat just revives on its next message. For the same reason, an agent whose
+record can't be classified falls through to the worker band, not a protected one.
+
+Re-tagging is purely event-driven: the prioritizer runs on each `/api/activity`
+report the frontend posts (on tab-presence changes and after a message send), with
+no polling. That is race-free for the revive-on-message path because the send
+blocks until the revived process is ready -- the wrapper registers its pid before
+`exec`, so the pid exists by the time the frontend reports activity after the send
+returns. (The system interface still runs a short lifecycle poll, but only to feed
+the UI's liveness dot; it no longer drives OOM re-tagging.)
 
 ## Outputs
 

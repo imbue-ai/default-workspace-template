@@ -35,26 +35,35 @@ PROTECTED: Final[int] = 0
 # (that needs ``CAP_SYS_RESOURCE``, which the container lacks), so this is the
 # strongest available protection -- shed dead last, tied with sshd/supervisord.
 PRIMARY_AGENT: Final[int] = PROTECTED
+# A boundary marker, no longer assigned at launch: it equals ``CHAT_AGENT_FLOOR``
+# (a maximally-engaged chat is as protected as a "user agent") and is the ceiling
+# the service bands sit below. Every user-facing agent is a chat; there is no
+# distinct plain-user-agent actor to tag with it.
 USER_AGENT: Final[int] = 300
 WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
 
-# Dynamic chat-agent band. A chat agent's expendability is re-tagged at runtime
-# from live UI activity (see the system_interface ``ChatOomPrioritizer``): the
-# more a chat is engaged with, the more protected it is, but every chat always
-# stays strictly below ``WORKER_AGENT`` (workers are shed before any chat) and
-# strictly above the service bands (a chat revives on its next message, so it is
-# shed before a service). ``chat_agent_oom_score_adj`` maps the activity signals
-# to a value in ``[CHAT_AGENT_FLOOR, CHAT_AGENT_BASE]``.
-CHAT_AGENT_BASE: Final[int] = 560  # closed tab, least-recently messaged (most expendable chat)
-CHAT_AGENT_FLOOR: Final[int] = 300  # open + visible + most-recently messaged (most protected chat)
+# Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` (the most
+# expendable chat) and its expendability is re-tagged at runtime from live UI
+# activity (see the system_interface ``ChatOomPrioritizer``): the more a chat is
+# engaged with, the more protected it is, but every chat always stays strictly
+# below ``WORKER_AGENT`` (workers are shed before any chat) and strictly above the
+# service bands (a chat revives on its next message, so it is shed before a
+# service). ``chat_agent_oom_score_adj`` maps the activity signals to a value in
+# ``[CHAT_AGENT_FLOOR, CHAT_AGENT_BASE]``. Starting at the expendable end means a
+# chat that is never re-tagged (dormant, or messaged outside the UI) stays
+# maximally expendable rather than pinned to the protected floor.
+CHAT_AGENT_BASE: Final[int] = 560  # idle chat; also the chat launch band
+CHAT_AGENT_FLOOR: Final[int] = 300  # fully-engaged chat (most protected)
 _CHAT_OPEN_BONUS: Final[int] = 80
 _CHAT_VISIBLE_BONUS: Final[int] = 80
 _CHAT_RECENCY_MAX_BONUS: Final[int] = 120
 _CHAT_RECENCY_STEP: Final[int] = 15
 
 
-def chat_agent_oom_score_adj(*, is_open: bool, is_visible: bool, recency_rank: int | None) -> int:
+def chat_agent_oom_score_adj(
+    *, is_open: bool, is_visible: bool, recency_rank: int | None
+) -> int:
     """Map a chat agent's live activity to its ``oom_score_adj``.
 
     Lower is more protected. Starting from ``CHAT_AGENT_BASE`` (a closed,
@@ -74,7 +83,9 @@ def chat_agent_oom_score_adj(*, is_open: bool, is_visible: bool, recency_rank: i
     """
     recency_bonus = 0
     if recency_rank is not None:
-        recency_bonus = max(0, _CHAT_RECENCY_MAX_BONUS - _CHAT_RECENCY_STEP * max(0, recency_rank))
+        recency_bonus = max(
+            0, _CHAT_RECENCY_MAX_BONUS - _CHAT_RECENCY_STEP * max(0, recency_rank)
+        )
     adj = CHAT_AGENT_BASE
     if is_open:
         adj -= _CHAT_OPEN_BONUS
@@ -82,6 +93,7 @@ def chat_agent_oom_score_adj(*, is_open: bool, is_visible: bool, recency_rank: i
         adj -= _CHAT_VISIBLE_BONUS
     adj -= recency_bonus
     return max(CHAT_AGENT_FLOOR, min(CHAT_AGENT_BASE, adj))
+
 
 # Supervisord service bands, keyed by the service key passed to
 # ``scripts/oom_tag_service.py``. Every value sits strictly between PROTECTED (0)

@@ -7,9 +7,11 @@ worker creations ``agent_created=true`` and user-facing creations
 ``user_created=true``; the workspace's own services agent additionally carries
 ``is_primary=true``. This maps a name to the right priority band.
 
-An agent we cannot classify defaults to *not* a worker and *not* primary -- i.e.
-it is tagged at the more-protected user-agent band, so an unlabeled agent is shed
-later rather than earlier (but not pinned to the never-shed primary band).
+An agent we cannot classify is *not* primary, *not* a chat, and *not* a worker,
+so it falls through to the least-protected agent tier (the worker band): we must
+not shield an agent we cannot identify. The primary (services) agent never runs
+the launch wrapper -- its window-0 command is ``sleep infinity`` -- so this
+fallback can never make the workspace's services agent expendable.
 
 Stdlib-only (see ``paths``): imported by the agent-tagging Claude hook under a
 plain ``python3``.
@@ -62,6 +64,19 @@ def is_worker_agent(agent_name: str) -> bool:
     found, so the caller falls back to the protected user-agent band.
     """
     return _has_true_label(agent_name, "agent_created")
+
+
+def is_chat_agent(agent_name: str) -> bool:
+    """Whether ``agent_name`` carries the ``user_created=true`` label.
+
+    A chat is a user-facing agent (created through the UI or an equivalent
+    user_created path). It launches at the most-expendable chat band and the
+    system_interface prioritizer pulls it toward the protected floor as the user
+    engages with it. Returns False when the record is unavailable or the agent is
+    not found, so an unclassifiable agent is treated as least-protected rather
+    than given a chat's engagement-based protection.
+    """
+    return _has_true_label(agent_name, "user_created")
 
 
 def is_primary_agent(agent_name: str) -> bool:

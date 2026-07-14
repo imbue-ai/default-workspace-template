@@ -83,13 +83,12 @@ def test_revived_chat_is_tagged_on_the_next_reapply() -> None:
     h = _Harness(chat_ids=["a"], pids={})
     h.prioritizer.record_activity(open_ids=["a"], visible_ids=["a"], messaged_id="a")
     assert h.writes == []
-    # The lifecycle poll finds the revived process and reapplies.
+    # A later activity report (e.g. the user messages the now-revived chat) finds
+    # its live process and re-tags it -- the re-resolution is idempotent per report.
     h.pids["a"] = 10
     h.prioritizer.reapply()
     # ``a`` was messaged (rank 0), so it earns the recency bonus on top of open+visible.
-    assert h.latest_adj_by_pid()[10] == bands.chat_agent_oom_score_adj(
-        is_open=True, is_visible=True, recency_rank=0
-    )
+    assert h.latest_adj_by_pid()[10] == bands.chat_agent_oom_score_adj(is_open=True, is_visible=True, recency_rank=0)
 
 
 def test_non_chat_ids_in_the_report_are_ignored() -> None:

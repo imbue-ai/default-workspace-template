@@ -26,11 +26,17 @@ _spec.loader.exec_module(wrapper)
 from oom_priority.registry import lookup_agent
 
 
-def _write_agent_record(host_dir: Path, name: str, *, is_worker: bool, labels: dict | None = None) -> None:
+def _write_agent_record(
+    host_dir: Path, name: str, *, is_worker: bool, labels: dict | None = None
+) -> None:
     """Seed the host agent record the identity checks read to classify ``name``."""
     agent_dir = host_dir / "agents" / "id"
     agent_dir.mkdir(parents=True)
-    resolved = labels if labels is not None else ({"agent_created": "true"} if is_worker else {"user_created": "true"})
+    resolved = (
+        labels
+        if labels is not None
+        else ({"agent_created": "true"} if is_worker else {"user_created": "true"})
+    )
     (agent_dir / "data.json").write_text(json.dumps({"name": name, "labels": resolved}))
 
 
@@ -53,10 +59,11 @@ def test_tag_self_classifies_worker_into_the_worker_band(
     assert entry["is_worker"] is True
 
 
-def test_tag_self_classifies_unlabelled_agent_into_the_user_band(
+def test_tag_self_records_a_chat_as_non_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An agent without the worker label lands in the (more protected) user band."""
+    """A chat (no ``agent_created`` label) is recorded as a non-worker so the
+    kill hook can tell an agent shed from a subprocess shed."""
     monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path / "rt"))
     host = tmp_path / "host"
     _write_agent_record(host, "u1", is_worker=False)
@@ -70,25 +77,51 @@ def test_tag_self_classifies_unlabelled_agent_into_the_user_band(
     assert entry["is_worker"] is False
 
 
-def test_band_for_pins_the_primary_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_band_for_pins_the_primary_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The primary (services) agent is pinned to the never-shed PRIMARY_AGENT band,
     ahead of the worker/user classification."""
     host = tmp_path / "host"
-    _write_agent_record(host, "services", is_worker=False, labels={"is_primary": "true", "user_created": "true"})
+    _write_agent_record(
+        host,
+        "services",
+        is_worker=False,
+        labels={"is_primary": "true", "user_created": "true"},
+    )
     monkeypatch.setenv("MNGR_HOST_DIR", str(host))
-    assert wrapper._band_for("services", is_worker=False) == wrapper.bands.PRIMARY_AGENT
+    # is_primary wins even though the record also carries user_created.
+    assert wrapper._band_for("services") == wrapper.bands.PRIMARY_AGENT
 
 
-def test_band_for_classifies_worker_and_user(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_band_for_starts_a_chat_expendable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chat (user_created) launches at the most-expendable chat band, to be
+    protected later by live UI engagement -- not at the protected floor."""
     host = tmp_path / "host"
-    _write_agent_record(host, "u1", is_worker=False)
+    _write_agent_record(host, "c1", is_worker=False, labels={"user_created": "true"})
     monkeypatch.setenv("MNGR_HOST_DIR", str(host))
-    # No is_primary label -> ordinary worker/user bands.
-    assert wrapper._band_for("u1", is_worker=True) == wrapper.bands.WORKER_AGENT
-    assert wrapper._band_for("u1", is_worker=False) == wrapper.bands.USER_AGENT
+    assert wrapper._band_for("c1") == wrapper.bands.CHAT_AGENT_BASE
 
 
-def test_tag_self_records_the_agent_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_band_for_puts_workers_and_unidentifiable_agents_in_the_worker_band(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker, and an agent whose record cannot be read to classify it, both
+    land at the least-protected agent tier -- we must not shield an agent we
+    cannot identify."""
+    host = tmp_path / "host"
+    _write_agent_record(host, "w1", is_worker=True, labels={"agent_created": "true"})
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host))
+    assert wrapper._band_for("w1") == wrapper.bands.WORKER_AGENT
+    # No record for "ghost" -> unclassifiable -> least protected.
+    assert wrapper._band_for("ghost") == wrapper.bands.WORKER_AGENT
+
+
+def test_tag_self_records_the_agent_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The stable agent id is recorded so the prioritizer can resolve the pid by id."""
     monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path / "rt"))
     host = tmp_path / "host"
