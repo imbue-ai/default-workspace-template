@@ -14,9 +14,11 @@ be created FROM it (not just read its app code). One repo can accumulate
 several inspirations (one manifest + thumbnail per inspiration, all at the
 repo root). This skill delegates the assembly to a `launch-task` sub-agent
 worker (which builds the snapshot, finishes the manifest, and designs the
-thumbnail in its own git worktree), confirms the publish with the user in
-chat, obtains GitHub access via latchkey permissioning (never the `gh` CLI),
-and then creates the repo and pushes -- directly from the worker's worktree.
+thumbnail in its own git worktree), opens a local preview of the assembled
+snapshot as an `inspiration-preview` tab, confirms the publish with the user
+in chat, obtains GitHub access via latchkey permissioning (never the `gh`
+CLI), and then creates the repo and pushes -- directly from the worker's
+worktree. The preview tab is torn down at close-out (§10), success or abort.
 
 > **CWD INVARIANT -- read this before running anything in §§6-8.** From the
 > moment §3's worker reports `done`, the live mind's checkout at `/code` is
@@ -37,6 +39,13 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 > old base as an intentional deletion -- 1400+ files gone from a live mind).
 > Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/code`, or any
 > other step that runs from `/code` after assembly.
+>
+> The ONE documented exception is §6's preview-tab plumbing (and its §10
+> teardown): `render_preview.sh` renders into a temp dir, and
+> `scripts/forward_port.py` runs from `/code` because it writes the live
+> mind's gitignored `runtime/applications.toml` tab registry. Those commands
+> never run git and never touch tracked files in `/code` -- the invariant
+> above is about `/code`'s tree and branches, which stay untouched.
 
 > **AN INSPIRATION MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
 > valid inspiration is always the FULL tree `build_inspiration.sh` assembles on
@@ -86,8 +95,14 @@ Ask the user, in plain language. Never enumerate files at them:
   repo-root-relative include paths, e.g. `apps/slack-inbox`, `libs/slack_inbox`,
   plus their service wiring -- you reason about the backing paths, the user does
   not);
-- whether any data should be included. **Default: NO user data.** Include data
-  paths only if the user explicitly asks for them;
+- what should and should not be SHARED -- **ask, never silently assume**.
+  The default is still NO user data, but apply it as a question, not a
+  policy: name the kinds of shareable content you actually found in the
+  selected paths, in plain language rather than file lists ("your saved
+  contacts", "the instructions you wrote for the digest", sample data,
+  docs), and ask which of these, if any, they want to ship. Some users
+  WANT their instructions or curated examples shared -- do not strip those
+  without asking; equally, do not ship data without an explicit yes;
 - whether anything should be **changed, removed, or generalized in the
   published version only** -- hardcoded personal preferences, account or
   channel names, anything they'd rather not ship. Their live files stay
@@ -100,6 +115,32 @@ Ask the user, in plain language. Never enumerate files at them:
 Derive `slug` and `repo_name` from the title. Resolve the concrete set of
 include paths yourself.
 
+**Design the adopter's onboarding, then confirm it.** Before the gate below,
+think through the first-run experience of someone ADOPTING this inspiration,
+and write it down as a short plain-language onboarding summary. Design for
+the smoothest path to an INSTANT app the adopter can see working with their
+own data and then modify:
+
+- Every piece of data the app needs must come from the adopter's own
+  connectors when one exists, initiated by the adopting agent via latchkey --
+  NEVER a manual data-entry chore. (A real publish told adopters to type all
+  their contacts into a `contacts.txt`; the right onboarding pulls contacts
+  from their email/Google account after a permission approval. Manual entry
+  is a design failure whenever a connector could supply the same data.)
+- Enumerate what the adopting agent will self-initiate (the
+  `requires_permission:` / `requires_secret:` lines), what then populates
+  automatically, and what genuinely remains for the adopter to decide --
+  those decisions are the Holes; data-entry chores are not acceptable Holes.
+- The summary reads like: "when someone adopts this, their agent asks to
+  connect X and Y; the app then fills with their own data automatically; the
+  only choices left are Z."
+
+This summary is confirmed at the gate below and then handed to the worker
+(§3), which writes the manifest's Prerequisites / How to adapt it / Holes to
+MATCH it. (The generated welcome routes adopters through the manifest, so
+the manifest matching is sufficient -- the welcome itself is a deterministic
+write the worker never edits.)
+
 **The scope gate: confirm BEFORE any assembly work -- before treating the
 include set as final, and before dispatching the worker (§3). This is a hard
 gate.** Send ONE message that lays out, in plain language:
@@ -107,6 +148,12 @@ gate.** Send ONE message that lays out, in plain language:
 - what WILL be included (apps/features, not file lists);
 - what will NOT be included that they might expect (their data, other apps
   this mind has, secrets/config) -- so surprises surface now;
+- the share-or-strip answers from the Q&A above, restated (which
+  instructions/config/sample data ship, which data stays private) -- as
+  their answers being played back, not as assumptions;
+- the **onboarding summary** you designed above -- how an adopter goes from
+  creating a mind off this repo to seeing the app working with their own
+  data, what their agent self-initiates, and what the remaining Holes are;
 - the published-version modifications you will apply (or "none");
 - the proposed title and repo name, marked as adjustable later;
 - the default private visibility.
@@ -310,6 +357,13 @@ worktree to a clean template base and deletes gitignored state -- including
    nothing to add, say so explicitly in prose; never leave a placeholder
    comment in place and never leave a section blank.
 
+   "Prerequisites," "How to adapt it," and "Holes" must together realize the
+   user-confirmed onboarding design from your task's Context: any data the
+   app needs comes from the adopter's own connectors (initiated by the
+   adopting agent via latchkey), never from a manual data-entry step where a
+   connector exists, and every Hole is a genuine decision for the adopter --
+   not a chore like "type your contacts into a file."
+
    The generated `README.md` at the repo root (the repo's GitHub landing
    page) carries ONE `<!-- FILL-IN (publishing agent): ... -->` block too --
    a short overview of this inspiration. Replace it with a GitHub-flavored
@@ -350,6 +404,12 @@ worktree to a clean template base and deletes gitignored state -- including
   -- that is correct and expected. Do not "restore" anything it removes.
 - Included paths and what each one is:
   <one line per include path: what it is and its role>
+- The USER-CONFIRMED onboarding design (write the manifest's Prerequisites /
+  How to adapt it / Holes to MATCH this; adopter data comes from their own
+  connectors via latchkey, initiated by the adopting agent -- never a manual
+  data-entry step where a connector exists):
+  <the lead's confirmed onboarding summary from §1: what the adopting agent
+  self-initiates, what fills automatically, what the genuine Holes are>
 - <extra context the lead has: what the app does for its user, known holes,
   tokens/accounts it depends on -- everything the worker needs to write a
   good manifest and a representative thumbnail>
@@ -361,6 +421,9 @@ worktree to a clean template base and deletes gitignored state -- including
 - Every FILL-IN block replaced with real prose (or an explicit "none") -- in
   BOTH `inspiration-<slug>.md` and `README.md`.
 - `README.md` describes this inspiration (not the default-workspace-template).
+- The manifest's Prerequisites / How to adapt it / Holes match the
+  user-confirmed onboarding design above (no manual data-entry steps where a
+  connector exists; Holes are decisions, not chores).
 - `inspiration-<slug>.svg` is a bespoke design for this app; the placeholder
   marker is gone and the safety grep is clean.
 - Follow-up edits committed on `mngr/<slug>`; `git status` clean.
@@ -482,7 +545,68 @@ BOOTABLE" callout at the top of this skill.
 
 **cwd = `$WT` for this and every remaining section.** The manifest/thumbnail
 files referenced below (`inspiration-<slug>.md` / `.svg`) live at `$WT`'s repo
-root, not `/code`'s.
+root, not `/code`'s. (The preview-tab plumbing below is the one documented
+exception -- see the CWD-invariant callout at the top of this skill.)
+
+**Open the preview tab BEFORE sending the confirmation message.** The user
+gets a rendered preview of exactly what will (and will not) be published, in
+a tab named `inspiration-preview`, alongside the chat message. The preview is
+ADDITIVE: it changes nothing about this section's hard-gate semantics -- the
+explicit go-ahead still happens in chat, exactly as described below.
+
+```bash
+# 1. Re-publish safety: tear down any stale preview from an earlier run
+#    (safe no-op when there is none). Same block as §10's teardown.
+PREVIEW_STATE=/code/runtime/publish-inspiration/preview.env
+if [ -f "$PREVIEW_STATE" ]; then
+    . "$PREVIEW_STATE"
+    if [ -n "${PREVIEW_PID:-}" ] && ps -p "$PREVIEW_PID" -o command= 2>/dev/null | grep -q http.server; then
+        kill "$PREVIEW_PID"
+    fi
+    [ -n "${PREVIEW_DIR:-}" ] && rm -rf "$PREVIEW_DIR"
+    rm -f "$PREVIEW_STATE"
+fi
+(cd /code && python3 scripts/forward_port.py --remove --name inspiration-preview)
+
+# 2. Render the static preview page from the ASSEMBLED snapshot. Run the
+#    script from /code's skill dir ($WT is reset to BASE_REF, which may
+#    predate it); pass the SAME include/data-include paths you gave
+#    build_inspiration.sh, and one --modification per applied
+#    published-version modification (omit if none).
+PREVIEW_DIR="$(mktemp -d)"
+bash /code/.agents/skills/publish-inspiration/scripts/render_preview.sh \
+    --worktree "$WT" \
+    --slug <slug> \
+    --out "$PREVIEW_DIR" \
+    --include <path> [--include <path> ...] \
+    [--data-include <path> ...] \
+    [--modification "<text>" ...]
+
+# 3. Serve it on a free localhost port as a BACKGROUND process and record the
+#    PID + port + dir (the state file is what §10's teardown kills -- never a
+#    pattern-based pkill).
+PREVIEW_PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+nohup python3 -m http.server "$PREVIEW_PORT" --directory "$PREVIEW_DIR" --bind 127.0.0.1 \
+    > "$PREVIEW_DIR/server.log" 2>&1 &
+PREVIEW_PID=$!
+mkdir -p /code/runtime/publish-inspiration
+printf 'PREVIEW_PID=%s\nPREVIEW_PORT=%s\nPREVIEW_DIR=%s\n' \
+    "$PREVIEW_PID" "$PREVIEW_PORT" "$PREVIEW_DIR" > "$PREVIEW_STATE"
+for _ in 1 2 3 4 5; do
+    curl -sf "http://127.0.0.1:${PREVIEW_PORT}/" > /dev/null && break
+    sleep 1
+done
+curl -sf "http://127.0.0.1:${PREVIEW_PORT}/" > /dev/null   # hard check: server is up
+
+# 4. Register the tab. MUST run from /code -- the registry is the LIVE
+#    mind's runtime/applications.toml, not $WT's.
+(cd /code && python3 scripts/forward_port.py --name inspiration-preview --url "http://localhost:${PREVIEW_PORT}")
+```
+
+If the hard check in step 3 fails (the free port got taken in the window
+before `http.server` bound it), kill the recorded PID and redo step 3 with a
+fresh port. The server is a plain background process, so it survives across
+your turns while you wait at the gate below.
 
 Confirmation happens inline in chat -- there is no other confirmation
 mechanism. Present the proposal to the user ONCE, in plain language:
@@ -493,6 +617,13 @@ mechanism. Present the proposal to the user ONCE, in plain language:
 - a short recap of the **published-version modifications** that were applied
   (or that there were none), so the user can verify their requested removals
   and changes actually happened;
+- the **onboarding as actually written**: a two-or-three-line recap of the
+  manifest's setup path and Holes as the worker wrote them (what an adopter's
+  agent self-initiates, what fills automatically, what decisions remain), so
+  the user confirms the REAL manifest -- not just the §1 design -- reads the
+  way they approved. If the worker's version drifted from the confirmed
+  design (e.g. it introduced a manual data-entry step), fix the manifest
+  BEFORE presenting this message, not after;
 - the **thumbnail** the sub-agent designed -- EMBED it in the chat message
   as a markdown image so the user actually sees what will represent their
   inspiration, using the file's absolute path:
@@ -502,7 +633,11 @@ mechanism. Present the proposal to the user ONCE, in plain language:
   ```
 
   (substitute the real absolute worktree path), and note you can adjust it if
-  they'd like.
+  they'd like;
+- the **preview tab**: tell the user the full preview is open in the
+  `inspiration-preview` tab -- a page showing the title, thumbnail, manifest,
+  and a plain breakdown of exactly what will and will not be published.
+  (Keep embedding the thumbnail in chat as above; the tab is additive.)
 
 Then END YOUR TURN and WAIT. **This is a hard gate, exactly like §1's:** §8
 (create the repo + push) may only run after an explicit go-ahead in the
@@ -519,10 +654,14 @@ details before the repo existed on their account. This gate exists to
 prevent exactly that.)
 
 Take edits in their replies and apply them; once their reply is an explicit
-go-ahead, proceed with the agreed values. Do not re-ask what they already
+go-ahead, proceed with the agreed values. After applying confirmed
+manifest/thumbnail edits, re-run step 2's `render_preview.sh` into the SAME
+`$PREVIEW_DIR` so the tab reflects them on reload -- no server restart or
+re-registration needed. Do not re-ask what they already
 answered in §1; this is a confirm-and-adjust pass, not a second interview.
 If the user asks to abort, stop here and leave the assembled commit intact
-(§10's failure path).
+(§10's failure path) -- and run §10's preview teardown NOW: a stale preview
+tab must never outlive the publish flow.
 
 - Validate an edited repo name against `^[A-Za-z0-9._-]+$` (no leading `-`)
   before using it.
@@ -611,7 +750,8 @@ exit 1
 ```
 
 If the user never approves, surface a clear message and stop, leaving the
-assembled commit intact. Do NOT fall back to any other credential or
+assembled commit intact -- and run §10's preview teardown (the preview tab
+must not outlive the flow). Do NOT fall back to any other credential or
 mechanism (no `GH_TOKEN`-in-URL pushes, no partial-tree API uploads -- see
 the "MUST BE BOOTABLE" callout).
 
@@ -732,7 +872,8 @@ diagnose before retrying step 2 -- do NOT re-create the repo:
 
 Keep the assembled commit intact in `$WT` throughout. For fixable causes,
 fix and retry the failed step until it succeeds or the user aborts; for the
-stop-and-report cases above, stop.
+stop-and-report cases above, stop -- and whenever you stop or the user
+aborts here, run §10's preview teardown before ending the flow.
 **Never fall back to publishing a different, non-bootable thing** (e.g.
 uploading just the selected app files through the API instead of pushing
 `$WT`'s full assembled tree) -- see the "MUST BE BOOTABLE" callout at the top
@@ -747,6 +888,30 @@ one -- they are part of the assembled tree. The generated `/welcome` targets
 only the newly-published slug (the latest).
 
 ## 10. Close out
+
+**Preview teardown -- runs in EVERY exit from this flow**, success or abort
+(user declined at §6, GitHub access never approved in §7, a stop-and-report
+failure in §8): kill the recorded server PID, remove the tab registration,
+and delete the rendered files. A stale `inspiration-preview` tab must never
+outlive the publish flow. Kill ONLY the recorded PID (verified below) --
+never a pattern-based `pkill`:
+
+```bash
+PREVIEW_STATE=/code/runtime/publish-inspiration/preview.env
+if [ -f "$PREVIEW_STATE" ]; then
+    . "$PREVIEW_STATE"
+    if [ -n "${PREVIEW_PID:-}" ] && ps -p "$PREVIEW_PID" -o command= 2>/dev/null | grep -q http.server; then
+        kill "$PREVIEW_PID"
+    fi
+    [ -n "${PREVIEW_DIR:-}" ] && rm -rf "$PREVIEW_DIR"
+    rm -f "$PREVIEW_STATE"
+fi
+(cd /code && python3 scripts/forward_port.py --remove --name inspiration-preview)
+```
+
+(This is the same block §6 runs as its re-publish pre-clean, and it is part
+of the CWD invariant's documented exception -- `forward_port.py` runs from
+`/code` because the tab registry is the live mind's.)
 
 On a successful push, clean up per `launch-task`'s conventions: the worker can
 be destroyed now (destroying it removes its worktree, i.e. `$WT`), and the
@@ -765,7 +930,9 @@ a named remote.)
 
 If the push failed and you are stopping (user aborted, unrecoverable error),
 leave the worker, `$WT`, and the `mngr/<slug>` branch intact instead -- do not
-delete work the user may want to retry or reassemble from.
+delete work the user may want to retry or reassemble from. The preview
+teardown above still runs: keeping the assembled work does not mean keeping
+the preview tab.
 
 Close the delegation step with a work-summary line. Report the new repo URL in
 your final assistant message to the user (not in the step summary).
@@ -823,3 +990,34 @@ What it does, in order (see the script for the exact commands):
    newly-published inspiration.
 10. Validates `supervisord.conf` WITHOUT starting the daemon (never
     `supervisord -t`), then makes a single commit for the assembled snapshot.
+
+## The preview script: `scripts/render_preview.sh`
+
+The LEAD runs `scripts/render_preview.sh` (never the worker) in §6, from
+`/code`'s copy of this skill, against the assembled `$WT`. Interface:
+
+```
+.agents/skills/publish-inspiration/scripts/render_preview.sh \
+  --worktree <path-to-$WT> \
+  --slug <slug> \
+  --out <dir> \                    # gets index.html + a copy of the thumbnail SVG
+  [--include <path> ...] \         # the same paths passed to build_inspiration.sh
+  [--data-include <path> ...] \    # ditto (labeled as opted-in data on the page)
+  [--modification <text> ...]      # one per applied published-version modification
+```
+
+It renders a single static, fully self-contained page (inline CSS, no
+external resources; the thumbnail is copied next to it and referenced
+relatively). Every fact on the page is derived from `$WT`'s actual contents
+-- the manifest front-matter and body, the thumbnail, `git ls-tree HEAD` --
+never invented. The page carries a prominent PREVIEW banner (nothing
+published yet; confirm in chat), a what-is-in-this-preview note (rendered
+locally, mock-data thumbnail, nothing has left the machine), the
+what-WILL-be-published breakdown (selected paths, generated files,
+carried-forward inspirations, template base, and the one-snapshot-commit
+history guarantee), and the what-is-NOT-published breakdown (chats /
+transcripts / memory, secrets and `.env` files behind the two-scanner gate,
+unselected apps and files, the mind's git history, uploads, and the
+published-version modifications -- or "none requested"). Pass the include
+paths explicitly; if omitted, the script derives them from the snapshot's
+`inspiration: <slug>` assembly commit, and errors out if it cannot.
