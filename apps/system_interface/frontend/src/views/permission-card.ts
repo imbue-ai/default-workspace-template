@@ -17,6 +17,8 @@ import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
 import { isPermissionRequestCall } from "./message-classification";
+import { icon } from "./icons";
+import type { IconName } from "./icons";
 
 /** The rich fields a created permission request echoes back on stdout, parsed
  *  from the tool result. `requestId` is always present (it's what the modal
@@ -111,22 +113,7 @@ export function openPermissionRequest(requestId: string): void {
 
 /** Small lock glyph shown in the permission-request card heading and button. */
 function renderLockIcon(): m.Vnode {
-  return m(
-    "svg",
-    {
-      class: "permission-request-icon",
-      width: "14",
-      height: "14",
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      "aria-hidden": "true",
-    },
-    [m("rect", { x: "3", y: "11", width: "18", height: "11", rx: "2" }), m("path", { d: "M7 11V7a5 5 0 0 1 10 0v4" })],
-  );
+  return m.trust(icon("lock", { size: 14, className: "permission-request-icon" }));
 }
 
 /** The card heading: "Permission request: File access" for a file-sharing
@@ -184,28 +171,8 @@ function permissionRequestingValue(
 /** A small glyph for the resolved-request verdict: a check (granted), a cross
  *  (denied), or an exclamation (error / couldn't complete). */
 function renderVerdictIcon(resolution: PermissionResolution): m.Vnode {
-  const path =
-    resolution === "granted"
-      ? "M4.5 8.5L7 11L11.5 5.5"
-      : resolution === "denied"
-        ? "M5 5l6 6M11 5l-6 6"
-        : "M8 4v5M8 11.5h0";
-  return m(
-    "svg",
-    {
-      class: "permission-request-verdict-icon",
-      width: "14",
-      height: "14",
-      viewBox: "0 0 16 16",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      "aria-hidden": "true",
-    },
-    m("path", { d: path }),
-  );
+  const name: IconName = resolution === "granted" ? "check" : resolution === "denied" ? "close" : "alert";
+  return m.trust(icon(name, { size: 14, className: "permission-request-verdict-icon" }));
 }
 
 /** The label shown beside the verdict icon. "error" reads as "Couldn't
