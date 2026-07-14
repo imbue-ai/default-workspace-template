@@ -355,7 +355,7 @@ def test_mobile_viewport_layout(e2e_server: tuple[str, list[AgentInfo], Path], p
 def test_mobile_menu_lists_tabs_and_new_tab_actions(
     e2e_server: tuple[str, list[AgentInfo], Path], page: Page
 ) -> None:
-    """The hamburger button opens one bottom sheet holding the open tabs plus
+    """The hamburger button opens the left drawer holding the destinations plus
     the same actions as the desktop add-tab dropdown."""
     base_url, _, _ = e2e_server
     page.set_viewport_size({"width": 390, "height": 844})
@@ -367,17 +367,25 @@ def test_mobile_menu_lists_tabs_and_new_tab_actions(
 
     # The open tab is listed as the active row, alongside the "open new"
     # actions, all in the single combined sheet.
-    active_row = page.locator(".mobile-sheet-row--active")
+    active_row = page.locator(".mobile-drawer-row--active")
     expect(active_row).to_be_visible()
     expect(active_row).to_contain_text("test-agent")
-    expect(page.locator(".mobile-sheet-row", has_text="New chat")).to_be_visible()
-    expect(page.locator(".mobile-sheet-row", has_text="New terminal")).to_be_visible()
+    expect(page.locator(".mobile-drawer-row", has_text="New chat")).to_be_visible()
+    expect(page.locator(".mobile-drawer-row", has_text="New terminal")).to_be_visible()
 
-    # Backdrop tap dismisses the sheet. Click near the top: the backdrop
-    # spans the whole viewport and the sheet covers its center, so a default
-    # (center) click would land on the sheet instead.
-    page.locator(".mobile-sheet-backdrop").click(position={"x": 10, "y": 10})
-    expect(page.locator(".mobile-sheet")).to_have_count(0)
+    # Backdrop tap dismisses the drawer. Click near the top right: the
+    # backdrop spans the whole viewport and the drawer covers its left side
+    # (including the center), so a default (center) click would land on the
+    # drawer instead.
+    page.locator(".mobile-drawer-backdrop").click(position={"x": 380, "y": 10})
+    expect(page.locator(".mobile-drawer")).to_have_count(0)
+
+    # The drawer's own close button dismisses it too (reopening refreshes the
+    # terminal fleet again, hence the second awaited response).
+    with page.expect_response("**/api/terminals"):
+        page.locator(".mobile-tab-bar-menu-button").click()
+    page.locator(".mobile-drawer-close").click()
+    expect(page.locator(".mobile-drawer")).to_have_count(0)
 
 
 def test_desktop_viewport_keeps_default_chrome(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:

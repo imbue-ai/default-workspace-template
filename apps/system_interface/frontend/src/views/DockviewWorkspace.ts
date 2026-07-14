@@ -2870,7 +2870,7 @@ export const DockviewWorkspace: m.Component = {
       [
         // Phone-sized screens replace the dockview tab strip (hidden via
         // responsive.css) with a mobile tab bar: a hamburger button opening
-        // one bottom-sheet menu that lists every destination (loaded panels
+        // a left drawer menu that lists every destination (loaded panels
         // first, with close/destroy; then the rest) plus the same creation
         // and layout actions as the desktop dropdown.
         isMobileViewport()

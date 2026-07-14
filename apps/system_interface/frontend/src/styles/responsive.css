@@ -85,56 +85,84 @@
     color: var(--color-text-primary);
   }
 
-  /* ── Bottom-sheet menu (open tabs + "open new" actions) ── */
-  .mobile-sheet-backdrop {
+  /* ── Left drawer menu (destinations + creation/layout actions) ── */
+  .mobile-drawer-backdrop {
     position: fixed;
     inset: 0;
     z-index: 10000;
     background: rgba(0, 0, 0, 0.35);
   }
 
-  .mobile-sheet {
+  .mobile-drawer {
     position: fixed;
+    top: 0;
     left: 0;
-    right: 0;
     bottom: 0;
     z-index: 10001;
     display: flex;
     flex-direction: column;
-    max-height: 70vh;
-    padding: 6px 8px calc(12px + env(safe-area-inset-bottom, 0px));
+    width: min(320px, 85vw);
+    padding: calc(8px + env(safe-area-inset-top, 0px)) 8px calc(12px + env(safe-area-inset-bottom, 0px))
+      calc(8px + env(safe-area-inset-left, 0px));
     background: var(--color-surface);
-    border-radius: 16px 16px 0 0;
-    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.18);
-    animation: mobile-sheet-in 180ms ease-out;
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.18);
+    animation: mobile-drawer-in 200ms ease-out;
   }
 
-  @keyframes mobile-sheet-in {
+  @keyframes mobile-drawer-in {
     from {
-      transform: translateY(24px);
-      opacity: 0.6;
+      transform: translateX(-100%);
     }
     to {
-      transform: translateY(0);
-      opacity: 1;
+      transform: translateX(0);
     }
   }
 
-  .mobile-sheet-grabber {
+  /* Header row: the close button aligns with the bar's hamburger (same size,
+     same left offset) so the two read as one toggle. */
+  .mobile-drawer-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     flex-shrink: 0;
-    width: 36px;
-    height: 4px;
-    margin: 4px auto 8px;
-    border-radius: 2px;
-    background: var(--color-border);
+    height: 48px;
+    margin: -2px 0 4px -2px;
   }
 
-  .mobile-sheet-rows {
+  .mobile-drawer-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 8px;
+    color: var(--color-text-primary);
+    cursor: pointer;
+  }
+
+  .mobile-drawer-close:active {
+    background: var(--color-bg-hover);
+  }
+
+  .mobile-drawer-header-label {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+  }
+
+  .mobile-drawer-rows {
+    flex: 1;
     min-height: 0;
     overflow-y: auto;
   }
 
-  .mobile-sheet-row {
+  .mobile-drawer-row {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -146,20 +174,20 @@
     cursor: pointer;
   }
 
-  .mobile-sheet-row:active {
+  .mobile-drawer-row:active {
     background: var(--color-bg-hover);
   }
 
-  .mobile-sheet-row--active {
+  .mobile-drawer-row--active {
     background: var(--color-accent-light);
     font-weight: 600;
   }
 
-  .mobile-sheet-row--disabled {
+  .mobile-drawer-row--disabled {
     opacity: 0.5;
   }
 
-  .mobile-sheet-row-label {
+  .mobile-drawer-row-label {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -167,7 +195,7 @@
     white-space: nowrap;
   }
 
-  .mobile-sheet-row-action {
+  .mobile-drawer-row-action {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -182,21 +210,21 @@
     cursor: pointer;
   }
 
-  .mobile-sheet-row-action:active {
+  .mobile-drawer-row-action:active {
     background: var(--color-bg-active);
   }
 
-  .mobile-sheet-row-action--destructive:active {
+  .mobile-drawer-row-action--destructive:active {
     background: rgba(220, 38, 38, 0.1);
     color: #dc2626;
   }
 
-  .mobile-sheet-divider {
+  .mobile-drawer-divider {
     margin: 6px 4px;
     border-top: 1px solid var(--color-border);
   }
 
-  .mobile-sheet-empty {
+  .mobile-drawer-empty {
     padding: 16px 12px;
     color: var(--color-text-secondary);
     font-size: 14px;
