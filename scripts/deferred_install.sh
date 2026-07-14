@@ -17,8 +17,8 @@
 # only on success.
 set -euo pipefail
 
-# Both dirs are env-overridable for unit tests only; the supervisord program
-# never sets them, so production always uses the container-local defaults.
+# MARKER_DIR is env-overridable for unit tests only; the supervisord program
+# never sets it, so production always uses the container-local default.
 readonly MARKER_DIR="${DEFERRED_INSTALL_MARKER_DIR:-/var/lib/minds/deferred-install}"
 readonly REPO_ROOT=/mngr/code
 
