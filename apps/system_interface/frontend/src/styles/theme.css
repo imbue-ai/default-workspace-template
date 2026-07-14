@@ -1,0 +1,91 @@
+/* Design tokens and page-level base styles. */
+
+@theme {
+  --color-bg: #fafaf8;
+  --color-bg-sidebar: #f3f2ef;
+  --color-bg-hover: #edecea;
+  --color-bg-active: #e8e6e1;
+  --color-bg-user-bubble: #eae8e4;
+  --color-bg-composer: #ffffff;
+  --color-text-primary: #37352f;
+  --color-text-secondary: #787774;
+  --color-text-faint: #b4b4b0;
+  --color-border: #e4e3df;
+  --color-border-faint: #efeeeb;
+  --color-accent: #2f6b4f;
+  --color-accent-hover: #24573f;
+  --color-accent-light: #e9f2ee;
+  --color-surface: #ffffff;
+  --color-surface-secondary: #f3f2ef;
+  --color-stop-button: #64748b;
+  --color-stop-button-hover: #475569;
+  --font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-family-heading: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-family-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  --spacing-page: 1.5rem;
+  --width-message-column: 740px;
+  --width-sidebar: 250px;
+  --width-sidebar-collapsed: 3.25rem;
+  --duration-sidebar-transition: 200ms;
+  --radius-base: 6px;
+  --radius-bubble: 18px;
+  --radius-composer: 16px;
+  --logo-url: none;
+}
+
+body {
+  font-family: var(--font-family-base);
+  font-size: 15px;
+  color: var(--color-text-primary);
+  background-color: var(--color-bg);
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+@supports (height: 100dvh) {
+  body {
+    height: 100dvh;
+  }
+}
+
+/* The app fills the viewport minus the desktop client's title bar.
+
+   Heights come in three layers, each overriding the previous where it applies:
+   - 100vh: the universal fallback. On mobile browsers 100vh includes the area
+     behind the retractable URL bar, which is what used to push the composer
+     off-screen.
+   - 100dvh: tracks the *dynamic* viewport, so the app shrinks with the URL
+     bar instead of extending behind it.
+   - --app-viewport-height (gated on .app-viewport-clamped, both managed by
+     initViewportHeightSync in mobile-viewport.ts): the visualViewport height
+     while the on-screen keyboard is open -- the one case dvh does not cover
+     (notably iOS Safari, where the keyboard overlays the layout viewport
+     rather than resizing it). */
+.app-layout {
+  height: calc(100vh - var(--minds-titlebar-height, 0px));
+}
+
+@supports (height: 100dvh) {
+  .app-layout {
+    height: calc(100dvh - var(--minds-titlebar-height, 0px));
+  }
+}
+
+html.app-viewport-clamped .app-layout {
+  height: calc(var(--app-viewport-height, 100vh) - var(--minds-titlebar-height, 0px));
+}
+
+/* Spacer for the Minds desktop client title bar. When running inside the
+   Electron shell, --minds-titlebar-height is set to the title bar height
+   (38px). Outside the shell the variable is unset and the spacer collapses
+   to zero height. */
+.minds-titlebar-spacer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: var(--minds-titlebar-height, 0px);
+  pointer-events: none;
+}

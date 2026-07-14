@@ -6,7 +6,9 @@ import { isLoginModalOpen, closeLoginModal } from "../models/ClaudeAuth";
 export function App(): m.Component {
   return {
     view() {
-      return m("div", { class: "app-layout flex", style: "height: calc(100vh - var(--minds-titlebar-height, 0px))" }, [
+      // Height comes from the .app-layout rules in theme.css (dvh-aware, with
+      // a keyboard clamp from mobile-viewport.ts).
+      return m("div", { class: "app-layout flex" }, [
         m("div", { class: "minds-titlebar-spacer" }),
         m("div", { class: "app-main flex flex-1 min-w-80" }, [m(DockviewWorkspace)]),
         // Claude auth is mind-global, so the login modal is a single

@@ -1,0 +1,293 @@
+/* Mobile and small-screen overrides. Imported last so these win the cascade.
+
+   Everything here is gated on viewport width rather than pointer type so a
+   narrow desktop window gets the same treatment, and so the layout is
+   deterministic under test. The 768px breakpoint is mirrored in
+   MobileTabBar.ts (isMobileViewport), which renders the mobile tab bar the
+   rules below make room for. */
+
+@media (max-width: 768px) {
+  /* ── Safe areas (notch / home indicator) ──
+     The viewport meta uses viewport-fit=cover, so pad the app shell back out
+     of the unusable edges. env() resolves to 0 everywhere it doesn't apply. */
+  .app-layout {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  /* ── Mobile tab navigation ──
+     The dockview tab strip is desktop chrome: tiny targets, wheel-driven
+     overflow scrolling, drag-and-drop. Hide it and stack the mobile tab bar
+     (MobileTabBar.ts) above the dockview host instead. */
+  .dockview-workspace {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dockview-host {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+  }
+
+  .dockview-agent-container .dv-tabs-and-actions-container {
+    display: none;
+  }
+
+  /* The empty-state card keeps its status text, but its dropdown is the
+     desktop menu -- the mobile bar's "+" is the affordance here. */
+  .dockview-empty-state-action {
+    display: none;
+  }
+
+  .mobile-tab-bar-root {
+    flex: 0 0 auto;
+  }
+
+  .mobile-tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 48px;
+    padding: 0 6px;
+    background: var(--color-bg-sidebar);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .mobile-tab-bar-switcher {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+    height: 40px;
+    padding: 0 10px;
+    background: none;
+    border: none;
+    border-radius: 8px;
+    color: var(--color-text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .mobile-tab-bar-switcher:active {
+    background: var(--color-bg-hover);
+  }
+
+  .mobile-tab-bar-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .mobile-tab-bar-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: var(--color-bg-active);
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .mobile-tab-bar-chevron {
+    display: inline-flex;
+    flex-shrink: 0;
+    color: var(--color-text-secondary);
+  }
+
+  .mobile-tab-bar-add {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 8px;
+    color: var(--color-text-secondary);
+    font-size: 26px;
+    font-weight: 300;
+    cursor: pointer;
+  }
+
+  .mobile-tab-bar-add:active {
+    background: var(--color-bg-hover);
+  }
+
+  /* ── Bottom sheets (tab switcher and "open new" menu) ── */
+  .mobile-sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: rgba(0, 0, 0, 0.35);
+  }
+
+  .mobile-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10001;
+    display: flex;
+    flex-direction: column;
+    max-height: 70vh;
+    padding: 6px 8px calc(12px + env(safe-area-inset-bottom, 0px));
+    background: var(--color-surface);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.18);
+    animation: mobile-sheet-in 180ms ease-out;
+  }
+
+  @keyframes mobile-sheet-in {
+    from {
+      transform: translateY(24px);
+      opacity: 0.6;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  .mobile-sheet-grabber {
+    flex-shrink: 0;
+    width: 36px;
+    height: 4px;
+    margin: 4px auto 8px;
+    border-radius: 2px;
+    background: var(--color-border);
+  }
+
+  .mobile-sheet-title {
+    flex-shrink: 0;
+    padding: 0 12px 8px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+  }
+
+  .mobile-sheet-rows {
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .mobile-sheet-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 4px 12px;
+    border-radius: 10px;
+    font-size: 16px;
+    color: var(--color-text-primary);
+    cursor: pointer;
+  }
+
+  .mobile-sheet-row:active {
+    background: var(--color-bg-hover);
+  }
+
+  .mobile-sheet-row--active {
+    background: var(--color-accent-light);
+    font-weight: 600;
+  }
+
+  .mobile-sheet-row--disabled {
+    opacity: 0.5;
+  }
+
+  .mobile-sheet-row-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-sheet-row-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 8px;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+  }
+
+  .mobile-sheet-row-action:active {
+    background: var(--color-bg-active);
+  }
+
+  .mobile-sheet-row-action--destructive:active {
+    background: rgba(220, 38, 38, 0.1);
+    color: #dc2626;
+  }
+
+  .mobile-sheet-divider {
+    margin: 6px 4px;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .mobile-sheet-empty {
+    padding: 16px 12px;
+    color: var(--color-text-secondary);
+    font-size: 14px;
+  }
+
+  /* ── Transcript and composer: reclaim horizontal space ── */
+  .app-content {
+    padding: 16px 12px;
+  }
+
+  .app-footer {
+    padding: 0 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .message-user-bubble {
+    max-width: 88%;
+  }
+
+  /* 16px is the threshold below which iOS Safari zooms the whole page when an
+     input is focused -- the zoom is what used to shove the composer out of
+     view. Keep every text input at or above it on small screens. */
+  .message-input-textbox,
+  .new-conversation-textbox,
+  .custom-url-dialog-input,
+  .share-modal-email-input,
+  .claude-login-input {
+    font-size: 16px;
+  }
+
+  .chat-agent-terminal-link button {
+    padding: 6px 8px;
+  }
+
+  /* ── Dialogs sized to the phone ── */
+  .custom-url-dialog,
+  .destroy-dialog,
+  .share-modal {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+    padding: 18px;
+  }
+}
