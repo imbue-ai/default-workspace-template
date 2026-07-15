@@ -120,6 +120,14 @@ export type TerminalSessionListener = (terminalId: string | null, sessionId: str
  * of the previous state.
  */
 export type AgentActivityListener = (agentId: string, previous: string | null, current: string | null) => void;
+/**
+ * Notified when the live-updates WebSocket connects or disconnects. ``connected``
+ * is the new state: ``true`` the instant the socket opens, ``false`` the instant
+ * it closes. Fired only on an actual change, so a consumer sees clean edges (to
+ * retry a held send on reconnect, or surface a "reconnecting" indicator during an
+ * outage) without keeping its own shadow copy of the previous state.
+ */
+export type ConnectionStateListener = (connected: boolean) => void;
 
 let agents: AgentState[] = [];
 let applications: ApplicationEntry[] = [];
@@ -128,11 +136,42 @@ let layoutOpListeners: LayoutOpListener[] = [];
 let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
 let terminalSessionListeners: TerminalSessionListener[] = [];
 let agentActivityListeners: AgentActivityListener[] = [];
+let connectionStateListeners: ConnectionStateListener[] = [];
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
 
 const reconnectBackoff = new ReconnectBackoff();
+
+// Update the connection flag and, only on an actual change, notify listeners so
+// they see clean true/false edges without deduping their own copy. Deduping also
+// makes the wake-reconnect path (which opens a fresh socket while we still
+// optimistically believe we're connected) fire nothing unless the real state
+// actually flips.
+function setConnected(value: boolean): void {
+  if (connected === value) {
+    return;
+  }
+  connected = value;
+  for (const listener of connectionStateListeners) {
+    listener(connected);
+  }
+}
+
+// On disconnect, blank every agent's activity_state to null ("unknown") while
+// keeping the rest of its metadata (name, labels, work_dir) intact. A dropped
+// client would otherwise keep serving the last snapshot's activity (e.g.
+// "THINKING") forever, indistinguishable from a true current state; nulling it
+// lets any view reading through getEffectiveActivityState render a truthful
+// "reconnecting" state instead. Broadcast to agentsUpdatedListeners exactly as an
+// agents_updated would, so subscribed views redraw; the next post-reconnect
+// snapshot repopulates the real states.
+function markActivityStatesUnknown(): void {
+  agents = agents.map((agent) => ({ ...agent, activity_state: null }));
+  for (const listener of agentsUpdatedListeners) {
+    listener(getAgents());
+  }
+}
 
 function getWsUrl(): string {
   const base = apiUrl("/api/ws");
@@ -153,7 +192,7 @@ function connect(): void {
   ws = new WebSocket(url);
 
   ws.onopen = () => {
-    connected = true;
+    setConnected(true);
     // A successful connection resets the backoff so the next disconnect
     // starts from the base delay again.
     reconnectBackoff.reset();
@@ -179,7 +218,8 @@ function connect(): void {
 
   ws.onclose = () => {
     ws = null;
-    connected = false;
+    setConnected(false);
+    markActivityStatesUnknown();
     scheduleReconnect();
     m.redraw();
   };
@@ -225,7 +265,11 @@ function reconnectOnWake(): void {
   if (ws !== null) {
     // Detach handlers before closing so this dead socket's late ``onclose``
     // can't null out the replacement we open below (which would also schedule
-    // a duplicate reconnect against the fresh socket).
+    // a duplicate reconnect against the fresh socket). Detaching means this
+    // teardown fires neither the connection-state listeners nor the
+    // activity-unknown broadcast: the fresh socket's own onopen/onclose reports
+    // the true post-wake state, so a spurious wake (the socket was actually
+    // fine) causes no false disconnect/reconnect flicker.
     ws.onopen = null;
     ws.onmessage = null;
     ws.onclose = null;
@@ -370,6 +414,14 @@ export function addAgentActivityListener(listener: AgentActivityListener): void 
 
 export function removeAgentActivityListener(listener: AgentActivityListener): void {
   agentActivityListeners = agentActivityListeners.filter((l) => l !== listener);
+}
+
+export function addConnectionStateListener(listener: ConnectionStateListener): void {
+  connectionStateListeners.push(listener);
+}
+
+export function removeConnectionStateListener(listener: ConnectionStateListener): void {
+  connectionStateListeners = connectionStateListeners.filter((l) => l !== listener);
 }
 
 export function addTerminalSessionListener(listener: TerminalSessionListener): void {
