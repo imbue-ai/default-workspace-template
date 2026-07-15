@@ -15,9 +15,9 @@ Output the following welcome message to the user, verbatim, as your entire respo
 
 ### Welcome to Minds
 
-I'm an AI operating system built to extend *you* — so you can do your best work.
+Think of me as your personal agentic computer. I can run tasks for you in the background, learn about how you want things done, and keep things running even when you're offline.
 
-I can take on tasks for you, build custom AI tools you can easily edit, connect to the tools you already use to pull in information, or just brainstorm ways to make your work better.
+Everything can be personalized to you — how I work, the interfaces you see, and the custom apps built for your tasks.
 
 **Let's get started**
 
