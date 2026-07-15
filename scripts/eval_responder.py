@@ -60,6 +60,10 @@ def _mark_timed_out(sink, agent_id: str, waits_done: int, num_turns: int) -> Non
     )
     sink.upload_transcript(watcher.fetch_all_events(agent_id))
     sink.write_state(waits_done, num_turns, "timed_out")
+    # Timed-out is terminal too: without the marker, waking this workspace later (visit-batch on a
+    # hibernated batch) would re-run the worker from turn 1 into the old chat.
+    DONE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+    DONE_MARKER.write_text("")
 
 
 def main() -> None:
