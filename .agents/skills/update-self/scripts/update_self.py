@@ -295,8 +295,17 @@ def _list_names(output: str) -> list[str]:
     return [line for line in output.splitlines() if line]
 
 
+def _repo_root(args: argparse.Namespace) -> Path:
+    """The ``--repo-root`` value, whether given before or after the subcommand.
+
+    The attribute is absent (not defaulted) when the flag was never passed --
+    see the ``SUPPRESS`` note in ``main`` -- so the cwd fallback lives here.
+    """
+    return getattr(args, "repo_root", Path.cwd())
+
+
 def _cmd_resolve_target(args: argparse.Namespace) -> int:
-    repo_root = args.repo_root
+    repo_root = _repo_root(args)
     tags = _list_names(
         _git(["tag", "--list", "minds-v*"], repo_root)
         if args.local_tags
@@ -311,7 +320,7 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
 
 
 def _cmd_classify_merge(args: argparse.Namespace) -> int:
-    repo_root = args.repo_root
+    repo_root = _repo_root(args)
     base = args.base or _git(["merge-base", args.local, args.target], repo_root)
     upstream_changed = _list_names(
         _git(["diff", "--name-only", base, args.target], repo_root)
@@ -337,7 +346,7 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
 
 
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
-    repo_root = args.repo_root
+    repo_root = _repo_root(args)
     added = _list_names(
         _git(
             [
@@ -360,11 +369,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     # ``--repo-root`` lives on a shared parent parser so it is accepted both
     # before and after the subcommand (an option defined only on the top-level
     # parser would reject ``update_self.py <subcommand> --repo-root X``).
+    # The default must be ``SUPPRESS``, not a value: on Python < 3.13 a
+    # subparser re-applies its defaults over the namespace the top-level parser
+    # already filled in (bpo-9351), so a concrete default here would clobber a
+    # ``--repo-root`` given before the subcommand. With ``SUPPRESS`` the
+    # attribute is only set when the flag is actually passed; ``_repo_root``
+    # falls back to cwd.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
         "--repo-root",
         type=Path,
-        default=Path.cwd(),
+        default=argparse.SUPPRESS,
         help="Repo root the git subcommands run in (default: cwd).",
     )
     parser = argparse.ArgumentParser(description=__doc__, parents=[common])
