@@ -68,6 +68,7 @@ dedicated `type: "workspace"` request (distinct from the predefined-service
 requests in the `latchkey` skill):
 
 ```bash
+# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{
