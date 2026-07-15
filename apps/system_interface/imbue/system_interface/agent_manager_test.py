@@ -326,9 +326,7 @@ def test_agent_state_event_adds_agent(agent_manager: AgentManager, broadcaster: 
     q = broadcaster.register()
 
     test_agent_id = MngrAgentId()
-    agent = _agent_details(
-        "discovered-agent", agent_id=test_agent_id, labels={"user_created": "true"}
-    )
+    agent = _agent_details("discovered-agent", agent_id=test_agent_id, labels={"user_created": "true"})
 
     agent_manager._handle_observe_event(make_agent_state_event(agent))
 
@@ -946,6 +944,27 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
         primary_labels={"workspace": "ws", "project": "proj"},
     )
     assert_mngr_argv_valid(argv)
+    # The chat carries user_created so the OOM launch wrapper puts it in the
+    # dynamic chat band rather than the least-protected worker/unclassified band.
+    assert "user_created=true" in argv
+
+
+def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
+    """Only chats are OOM-managed: workers and the primary keep their launch bands."""
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            for agent_id, labels in (
+                ("chat", {"user_created": "true"}),
+                ("worker", {"agent_created": "true"}),
+                ("primary", {"is_primary": "true"}),
+            ):
+                manager._agents[agent_id] = AgentStateItem(
+                    id=agent_id, name=agent_id, state="RUNNING", labels=labels, work_dir=None
+                )
+        assert manager.get_chat_agent_ids() == ["chat"]
+    finally:
+        manager.stop()
 
 
 def test_observe_argv_accepted_by_live_cli() -> None:

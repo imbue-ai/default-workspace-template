@@ -22,7 +22,15 @@ import { CreateBrowserModal } from "./CreateBrowserModal";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { LayoutDialog, type LayoutDialogMode } from "./LayoutDialog";
 import { ShareModal } from "./ShareModal";
+import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
+import { attachHoverTooltip } from "./hoverTooltip";
+import {
+  addActivityOverlayListener,
+  getEffectiveActivityState,
+  removeActivityOverlayListener,
+} from "../models/PendingMessages";
 import { reloadInterface } from "../reload";
+import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
@@ -39,6 +47,7 @@ import {
   getApplications,
   getProtoAgents,
   removeAgentLocally,
+  removeAgentsUpdatedListener,
   reportClientState,
   type AgentsUpdatedListener,
   type LayoutOpEvent,
@@ -268,6 +277,9 @@ function createMithrilRenderer(
         // visibility -- in particular so ChatPanel restores its scroll position
         // on the first redraw after the tab is shown again.
         m.redraw();
+        // A tab switch changes which chat is visible; report so the OOM
+        // prioritizer re-scores (a visible chat is more protected).
+        reportChatTabActivity();
       });
       m.mount(element, { view: () => m(component, { ...attrs, isVisible: panelVisible }) });
     },
@@ -378,6 +390,53 @@ function createCustomTab(options: { id: string; name: string }): {
         const primaryAgentId = getPrimaryAgentId();
         const isPrimary = chatAgentId === primaryAgentId;
 
+        // Per-agent liveness dot, to the left of the title. Distinct from the
+        // chat's activity indicator: this tracks the agent's mngr lifecycle
+        // state -- green while its claude process is working (RUNNING), yellow
+        // while it is idle and waiting on the user (WAITING), grey while it is
+        // dormant (DONE/STOPPED/etc.; revives on the next message). Hovering
+        // shows the exact lifecycle state via a body-level tooltip (a native
+        // ``title`` is suppressed on dockview's draggable tabs -- see
+        // ``attachHoverTooltip``). Hidden until the agent's state is known.
+        //
+        // The lifecycle RUNNING/WAITING split comes only from the backend's
+        // lifecycle poll and lags a sent message, so the color is resolved through
+        // ``effectiveLifecycleState`` against the prompt activity signal
+        // (transcript-derived, plus the optimistic forced-THINKING the send
+        // applies). That makes the dot turn green the instant a message is sent,
+        // in step with the activity indicator -- hence the second listener below
+        // on the activity overlay, since an optimistic send is not a WS update.
+        const processDot = document.createElement("span");
+        processDot.className = "dv-tab-process-dot";
+        const processDotTooltip = attachHoverTooltip(processDot);
+        const updateProcessDot = (): void => {
+          const state = getAgentById(chatAgentId)?.state;
+          if (!state) {
+            processDot.style.display = "none";
+            processDotTooltip.setText(null);
+            return;
+          }
+          const effective = effectiveLifecycleState(state, getEffectiveActivityState(chatAgentId));
+          processDot.style.display = "";
+          // ``data-liveness`` drives the color (the primary signal). Several
+          // lifecycle states share a color (DONE/STOPPED/REPLACED/UNKNOWN are
+          // all grey "dormant"; RUNNING/RUNNING_UNKNOWN_AGENT_TYPE are both
+          // green), so ``data-lifecycle-state`` carries the exact state and the
+          // CSS gives each a subtly different circular treatment (solid / ring /
+          // ring-with-dot / faded) so same-color states stay tellable apart.
+          processDot.setAttribute("data-liveness", livenessCategoryForState(effective));
+          processDot.setAttribute("data-lifecycle-state", effective);
+          processDotTooltip.setText(effective);
+        };
+        updateProcessDot();
+        element.insertBefore(processDot, element.firstChild);
+        const processDotListener: AgentsUpdatedListener = () => updateProcessDot();
+        addAgentsUpdatedListener(processDotListener);
+        addActivityOverlayListener(updateProcessDot);
+        disposables.push({ dispose: () => removeAgentsUpdatedListener(processDotListener) });
+        disposables.push({ dispose: () => removeActivityOverlayListener(updateProcessDot) });
+        disposables.push(processDotTooltip);
+
         const destroyBtn = createTabActionButton(
           isPrimary ? "Cannot destroy the primary agent" : "Destroy agent",
           "trash",
@@ -447,6 +506,27 @@ function createCustomTab(options: { id: string; name: string }): {
       disposables.length = 0;
     },
   };
+}
+
+/** Report the current open/visible chat tabs to the backend (OOM priority).
+ *
+ *  Computed from ``dockview.panels`` (the live panel set) rather than
+ *  ``panelParams`` so a just-removed panel isn't reported as still open when
+ *  this fires from ``onDidLayoutChange`` before ``onDidRemovePanel`` clears its
+ *  params. Only chat panels are reported; the report is debounced in the
+ *  reporter, so calling it on every layout/visibility change is cheap. */
+function reportChatTabActivity(): void {
+  if (!dockview) return;
+  const open: string[] = [];
+  const visible: string[] = [];
+  for (const panel of dockview.panels) {
+    const pp = panelParams.get(panel.id);
+    if (pp?.panelType !== "chat") continue;
+    const chatId = pp.chatAgentId ?? pp.agentId;
+    open.push(chatId);
+    if (panel.api.isVisible) visible.push(chatId);
+  }
+  reportActivity({ open, visible });
 }
 
 /** Get the set of agent IDs that currently have open chat panels. */
@@ -2586,6 +2666,9 @@ function initializeDockview(parentElement: HTMLElement): void {
   // Listen for layout changes and auto-save
   dv.api.onDidLayoutChange(() => {
     scheduleSave();
+    // Opening, closing, or moving a tab changes the open/visible chat set;
+    // report it so the OOM prioritizer re-scores the affected chats.
+    reportChatTabActivity();
   });
 
   // Clean up params on panel removal. We DON'T reopen anything when

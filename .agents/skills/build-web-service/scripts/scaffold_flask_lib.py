@@ -375,7 +375,7 @@ def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
 
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=bash -c "python3 scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
+command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
 directory=/mngr/code
 autostart=true
 autorestart=true
@@ -396,7 +396,9 @@ def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
     # preserving, so append a [program:<name>] block as text rather than
     # round-tripping through a parser. The command is wrapped in `bash -c "..."`
     # because supervisord exec's commands directly (no shell) and this one chains
-    # forward_port.py with `&&`.
+    # forward_port.py with `&&`; the `oom_tag_service.py user` prefix tags the
+    # new (user-created) service so it is shed before any built-in service under
+    # memory pressure (see libs/oom_priority/README.md).
     path = repo_root / "supervisord.conf"
     if not path.exists():
         sys.exit(f"error: {path} not found (cannot register the new service)")

@@ -160,7 +160,7 @@ What gets updated:
 
   ```ini
   [program:<name>]
-  command=bash -c "python3 scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
+  command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
   directory=/mngr/code
   autostart=true
   autorestart=true
@@ -172,7 +172,10 @@ What gets updated:
   rewrites absolute paths in served HTML and installs a scoped service
   worker that prepends the prefix to the page's own fetches). The
   `bash -c "..."` wrapper is required because supervisord runs commands
-  directly (no shell) and this one chains `forward_port.py` with `&&`.
+  directly (no shell) and this one chains `forward_port.py` with `&&`. The
+  `oom_tag_service.py user` prefix tags this user-created service so it is
+  shed before any built-in service under memory pressure (see
+  `libs/oom_priority/README.md`).
 
 supervisord does not watch the config, so tell it to pick up the new
 program, then confirm it is running:
@@ -407,11 +410,14 @@ For pre-existing third-party tools, do not scaffold a lib. Add a
 `[program:<name>]` block to `supervisord.conf` that runs
 `forward_port.py` and then your existing start command. supervisord runs
 commands directly (no shell), so wrap any command that chains with `&&`
-in `bash -c "..."`:
+in `bash -c "..."`, and prefix the whole thing with
+`python3 scripts/oom_tag_service.py user` so this user-created service is
+shed before any built-in service under memory pressure (see
+`libs/oom_priority/README.md`):
 
 ```ini
 [program:<name>]
-command=bash -c "python3 scripts/forward_port.py --url http://localhost:<port> --name <name> && <existing_start_command>"
+command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:<port> --name <name> && <existing_start_command>"
 directory=/mngr/code
 autostart=true
 autorestart=true
@@ -423,7 +429,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=bash -c "python3 scripts/forward_port.py --url http://localhost:8090 --name docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:8090 --name docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
   directory=/mngr/code
   autostart=true
   autorestart=true
@@ -441,7 +447,7 @@ Two valid shapes:
 
   ```ini
   [program:<name>]
-  command=bash scripts/run_<name>.sh
+  command=python3 scripts/oom_tag_service.py user bash scripts/run_<name>.sh
   directory=/mngr/code
   autostart=true
   autorestart=true
