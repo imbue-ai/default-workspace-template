@@ -57,12 +57,19 @@ def test_execs_the_command_forwarding_its_args(tmp_path: Path) -> None:
     assert out.read_text().splitlines()[0] == "args:--flag value"
 
 
-def test_unknown_service_key_still_execs_the_command_and_warns(tmp_path: Path) -> None:
+def test_unknown_service_key_execs_and_defaults_to_the_user_band(
+    tmp_path: Path,
+) -> None:
+    # An unrecognized key must fail expendable (the user-service band), never
+    # keep the fully-protected inherited default.
     bindir, out = _fake_command(tmp_path)
     result = _run(["not-a-real-service", "fake-service", "arg"], bindir)
     assert result.returncode == 0, result.stderr
-    assert out.read_text().splitlines()[0] == "args:arg"
+    recorded = out.read_text().splitlines()
+    assert recorded[0] == "args:arg"
     assert "unknown service band" in result.stderr
+    if _HAS_WRITABLE_PROC_OOM:
+        assert recorded[1] == str(bands.USER_SERVICE)
 
 
 def test_missing_command_exits_nonzero_with_usage(tmp_path: Path) -> None:

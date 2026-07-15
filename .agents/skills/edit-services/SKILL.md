@@ -77,9 +77,11 @@ overhead.
 
 Only the built-in template services pass their own name instead of `user` (e.g.
 `... oom_tag_service.py system_interface ...`); anything you add should use
-`user`. If you omit the prefix entirely the service still runs, but it is treated
-as fully protected -- it would survive *longer* than the built-in services, which
-is backwards, so don't skip it.
+`user`. There is no protected escape hatch: an unknown key defaults to the
+`user` band, and if you omit the prefix entirely a backstop listener
+(`oom-tag-backstop`) tags the service into the `user` band shortly after it
+starts anyway. Still include the prefix -- it applies the band at spawn rather
+than ~1s later, and it keeps the command self-documenting.
 
 ## Adding a service
 

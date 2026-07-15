@@ -132,11 +132,55 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "user": USER_SERVICE,
 }
 
+# The shared-browser band: the absolute ceiling, one above AGENT_SUBPROCESS, so a
+# browser always outranks even an agent's build/test subprocess and is shed first.
+# The browser program tags itself at spawn (inline in its supervisord command,
+# which cannot import this module); the constant exists so the backstop listener
+# can re-assert the value if that self-tag failed.
+SHARED_BROWSER: Final[int] = 1000
+
+# Expected band per supervisord program whose *program name* is not a
+# SERVICE_BANDS key, for the backstop listener (scripts/oom_tag_backstop.py).
+# The OOM machinery itself (earlyoom, the listener) must stay PROTECTED -- it is
+# what keeps every other band meaningful. deferred-install stays PROTECTED too:
+# shedding the one-shot first-boot installer mid-run would leave provisioning
+# half-done with no auto-restart to finish it.
+_NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
+    "earlyoom": PROTECTED,
+    "oom-tag-backstop": PROTECTED,
+    "deferred-install": PROTECTED,
+    "browser": SHARED_BROWSER,
+}
+
+
+def supervisord_program_band(program_name: str) -> int:
+    """The band a supervisord program is expected to occupy, by program name.
+
+    A built-in service's program name doubles as its SERVICE_BANDS key; the
+    handful of programs outside that map have explicit expected bands above.
+    Anything unrecognized is a user-created service and falls back to
+    ``USER_SERVICE``: an unknown process must default to being expendable, never
+    to the protected default it would otherwise inherit.
+    """
+    if program_name in SERVICE_BANDS:
+        return SERVICE_BANDS[program_name]
+    return _NON_SERVICE_PROGRAM_BANDS.get(program_name, USER_SERVICE)
+
+
 _PROC_DIR: Final[Path] = Path("/proc")
 
 
 def _oom_score_adj_path(pid: int) -> Path:
     return _PROC_DIR / str(pid) / "oom_score_adj"
+
+
+def read_oom_score_adj(pid: int) -> int | None:
+    """Read ``pid``'s current ``oom_score_adj``, or None when it is unreadable
+    (the process exited, or the host has no ``/proc`` -- e.g. macOS)."""
+    try:
+        return int(_oom_score_adj_path(pid).read_text().strip())
+    except (OSError, ValueError):
+        return None
 
 
 def set_oom_score_adj(pid: int, adj: int) -> bool:

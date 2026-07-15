@@ -49,6 +49,25 @@ def test_the_builtin_key_set_matches_the_documented_order() -> None:
     assert set(bands.SERVICE_BANDS) == {*_BUILTIN_SERVICE_ORDER, "user"}
 
 
+def test_unrecognized_supervisord_program_falls_back_to_the_user_service_band() -> None:
+    # The core fail-expendable guarantee: a program the policy does not know
+    # (a user-created service that skipped the tagging prefix) must default to
+    # the user-service band, never to a protected one.
+    assert bands.supervisord_program_band("some-user-service") == bands.USER_SERVICE
+
+
+def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
+    # Program names that double as service keys resolve to their service band;
+    # the OOM machinery itself stays protected; the browser stays the single
+    # most-expendable thing, above even an agent's subprocesses.
+    for key in _BUILTIN_SERVICE_ORDER:
+        assert bands.supervisord_program_band(key) == bands.SERVICE_BANDS[key]
+    assert bands.supervisord_program_band("earlyoom") == bands.PROTECTED
+    assert bands.supervisord_program_band("oom-tag-backstop") == bands.PROTECTED
+    assert bands.SHARED_BROWSER > bands.AGENT_SUBPROCESS
+    assert bands.supervisord_program_band("browser") == bands.SHARED_BROWSER
+
+
 def test_primary_agent_is_pinned_to_the_never_shed_band() -> None:
     # The primary (services) agent must be at least as protected as the never-kill
     # infrastructure, and strictly below every service and agent band, so it is

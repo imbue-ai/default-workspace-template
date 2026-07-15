@@ -12,9 +12,9 @@ arguments untouched. Mirrors ``claude_oom_launch.py`` (self-tag, then exec).
 The first argument is a service key from ``oom_priority.bands.SERVICE_BANDS``.
 Built-in services pass their own name (``system_interface``, ``cloudflared``,
 ...); user-created services pass ``user`` so they are shed before any built-in
-service under memory pressure. An unknown key leaves ``oom_score_adj`` at its
-inherited default -- a safe no-op (the service stays as protected as it was)
-rather than a launch failure.
+service under memory pressure. An unknown key is tagged with the user-service
+band (with a warning), the same as ``user``: an unrecognized service must
+default to being expendable, not keep the fully-protected inherited default.
 
 Tagging is best-effort: a failure to write ``/proc`` (e.g. macOS, which has no
 ``/proc``) is swallowed by ``set_oom_score_adj``. Exec is mandatory: the service
@@ -46,13 +46,13 @@ def main() -> None:
     command = sys.argv[2:]
     adj = bands.SERVICE_BANDS.get(service_key)
     if adj is None:
+        adj = bands.USER_SERVICE
         print(
             f"oom_tag_service: unknown service band {service_key!r}; "
-            "leaving oom_score_adj at its inherited default",
+            "defaulting to the user-service band",
             file=sys.stderr,
         )
-    else:
-        bands.set_oom_score_adj(os.getpid(), adj)
+    bands.set_oom_score_adj(os.getpid(), adj)
     os.execvp(command[0], command)
 
 
