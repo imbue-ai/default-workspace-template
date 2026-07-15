@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared system-toolchain setup for forever-claude-template hosts.
+# Shared system-toolchain setup for default-workspace-template hosts.
 #
 # Installs the repo-independent toolchain: system packages, language runtimes,
 # and pinned CLIs. This is the single source of truth for that setup -- the
@@ -18,7 +18,7 @@ provision_skip_if_done setup_system
 : "${TTYD_VERSION:=1.7.7}"
 : "${CLOUDFLARED_VERSION:=2026.3.0}"
 : "${UV_VERSION:=0.11.7}"
-: "${CLAUDE_CODE_VERSION:=2.1.160}"
+: "${CLAUDE_CODE_VERSION:=2.1.207}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${NODE_MAJOR:=20}"
 : "${LATCHKEY_VERSION:=2.20.0}"
@@ -89,7 +89,7 @@ fi
 if ! grep -q '/root/.local/bin' /root/.bashrc 2>/dev/null; then
     echo 'PATH="/root/.local/bin:$PATH"' >> /root/.bashrc
 fi
-printf '%s\n' 'PATH="/root/.local/bin:$PATH"' > /etc/profile.d/fct_path.sh
+printf '%s\n' 'PATH="/root/.local/bin:$PATH"' > /etc/profile.d/default_workspace_template_path.sh
 
 # Source /mngr/env (when present) for interactive bash sessions so terminals can
 # run mngr commands without manual setup.

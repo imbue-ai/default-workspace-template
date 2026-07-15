@@ -1,4 +1,4 @@
-# forever-claude-template
+# default-workspace-template
 
 A self-contained template for running a persistent Claude agent that delegates work to sub-agents and can manage its own background services.
 
@@ -7,7 +7,7 @@ A self-contained template for running a persistent Claude agent that delegates w
 ```bash
 mngr create my-workspace main -t local \
     --host-env MINDS_WORKSPACE_NAME=my-workspace \
-    --project ~/project/forever-claude-template
+    --project ~/project/default-workspace-template
 ```
 
 ## Structure
@@ -21,7 +21,7 @@ mngr create my-workspace main -t local \
 - `supervisord.conf` - Supervisord config defining the background services
 - `libs/bootstrap/` - First-boot setup, then launches supervisord to supervise the services
 - `vendor/mngr/` - A vendored, mutable copy of mngr. Note that making changes here *will* affect the behavior of the `mngr` command
-- `vendor/tk/` - A vendored copy of the [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script (also callable as `tk`) manages tickets stored as markdown. We point `TICKETS_DIR` at `runtime/tickets/` (set in `.mngr/settings.toml`'s `host_env`) so tickets are backed up alongside the rest of `runtime/` on the `mindsbackup/$MNGR_AGENT_ID` branch.
+- `vendor/tk/` - A vendored copy of the [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script (also callable as `tk`) manages tickets stored as markdown. We point `TICKETS_DIR` at `runtime/tickets/` (set in `.mngr/settings.toml`'s `host_env`) so tickets live alongside the rest of `runtime/` (and are covered by the opt-in GitHub sync when the `github-sync` skill has enabled it).
 
 ## Create templates
 

@@ -12,7 +12,7 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 - NEVER amend commits or rebase--always create new commits.
 - If you ever need to work with another *git* repo that is *outside* of this monorepo as a read-only dependency, you should do so by adding a git subtree under `vendor/`.
 - If you need to *actively develop* against an external repo (e.g. `mngr`), check out a standalone clone of it under `.external_worktrees/<repo-name>/`. This directory is gitignored so the external clones don't pollute the monorepo. The branch in the external clone should mirror the branch you're on in this monorepo.
-- This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `runtime/tickets/` (the path is set via the `TICKETS_DIR` env var so tickets ride the `mindsbackup/$MNGR_AGENT_ID` runtime-backup branch).
+- This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `runtime/tickets/` (the path is set via the `TICKETS_DIR` env var so tickets sit with the rest of the workspace's runtime state).
 - All relative paths in this repo assume cwd = repo root (`/code`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. State directories live under `runtime/<feature>/`.
 - When adding a new web app, do NOT edit `libs/web_server/` -- it's an example placeholder. Use the `build-web-service` skill, which sets up a new lib + service entry + `forward_port.py` registration on its own port.
 
@@ -116,10 +116,10 @@ Only after doing all of the above should you begin writing code.
 - For faster iteration, add "-m 'not tmux and not modal and not docker and not docker_sdk and not acceptance and not release'" to skip slow infrastructure tests (~30s instead of ~95s). These still run in CI. Note that you *MUST* also pass "--no-cov --cov-fail-under=0" when doing this, otherwise it will complain about a lack of coverage.
 - When running pytest with a Bash tool timeout, always set `PYTEST_MAX_DURATION_SECONDS` to match the timeout (in seconds). For example, if using a 2-minute timeout: `PYTEST_MAX_DURATION_SECONDS=120 uv run pytest ...`. This ensures the pytest global lock file records a deadline, allowing other pytest processes to break a stale lock if this one gets killed by the timeout.
 - Running pytest will produce files in .test_output/ (relative to the directory you ran from) for things like slow tests and coverage reports.
-- Note that "uv run pytest" defaults to running all "unit" and "integration" tests, but the "acceptance" tests also run in CI. Do *not* run *all* the acceptance tests locally to validate changes--just allow CI to run them automatically after you finish responding (it's faster than running them locally).
+- Note that "uv run pytest" defaults to running all "unit" and "integration" tests, but the "acceptance" tests also run in CI when a PR exists. Do *not* run *all* the acceptance tests locally to validate changes--let CI run them once a PR is opened (it's faster than running them locally).
 - If you need to run a specific acceptance or release test to write or fix it, iterate on that specific test locally by calling "just test <full_path>::<test_name>" from the root of the git checkout. Do this rather than re-running all tests in CI.
-- Tasks are not allowed to finish without all tests passing in CI.
-- A PR will be made automatically for you when you finish your reply--do NOT create one yourself.
+- Tasks are not allowed to finish without all tests passing (in CI, if a PR exists).
+- Do NOT create a PR yourself--if a PR is needed, the user will create it.
 - To help verify that you ran the tests, report the exact command you used to run the tests, as well as the total number of tests that passed and failed (and the number that failed had better be 0).
 - If tests fail because of a lack of coverage, you should add tests for the new code that you wrote.
 - When adding tests, consider whether it should be a unit test (in a _test.py file) or an integration/acceptance/release test (in a test_*.py file, and marked with @pytest.mark.acceptance or @pytest.mark.release, no marks needed for integration).  See the style_guide.md for exact details on the types of tests. In general, most slow tests of all functionality should be release tests, and only important / core functionality should be acceptance tests.
@@ -205,6 +205,8 @@ You can (and should) modify your own configuration to improve yourself:
 
 Commit your changes to git after making modifications.
 
+Inspirations are a publishable, reusable, bootable snapshot of the apps and features a mind has built (one repo can accumulate several); another mind can adapt one into itself.
+
 # Updates
 
 Use the `update-self` skill to pull improvements from the upstream template repo, and the `submit-upstream-changes` skill to push shared changes (skills, scripts, config) back upstream.
@@ -227,7 +229,7 @@ The upstream is defined in `parent.toml`.
 # Memory
 
 Use Claude's built-in memory system. Your memory directory is `runtime/memory/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
-Memory is gitignored from the main branch but is backed up automatically by the runtime-backup service onto the `mindsbackup/$MNGR_AGENT_ID` branch when `GH_TOKEN` is set, so it survives container loss.
+Memory is gitignored from the main branch. When the user has enabled GitHub sync (the `github-sync` skill), the github-sync service ships it -- with the rest of `runtime/` -- to the `runtime-sync` branch of the workspace's private sync repo, so it survives container loss.
 
 # Services
 
@@ -241,11 +243,11 @@ See the `edit-services` skill for details.
 Commit your changes locally.
 `runtime/` is gitignored from the main branch (it includes `runtime/memory/` for Claude memory and other transient state).
 
-A `post-commit` hook installed via `core.hooksPath = /mngr/code/scripts/git_hooks` auto-pushes the active branch to `origin` in the background, but only when `GH_TOKEN` is set in the environment. You do not need to push manually. The hook never blocks the commit; output is captured at `/tmp/post-commit-push.log`.
+Chat file uploads (files a user attaches to a message) are stored in the top-level `uploads/` directory inside the repo working tree -- NOT under `runtime/`. Uploads can be arbitrarily large and any format, so they don't belong in version-controllable content; `uploads/` is gitignored. Being outside `runtime/`, uploads are NOT carried by the opt-in GitHub sync (which ships only `runtime/`), but the host-level `host-backup` service (a restic snapshot of the whole host dir) does capture them, so uploads still survive container loss. See `libs/host_backup/README.md`.
 
-`runtime/` is backed up automatically by the `runtime-backup` service onto a separate orphan branch (`mindsbackup/$MNGR_AGENT_ID`) on the same `origin`, also gated on `GH_TOKEN`. See `libs/runtime_backup/README.md`.
+GitHub sync is opt-in via the `github-sync` skill. When the user has enabled it: a `post-commit` hook auto-pushes the active branch of every checkout to `origin` (the workspace's dedicated private repo) in the background -- you do not need to push manually; the hook never blocks the commit, and output is captured at `/tmp/post-commit-push.log`. The `github-sync` service additionally syncs `runtime/` onto a separate orphan branch (`runtime-sync`) on the same `origin`. See `libs/github_sync/README.md`.
 
-If `GH_TOKEN` is unset, both auto-pushes silently no-op; commits stay local.
+When GitHub sync is not enabled, there is no auto-push and no GitHub remote to push to; commits stay local (the restic `host-backup` still protects the whole host dir).
 
 - Don't include auto-generated lockfile churn (`uv.lock`, `package-lock.json`, etc.) in commits unless the change intentionally bumps a dependency.
 

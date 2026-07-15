@@ -26,21 +26,21 @@ from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.local_process import RunningProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.mutable_model import MutableModel
-from imbue.mngr.api.discovery_aggregator import DiscoveryStateAggregator
-from imbue.mngr.api.discovery_events import DiscoveryEvent
-from imbue.mngr.api.discovery_events import parse_discovery_event_line
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.observe import AgentRemovedEvent
+from imbue.mngr.api.observe import AgentStateEvent
+from imbue.mngr.api.observe import FullAgentStateEvent
+from imbue.mngr.api.observe import parse_observe_event_line
 from imbue.mngr.errors import MngrError
+from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentNameStyle
-from imbue.mngr.primitives import DiscoveredAgent
 from imbue.mngr.primitives import HostName
-from imbue.mngr.primitives import LOCAL_PROVIDER_NAME
 from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import derive_activity_state
 from imbue.system_interface.activity_state import has_unmatched_tool_use
-from imbue.system_interface.activity_state import is_lifecycle_process_running
 from imbue.system_interface.activity_state import last_event_timestamp
 from imbue.system_interface.activity_state import last_event_type
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
@@ -64,19 +64,6 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 
 _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
-
-# How often the lifecycle poll re-probes each local agent's process-liveness state.
-# The discovery stream (mngr observe --discovery-only) is metadata-only and carries
-# no lifecycle state, so this poll is the source of "is the agent's process alive"
-# (RUNNING / WAITING / STOPPED / DONE / ...). A local list is cheap, so this is short
-# enough that a process death (e.g. an OOM shed) surfaces within a few seconds.
-_LIFECYCLE_POLL_INTERVAL_SECONDS: Final[float] = 5.0
-
-# Lifecycle state assumed for an agent that appears on the (state-free) discovery
-# stream before the poll has probed it. A just-appeared agent is almost always a
-# freshly-created, running one; the next poll (within a few seconds) replaces this
-# with the real probed state. Matches the pre-existing optimistic default.
-_DEFAULT_LIFECYCLE_STATE: Final[str] = "RUNNING"
 
 # A chat spawned by the minds "get help -> have an agent help" flow carries this
 # label (set on its ``mngr create``). When such an agent is first discovered, we
@@ -138,9 +125,8 @@ def _build_chat_create_command(
         "none",
         "--template",
         "chat",
-        # Tags this as a user-created agent so the OOM agent-tagging hook puts it
-        # in the protected user-agent band (shed only as a last resort, after
-        # worker agents and every agent's subprocesses).
+        # Tags this as a user-created agent so the OOM launch wrapper puts it in the
+        # dynamic chat band (re-tagged from live UI engagement), not the worker band.
         "--label",
         "user_created=true",
         "--no-connect",
@@ -153,18 +139,19 @@ def _build_chat_create_command(
 
 
 def _build_observe_command_argv(mngr_binary: str) -> list[str]:
-    """Build the ``mngr observe`` discovery-only argv. Pure (see above).
+    """Build the ``mngr observe --stream-events`` argv. Pure (see above).
 
-    ``--discovery-only`` streams discovery events as JSONL to stdout (which we
-    consume directly) and tails the single shared discovery log under the
-    default host dir. We deliberately do NOT pass ``--events-dir``: that flag
-    only relocates the *full* observer's event files + lock and has no effect in
-    discovery-only mode -- mngr now rejects the combination outright.
+    ``--stream-events`` runs the full observer and additionally echoes each
+    agents-stream event (AGENT_STATE / AGENTS_FULL_STATE / AGENT_REMOVED) as
+    JSONL to stdout, which we consume directly. Unlike the old ``--discovery-only``
+    stream, these events carry real probed lifecycle state (including event-driven
+    detection of an agent process dying on its own), which is what drives each
+    agent's real ``state`` below.
     """
     return [
         mngr_binary,
         "observe",
-        "--discovery-only",
+        "--stream-events",
     ]
 
 
@@ -175,18 +162,18 @@ def _build_observe_command_argv(mngr_binary: str) -> list[str]:
 _UNUSED_HOST_NAME: Final[HostName] = HostName("unknown")
 
 
-def _build_agent_match(agent: DiscoveredAgent) -> AgentMatch:
-    """Assemble the messaging-location AgentMatch for a discovered agent.
+def _build_agent_match(agent: AgentDetails) -> AgentMatch:
+    """Assemble the messaging-location AgentMatch for an observed agent.
 
-    Addressed by agent_id + host_id + provider_name; host_name is a placeholder
-    (see `_UNUSED_HOST_NAME`).
+    Addressed by agent_id + host_id + provider_name (sourced from the agent's
+    nested host details); host_name is a placeholder (see `_UNUSED_HOST_NAME`).
     """
     return AgentMatch(
-        agent_id=agent.agent_id,
-        agent_name=agent.agent_name,
-        host_id=agent.host_id,
+        agent_id=agent.id,
+        agent_name=agent.name,
+        host_id=agent.host.id,
         host_name=_UNUSED_HOST_NAME,
-        provider_name=agent.provider_name,
+        provider_name=agent.host.provider_name,
     )
 
 
@@ -305,12 +292,12 @@ class AgentManager:
     _broadcaster: WebSocketBroadcaster
     _messenger: MngrMessenger
     _lock: threading.Lock
-    # Folds the per-provider discovery stream into one consistent view. Each
-    # discovery event (per-provider snapshot or incremental agent/host event) is
-    # applied here, and ``_agents`` / ``_match_by_agent_id`` are rebuilt from the
-    # accumulated state so a slow/errored provider's snapshot can never wipe
-    # another provider's agents.
-    _aggregator: DiscoveryStateAggregator
+    # The live view of observed agents keyed by id, folded from the observe
+    # stream: an AGENTS_FULL_STATE snapshot rebuilds it wholesale, an AGENT_STATE
+    # upserts one agent, and an AGENT_REMOVED drops one. ``_agents`` /
+    # ``_match_by_agent_id`` are rebuilt from it after each event, and its
+    # before/after key diff drives the per-agent membership side-effects.
+    _agent_details_by_id: dict[str, AgentDetails]
     _agents: dict[str, AgentStateItem]
     # agent id -> its discovered location (host/provider), maintained from the
     # observe snapshot/discovered/destroy events so messaging can resolve an
@@ -335,16 +322,6 @@ class AgentManager:
     _last_event_type_by_agent: dict[str, str | None]
     _last_event_timestamp_by_agent: dict[str, str | None]
     _activity_state_by_agent: dict[str, ActivityState]
-    # Per-agent lifecycle state (RUNNING / WAITING / STOPPED / DONE / ...), owned by
-    # the lifecycle poll (``_poll_lifecycle_states``). The discovery stream is
-    # metadata-only and carries no state, so this cache -- not the stream -- is the
-    # source of truth for it, and it is re-applied whenever ``_handle_discovery_event``
-    # rebuilds ``_agents`` from a stream event (mirrors ``_activity_state_by_agent``).
-    _lifecycle_state_by_agent: dict[str, str]
-    # Signals the lifecycle poll loop to exit. Set by ``stop()`` (a dedicated event
-    # rather than ``_shutdown_event`` so the poll's cadence never contends on the
-    # shutdown event shared with the observe subprocess).
-    _lifecycle_poll_stop: threading.Event
     # Assist chats whose tab we have already auto-opened (or that existed at
     # startup, seeded by ``_initial_discover`` so we never auto-open them). Lets
     # both discovery paths -- the per-agent delta and the full snapshot -- open
@@ -354,8 +331,8 @@ class AgentManager:
     # visible / recently-messaged). Driven purely by the ``/api/activity`` endpoint
     # (via ``record_activity``): a chat launches at the expendable band and is
     # protected only as engagement is reported, so no periodic re-tag is needed.
-    # The messaged-revive path is race-free without one -- the send blocks until
-    # the revived process is ready (and its pid is registered before that), and the
+    # The messaged-revive path is race-free without one -- the send blocks until the
+    # revived process is ready (and its pid is registered before that), and the
     # frontend posts activity only after the send returns.
     _oom_prioritizer: ChatOomPrioritizer
 
@@ -371,14 +348,14 @@ class AgentManager:
         ``messenger`` is the agent-messaging collaborator; it defaults to the
         real mngr discover/send. Tests pass one whose ``discover``/``send`` are
         fakes to avoid touching mngr. ``mngr_binary`` is the path or name of the
-        mngr executable used for the discovery-only observe subprocess and for
+        mngr executable used for the stream-events observe subprocess and for
         agent-creation commands.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
         manager._messenger = messenger
         manager._lock = threading.Lock()
-        manager._aggregator = DiscoveryStateAggregator()
+        manager._agent_details_by_id = {}
         manager._agents = {}
         manager._match_by_agent_id = {}
         manager._applications = []
@@ -399,8 +376,6 @@ class AgentManager:
         manager._last_event_type_by_agent = {}
         manager._last_event_timestamp_by_agent = {}
         manager._activity_state_by_agent = {}
-        manager._lifecycle_state_by_agent = {}
-        manager._lifecycle_poll_stop = threading.Event()
         manager._auto_opened_assist_ids = set()
         # Built last: its ``list_chat_agent_ids`` callback reads ``_agents`` /
         # ``_lock``, which are set above.
@@ -423,8 +398,6 @@ class AgentManager:
     def stop(self) -> None:
         """Stop the observe subprocess, file watchers, and creation threads."""
         self._shutdown_event.set()
-        # Wake the lifecycle poll loop so it exits before the observe group joins it.
-        self._lifecycle_poll_stop.set()
 
         if self._observe_cg is not None:
             self._observe_cg.shutdown()
@@ -444,7 +417,6 @@ class AgentManager:
             self._has_unmatched_tool_use_by_agent.clear()
             self._last_event_type_by_agent.clear()
             self._activity_state_by_agent.clear()
-            self._lifecycle_state_by_agent.clear()
 
     @property
     def broadcaster(self) -> WebSocketBroadcaster:
@@ -463,6 +435,36 @@ class AgentManager:
         """Look up a single agent by ID."""
         with self._lock:
             return self._agents.get(agent_id)
+
+    def get_chat_agent_ids(self) -> list[str]:
+        """Ids of the agents the OOM prioritizer manages: chat agents only.
+
+        Excludes workers (``agent_created=true``) and the primary services agent
+        (``is_primary=true``); those keep their launch bands -- workers maximally
+        expendable, the primary pinned -- so no UI activity moves their score.
+        Remote agents are left in (they have no local pid, so the prioritizer's
+        pid lookup skips them harmlessly).
+        """
+        with self._lock:
+            return [
+                agent.id
+                for agent in self._agents.values()
+                if agent.labels.get("agent_created") != "true" and agent.labels.get("is_primary") != "true"
+            ]
+
+    def record_activity(
+        self,
+        *,
+        open_ids: list[str],
+        visible_ids: list[str],
+        messaged_id: str | None = None,
+    ) -> None:
+        """Feed a frontend activity report to the OOM prioritizer (re-tags chats)."""
+        self._oom_prioritizer.record_activity(
+            open_ids=open_ids,
+            visible_ids=visible_ids,
+            messaged_id=messaged_id,
+        )
 
     def get_agent_info_by_id(self, agent_id: str) -> AgentInfo | None:
         """Resolve an agent id to its web-UI :class:`AgentInfo` (with resolved dirs), or None."""
@@ -552,36 +554,6 @@ class AgentManager:
                 }
                 for a in self._agents.values()
             ]
-
-    def get_chat_agent_ids(self) -> list[str]:
-        """Ids of the agents the OOM prioritizer manages: chat agents only.
-
-        Excludes workers (``agent_created=true``) and the primary services agent
-        (``is_primary=true``); those keep their launch bands -- workers maximally
-        expendable, the primary pinned -- so no UI activity moves their score.
-        Remote agents are left in (they have no local pid, so the prioritizer's
-        pid lookup skips them harmlessly).
-        """
-        with self._lock:
-            return [
-                agent.id
-                for agent in self._agents.values()
-                if agent.labels.get("agent_created") != "true" and agent.labels.get("is_primary") != "true"
-            ]
-
-    def record_activity(
-        self,
-        *,
-        open_ids: list[str],
-        visible_ids: list[str],
-        messaged_id: str | None = None,
-    ) -> None:
-        """Feed a frontend activity report to the OOM prioritizer (re-tags chats)."""
-        self._oom_prioritizer.record_activity(
-            open_ids=open_ids,
-            visible_ids=visible_ids,
-            messaged_id=messaged_id,
-        )
 
     def get_proto_agents(self) -> list[dict[str, Any]]:
         """Return list of proto-agents (agents being created)."""
@@ -818,10 +790,6 @@ class AgentManager:
             agents = discover_agents()
             with self._lock:
                 for agent_info in agents:
-                    # Seed the poll-owned lifecycle cache so a stream event arriving
-                    # before the first poll re-applies the real startup state rather
-                    # than the placeholder.
-                    self._lifecycle_state_by_agent[agent_info.id] = agent_info.state
                     agent_state = AgentStateItem(
                         id=agent_info.id,
                         name=agent_info.name,
@@ -859,8 +827,6 @@ class AgentManager:
             with self._lock:
                 old_ids = set(self._agents.keys())
                 new_ids = set(new_agents.keys())
-                for agent_info in agents:
-                    self._lifecycle_state_by_agent[agent_info.id] = agent_info.state
                 self._agents = new_agents
 
             for agent_id in new_ids:
@@ -893,7 +859,7 @@ class AgentManager:
         return Path.home()
 
     def _build_observe_command(self) -> list[str]:
-        """Build the argv for the mngr observe discovery-only subprocess. Pure."""
+        """Build the argv for the mngr observe --stream-events subprocess. Pure."""
         return _build_observe_command_argv(self._mngr_binary)
 
     def _start_observe(self) -> None:
@@ -947,72 +913,6 @@ class AgentManager:
             is_checked=False,
         )
 
-        # The discovery stream carries no lifecycle state, so a separate poll owns
-        # process-liveness. Runs on the observe concurrency group so ``stop()`` tears
-        # it down; the loop wakes on the shutdown event for a prompt exit.
-        self._observe_cg.start_new_thread(
-            target=self._lifecycle_poll_loop,
-            name="lifecycle-poll",
-            is_checked=False,
-        )
-
-    def _lifecycle_poll_loop(self) -> None:
-        """Re-probe local agents' lifecycle state every poll interval until shutdown.
-
-        The ``mngr observe --discovery-only`` stream is metadata-only (who exists),
-        so this loop is the source of "is the agent's process alive". It exits
-        promptly when ``stop()`` sets the shutdown event.
-        """
-        while not self._lifecycle_poll_stop.wait(timeout=_LIFECYCLE_POLL_INTERVAL_SECONDS):
-            try:
-                self._poll_lifecycle_states()
-            except (OSError, ValueError, RuntimeError, MngrError) as e:
-                _loguru_logger.opt(exception=e).warning("Lifecycle poll iteration failed (continuing)")
-
-    def _poll_lifecycle_states(self) -> None:
-        """Probe every local agent's lifecycle state and reconcile it into tracked state.
-
-        Scoped to the local provider -- the workspace's own agents -- so it is cheap
-        and, being a filtered listing, writes no discovery snapshot as a side effect.
-        The reconciliation itself lives in ``_apply_polled_lifecycle_states`` so it can
-        be tested without a live ``mngr list``.
-        """
-        agents = discover_agents(provider_names=(str(LOCAL_PROVIDER_NAME),))
-        self._apply_polled_lifecycle_states({agent_info.id: agent_info.state for agent_info in agents})
-
-    def _apply_polled_lifecycle_states(self, state_by_agent_id: dict[str, str]) -> None:
-        """Fold freshly-probed lifecycle states into tracked state and broadcast changes.
-
-        Updates the poll-owned ``_lifecycle_state_by_agent`` cache for every probed
-        agent; for any tracked agent whose state changed, rebuilds its ``_agents``
-        entry, recomputes activity (a state flip can change the ``is_agent_running``
-        gate -- e.g. a now-STOPPED agent must read IDLE), and broadcasts once.
-        """
-        changed_agent_ids: list[str] = []
-        with self._lock:
-            for agent_id, new_state in state_by_agent_id.items():
-                self._lifecycle_state_by_agent[agent_id] = new_state
-                current = self._agents.get(agent_id)
-                if current is not None and current.state != new_state:
-                    self._agents[agent_id] = AgentStateItem(
-                        id=current.id,
-                        name=current.name,
-                        state=new_state,
-                        labels=current.labels,
-                        work_dir=current.work_dir,
-                        activity_state=current.activity_state,
-                    )
-                    changed_agent_ids.append(agent_id)
-
-        if not changed_agent_ids:
-            return
-
-        # Recompute activity for the changed agents (without broadcasting per agent),
-        # then broadcast the whole list once so both the dot and the indicator update.
-        for agent_id in changed_agent_ids:
-            self._recompute_activity_state(agent_id, broadcast_on_change=False)
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
-
     def _watch_observe_process(self, process: RunningProcess) -> None:
         """Log an error if the observe subprocess exits before shutdown."""
         try:
@@ -1046,71 +946,82 @@ class AgentManager:
         if not is_stdout:
             _loguru_logger.warning("mngr observe stderr: {}", stripped)
             return
-        event = parse_discovery_event_line(stripped)
+        event = parse_observe_event_line(stripped)
         if event is None:
-            # parse_discovery_event_line only returns None for empty/whitespace lines,
-            # which we filtered out above; reaching here indicates an internal contract
-            # violation in the parser.
-            raise MngrError(f"parse_discovery_event_line returned None for non-empty line: {stripped[:200]!r}")
-        self._handle_discovery_event(event)
+            # The agents stream carries only AGENT_STATE / AGENTS_FULL_STATE /
+            # AGENT_REMOVED; parse_observe_event_line returns None for empty lines
+            # (filtered above) and for any other/forward-compatible type, which we
+            # simply ignore. (Malformed JSON raises out of the parser.)
+            return
+        self._handle_observe_event(event)
 
-    def _handle_discovery_event(self, event: DiscoveryEvent) -> None:
-        """Fold a discovery event into the aggregator and reconcile tracked state.
+    def _handle_observe_event(self, event: AgentStateEvent | FullAgentStateEvent | AgentRemovedEvent) -> None:
+        """Fold one observe agents-stream event into the tracked agent view.
 
-        Every parsed discovery event -- per-provider snapshots and incremental
-        agent/host events alike -- is applied to the shared
-        :class:`DiscoveryStateAggregator`, which maintains the
-        per-provider-correct view (a per-provider snapshot is authoritative only
-        for its own provider, and an item with a newer incremental event is not
-        clobbered by an in-flight snapshot). ``self._agents`` and
-        ``self._match_by_agent_id`` are then rebuilt wholesale from that
-        consistent view, while the returned membership delta drives per-agent
-        resource start/stop (app watcher, activity tracking) and assist
-        auto-open. This replaces the old per-event-type dispatch and centralizes
-        the "what changed" decision in the aggregator.
+        ``AGENTS_FULL_STATE`` rebuilds the whole set, ``AGENT_STATE`` upserts one
+        agent, and ``AGENT_REMOVED`` drops one. ``self._agents`` and
+        ``self._match_by_agent_id`` are then rebuilt from the folded view -- now
+        carrying each agent's real lifecycle ``state`` (``AgentDetails.state``)
+        rather than a hardcoded literal -- while the before/after key diff drives
+        per-agent resource start/stop (app watcher, activity tracking) and assist
+        auto-open, exactly as the discovery membership delta used to.
         """
-        delta = self._aggregator.apply_event(event)
+        with self._lock:
+            before_details = dict(self._agent_details_by_id)
+            match event:
+                case FullAgentStateEvent():
+                    self._agent_details_by_id = {str(agent.id): agent for agent in event.agents}
+                case AgentStateEvent():
+                    self._agent_details_by_id[str(event.agent.id)] = event.agent
+                case AgentRemovedEvent():
+                    self._agent_details_by_id.pop(str(event.agent_id), None)
+            details_by_id = dict(self._agent_details_by_id)
 
-        agent_by_id = self._aggregator.get_agent_by_id()
+        before_ids = set(before_details)
+        after_ids = set(details_by_id)
+        added_agent_ids = after_ids - before_ids
+        removed_agent_ids = before_ids - after_ids
+        # Persisting agents whose lifecycle state changed (e.g. RUNNING -> STOPPED
+        # when a process dies) need their activity indicator re-gated below.
+        state_changed_ids = {
+            agent_id
+            for agent_id, agent in details_by_id.items()
+            if agent_id in before_details and before_details[agent_id].state != agent.state
+        }
+
         new_agents: dict[str, AgentStateItem] = {}
         new_matches: dict[str, AgentMatch] = {}
-        for agent_id, agent in agent_by_id.items():
+        for agent_id, agent in details_by_id.items():
             new_agents[agent_id] = AgentStateItem(
                 id=agent_id,
-                name=str(agent.agent_name),
-                # The discovery stream is metadata-only and carries no lifecycle
-                # state; the poll owns it and it is re-applied under the lock below.
-                # This placeholder is only used for a just-appeared agent the poll
-                # has not yet reached.
-                state=_DEFAULT_LIFECYCLE_STATE,
+                name=str(agent.name),
+                state=agent.state.value,
                 labels=dict(agent.labels),
-                work_dir=str(agent.work_dir) if agent.work_dir else None,
+                work_dir=str(agent.work_dir),
             )
             new_matches[agent_id] = _build_agent_match(agent)
 
         with self._lock:
-            # Rebuilding ``_agents`` wholesale from the stream drops two fields the
-            # discovery payload does not carry: the poll-owned lifecycle ``state`` and
-            # the per-agent ``activity_state``. Re-apply both from their caches so a
-            # stream event does not revert the dot to the placeholder state or blank
-            # the "Thinking..." indicator for agents that are already tracked (only
-            # ids in ``delta.added_agent_ids`` get an ``_ensure_activity_tracking``
-            # recompute; persisting agents rely on this re-application).
+            # Rebuilding ``_agents`` wholesale drops the per-agent ``activity_state``
+            # (the observe payload carries no such field). Re-apply the cached value
+            # so the broadcast below does not blank the indicator for agents that are
+            # already tracked; the recompute pass just below then re-derives it from
+            # the (possibly changed) lifecycle state.
             for agent_id, agent_state in new_agents.items():
-                lifecycle_state = self._lifecycle_state_by_agent.get(agent_id, agent_state.state)
-                cached_activity = self._activity_state_by_agent.get(agent_id)
-                new_agents[agent_id] = AgentStateItem(
-                    id=agent_state.id,
-                    name=agent_state.name,
-                    state=lifecycle_state,
-                    labels=agent_state.labels,
-                    work_dir=agent_state.work_dir,
-                    activity_state=cached_activity.value if cached_activity is not None else None,
-                )
+                cached_state = self._activity_state_by_agent.get(agent_id)
+                if cached_state is not None:
+                    new_agents[agent_id] = AgentStateItem(
+                        id=agent_state.id,
+                        name=agent_state.name,
+                        state=agent_state.state,
+                        labels=agent_state.labels,
+                        work_dir=agent_state.work_dir,
+                        activity_state=cached_state.value,
+                    )
             self._agents = new_agents
             self._match_by_agent_id = new_matches
 
-        for agent_id in delta.added_agent_ids:
+        for agent_id in added_agent_ids:
             added_agent_state = new_agents.get(agent_id)
             if added_agent_state is None:
                 continue
@@ -1118,9 +1029,21 @@ class AgentManager:
                 self._start_app_watcher(agent_id, Path(added_agent_state.work_dir))
             self._ensure_activity_tracking(agent_id)
 
-        for agent_id in delta.removed_agent_ids:
+        for agent_id in removed_agent_ids:
             self._stop_app_watcher(agent_id)
             self._stop_activity_tracking(agent_id)
+
+        # Re-derive activity for persisting agents whose lifecycle state changed,
+        # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the
+        # activity indicator through the unchanged ``is_agent_running`` gate --
+        # otherwise a stopped agent would keep a stale "Thinking..." indicator.
+        # Added agents were already recomputed via _ensure_activity_tracking above;
+        # unchanged agents keep their re-applied cached state. broadcast_on_change
+        # is False so the single broadcast below stays authoritative.
+        with self._lock:
+            recompute_ids = [agent_id for agent_id in state_changed_ids if agent_id in self._activity_tracked_agents]
+        for agent_id in recompute_ids:
+            self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
         # Broadcast the updated agent list BEFORE any auto-open: the frontend's open
         # handler resolves ``chat:<name>`` against its known-agents list and drops the
@@ -1131,7 +1054,7 @@ class AgentManager:
         # auto-open assist chats that have appeared. ``_maybe_auto_open_assist``
         # dedupes, so an assist chat already present (including at startup) is not
         # reopened.
-        for agent_id in delta.added_agent_ids:
+        for agent_id in added_agent_ids:
             appeared_agent_state = new_agents.get(agent_id)
             if appeared_agent_state is not None:
                 self._maybe_auto_open_assist(appeared_agent_state)
@@ -1219,10 +1142,10 @@ class AgentManager:
         are tracked on a remote host and have no local transcript to watch.
         Idempotent: a second call does not duplicate work. The cached activity
         state is re-applied to ``_agents`` on every call, which matters because
-        the lifecycle handlers (``_handle_discovery_event``, ``_refresh_agents``)
-        rebuild ``_agents`` entries from raw discovery data with
+        the lifecycle handlers (``_handle_observe_event``, ``_refresh_agents``)
+        rebuild ``_agents`` entries from raw observe data with
         ``activity_state=None`` and rely on this method (for newly-added agents)
-        or on ``_handle_discovery_event``'s own cached-state re-application (for
+        or on ``_handle_observe_event``'s own cached-state re-application (for
         agents that persist across events) to repopulate it.
         """
         state_dir = self._get_agent_state_dir(agent_id)
@@ -1240,7 +1163,6 @@ class AgentManager:
             self._last_event_type_by_agent.pop(agent_id, None)
             self._last_event_timestamp_by_agent.pop(agent_id, None)
             self._activity_state_by_agent.pop(agent_id, None)
-            self._lifecycle_state_by_agent.pop(agent_id, None)
 
     def _read_process_started_at(self, agent_id: str) -> float | None:
         """Return the mtime of the agent's ``claude_process_started`` marker, or None.
@@ -1282,14 +1204,7 @@ class AgentManager:
             cached_last_event_type = self._last_event_type_by_agent.get(agent_id)
             tail_event_at = parse_iso_timestamp_to_epoch(self._last_event_timestamp_by_agent.get(agent_id))
             new_state = derive_activity_state(
-                # "Running" here means the process is alive (RUNNING or idle
-                # WAITING), not the narrower "mid-turn" sense: an idle agent is
-                # WAITING, and gating on the narrow set would suppress
-                # "Thinking..." for up to one lifecycle-poll interval after a
-                # message is sent (the poll lags the transcript). The transcript
-                # signals below decide working-vs-idle among live agents; this
-                # flag only forces IDLE once the process is gone.
-                is_agent_running=is_lifecycle_process_running(agent_state.state),
+                is_agent_running=agent_state.state in RUNNING_LIFECYCLE_STATES,
                 has_pending_tool_use=has_pending_tool,
                 tail_event_type=cached_last_event_type,
                 tail_event_at=tail_event_at,

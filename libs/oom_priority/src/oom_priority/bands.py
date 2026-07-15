@@ -101,12 +101,12 @@ def chat_agent_oom_score_adj(
 # agent's work revives on the next message, so it is shed first) but still
 # steerable relative to the other services.
 #
-# The built-in services are ordered from least- to most-expendable by how much
-# losing one hurts: the terminal (raw shell access) and the UI come first, then
-# the tunnel, then the two backups, then the app-watcher, then the placeholder
-# ``web`` example. ``user`` is the single band every *user-created* service
-# shares; it sits above every built-in service so a user's own service is shed
-# before any built-in one, while staying below USER_AGENT.
+# The services are ordered from least- to most-expendable by how much losing one
+# hurts: the terminal (raw shell access) and the UI come first, then the tunnel,
+# then the runtime-state sync (github-sync, opt-in) and the host backup, then the
+# app-watcher, then the placeholder ``web`` example. ``user`` is the single band
+# every *user-created* service shares; it sits above every built-in service so a
+# user's own service is shed before any built-in one, while staying below USER_AGENT.
 #
 # sshd and the other never-kill infrastructure (supervisord, earlyoom, tini,
 # tmux) are deliberately absent: they keep the inherited PROTECTED default (0)
@@ -123,7 +123,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "terminal": 10,
     "system_interface": 20,
     "cloudflared": 30,
-    "runtime-backup": 40,
+    # Opt-in runtime/ sync (added by the github-sync skill); inherits the band the
+    # now-removed runtime-backup service used to hold.
+    "github-sync": 40,
     "host-backup": 50,
     "app-watcher": 60,
     "web": 70,

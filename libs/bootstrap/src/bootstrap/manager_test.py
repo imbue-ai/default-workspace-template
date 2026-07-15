@@ -16,7 +16,6 @@ from bootstrap.manager import (
     INITIAL_CHAT_AGENT_ID_FILENAME,
     _build_create_chat_command,
     _configure_git_global,
-    _create_orphan_runtime_worktree,
     _ensure_host_claude_config_dir,
     _format_env_file,
     _initialize_workspace_main_branch,
@@ -32,12 +31,14 @@ from bootstrap.manager import (
 # --- _configure_git_global ---
 
 
-def test_configure_git_global_sets_insteadof_and_hookspath(
+def test_configure_git_global_sets_insteadof_but_not_hookspath(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Isolate the global git config to a tmp file so the test does not touch the
     # developer's real ~/.gitconfig. _configure_git_global should set both
-    # insteadOf rewrites (git@ and ssh://) plus core.hooksPath.
+    # insteadOf rewrites (git@ and ssh://). core.hooksPath must NOT be set:
+    # the post-commit auto-push hook only becomes active when the opt-in
+    # github-sync skill wires it up.
     gitconfig = tmp_path / ".gitconfig"
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
@@ -59,7 +60,7 @@ def test_configure_git_global_sets_insteadof_and_hookspath(
         text=True,
         check=False,
     ).stdout.strip()
-    assert hooks_path == "/mngr/code/scripts/git_hooks"
+    assert hooks_path == ""
 
 
 # --- Env-file helpers ---
@@ -520,152 +521,3 @@ def test_initialize_workspace_main_branch_is_idempotent_on_clean_main(
     _initialize_workspace_main_branch()
     branch = _git_in(work_dir, "branch", "--show-current").stdout.strip()
     assert branch == "main"
-
-
-# --- _create_orphan_runtime_worktree ---
-
-
-def test_create_orphan_runtime_worktree_creates_empty_orphan_branch(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The helper must add runtime/ as a worktree on a brand-new orphan branch
-    (no parent, empty tree) using only plumbing that works on old git -- no
-    `git worktree add --orphan` (git >= 2.42), which Lima's Debian 12 lacks."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git_in(repo, "init", "-q", "--initial-branch=main")
-    _git_in(repo, "config", "user.email", "seed@test.local")
-    _git_in(repo, "config", "user.name", "seed")
-    (repo / "README.md").write_text("seed\n")
-    _git_in(repo, "add", "-A")
-    _git_in(repo, "commit", "-qm", "seed")
-
-    monkeypatch.chdir(repo)
-    result = _create_orphan_runtime_worktree("mindsbackup/agent-test")
-    assert result.returncode == 0, result.stderr
-
-    runtime = repo / "runtime"
-    assert (runtime / ".git").exists()
-    # The branch is an orphan: its tip commit has no parents.
-    parents = _git_in(runtime, "rev-list", "--parents", "-1", "HEAD").stdout.split()
-    assert len(parents) == 1  # just the commit sha, no parent sha
-    # Nothing is tracked yet (empty tree); the worktree has no repo content.
-    assert _git_in(runtime, "ls-files").stdout.strip() == ""
-    assert not (runtime / "README.md").exists()
-
-
-# --- detect_snapshot_settings / init_backup_config_with_settings ---
-
-
-import tomllib as _tomllib
-
-import tomlkit
-from host_backup.config import (
-    SnapshotMethod,
-    SnapshotSettings,
-    render_default_backup_toml,
-)
-
-from bootstrap.manager import (
-    detect_snapshot_settings,
-    init_backup_config_with_settings,
-)
-
-
-def test_detect_snapshot_settings_picks_outer_trigger_when_trigger_dir_present(
-    tmp_path: Path,
-) -> None:
-    """If trigger_dir is a real dir on disk, bootstrap selects OUTER_TRIGGER."""
-    trigger_dir = tmp_path / "mngr-snapshot"
-    trigger_dir.mkdir()
-    settings = detect_snapshot_settings(
-        trigger_dir=trigger_dir,
-        host_dir=tmp_path / "mngr",
-    )
-    assert settings.method == SnapshotMethod.OUTER_TRIGGER
-    assert settings.trigger_dir == trigger_dir
-
-
-def test_detect_snapshot_settings_falls_back_to_direct_when_no_btrfs(
-    tmp_path: Path,
-) -> None:
-    """No trigger dir + non-btrfs host_dir => DIRECT."""
-    host_dir = tmp_path / "mngr"
-    host_dir.mkdir()
-    settings = detect_snapshot_settings(
-        trigger_dir=tmp_path / "absent-trigger",
-        host_dir=host_dir,
-    )
-    assert settings.method == SnapshotMethod.DIRECT
-    assert settings.snapshot_read_path == host_dir
-
-
-def test_init_backup_config_writes_defaults_when_files_absent(tmp_path: Path) -> None:
-    """First boot: backup.toml + restic.env are rendered from scratch."""
-    snapshot = SnapshotSettings(
-        method=SnapshotMethod.DIRECT, snapshot_read_path=Path("/mngr")
-    )
-    backup_toml_path = tmp_path / "backup.toml"
-    restic_env_path = tmp_path / "secrets" / "restic.env"
-    init_backup_config_with_settings(
-        snapshot,
-        backup_toml_path=backup_toml_path,
-        restic_env_path=restic_env_path,
-    )
-    assert backup_toml_path.exists()
-    assert restic_env_path.exists()
-    parsed = _tomllib.loads(backup_toml_path.read_text())
-    assert parsed["snapshot"]["method"] == SnapshotMethod.DIRECT.value
-
-
-def test_init_backup_config_preserves_user_fields_on_reboot(tmp_path: Path) -> None:
-    """A re-boot with a different detected method preserves user retention edits."""
-    backup_toml_path = tmp_path / "backup.toml"
-    restic_env_path = tmp_path / "secrets" / "restic.env"
-
-    # First boot: write a default toml then user edits retention.
-    backup_toml_path.write_text(
-        render_default_backup_toml(
-            SnapshotSettings(
-                method=SnapshotMethod.DIRECT, snapshot_read_path=Path("/mngr")
-            )
-        )
-    )
-    doc = tomlkit.parse(backup_toml_path.read_text())
-    doc["retention"]["keep_hourly"] = 99
-    backup_toml_path.write_text(tomlkit.dumps(doc))
-
-    # Second boot: detector now says OUTER_TRIGGER.
-    init_backup_config_with_settings(
-        SnapshotSettings(
-            method=SnapshotMethod.OUTER_TRIGGER,
-            btrfs_mount_path=Path("/mngr-btrfs"),
-            host_subvolume_path=Path("/mngr-btrfs/abcdef"),
-            snapshot_current_path=Path("/mngr-btrfs/snapshots/current"),
-            snapshot_read_path=Path("/mngr-snapshots/current"),
-            trigger_dir=Path("/mngr-snapshot"),
-        ),
-        backup_toml_path=backup_toml_path,
-        restic_env_path=restic_env_path,
-    )
-    parsed = _tomllib.loads(backup_toml_path.read_text())
-    assert parsed["snapshot"]["method"] == SnapshotMethod.OUTER_TRIGGER.value
-    assert parsed["retention"]["keep_hourly"] == 99
-
-
-def test_init_backup_config_is_noop_when_restic_env_already_exists(
-    tmp_path: Path,
-) -> None:
-    """If the user already populated restic.env, bootstrap must not overwrite it."""
-    backup_toml_path = tmp_path / "backup.toml"
-    restic_env_path = tmp_path / "secrets" / "restic.env"
-    restic_env_path.parent.mkdir(parents=True)
-    restic_env_path.write_text("RESTIC_PASSWORD=user-set\n")
-    init_backup_config_with_settings(
-        SnapshotSettings(
-            method=SnapshotMethod.DIRECT, snapshot_read_path=Path("/mngr")
-        ),
-        backup_toml_path=backup_toml_path,
-        restic_env_path=restic_env_path,
-    )
-    assert restic_env_path.read_text() == "RESTIC_PASSWORD=user-set\n"
