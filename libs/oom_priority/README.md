@@ -44,7 +44,7 @@ without inspecting the process tree:
 | a user-created supervisord service | launch | user service (above every built-in) | `scripts/oom_tag_service.py user` (command prefix) |
 | an agent's main process | launch | chat -> expendable chat band (560); worker or unidentifiable -> worker agent | `scripts/claude_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `scripts/claude_oom_tag_subprocess.py` (PreToolUse) |
-| a shared browser | launch | 1000 (the ceiling) | inline `oom_score_adj` write in the `browser` program |
+| a shared browser | launch | `SHARED_BROWSER` (1000, the ceiling) | inline `oom_score_adj` write in the `browser` program |
 
 Each supervisord service tags itself the same way an agent's main process does:
 its `command` in `supervisord.conf` runs `scripts/oom_tag_service.py <key> <the
@@ -52,9 +52,23 @@ real command>`, which sets its own `oom_score_adj` from `SERVICE_BANDS` and then
 `exec`s the command in place (the band survives `execve` and is inherited by
 every child). Built-in services pass their own name; a **user-created** service
 (added via the `edit-services` skill) passes the `user` key so it is shed before
-any built-in service. A service whose command is not wrapped keeps the inherited
-default of 0, which fails safe -- it stays as protected as the never-kill infra
-rather than being shed early.
+any built-in service. An unknown key is tagged as `user` too (with a warning):
+an unrecognized service must fail *expendable*, never protected.
+
+A **backstop event listener** (`scripts/oom_tag_backstop.py`, the
+`oom-tag-backstop` supervisord program) covers the one case the prefix cannot: a
+service whose command omits the wrapper entirely, which would otherwise keep the
+inherited `oom_score_adj` of 0 and sit as protected as sshd/supervisord. On
+every `PROCESS_STATE_RUNNING` event (boot and each restart) it resolves the
+program's expected band by *program name* (`bands.supervisord_program_band`: a
+built-in's own band; `USER_SERVICE` for anything unrecognized) and raises the
+process -- plus any children it already spawned, found via a
+`/proc/<pid>/task/*/children` walk -- up to that band. It only ever raises,
+never lowers, so a self-tagged process (the browser at the ceiling) and the
+`PROTECTED` programs (earlyoom, deferred-install, the listener itself) are never
+demoted. The prefix remains the primary mechanism because it tags at spawn:
+the RUNNING event fires only after `startsecs` (~1s), leaving a short window
+where an unwrapped service runs untagged.
 
 The agent's main process tags *itself*: the `claude` and `worker` agent types'
 `command` (in `.mngr/settings.toml`) runs `scripts/claude_oom_launch.py`, which
