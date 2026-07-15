@@ -54,6 +54,9 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
 - **Memory shedding** (`oom_retag.py`): the daemon is tagged as the most
   expendable thing in the workspace, but Chromium overwrites the inherited
   `oom_score_adj` with its own values, which would leave renderers more
-  protected than the agents they serve. A periodic sweep on a daemon thread
-  remaps Chromium's self-assigned values back into the browser band, preserving
-  their relative order. See "The Chromium exception" in `libs/oom_priority/README.md`.
+  protected than the agents they serve. Every fleet event that can spawn a
+  Chromium process (launch, new page -- from any origin, including a human in
+  the viewer -- and navigation) triggers a short burst of sweeps on a daemon
+  thread that remaps Chromium's self-assigned values back into the browser
+  band, preserving their relative order. See "The Chromium exception" in
+  `libs/oom_priority/README.md`.

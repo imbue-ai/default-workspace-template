@@ -52,7 +52,7 @@ from simple_websocket import ConnectionClosed
 
 from browser.loop_bridge import AsyncLoopBridge, cancel_task
 from browser.names import is_valid_browser_name
-from browser.oom_retag import start_retag_thread
+from browser.oom_retag import start_oom_retagging
 from browser.session import (
     BrowserSessionManager,
     BrowserStartupError,
@@ -925,10 +925,11 @@ def main() -> None:
     """
     app = create_app()
     # Chromium overwrites the inherited oom_score_adj with its own gradation;
-    # this sweep remaps its processes back into the browser shedding band (see
+    # session.py reports every event that can spawn Chromium processes and this
+    # worker remaps them back into the browser shedding band (see
     # browser.oom_retag). Started here, not in create_app, so tests that build
     # the app don't sweep the real process tree.
-    start_retag_thread()
+    start_oom_retagging()
     signal.signal(signal.SIGTERM, _exit_on_signal)
     signal.signal(signal.SIGINT, _exit_on_signal)
     server = make_threaded_server("127.0.0.1", 8081, app)

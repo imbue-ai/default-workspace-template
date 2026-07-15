@@ -5,10 +5,14 @@ The sweep policy is tested with injected collaborators (a recorded fake
 matters: Chrome-lowered values are remapped into the browser band preserving
 their order, everything at/above the floor (inherited-ceiling processes,
 already-remapped processes) is untouched, and repeating the sweep writes
-nothing more.
+nothing more. The scheduler is tested with an injected sweep and tight
+timings: it must be idle until kicked, and one kick must produce a burst of
+sweeps (not just one), since the processes spawn after the triggering event.
 """
 
-from browser.oom_retag import sweep_once
+import threading
+
+from browser.oom_retag import RetagScheduler, sweep_once
 from oom_priority import bands
 
 
@@ -63,3 +67,38 @@ def test_exited_processes_are_skipped() -> None:
     proc = _FakeProc({10: 0})
     writes = _sweep(proc, [10, 11])
     assert [pid for pid, _, _ in writes] == [10]
+
+
+def test_scheduler_is_idle_until_kicked_then_sweeps() -> None:
+    swept = threading.Event()
+    scheduler = RetagScheduler(sweep=swept.set, burst_interval=0.01, burst_duration=0.1)
+    scheduler.start()
+    try:
+        assert not swept.wait(timeout=0.05), "swept before any kick"
+        scheduler.kick()
+        assert swept.wait(timeout=2.0), "kick did not trigger a sweep"
+    finally:
+        scheduler.stop()
+
+
+def test_one_kick_produces_a_burst_of_sweeps() -> None:
+    # The Chromium processes spawn (and self-write their values) over the
+    # seconds after the triggering event, so a single immediate sweep would
+    # race them: one kick must keep re-sweeping through the burst window.
+    sweep_count = [0]
+    third_sweep = threading.Event()
+
+    def record_sweep() -> None:
+        sweep_count[0] += 1
+        if sweep_count[0] >= 3:
+            third_sweep.set()
+
+    scheduler = RetagScheduler(
+        sweep=record_sweep, burst_interval=0.01, burst_duration=5.0
+    )
+    scheduler.start()
+    try:
+        scheduler.kick()
+        assert third_sweep.wait(timeout=2.0), "the burst did not re-sweep"
+    finally:
+        scheduler.stop()
