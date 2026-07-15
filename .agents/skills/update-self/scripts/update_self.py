@@ -184,12 +184,18 @@ def classify_path(path: str) -> PathClass:
       merge.
     - ``dockerfile`` -- ``Dockerfile``; split by hunk into live-applicable vs
       rebuild-only by worker judgement.
-    - ``docs`` -- ``CLAUDE.md``, ``changelog/**``, and top-level ``*.md``.
+    - ``docs`` -- any ``README.md``, ``CLAUDE.md``, ``changelog/**``, and
+      top-level ``*.md``.
     - ``other`` -- anything else.
     """
     is_manifest = Path(path).name in _MANIFEST_BASENAMES
     project = _project_for_path(path)
 
+    # A README is documentation wherever it lives -- without this, a README
+    # under a service prefix (e.g. ``libs/bootstrap/README.md``) would inherit
+    # that prefix's reveal class and trigger a pointless restart.
+    if Path(path).name == "README.md":
+        return PathClass(CLASS_DOCS, project, is_manifest)
     if path.startswith("apps/system_interface/"):
         return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest)
     if path == "supervisord.conf" or path.startswith("libs/bootstrap/"):

@@ -319,7 +319,10 @@ def launch(
     Pre-flight checks run first so a typo doesn't half-create a worker:
     ``runtime_dir`` and ``task_file`` existence (and any declared
     ``source_artifacts_dir``'s existence) return exit code 2 with a clean
-    message, since those are caller-supplied paths. Malformed task-file
+    message, since those are caller-supplied paths. So does a leftover file at
+    the task's ``finish_report_path`` -- a stale report from a previous run
+    would satisfy ``await`` instantly, so launch refuses until the caller has
+    confirmed it was handled and moved it aside. Malformed task-file
     frontmatter instead raises ``ValueError`` (full traceback) -- that's a bug
     in how the task file was composed, not a bad CLI argument.
 
@@ -348,6 +351,25 @@ def launch(
     if artifacts_dir is not None and not artifacts_dir.is_dir():
         print(
             f"create_worker: source_artifacts_dir is not a directory: {artifacts_dir}",
+            file=sys.stderr,
+        )
+        return 2
+    # A leftover report at ``finish_report_path`` would satisfy the next
+    # ``await`` instantly (it only polls for file existence), so the new
+    # worker's real result would never be read -- and the runtime-dir sync
+    # below would even copy the stale report into the new worker's worktree.
+    # Refuse to launch; the caller must confirm the old report was fully
+    # handled and move it aside before relaunching.
+    report_path_value = _read_frontmatter_field(task_file, "finish_report_path")
+    if report_path_value is not None and Path(report_path_value).exists():
+        consumed_dir = Path(report_path_value).parent / "consumed"
+        print(
+            f"create_worker: refusing to launch {name}: something already "
+            f"exists at the report path {report_path_value} (left over from a "
+            f"previous run; `await` would return it instantly instead of this "
+            f"worker's real report). Confirm it has been dealt with, move it "
+            f"aside (e.g. mkdir -p {consumed_dir} && mv {report_path_value} "
+            f"{consumed_dir}/), then relaunch.",
             file=sys.stderr,
         )
         return 2

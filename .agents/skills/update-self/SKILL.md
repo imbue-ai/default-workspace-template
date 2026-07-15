@@ -53,10 +53,11 @@ with open('parent.toml', 'rb') as f:
 ")"
 git fetch upstream --tags
 
-REF=$(python3 .agents/skills/update-self/scripts/update_self.py resolve-target \
+REF=$(python3 .agents/skills/update-self/scripts/update_self.py resolve-target --local-tags \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["ref"])')
-# honoring a user override, append e.g. `--override main` or `--override minds-v0.3.6`
-# to the resolve-target call above.
+# `--local-tags` reads the tags the fetch above just landed (no second network
+# round-trip). Honoring a user override, append e.g. `--override main` or
+# `--override minds-v0.3.6` to the resolve-target call above.
 echo "$REF"
 ```
 
@@ -71,9 +72,16 @@ machinery, and background-poll.
 
 ```bash
 mkdir -p runtime/update-self
-TICKET_ID=$(tk create "update-self" -t task \
-    --acceptance "worker launched; conflicts triaged; validated; branch merged; revealed")
-tk start "$TICKET_ID"
+tk create "update-self" -t task \
+    --acceptance "worker launched; conflicts triaged; validated; branch merged; revealed"
+```
+
+Note the ticket id it prints, then start it. The tk hook requires `tk start` /
+`tk close` to be the *only* command in their tool call -- never chain them after
+another command or capture their output:
+
+```bash
+tk start <ticket-id>
 ```
 
 Write the task file. Use the two-heredoc form the other worker skills use: an
@@ -232,8 +240,21 @@ too: stop its isolated instance and close its tab (`python3 scripts/layout.py
 close <name>`). Then:
 
 ```bash
+mkdir -p runtime/update-self/reports/consumed
+mv runtime/update-self/reports/report.md \
+    runtime/update-self/reports/consumed/$(date +%s)-done.md
 uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name update-self
-tk close "$TICKET_ID" "Updated to <ref> -- worker branch merged and revealed."
+```
+
+Consuming the terminal report is not optional bookkeeping: `create_worker.py
+launch` refuses to start a worker while a leftover report sits at the report
+path (a stale one would satisfy the next pass's `await` instantly), so skipping
+this breaks the next update-self pass until someone cleans it up.
+
+Close the tracking ticket last (its own tool call, nothing chained):
+
+```bash
+tk close <ticket-id> "Updated to <ref> -- worker branch merged and revealed."
 ```
 
 ## To push local improvements back upstream

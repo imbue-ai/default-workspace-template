@@ -93,6 +93,12 @@ def test_classify_path_reveal_classes() -> None:
         "CLAUDE.md": update_self.CLASS_DOCS,
         "changelog/some-entry.md": update_self.CLASS_DOCS,
         "parent.toml": update_self.CLASS_OTHER,
+        # A README is docs even under a prefix with its own reveal class --
+        # it must never trigger that class's reveal action (e.g. a service
+        # restart for libs/bootstrap/README.md).
+        "libs/bootstrap/README.md": update_self.CLASS_DOCS,
+        "apps/system_interface/README.md": update_self.CLASS_DOCS,
+        "vendor/mngr/README.md": update_self.CLASS_DOCS,
     }
     for path, expected in cases.items():
         assert update_self.classify_path(path).reveal_class == expected, path
@@ -186,10 +192,14 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path) -> None:
     _git("tag", "minds-v0.1.0")
 
     assert (
-        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(tmp_path)])
+        update_self.main(
+            ["resolve-target", "--local-tags", "--repo-root", str(tmp_path)]
+        )
         == 0
     )
     assert (
-        update_self.main(["--repo-root", str(tmp_path), "resolve-target", "--local-tags"])
+        update_self.main(
+            ["--repo-root", str(tmp_path), "resolve-target", "--local-tags"]
+        )
         == 0
     )
