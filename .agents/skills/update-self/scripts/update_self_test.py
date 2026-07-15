@@ -89,6 +89,13 @@ def test_classify_path_reveal_classes() -> None:
         "scripts/forward_port.py": update_self.CLASS_SHARED_RUNTIME,
         ".agents/skills/update-self/SKILL.md": update_self.CLASS_SHARED_RUNTIME,
         "libs/oom_priority/src/oom_priority/ledger.py": update_self.CLASS_SHARED_RUNTIME,
+        # Provisioning files: pinned-toolchain scripts (would otherwise read as
+        # shared_runtime under scripts/) and the .mngr/ create config (would
+        # otherwise fall through to other) -- both need the provisioner reveal.
+        "scripts/setup_system.sh": update_self.CLASS_PROVISIONER,
+        "scripts/install_secret_scanners.sh": update_self.CLASS_PROVISIONER,
+        "scripts/_provision_guard.sh": update_self.CLASS_PROVISIONER,
+        ".mngr/settings.toml": update_self.CLASS_PROVISIONER,
         "Dockerfile": update_self.CLASS_DOCKERFILE,
         "CLAUDE.md": update_self.CLASS_DOCS,
         "changelog/some-entry.md": update_self.CLASS_DOCS,
@@ -159,6 +166,22 @@ def test_classify_merge_summary_fields() -> None:
     ]
     assert result.reveal_classes_pulled_in == [update_self.CLASS_SHARED_RUNTIME]
     assert result.projects_to_validate == ["apps/system_interface", "vendor/mngr"]
+
+
+def test_classify_merge_surfaces_provisioner_bump() -> None:
+    # The motivating case: upstream bumps the pinned latchkey version in
+    # scripts/setup_system.sh and touches .mngr/settings.toml, local left both
+    # untouched. They come in as a clean pull, but must still surface under the
+    # provisioner reveal class (not shared_runtime/other) so the flow re-runs the
+    # provisioner or flags a rebuild rather than silently dropping the new pin.
+    result = update_self.classify_merge(
+        ["scripts/setup_system.sh", ".mngr/settings.toml"], []
+    )
+    assert result.reveal_classes_pulled_in == [update_self.CLASS_PROVISIONER]
+    assert [entry["reveal_class"] for entry in result.pulled_in] == [
+        update_self.CLASS_PROVISIONER,
+        update_self.CLASS_PROVISIONER,
+    ]
 
 
 def test_classify_merge_empty() -> None:
