@@ -65,6 +65,14 @@ echo "$REF"
 to `upstream/main` (not the stale local branch). Keep `$REF` in your shell for the
 dispatch below, and tell the user which version you're updating to.
 
+To preview what the release actually changes, always diff from the **merge
+base**, never from `HEAD` -- a `git diff HEAD "$REF"` also shows every *local*
+change as if upstream were reverting it, which reads as phantom upstream churn:
+
+```bash
+git diff --name-status "$(git merge-base HEAD "$REF")" "$REF"
+```
+
 ## 3. Dispatch the worker
 
 Open a tracking ticket, write the task file, launch via the `launch-task`
@@ -174,6 +182,16 @@ it from inside that preview. Skip previews for services that came in clean.
 
 ### 5b. Land the merge
 
+**When the update touches `apps/system_interface/` at all** (merged *or* pulled
+in -- anything that makes 5c run the safe-reveal), first take the
+`editing service system_interface` lease and hold it through the end of 5c,
+exactly as `update-system-interface` Step 4 does: the reveal's auto-rollback
+restores a captured revision, so a foreign merge landing between here and the
+reveal could be swept away by it. Check `tk ready` for another agent's lease
+and surface instead of proceeding if one is held; then `tk create "editing
+service system_interface" -t chore` and `tk start` it (each as its own
+command). Release it (tk close) after 5c.
+
 Capture the rollback revision, then fast-forward the worker branch. It branched
 off this exact `HEAD`, so the merge fast-forwards and **preserves the worker's
 `update-self:` merge commit verbatim** (the marker `assist` relies on):
@@ -205,7 +223,11 @@ The report says which classes merged. Apply each; a clean pull-in is still
   ```
 
   Exit codes per `update-system-interface` Step 5 (`0` revealed; `2`
-  auto-rolled-back; `3` emergency; `1` precondition).
+  auto-rolled-back; `3` emergency; `1` precondition). **On exit 2 the rollback
+  reverts `$ROLLBACK_TO..HEAD` -- the entire landed merge, every class, not
+  just the system interface.** Stop here: apply no other class (the tree no
+  longer contains the update), surface the failure, and re-dispatch once the
+  cause is fixed. Exit 3 means the restore itself failed -- surface immediately.
 
 - **`service` / `supervisord.conf` / `bootstrap`** -- restart the services agent
   so `bootstrap` re-runs and `supervisord` reloads every program, then refresh
