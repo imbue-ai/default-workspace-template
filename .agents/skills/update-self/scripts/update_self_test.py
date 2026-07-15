@@ -171,9 +171,14 @@ def test_classify_merge_empty() -> None:
 # --- CLI wiring --------------------------------------------------------------
 
 
-def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path) -> None:
-    # `--repo-root` must work both before and after the subcommand; a value after
-    # the subcommand previously errored because it lived only on the top parser.
+def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -> None:
+    # `--repo-root` must work both before and after the subcommand. Each
+    # ordering has broken in its own way: a value after the subcommand errored
+    # when the option lived only on the top parser, and a value *before* it was
+    # silently clobbered back to cwd by the subparser's default on
+    # Python < 3.13 (bpo-9351). Asserting on the resolved tag (which only
+    # exists in the tmp repo) catches both -- a clobber would resolve against
+    # the real repo and either fail or print a different ref.
     def _git(*args: str) -> None:
         subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
 
@@ -191,15 +196,9 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path) -> None:
     )
     _git("tag", "minds-v0.1.0")
 
-    assert (
-        update_self.main(
-            ["resolve-target", "--local-tags", "--repo-root", str(tmp_path)]
-        )
-        == 0
-    )
-    assert (
-        update_self.main(
-            ["--repo-root", str(tmp_path), "resolve-target", "--local-tags"]
-        )
-        == 0
-    )
+    for argv in (
+        ["resolve-target", "--local-tags", "--repo-root", str(tmp_path)],
+        ["--repo-root", str(tmp_path), "resolve-target", "--local-tags"],
+    ):
+        assert update_self.main(argv) == 0, argv
+        assert '"minds-v0.1.0"' in capsys.readouterr().out, argv
