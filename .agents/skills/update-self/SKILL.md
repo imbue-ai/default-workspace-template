@@ -249,7 +249,60 @@ The report says which classes merged. Apply each; a clean pull-in is still
   `.mngr/settings.toml` in sync). Tell the user any image-level hunk (base
   `FROM`, `apt-get` packages, build-time layout) needs a manual workspace rebuild.
 
-- **`shared_runtime` (`scripts/**`, other `libs/**`, `.agents/**`)** -- applies to
+- **`provisioner` (`scripts/setup_system.sh`,
+  `scripts/install_secret_scanners.sh`, `scripts/_provision_guard.sh`,
+  `.mngr/**`)** -- shapes how the workspace image and agents are *provisioned*,
+  not live runtime code, so it doesn't reveal by merely restarting a dependent
+  service the way `shared_runtime` does. Work the report's apply plan by sub-case:
+
+  - A **pinned-toolchain bump** in `setup_system.sh` /
+    `install_secret_scanners.sh` (canonically `LATCHKEY_VERSION`, but also `UV_`,
+    `MODAL_`, `TTYD_`, `CLOUDFLARED_`, scanner pins) does **not** reach the live
+    workspace on its own -- the globally-installed CLI stays at the old version
+    until a rebuild. Apply it live by re-running the provisioner:
+
+    ```bash
+    bash scripts/setup_system.sh
+    ```
+
+    This now actually runs (rather than skipping): the merge changed the repo
+    tree, so the content-addressed provision guard's marker no longer matches,
+    and the script re-installs the pinned tools idempotently. The report names
+    which pins moved.
+  - A hunk that only affects a **fresh image build** -- something the idempotent
+    re-run does not reproduce -- needs a **manual workspace rebuild**; tell the
+    user, exactly as for an image-level `Dockerfile` hunk.
+  - **`.mngr/**` create config** governs `mngr create`, so the merged file
+    governs every *future* create automatically (a fresh workspace, and the
+    sub-agents `launch-task` spawns) -- but the *current* workspace was built and
+    launched under the **old** settings, so a create-time change does not reach it
+    on its own. The worker's report carries a **per-change apply plan** (it
+    best-effort mirrors each change into a live counterpart within the merge);
+    carry it out:
+
+    - **Live-applicable** (most changes, including env vars and agent behavior) --
+      the worker already made the in-repo edits mirroring the change into its live
+      counterpart (an env var into a `profile.d` entry / a supervisord program's
+      `environment=`; a `settings_overrides` / `disable_plugin` change into what
+      the running agent reads; a Claude/toolchain version pin into `setup_system.sh`
+      / the Dockerfile). You run the restart the report names to make them take
+      effect: re-run the provisioner for a mirrored toolchain pin, and/or `mngr
+      start --restart system-services` (or a relaunch of the affected agent) so the
+      next process start reads it. Keep lockstep pins (`agent_types.claude.version`
+      vs the Dockerfile `CLAUDE_CODE_VERSION` and the installed binary) consistent.
+    - **Rebuild-only for the current workspace** (the narrow remainder) -- only a
+      container build/launch parameter an already-running container can't adopt: a
+      `[create_templates.*]` / `[providers.*]` `build_arg`, `start_arg`
+      (`--security-opt`, `--tmpfs`, `--cpus`, …), or runtime flag (`runsc` /
+      `docker_runtime`). Flag it to the user as needing a workspace recreate,
+      exactly as an image-level `Dockerfile` hunk; don't imply it is already live.
+
+    (A change the worker judged neither live-applicable nor safe to defer to a
+    rebuild comes back as `stuck`, handled in Step 5's terminal status -- nothing
+    is landed.)
+
+- **`shared_runtime` (`scripts/**` other than the provisioning scripts above,
+  `libs/**`, `.agents/**`)** -- applies to
   future agents automatically unless a live service depends on the file. The
   report's impact analysis names any live consumer; restart that service
   (usually `mngr start --restart system-services`). Only "nothing to reveal"

@@ -136,6 +136,76 @@ work, and you must do it for every changed `scripts/**`, `libs/**`, and
    you checked and how, so the lead sees the coverage instead of trusting an
    unstated search.
 
+**Provisioning files always count as impacted -- and you best-effort apply them.**
+A change to `scripts/setup_system.sh`, `scripts/install_secret_scanners.sh`,
+`scripts/_provision_guard.sh`, or `.mngr/**` (the `provisioner` reveal class) has
+no *running* consumer to grep for -- nothing imports it -- yet it installs and
+configures the global toolchain (the latchkey CLI, uv, claude, modal, the secret
+scanners) and the `mngr create` config every live agent, service, and future
+sub-agent runs on. So never conclude "nothing to reveal" for one. Work each
+provisioning change through, most-live-applicable first, and record the plan in
+your report so the lead can carry it out (you stay in your worktree -- you make
+the in-repo edits an apply implies, but the lead runs the live restarts):
+
+- **Toolchain-script pins** (`setup_system.sh` / `install_secret_scanners.sh`) --
+  a pinned-version bump (e.g. `LATCHKEY_VERSION`) is **live-applicable**: the lead
+  re-runs the idempotent provisioner (`bash scripts/setup_system.sh`) to install
+  the new version. A hunk only a fresh image build reproduces is **rebuild-only**.
+- **`.mngr/**` settings** -- `.mngr/settings.toml` only governs `mngr create`, so
+  the merged file governs every *future* create automatically (a new workspace,
+  and the sub-agents `launch-task` spawns). But the *current* workspace was built
+  and launched under the **old** settings, so a create-time change does not reach
+  it on its own. **Examine each changed setting and best-effort make it live:**
+    Lean hard toward applying live: most settings have a live counterpart, and
+    "it's fiddly to get right" is not a reason to defer -- only a genuine lack of
+    any live lever is.
+
+    **Ground every apply in how `vendor/mngr` consumes the setting -- do not guess
+    the live mechanism.** For each changed key, grep `vendor/mngr` for its name to
+    find exactly where mngr reads and enacts it at create time, then mirror *that*
+    mechanism. E.g. a `commands.create` `host_env__extend` change: `grep -rn
+    host_env vendor/mngr` shows where mngr turns those entries into the agent
+    container's environment (which env file / process env it writes), so you know
+    the precise place to set them live and which process must restart to re-read
+    them. Likewise `settings_overrides` -> where mngr writes Claude's settings;
+    `extra_provision_command` -> how/when mngr runs it; `disable_plugin` -> where
+    the plugin list is applied. Applying the setting the way mngr itself does is
+    what makes the live edit correct rather than a plausible-looking guess.
+
+    Cases, most-clearly-applyable first:
+  - **Env vars and agent behavior** (`host_env` / `pass_env` / `pass_host_env` /
+    `env`, `settings_overrides` like `model` / `fastMode`, `disable_plugin`) are
+    **live-applicable**, just fiddly: they shape the environment and config that
+    each agent/service process reads *at launch*, so mirror the change into the
+    live equivalent (an env var into a `profile.d` entry or the relevant
+    supervisord program's `environment=`; an agent-behavior override into whatever
+    the running agent reads) and have the lead bounce the consumers -- `mngr start
+    --restart system-services`, or a relaunch of the affected agent -- so the next
+    process start picks it up. Do the mirror edit in your branch so it merges and
+    is validated. Get it right rather than punting it to a rebuild.
+  - A **toolchain/version pin** under `[agent_types.*]` (Claude version) -> mirror
+    into `setup_system.sh` / the `Dockerfile` pin so a provisioner re-run installs
+    it, and bounce the services agent. An `extra_provision_command` addition -> the
+    lead runs that command live. Keep lockstep pins (`agent_types.claude.version`
+    vs the Dockerfile `CLAUDE_CODE_VERSION` and the installed binary) consistent
+    across every file that carries them.
+  - Only a **container build/launch parameter** an already-running container
+    genuinely cannot adopt -- a `[create_templates.*]` / `[providers.*]`
+    `build_arg`, a `start_arg` (`--security-opt`, `--tmpfs`, `--workdir`,
+    `--cpus`/`--memory`/`--disk`, `--restart`), or a runtime/provider flag (`runsc`
+    / `docker_runtime` / `install_gvisor_runtime`) -- is **rebuild-only for the
+    current workspace** (it still governs future creates). Flag it to the lead as
+    needing a workspace recreate, exactly like an image-level `Dockerfile` hunk; do
+    not imply it is already in effect.
+
+**Escape hatch (`stuck`).** If a provisioning change is **not** live-applicable
+**and** leaving the running workspace on the old provisioning would **genuinely
+break it** (not merely "won't take effect until the next create"), do **not**
+report `done` with a rebuild flag -- report `stuck` (Step 6), name the setting and
+why it breaks, and refuse the update so the live workspace is left untouched.
+Reserve this for real breakage; a change that is simply deferred-until-rebuild is
+`done` plus a rebuild flag, not `stuck`.
+
 An impacted *service* gets validated below (boot + suites) and flagged for
 restart in your report. An impacted *skill* (a workspace-added skill relying on
 something the update changed) gets validated per its own contract -- run its
@@ -209,8 +279,19 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     checked and how, and which services the lead must restart.
   - **Dockerfile split** (if it merged) -- each hunk as live-applicable (e.g. a
     `CLAUDE_CODE_VERSION` bump) or image-level (needs a manual rebuild).
+  - **Provisioning changes** (if any `provisioner`-class file changed) -- per the
+    impact analysis above, each change with its apply plan: **live-applicable**
+    (the in-branch edits you made to mirror it + the exact restart the lead runs,
+    e.g. a `LATCHKEY_VERSION` bump -> re-run `setup_system.sh`; an env var or
+    `[agent_types]` change -> mirrored into the live env/pin + `mngr start
+    --restart system-services`) or **rebuild-only for the current workspace** (only
+    a `build_arg` / `start_arg` / runtime-flag change a running container can't
+    adopt). A genuinely-breaking, unapplyable change is a `stuck` report, not a
+    `done`.
   - **Validation** -- suites/boots/Playwright and review gates run, all passing;
     autofix fixes kept vs reverted.
-- `stuck` (`type: status`) -- you couldn't reach a clean, validated merge; one
-  sentence on what blocked you and where the work stands. Never report `done` on
-  a merge whose suites or boots fail.
+- `stuck` (`type: status`) -- you couldn't reach a clean, validated merge, or you
+  hit the provisioning escape hatch above (a change you can neither apply live nor
+  safely defer to a rebuild without breaking the running workspace); one sentence
+  on what blocked you and where the work stands. Never report `done` on a merge
+  whose suites or boots fail.

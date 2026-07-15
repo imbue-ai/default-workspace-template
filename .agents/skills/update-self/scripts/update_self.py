@@ -128,9 +128,37 @@ CLASS_SYSTEM_INTERFACE = "system_interface"
 CLASS_SERVICE = "service"
 CLASS_EDITABLE_TOOL = "editable_tool"
 CLASS_SHARED_RUNTIME = "shared_runtime"
+CLASS_PROVISIONER = "provisioner"
 CLASS_DOCKERFILE = "dockerfile"
 CLASS_DOCS = "docs"
 CLASS_OTHER = "other"
+
+# Files whose effects land at image-build / workspace-create / first-boot
+# provisioning time -- the pinned global toolchain and the create/agent config --
+# rather than at runtime. A change to one never reaches a *live* workspace by
+# restarting a service (nothing running imports it): it needs the provisioning
+# step re-run live (these scripts are idempotent) or a workspace rebuild. Split
+# out of ``shared_runtime``/``other`` so the reveal can flag that downstream
+# impact instead of concluding "nothing to reveal". See the skill's
+# ``provisioner`` reveal class.
+_PROVISIONER_SCRIPTS = frozenset(
+    {
+        "scripts/setup_system.sh",  # pinned global toolchain (latchkey, uv, claude, ...)
+        "scripts/install_secret_scanners.sh",  # pinned global scanner binaries
+        "scripts/_provision_guard.sh",  # the guard that gates the above
+    }
+)
+
+
+def _is_provisioner(path: str) -> bool:
+    """Whether ``path`` shapes how the workspace/agent is *provisioned*.
+
+    The pinned-toolchain scripts (:data:`_PROVISIONER_SCRIPTS`) plus everything
+    under ``.mngr/`` -- the ``mngr create`` defaults, provider blocks, and the
+    agent Claude-version pin that provisioning applies to every new workspace.
+    """
+    return path in _PROVISIONER_SCRIPTS or path.startswith(".mngr/")
+
 
 # Basenames whose change means a dependency manifest moved, so the editable
 # install / build needs its env refreshed rather than just picking up new source.
@@ -182,6 +210,10 @@ def classify_path(path: str) -> PathClass:
       may be a live runtime dependency of a service or a workspace-added skill,
       so it needs the worker's impact analysis before it can be called a silent
       merge.
+    - ``provisioner`` -- the pinned-toolchain scripts and the ``.mngr/`` create
+      config (see :func:`_is_provisioner`); shapes image-build / create-time
+      provisioning, so a change is re-run live (idempotent scripts) or flagged
+      for a workspace rebuild, never revealed by a service restart.
     - ``dockerfile`` -- ``Dockerfile``; split by hunk into live-applicable vs
       rebuild-only by worker judgement.
     - ``docs`` -- any ``README.md``, ``CLAUDE.md``, ``changelog/**``, and
@@ -196,6 +228,13 @@ def classify_path(path: str) -> PathClass:
     # that prefix's reveal class and trigger a pointless restart.
     if Path(path).name == "README.md":
         return PathClass(CLASS_DOCS, project, is_manifest)
+    # Provisioning files are matched before the generic ``scripts/`` and
+    # catch-all rules below: a toolchain script lives under ``scripts/`` (would
+    # otherwise read as ``shared_runtime``) and ``.mngr/settings.toml`` would
+    # otherwise fall through to ``other`` -- either way the reveal would miss its
+    # build/create-time impact.
+    if _is_provisioner(path):
+        return PathClass(CLASS_PROVISIONER, project, is_manifest)
     if path.startswith("apps/system_interface/"):
         return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest)
     if path == "supervisord.conf" or path.startswith("libs/bootstrap/"):
