@@ -2,12 +2,10 @@
 
 # Claude
 
-- Claude Code's built-in `TodoWrite` is disabled; step records are the replacement for `TodoWrite`.
-- The pytest-timeout note (`PYTEST_MAX_DURATION_SECONDS`) refers to the **Bash tool** timeout.
-- **CLAUDE.md** (this file): update these instructions if you discover better ways to operate.
-- `.agents/skills/` is also symlinked from `.claude/skills/`.
-- `runtime/memory/` holds Claude memory.
+Claude Code's built-in `TodoWrite` is disabled, use tk instead. Step records (`tk create --step "..."`) are the replacement for `TodoWrite`.
+
+`.claude/skills` does not exist, it is symlinked to `.agents/skills/`.
 
 # Memory
 
-Use Claude's built-in memory system. Your memory directory is `runtime/memory/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
+Use Claude's built-in memory system. Your memory directory is `runtime/memory/` (configured via `autoMemoryDirectory` in `.claude/settings.json`). Memory is gitignored from the main branch.
