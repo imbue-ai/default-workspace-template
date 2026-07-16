@@ -311,9 +311,9 @@ The report says which classes merged. Apply each; a clean pull-in is still
   longer contains the update), surface the failure, and re-dispatch once the
   cause is fixed. Exit 3 means the restore itself failed -- surface immediately.
 
-- **`service` / `supervisord.conf` / `bootstrap`** -- restart the services agent
-  so `bootstrap` re-runs and `supervisord` reloads every program, then refresh
-  any affected tab (`python3 scripts/layout.py refresh <name>`):
+- **`service` / `supervisord.conf` / `bootstrap`** -- restart the whole services
+  agent (do not use `supervisorctl reread && update` here), then refresh any
+  affected tab (`python3 scripts/layout.py refresh <name>`):
 
   ```bash
   mngr start --restart system-services
