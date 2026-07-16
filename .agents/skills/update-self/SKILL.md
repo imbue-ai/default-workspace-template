@@ -118,9 +118,10 @@ Then branch on the result:
   export UPDATE_SELF_SKILL_DIR=.agents/skills/update-self
   ```
 
-- **`differs` is `True`** -> the target ships a changed update flow. **Stop
-  following this document.** Export the extracted copy as your skill dir and
-  follow *its* `SKILL.md` from **Step 3** onward:
+- **`differs` is `True`** -> the target's copy of the flow differs from your
+  local one (it shipped changes, or this workspace customized the flow locally).
+  **Stop following this document.** Export the extracted copy as your skill dir
+  and follow *its* `SKILL.md` from **Step 3** onward:
 
   ```bash
   export UPDATE_SELF_SKILL_DIR="$SKILL_DIR"   # absolute path to the target's copy
@@ -134,6 +135,20 @@ Then branch on the result:
 Either way, `$UPDATE_SELF_SKILL_DIR` now names the copy of the flow to run.
 Everything below reaches the skill's scripts and worker reference through it (and
 passes it to the worker), so both paths dispatch against the correct version.
+
+**The handoff contract (keep this boundary stable when editing this skill).**
+Steps 1-2 -- preconditions and target resolution -- always run from the *local*
+copy: they are what decide `$REF`, so by construction they cannot come from the
+target. The target's flow is entered at **Step 3**. So an edit to this skill must
+preserve that boundary: a future version's Steps 1-2 must stay "capture a backup,
+the single-flight/clean-tree checks, then resolve a ref into `$REF`", and its
+Step 3 must stay the worker dispatch -- otherwise an older initiator handing off
+into a newer copy (or vice versa) lands at the wrong step. Note also that this
+handoff runs the target ref's `update_self.py` and follows its prose *before* the
+Step 5a approval gate; for the default target (a stable, already-tested `minds-v*`
+tag) that is the same trust basis as the merge itself, but a `--override` to an
+untrusted ref means trusting that ref's flow code and instructions -- only
+override to a ref you trust.
 
 ## 3. Dispatch the worker
 

@@ -229,33 +229,18 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
         assert '"minds-v0.1.0"' in capsys.readouterr().out, argv
 
 
-# --- read_tree / trees_differ ----------------------------------------------
+# --- read_tree --------------------------------------------------------------
 
 
-def test_trees_differ_detects_content_and_file_set_changes(tmp_path) -> None:
-    left = tmp_path / "left"
-    right = tmp_path / "right"
-    for root in (left, right):
-        (root / "sub").mkdir(parents=True)
-        (root / "SKILL.md").write_text("same", encoding="utf-8")
-        (root / "sub" / "a.py").write_text("print(1)", encoding="utf-8")
-    assert not update_self.trees_differ(left, right)
-
-    # A content change on one side is a difference.
-    (right / "SKILL.md").write_text("changed", encoding="utf-8")
-    assert update_self.trees_differ(left, right)
-
-    # A differing file set is a difference even when shared files match.
-    (right / "SKILL.md").write_text("same", encoding="utf-8")
-    (right / "extra.md").write_text("new", encoding="utf-8")
-    assert update_self.trees_differ(left, right)
-
-
-def test_trees_differ_missing_tree_counts_as_empty(tmp_path) -> None:
-    present = tmp_path / "present"
-    present.mkdir()
-    (present / "SKILL.md").write_text("x", encoding="utf-8")
-    assert update_self.trees_differ(present, tmp_path / "absent")
+def test_read_tree_maps_files_to_bytes_by_relative_path(tmp_path) -> None:
+    root = tmp_path / "skill"
+    (root / "scripts").mkdir(parents=True)
+    (root / "SKILL.md").write_text("body", encoding="utf-8")
+    (root / "scripts" / "a.py").write_bytes(b"print(1)")
+    assert update_self.read_tree(root) == {
+        "SKILL.md": b"body",
+        "scripts/a.py": b"print(1)",
+    }
 
 
 # --- bootstrap-skill --------------------------------------------------------
@@ -320,6 +305,35 @@ def test_bootstrap_skill_reports_no_difference_when_local_matches_tag(
 ) -> None:
     repo = tmp_path / "repo"
     _init_repo_with_skill(repo, skill_body="STABLE FLOW\n")
+
+    assert (
+        update_self.main(
+            [
+                "bootstrap-skill",
+                "--ref",
+                "minds-v1.0.0",
+                "--dest",
+                str(tmp_path / "staging"),
+                "--repo-root",
+                str(repo),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["differs"] is False
+
+
+def test_bootstrap_skill_ignores_untracked_build_artifacts(tmp_path, capsys) -> None:
+    # Importing the script drops __pycache__/*.pyc into scripts/. Those are
+    # untracked and never appear in the git-archive extraction, so they must not
+    # register as a spurious difference -- otherwise the "identical -> stay on the
+    # local flow" branch would be dead in every real checkout (where the module
+    # has been imported at least once).
+    repo = tmp_path / "repo"
+    _init_repo_with_skill(repo, skill_body="STABLE FLOW\n")
+    pycache = repo / update_self.SKILL_DIR_REL / "scripts" / "__pycache__"
+    pycache.mkdir()
+    (pycache / "update_self.cpython-313.pyc").write_bytes(b"\x00compiled\x00")
 
     assert (
         update_self.main(
