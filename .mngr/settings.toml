@@ -79,6 +79,12 @@ yes = true
 auto_dismiss_dialogs = true
 auto_allow_permissions = true
 auto_disable_questions = true
+# Autonomous/sandbox agents should not wedge on an interactive selector. After a message is
+# delivered, auto-accept the default of any blocking dialog it opened (e.g. the /model
+# confirmation) up to this depth; likewise auto-clear a dialog already present when a send
+# starts or the agent comes up. (Permission prompts are never auto-accepted.)
+auto_accept_prompt_depth = 5
+auto_accept_preflight_prompt_depth = 5
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
 settings_overrides__extend = {model = "opus[1m]", fastMode = true}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
