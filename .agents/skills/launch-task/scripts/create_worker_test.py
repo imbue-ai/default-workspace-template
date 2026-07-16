@@ -989,12 +989,13 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
     # dir), so without cleanup the report launch_sync just collected would trap the
     # next call. A non-interactive caller (a service) that calls launch_sync
     # repeatedly with the same task file -- hence the same report path -- must not
-    # be blocked by its own previous report. So launch_sync consumes (removes) the
-    # report once it has been collected and emitted.
+    # be blocked by its own previous report. So launch_sync moves the collected
+    # report aside into consumed/ (archived, not deleted) once it is collected.
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
     _write_launch_sync_task(task, report)
+    consumed = report.parent / "consumed"
 
     def _run_once(runner: create_worker_mod.Runner) -> int:
         return create_worker_mod.launch_sync(
@@ -1014,8 +1015,12 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
 
     first = _RecordingRunner()
     assert _run_once(first) == 0
-    # The collected report is cleared from the report path, not left behind.
+    # The collected report is cleared from the report path but preserved in
+    # consumed/, not deleted.
     assert not report.exists()
+    assert (consumed / "report.md").read_text() == (
+        "---\ntype: status\nname: done\n---\n\nround\n"
+    )
 
     # A second identical call re-creates the worker and returns 0 instead of
     # aborting on the guard (exit 2, which would emit no `mngr create`).
@@ -1033,6 +1038,10 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
             "agent_created=true",
         ]
     ]
+    # The second run's report is archived under a disambiguated name -- the first
+    # archive is not overwritten, so both are retained.
+    assert not report.exists()
+    assert sorted(p.name for p in consumed.iterdir()) == ["report.1.md", "report.md"]
 
 
 def test_launch_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:

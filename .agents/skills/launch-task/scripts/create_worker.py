@@ -573,6 +573,32 @@ def destroy(name: str, runner: Runner | None = None) -> None:
     runner.run(["mngr", "destroy", name, "--force"], check=True)
 
 
+def _archive_report(report_path: Path) -> None:
+    """Move a collected report out of ``finish_report_path`` into ``consumed/``.
+
+    ``launch``'s stale-report guard refuses to start while anything sits at
+    ``finish_report_path``, and ``destroy`` never touches this file (it lives in
+    the caller's runtime dir, not the worker's worktree), so a repeated
+    ``launch_sync`` on the same task file would be blocked by the report it just
+    collected. We move it aside rather than delete it -- the raw report is worth
+    keeping -- mirroring the interactive flow's ``consumed/`` archive and the
+    guard's own suggested remedy. The archive name is disambiguated by a numeric
+    suffix so successive runs each keep their own report (and nothing is
+    overwritten). A no-op if the file is already gone (e.g. a race with an
+    external cleanup).
+    """
+    if not report_path.exists():
+        return
+    consumed_dir = report_path.parent / "consumed"
+    consumed_dir.mkdir(parents=True, exist_ok=True)
+    target = consumed_dir / report_path.name
+    index = 1
+    while target.exists():
+        target = consumed_dir / f"{report_path.stem}.{index}{report_path.suffix}"
+        index += 1
+    report_path.replace(target)
+
+
 def _emit_run_result(
     payload: Mapping[str, object], stream: TextIO, result_path: Path | None
 ) -> None:
@@ -669,11 +695,8 @@ def launch_sync(
     # ``finish_report_path``, and ``destroy`` only removes the worker's
     # agent/worktree -- not this report, which lives in the caller's runtime dir.
     # Leaving it behind would trap the next ``launch_sync`` on the same task file
-    # (the fixed-path pattern services use). The raw report is preserved in the
-    # emitted result (``raw_report`` in the JSON, plus ``result_path`` if set), so
-    # removing the on-disk copy loses nothing. ``missing_ok`` guards a race where
-    # something already cleared it between the await and here.
-    report_path.unlink(missing_ok=True)
+    # (the fixed-path pattern services use).
+    _archive_report(report_path)
     if destroy_on_finish:
         destroy(name, runner)
     _emit_run_result(

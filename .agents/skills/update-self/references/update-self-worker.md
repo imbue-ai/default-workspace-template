@@ -224,10 +224,16 @@ template rather than added locally.
 
 - **Dependent is built-in code** (present in the upstream template at the target
   ref -- e.g. `apps/system_interface`, a template-shipped `libs/*` service, a
-  `.agents/shared/` script): **trust it and apply live.** The upstream release
-  tested that built-in code against the bumped dependency *together*, so re-running
-  the provisioner and restarting the built-in service is safe -- the same "trust
-  upstream's testing" basis the whole pulled-in set rides on. Not rebuild-only.
+  `.agents/shared/` script): **classify it live-applicable and report that** -- the
+  upstream release tested that built-in code against the bumped dependency
+  *together*, so it's safe to apply on the same "trust upstream's testing" basis
+  the whole pulled-in set rides on. Not rebuild-only. **You do not run the bump
+  yourself:** re-running the provisioner is a live, host-global toolchain mutation
+  you can't (and mustn't) do from your worktree -- it's the **lead's** action at
+  reveal. Your job here is only to judge it safe-to-apply and say so in the report
+  (name the provisioner re-run + the built-in service the lead should restart); you
+  don't validate the built-in against the new dep either, because you're trusting
+  upstream's testing rather than re-doing it.
 - **Dependent is user-created** (absent from upstream -- built in this workspace:
   a `build-web-service` app in its own `libs/` lib, a crystallized skill's scripts
   under `.agents/skills/<skill>/`, a local script): **unsafe to hot-apply.**
