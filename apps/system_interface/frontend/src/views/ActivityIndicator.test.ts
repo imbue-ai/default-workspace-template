@@ -1,6 +1,58 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type m from "mithril";
 import type { TranscriptEvent } from "../models/Response";
-import { isWorkingActivityState, labelForActivityState } from "./ActivityIndicator";
+
+// Mithril captures requestAnimationFrame at import time; polyfill before imports
+// so the m.redraw() the skip handler fires does not throw in the node test env.
+vi.hoisted(() => {
+  globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
+    setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
+});
+
+// The component reads the effective activity state from PendingMessages and
+// calls interruptAgent on skip. Stub both so the render test controls the state
+// and observes the interrupt without a live backend.
+let mockActivityState: string | null = "THINKING";
+vi.mock("../models/PendingMessages", () => ({
+  getEffectiveActivityState: () => mockActivityState,
+}));
+const interruptAgentMock = vi.fn((_agentId: string) => Promise.resolve());
+vi.mock("../models/Response", () => ({
+  interruptAgent: (agentId: string) => interruptAgentMock(agentId),
+}));
+
+import {
+  ActivityIndicator,
+  SKIP_THRESHOLD_MS,
+  formatElapsed,
+  isWorkingActivityState,
+  labelForActivityState,
+  shouldOfferSkip,
+} from "./ActivityIndicator";
+
+// The vnode param type of the component's view, so the render test can build a
+// minimal vnode without referencing the non-exported attrs interface.
+type IndicatorVnode = Parameters<NonNullable<ReturnType<typeof ActivityIndicator>["view"]>>[0];
+
+function indicatorVnode(agentId: string): IndicatorVnode {
+  return { attrs: { agentId, events: [] } } as unknown as IndicatorVnode;
+}
+
+/** Depth-first search for the first vnode carrying the given CSS class. */
+function findByClass(node: unknown, cls: string): m.Vnode | undefined {
+  if (node === null || typeof node !== "object") return undefined;
+  const v = node as m.Vnode;
+  const className = (v.attrs as { className?: string } | null | undefined)?.className;
+  if (typeof className === "string" && className.split(" ").includes(cls)) return v;
+  const children = (v as { children?: unknown }).children;
+  if (Array.isArray(children)) {
+    for (const child of children) {
+      const found = findByClass(child, cls);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
 
 function userMsg(ts: string): TranscriptEvent {
   return { timestamp: ts, type: "user_message", event_id: `u-${ts}`, source: "test", role: "user", content: "hi" };
@@ -217,5 +269,92 @@ describe("isWorkingActivityState — stop-button visibility gate", () => {
 
   it("treats an unknown / future state value as not working", () => {
     expect(isWorkingActivityState("SOMETHING_NEW")).toBe(false);
+  });
+});
+
+describe("shouldOfferSkip — time-gated skip control", () => {
+  it("hides the skip control before the threshold", () => {
+    expect(shouldOfferSkip(0)).toBe(false);
+    expect(shouldOfferSkip(SKIP_THRESHOLD_MS - 1)).toBe(false);
+  });
+
+  it("shows the skip control at and after the threshold", () => {
+    expect(shouldOfferSkip(SKIP_THRESHOLD_MS)).toBe(true);
+    expect(shouldOfferSkip(SKIP_THRESHOLD_MS + 60_000)).toBe(true);
+  });
+});
+
+describe("formatElapsed — m:ss elapsed formatting", () => {
+  it("formats sub-minute durations with a zero minute and padded seconds", () => {
+    expect(formatElapsed(0)).toBe("0:00");
+    expect(formatElapsed(5_000)).toBe("0:05");
+    expect(formatElapsed(34_000)).toBe("0:34");
+  });
+
+  it("rolls seconds into minutes past 60s", () => {
+    expect(formatElapsed(60_000)).toBe("1:00");
+    expect(formatElapsed(95_000)).toBe("1:35");
+    expect(formatElapsed(600_000)).toBe("10:00");
+  });
+
+  it("floors partial seconds rather than rounding", () => {
+    expect(formatElapsed(1_999)).toBe("0:01");
+  });
+
+  it("clamps negative durations (clock skew) to zero", () => {
+    expect(formatElapsed(-500)).toBe("0:00");
+  });
+});
+
+describe("ActivityIndicator component — time-gated skip control", () => {
+  let nowSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    mockActivityState = "THINKING";
+    interruptAgentMock.mockClear();
+    nowSpy = vi.spyOn(Date, "now");
+  });
+
+  afterEach(() => {
+    nowSpy.mockRestore();
+  });
+
+  it("hides the skip control before the threshold, then shows it (with a timer) once the turn runs long", () => {
+    const comp = ActivityIndicator();
+    const vnode = indicatorVnode("agent-slow");
+
+    // First render establishes the working-start clock; nothing has elapsed yet.
+    nowSpy.mockReturnValue(1_000);
+    const early = comp.view!(vnode);
+    expect(findByClass(early, "agent-activity-indicator__skip")).toBeUndefined();
+    expect(findByClass(early, "agent-activity-indicator__elapsed")).toBeUndefined();
+
+    // Advance past the threshold: the skip control and elapsed timer appear.
+    nowSpy.mockReturnValue(1_000 + SKIP_THRESHOLD_MS + 5_000);
+    const late = comp.view!(vnode);
+    expect(findByClass(late, "agent-activity-indicator__skip")).toBeDefined();
+    expect(findByClass(late, "agent-activity-indicator__elapsed")).toBeDefined();
+  });
+
+  it("interrupts the agent when the skip control is clicked", () => {
+    const comp = ActivityIndicator();
+    const vnode = indicatorVnode("agent-clickme");
+
+    nowSpy.mockReturnValue(0);
+    comp.view!(vnode);
+    nowSpy.mockReturnValue(SKIP_THRESHOLD_MS + 1_000);
+    const tree = comp.view!(vnode);
+
+    const skip = findByClass(tree, "agent-activity-indicator__skip");
+    expect(skip).toBeDefined();
+    (skip!.attrs as { onclick: () => void }).onclick();
+    expect(interruptAgentMock).toHaveBeenCalledWith("agent-clickme");
+  });
+
+  it("renders nothing (and offers no skip) when the agent is idle", () => {
+    mockActivityState = "IDLE";
+    const comp = ActivityIndicator();
+    nowSpy.mockReturnValue(SKIP_THRESHOLD_MS * 10);
+    expect(comp.view!(indicatorVnode("agent-idle"))).toBe(null);
   });
 });
