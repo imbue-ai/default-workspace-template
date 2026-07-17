@@ -146,23 +146,14 @@ data or the user's preference makes it clearer.
 ### Cost gate for metered batch steps
 
 When the real processing method is a *metered* automated call (an LLM completion,
-a paid API), measure its cost and runtime on the small sample and report an
-extrapolation to the full set before scaling ("classifying 5 items took 12s and
-cost $0.013 -- extrapolated to 150 items, ~$0.40 and ~6 min"). Only scale after a
-thumbs-up. Apply by default to any metered batch step, whether it comes up here or
-later in a surface -- don't pre-judge whether it's "long enough" to need this.
-
-**This applies even when you produced the sample by hand in-context.** Hand-making
-the sample (you, the agent, writing the prose or doing the web searches yourself)
-feels free, but the crystallized pipeline will fan that same work into N metered
-calls -- often one model call per item, and web search bills on top of tokens. So
-when the automated version will be metered, give the user an order-of-magnitude
-heads-up in the plan *before* they sign off ("the built pipeline makes ~15
-searching model calls per run -- likely a few dollars and a few minutes; the
-harden step will measure it exactly"). The crystallize worker then delivers the
-*measured* figure as a required Gate 1 outline field, so the real cost is approved
-before the full pipeline is built, not discovered after the first run. Model-call
-mechanics and the measurement technique live in the `use-ai-integration` skill.
+a paid API) -- as opposed to you doing it in-context -- measure its cost and
+runtime on the small sample and report an extrapolation to the full set before
+scaling ("classifying 5 items took 12s and cost $0.013 -- extrapolated to 150
+items, ~$0.40 and ~6 min"). Only scale after a thumbs-up. Apply by default to any
+metered batch step, whether it comes up here or later in a surface -- don't
+pre-judge whether it's "long enough" to need this. When the work later
+crystallizes into a pipeline, make sure the worker included this cost/time
+estimate before you approve its Gate 1 outline.
 
 ## After confirmation: crystallize (background) and start surfaces (foreground)
 
