@@ -722,143 +722,6 @@ body {
   background: var(--color-accent-light);
 }
 
-/* ── New conversation page ── */
-.new-conversation {
-  background: var(--color-bg);
-}
-
-.new-conversation-title {
-  font-family: var(--font-family-heading);
-  color: var(--color-text-primary);
-}
-
-.new-conversation-input-box {
-  background: var(--color-bg-composer);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-composer);
-  box-shadow:
-    0 -4px 20px rgba(55, 53, 47, 0.06),
-    0 -1px 6px rgba(55, 53, 47, 0.04);
-  transition:
-    border-color 150ms,
-    box-shadow 200ms;
-}
-
-.new-conversation-input-box:focus-within {
-  border-color: var(--color-accent);
-  box-shadow:
-    0 -4px 24px rgba(47, 107, 79, 0.08),
-    0 -1px 8px rgba(47, 107, 79, 0.06);
-}
-
-.new-conversation-textbox {
-  font-family: var(--font-family-base);
-  font-size: 15px;
-}
-
-.new-conversation-textbox::placeholder {
-  color: var(--color-text-faint);
-}
-
-.new-conversation-send-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: #fff;
-  background: var(--color-accent);
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition:
-    background 120ms,
-    opacity 150ms,
-    visibility 150ms;
-  flex-shrink: 0;
-}
-
-.new-conversation-send-button:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-}
-
-.system-prompt-toggle {
-  color: var(--color-text-secondary);
-}
-
-.system-prompt-toggle:hover {
-  color: var(--color-text-primary);
-}
-
-.system-prompt-textbox {
-  border-color: var(--color-border);
-  font-family: var(--font-family-base);
-}
-
-.system-prompt-textbox:focus {
-  border-color: var(--color-accent);
-}
-
-/* ── Tool selector ── */
-.tool-selector-section {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.tool-selector-toggle {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  align-self: flex-start;
-  transition: color 120ms;
-}
-
-.tool-selector-toggle:hover {
-  color: var(--color-text-primary);
-}
-
-.tool-selector-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.tool-selector-option {
-  display: inline-flex;
-  align-items: center;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-sidebar);
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  padding: 4px 10px;
-  cursor: pointer;
-  transition:
-    background 120ms,
-    border-color 120ms,
-    color 120ms;
-  user-select: none;
-  white-space: nowrap;
-}
-
-.tool-selector-option:hover {
-  border-color: var(--color-accent);
-  color: var(--color-text-primary);
-}
-
-.tool-selector-option--selected {
-  color: var(--color-accent);
-  font-weight: 500;
-  background: var(--color-accent-light);
-  border-color: var(--color-accent);
-}
-
 /* ── Markdown content styling ── */
 .markdown-content {
   line-height: 1.5;
@@ -1716,6 +1579,79 @@ body {
   gap: 4px;
 }
 
+/* Per-agent liveness dot on chat tabs, reflecting the agent's mngr lifecycle
+   state. Distinct from the chat's activity indicator, which tracks work within
+   a running process. Grey (the default) is "dormant" -- the process is not
+   running (DONE/STOPPED/etc.) but revives on the next message.
+
+   Color (from data-liveness) is the primary signal; ``currentColor`` carries
+   the hue so the per-state shape variants below can render as a solid disc, a
+   hollow ring, or a ring-with-dot in that same color without repeating it. */
+.dv-tab-process-dot {
+  box-sizing: border-box;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+  background: currentColor;
+}
+
+/* Process up and working (RUNNING) -- green, matching the activity indicator. */
+.dv-tab-process-dot[data-liveness="active"] {
+  color: var(--color-accent);
+}
+
+/* Process up but idle, waiting on the user (WAITING) -- yellow. */
+.dv-tab-process-dot[data-liveness="waiting"] {
+  color: #ca8a04;
+}
+
+/* Within a color, subtly vary the shape so states that share a hue stay
+   distinguishable (color is still the primary signal; the tooltip names the
+   exact state). Solid disc = the "expected" state of each color: RUNNING
+   (green), WAITING (yellow), DONE (grey, a clean exit to the shell).
+
+   Hollow ring -- the process is up but its agent type is unconfirmed
+   (RUNNING_UNKNOWN_AGENT_TYPE, green), or dormant because its tmux window is
+   gone (STOPPED, grey). */
+.dv-tab-process-dot[data-lifecycle-state="RUNNING_UNKNOWN_AGENT_TYPE"],
+.dv-tab-process-dot[data-lifecycle-state="STOPPED"] {
+  background: transparent;
+  border: 1.5px solid currentColor;
+}
+
+/* Ring with a center dot -- REPLACED (superseded by a newer process). */
+.dv-tab-process-dot[data-lifecycle-state="REPLACED"] {
+  background: radial-gradient(currentColor 0 1px, transparent 1.4px);
+  border: 1.5px solid currentColor;
+}
+
+/* Faded solid -- UNKNOWN (dormant, exact state indeterminate). */
+.dv-tab-process-dot[data-lifecycle-state="UNKNOWN"] {
+  opacity: 0.45;
+}
+
+/* Hover tooltip for the liveness dot, appended to <body> and positioned (fixed)
+   just below the dot by attachHoverTooltip. It lives on the body rather than as
+   a ::after bubble because the tab strip clips overflow, and as a JS element
+   rather than a native title because dockview's draggable tabs suppress those. */
+.dv-tab-hover-tooltip {
+  position: fixed;
+  z-index: 1000;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--color-text-primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+
 .dv-custom-tab-actions {
   display: flex;
   align-items: center;
@@ -2424,12 +2360,14 @@ body {
    the ungrouped block it sits above the timeline thread (opaque background +
    z-index) so the thread doesn't draw through the chip. The chip itself keeps
    its own collapsible styling; this wrapper only handles positioning and
-   masking the thread. */
+   masking the thread. The background is the pure-white transcript color
+   (--color-bg-chat), not the shell's off-white --color-bg, so the mask blends
+   into the transcript instead of showing as a band. */
 .pv-stophook {
   position: relative;
   z-index: 2;
   margin: 6px 0 14px 0;
-  background: var(--color-bg);
+  background: var(--color-bg-chat);
 }
 
 /* Ungrouped work/prose: real work the agent did with no step open (e.g.
@@ -2447,14 +2385,15 @@ body {
 }
 
 /* Agent permission request, lifted out of any open step so it is always
-   directly visible and breaks the timeline flow. Positioned like an ungrouped
-   run (opaque background + z-index) so the timeline thread doesn't draw through
-   it; the request block carries its own permission-request styling and button. */
+   directly visible and breaks the timeline flow. Lifted above the timeline
+   thread with z-index so the thread doesn't draw through it; the permission-request
+   card carries its own opaque surface, so it masks the thread on its own and this
+   wrapper needs no background of its own (a background here would paint the shell's
+   off-white --color-bg over the pure-white --color-bg-chat transcript). */
 .pv-permission {
   position: relative;
   z-index: 2;
   margin: 6px 0 14px 0;
-  background: var(--color-bg);
 }
 
 /* ─────────────────────────────────────────────────────────────────────
