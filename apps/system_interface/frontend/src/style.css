@@ -2583,7 +2583,7 @@ body {
 .agent-activity-indicator__elapsed {
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary, var(--color-text-secondary));
+  color: var(--color-text-secondary);
   opacity: 0.8;
 }
 
@@ -2609,7 +2609,9 @@ body {
 
 .agent-activity-indicator__skip:hover:not(:disabled) {
   color: var(--color-text-primary);
-  background: var(--color-surface-hover, rgba(127, 127, 127, 0.12));
+  /* Faint neutral wash -- theme-agnostic (reads on both light and dark) since
+     there is no defined surface-hover token in the palette. */
+  background: rgba(127, 127, 127, 0.12);
   border-color: var(--color-text-secondary);
 }
 
