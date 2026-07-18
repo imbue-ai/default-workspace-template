@@ -9,16 +9,28 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-// The component reads the effective activity state from PendingMessages and
-// calls interruptAgent on skip. Stub both so the render test controls the state
-// and observes the interrupt without a live backend.
+// The component reads the effective activity state from PendingMessages and, on
+// skip, interrupts the agent then re-sends the last question on a fast model.
+// Stub both models so the render tests control the state and observe the
+// interrupt + sends (in order) without a live backend.
 let mockActivityState: string | null = "THINKING";
 vi.mock("../models/PendingMessages", () => ({
   getEffectiveActivityState: () => mockActivityState,
 }));
-const interruptAgentMock = vi.fn((_agentId: string) => Promise.resolve());
+// Records interrupt/send calls in the order they happen so a test can assert the
+// fast-retry sequence (interrupt -> /model -> /effort -> resend).
+const skipCalls: string[] = [];
+const interruptAgentMock = vi.fn((agentId: string) => {
+  skipCalls.push(`interrupt:${agentId}`);
+  return Promise.resolve();
+});
+const sendMessageMock = vi.fn((agentId: string, message: string) => {
+  skipCalls.push(`send:${agentId}:${message}`);
+  return Promise.resolve();
+});
 vi.mock("../models/Response", () => ({
   interruptAgent: (agentId: string) => interruptAgentMock(agentId),
+  sendMessage: (agentId: string, message: string) => sendMessageMock(agentId, message),
 }));
 
 import {
@@ -27,6 +39,7 @@ import {
   formatElapsed,
   isWorkingActivityState,
   labelForActivityState,
+  lastUserPromptText,
   shouldOfferSkip,
 } from "./ActivityIndicator";
 
@@ -34,8 +47,8 @@ import {
 // minimal vnode without referencing the non-exported attrs interface.
 type IndicatorVnode = Parameters<NonNullable<ReturnType<typeof ActivityIndicator>["view"]>>[0];
 
-function indicatorVnode(agentId: string): IndicatorVnode {
-  return { attrs: { agentId, events: [] } } as unknown as IndicatorVnode;
+function indicatorVnode(agentId: string, events: TranscriptEvent[] = []): IndicatorVnode {
+  return { attrs: { agentId, events } } as unknown as IndicatorVnode;
 }
 
 /** Depth-first search for the first vnode carrying the given CSS class. */
@@ -54,8 +67,8 @@ function findByClass(node: unknown, cls: string): m.Vnode | undefined {
   return undefined;
 }
 
-function userMsg(ts: string): TranscriptEvent {
-  return { timestamp: ts, type: "user_message", event_id: `u-${ts}`, source: "test", role: "user", content: "hi" };
+function userMsg(ts: string, content = "hi"): TranscriptEvent {
+  return { timestamp: ts, type: "user_message", event_id: `u-${ts}`, source: "test", role: "user", content };
 }
 
 function toolUse(ts: string, toolName: string, callId: string, input: string): TranscriptEvent {
@@ -272,6 +285,33 @@ describe("isWorkingActivityState — stop-button visibility gate", () => {
   });
 });
 
+describe("lastUserPromptText — the prompt a fast retry re-asks", () => {
+  it("returns null when there are no user messages", () => {
+    expect(lastUserPromptText([])).toBe(null);
+    expect(lastUserPromptText([toolUse("2026-04-28T01:00:00Z", "Read", "tc1", "{}")])).toBe(null);
+  });
+
+  it("returns the most recent genuine user message content", () => {
+    const events = [userMsg("2026-04-28T01:00:00Z", "first"), userMsg("2026-04-28T01:00:01Z", "second")];
+    expect(lastUserPromptText(events)).toBe("second");
+  });
+
+  it("skips hidden control chatter (/model, /effort, local-command-stdout) and skill expansions", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z", "the real question"),
+      userMsg("2026-04-28T01:00:01Z", "/model haiku"),
+      userMsg("2026-04-28T01:00:02Z", "<local-command-stdout>Set model to Haiku 4.5</local-command-stdout>"),
+      userMsg("2026-04-28T01:00:03Z", "/effort low"),
+    ];
+    expect(lastUserPromptText(events)).toBe("the real question");
+  });
+
+  it("skips empty/whitespace-only user messages", () => {
+    const events = [userMsg("2026-04-28T01:00:00Z", "real"), userMsg("2026-04-28T01:00:01Z", "   ")];
+    expect(lastUserPromptText(events)).toBe("real");
+  });
+});
+
 describe("shouldOfferSkip — time-gated skip control", () => {
   it("hides the skip control before the threshold", () => {
     expect(shouldOfferSkip(0)).toBe(false);
@@ -312,6 +352,8 @@ describe("ActivityIndicator component — time-gated skip control", () => {
   beforeEach(() => {
     mockActivityState = "THINKING";
     interruptAgentMock.mockClear();
+    sendMessageMock.mockClear();
+    skipCalls.length = 0;
     nowSpy = vi.spyOn(Date, "now");
   });
 
@@ -336,8 +378,9 @@ describe("ActivityIndicator component — time-gated skip control", () => {
     expect(findByClass(late, "agent-activity-indicator__elapsed")).toBeDefined();
   });
 
-  it("interrupts the agent when the skip control is clicked", () => {
+  it("interrupts the agent when the skip control is clicked (no prior prompt to re-ask)", () => {
     const comp = ActivityIndicator();
+    // No user_message in events -> nothing to re-ask, so a plain interrupt.
     const vnode = indicatorVnode("agent-clickme");
 
     nowSpy.mockReturnValue(0);
@@ -349,6 +392,58 @@ describe("ActivityIndicator component — time-gated skip control", () => {
     expect(skip).toBeDefined();
     (skip!.attrs as { onclick: () => void }).onclick();
     expect(interruptAgentMock).toHaveBeenCalledWith("agent-clickme");
+    // Nothing to re-ask, so no model switch or resend.
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("fast-retries when clicked: interrupt, switch to the fast model, then re-ask the last question", async () => {
+    const comp = ActivityIndicator();
+    const events = [userMsg("2026-04-28T01:00:00Z", "What is the meaning of life?")];
+    const vnode = indicatorVnode("agent-retry", events);
+
+    nowSpy.mockReturnValue(0);
+    comp.view!(vnode);
+    nowSpy.mockReturnValue(SKIP_THRESHOLD_MS + 1_000);
+    const tree = comp.view!(vnode);
+
+    const skip = findByClass(tree, "agent-activity-indicator__skip");
+    expect(skip).toBeDefined();
+    (skip!.attrs as { onclick: () => Promise<void> }).onclick();
+    // Let the awaited interrupt + sends resolve.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Interrupt first, then /model haiku, /effort low, then the re-asked prompt,
+    // strictly in that order.
+    expect(skipCalls).toEqual([
+      "interrupt:agent-retry",
+      "send:agent-retry:/model haiku",
+      "send:agent-retry:/effort low",
+      "send:agent-retry:What is the meaning of life?",
+    ]);
+  });
+
+  it("re-asks the genuine prompt, skipping a prior fast retry's own control chatter", async () => {
+    const comp = ActivityIndicator();
+    // A genuine prompt followed by the hidden control commands a prior fast retry
+    // would have left in the transcript. The genuine prompt must be re-asked.
+    const events = [
+      userMsg("2026-04-28T01:00:00Z", "Summarize the report."),
+      userMsg("2026-04-28T01:00:01Z", "/model haiku"),
+      userMsg("2026-04-28T01:00:02Z", "<local-command-stdout>Set model to Haiku 4.5</local-command-stdout>"),
+      userMsg("2026-04-28T01:00:03Z", "/effort low"),
+    ];
+    const vnode = indicatorVnode("agent-again", events);
+
+    nowSpy.mockReturnValue(0);
+    comp.view!(vnode);
+    nowSpy.mockReturnValue(SKIP_THRESHOLD_MS + 1_000);
+    const tree = comp.view!(vnode);
+
+    const skip = findByClass(tree, "agent-activity-indicator__skip");
+    (skip!.attrs as { onclick: () => Promise<void> }).onclick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(skipCalls[skipCalls.length - 1]).toBe("send:agent-again:Summarize the report.");
   });
 
   it("renders nothing (and offers no skip) when the agent is idle", () => {
