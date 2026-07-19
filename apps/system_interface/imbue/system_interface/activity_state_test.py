@@ -91,8 +91,8 @@ def test_last_event_type(events: list[dict[str, Any]], expected: str | None) -> 
         # dropped to WAITING (alive but not looping). An in-flight tool still reads
         # as TOOL_RUNNING.
         pytest.param(False, True, True, ActivityState.TOOL_RUNNING, id="waiting_with_tool_is_tool_running"),
-        # Alive + WAITING + no tool + settled tail: the turn is done, waiting for the user.
-        pytest.param(False, True, False, ActivityState.IDLE, id="waiting_no_tool_settled_is_idle"),
+        # Alive + WAITING + no tool: the turn is done, waiting for the user.
+        pytest.param(False, True, False, ActivityState.IDLE, id="waiting_no_tool_is_idle"),
     ],
 )
 def test_derive_activity_state(
@@ -105,28 +105,8 @@ def test_derive_activity_state(
         is_agent_running=is_agent_running,
         is_agent_alive=is_agent_alive,
         has_pending_tool_use=has_pending_tool_use,
-        tail_event_type="assistant_message",
     )
     assert state == expected
-
-
-@pytest.mark.parametrize(
-    "tail_event_type",
-    [
-        pytest.param("user_message", id="just_after_user_send"),
-        pytest.param("tool_result", id="just_after_tool_result"),
-    ],
-)
-def test_derive_activity_state_pending_reply_is_thinking_despite_poll_lag(tail_event_type: str) -> None:
-    """Input was handed over (user message / tool result) but the lifecycle poll has
-    not yet flipped to RUNNING -- show THINKING, not the poll-lag IDLE gap."""
-    state = derive_activity_state(
-        is_agent_running=False,
-        is_agent_alive=True,
-        has_pending_tool_use=False,
-        tail_event_type=tail_event_type,
-    )
-    assert state == ActivityState.THINKING
 
 
 @pytest.mark.parametrize(

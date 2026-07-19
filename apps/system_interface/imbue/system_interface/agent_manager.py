@@ -1277,13 +1277,11 @@ class AgentManager:
             if agent_state is None:
                 return
             has_pending_tool = self._has_unmatched_tool_use_by_agent.get(agent_id, False)
-            cached_last_event_type = self._last_event_type_by_agent.get(agent_id)
             tail_event_at = parse_iso_timestamp_to_epoch(self._last_event_timestamp_by_agent.get(agent_id))
             new_state = derive_activity_state(
                 is_agent_running=agent_state.state in RUNNING_LIFECYCLE_STATES,
                 is_agent_alive=agent_state.state in ALIVE_LIFECYCLE_STATES,
                 has_pending_tool_use=has_pending_tool,
-                tail_event_type=cached_last_event_type,
                 tail_event_at=tail_event_at,
                 process_started_at=process_started_at,
             )
