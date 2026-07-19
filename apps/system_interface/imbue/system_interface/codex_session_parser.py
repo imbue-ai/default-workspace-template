@@ -14,10 +14,12 @@ branches. It is the codex analogue of ``claude_session_parser``.
 Sourcing rule (confirmed against codex ``policy.rs`` + real rollouts, see
 blueprint/codex-rich-transcript): ``response_item`` lines are the canonical
 conversation state; ``event_msg`` lines are a derived live-display stream. We build
-the body from ``response_item`` -- **except user bubbles**, which come from
-``event_msg`` ``user_message`` (the clean human-typed prompt). ``response_item``
-role=user is the *model-facing* user role: the human prompt PLUS injected
-``AGENTS.md`` / ``<environment_context>`` / ``<turn_aborted>`` /
+the body from ``response_item`` -- **except** two things taken from ``event_msg``:
+(1) user bubbles, from ``user_message`` (the clean human-typed prompt); and (2) a
+hosted web search, from the ``web_search_begin`` / ``web_search_end`` pair (the
+matching ``web_search_call`` response_item is left unhandled so we don't double-count).
+``response_item`` role=user is the *model-facing* user role: the human prompt PLUS
+injected ``AGENTS.md`` / ``<environment_context>`` / ``<turn_aborted>`` /
 ``<subagent_notification>`` content, which we do not want as chat bubbles. Everything
 else in ``event_msg`` (``agent_message`` display echoes, ``token_count``, ``task_*``)
 is skipped in this core cut.
@@ -132,7 +134,7 @@ def parse_codex_rollout_line(
         return None
     payload_type = payload.get("type")
 
-    # --- event_msg: only the clean human prompt; the rest is display echoes / overlay ---
+    # --- event_msg: the clean human prompt, plus hosted web-search lifecycle ---
     if outer == "event_msg":
         if payload_type == "user_message":
             text = payload.get("message")
@@ -147,6 +149,38 @@ def parse_codex_rollout_line(
                     "content": text,
                     "message_uuid": event_id,
                 }
+        # A hosted web search is written as a ``web_search_begin`` / ``web_search_end``
+        # event_msg pair (each its own line, both carrying ``call_id``); the separate
+        # ``web_search_call`` *response_item* is left unhandled below so we don't
+        # double-count. We lift the pair into the same tool_use/tool_result shape as a
+        # function call so it renders as a tool and drives TOOL_RUNNING ("Searching the
+        # web…") for the in-flight window. The query only appears on ``end`` (once the
+        # search is done), so it lands in the result, not the live caption.
+        if payload_type == "web_search_begin":
+            call_id = str(payload.get("call_id", ""))
+            tool_name_by_call_id[call_id] = "web_search"
+            event_id = f"codex-call-{call_id}" if call_id else f"codex-{line_index}-assistant"
+            return _assistant_event(
+                timestamp,
+                event_id,
+                text="",
+                tool_calls=[{"tool_call_id": call_id, "tool_name": "web_search", "input_preview": ""}],
+            )
+        if payload_type == "web_search_end":
+            call_id = str(payload.get("call_id", ""))
+            query = payload.get("query")
+            event_id = f"codex-result-{call_id}" if call_id else f"codex-{line_index}-tool_result"
+            return {
+                "timestamp": timestamp,
+                "type": "tool_result",
+                "event_id": event_id,
+                "source": _SOURCE,
+                "tool_call_id": call_id,
+                "tool_name": "web_search",
+                "output": query if isinstance(query, str) else "",
+                "is_error": False,
+                "message_uuid": event_id,
+            }
         return None
 
     if outer != "response_item":
