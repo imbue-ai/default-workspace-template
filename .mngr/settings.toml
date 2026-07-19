@@ -172,6 +172,13 @@ model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 check_installation = false
 
+# Disable codex's built-in memory system. It is off by default, but pin it off so it never
+# writes to $CODEX_HOME/memories/ -- a per-agent, non-runtime-backed silo that would compete
+# with the shared runtime/memory/ we use. (features.memories is the master switch; false wins
+# regardless of any [memories] settings.)
+[agent_types.codex.config_overrides.features]
+memories = false
+
 # --- Provider configurations ---
 
 # all disabled for now, since we don't want the agents to be able to launch mngr agents anywhere except within their own containers
