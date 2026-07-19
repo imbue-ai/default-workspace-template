@@ -15,10 +15,11 @@ Sourcing rule (confirmed against codex ``policy.rs`` + real rollouts, see
 blueprint/codex-rich-transcript): ``response_item`` lines are the canonical
 conversation state; ``event_msg`` lines are a derived live-display stream. We build
 the body from ``response_item`` -- **except** two things taken from ``event_msg``:
-(1) user bubbles, from ``user_message`` (the clean human-typed prompt); and (2) a
-hosted web search, from the ``web_search_begin`` / ``web_search_end`` pair (the
-matching ``web_search_call`` response_item is left unhandled so we don't double-count).
-``response_item`` role=user is the *model-facing* user role: the human prompt PLUS
+(1) user bubbles, from ``user_message`` (the clean human-typed prompt); and (2) the
+``turn_aborted`` marker (a user interrupt), used to clear a stuck activity dot.
+A hosted web search comes from its ``response_item`` ``web_search_call`` (not the
+transient begin/end event_msgs). ``response_item`` role=user is the *model-facing*
+user role: the human prompt PLUS
 injected ``AGENTS.md`` / ``<environment_context>`` / ``<turn_aborted>`` /
 ``<subagent_notification>`` content, which we do not want as chat bubbles. Everything
 else in ``event_msg`` (``agent_message`` display echoes, ``token_count``, ``task_*``)
@@ -39,6 +40,7 @@ not re-serialised, and the watcher reads in order and never reparses a single li
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 # Kept as ``codex/common_transcript`` to match the ``<harness>/common_transcript``
@@ -116,12 +118,33 @@ def _assistant_event(timestamp: str, event_id: str, *, text: str, tool_calls: li
     }
 
 
+def _web_search_query(action: Any) -> str:
+    """Pull the query from a ``web_search_call``'s ``action`` (Search variant:
+    ``query``, or the first of ``queries``). Empty string when absent."""
+    if not isinstance(action, dict):
+        return ""
+    query = action.get("query")
+    if isinstance(query, str) and query:
+        return query
+    queries = action.get("queries")
+    if isinstance(queries, list):
+        for candidate in queries:
+            if isinstance(candidate, str) and candidate:
+                return candidate
+    return ""
+
+
 def parse_codex_rollout_line(
     record: dict[str, Any],
     line_index: int,
     tool_name_by_call_id: dict[str, str],
-) -> dict[str, Any] | None:
-    """Map one codex rollout line to a UI event dict, or ``None`` to skip.
+) -> list[dict[str, Any]]:
+    """Map one codex rollout line to zero or more UI event dicts (``[]`` to skip).
+
+    Returns a *list* because one rollout line can expand to more than one event: a
+    completed hosted web search is a single self-contained ``web_search_call`` item,
+    which we emit as a tool_use + its matching tool_result so it renders as a done
+    "Searching the web ..." bubble without leaving an unmatched (stuck) call.
 
     ``line_index`` is the stable physical line number (for event-id synthesis).
     ``tool_name_by_call_id`` is a mutable cross-line map so a ``function_call_output``
@@ -131,79 +154,65 @@ def parse_codex_rollout_line(
     payload = record.get("payload")
     timestamp = record.get("timestamp", "")
     if not isinstance(payload, dict) or not isinstance(timestamp, str):
-        return None
+        return []
     payload_type = payload.get("type")
 
-    # --- event_msg: the clean human prompt, plus hosted web-search lifecycle ---
+    # --- event_msg: the clean human prompt + the turn-abort marker ---
     if outer == "event_msg":
         if payload_type == "user_message":
             text = payload.get("message")
             if isinstance(text, str) and text:
                 event_id = f"codex-{line_index}-user"
-                return {
+                return [
+                    {
+                        "timestamp": timestamp,
+                        "type": "user_message",
+                        "event_id": event_id,
+                        "source": _SOURCE,
+                        "role": "user",
+                        "content": text,
+                        "message_uuid": event_id,
+                    }
+                ]
+            return []
+        # A user interrupt aborts the turn. Codex does NOT persist the synthetic
+        # aborted tool output, so an in-flight tool call would otherwise stay
+        # unmatched forever and pin the activity dot at "Running". Emit a lightweight
+        # turn_aborted marker; the activity layer treats it as resolving every
+        # still-open tool call (see ``activity_state.pending_tool_call``).
+        if payload_type == "turn_aborted":
+            event_id = f"codex-{line_index}-turn_aborted"
+            return [
+                {
                     "timestamp": timestamp,
-                    "type": "user_message",
+                    "type": "turn_aborted",
                     "event_id": event_id,
                     "source": _SOURCE,
-                    "role": "user",
-                    "content": text,
                     "message_uuid": event_id,
                 }
-        # A hosted web search is written as a ``web_search_begin`` / ``web_search_end``
-        # event_msg pair (each its own line, both carrying ``call_id``); the separate
-        # ``web_search_call`` *response_item* is left unhandled below so we don't
-        # double-count. We lift the pair into the same tool_use/tool_result shape as a
-        # function call so it renders as a tool and drives TOOL_RUNNING ("Searching the
-        # web…") for the in-flight window. The query only appears on ``end`` (once the
-        # search is done), so it lands in the result, not the live caption.
-        if payload_type == "web_search_begin":
-            call_id = str(payload.get("call_id", ""))
-            tool_name_by_call_id[call_id] = "web_search"
-            event_id = f"codex-call-{call_id}" if call_id else f"codex-{line_index}-assistant"
-            return _assistant_event(
-                timestamp,
-                event_id,
-                text="",
-                tool_calls=[{"tool_call_id": call_id, "tool_name": "web_search", "input_preview": ""}],
-            )
-        if payload_type == "web_search_end":
-            call_id = str(payload.get("call_id", ""))
-            query = payload.get("query")
-            event_id = f"codex-result-{call_id}" if call_id else f"codex-{line_index}-tool_result"
-            return {
-                "timestamp": timestamp,
-                "type": "tool_result",
-                "event_id": event_id,
-                "source": _SOURCE,
-                "tool_call_id": call_id,
-                "tool_name": "web_search",
-                "output": query if isinstance(query, str) else "",
-                "is_error": False,
-                "message_uuid": event_id,
-            }
-        return None
+            ]
+        return []
 
     if outer != "response_item":
-        return None  # session_meta, turn_context -> drop
+        return []  # session_meta, turn_context -> drop
 
-    # --- response_item: assistant messages + tool calls/results ---
+    # --- response_item: assistant messages + tool calls/results + hosted web search ---
     if payload_type == "message":
         if payload.get("role") == "assistant":
-            # codex 0.144.3 re-serialises history (the "paginated" / world_state
-            # persistence): the same assistant message is written to the rollout
-            # more than once, every copy sharing codex's stable message ``id``. Key
-            # the event id on that id so the watcher dedups the copies (falling back
-            # to the line index for a message without one).
+            # codex re-serialises history; each copy shares the message ``id``, so
+            # keying the event id on it dedups the copies (fall back to line index).
             msg_id = payload.get("id")
             event_id = f"codex-{msg_id}" if isinstance(msg_id, str) and msg_id else f"codex-{line_index}-assistant"
-            return _assistant_event(
-                timestamp,
-                event_id,
-                text=_join_content_text(payload.get("content"), "output_text"),
-                tool_calls=[],
-            )
+            return [
+                _assistant_event(
+                    timestamp,
+                    event_id,
+                    text=_join_content_text(payload.get("content"), "output_text"),
+                    tool_calls=[],
+                )
+            ]
         # role=user (and developer/system) -> skip; user bubbles come from event_msg.
-        return None
+        return []
 
     if payload_type in ("function_call", "custom_tool_call"):
         call_id = str(payload.get("call_id", ""))
@@ -212,32 +221,70 @@ def parse_codex_rollout_line(
             tool_name_by_call_id[call_id] = tool_name
         # Same dedup rationale: a re-serialised tool call keeps its ``call_id``.
         event_id = f"codex-call-{call_id}" if call_id else f"codex-{line_index}-assistant"
-        return _assistant_event(
-            timestamp,
-            event_id,
-            text="",
-            tool_calls=[
-                {
-                    "tool_call_id": call_id,
-                    "tool_name": tool_name,
-                    "input_preview": _tool_call_input_preview(payload),
-                }
-            ],
-        )
+        return [
+            _assistant_event(
+                timestamp,
+                event_id,
+                text="",
+                tool_calls=[
+                    {
+                        "tool_call_id": call_id,
+                        "tool_name": tool_name,
+                        "input_preview": _tool_call_input_preview(payload),
+                    }
+                ],
+            )
+        ]
 
     if payload_type in ("function_call_output", "custom_tool_call_output"):
         call_id = str(payload.get("call_id", ""))
         event_id = f"codex-result-{call_id}" if call_id else f"codex-{line_index}-tool_result"
-        return {
-            "timestamp": timestamp,
-            "type": "tool_result",
-            "event_id": event_id,
-            "source": _SOURCE,
-            "tool_call_id": call_id,
-            "tool_name": tool_name_by_call_id.get(call_id, ""),
-            "output": _stringify_output(payload.get("output")),
-            "is_error": False,
-            "message_uuid": event_id,
-        }
+        return [
+            {
+                "timestamp": timestamp,
+                "type": "tool_result",
+                "event_id": event_id,
+                "source": _SOURCE,
+                "tool_call_id": call_id,
+                "tool_name": tool_name_by_call_id.get(call_id, ""),
+                "output": _stringify_output(payload.get("output")),
+                "is_error": False,
+                "message_uuid": event_id,
+            }
+        ]
 
-    return None
+    # A hosted web search is persisted (all modes) as a single, self-contained
+    # ``web_search_call`` response_item -- keyed on ``id`` (there is no call_id), with
+    # the query under ``action`` -- NOT as the transient ``web_search_begin``/``_end``
+    # event_msgs (begin is never persisted; end is legacy-only). It is already done
+    # when written, so we synthesise BOTH the tool call and its matching result from
+    # this one line: a "Searching the web <query>" bubble that renders complete,
+    # never an unmatched call that would stick the dot. (No in-flight window to
+    # caption live -- codex hands us the search already finished.)
+    if payload_type == "web_search_call":
+        item_id = str(payload.get("id", "")) or f"line{line_index}"
+        query = _web_search_query(payload.get("action"))
+        input_preview = json.dumps({"query": query}, separators=(",", ":")) if query else ""
+        call_event_id = f"codex-call-{item_id}"
+        result_event_id = f"codex-result-{item_id}"
+        return [
+            _assistant_event(
+                timestamp,
+                call_event_id,
+                text="",
+                tool_calls=[{"tool_call_id": item_id, "tool_name": "web_search", "input_preview": input_preview}],
+            ),
+            {
+                "timestamp": timestamp,
+                "type": "tool_result",
+                "event_id": result_event_id,
+                "source": _SOURCE,
+                "tool_call_id": item_id,
+                "tool_name": "web_search",
+                "output": query,
+                "is_error": False,
+                "message_uuid": result_event_id,
+            },
+        ]
+
+    return []

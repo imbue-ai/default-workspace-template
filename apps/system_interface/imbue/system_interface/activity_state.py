@@ -37,30 +37,12 @@ class ActivityState(UpperCaseStrEnum):
 
 @pure
 def has_unmatched_tool_use(events: Sequence[dict[str, Any]]) -> bool:
-    """True iff the transcript has at least one ``tool_use`` without a matching ``tool_result``.
+    """True iff a tool call is currently in flight (unmatched by a ``tool_result``).
 
-    Walks every event so that an unmatched ``tool_use`` from any prior assistant
-    turn still counts -- in practice Claude only ever has outstanding tool calls
-    from its most recent assistant message, but the matching is order-independent
-    so we don't have to care.
+    Defined in terms of :func:`pending_tool_call` so "what counts as in-flight" --
+    including the ``turn_aborted`` reset -- lives in exactly one walker.
     """
-    pending: set[str] = set()
-    matched: set[str] = set()
-    for event in events:
-        event_type = event.get("type")
-        if event_type == "assistant_message":
-            for tool_call in event.get("tool_calls") or ():
-                tool_call_id = tool_call.get("tool_call_id")
-                if tool_call_id:
-                    pending.add(tool_call_id)
-        elif event_type == "tool_result":
-            tool_call_id = event.get("tool_call_id")
-            if tool_call_id:
-                matched.add(tool_call_id)
-        else:
-            # user_message or other event types we don't care about for tool tracking.
-            pass
-    return bool(pending - matched)
+    return pending_tool_call(events) is not None
 
 
 @pure
@@ -74,10 +56,19 @@ def pending_tool_call(events: Sequence[dict[str, Any]]) -> dict[str, Any] | None
     containing assistant message's ``source`` (codex parser stamps ``codex/...``), so
     the caption layer picks the right harness's verb paths without a separate lookup.
     Walks from the end so the newest unmatched call wins.
+
+    A ``turn_aborted`` event (a user interrupt; codex emits one) resolves every tool
+    call still open in the aborted turn -- codex does not persist the synthetic
+    aborted output, so without this the interrupted tool would read as in-flight
+    forever and pin the dot at "Running". Walking from the end, reaching a
+    ``turn_aborted`` before any unmatched call means every older call is done -> None;
+    a live call in a *newer* turn is encountered first and still wins.
     """
     resolved: set[str] = set()
     for event in reversed(list(events)):
         event_type = event.get("type")
+        if event_type == "turn_aborted":
+            return None
         if event_type == "tool_result":
             tool_call_id = event.get("tool_call_id")
             if tool_call_id:

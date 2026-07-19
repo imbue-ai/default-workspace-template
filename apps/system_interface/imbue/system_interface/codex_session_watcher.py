@@ -238,26 +238,24 @@ class CodexSessionWatcher:
                 stripped = line.strip()
                 if not stripped:
                     continue
-                event = self._adapt_line(stripped, idx)
-                if event is None:
-                    continue
-                event_id = event["event_id"]
-                if event_id in self._event_index:
-                    continue
-                self._event_index[event_id] = len(self._events)
-                self._events.append(event)
-                new_events.append(event)
+                for event in self._adapt_line(stripped, idx):
+                    event_id = event["event_id"]
+                    if event_id in self._event_index:
+                        continue
+                    self._event_index[event_id] = len(self._events)
+                    self._events.append(event)
+                    new_events.append(event)
 
         return new_events
 
-    def _adapt_line(self, line: str, line_index: int) -> dict[str, Any] | None:
+    def _adapt_line(self, line: str, line_index: int) -> list[dict[str, Any]]:
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
             logger.debug("codex watcher: skipping malformed rollout line")
-            return None
+            return []
         if not isinstance(record, dict):
-            return None
+            return []
         return parse_codex_rollout_line(record, line_index, self._tool_name_by_call_id)
 
     # --- read API (mirrors AgentSessionWatcher) ----------------------------
