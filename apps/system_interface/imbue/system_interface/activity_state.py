@@ -146,6 +146,7 @@ def derive_activity_state(
     is_agent_running: bool,
     is_agent_alive: bool,
     has_pending_tool_use: bool,
+    tail_event_type: str | None = None,
     tail_event_at: float | None = None,
     process_started_at: float | None = None,
 ) -> ActivityState:
@@ -170,16 +171,25 @@ def derive_activity_state(
     abandoned mid-flight (stale tail -> IDLE), which would otherwise pin the indicator
     busy forever after a restart.
 
+    ``tail_event_type`` is the type of the last transcript event. It bridges the
+    poll-lag gap: mngr's lifecycle state comes from a periodic poll, so right after
+    the user's message lands (or a tool result lands) the agent is genuinely working
+    but the poll may still read WAITING for a beat -- leaving a visible "nothing"
+    window. A last event of ``user_message`` / ``tool_result`` means input was handed
+    over and a reply is pending, so we show THINKING immediately without waiting for
+    the poll to flip.
+
     Priority:
       0. agent not alive (STOPPED/DONE) -> IDLE.
       1. transcript tail predates the current process (stale) -> IDLE.
       2. an unmatched tool call (a tool is in flight) -> TOOL_RUNNING -- fires even
          when the agent is merely alive-and-WAITING (codex's backgrounded command).
-      3. agent running, no tool in flight -> THINKING (the default busy state,
+      3. last event is user_message / tool_result -> THINKING (input handed over,
+         reply pending; covers the poll lag after a send or a tool result).
+      4. agent running, no tool in flight -> THINKING (the default busy state,
          covering reasoning / reply generation that writes nothing to the transcript
          until it completes -- the "nothing" gap).
-      4. otherwise (alive but WAITING with no tool) -> IDLE -- the turn is done and
-         the agent is waiting for the user.
+      5. otherwise (alive but WAITING, turn settled) -> IDLE -- waiting for the user.
     """
     if not is_agent_alive:
         return ActivityState.IDLE
@@ -187,6 +197,8 @@ def derive_activity_state(
         return ActivityState.IDLE
     if has_pending_tool_use:
         return ActivityState.TOOL_RUNNING
+    if tail_event_type in ("user_message", "tool_result"):
+        return ActivityState.THINKING
     if is_agent_running:
         return ActivityState.THINKING
     return ActivityState.IDLE
