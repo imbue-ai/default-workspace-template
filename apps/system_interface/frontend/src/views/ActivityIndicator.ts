@@ -99,6 +99,11 @@ function targetForToolCall(tc: ToolCall): string | null {
   if (url !== null) return shorten(url, MAX_TARGET_LEN);
   const command = typeof parsed.command === "string" ? parsed.command : null;
   if (command !== null) return shorten(command, MAX_TARGET_LEN);
+  // Codex's exec tool carries the command in `cmd` (not `command`), with no
+  // human-readable description like Bash's -- surface the raw command so the
+  // label reads "Running <cmd>" instead of a bare "Running tool…".
+  const cmd = typeof parsed.cmd === "string" ? parsed.cmd : null;
+  if (cmd !== null) return shorten(cmd, MAX_TARGET_LEN);
   const pattern = typeof parsed.pattern === "string" ? parsed.pattern : null;
   if (pattern !== null) return `"${shorten(pattern, MAX_TARGET_LEN)}"`;
   const query = typeof parsed.query === "string" ? parsed.query : null;
