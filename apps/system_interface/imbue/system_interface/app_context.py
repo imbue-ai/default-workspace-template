@@ -11,6 +11,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.claude_auth import ClaudeAuthService
+from imbue.system_interface.codex_heartbeat_watcher import CodexHeartbeatWatcher
 from imbue.system_interface.codex_session_watcher import CodexSessionWatcher
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
@@ -73,6 +74,10 @@ class SystemInterfaceState(MutableModel):
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
     watchers: dict[str, AnySessionWatcher] = {}
+    # Per-codex-agent heartbeat watchers (tail the TUI log for the "generating now"
+    # sse signal that drives codex's Thinking indicator). Created alongside the
+    # session watcher for codex agents only.
+    codex_heartbeat_watchers: dict[str, CodexHeartbeatWatcher] = {}
     latchkey_catalog_cache: dict[str, Any] = {}
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
@@ -147,6 +152,17 @@ class SystemInterfaceState(MutableModel):
             self.watchers[agent_info.id] = watcher
             watcher.start()
 
+            # Codex only: tail the TUI log for the sse-delta heartbeat that drives
+            # the Thinking indicator (codex's lifecycle state is unreliable for that).
+            if _is_codex_agent(agent_info):
+                heartbeat = CodexHeartbeatWatcher(
+                    agent_id=agent_info.id,
+                    agent_state_dir=agent_info.agent_state_dir,
+                    on_heartbeat=self.agent_manager.record_codex_heartbeat,
+                )
+                self.codex_heartbeat_watchers[agent_info.id] = heartbeat
+                heartbeat.start()
+
         # Seed transcript-derived activity signals once at watcher creation so
         # the indicator does not lag a turn behind on first connect. Done
         # outside the watchers lock to avoid holding it across the agent
@@ -159,6 +175,9 @@ class SystemInterfaceState(MutableModel):
             for watcher in self.watchers.values():
                 watcher.stop()
             self.watchers.clear()
+            for heartbeat in self.codex_heartbeat_watchers.values():
+                heartbeat.stop()
+            self.codex_heartbeat_watchers.clear()
 
     def shutdown(self) -> None:
         """Tear down every owned resource. Idempotent."""

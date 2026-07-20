@@ -3,6 +3,7 @@ import os
 import queue
 import shlex
 import threading
+import time
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,12 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 
 _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
+
+# How long after a codex agent's last "generating" sse delta we keep showing
+# THINKING. Deltas arrive many-per-second while generating; this is the grace
+# period before we call it done (and the heartbeat watcher's ~1s poll re-derives,
+# so THINKING clears within ~this window of the last delta).
+_CODEX_GENERATING_WINDOW_S = 2.0
 
 # A chat spawned by the minds "get help -> have an agent help" flow carries this
 # label (set on its ``mngr create``). When such an agent is first discovered, we
@@ -348,6 +355,10 @@ class AgentManager:
     _activity_tracked_agents: set[str]
     _has_unmatched_tool_use_by_agent: dict[str, bool]
     _pending_tool_call_by_agent: dict[str, dict[str, Any] | None]
+    # Monotonic time of a codex agent's last "generating" sse delta (from the
+    # heartbeat watcher). Presence of a key marks the agent as heartbeat-tracked
+    # (codex); absence means fall back to the lifecycle rule (claude).
+    _codex_heartbeat_at_by_agent: dict[str, float | None]
     _last_event_type_by_agent: dict[str, str | None]
     _last_event_timestamp_by_agent: dict[str, str | None]
     _activity_state_by_agent: dict[str, ActivityState]
@@ -404,6 +415,7 @@ class AgentManager:
         manager._activity_tracked_agents = set()
         manager._has_unmatched_tool_use_by_agent = {}
         manager._pending_tool_call_by_agent = {}
+        manager._codex_heartbeat_at_by_agent = {}
         manager._last_event_type_by_agent = {}
         manager._last_event_timestamp_by_agent = {}
         manager._activity_state_by_agent = {}
@@ -448,6 +460,7 @@ class AgentManager:
             self._activity_tracked_agents.clear()
             self._has_unmatched_tool_use_by_agent.clear()
             self._pending_tool_call_by_agent.clear()
+            self._codex_heartbeat_at_by_agent.clear()
             self._last_event_type_by_agent.clear()
             self._activity_state_by_agent.clear()
             self._activity_caption_by_agent.clear()
@@ -1240,6 +1253,7 @@ class AgentManager:
             self._activity_tracked_agents.discard(agent_id)
             self._has_unmatched_tool_use_by_agent.pop(agent_id, None)
             self._pending_tool_call_by_agent.pop(agent_id, None)
+            self._codex_heartbeat_at_by_agent.pop(agent_id, None)
             self._activity_caption_by_agent.pop(agent_id, None)
             self._last_event_type_by_agent.pop(agent_id, None)
             self._last_event_timestamp_by_agent.pop(agent_id, None)
@@ -1289,10 +1303,21 @@ class AgentManager:
                 return
             has_pending_tool = self._has_unmatched_tool_use_by_agent.get(agent_id, False)
             tail_event_at = parse_iso_timestamp_to_epoch(self._last_event_timestamp_by_agent.get(agent_id))
+            # Heartbeat signal: only for heartbeat-tracked (codex) agents -- a key in
+            # the map marks them. THINKING iff a generating sse delta arrived within
+            # the window. None (claude / not-yet-tracked) -> derive uses the lifecycle.
+            generating_signal: bool | None = None
+            if agent_id in self._codex_heartbeat_at_by_agent:
+                last_generating_at = self._codex_heartbeat_at_by_agent[agent_id]
+                generating_signal = (
+                    last_generating_at is not None
+                    and (time.monotonic() - last_generating_at) < _CODEX_GENERATING_WINDOW_S
+                )
             new_state = derive_activity_state(
                 is_agent_running=agent_state.state in RUNNING_LIFECYCLE_STATES,
                 is_agent_alive=agent_state.state in ALIVE_LIFECYCLE_STATES,
                 has_pending_tool_use=has_pending_tool,
+                generating_signal=generating_signal,
                 tail_event_at=tail_event_at,
                 process_started_at=process_started_at,
             )
@@ -1390,6 +1415,8 @@ class AgentManager:
             self._pending_tool_call_by_agent[agent_id] = None
             self._last_event_type_by_agent[agent_id] = None
             self._last_event_timestamp_by_agent[agent_id] = None
+            if agent_id in self._codex_heartbeat_at_by_agent:
+                self._codex_heartbeat_at_by_agent[agent_id] = None
             self._activity_state_by_agent[agent_id] = ActivityState.IDLE
             self._activity_caption_by_agent[agent_id] = None
             agent_state = self._agents.get(agent_id)
@@ -1404,6 +1431,20 @@ class AgentManager:
                     activity_caption=None,
                 )
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+    def record_codex_heartbeat(self, agent_id: str, last_generating_at: float | None) -> None:
+        """Record a codex agent's latest generating-delta time (from the heartbeat
+        watcher) and recompute its activity.
+
+        Storing a key here marks the agent as heartbeat-tracked, so
+        :func:`derive_activity_state` uses the heartbeat -- not the unreliable codex
+        lifecycle -- to decide THINKING for it. Called ~1x/sec per codex agent, which
+        doubles as the expiry tick so THINKING clears within the window once deltas
+        stop. Only ever called for codex agents (the watcher runs for them alone).
+        """
+        with self._lock:
+            self._codex_heartbeat_at_by_agent[agent_id] = last_generating_at
+        self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
     def _read_applications(self, toml_path: Path) -> None:
         """Read and parse runtime/applications.toml for the primary agent."""

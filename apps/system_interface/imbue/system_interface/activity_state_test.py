@@ -248,3 +248,40 @@ def test_derive_activity_state_fresh_tail_still_reports_working() -> None:
         process_started_at=200.0,
     )
     assert state == ActivityState.TOOL_RUNNING
+
+
+@pytest.mark.parametrize(
+    "is_agent_running, generating_signal, expected",
+    [
+        # Heartbeat-tracked (codex): the generating signal decides, lifecycle ignored.
+        pytest.param(True, False, ActivityState.IDLE, id="codex_running_but_not_generating_is_idle"),
+        pytest.param(False, True, ActivityState.THINKING, id="codex_generating_even_if_not_running"),
+        pytest.param(True, True, ActivityState.THINKING, id="codex_generating_and_running"),
+        pytest.param(False, False, ActivityState.IDLE, id="codex_alive_idle"),
+    ],
+)
+def test_derive_activity_state_heartbeat_overrides_lifecycle(
+    is_agent_running: bool, generating_signal: bool, expected: ActivityState
+) -> None:
+    """For a heartbeat-tracked (codex) agent the generating signal replaces the
+    lifecycle rule: RUNNING-but-not-generating -> IDLE (no false Thinking), and
+    generating-while-not-RUNNING -> THINKING."""
+    state = derive_activity_state(
+        is_agent_running=is_agent_running,
+        is_agent_alive=True,
+        has_pending_tool_use=False,
+        generating_signal=generating_signal,
+    )
+    assert state == expected
+
+
+def test_derive_activity_state_in_flight_tool_beats_heartbeat() -> None:
+    """An in-flight tool is TOOL_RUNNING even mid-generation (the tool check precedes
+    the heartbeat check)."""
+    state = derive_activity_state(
+        is_agent_running=False,
+        is_agent_alive=True,
+        has_pending_tool_use=True,
+        generating_signal=True,
+    )
+    assert state == ActivityState.TOOL_RUNNING

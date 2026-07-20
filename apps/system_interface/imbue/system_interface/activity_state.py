@@ -169,6 +169,7 @@ def derive_activity_state(
     is_agent_running: bool,
     is_agent_alive: bool,
     has_pending_tool_use: bool,
+    generating_signal: bool | None = None,
     tail_event_at: float | None = None,
     process_started_at: float | None = None,
 ) -> ActivityState:
@@ -193,15 +194,24 @@ def derive_activity_state(
     abandoned mid-flight (stale tail -> IDLE), which would otherwise pin the indicator
     busy forever after a restart.
 
+    ``generating_signal`` is a real-time "the model is producing output right now"
+    signal (recent sse deltas), supplied for **heartbeat-tracked** harnesses (codex)
+    and ``None`` otherwise (claude). When provided it is authoritative for THINKING
+    and *replaces* the lifecycle rule, because codex's lifecycle is unreliable there
+    (code mode keeps a cell alive -> RUNNING while idle). An in-flight tool still wins
+    over it (a running tool is TOOL_RUNNING even mid-generation-gap).
+
     Priority:
       0. agent not alive (STOPPED/DONE) -> IDLE.
       1. transcript tail predates the current process (stale) -> IDLE.
       2. an unmatched tool call (a tool is in flight) -> TOOL_RUNNING -- fires even
          when the agent is merely alive-and-WAITING (codex's backgrounded command).
-      3. agent running, no tool in flight -> THINKING (the default busy state,
-         covering reasoning / reply generation that writes nothing to the transcript
-         until it completes -- the "nothing" gap).
-      4. otherwise (alive but WAITING, turn settled) -> IDLE -- waiting for the user.
+      3. heartbeat-tracked (generating_signal is not None): THINKING iff generating,
+         else IDLE -- the real-time signal replaces the lifecycle rule for codex.
+      4. agent running, no tool in flight -> THINKING (the lifecycle default, for
+         claude: covers reasoning / reply generation that writes nothing to the
+         transcript until it completes -- the "nothing" gap).
+      5. otherwise (alive but WAITING/idle) -> IDLE -- waiting for the user.
     """
     if not is_agent_alive:
         return ActivityState.IDLE
@@ -209,6 +219,12 @@ def derive_activity_state(
         return ActivityState.IDLE
     if has_pending_tool_use:
         return ActivityState.TOOL_RUNNING
+    # Heartbeat-authoritative harnesses (codex): a real-time "model is generating
+    # now" signal (recent sse deltas) decides THINKING, because the lifecycle state
+    # is unreliable there -- code mode keeps a cell alive, so RUNNING doesn't mean
+    # working. When this signal is provided it fully replaces the lifecycle rule.
+    if generating_signal is not None:
+        return ActivityState.THINKING if generating_signal else ActivityState.IDLE
     if is_agent_running:
         return ActivityState.THINKING
     return ActivityState.IDLE
