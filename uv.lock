@@ -385,11 +385,13 @@ version = "0.1.0"
 source = { editable = "libs/bootstrap" }
 dependencies = [
     { name = "loguru" },
+    { name = "tenacity" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = ">=0.7.0" },
+    { name = "tenacity", specifier = ">=8.0" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
 ]
 

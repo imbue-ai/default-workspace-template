@@ -1,8 +1,8 @@
-// Pure decision for surfacing a highlighted agent's tab (e.g. the nightly
+// Pure decision for surfacing a highlighted agent's tab (e.g. the weekly
 // Caretaker). Kept DOM-free and dependency-free so it can be unit-tested in
 // isolation; DockviewWorkspace imports it and supplies the live inputs.
 
-export type HighlightSurfaceDecision = "open" | "flash" | "noop";
+export type HighlightSurfaceDecision = "open" | "noop";
 
 /**
  * Decide what to do with a highlighted agent on a given agents_updated snapshot.
@@ -11,16 +11,13 @@ export type HighlightSurfaceDecision = "open" | "flash" | "noop";
  * highlight key the user viewed) versus the agent's current key -- never from
  * any in-session/in-memory "already surfaced this key" bookkeeping. That is what
  * makes it idempotent across a WebSocket reconnect: a run that appeared while the
- * UI was disconnected (e.g. the Caretaker firing at 3 AM while the laptop slept)
- * still surfaces on the first snapshot after reconnect, and keeps surfacing until
- * the user actually views (or dismisses) it.
+ * UI was disconnected (e.g. the Caretaker firing overnight while the laptop
+ * slept) still surfaces on the first snapshot after reconnect.
  *
- * - ``"open"``  -- closed tab with an unacknowledged run: open it (in the
- *   background) so it flashes.
- * - ``"flash"`` -- already-open background tab with an unacknowledged run:
- *   (re-)arm its flash. Idempotent: re-arming an already-flashing tab is a no-op,
- *   so this can run on every snapshot without a flash storm.
- * - ``"noop"``  -- not highlighted, or the current run is already acknowledged.
+ * - ``"open"`` -- closed tab with an unacknowledged run: open it (in the
+ *   background, without stealing focus).
+ * - ``"noop"`` -- not highlighted, the current run is already acknowledged, or
+ *   the tab is already open (nothing to do; viewing it acknowledges the run).
  */
 export function decideHighlightSurface(input: {
   isHighlighted: boolean;
@@ -30,5 +27,5 @@ export function decideHighlightSurface(input: {
 }): HighlightSurfaceDecision {
   if (!input.isHighlighted) return "noop";
   if (input.acknowledgedKey === input.currentKey) return "noop";
-  return input.isTabOpen ? "flash" : "open";
+  return input.isTabOpen ? "noop" : "open";
 }

@@ -1702,36 +1702,6 @@ body {
   color: var(--color-text-secondary);
 }
 
-/* Newly auto-created agent tab (e.g. the nightly Caretaker): flash yellow until
-   the user opens it. createCustomTab() adds .dv-tab-new on the inner tab content
-   element, and the flash is applied to the enclosing .dv-tab wrapper (via :has)
-   so the WHOLE clickable tab region lights up, not just the inner label.
-   createCustomTab removes .dv-tab-new on the tab's first activation.
-
-   Only the wrapper's BACKGROUND animates (yellow -> transparent); the tab's
-   text color is never touched, so between flashes the label is exactly the gray
-   (or any other state-dependent color) dockview would give it normally -- the
-   background sits behind the label, so the yellow still reads as a full-tab
-   pulse. */
-.dv-tab:has(.dv-tab-new) {
-  animation: tab-new-flash 1.4s ease-out infinite;
-  border-radius: 4px;
-}
-
-.dv-tab:has(.dv-tab-new) .dv-default-tab-content {
-  font-weight: 600;
-}
-
-@keyframes tab-new-flash {
-  0% {
-    background-color: #ffd700;
-  }
-  70%,
-  100% {
-    background-color: transparent;
-  }
-}
-
 /* ── Destroy confirmation dialog ── */
 .destroy-dialog-overlay {
   position: fixed;
