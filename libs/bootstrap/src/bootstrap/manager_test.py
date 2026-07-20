@@ -7,9 +7,7 @@ import json
 import os
 import subprocess
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 from imbue.mngr.cli.output_helpers import write_json_line
@@ -526,6 +524,8 @@ def test_initialize_workspace_main_branch_is_idempotent_on_clean_main(
     _initialize_workspace_main_branch()
     branch = _git_in(work_dir, "branch", "--show-current").stdout.strip()
     assert branch == "main"
+
+
 # --- _apply_container_timezone ---
 
 
