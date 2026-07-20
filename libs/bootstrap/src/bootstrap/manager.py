@@ -15,7 +15,6 @@ import json
 import os
 import subprocess
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
