@@ -64,9 +64,35 @@ def test_project_for_path_maps_libs_apps_and_dev(tmp_path: Path) -> None:
     assert gate.project_for_path("apps/beta/bar.py", repo) == "beta"
     # A libs/ dir without a pyproject.toml is not a real project -> dev.
     assert gate.project_for_path("libs/nope/x.py", repo) == "dev"
+    # Anything under .agents/ -> the synthetic agents bucket.
+    assert gate.project_for_path(".agents/skills/foo/SKILL.md", repo) == "agents"
+    assert gate.project_for_path(".agents/shared/references/x.md", repo) == "agents"
     # Root-level files -> dev.
     assert gate.project_for_path("scripts/thing.sh", repo) == "dev"
     assert gate.project_for_path("README.md", repo) == "dev"
+
+
+def test_gate_flags_agents_change_missing_entry_and_clears_with_one(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "feat/skill")
+    skill = repo / ".agents/skills/foo/SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_text("# a skill\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "touch a skill")
+
+    base = gate.resolve_diff_base(repo)
+    changed = gate.changed_files_against_base(base, repo)
+    touched = gate.projects_requiring_entry(changed, repo)
+    assert touched == {"agents"}
+    assert gate.find_missing_entries("feat/skill", touched, repo) == [
+        ".agents/changelog/feat-skill.md"
+    ]
+
+    _add_entry(repo, ".agents", "feat/skill")
+    assert gate.find_missing_entries("feat/skill", touched, repo) == []
 
 
 def test_gate_fails_when_touched_project_missing_entry(tmp_path: Path) -> None:
