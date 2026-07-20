@@ -101,6 +101,13 @@ MNGR_AGENT_ID_HEADER = "X-Mngr-Agent-Id"
 # how the served environment is constructed.
 APP_DIR = "apps/system_interface"
 FRONTEND_DIR = f"{APP_DIR}/frontend"
+# The frontend build output the backend serves at ``/``. A worker that only
+# changed the backend can report ``done`` without producing it -- both
+# ``node_modules`` and the ``static/`` bundle are gitignored, so a fresh worktree
+# has neither -- and the backend then serves its "Frontend not built"
+# placeholder. The preview builds it if missing (see ``_ensure_frontend_built``)
+# so the previewed tab always renders the real UI.
+FRONTEND_BUILD_INDEX = f"{APP_DIR}/imbue/system_interface/static/index.html"
 TOOL_NAME = "system-interface"
 RELOAD_OP = "reload_system_interface"
 
@@ -698,13 +705,60 @@ def _find_other_preview(repo_root: Path, slug: str) -> str | None:
     return None
 
 
+def _ensure_frontend_built(work_dir: Path, runner: Runner) -> str | None:
+    """Build the worker's frontend bundle if it is missing, before it is served.
+
+    The preview serves the worker's app dir directly, so that dir must contain a
+    frontend build; otherwise the backend serves its "Frontend not built"
+    placeholder and the preview is a dead page. A worker whose change was
+    backend-only can legitimately report ``done`` without one -- both
+    ``node_modules`` and ``static/`` are gitignored, so a fresh worktree has
+    neither. Build it here (mirroring the ``npm ci`` / ``npm run build`` the reveal
+    step runs on the live tree) when the bundle is absent, and **fail loudly** if a
+    build cannot be produced rather than booting the placeholder. Returns an error
+    message on failure, or ``None`` when a bundle is present (already built or built
+    just now).
+    """
+    static_index = work_dir / FRONTEND_BUILD_INDEX
+    if static_index.exists():
+        return None
+    frontend_dir = work_dir / FRONTEND_DIR
+    if not frontend_dir.is_dir():
+        return f"{frontend_dir} is not a directory; cannot build the frontend"
+    sys.stderr.write(
+        f"preview: no frontend build in {work_dir}; building it "
+        "(npm ci + npm run build) so the preview renders the real UI...\n"
+    )
+    # A fresh worktree has no node_modules; install first (only when absent, since
+    # a re-run of the same slug may already have them).
+    if not (frontend_dir / "node_modules").is_dir():
+        installed = runner.run(
+            ["npm", "ci"], cwd=str(frontend_dir), capture_output=True, text=True, check=False
+        )
+        if getattr(installed, "returncode", 0) != 0:
+            stderr = (getattr(installed, "stderr", "") or "").strip()
+            return f"npm ci failed (exit {installed.returncode}): {stderr}"
+    built = runner.run(
+        ["npm", "run", "build"], cwd=str(frontend_dir), capture_output=True, text=True, check=False
+    )
+    if getattr(built, "returncode", 0) != 0:
+        stderr = (getattr(built, "stderr", "") or "").strip()
+        return f"npm run build failed (exit {built.returncode}): {stderr}"
+    # Trust nothing: confirm the bundle the backend serves actually appeared, so a
+    # build that exits 0 without emitting it still fails loudly here.
+    if not static_index.exists():
+        return f"npm run build completed but {static_index} is still missing"
+    return None
+
+
 def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int:
     """Stand up a pre-merge preview of the worker's ``work_dir``.
 
     Thin system-interface adapter over the shared ``serve_isolated_instance.py``
-    ``up`` motion: validate the worker's app dir, then hand the shared script the
-    system-interface specifics -- boot ``uv run system-interface`` from the
-    worker's already-built app dir on a free port; neuter layout persistence by
+    ``up`` motion: validate the worker's app dir, build its frontend bundle if the
+    worker left none (see ``_ensure_frontend_built``), then hand the shared script
+    the system-interface specifics -- boot ``uv run system-interface`` from the
+    worker's app dir on a free port; neuter layout persistence by
     dropping MNGR_AGENT_ID (so the preview can't clobber the live ``layout.json``)
     while keeping discovery, so the real conversations still render; probe
     ``/api/agents``; register the inner app and the labeled wrapper frame. The
@@ -730,6 +784,13 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             "with that pass -- or, if it is abandoned, tear it down first with "
             f"'unpreview --slug {other_slug}'.\n"
         )
+        return 1
+    # The preview serves the worker's app dir as-is, so it must carry a frontend
+    # build; build it if the worker (e.g. a backend-only change) left none, and
+    # fail before booting rather than serve the "Frontend not built" placeholder.
+    build_error = _ensure_frontend_built(Path(work_dir), runner)
+    if build_error is not None:
+        sys.stderr.write(f"preview: {build_error}\n")
         return 1
     result = runner.run(
         [

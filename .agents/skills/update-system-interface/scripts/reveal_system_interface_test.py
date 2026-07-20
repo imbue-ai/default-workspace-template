@@ -437,10 +437,22 @@ _SERVE_UP = (sys.executable, str(reveal_mod._SHARED_SERVE_SCRIPT), "up")
 _SERVE_DOWN = (sys.executable, str(reveal_mod._SHARED_SERVE_SCRIPT), "down")
 
 
-def _make_work_dir(tmp_path: Path) -> Path:
-    """A stand-in for a worker's work_dir: a folder with an apps/system_interface."""
+def _make_work_dir(tmp_path: Path, *, built: bool = True) -> Path:
+    """A stand-in for a worker's work_dir: a folder with an apps/system_interface.
+
+    ``built`` seeds the frontend build output the backend serves, modelling a
+    worker that produced a bundle; pass ``built=False`` for the backend-only worker
+    that reported ``done`` without one (the case the preview must build for).
+    """
     work_dir = tmp_path / "worker"
     (work_dir / reveal_mod.APP_DIR).mkdir(parents=True)
+    # A real worktree always carries the frontend source dir; only node_modules and
+    # the static/ bundle are gitignored (and so absent until built).
+    (work_dir / reveal_mod.FRONTEND_DIR).mkdir(parents=True, exist_ok=True)
+    if built:
+        static_index = work_dir / reveal_mod.FRONTEND_BUILD_INDEX
+        static_index.parent.mkdir(parents=True, exist_ok=True)
+        static_index.write_text("<!doctype html><html></html>")
     return work_dir
 
 
@@ -484,6 +496,80 @@ def test_preview_rejects_a_work_dir_without_the_app(tmp_path: Path) -> None:
     bad_work_dir = tmp_path / "gone"  # no apps/system_interface under it
 
     code = reveal_mod.preview(_SLUG, str(bad_work_dir), tmp_path, runner=runner)
+
+    assert code == 1
+    assert not runner.argvs_starting(*_SERVE_UP)
+
+
+@dataclass
+class _BuildingRunner(_RecordingRunner):
+    """Recording runner whose ``npm run build`` emits the served bundle.
+
+    Models a real build: the preview verifies the bundle appeared after building,
+    so a stub that never wrote it could not exercise the success path.
+    """
+
+    static_index: Path | None = None
+
+    def run(self, argv: Sequence[str], **kwargs) -> _Result:
+        result = super().run(argv, **kwargs)
+        if self.static_index is not None and list(argv)[:3] == ["npm", "run", "build"]:
+            self.static_index.parent.mkdir(parents=True, exist_ok=True)
+            self.static_index.write_text("<!doctype html><html></html>")
+        return result
+
+
+def test_preview_builds_the_frontend_when_the_worker_left_none(tmp_path: Path) -> None:
+    # A backend-only worker reports done without a frontend build; the preview must
+    # produce one (npm ci + npm run build) before booting, or it would serve the
+    # backend's "Frontend not built" placeholder -- a dead preview.
+    work_dir = _make_work_dir(tmp_path, built=False)
+    runner = _BuildingRunner(static_index=work_dir / reveal_mod.FRONTEND_BUILD_INDEX)
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), tmp_path, runner=runner)
+
+    assert code == 0
+    assert runner.ran("npm", "ci")
+    assert runner.ran("npm", "run", "build")
+    # The build ran in the worker's frontend dir, then the instance booted.
+    build_calls = runner.argvs_starting("npm", "run", "build")
+    assert len(build_calls) == 1
+    assert len(runner.argvs_starting(*_SERVE_UP)) == 1
+
+
+def test_preview_skips_the_build_when_a_bundle_is_already_present(tmp_path: Path) -> None:
+    # An already-built work_dir must boot as-is -- no needless rebuild.
+    work_dir = _make_work_dir(tmp_path, built=True)
+    runner = _RecordingRunner()
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), tmp_path, runner=runner)
+
+    assert code == 0
+    assert not runner.ran("npm", "ci")
+    assert not runner.ran("npm", "run", "build")
+    assert len(runner.argvs_starting(*_SERVE_UP)) == 1
+
+
+def test_preview_fails_loudly_when_the_build_fails(tmp_path: Path) -> None:
+    # A failed build must abort the preview (non-zero, no boot) rather than fall
+    # through to serving the placeholder.
+    work_dir = _make_work_dir(tmp_path, built=False)
+    runner = _RecordingRunner()
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="tsc error"))
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), tmp_path, runner=runner)
+
+    assert code == 1
+    assert not runner.argvs_starting(*_SERVE_UP)
+
+
+def test_preview_fails_loudly_when_the_build_emits_no_bundle(tmp_path: Path) -> None:
+    # Even a build that exits 0 without producing the served bundle must abort --
+    # the preview trusts the artifact on disk, not the exit code alone.
+    work_dir = _make_work_dir(tmp_path, built=False)
+    runner = _RecordingRunner()  # npm exits 0 but writes nothing
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), tmp_path, runner=runner)
 
     assert code == 1
     assert not runner.argvs_starting(*_SERVE_UP)
