@@ -346,8 +346,8 @@ def test_discovered_agent_labels_come_from_discovery(agent_manager: AgentManager
 
     The observe stream carries each agent's current labels -- including the
     ``highlight`` run-key that run_task_agent.sh bumps on each task-agent run
-    to re-flash its tab. The web UI keys its is_primary hiding and its
-    tab-blink off these, so they must pass straight through.
+    to re-surface its tab. The web UI keys its is_primary hiding and its
+    tab surfacing off these, so they must pass straight through.
     """
     agent = _agent_details(
         "caretaker",

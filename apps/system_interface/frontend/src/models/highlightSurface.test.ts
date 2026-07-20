@@ -19,13 +19,14 @@ describe("decideHighlightSurface", () => {
     ).toBe("open");
   });
 
-  it("flashes an open background tab with an unacknowledged new key", () => {
+  it("leaves an already-open tab alone even with an unacknowledged new key", () => {
+    // The tab is on screen; viewing it is how the run gets acknowledged.
     expect(
       decideHighlightSurface({ isHighlighted: true, currentKey: "new", acknowledgedKey: "old", isTabOpen: true }),
-    ).toBe("flash");
+    ).toBe("noop");
   });
 
-  it("does nothing once the current run is acknowledged (no flash storm)", () => {
+  it("does nothing once the current run is acknowledged", () => {
     expect(
       decideHighlightSurface({ isHighlighted: true, currentKey: "k", acknowledgedKey: "k", isTabOpen: true }),
     ).toBe("noop");

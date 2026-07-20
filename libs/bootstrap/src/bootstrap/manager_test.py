@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import shlex
 import subprocess
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
@@ -32,7 +31,6 @@ from bootstrap.manager import (
     _read_host_name,
     _read_main_agent_labels,
     _resolve_services_claude_config_dir,
-    _write_agent_env_snapshot,
 )
 
 # --- _configure_git_global ---
@@ -702,59 +700,6 @@ def test_apply_container_timezone_tolerates_oserror(tmp_path: Path) -> None:
         localtime_path=missing_dir / "localtime",
         timezone_path=missing_dir / "timezone",
     )
-
-
-# --- _write_agent_env_snapshot ---
-
-
-def test_write_agent_env_snapshot_quotes_values_and_restricts_mode(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MINDS_TEST_SPACES", "two words")
-    monkeypatch.setenv("MINDS_TEST_QUOTES", "he said \"hi\" and 'bye'")
-    snapshot = tmp_path / "agent-env"
-
-    _write_agent_env_snapshot(snapshot)
-
-    assert (snapshot.stat().st_mode & 0o777) == 0o600
-    parsed: dict[str, str] = {}
-    for line in snapshot.read_text().splitlines():
-        # Each line must be a shell-parseable `export KEY=<value>` statement.
-        words = shlex.split(line)
-        assert words[0] == "export"
-        key, _, value = words[1].partition("=")
-        parsed[key] = value
-    assert parsed["MINDS_TEST_SPACES"] == "two words"
-    assert parsed["MINDS_TEST_QUOTES"] == "he said \"hi\" and 'bye'"
-
-
-def test_write_agent_env_snapshot_skips_non_identifier_keys(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # POSIX allows env keys that are not valid shell identifiers (e.g. with a
-    # dash); an `export` line for one would break sourcing, so it is skipped.
-    monkeypatch.setenv("MINDS-BAD-KEY", "value")
-    monkeypatch.setenv("MINDS_GOOD_KEY", "value")
-    snapshot = tmp_path / "agent-env"
-
-    _write_agent_env_snapshot(snapshot)
-
-    content = snapshot.read_text()
-    assert "MINDS-BAD-KEY" not in content
-    assert "export MINDS_GOOD_KEY=value" in content
-
-
-def test_write_agent_env_snapshot_overwrites_and_retightens_mode(
-    tmp_path: Path,
-) -> None:
-    snapshot = tmp_path / "agent-env"
-    snapshot.write_text("stale\n")
-    snapshot.chmod(0o644)
-
-    _write_agent_env_snapshot(snapshot)
-
-    assert (snapshot.stat().st_mode & 0o777) == 0o600
-    assert "stale" not in snapshot.read_text()
 
 
 # --- _fetch_user_timezone ---

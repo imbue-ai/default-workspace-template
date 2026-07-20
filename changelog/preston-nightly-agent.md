@@ -22,9 +22,10 @@ this: it fires only when the machine is up at that moment and never backfills
 a missed run -- the checker exists precisely to add "due at the due hour, but
 catch up a missed window the first minute the container is back, at any
 hour". Because cron scrubs
-the job environment, a small wrapper (`scripts/with_agent_env.sh`) restores
-the workspace environment from a snapshot the bootstrap writes each boot, and
-every scheduled job runs through it. The container's clock is set to the
+the job environment, a small wrapper (`scripts/with_agent_env.sh`) rebuilds
+the workspace environment from the env files mngr maintains on the host dir
+(the same way mngr sources them for agent operations), and every scheduled
+job runs through it. The container's clock is set to the
 user's local timezone at each boot: the bootstrap pulls it from the minds
 desktop client's `GET /api/v1/timezone` through the latchkey gateway (falling
 back to UTC when unreachable), so schedules run in the user's local time. (An
@@ -78,18 +79,15 @@ manage-scheduled-tasks skill; CLAUDE.md gains just one sentence pointing at the
 manage-scheduled-tasks and check-app-errors skills.
 
 **Surfacing scheduled agents in the workspace.** An agent a scheduled job creates
-now opens as its own tab in the main chat window (without stealing focus) and
-blinks until you open it, so a new run is never easy to miss. The blink is a
-yellow flash-then-fade on the whole clickable tab region, driven by a generic
-`highlight` label any agent can carry:
-bumping the label's value re-blinks the tab. The tab re-blinks for each genuinely
-new run whether it was left open or closed (a tab you're actively viewing is left
-alone). Surfacing is driven entirely by one persisted signal -- the run you last
+now opens as its own tab in the main chat window (without stealing focus), so a
+new run is never easy to miss. Surfacing is driven by a generic `highlight`
+label any agent can carry: bumping the label's value re-opens the tab if it was
+closed. It is driven entirely by one persisted signal -- the run you last
 acknowledged (by viewing or closing the tab) versus the run currently showing --
 so it is idempotent on reconnect: a run that fired while your laptop was asleep
-(e.g. an overnight Caretaker run) surfaces and blinks the moment the workspace's
-web UI reconnects, with no need to reopen anything. Closing a blinking tab dismisses
-that run (it will not immediately reopen), and a genuinely newer run brings it back.
+(e.g. an overnight Caretaker run) surfaces the moment the workspace's web UI
+reconnects, with no need to reopen anything. Closing the tab dismisses that run
+(it will not immediately reopen), and a genuinely newer run brings it back.
 The system interface reads each agent's labels straight from the discovery stream,
 so the Caretaker is reliably recognized and the hidden services agent stays hidden.
 
@@ -101,7 +99,7 @@ tunnel dies but the browser never fires a close event -- it leaves the socket
 in a phantom "OPEN" state -- so the close-driven auto-reconnect never ran, and
 a Caretaker run that fired overnight stayed invisible until a manual reload.
 Returning to the workspace now drops the stale socket and opens a fresh one,
-whose snapshot re-surfaces (and blinks) anything missed. Because reconnects
+whose snapshot re-surfaces anything missed. Because reconnects
 replay pending proto-agent creations but not completions, the reconnect also
 rebuilds the local proto-agent set from the fresh snapshot, so an agent that
 finished building while the laptop slept can no longer strand a tab on

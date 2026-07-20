@@ -651,7 +651,7 @@ type = "claude"
 # weekly and findings-gated when enabled) via
 # scripts/run_task_agent.sh, and is
 # labelled task_agent=caretaker + highlight=<run-key> so it can be found as a
-# singleton and surfaced/re-flashed as a tab in the minds UI.
+# singleton and surfaced as a tab in the minds UI.
 [create_templates.caretaker]
 type = "claude"
 env = ["MNGR_AGENT_ROLE=caretaker"]

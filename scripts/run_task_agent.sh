@@ -31,8 +31,8 @@
 #   - No agent yet (first run ever) -> create the persistent agent whose first
 #     message is `/<skill>`. A brand-new agent starts from an empty chat, so a
 #     self-detecting skill (like caretaker) can deliver a first-run welcome.
-#   - Agent already exists -> bump its run key (so the minds UI re-surfaces and
-#     re-flashes the tab if the user had closed it), send `/clear` to start a
+#   - Agent already exists -> bump its run key (so the minds UI re-surfaces
+#     the tab if the user had closed it), send `/clear` to start a
 #     fresh session, then send `/<skill>` to run again with a clean context.
 #
 # `/clear` starts a new session, so the skill re-runs with no memory of the
@@ -145,8 +145,8 @@ main() {
   # more than one exists.
   id="$(printf '%s\n' "$ids" | head -n 1)"
 
-  # Bump the highlight key so the minds UI re-flashes the tab for this new run --
-  # whether the user had closed it (re-surfaced) or left it open (re-blinked).
+  # Bump the highlight key so the minds UI re-surfaces the tab for this new
+  # run if the user had closed it.
   uv run mngr label "$id" -l "highlight=$(date +%s)" 2>/dev/null || true
 
   # Clear the rendered chat so this run starts from an empty conversation.

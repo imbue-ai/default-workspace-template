@@ -13,16 +13,14 @@ sourced agent environment (MNGR_AGENT_STATE_DIR, CLAUDE_CONFIG_DIR, etc.).
 
 import json
 import os
-import re
-import shlex
 import subprocess
-import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
@@ -36,27 +34,6 @@ RUNTIME_DIR = Path("runtime")
 # The Caretaker's state dir (run logs + permissions.md, written by the
 # caretaker skill) lives under runtime/ so it rides the runtime-backup branch.
 CARETAKER_DIR = RUNTIME_DIR / "caretaker"
-
-# Env snapshot for cron jobs. cron builds a minimal environment for its
-# jobs, so none of the agent env (MNGR_*, LATCHKEY_*, GH_TOKEN, the PATH with
-# /root/.local/bin, ...) survives into them. Bootstrap has the full agent env
-# (supervisord and every service inherit it from this shell), so it dumps a
-# snapshot here each boot for scripts/with_agent_env.sh to source. /run is a
-# tmpfs, so the snapshot never outlives the boot that wrote it.
-AGENT_ENV_SNAPSHOT_PATH = Path("/run/minds-agent-env")
-# Keys must be valid shell identifiers to be re-exported (cron jobs source the
-# snapshot through bash); anything else (e.g. bash exports function baggage) is
-# skipped.
-_ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-# Timezone-at-boot: the minds desktop client serves the user's IANA timezone at
-# GET /api/v1/timezone; bootstrap reaches it through the latchkey gateway's
-# minds-api-proxy and points /etc/localtime + /etc/timezone at it, so cron
-# schedules run in the user's local time. The gateway's reverse tunnel may not
-# be up yet this early in boot, hence the small bounded retry.
-_TIMEZONE_FETCH_ATTEMPTS = 3
-_TIMEZONE_FETCH_RETRY_SECONDS = 3.0
-_TIMEZONE_FETCH_TIMEOUT_SECONDS = 5.0
 
 # Signal file gating exactly-once creation of the initial chat agent. Lives
 # under runtime/, which persists with the container volume (and is synced to
@@ -566,42 +543,42 @@ def _configure_git_global() -> None:
             )
 
 
-def _write_agent_env_snapshot(path: Path = AGENT_ENV_SNAPSHOT_PATH) -> None:
-    """Dump this process's environment as `export KEY=<value>` lines at `path`.
+class TimezoneFetchError(Exception):
+    """The timezone endpoint answered with an unusable payload."""
 
-    scripts/with_agent_env.sh sources the file to rebuild the agent environment
-    inside cron jobs (see AGENT_ENV_SNAPSHOT_PATH). Values are
-    shell-quoted; keys that are not valid shell identifiers are skipped. Written
-    0600 because the env carries secrets (GH_TOKEN, gateway password).
-    Best-effort: logs and returns rather than raising.
+
+# The gateway's reverse tunnel may not be up yet this early in boot, and there
+# is no readiness event to wait on -- hence the small bounded retry.
+@retry(
+    retry=retry_if_exception_type((OSError, ValueError, TimezoneFetchError)),
+    stop=stop_after_attempt(3),
+    wait=wait_fixed(3),
+    reraise=True,
+)
+def _request_timezone(request: urllib.request.Request) -> str:
+    """One GET of the timezone endpoint; raises so the retry decorator can act.
+
+    OSError covers URLError/HTTPError (refused, 403/503, timeout); ValueError
+    covers a non-JSON or non-UTF-8 body; TimezoneFetchError an unexpected
+    payload shape.
     """
-    lines = []
-    for key, value in sorted(os.environ.items()):
-        if not _ENV_KEY_PATTERN.fullmatch(key):
-            continue
-        lines.append(f"export {key}={shlex.quote(value)}")
-    content = "\n".join(lines) + "\n"
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as handle:
-            handle.write(content)
-        # os.open's mode only applies at creation; tighten a pre-existing file.
-        path.chmod(0o600)
-    except OSError as e:
-        logger.warning("Failed to write agent env snapshot to {}: {}", path, e)
-        return
-    logger.info("Wrote agent env snapshot to {}", path)
+    with urllib.request.urlopen(request, timeout=5) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    timezone_name = payload.get("timezone") if isinstance(payload, dict) else None
+    if not isinstance(timezone_name, str) or not timezone_name:
+        raise TimezoneFetchError(f"unexpected timezone payload: {payload!r}")
+    return timezone_name
 
 
 def _fetch_user_timezone() -> str:
     """Fetch the user's IANA timezone name from the minds desktop client.
 
     GETs /api/v1/timezone through the latchkey gateway's minds-api-proxy using
-    the gateway env vars mngr injects into the agent environment. The gateway's
-    reverse tunnel may not be up yet this early in boot, so the fetch retries a
-    few times before giving up. Returns "" on any failure (missing env, refused
-    connection, non-200, malformed body) so the caller can fall back to UTC.
+    the gateway env vars mngr injects into the agent environment. Timezone-at-
+    boot: the caller points /etc/localtime + /etc/timezone at the result so
+    cron schedules run in the user's local time. Returns "" on any failure
+    (missing env, refused connection, non-200, malformed body) so the caller
+    can fall back to UTC.
     """
     gateway = os.environ.get("LATCHKEY_GATEWAY", "")
     password = os.environ.get("LATCHKEY_GATEWAY_PASSWORD", "")
@@ -616,34 +593,15 @@ def _fetch_user_timezone() -> str:
             "X-Latchkey-Gateway-Permissions-Override": permissions,
         },
     )
-    last_error: Exception | None = None
-    for attempt in range(_TIMEZONE_FETCH_ATTEMPTS):
-        if attempt > 0:
-            # The bounded sleep between attempts is deliberate (and carried by
-            # the time_sleep ratchet): there is no readiness event for the
-            # gateway's reverse tunnel to wait on this early in boot.
-            time.sleep(_TIMEZONE_FETCH_RETRY_SECONDS)
-        try:
-            with urllib.request.urlopen(
-                request, timeout=_TIMEZONE_FETCH_TIMEOUT_SECONDS
-            ) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (OSError, ValueError) as e:
-            # OSError covers URLError/HTTPError (refused, 403/503, timeout);
-            # ValueError covers a non-JSON or non-UTF-8 body.
-            last_error = e
-            continue
-        timezone_name = payload.get("timezone") if isinstance(payload, dict) else None
-        if isinstance(timezone_name, str) and timezone_name:
-            return timezone_name
-        last_error = ValueError(f"unexpected timezone payload: {payload!r}")
-    logger.warning(
-        "Could not fetch the user timezone from the gateway after {} attempts "
-        "({}); container stays on UTC",
-        _TIMEZONE_FETCH_ATTEMPTS,
-        last_error,
-    )
-    return ""
+    try:
+        return _request_timezone(request)
+    except (OSError, ValueError, TimezoneFetchError) as e:
+        logger.warning(
+            "Could not fetch the user timezone from the gateway ({}); "
+            "container stays on UTC",
+            e,
+        )
+        return ""
 
 
 def _apply_container_timezone(
@@ -732,14 +690,9 @@ def main() -> None:
     # agent runs git.
     _configure_git_global()
 
-    # Snapshot the agent environment for cron jobs (they get a scrubbed
-    # env; scripts/with_agent_env.sh sources this snapshot), and set the
-    # container clock to the user's timezone so schedules run in their local
-    # time. All of this must precede _exec_supervisord: cron reads the timezone
-    # once at daemon start, and the Caretaker's daily-job stamp must be seeded
-    # before cron's first tick of scripts/run_daily_job.sh or a workspace
-    # created after 3 AM spawns the Caretaker immediately on creation.
-    _write_agent_env_snapshot()
+    # Set the container clock to the user's timezone so cron schedules run in
+    # their local time. Must precede _exec_supervisord: cron reads the
+    # timezone once at daemon start.
     tz_name = _fetch_user_timezone()
     if tz_name:
         _apply_container_timezone(tz_name)

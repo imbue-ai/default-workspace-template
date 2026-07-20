@@ -65,9 +65,10 @@ match those.
 ## Every job needs the env wrapper
 
 Cron gives jobs a scrubbed, minimal environment -- none of the agent
-environment (PATH with `uv`, `MNGR_*`, `LATCHKEY_*`, `GH_TOKEN`, ...) survives.
-Prefix every job command with the wrapper, which restores the workspace
-environment and runs the command from the repo root:
+environment (PATH with `uv`, `MNGR_*`, `LATCHKEY_*`, ...) survives. Prefix
+every job command with the wrapper, which rebuilds the workspace environment
+from the env files mngr maintains on the host dir and runs the command from
+the repo root:
 
 ```
 /mngr/code/scripts/with_agent_env.sh <command...>
@@ -151,7 +152,7 @@ That is all -- no new agent template is required. `scripts/run_task_agent.sh
 <skill>` creates a persistent singleton agent (labelled `task_agent=<skill>`),
 keeps it alive across runs, and on each run clears its chat and re-sends
 `/<skill>`, so the skill runs fresh. The agent surfaces as a tab in the minds UI
-and re-flashes on each run. Pass `--template <t>` only when you want a custom
+on each run (re-opening the tab if it was closed). Pass `--template <t>` only when you want a custom
 agent template; otherwise the generic `task_agent` template is used.
 
 ## How the Caretaker is wired (the built-in example)
@@ -214,8 +215,9 @@ The complete map of the scheduling machinery, for edits and debugging:
   `supervisorctl status cron`).
 - `/var/log/supervisor/<job>.log` -- each job's own output (per the redirect
   on its entry); `/var/log/supervisor/cron-*.log` -- the cron daemon's logs.
-- `/run/minds-agent-env` -- the per-boot agent-environment snapshot that
-  `scripts/with_agent_env.sh` sources.
+- `/mngr/env` and `/mngr/agents/<id>/env` -- the host and per-agent env
+  files mngr maintains; `scripts/with_agent_env.sh` sources them (host first,
+  then the services agent's) to rebuild the job environment.
 - `/etc/localtime` + `/etc/timezone` -- the container clock, set from the
   user's timezone at each boot by the bootstrap (see the timezone section
   above for re-checking it).
