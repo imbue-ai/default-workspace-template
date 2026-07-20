@@ -1,6 +1,6 @@
 Fixed two host_backup defects surfaced by a bug report (a 17-day silent backup outage from an uncleared stale restic lock, plus `host-backup-now` hanging for non-primary agents):
 
-- Stale-lock recovery: a `restic backup` that fails because the repository is already locked (e.g. an exclusive lock left by a dead PID from a prior container incarnation) now runs `restic unlock` -- which removes only *stale* locks, never one a live process holds -- and retries once, instead of failing every tick indefinitely with no recovery. The `restic_backup_succeeded` / `restic_backup_failed` event records whether an unlock recovery was attempted.
+- Stale-lock recovery: a `restic backup` that fails because the repository is already locked (e.g. an exclusive lock left by a dead PID from a prior container incarnation) now runs `restic unlock` -- which removes only *stale* locks, never one a live process holds -- and retries once, instead of failing every tick indefinitely with no recovery.
 
 - Repeated-failure escalation: consecutive failed ticks are counted (reset on any success), and once the count reaches a threshold (3) each failing tick also emits a new `backup_repeatedly_failing` event and logs at error level, so a multi-day outage leaves a loud, durable signal instead of passing silently. The `restic_backup_failed` event now carries the current consecutive-failure count.
 
