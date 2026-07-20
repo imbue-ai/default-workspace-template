@@ -64,11 +64,57 @@ _CODEX_VERB_BY_TOOL: dict[str, str] = {
     "web_search": "Searching the web",
 }
 
-# Codex code-mode shell tool: a ``custom_tool_call`` whose input is a JavaScript
-# program (e.g. ``tools.exec_command({cmd:"..."})``), not a tidy command. We show
-# a fixed label rather than trying to parse the JS.
+# Codex code-mode: EVERYTHING the model does is one ``exec`` custom_tool_call whose
+# input is a JavaScript program that calls ``tools.<fn>({...})`` -- exec_command for a
+# shell, web__run for a web search, apply_patch for an edit, etc. So the real
+# operation is the ``tools.<fn>`` inside the JS, not the tool name. We parse that fn
+# out and map it to a verb (mirroring the non-code-mode codex/claude verbs), falling
+# back to a humanized fn name, then "Running code" only if no tools.<fn> is found.
 _CODEX_CODE_EXEC_TOOL = "exec"
 _CODEX_CODE_EXEC_LABEL = "Running code"
+
+_CODE_MODE_CALL = re.compile(r"tools\.([A-Za-z_]\w*)\s*\(")
+
+_CODE_MODE_VERB_BY_FN: dict[str, str] = {
+    "exec_command": "Running",
+    "shell_command": "Running",
+    "web__run": "Searching the web",
+    "web_search": "Searching the web",
+    "apply_patch": "Editing",
+    "view_image": "Viewing image",
+}
+
+
+def _code_mode_target(fn: str, js: str) -> str | None:
+    """Best-effort target from the JS args of a ``tools.<fn>(...)`` call."""
+    if fn == "apply_patch":
+        return _apply_patch_target(js)
+    if fn in ("exec_command", "shell_command"):
+        match = re.search(r'cmd\s*:\s*"([^"]*)"', js) or re.search(r'command\s*:\s*"([^"]*)"', js)
+        return _shorten(match.group(1)) if match else None
+    if fn in ("web__run", "web_search"):
+        match = re.search(r'\bq\s*:\s*"([^"]*)"', js) or re.search(r'query\s*:\s*"([^"]*)"', js)
+        return f'"{_shorten(match.group(1))}"' if match else None
+    if fn == "view_image":
+        match = re.search(r'path\s*:\s*"([^"]*)"', js)
+        return _basename(match.group(1)) if match else None
+    return None
+
+
+def _code_mode_caption(js: str) -> str:
+    """Caption for a code-mode ``exec`` call, from the ``tools.<fn>`` inside its JS."""
+    match = _CODE_MODE_CALL.search(js)
+    if match is None:
+        return _CODEX_CODE_EXEC_LABEL
+    fn = match.group(1)
+    verb = _CODE_MODE_VERB_BY_FN.get(fn)
+    target = _code_mode_target(fn, js)
+    if verb is not None and target is not None:
+        return f"{verb} {target}"
+    if verb is not None:
+        return f"{verb}…"
+    # Unknown tools.<fn> -> humanize it (web__run -> "web run"), like the MCP path.
+    return f"Running {fn.replace('__', ' ').replace('_', ' ')}"
 
 # Codex's experimental multi-agent spawn tools -> "Delegating to sub-agent…".
 _CODEX_SPAWN_TOOL_PREFIX = "spawn_agent"
@@ -196,7 +242,7 @@ def caption_for_tool_call(tool_name: str, input_preview: str, *, is_codex: bool)
         return "Delegating to sub-agent…"
 
     if is_codex and tool_name == _CODEX_CODE_EXEC_TOOL:
-        return _CODEX_CODE_EXEC_LABEL
+        return _code_mode_caption(input_preview)
 
     verb_by_tool = _CODEX_VERB_BY_TOOL if is_codex else _CLAUDE_VERB_BY_TOOL
     verb = verb_by_tool.get(tool_name)
