@@ -394,7 +394,7 @@ def _run_restic_backup(
     an outage cannot pass silently. `backup_fn`/`unlock_fn` are injected for tests.
     """
     tag = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    result, duration, unlock_attempted = _attempt_backup_with_unlock_retry(
+    result, duration = _attempt_backup_with_unlock_retry(
         snapshot=snapshot,
         excludes=config.excludes,
         tag=tag,
@@ -414,7 +414,6 @@ def _run_restic_backup(
                 duration_seconds=duration,
                 stdout=result.stdout,
                 stderr=result.stderr,
-                unlock_recovery_attempted=unlock_attempted,
                 consecutive_failures=state.consecutive_backup_failures,
             ),
         )
@@ -435,7 +434,6 @@ def _run_restic_backup(
             duration_seconds=duration,
             stdout=result.stdout,
             stderr=result.stderr,
-            unlock_recovery_attempted=unlock_attempted,
         ),
     )
     return True
@@ -449,12 +447,12 @@ def _attempt_backup_with_unlock_retry(
     env_overrides: Mapping[str, str],
     backup_fn: BackupFn,
     unlock_fn: UnlockFn,
-) -> tuple[subprocess.CompletedProcess[str], float, bool]:
+) -> tuple[subprocess.CompletedProcess[str], float]:
     """Run the backup, clearing a stale lock and retrying once if one blocks it.
 
-    Returns (final restic result, total elapsed seconds, whether an unlock+retry
-    was attempted). Only a lock error triggers the unlock; any other failure is
-    returned as-is for the caller to record.
+    Returns (final restic result, total elapsed seconds). Only a lock error
+    triggers the unlock; any other failure is returned as-is for the caller to
+    record.
     """
     start = time.monotonic()
     result = backup_fn(
@@ -463,9 +461,7 @@ def _attempt_backup_with_unlock_retry(
         tag=tag,
         env_overrides=env_overrides,
     )
-    unlock_attempted = False
     if result.returncode != 0 and is_repo_locked_error(result.stderr):
-        unlock_attempted = True
         logger.warning(
             "restic backup blocked by an existing repository lock; running "
             "`restic unlock` to clear stale locks and retrying once"
@@ -485,7 +481,7 @@ def _attempt_backup_with_unlock_retry(
                 env_overrides=env_overrides,
             )
     duration = time.monotonic() - start
-    return result, duration, unlock_attempted
+    return result, duration
 
 
 def _maybe_emit_repeated_failure_alarm(state: _LoopState) -> None:

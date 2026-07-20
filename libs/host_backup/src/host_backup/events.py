@@ -124,10 +124,6 @@ class ResticBackupSucceededEvent(BackupEvent):
     duration_seconds: float
     stdout: str
     stderr: str
-    unlock_recovery_attempted: bool = Field(
-        default=False,
-        description="True if a stale-lock `restic unlock` + retry was needed for this backup",
-    )
 
 
 class ResticBackupFailedEvent(BackupEvent):
@@ -139,10 +135,6 @@ class ResticBackupFailedEvent(BackupEvent):
     duration_seconds: float
     stdout: str
     stderr: str
-    unlock_recovery_attempted: bool = Field(
-        default=False,
-        description="True if a stale-lock `restic unlock` + retry was attempted before giving up",
-    )
     consecutive_failures: int = Field(
         default=0,
         description="How many ticks in a row have now failed (1 on the first failure)",

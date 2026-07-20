@@ -263,7 +263,6 @@ def test_run_restic_backup_unlocks_and_retries_on_stale_lock(tmp_path: Path) -> 
         if e["type"] == "RESTIC_BACKUP_SUCCEEDED"
     ]
     assert len(succeeded_events) == 1
-    assert succeeded_events[0]["unlock_recovery_attempted"] is True
     assert succeeded_events[0]["snapshot_id"] == "snap1"
 
 
@@ -279,7 +278,6 @@ def test_run_restic_backup_does_not_unlock_on_unrelated_failure(tmp_path: Path) 
         e for e in _events_in(state.events_dir) if e["type"] == "RESTIC_BACKUP_FAILED"
     ]
     assert len(failed_events) == 1
-    assert failed_events[0]["unlock_recovery_attempted"] is False
     assert failed_events[0]["consecutive_failures"] == 1
 
 
