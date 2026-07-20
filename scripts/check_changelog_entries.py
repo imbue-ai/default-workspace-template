@@ -8,11 +8,13 @@ non-zero exit) rather than pass vacuously when it cannot establish a base
 distinct from HEAD.
 
 A "project" is a directory under ``libs/`` or ``apps/`` containing a
-``pyproject.toml``, or the synthetic top-level ``dev`` bucket that owns
-root-level files (scripts/, .github/, top-level docs, build tooling). Each
-project holds its per-PR entries in ``<project_dir>/changelog/``; a PR that
-touches a project must add ``<project_dir>/changelog/<branch>.md`` (slashes in
-the branch name replaced with dashes).
+``pyproject.toml``, the synthetic ``agents`` bucket that owns the ``.agents``
+tree (skills and shared agent config), or the synthetic top-level ``dev`` bucket
+that owns root-level files (scripts/, .github/, top-level docs, build tooling).
+Each project holds its per-PR entries in ``<project_dir>/changelog/`` (the
+``agents`` bucket's entries live in ``.agents/changelog/``); a PR that touches a
+project must add ``<project_dir>/changelog/<branch>.md`` (slashes in the branch
+name replaced with dashes).
 
 The gate is pure stdlib so it can run without ``uv sync``. Run it from the repo
 root::
@@ -35,22 +37,27 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DEV_PROJECT = "dev"
+AGENTS_PROJECT = "agents"
+AGENTS_DIR = ".agents"
 
 
 def project_for_path(rel_path: Path | str, repo_root: Path) -> str:
     """Return the project that owns ``rel_path`` (a repo-relative path).
 
     A ``libs/<name>/...`` or ``apps/<name>/...`` path resolves to ``<name>``
-    when that directory contains a ``pyproject.toml``; everything else falls
-    back to ``dev``. The ``pyproject.toml`` check guards against a path like
-    ``libs/garbage/...`` (not an actual project) being treated as a real
-    project.
+    when that directory contains a ``pyproject.toml``. Anything under
+    ``.agents/`` (skills and shared agent config) resolves to the synthetic
+    ``agents`` bucket. Everything else falls back to ``dev``. The
+    ``pyproject.toml`` check guards against a path like ``libs/garbage/...`` (not
+    an actual project) being treated as a real project.
     """
     parts = Path(rel_path).parts
     if len(parts) >= 2 and parts[0] in ("libs", "apps"):
         candidate = repo_root / parts[0] / parts[1]
         if (candidate / "pyproject.toml").exists():
             return parts[1]
+    if parts and parts[0] == AGENTS_DIR:
+        return AGENTS_PROJECT
     return DEV_PROJECT
 
 
@@ -58,6 +65,8 @@ def project_entries_dir(project: str, repo_root: Path) -> Path:
     """Return the ``<project_dir>/changelog/`` directory for per-PR entry files."""
     if project == DEV_PROJECT:
         return repo_root / DEV_PROJECT / "changelog"
+    if project == AGENTS_PROJECT:
+        return repo_root / AGENTS_DIR / "changelog"
     libs = repo_root / "libs" / project
     if libs.is_dir():
         return libs / "changelog"
@@ -68,12 +77,12 @@ def project_entries_dir(project: str, repo_root: Path) -> Path:
 
 
 def all_known_projects(repo_root: Path) -> set[str]:
-    """Return every known project name, including the synthetic ``dev``.
+    """Return every known project name, including the synthetic buckets.
 
     A project is every ``libs/<name>`` and ``apps/<name>`` that contains a
-    ``pyproject.toml``, plus ``dev``.
+    ``pyproject.toml``, plus the synthetic ``dev`` and ``agents`` buckets.
     """
-    names: set[str] = {DEV_PROJECT}
+    names: set[str] = {DEV_PROJECT, AGENTS_PROJECT}
     for parent_name in ("libs", "apps"):
         parent = repo_root / parent_name
         if not parent.is_dir():
@@ -240,7 +249,9 @@ def main(repo_root: Path = _REPO_ROOT) -> int:
         f"Create:\n" + "\n".join(f"  - {p}" for p in missing) + "\n"
         f"Each file should briefly describe the user-visible changes in this PR that "
         f"pertain to that project. The synthetic '{DEV_PROJECT}' project covers "
-        f"root-level files (scripts/, .github/, top-level docs, build tooling).\n"
+        f"root-level files (scripts/, .github/, top-level docs, build tooling); the "
+        f"synthetic '{AGENTS_PROJECT}' project covers the '{AGENTS_DIR}' tree (skills "
+        f"and shared agent config).\n"
         f"\n"
         f"If you believe this PR makes NO actual changes to one of the listed "
         f"projects, do NOT add a placebo entry: a stale or misconfigured diff base "
