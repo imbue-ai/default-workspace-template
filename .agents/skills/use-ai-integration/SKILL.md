@@ -41,9 +41,8 @@ needs. Pick the weakest -- it is cheaper, faster, and simpler.
    answer-from-context. One prompt, one response, no tools. The common case.
 2. **One-shot agentic task** -- a single self-contained job that needs tools or
    file access ("read this file and act", "summarize the diff with the repo
-   open"). This is also how you **search the web**: use an agent (`claude -p` has
-   a built-in `WebSearch` tool), rather than attaching a server-side search tool
-   to a completion.
+   open"). This is also how you **search the web** -- `claude -p` has a built-in
+   `WebSearch` tool.
 3. **Full agent** -- a full, possibly long-running agent that runs in its **own
    git worktree** (a `launch-task` worker). Reach for this over scenario 2 when
    Claude edits code that must be tested and validated, or when several agents
@@ -52,7 +51,11 @@ needs. Pick the weakest -- it is cheaper, faster, and simpler.
 
 ## Scenario 1 -- one-shot completion
 
-For a plain completion with **no tools**.
+For a plain completion with **no tools**. If the step needs a tool at all --
+web search or otherwise -- reach for an agent (scenario 2), not a server-side
+provider tool bolted onto a completion. A server-side tool runs on the provider
+that hosts it, welding the step to one vendor, and drags a plain completion onto
+a fragile tool code path; an agent's built-in tools have neither problem.
 
 **Keyed (`ANTHROPIC_API_KEY` set): call litellm directly.** It is cheaper than
 `claude -p` for non-agentic work, and it gives you structured output, tools,
