@@ -259,7 +259,7 @@ const OPEN_TAB_SPLIT_FRACTION = 0.6;
 // for runs that happened before the page loaded. A dead-socket gap is NOT a
 // new session: the last-seen keys live in module state, so a run that fired
 // while the laptop slept surfaces on the first snapshot after the WebSocket
-// reconnects (see reconnectOnWake in AgentManager). Closing the tab is just
+// reconnects. Closing the tab is just
 // closing it -- the key was already recorded, so it stays closed until a
 // genuinely newer run bumps the key.
 let highlightBaselineRecorded = false;
