@@ -174,8 +174,6 @@ finds something.
    `runtime/caretaker/permissions.md`. Start from `runtime/caretaker/findings.md`
    when it exists -- that is what the deterministic check found and why you were
    woken; verify each item and dig into causes rather than re-discovering them.
-   Check the permission line in
-   `runtime/caretaker/permissions.md`.
    - `no` or not set: do **not** scan (no permission yet). Skip to step 5; your
      hello already re-offered, so just close warmly.
    - `yes`: three checks, noting what you find **in your log**, in plain terms:
