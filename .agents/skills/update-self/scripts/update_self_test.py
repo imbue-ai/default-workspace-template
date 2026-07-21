@@ -229,20 +229,6 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
         assert '"minds-v0.1.0"' in capsys.readouterr().out, argv
 
 
-# --- read_tree --------------------------------------------------------------
-
-
-def test_read_tree_maps_files_to_bytes_by_relative_path(tmp_path) -> None:
-    root = tmp_path / "skill"
-    (root / "scripts").mkdir(parents=True)
-    (root / "SKILL.md").write_text("body", encoding="utf-8")
-    (root / "scripts" / "a.py").write_bytes(b"print(1)")
-    assert update_self.read_tree(root) == {
-        "SKILL.md": b"body",
-        "scripts/a.py": b"print(1)",
-    }
-
-
 # --- bootstrap-skill --------------------------------------------------------
 
 
@@ -325,10 +311,10 @@ def test_bootstrap_skill_reports_no_difference_when_local_matches_tag(
 
 def test_bootstrap_skill_ignores_untracked_build_artifacts(tmp_path, capsys) -> None:
     # Importing the script drops __pycache__/*.pyc into scripts/. Those are
-    # untracked and never appear in the git-archive extraction, so they must not
-    # register as a spurious difference -- otherwise the "identical -> stay on the
-    # local flow" branch would be dead in every real checkout (where the module
-    # has been imported at least once).
+    # untracked, so `git diff` ignores them and they must not register as a
+    # spurious difference -- otherwise the "identical -> stay on the local flow"
+    # branch would be dead in every real checkout (where the module has been
+    # imported at least once).
     repo = tmp_path / "repo"
     _init_repo_with_skill(repo, skill_body="STABLE FLOW\n")
     pycache = repo / update_self.SKILL_DIR_REL / "scripts" / "__pycache__"
