@@ -8,11 +8,13 @@ description: Publish a clean, shareable snapshot of the apps/features this mind 
 Version: v1 (inspirations flow). This versions the publish/adopt flow and the
 `inspiration-<slug>.md` manifest format.
 
-An "inspiration" is a clean, shareable, **bootable** snapshot of the apps and
-features this mind built, published to a new GitHub repo so another mind can
-be created FROM it (not just read its app code). One repo can accumulate
-several inspirations (one manifest + thumbnail per inspiration, all at the
-repo root). This skill delegates the assembly to a `launch-task` sub-agent
+An "inspiration" is a clean, shareable, **bootable** snapshot of something this
+mind built -- an app or feature, but equally a chat customization or behavior, a
+skill, a workflow, a service, config, or seed data: anything committable that
+lives in the repo tree and can be snapshotted -- published to a new GitHub repo
+so another mind can be created FROM it (not just read its source). One repo can
+accumulate several inspirations (one manifest + thumbnail per inspiration, all at
+the repo root). This skill delegates the assembly to a `launch-task` sub-agent
 worker (which builds the snapshot, finishes the manifest, and designs the
 thumbnail in its own git worktree), confirms the publish with the user in
 chat, obtains GitHub access via latchkey permissioning (never the `gh` CLI),
@@ -82,10 +84,12 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 
 Ask the user, in plain language. Never enumerate files at them:
 
-- which apps or features they want to include (you translate this into a set of
-  repo-root-relative include paths, e.g. `apps/slack-inbox`, `libs/slack_inbox`,
-  plus their service wiring -- you reason about the backing paths, the user does
-  not);
+- what they want to include -- an app or feature, but equally a skill, a chat
+  customization or behavior, a workflow, a service, config, or seed data:
+  anything committable that lives in the repo tree. You translate this into a set
+  of repo-root-relative include paths (e.g. `apps/slack-inbox`, `libs/slack_inbox`
+  plus their service wiring, or `.agents/skills/<name>` for a skill) -- you reason
+  about the backing paths, the user does not;
 - what data should be included -- and this is NOT an all-or-nothing default.
   Judge each candidate data path by whether it is **personal**: information
   about the user or specific real people (names, emails, accounts, messages,
@@ -108,6 +112,18 @@ Ask the user, in plain language. Never enumerate files at them:
 - a name for the inspiration (propose one yourself; it becomes the title, and
   the slug derives from it -- naming is cheap to change later, so it never
   needs to hold up the gate below).
+
+**If what they want to snapshot is not committed to git** -- an ephemeral chat
+behavior, the current conversation's history, runtime-only state, anything that
+lives only in memory or outside the repo tree -- it cannot go into an inspiration
+as-is: an inspiration must be reconstructable from the committed tree, so a
+snapshot that omits it would boot without the very thing that made it worth
+sharing. Recognize this and, before going further, suggest turning it into
+something committable first -- most often by crystallizing it into a skill (this
+repo's `crystallize-artifact` skill promotes just-finished work into a committed,
+tested skill), or otherwise capturing it as config, seed data, or a service that
+does live in the tree. Once it is committed, include it like any other path
+above.
 
 Derive `slug` and `repo_name` from the title. Resolve the concrete set of
 include paths yourself.
@@ -319,11 +335,32 @@ worktree to a clean template base and deletes gitignored state -- including
    what the ADOPTING agent acts on during setup -- it initiates each one via
    a latchkey permission request before asking how to adapt -- so a vague or
    missing line silently breaks adoption (a real incident: an adopter never
-   prompted for a Slack permission the app needed). "Holes" is the
+   prompted for a Slack permission the app needed). This list IS "what the
+   inspiration's user would need to give for the app to work"; it must be
+   complete and accurate, because the lead surfaces it back to the publishing
+   user for confirmation in §6 and a gap you leave here is exactly what that
+   confirmation is checking for. "Holes" is the
    adaptation agenda only -- design gaps, stubbed integrations, hardcoded
    accounts -- never activation requirements. If a section genuinely has
    nothing to add, say so explicitly in prose; never leave a placeholder
    comment in place and never leave a section blank.
+
+   **LLM access is a first-class prerequisite.** If any included code calls an
+   LLM (Claude) -- an AI-driven service, an AI integration, a scripted model
+   step -- record that dependency explicitly, because HOW a mind reaches Claude
+   is per-environment and differs between the publisher and the adopter. This
+   repo's `use-ai-integration` skill routes through a KEYED path
+   (`ANTHROPIC_API_KEY` set -> `litellm`, pay-per-token API) or a KEYLESS path
+   (`claude -p` -> the subscription credit pool), chosen by whether
+   `ANTHROPIC_API_KEY` is present. The adopter's mind may use the OTHER method
+   than the one this code was written against. So add a Prerequisites line naming
+   the LLM dependency and the method it was built for, e.g. `requires_llm: calls
+   Claude via the keyed litellm path (ANTHROPIC_API_KEY); an adopter on the
+   keyless subscription path must switch the model calls per use-ai-integration`.
+   If the code hardcodes one path (a key, an endpoint, a specific model), ALSO
+   list switching it to the adopter's method as a Hole. Never leave an LLM
+   dependency implicit: the adopter must know the app needs LLM access and be
+   able to wire in their own method (subscription or litellm).
 
    The generated `README.md` at the repo root (the repo's GitHub landing
    page) carries ONE `<!-- FILL-IN (publishing agent): ... -->` block too --
@@ -508,6 +545,17 @@ mechanism. Present the proposal to the user ONCE, in plain language:
 - a short recap of the **published-version modifications** that were applied
   (or that there were none), so the user can verify their requested removals
   and changes actually happened;
+- the **permissions and secrets an adopter must grant** -- the set the
+  manifest's "Prerequisites" lists (the worker derived these from the code in
+  §3), stated plainly rather than as `requires_` lines, e.g. "For this to work,
+  whoever adopts it will need to connect/grant: <X>, <Y>. Do those look right and
+  complete?". This is "what the inspiration's user would need to give for the app
+  to work", and the publisher's reply is part of the go-ahead: if they say a
+  permission or secret is missing or wrong, fix the manifest's "Prerequisites" in
+  `$WT` (and re-commit per the commit step below) BEFORE proceeding to §7/§8 -- a
+  missing or inaccurate line silently breaks adoption, since it is exactly what
+  the adopting agent initiates during setup. If Prerequisites says there are
+  none, state that too, so the user can confirm the app really needs nothing;
 - the **thumbnail** the sub-agent designed -- EMBED it in the chat message
   as a markdown image so the user actually sees what will represent their
   inspiration, using the file's absolute path:
@@ -550,8 +598,10 @@ If the user asks to abort, stop here and leave the assembled commit intact
   stripped).
 
 **Commit before §8's push.** Write any confirmed title/description edits into
-`inspiration-<slug>.md`'s front-matter (and any thumbnail edits into the
-`.svg`), and COMMIT that change with cwd = `$WT` before proceeding to §7/§8.
+`inspiration-<slug>.md`'s front-matter (any Prerequisites the publisher flagged
+as missing or wrong into its "Prerequisites" section, and any thumbnail edits
+into the `.svg`), and COMMIT that change with cwd = `$WT` before proceeding to
+§7/§8.
 Never push first and fix up the manifest or thumbnail with a second
 commit-and-re-push. This commit -- like everything else in this skill after
 assembly -- happens IN `$WT`, never `/code`.
@@ -675,6 +725,43 @@ literal suffix ` (minds inspiration v1)` -- the flow-version marker every
 published repo carries; keep it verbatim. You
 already validated `repo_name` against `^[A-Za-z0-9._-]+$` in §6; keep the
 JSON built from variables, never string-interpolated shell.
+
+**Step 1b -- lock down the collaboration surface (unconditional -- never ask
+the user).** Immediately after the repo exists, close the surfaces where
+arbitrary, non-collaborator users could comment on or contribute to the
+inspiration. Turn **discussions OFF** and **forking OFF**. Both are settable
+via the "Update a repository" endpoint (`PATCH /repos/<owner>/<repo>`), NOT the
+create call above -- that is why this is a follow-up call. Do NOT touch
+`has_issues`: **issues stay enabled** so collaborators can still file them.
+
+```bash
+latchkey curl -X PATCH "https://api.github.com/repos/<owner>/<repo_name>" \
+    -H 'Content-Type: application/json' \
+    -d '{"has_discussions": false, "allow_forking": false}'
+```
+
+`<owner>` is the `.owner.login` you took from step 1's response; `<repo_name>`
+is the name you already validated in §6. This PATCH is covered by the same
+`github-write-all` grant from §7 (exactly like the topics `PUT` in step 3), so
+no new permission scope is needed; keep the JSON built from variables, never
+string-interpolated shell. If the call fails, treat it like the topics call:
+retry once, and if it still fails, report it as a minor follow-up rather than
+failing the whole publish -- the repo already exists and is private by default,
+so the comment surface is still closed.
+
+Why this is unconditional (the skill never asks the user about it): a published
+inspiration is meant to be adapted by other minds, not turned into a public
+forum on the author's account. Private-by-default -- the visibility default --
+is what makes issues and PRs collaborators-only: on a private repo only
+collaborators can open or comment on them at all. Turning discussions off and
+forking off closes the two remaining arbitrary-comment / fork-PR surfaces, so
+they stay closed even if the repo is later made public. The one honest
+limitation: GitHub has NO native "collaborators-only issues" setting for a
+PUBLIC repo -- short of disabling issues (which we deliberately keep on for
+collaborators), anyone with a GitHub account can open an issue on a public
+repo. So if the user chose PUBLIC visibility, briefly tell them this in chat
+(inform them -- do NOT ask permission), and note that keeping the repo private
+(the default) fully guarantees collaborators-only.
 
 **Step 2 -- mint ONE snapshot commit and push it as `main` (git through the
 latchkey gateway):**
