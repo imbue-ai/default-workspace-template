@@ -274,46 +274,52 @@ def test_markers_return_none_when_absent() -> None:
     assert version_history.pick_creation_marker(commits) is None
 
 
-def test_resolution_falls_back_to_the_first_parent_root(tmp_path: Path) -> None:
-    def _git(*args: str) -> str:
-        return subprocess.run(
-            ["git", *args],
-            cwd=tmp_path,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+def _git(repo: Path, *args: str) -> str:
+    """Run one git command in `repo` and return its stdout."""
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
 
-    _git("init", "-q")
-    _git("config", "user.email", "test@example.com")
-    _git("config", "user.name", "test")
-    _git("commit", "--allow-empty", "-q", "-m", "root")
-    root = _git("rev-parse", "HEAD")
-    _git("commit", "--allow-empty", "-q", "-m", "app work")
+
+def _init_bare_repo(repo: Path) -> None:
+    """An empty git repo with a committer configured -- no commits yet."""
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "test")
+
+
+def _init_repo(repo: Path) -> None:
+    """A minimal workspace repo: one `Initial workspace commit` marker."""
+    _init_bare_repo(repo)
+    _git(repo, "commit", "--allow-empty", "-q", "-m", "Initial workspace commit")
+
+
+def test_resolution_falls_back_to_the_first_parent_root(tmp_path: Path) -> None:
+    _init_bare_repo(tmp_path)
+    _git(tmp_path, "commit", "--allow-empty", "-q", "-m", "root")
+    root = _git(tmp_path, "rev-parse", "HEAD")
+    _git(tmp_path, "commit", "--allow-empty", "-q", "-m", "app work")
 
     # No marker anywhere -> both resolutions fall back to the first-parent root.
     assert version_history.resolve_creation_snapshot(tmp_path) == root
     assert version_history.resolve_base_ref(tmp_path) == root
 
-    _git("commit", "--allow-empty", "-q", "-m", "Initial workspace commit")
-    initial = _git("rev-parse", "HEAD")
-    _git("commit", "--allow-empty", "-q", "-m", "update-self: merge upstream template")
-    update = _git("rev-parse", "HEAD")
+    _git(tmp_path, "commit", "--allow-empty", "-q", "-m", "Initial workspace commit")
+    initial = _git(tmp_path, "rev-parse", "HEAD")
+    _git(
+        tmp_path,
+        "commit",
+        "--allow-empty",
+        "-q",
+        "-m",
+        "update-self: merge upstream template",
+    )
+    update = _git(tmp_path, "rev-parse", "HEAD")
     assert version_history.resolve_creation_snapshot(tmp_path) == initial
     assert version_history.resolve_base_ref(tmp_path) == update
 
 
 # --- CLI --------------------------------------------------------------------
-
-
-def _init_repo(tmp_path: Path) -> None:
-    for args in (
-        ["init", "-q"],
-        ["config", "user.email", "test@example.com"],
-        ["config", "user.name", "test"],
-        ["commit", "--allow-empty", "-q", "-m", "Initial workspace commit"],
-    ):
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
 
 
 def test_cli_seeds_the_creation_line_before_recording_a_publish(tmp_path: Path) -> None:
