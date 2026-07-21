@@ -234,6 +234,54 @@ describe("window position (offset / total)", () => {
     expect(mockRequest).not.toHaveBeenCalled();
   });
 
+  it("recovers a stuck hasMoreAfter when an empty forward page arrives with a too-high total", async () => {
+    const agent = freshAgent();
+    // Seed the divergent state the tail-read race leaves behind: the held count
+    // has drifted below the server-reported total (e.g. events deduped/merged by
+    // event_id on the paging path), so firstOffset + held < total and hasMoreAfter
+    // is stuck true even though the window already holds the last real event.
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("m2"), makeEvent("m3")], offset: 2, total: 6 });
+    await fetchEvents(agent);
+    expect(hasMoreAfter(agent)).toBe(true); // 2 + 2 < 6
+
+    // The forward page comes back empty AND the server still reports the higher
+    // total (6). Setting #total = 6 would be a no-op against the comparison, so
+    // the old code left hasMoreAfter stuck true -- the runaway-loop / frozen-panel
+    // bug. The window end must now define the tail.
+    mockRequest.mockResolvedValueOnce({ events: [], total: 6 });
+    await fetchForwardEvents(agent);
+
+    const call = mockRequest.mock.calls[mockRequest.mock.calls.length - 1][0];
+    expect(call.params.after).toBe("m3"); // it did issue the cursor request once
+    expect(hasMoreAfter(agent)).toBe(false); // clamped: window end (4) now defines total
+    expect(getTotalEventCount(agent)).toBe(4);
+
+    // The loop terminates: a second forward page fires no further request.
+    mockRequest.mockClear();
+    await fetchForwardEvents(agent);
+    expect(mockRequest).not.toHaveBeenCalled();
+
+    // append() re-anchors to the tail, so live SSE events resume being appended.
+    appendEvents(agent, [makeEvent("m4")]);
+    expect(ids(agent)).toEqual(["m2", "m3", "m4"]);
+    expect(getTotalEventCount(agent)).toBe(5);
+  });
+
+  it("keeps hasMoreAfter true while forward pages still return events", async () => {
+    const agent = freshAgent();
+    // A window well off the tail: holds [m2, m3] at offset 2 of 8.
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("m2"), makeEvent("m3")], offset: 2, total: 8 });
+    await fetchEvents(agent);
+    expect(hasMoreAfter(agent)).toBe(true);
+
+    // A non-empty forward page advances the window but does not reach the tail, so
+    // hasMoreAfter must remain true until the empty page arrives.
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("m4"), makeEvent("m5")], offset: 4, total: 8 });
+    await fetchForwardEvents(agent);
+    expect(ids(agent)).toEqual(["m2", "m3", "m4", "m5"]);
+    expect(hasMoreAfter(agent)).toBe(true); // 2 + 4 < 8
+  });
+
   it("jumps the window to an arbitrary offset, replacing held events", async () => {
     const agent = freshAgent();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("tail")], offset: 99, total: 100 });
