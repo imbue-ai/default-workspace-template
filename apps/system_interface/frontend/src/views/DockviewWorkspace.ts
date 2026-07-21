@@ -1064,8 +1064,16 @@ function closeChatTabsForAgent(agentId: string): void {
  *  risk from a transient snapshot. */
 function pruneDestroyedHighlightTabs(): void {
   if (!dockview) return;
-  const present = new Set(getAgents().map((agent) => agent.id));
-  for (const agent of getAgents()) {
+  const agents = getAgents();
+  // An empty snapshot carries no destruction information (e.g. a backend that
+  // just restarted and has not finished discovery yet), so treat it as unknown
+  // rather than "everything was destroyed" -- mirroring the guard in
+  // surfaceHighlightedAgents. Otherwise a transient empty snapshot would close
+  // every known highlighted tab and, with its key already recorded, leave it
+  // closed for good.
+  if (agents.length === 0) return;
+  const present = new Set(agents.map((agent) => agent.id));
+  for (const agent of agents) {
     if (isHighlightedAgent(agent)) knownHighlightAgentIds.add(agent.id);
   }
   for (const agentId of [...knownHighlightAgentIds]) {
