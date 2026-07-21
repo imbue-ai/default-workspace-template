@@ -297,8 +297,9 @@ so `update-self` and `publish-inspiration` write byte-identical lines (the worke
 never writes it -- only the lead knows the merge sha):
 
 ```bash
+MERGE_SHA=$(python3 .agents/shared/scripts/version_history.py resolve-base-ref)
 python3 .agents/shared/scripts/version_history.py add-workspace \
-    --template-version "$REF" --sha HEAD
+    --template-version "$REF" --sha "$MERGE_SHA"
 git add VERSION_HISTORY.md
 git commit -m "version history: updated to $REF"
 ```
@@ -306,10 +307,19 @@ git commit -m "version history: updated to $REF"
 The helper seeds the `## Workspace` "created from" line first if the ledger never
 had one, appends `- <date>  updated to <ref>  <merge sha>`, and is a no-op if the
 same entry is already recorded (a retried landing cannot double-record) -- in
-which case `git commit` has nothing to commit and you skip it. **Never give this
-commit an `update-self:` subject**: that prefix is the template-state marker
-`assist` and `publish-inspiration` §2 resolve `BASE_REF` from, and it belongs to
-the merge commit alone.
+which case `git commit` has nothing to commit and you skip it.
+
+**Pass `$MERGE_SHA`, never `HEAD`.** The helper de-duplicates on note + sha, and
+the `git commit` above moves `HEAD` onto the version-history commit: a re-run
+with `--sha HEAD` would pass a different sha, defeat the no-op, and append a
+second line pointing at the ledger commit instead of the merge. `resolve-base-ref`
+prints the newest template-state marker -- the merge you just landed -- and keeps
+printing it afterwards, so the whole block is safe to re-run.
+
+**Never give this commit an `update-self:` subject**: that prefix is the
+template-state marker `assist` and `publish-inspiration` §2 resolve `BASE_REF`
+from, it belongs to the merge commit alone, and `$MERGE_SHA` above depends on it
+staying that way.
 
 ### 5c. Reveal by change class
 
