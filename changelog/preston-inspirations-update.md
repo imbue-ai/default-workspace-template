@@ -1,3 +1,31 @@
+- **Inspiration versioning.** A workspace now keeps a plain, committed
+  `VERSION_HISTORY.md` recording where it came from and what it has published:
+  a `## Workspace` line for the template version it was created from and one per
+  `update-self` landing, and a `## Inspirations` entry per published inspiration
+  (`- v1  <date>  first published  <sha>`, then `v2`, `v3`, ... under the same
+  heading). Each line ends in the commit it was cut from, entries are appended
+  by a shared helper so both skills write identical formatting, and earlier lines
+  are never rewritten. `update-self` appends its line as part of landing an
+  update; `publish-inspiration` appends its entry only after the push has
+  succeeded -- the single sanctioned one-file commit back to the live workspace,
+  documented as an explicit exception so it is never confused with the
+  tree-clobbering pattern the skill forbids. An unpublished inspiration is never
+  recorded.
+
+- **Published manifests now carry a version and a recipe.** Each
+  `inspiration-<slug>.md` records `version: v1` in its front-matter and a new
+  "Recipe" section: the include paths, the deliberate exclusions, and the
+  published-version modification RULES (rules only -- never the removed values).
+  An inspiration is derived from its workspace by that recipe rather than being a
+  fork of it, so a later update re-runs the recipe against the current workspace
+  instead of diffing two repos -- which is what keeps anything deliberately
+  excluded excluded, even though it still exists in the source workspace.
+
+- A published snapshot no longer carries the publisher's own version history:
+  the assembled tree's `VERSION_HISTORY.md` is reset to the pristine template
+  file, so the slugs, repo URLs, and source commits of a mind's other
+  inspirations never ship inside one it publishes.
+
 - The publish skill now confirms the **adopter's required permissions with the
   publisher**. The manifest's "Prerequisites" list (what the inspiration's user
   must grant for the app to work) is surfaced back in the §6 chat confirmation in

@@ -289,6 +289,28 @@ If the fast-forward is refused, `HEAD` moved under the pass: treat it as stale
 per `.agents/shared/references/harden-contention.md` and re-dispatch off the
 current `HEAD` -- do not hand-resolve.
 
+**Record the version, in the same landing.** Landing an update is what makes the
+workspace a new version, so the entry belongs in the git tree, right here --
+never left to a later turn. The merge sha only exists once the merge has landed,
+so this is a follow-up commit of exactly one file, appended by the shared helper
+so `update-self` and `publish-inspiration` write byte-identical lines (the worker
+never writes it -- only the lead knows the merge sha):
+
+```bash
+python3 .agents/shared/scripts/version_history.py add-workspace \
+    --template-version "$REF" --sha HEAD
+git add VERSION_HISTORY.md
+git commit -m "version history: updated to $REF"
+```
+
+The helper seeds the `## Workspace` "created from" line first if the ledger never
+had one, appends `- <date>  updated to <ref>  <merge sha>`, and is a no-op if the
+same entry is already recorded (a retried landing cannot double-record) -- in
+which case `git commit` has nothing to commit and you skip it. **Never give this
+commit an `update-self:` subject**: that prefix is the template-state marker
+`assist` and `publish-inspiration` §2 resolve `BASE_REF` from, and it belongs to
+the merge commit alone.
+
 ### 5c. Reveal by change class
 
 The report says which classes merged. Apply each; a clean pull-in is still
