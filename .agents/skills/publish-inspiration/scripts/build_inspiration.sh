@@ -340,11 +340,19 @@ with one line per requirement, using exactly these forms:
   the adopting agent initiates this via a latchkey permission request during
   setup -- it must not merely mention it)
 - requires_secret: <ENV_VAR or config key> (what it is for and where to put it)
+- requires_llm: <how the code reaches Claude, and what an adopter needs>
+  (include this line whenever the app calls an LLM: name the method it was
+  built for -- keyed litellm via ANTHROPIC_API_KEY, or keyless subscription via
+  claude -p -- so an adopter on the other method knows to switch it per the
+  use-ai-integration skill)
 
 Derive the real values from the included code (e.g. every service the app
-calls through \`latchkey curl\`). Example:
+calls through \`latchkey curl\`, and whether any code calls an LLM). Example:
 - requires_permission: slack-api / slack-read-all (user-approved; adopting
   agent initiates during setup)
+- requires_llm: calls Claude via the keyed litellm path (ANTHROPIC_API_KEY set);
+  an adopter on the keyless subscription path must switch the model calls per
+  use-ai-integration
 If nothing is required, write exactly: "No prerequisites -- runs with no
 external permissions or secrets." -->
 
