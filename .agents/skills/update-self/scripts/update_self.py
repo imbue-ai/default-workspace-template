@@ -331,43 +331,6 @@ def classify_merge(
     )
 
 
-# --- Skill bootstrap -------------------------------------------------------
-
-
-def read_tree(root: Path) -> dict[str, bytes]:
-    """Map every regular file under ``root`` to its bytes, keyed by relative path.
-
-    Keys are POSIX-relative paths so the mapping is comparable across two
-    checkouts of the same tree. Directories and symlinks are skipped -- only file
-    contents bear on whether two copies of the skill are byte-identical.
-    """
-    tree: dict[str, bytes] = {}
-    for path in sorted(root.rglob("*")):
-        if path.is_file() and not path.is_symlink():
-            tree[path.relative_to(root).as_posix()] = path.read_bytes()
-    return tree
-
-
-def read_tracked_tree(repo_root: Path, rel_dir: str) -> dict[str, bytes]:
-    """Map each git-tracked file under ``rel_dir`` to its working-tree bytes.
-
-    Keyed by path relative to ``rel_dir``, so the mapping is directly comparable
-    to :func:`read_tree` of a ``git archive`` extraction. Listing the *tracked*
-    set (rather than walking the directory like :func:`read_tree`) is what keeps
-    untracked build artifacts -- above all the ``__pycache__/*.pyc`` that importing
-    the script drops into ``scripts/`` -- from registering as spurious differences
-    against the extraction, which only ever contains tracked files.
-    """
-    listing = _git(["ls-files", "-z", "--", rel_dir], repo_root)
-    prefix = Path(rel_dir)
-    tree: dict[str, bytes] = {}
-    for name in listing.split("\0"):
-        if not name:
-            continue
-        tree[Path(name).relative_to(prefix).as_posix()] = (repo_root / name).read_bytes()
-    return tree
-
-
 # --- git-touching CLI wrappers ---------------------------------------------
 
 
@@ -489,7 +452,19 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
         tar.extractall(dest_root, filter="data")
 
     staged_skill = dest_root / SKILL_DIR_REL
-    differs = read_tree(staged_skill) != read_tracked_tree(repo_root, SKILL_DIR_REL)
+    # Whether the ref's skill differs from the local working-tree copy. Let git
+    # do the compare: ``git diff`` ignores untracked files, so the ``__pycache__/
+    # *.pyc`` that importing the script drops into ``scripts/`` never registers as
+    # a spurious difference. ``--quiet`` exits 0 if identical, 1 on any
+    # difference; ``check_returncode`` surfaces any other code as a real git error.
+    diff = subprocess.run(
+        ["git", "diff", "--quiet", args.ref, "--", SKILL_DIR_REL],
+        cwd=repo_root,
+        capture_output=True,
+    )
+    if diff.returncode not in (0, 1):
+        diff.check_returncode()
+    differs = diff.returncode == 1
     print(
         json.dumps(
             {"skill_dir": str(staged_skill), "differs": differs, "ref": args.ref}
