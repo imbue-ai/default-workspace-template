@@ -8,7 +8,8 @@
 #
 # The dev `create-new-mind-repo` recipe is NOT available in the VM, so this is
 # self-contained. It does the assembly + secret scan + manifest/thumbnail +
-# /welcome rewrite + boot smoke-check + single commit. It does NOT create the
+# /welcome rewrite + version-history reset + boot smoke-check + single commit.
+# It does NOT create the
 # GitHub repo or push, and it deliberately leaves two things unfinished for the
 # worker to complete before reporting done: the manifest's FILL-IN blocks (real
 # prose) and the placeholder thumbnail (a bespoke, app-specific SVG). The lead
@@ -41,6 +42,12 @@ set -euo pipefail
 # Version of the inspirations flow (and of the manifest format this script
 # writes into the generated manifest's `format:` front-matter key).
 INSPIRATION_FLOW_VERSION="v1"
+
+# The published version of THIS inspiration (front-matter `version:`), distinct
+# from the flow/manifest-format version above. A first publish is always v1; a
+# later update of the same inspiration publishes v2, v3, ... and the source
+# workspace's VERSION_HISTORY.md counts them.
+INSPIRATION_VERSION="v1"
 
 # Resolve this script's own directory up front, before any cd: the sibling
 # scan_secrets.sh + betterleaks.toml live next to this script, and the script
@@ -286,11 +293,32 @@ if [ -z "$manifest_description" ]; then
     manifest_description="A shareable snapshot of ${TITLE}."
 fi
 
+# The RECIPE: how this inspiration is derived from its source workspace, so a
+# later update can re-run it instead of diffing two repos. The include sets are
+# known here; the exclusions and the published-version modification RULES are
+# not (the lead resolved them with the user), so they are FILL-IN lines the
+# worker replaces -- caught by the same `<!-- FILL-IN (publishing agent)` gate
+# as every other placeholder. RULES only, never the removed values: the point of
+# a modification is that the value does not ship.
+recipe_include_block="include:"$'\n'
+for rel in "${INCLUDE_PATHS[@]}"; do
+    recipe_include_block+="  - ${rel}"$'\n'
+done
+if [ "${#DATA_INCLUDE_PATHS[@]}" -gt 0 ]; then
+    recipe_include_block+="data_include:"$'\n'
+    for rel in "${DATA_INCLUDE_PATHS[@]}"; do
+        recipe_include_block+="  - ${rel}"$'\n'
+    done
+else
+    recipe_include_block+="data_include: []"$'\n'
+fi
+
 cat > "$MANIFEST" <<MANIFEST_EOF
 ---
 title: ${TITLE}
 description: ${manifest_description}
 thumbnail: ${THUMBNAIL}
+version: ${INSPIRATION_VERSION}
 format: ${INSPIRATION_FLOW_VERSION}
 ---
 
@@ -325,6 +353,30 @@ Then describe how the pieces wire together at runtime: which supervisord
 programs (in supervisord.conf) run them, which ports they listen on and how
 those are registered in forward_port.py (if applicable), and any scripts or
 services that connect them. -->
+
+## Recipe
+
+This inspiration is version \`${INSPIRATION_VERSION}\` (front-matter \`version:\`).
+It is not a fork of the workspace it came from -- it is DERIVED from it by the
+recipe below: include these paths, leave these out, apply these
+published-version rules. An update re-runs the recipe against the current
+workspace and publishes the result as the next version, so anything excluded
+here stays excluded even though it still exists in the source workspace. This
+block is the durable home of that recipe -- a later update reads it back from
+here.
+
+\`\`\`yaml
+version: ${INSPIRATION_VERSION}
+${recipe_include_block}exclude:
+<!-- FILL-IN (publishing agent): replace this line with one \`  - <path or feature>\`
+entry per deliberate exclusion (paths not included, and features stripped out of
+an included path), or with the single line \`  []\` if nothing was excluded. -->
+modification_rules:
+<!-- FILL-IN (publishing agent): replace this line with one \`  - <rule>\` entry per
+published-version modification, stated as a RULE and never the removed value
+(e.g. \`  - replace the hardcoded team Slack channel with a neutral default\`),
+or with the single line \`  []\` if there were none. -->
+\`\`\`
 
 ## Prerequisites
 
@@ -525,6 +577,24 @@ Each \`inspiration-<slug>.md\` is the full manifest for that inspiration: what
 it is, how it works, the prerequisites it needs, and how to adapt it.
 README_EOF
 
+# --- 8.6 reset the version history so the publisher's ledger never ships -----
+
+# VERSION_HISTORY.md is the SOURCE workspace's own ledger: where that mind came
+# from, and every inspiration it has ever published (slugs, repo URLs, source
+# commits). None of that belongs to this snapshot -- and after an update-self,
+# BASE_REF's tree carries an accumulated copy of it -- so replace it with the
+# pristine template file, which a mind created from this inspiration then seeds
+# for itself. Deterministic, like the /welcome and README writes above. This
+# runs AFTER the no-diff guard so it can never make an empty include set look
+# like it had something to publish.
+VERSION_HISTORY_HELPER=".agents/shared/scripts/version_history.py"
+rm -f VERSION_HISTORY.md
+if [ -f "$VERSION_HISTORY_HELPER" ]; then
+    if ! python3 "$VERSION_HISTORY_HELPER" init --force; then
+        echo "build_inspiration.sh: warning: could not write a pristine VERSION_HISTORY.md; the snapshot ships without one" >&2
+    fi
+fi
+
 # --- 9. boot smoke-check WITHOUT side effects, then single commit -------------
 
 # Validate supervisord.conf via the supervisor python lib -- realize() +
@@ -612,7 +682,8 @@ echo "  thumbnail: ${THUMBNAIL}"
 echo "  readme:    README.md (regenerated to describe this inspiration)"
 echo "  boot smoke-check: passed"
 echo "  NEXT: ${MANIFEST} still has <!-- FILL-IN (publishing agent): ... --> placeholders in"
-echo "  'What it is', 'How it works', 'Prerequisites', and 'Holes'; README.md has one FILL-IN"
+echo "  'What it is', 'How it works', 'Recipe' (exclude + modification_rules), 'Prerequisites',"
+echo "  and 'Holes'; README.md has one FILL-IN"
 echo "  (its overview); and ${THUMBNAIL}"
 echo "  is a generic placeholder (marker comment inside). Replace ALL FILL-INs with real content"
 echo "  (or explicit 'none' prose) AND replace the placeholder with a bespoke SVG for this app,"

@@ -39,6 +39,17 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 > old base as an intentional deletion -- 1400+ files gone from a live mind).
 > Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/code`, or any
 > other step that runs from `/code` after assembly.
+>
+> **The ONE sanctioned exception: §8 step 4, the version-history entry.** After
+> the push has SUCCEEDED, `/code` gets exactly one write -- appending this
+> publish to `VERSION_HISTORY.md` and committing that single file on the branch
+> `/code` is already on. That is a normal one-file commit, not a tree
+> operation: `git add VERSION_HISTORY.md` + `git commit`, and NEVER a merge, a
+> checkout, a reset, a `git add -A`, or anything that touches another path. It
+> is what makes a publish knowable afterwards (slug, repo, version, and the
+> source commit the snapshot was cut from). Do not mistake it for the
+> tree-clobbering pattern above, and do not generalize it: nothing else in
+> §§6-10 runs from `/code`, and if the push fails it does not run at all.
 
 > **AN INSPIRATION MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
 > valid inspiration is always the FULL tree `build_inspiration.sh` assembles on
@@ -168,7 +179,7 @@ dispatch anyway, handle it in place:
   old-slug files as if they were an accumulated earlier inspiration. A
   display-title-only change is just the front-matter edit.
 
-## 2. Resolve `BASE_REF` (in-repo, no network)
+## 2. Resolve `BASE_REF` and `SOURCE_SHA` (in-repo, no network)
 
 `BASE_REF` is this workspace's **creation snapshot** -- the template state the
 mind started from (or last updated itself to). Resolve it deterministically as
@@ -224,6 +235,22 @@ too-old-base problems in seconds instead of a full worker round-trip.
 `build_inspiration.sh` re-validates both conditions itself and exits 5 with
 a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
+
+(The same marker walk is implemented in
+`.agents/shared/scripts/version_history.py` -- `resolve-base-ref` prints exactly
+this `BASE_REF`, and its `seed-workspace` uses the same walk for the ledger's
+creation line. Keep the two in step if either ever changes.)
+
+**Also capture `SOURCE_SHA` -- the source commit the snapshot is cut from.**
+The worker's worktree branches off `/code`'s current `HEAD`, so that commit is
+the provenance anchor recorded in §8 step 4's version-history entry (and what a
+later reader diffs against to see what changed since). Capture it now, in
+`/code`, BEFORE dispatching -- not after the push, when `/code`'s `HEAD` may
+have moved on:
+
+```bash
+SOURCE_SHA=$(git rev-parse HEAD)
+```
 
 ## 3. Delegate assembly to a launch-task worker
 
@@ -325,8 +352,9 @@ worktree to a clean template base and deletes gitignored state -- including
 
 3. **Flesh out the manifest.** `inspiration-<slug>.md` at the repo root has
    `<!-- FILL-IN (publishing agent): ... -->` comment blocks in "What it is,"
-   "How it works," "Prerequisites," and "Holes" -- generated placeholders,
-   not real content. Replace EVERY block with real, specific content.
+   "How it works," "Recipe," "Prerequisites," and "Holes" -- generated
+   placeholders, not real content. Replace EVERY block with real, specific
+   content.
    "Prerequisites" is the strictest: one machine-readable line per activation
    requirement in the exact `requires_permission:` / `requires_secret:` forms
    the template shows, derived from the included code (inspect every service
@@ -361,6 +389,25 @@ worktree to a clean template base and deletes gitignored state -- including
    list switching it to the adopter's method as a Hole. Never leave an LLM
    dependency implicit: the adopter must know the app needs LLM access and be
    able to wire in their own method (subscription or litellm).
+
+   **"Recipe" is the machine-readable one.** An inspiration is not a fork of the
+   workspace -- it is DERIVED from it by a recipe, and an update re-runs that
+   recipe rather than diffing two repos, so the recipe (not the diff) is what
+   must survive in the published repo. Its `yaml` block already carries the
+   inspiration's version (`v1`) and the include paths; you fill the two
+   remaining keys, terse, one list entry per line:
+
+   - `exclude:` -- every deliberate exclusion: paths NOT included that a reader
+     might expect, and features stripped out of an included path. This is what
+     keeps an exclusion excluded when a later update re-runs the recipe against
+     a source workspace that still has the thing.
+   - `modification_rules:` -- one entry per published-version modification from
+     step 2, written as a RULE and NEVER as the removed value (`- replace the
+     hardcoded team Slack channel with a neutral default`, never the channel
+     name itself). The whole point of a modification is that the value does not
+     ship; restating it here would publish it.
+
+   Use `  []` for either key if there is genuinely nothing.
 
    The generated `README.md` at the repo root (the repo's GitHub landing
    page) carries ONE `<!-- FILL-IN (publishing agent): ... -->` block too --
@@ -873,7 +920,42 @@ this call fails, the publish itself already succeeded -- retry once, and if
 it still fails, report it as a minor follow-up rather than treating the
 publish as failed.)
 
-**Failure handling.** If the create fails, read the response body: a
+**Step 4 -- record the version entry in the source workspace (ONLY after the
+push succeeded).** This is the single sanctioned write back to `/code` -- read
+the exception in the CWD-INVARIANT callout at the top of this skill before
+running it. Nothing is recorded for a publish that did not happen: if step 2's
+push failed, or the user aborted, SKIP this entirely.
+
+```bash
+( cd /code \
+    && python3 .agents/shared/scripts/version_history.py add-inspiration \
+        --slug <slug> \
+        --repo-url "github.com/<owner>/<repo_name>" \
+        --note "first published" \
+        --sha "$SOURCE_SHA" \
+    && git add VERSION_HISTORY.md \
+    && git commit -m "version history: published inspiration <slug> v1" )
+```
+
+Exactly that: one file staged by name, one commit, on whatever branch `/code`
+is already on. NEVER `git add -A` (it would sweep up the mind's unrelated
+working state), never a merge, checkout, or reset. `$SOURCE_SHA` is the source
+commit from §2 -- the snapshot's provenance anchor -- NOT `BASE_REF` and not
+anything from `$WT`. The helper creates
+`VERSION_HISTORY.md`'s `### <slug>  --  <repo-url>` heading on a first publish
+and appends `- v1  <date>  first published  <source sha>`; a later update of the
+same inspiration appends `v2`, `v3`, ... under the same heading, so the version
+number is computed, never typed. It is a no-op if the same entry is already
+recorded (a retried step cannot double-record) -- then there is nothing to
+commit and you skip the commit. The same helper writes `update-self`'s
+`## Workspace` lines, so both flows produce identical formatting.
+
+If the commit fails (e.g. a hook rejects it), the publish still succeeded --
+say so plainly, and fix the entry rather than re-pushing anything.
+
+**Failure handling.** A failure anywhere in this section means step 4 never
+runs: an unpublished inspiration is never recorded in `VERSION_HISTORY.md`.
+If the create fails, read the response body: a
 `"request not permitted by the user"` error means the `github-rest-api`
 grant is missing or too narrow -- go back to §7; a name-taken error means
 asking in chat for a new name and retrying step 1. If the push fails,
@@ -937,6 +1019,9 @@ git branch -D "mngr/<slug>"
 (No git remote cleanup is needed: §8 pushes to an explicit URL and never adds
 a named remote.)
 
+The version entry was already committed in `/code` by §8 step 4; there is
+nothing further to record here.
+
 If the push failed and you are stopping (user aborted, unrecoverable error),
 leave the worker, `$WT`, and the `mngr/<slug>` branch intact instead -- do not
 delete work the user may want to retry or reassemble from.
@@ -987,7 +1072,11 @@ What it does, in order (see the script for the exact commands):
    or any missing scanner binary fails the scan. There is no fallback scanner.
    This is the authoritative blocker, not LLM prose.
 7. Generates the manifest `inspiration-<slug>.md` at the repo root (with the
-   FILL-IN blocks the worker must replace).
+   FILL-IN blocks the worker must replace), carrying the inspiration's
+   `version: v1` in its front-matter and a "Recipe" block -- the include paths
+   it just overlaid, plus the `exclude` / `modification_rules` lists the worker
+   fills in. The recipe is what a later update re-runs, so the published repo
+   is its durable home.
 8. Generates a placeholder thumbnail `inspiration-<slug>.svg` carrying a
    distinctive `minds-placeholder-thumbnail` marker comment; the worker MUST
    replace the whole file with a bespoke SVG before reporting done, and the
@@ -995,5 +1084,10 @@ What it does, in order (see the script for the exact commands):
 9. Overwrites the snapshot's `welcome/SKILL.md` with a generated
    inspiration-specific welcome describing the
    newly-published inspiration.
-10. Validates `supervisord.conf` WITHOUT starting the daemon (never
+10. Resets `VERSION_HISTORY.md` in the snapshot to the pristine template file
+    (via `.agents/shared/scripts/version_history.py init --force`): that ledger
+    is the SOURCE workspace's own record of what it came from and everything it
+    has published, and none of it belongs in the published repo. Runs after the
+    no-diff guard, so it can never make an empty include set look publishable.
+11. Validates `supervisord.conf` WITHOUT starting the daemon (never
     `supervisord -t`), then makes a single commit for the assembled snapshot.
