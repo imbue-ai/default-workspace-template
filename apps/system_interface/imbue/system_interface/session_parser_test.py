@@ -530,9 +530,7 @@ def test_agent_tool_result_prefers_structured_over_trailer() -> None:
             id="authentication-error-type",
         ),
         pytest.param("API Error: 401 Unauthorized", True, id="api-401"),
-        pytest.param(
-            "Invalid authentication credentials provided.", True, id="invalid-credentials"
-        ),
+        pytest.param("Invalid authentication credentials provided.", True, id="invalid-credentials"),
         pytest.param(
             "Your credit balance is too low to make this request.",
             True,
@@ -567,10 +565,11 @@ def test_user_message_with_array_content() -> None:
     assert events[0]["content"] == "Part one\nPart two"
 
 
-def test_resume_continuation_user_message_not_emitted() -> None:
-    """Claude Code's isMeta "Continue from where you left off." resume marker
-    must not surface as a user_message -- the user never typed it. Claude Code
-    injects it (plus a synthetic reply) to close an unfinished turn on resume.
+def test_resume_continuation_user_message_emitted_as_meta() -> None:
+    """Claude Code's "Continue from where you left off." resume marker is emitted
+    with ``is_meta`` set, rather than dropped by a bespoke matcher. It is one of
+    many ``isMeta`` framework injections; the frontend classifier hides them all
+    via that flag (the user never typed it, so it must not render).
     """
     line = json.dumps(
         {
@@ -584,7 +583,43 @@ def test_resume_continuation_user_message_not_emitted() -> None:
             },
         }
     )
-    assert parse_session_lines([line]) == []
+    events = parse_session_lines([line])
+    assert len(events) == 1
+    assert events[0]["type"] == "user_message"
+    assert events[0]["is_meta"] is True
+
+
+def test_image_metadata_note_emitted_as_meta() -> None:
+    """Claude Code's isMeta image coordinate note is emitted with ``is_meta`` set
+    so the frontend can hide it, instead of leaking through as a bare user bubble.
+    """
+    line = json.dumps(
+        {
+            "type": "user",
+            "uuid": "uuid-img",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "isMeta": True,
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "[Image: original 1800x2800, displayed at 1286x2000. Multiply coordinates by 1.40 to map to original image.]",
+                    }
+                ],
+            },
+        }
+    )
+    events = parse_session_lines([line])
+    assert len(events) == 1
+    assert events[0]["is_meta"] is True
+
+
+def test_genuine_user_message_has_no_is_meta() -> None:
+    """A real human turn carries no ``is_meta`` key, so the frontend shows it."""
+    events = parse_session_lines([_make_user_line("uuid-h", "2026-01-01T00:00:00Z", "hello there")])
+    assert len(events) == 1
+    assert "is_meta" not in events[0]
 
 
 def test_synthetic_model_assistant_message_not_emitted() -> None:
@@ -686,8 +721,7 @@ def test_tk_lifecycle_input_preview_is_not_truncated() -> None:
     Batched `S1=$(tk create ...)` forms and long `tk close <id> "<summary>"`
     calls both qualify; a long non-tk command is still truncated."""
     batched_create = "\n".join(
-        f'S{i}=$(tk create --step "Step number {i} with a fairly long descriptive title here")'
-        for i in range(1, 6)
+        f'S{i}=$(tk create --step "Step number {i} with a fairly long descriptive title here")' for i in range(1, 6)
     )
     long_close = 'tk close cod-step-abcd "' + ("a very detailed summary of the work " * 6).strip() + '"'
     long_non_tk = "echo " + ("y" * 400)
@@ -735,3 +769,37 @@ def test_tk_mentioned_in_quoted_arg_is_still_truncated() -> None:
     preview = events[0]["tool_calls"][0]["input_preview"]
     assert preview.endswith("...")
     assert len(preview) <= 203
+
+
+@pytest.mark.parametrize("line_type", ["assistant", "user"])
+def test_null_message_line_is_dropped_not_crashed(line_type: str) -> None:
+    """A line with a present-but-null ``message`` must be dropped, not raised on.
+
+    ``raw.get("message", {})`` returns ``None`` for a present-but-null key (the
+    default only applies to a *missing* key), and Claude Code does write lines
+    with ``"message": null``. Without the guard the parser raises AttributeError,
+    which kills the watcher thread and wedges the read path (the byte offset never
+    advances, so every poll re-reads and re-crashes the same line forever).
+    """
+    line = json.dumps({"type": line_type, "uuid": "u-null", "timestamp": "2026-01-01T00:00:00Z", "message": None})
+    assert parse_session_lines([line]) == []
+
+
+def test_non_dict_message_is_dropped_not_crashed() -> None:
+    """A ``message`` that is present but not an object (e.g. a bare string) is
+    likewise dropped rather than crashing the per-line parse."""
+    line = json.dumps(
+        {"type": "assistant", "uuid": "u-str", "timestamp": "2026-01-01T00:00:00Z", "message": "not an object"}
+    )
+    assert parse_session_lines([line]) == []
+
+
+def test_null_message_line_does_not_wedge_following_valid_lines() -> None:
+    """A null-message line in the middle of a batch is skipped without aborting
+    the run -- the valid user message after it is still parsed."""
+    lines = [
+        json.dumps({"type": "assistant", "uuid": "u-bad", "timestamp": "2026-01-01T00:00:00Z", "message": None}),
+        _make_user_line("u-good", "2026-01-01T00:00:01Z", "still here"),
+    ]
+    events = parse_session_lines(lines)
+    assert [e["content"] for e in events if e["type"] == "user_message"] == ["still here"]
