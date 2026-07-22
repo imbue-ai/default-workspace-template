@@ -638,13 +638,14 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  height: 30px;
   font-family: var(--font-family-mono);
   font-size: 12px;
   color: var(--color-text-secondary);
   background: var(--color-bg-sidebar);
   border: 1px solid var(--color-border);
-  border-radius: 10px;
-  padding: 4px 10px;
+  border-radius: 8px;
+  padding: 0 10px;
   cursor: pointer;
   transition: border-color 120ms;
   user-select: none;
@@ -664,9 +665,11 @@ body {
   --_option-height: 29px;
   --_dropdown-padding: 6px;
   position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  min-width: 100%;
+  bottom: calc(100% + 8px);
+  /* Anchored to the right edge: the picker sits on the right of the composer
+     toolbar, so a left-anchored menu would spill off the composer. */
+  right: 0;
+  min-width: 200px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 12px;
@@ -676,6 +679,14 @@ body {
   padding: var(--_dropdown-padding);
   z-index: 100;
   overflow: hidden;
+}
+
+.model-selector-dropdown-header {
+  font-family: var(--font-family-base);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-faint);
+  padding: 4px 10px 6px;
 }
 
 .model-selector-dropdown-list {
@@ -731,45 +742,33 @@ body {
   border-color: var(--color-border);
 }
 
-/* ── Composer model/fast controls row ── */
-.message-input-controls {
-  gap: 6px;
-  padding: 4px 2px 0;
-}
-
+/* ── Composer fast-mode toggle (icon button in the toolbar) ── */
 .fast-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   color: var(--color-text-secondary);
-  background: var(--color-bg-sidebar);
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  padding: 4px 10px;
+  background: none;
+  border: none;
+  border-radius: 8px;
   cursor: pointer;
   transition:
-    border-color 120ms,
     color 120ms,
     background 120ms;
-  user-select: none;
-  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .fast-toggle:hover {
-  border-color: var(--color-accent);
-}
-
-.fast-toggle-icon {
-  display: inline-flex;
-  align-items: center;
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
 }
 
 .fast-toggle--on,
 .fast-toggle--on:hover {
   color: var(--color-accent);
-  border-color: var(--color-accent);
   background: var(--color-accent-light);
 }
 
