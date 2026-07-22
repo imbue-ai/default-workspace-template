@@ -57,14 +57,18 @@ const TRAILING_REFIT_DELAYS_MS = [50, 250, 1000];
  *  path ends in its own `fit()`. */
 export function refitTerminalIframes(container: HTMLElement): void {
   container.querySelectorAll<HTMLIFrameElement>("iframe").forEach((iframe) => {
+    let fit: (() => void) | undefined;
     try {
       const win = iframe.contentWindow as TtydTerminalWindow | null;
-      const fit = win?.term?.fit;
-      if (typeof fit === "function") fit();
+      fit = win?.term?.fit;
     } catch {
       // Cross-origin iframe: contentWindow is not scriptable. Terminal iframes
       // are same-origin (proxied under /service/), so nothing to do here.
+      return;
     }
+    // Called outside the try so a genuine error from the ttyd client's fit()
+    // surfaces instead of being swallowed with the cross-origin case.
+    if (typeof fit === "function") fit();
   });
 }
 
