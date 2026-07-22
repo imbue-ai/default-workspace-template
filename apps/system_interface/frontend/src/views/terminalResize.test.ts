@@ -114,6 +114,22 @@ describe("wireTerminalIframeRefit", () => {
     expect(() => FakeResizeObserver.instances[0].fire()).not.toThrow();
   });
 
+  it("skips cross-origin iframes (contentWindow access throws) and still refits the rest", () => {
+    const fit = vi.fn();
+    const crossOrigin = {
+      get contentWindow(): never {
+        throw new DOMException("Blocked a frame from accessing a cross-origin frame.", "SecurityError");
+      },
+    } as unknown as FakeIframe;
+    const container = makeContainer([crossOrigin, { contentWindow: { term: { fit } } }], {
+      width: 800,
+      height: 600,
+    });
+    wireTerminalIframeRefit(container, makeApi(true));
+    expect(() => FakeResizeObserver.instances[0].fire()).not.toThrow();
+    expect(fit).toHaveBeenCalledTimes(1);
+  });
+
   it("dispose cancels trailing re-checks and unhooks everything", () => {
     const fit = vi.fn();
     const api = makeApi(true);
