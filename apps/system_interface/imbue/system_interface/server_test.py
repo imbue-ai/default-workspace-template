@@ -31,6 +31,7 @@ from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
+from imbue.system_interface.server import _primary_agent_layout_dir
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
@@ -45,6 +46,20 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 # passing runs complete in well under a second -- the wait is pure scheduling
 # delay, so a bigger cap costs nothing when healthy.
 _WS_RECEIVE_TIMEOUT = 15.0
+
+
+def test_layout_dir_override_wins_over_the_agent_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The pre-merge preview points SYSTEM_INTERFACE_LAYOUT_DIR at a throwaway copy
+    # of the live layout so it renders the user's real tabs without writing to the
+    # live one. That override must win even when a real MNGR_AGENT_ID is present
+    # (the autouse isolation fixture sets one) -- otherwise the preview's autosaves
+    # would land on the live layout, which is the exact thing this prevents.
+    override = tmp_path / "seeded-layout"
+    monkeypatch.setenv("SYSTEM_INTERFACE_LAYOUT_DIR", str(override))
+
+    assert _primary_agent_layout_dir() == override
 
 
 @pytest.fixture

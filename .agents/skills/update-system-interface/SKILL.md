@@ -6,13 +6,13 @@ description: Canonical flow for changing the system interface (the web workspace
 # Updating the system interface
 
 `apps/system_interface` is the live web UI the user is looking at right now
-(the dockview shell, the chat panels, the progress view). It is, in effect,
-**the service that *is* the workspace UI** -- so this skill is the
-system-interface *specialization* of `update-service`'s "live loop first, ratify
-at turn-end" shape. Everything genuinely shared -- the editing lease, the
-demonstrative-artifact (mock) taxonomy, the turn-end harden handoff -- lives in
-[`update-service`](../update-service/SKILL.md) and the references it points at.
-This skill carries only what the system interface does *differently*.
+(the dockview shell, the chat panels, the progress view) -- **the service that
+*is* the workspace UI**. This skill is the system-interface *specialization* of
+`update-service`'s "live loop first, ratify at turn-end" shape: everything
+shared -- the editing lease, the demonstrative-artifact (mock) taxonomy, the
+turn-end harden handoff -- lives in
+[`update-service`](../update-service/SKILL.md) and the references it points at,
+and this skill carries only what the system interface does *differently*.
 
 Everything different traces to one fact: **a broken build here is served
 straight to the user as their entire workspace.** That forces three adjustments
@@ -21,18 +21,16 @@ to the ordinary live loop:
 1. **Code isolation.** You edit an *isolated git worktree*, never the served
    tree -- a half-broken build can never reach the served UI.
 2. **The isolated preview instance *is* the user's view.** For an ordinary
-   service the user watches the live tab and a preview is an escalation; here the
+   service the user watches the live tab and a preview is the exception; here the
    live tab is off-limits, so a labeled preview tab is the normal, always-on way
    the user sees the change as you iterate.
 3. **Safe-reveal go-live.** Merging is not enough: going live runs a
    health-checked, auto-rollback reveal script so a bad change can never take the
    UI down.
 
-The live loop itself is **lead-driven and cheap**: edit the worktree, build,
-refresh the preview in place, iterate with the user. The expensive test + review
-gate is deferred out of the loop and runs once, in a background worker, only
-after the user approves the shape. This is the whole point -- iterating on the
-workspace UI costs a build (seconds), not a harden pass (minutes).
+The loop stays cheap: the lead edits the worktree, builds, and refreshes the
+preview in place (seconds); the expensive test + review gate runs once, in a
+background worker, only after the user approves the shape.
 
 ## The hard rule
 
@@ -132,7 +130,11 @@ build/test mechanics for the system interface (in-process backend tests, the
 `test_e2e.py` Playwright harness, `npm run build`/`lint`/`test`) are the worker's
 job at harden time and are documented in
 [`artifact-system-interface.md`](../../shared/worker/references/artifact-system-interface.md);
-in the live loop you only need a clean build, not the full gate.
+in the live loop you only need a clean build, not the full gate. If you do run
+the Python suite while iterating, run the fast subset -- skip the CI-only slow
+markers with `-m 'not tmux and not modal and not docker and not docker_sdk and
+not acceptance and not release'` (plus `--no-cov --cov-fail-under=0`), per
+CLAUDE.md; those run in CI, not locally.
 
 **First round -- boot the preview.** After the first build, boot the worktree as
 a labeled preview tab and open it:
@@ -144,12 +146,14 @@ python3 scripts/layout.py open si-preview
 ```
 
 `preview` boots `uv run system-interface` from the worktree's already-built app
-dir on a free port, with layout persistence neutered (it drops `MNGR_AGENT_ID`
-so it cannot clobber the live `layout.json`) but agent discovery kept -- so the
-user's real conversations render -- and wraps it in a labeled "preview" frame the
-user opens as the `si-preview` tab. It never touches the served tree. (It refuses
-to boot if another pass's preview is already up rather than hijacking the tab;
-surface that and coordinate.)
+dir on a free port. It points layout persistence at a throwaway copy of the live
+layout, so the preview opens with the user's real tab layout while any drags they
+make in it autosave into the copy -- the live `layout.json` is never touched (it
+also drops `MNGR_AGENT_ID` as a backstop). Agent discovery is kept, so the user's
+real conversations render, and the whole thing is wrapped in a labeled "preview"
+frame the user opens as the `si-preview` tab. It never touches the served tree.
+(It refuses to boot if another pass's preview is already up rather than hijacking
+the tab; surface that and coordinate.)
 
 **Each subsequent round -- refresh in place; the tab never goes blank.** The tab
 points at the wrapper page, which never moves. After editing:
@@ -362,12 +366,9 @@ interleave.
 
 ## Why this shape
 
-The UI is what the user is actively looking at, so a broken build must never be
-served -- but that safety used to mean waiting out a full harden pass before the
-user could see *anything*, inverting "live first, ratify at turn-end." The fix
-keeps the safety (code isolation via the worktree, the health-checked
-auto-rollback reveal) while restoring the fast loop: the lead edits and previews
-in seconds, and the expensive gate runs once, in the background, only after the
-user is happy with the shape. Preview boot, in-place refresh, and reveal are
-deterministic, so they live as sub-commands of `reveal_system_interface.py`; the
+The safety (never serve a broken build) used to mean waiting out a full harden
+pass before the user could see *anything*, inverting "live first, ratify at
+turn-end." Code isolation and the auto-rollback reveal keep that safety while
+restoring the fast loop. Because preview boot, in-place refresh, and reveal are
+deterministic, they live as sub-commands of `reveal_system_interface.py`; the
 only non-deterministic part -- gating on the user's judgment -- stays with you.

@@ -58,10 +58,14 @@ the request is -- it changes what you do *before* touching code:
   live store to render a preview is fine; never let a preview or verification
   *write* to it.
 
-  **Does this change warrant a preview at all?** Use judgment: a change to a
-  surface the user perceives usually does; a behavior-only change behind an
-  unchanged surface often does not (a tab refresh after go-live suffices). Don't
-  stand up a preview tab for a change nobody needs to look at.
+  **Does this change warrant a preview at all?** For an ordinary service a
+  preview is the exception, not the default. If the change *works*, a taste
+  mismatch is cheap to fix next round, so most changes can just go live and
+  iterate. Reserve a preview for changes that are costly to redo -- a redesign,
+  a data-touching change, a substantial visual shift. A routine tweak, a copy
+  change, or a behavior-only change behind an unchanged surface doesn't need one.
+  (The system interface is the exception: its own flow, `update-system-interface`,
+  previews by default because the live tab is off-limits.)
 
   A new view or capability bolted onto an existing service is its own
   delivery with its own feedback gate (interactive-delivery phase 8):
