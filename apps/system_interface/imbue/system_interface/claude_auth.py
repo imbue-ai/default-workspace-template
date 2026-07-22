@@ -1,38 +1,44 @@
-"""In-mind Claude authentication recovery: status checks, OAuth PTY flow, API-key write.
+"""In-mind Claude authentication: settings-env credential writes, setup-token flow, agent restarts.
 
-Implements the backend half of the in-UI Claude login modal so that a user
-whose Claude credentials didn't sync into the mind can recover without
-dropping into the ttyd terminal.
+Implements the backend half of the in-UI Claude login modal. All credentials
+live in the ``env`` block of the shared ``$CLAUDE_CONFIG_DIR/settings.json``
+(the config dir every claude in the mind inherits), NEVER in the mngr host
+env file: the host env file is frozen into long-lived processes (supervisord
+and its services) at boot, so changing it would require tearing down the
+whole workspace, while a settings.json edit only requires restarting the
+claude agents themselves.
 
-Two sign-in paths:
+Three sign-in paths, all converging on the same settings-env write:
 
-1. Subscription OAuth (`claude auth login --claudeai`) and Console OAuth
-   (`claude auth login --console`) are driven via pexpect: the CLI prints
-   an `oauth/authorize` URL (`https://claude.com/cai/oauth/authorize?...`
-   for `--claudeai` and `https://platform.claude.com/oauth/authorize?...`
-   for `--console`) and waits for a `CODE#STATE` paste on stdin. The PTY
-   subprocess is held on the `ClaudeAuthService` instance between the
-   `start_oauth_login` and `submit_oauth_code` calls so the UI can collect
-   the code from the user in between.
+1. Subscription: `claude setup-token` is driven via pexpect. The CLI prints
+   an `oauth/authorize` URL and then *polls Anthropic itself*: once the user
+   approves in the browser, the CLI prints the minted 1-year token without
+   requiring a code paste (verified on the pinned Claude Code version; a
+   `Paste code here if prompted >` fallback exists for flows that do demand
+   one). The frontend polls `poll_setup_token` until the token appears; the
+   token is written as ``CLAUDE_CODE_OAUTH_TOKEN``.
+2. Raw API key: written as ``ANTHROPIC_API_KEY``.
+3. Imbue (LiteLLM): an env-var-style blob pasted from the desktop app's
+   mint page, written as ``ANTHROPIC_API_KEY`` + ``ANTHROPIC_BASE_URL``.
 
-   The two providers store their credential differently, which dictates
-   whether a restart is needed:
+Paths 2 and 3 (and a subtle "paste an existing token" affordance) share one
+strict env-lines parser: only the three managed keys are accepted, and
+mixed-mode pastes (an OAuth token alongside an API key) are rejected so the
+written state is always unambiguous. The writer fully controls the managed
+keys -- switching modes deletes the other mode's keys.
 
-   - `--claudeai` writes a subscription credential that every running
-     claude re-reads on its next API call -- no restart required.
-   - `--console` writes its credential as `primaryApiKey` *inside* the
-     shared `$CLAUDE_CONFIG_DIR/.claude.json`. Claude Code reads that file
-     once at process start and caches it, so an already-running agent
-     never sees the new key. The console path therefore restarts every
-     `type: claude` agent (same mechanism as the API-key path below).
-2. Raw API key: `submit_api_key` writes `ANTHROPIC_API_KEY` into the host
-   env file the bootstrap already manages and then restarts every
-   `type: claude` agent in the mind via `mngr stop`/`mngr start`. The
-   restart is necessary because env vars are inherited at process start
-   and cannot be updated in-place; without it, the new key has no effect
-   on already-running claudes.
+Every successful write restarts the mind's claude-binary agents (types
+``claude`` AND ``worker``; the ``main`` services agent is excluded -- its
+window 0 never runs a live claude, and restarting it would tear down
+supervisord and every background service). Settings-env values are read at
+claude process start, so a restart is what makes new credentials take
+effect. Agent states are snapshotted (via ``mngr list``) before stopping:
+agents that were RUNNING mid-task get a "please continue" message after the
+restart so unattended workers resume instead of silently dying; WAITING
+agents need nothing (their next user message starts them with the fresh
+env); STOPPED agents are left stopped.
 
-Both restart paths first run `_prepare_claude_config_for_restart`, which
+Every restart first runs `_prepare_claude_config_for_restart`, which
 pre-dismisses the Claude Code startup dialogs (onboarding, theme, custom
 API-key challenge) in `.claude.json` so the freshly restarted agents come
 up clean instead of blocking on an interactive TUI prompt -- mirroring
@@ -70,6 +76,7 @@ from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.imbue_common.pure import pure
 from imbue.mngr.cli.exit_codes import EXIT_CODE_PROVIDER_INACCESSIBLE
 from imbue.mngr.utils.env_utils import parse_env_file
 from imbue.mngr_claude.claude_config import acknowledge_cost_threshold
@@ -80,20 +87,61 @@ from imbue.mngr_claude.resources.stream_snapshot import strip_ansi
 
 logger = _loguru_logger
 
-_HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
 _CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
-_ANTHROPIC_API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+_HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
+ANTHROPIC_API_KEY_ENV_VAR: Final[str] = "ANTHROPIC_API_KEY"
+ANTHROPIC_BASE_URL_ENV_VAR: Final[str] = "ANTHROPIC_BASE_URL"
+CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR: Final[str] = "CLAUDE_CODE_OAUTH_TOKEN"
+# The full set of settings-env keys this module owns. The writer enforces
+# both presence AND absence: every write deletes all three before setting
+# the submitted subset, so stale keys from a previous mode can never
+# shadow the new one (ANTHROPIC_API_KEY outranks CLAUDE_CODE_OAUTH_TOKEN
+# in Claude Code's credential precedence, so a leftover key would
+# silently win over a freshly written token).
+MANAGED_AUTH_ENV_KEYS: Final[frozenset[str]] = frozenset(
+    (ANTHROPIC_API_KEY_ENV_VAR, ANTHROPIC_BASE_URL_ENV_VAR, CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR)
+)
 # Claude stores per-key approvals keyed by the last 20 characters of the key.
 _API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
+# Characters of the key/token shown in the modal's "currently signed in via"
+# header; long enough to disambiguate, short enough to stay a non-secret.
+_DISPLAY_SUFFIX_LENGTH: Final = 4
 _OAUTH_URL_REGEX = re.compile(r"https://\S*oauth/authorize\S*")
+# The long-lived token `claude setup-token` prints on completion.
+_SETUP_TOKEN_REGEX = re.compile(r"sk-ant-oat01-[A-Za-z0-9_-]+")
 _OAUTH_URL_WAIT_SECONDS: Final = 30.0
-_OAUTH_COMPLETE_WAIT_SECONDS: Final = 30.0
+_SETUP_TOKEN_POLL_SECONDS: Final = 0.2
+_SETUP_TOKEN_CODE_WAIT_SECONDS: Final = 30.0
 _MNGR_COMMAND_TIMEOUT_SECONDS: Final = 60.0
+# Message delivery waits for durable submission evidence inside mngr, which
+# polls the agent's transcript -- give it more headroom than plain commands.
+_MNGR_MESSAGE_TIMEOUT_SECONDS: Final = 120.0
 _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
+
+# Agent types whose window-0 process is a real claude binary and therefore
+# holds credentials frozen from process start. The `main` services agent is
+# deliberately absent: its window 0 sleeps forever and restarting it would
+# tear down supervisord and every background service.
+CLAUDE_BINARY_AGENT_TYPES: Final[frozenset[str]] = frozenset(("claude", "worker"))
+_AGENT_STATE_RUNNING: Final[str] = "RUNNING"
+_AGENT_STATE_WAITING: Final[str] = "WAITING"
+
+# Sent (via `mngr message`) to agents that were RUNNING when the auth-change
+# restart tore them down, so unattended work resumes instead of silently
+# stopping. WAITING agents are not messaged: their next user message starts
+# them under the fresh env anyway.
+RESTART_CONTINUE_MESSAGE: Final[str] = (
+    "Your Claude credentials were just updated and your session was restarted. "
+    "Please continue what you were working on."
+)
 
 
 class ClaudeAuthError(RuntimeError):
     """Raised when an auth flow operation cannot complete."""
+
+
+class CredentialPasteError(ClaudeAuthError):
+    """Raised when a pasted credential blob fails strict validation."""
 
 
 # Public type aliases for dependency injection. Tests pass deterministic
@@ -110,42 +158,70 @@ def _default_pexpect_spawner(executable: str, args: list[str], timeout: float) -
     return pexpect.spawn(executable, args, timeout=timeout, encoding="utf-8")
 
 
-class AuthStatus(FrozenModel):
-    """Parsed output of `claude auth status --json`.
+class AuthMode(str, Enum):
+    """The auth mode implied by the managed settings-env keys."""
 
-    `subscription_type` is unset for Console accounts (API-usage billing),
-    so the frontend conditionally renders the success-state copy.
+    SUBSCRIPTION = "subscription"
+    IMBUE = "imbue"
+    API_KEY = "api_key"
+    NONE = "none"
+
+
+class AuthStatus(FrozenModel):
+    """Parsed output of `claude auth status --json`, plus the settings-derived mode.
+
+    `subscription_type` is unset for Console accounts and for setup-token
+    (oauth_token) sessions, so the frontend conditionally renders the
+    success-state copy. `auth_mode` / `masked_key_suffix` are derived from
+    the shared settings.json env block, not from the status subprocess.
     """
 
     logged_in: bool = Field(description="Whether claude is currently authenticated")
-    auth_method: str | None = Field(default=None, description="e.g. 'oauth', 'api_key'")
-    api_provider: str | None = Field(default=None, description="e.g. 'anthropic', 'claudeai'")
+    auth_method: str | None = Field(default=None, description="e.g. 'oauth', 'api_key', 'oauth_token'")
+    api_provider: str | None = Field(default=None, description="e.g. 'anthropic', 'claudeai', 'firstParty'")
     email: str | None = Field(default=None)
     org_id: str | None = Field(default=None)
     org_name: str | None = Field(default=None)
-    subscription_type: str | None = Field(default=None, description="e.g. 'Max'; absent for Console accounts")
+    subscription_type: str | None = Field(default=None, description="e.g. 'Max'; absent for token/Console sessions")
+    auth_mode: AuthMode = Field(default=AuthMode.NONE, description="Mode derived from the managed settings env keys")
+    masked_key_suffix: str | None = Field(
+        default=None, description="Last few characters of the managed key/token, for display"
+    )
+    workspace_host_id: str | None = Field(
+        default=None, description="This mind's mngr host id, for the desktop app's key-mint page link"
+    )
 
 
-class OAuthProvider(str, Enum):
-    CLAUDEAI = "claudeai"
-    CONSOLE = "console"
+class SetupTokenStartResult(FrozenModel):
+    """Result of spawning `claude setup-token`."""
 
-
-class OAuthStartResult(FrozenModel):
-    session_id: str = Field(description="Opaque token for the in-flight OAuth session")
+    session_id: str = Field(description="Opaque token for the in-flight setup-token session")
     oauth_url: str = Field(description="URL the user opens to authorize the login")
 
 
-class _OAuthSessionRecord(FrozenModel):
-    """Immutable handle for an in-flight OAuth subprocess.
+class SetupTokenPollResult(FrozenModel):
+    """Result of polling an in-flight setup-token session."""
+
+    is_complete: bool = Field(description="Whether the token was minted and written")
+    status: AuthStatus | None = Field(default=None, description="Auth status after completion; None while pending")
+
+
+class _SetupTokenSessionRecord(FrozenModel):
+    """Immutable handle for an in-flight setup-token subprocess.
 
     Pairs with a parallel non-frozen slot that holds the live pexpect
     process object, since that object is not Pydantic-serializable.
     """
 
     session_id: str
-    provider: OAuthProvider
     oauth_url: str
+
+
+class AgentSnapshot(FrozenModel):
+    """One claude-binary agent's name and lifecycle state at snapshot time."""
+
+    name: str = Field(description="Agent name (used to address mngr stop/start/message)")
+    state: str = Field(description="Lifecycle state string from mngr list (e.g. 'RUNNING', 'WAITING')")
 
 
 def _coerce_str_or_none(value: object) -> str | None:
@@ -168,56 +244,175 @@ def _parse_status_payload(payload: dict[str, object]) -> AuthStatus:
     )
 
 
-def _format_env_file(env: dict[str, str]) -> str:
-    """Render an env dict back into the host env file format (matches mngr's _format_env_file)."""
-    lines: list[str] = []
-    for key, value in env.items():
-        if " " in value or '"' in value or "'" in value or "\n" in value:
-            value = '"' + value.replace('"', '\\"') + '"'
-        lines.append(f"{key}={value}")
-    return "\n".join(lines) + "\n"
+@pure
+def parse_credential_lines(pasted_text: str) -> dict[str, str]:
+    """Parse a pasted env-var-style credential blob into the managed keys.
+
+    Strict by design: the settings env block is fully controlled, so a paste
+    is rejected (rather than partially applied) when it contains any key
+    outside the managed set, mixes an OAuth token with an API key (the key
+    would silently outrank the token at runtime), supplies a base URL with
+    no key, or contains no managed key at all.
+
+    Raises CredentialPasteError with a user-facing message on any violation.
+    """
+    parsed = parse_env_file(pasted_text)
+    stripped = {key: value.strip() for key, value in parsed.items() if value.strip()}
+    if not stripped:
+        raise CredentialPasteError("No credentials found. Paste lines like ANTHROPIC_API_KEY=sk-ant-...")
+    unknown_keys = sorted(set(stripped) - MANAGED_AUTH_ENV_KEYS)
+    if unknown_keys:
+        raise CredentialPasteError(
+            "Unsupported keys in paste: {}. Only {} are accepted.".format(
+                ", ".join(unknown_keys), ", ".join(sorted(MANAGED_AUTH_ENV_KEYS))
+            )
+        )
+    has_token = CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR in stripped
+    has_key = ANTHROPIC_API_KEY_ENV_VAR in stripped
+    has_base_url = ANTHROPIC_BASE_URL_ENV_VAR in stripped
+    if has_token and (has_key or has_base_url):
+        raise CredentialPasteError(
+            "Paste either an OAuth token OR an API key (with optional base URL), not both: "
+            "an API key would silently take precedence over the token."
+        )
+    if has_base_url and not has_key:
+        raise CredentialPasteError(
+            f"{ANTHROPIC_BASE_URL_ENV_VAR} requires an accompanying {ANTHROPIC_API_KEY_ENV_VAR}."
+        )
+    return stripped
 
 
-def _resolve_host_env_path() -> Path:
+@pure
+def derive_auth_mode(managed_env: Mapping[str, str]) -> AuthMode:
+    """Derive the auth mode implied by the managed settings-env keys.
+
+    Mirrors Claude Code's credential precedence: an API key outranks an
+    OAuth token, and a key paired with a base URL means requests route to
+    a proxy (the Imbue LiteLLM case).
+    """
+    if managed_env.get(ANTHROPIC_API_KEY_ENV_VAR):
+        if managed_env.get(ANTHROPIC_BASE_URL_ENV_VAR):
+            return AuthMode.IMBUE
+        return AuthMode.API_KEY
+    elif managed_env.get(CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR):
+        return AuthMode.SUBSCRIPTION
+    else:
+        return AuthMode.NONE
+
+
+@pure
+def masked_credential_suffix(managed_env: Mapping[str, str]) -> str | None:
+    """Last few characters of the active managed credential, for display."""
+    credential = managed_env.get(ANTHROPIC_API_KEY_ENV_VAR) or managed_env.get(CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR)
+    if not credential:
+        return None
+    return credential[-_DISPLAY_SUFFIX_LENGTH:]
+
+
+def read_workspace_host_id() -> str | None:
+    """Read this mind's mngr host id from `$MNGR_HOST_DIR/data.json`.
+
+    Tolerant: returns None when the env var or file is missing/corrupt --
+    the host id only powers the desktop app's key-mint page link, and the
+    rest of the modal must keep working without it.
+    """
     host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
     if not host_dir:
-        raise ClaudeAuthError(f"{_HOST_DIR_ENV_VAR} is unset; cannot locate host env file")
-    return Path(host_dir) / "env"
+        return None
+    data_path = Path(host_dir) / "data.json"
+    if not data_path.exists():
+        return None
+    try:
+        data = json.loads(data_path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Cannot read host data.json at {}: {}", data_path, e)
+        return None
+    host_id = data.get("host_id") if isinstance(data, dict) else None
+    return host_id if isinstance(host_id, str) and host_id else None
 
 
-def write_api_key_to_host_env(api_key: SecretStr, env_path_override: Path | None = None) -> Path:
-    """Persist `ANTHROPIC_API_KEY=<value>` into the host env file (idempotent).
+def _resolve_claude_config_dir() -> Path:
+    config_dir = os.environ.get(_CLAUDE_CONFIG_DIR_ENV_VAR, "")
+    if not config_dir:
+        raise ClaudeAuthError(f"{_CLAUDE_CONFIG_DIR_ENV_VAR} is unset; cannot locate the Claude config")
+    return Path(config_dir)
 
-    Mirrors the host-env-write pattern used by the bootstrap for
-    `CLAUDE_CONFIG_DIR`. The host env is sourced when an agent's tmux
-    session starts, so a `mngr stop`/`mngr start` of the chat agent
-    afterwards picks the new key up.
-    """
-    env_path = env_path_override or _resolve_host_env_path()
-    existing: dict[str, str] = {}
-    if env_path.exists():
-        existing = parse_env_file(env_path.read_text())
-    existing[_ANTHROPIC_API_KEY_ENV_VAR] = api_key.get_secret_value()
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text(_format_env_file(existing))
-    return env_path
+
+def _resolve_claude_settings_path() -> Path:
+    """Locate the shared `$CLAUDE_CONFIG_DIR/settings.json` for the mind."""
+    return _resolve_claude_config_dir() / "settings.json"
 
 
 def _resolve_claude_config_path() -> Path:
     """Locate the shared `$CLAUDE_CONFIG_DIR/.claude.json` for the mind."""
-    config_dir = os.environ.get(_CLAUDE_CONFIG_DIR_ENV_VAR, "")
-    if not config_dir:
-        raise ClaudeAuthError(f"{_CLAUDE_CONFIG_DIR_ENV_VAR} is unset; cannot locate the Claude config")
-    return Path(config_dir) / ".claude.json"
+    return _resolve_claude_config_dir() / ".claude.json"
+
+
+def read_managed_auth_env(settings_path_override: Path | None = None) -> dict[str, str]:
+    """Read the managed auth keys currently in the shared settings.json env block."""
+    settings_path = settings_path_override or _resolve_claude_settings_path()
+    if not settings_path.exists():
+        return {}
+    try:
+        settings = json.loads(settings_path.read_text())
+    except json.JSONDecodeError as e:
+        logger.warning("Corrupt settings.json at {}: {}", settings_path, e)
+        return {}
+    if not isinstance(settings, dict):
+        logger.warning("Non-object settings.json at {}", settings_path)
+        return {}
+    env = settings.get("env")
+    if not isinstance(env, dict):
+        return {}
+    return {key: str(value) for key, value in env.items() if key in MANAGED_AUTH_ENV_KEYS and isinstance(value, str)}
+
+
+def write_managed_auth_env(managed_env: Mapping[str, str], settings_path_override: Path | None = None) -> Path:
+    """Write the managed auth keys into the shared settings.json env block.
+
+    Fully controlled: every managed key absent from `managed_env` is DELETED
+    from the env block, so a mode switch can never leave a stale credential
+    behind to shadow the new one. Non-managed env keys and every other
+    setting are preserved untouched.
+    """
+    for key in managed_env:
+        if key not in MANAGED_AUTH_ENV_KEYS:
+            raise ClaudeAuthError(f"Refusing to write unmanaged settings env key {key!r}")
+    settings_path = settings_path_override or _resolve_claude_settings_path()
+    settings: dict[str, Any] = {}
+    if settings_path.exists():
+        try:
+            loaded = json.loads(settings_path.read_text())
+        except json.JSONDecodeError as e:
+            # A corrupt shared settings file would break every claude in the
+            # mind well beyond auth; refuse to silently replace it.
+            raise ClaudeAuthError(f"Shared Claude settings at {settings_path} are corrupt JSON: {e}") from e
+        if not isinstance(loaded, dict):
+            raise ClaudeAuthError(f"Shared Claude settings at {settings_path} are not a JSON object")
+        settings = loaded
+    env = settings.get("env")
+    if not isinstance(env, dict):
+        env = {}
+    preserved = {key: value for key, value in env.items() if key not in MANAGED_AUTH_ENV_KEYS}
+    updated_env = {**preserved, **dict(managed_env)}
+    if updated_env:
+        settings["env"] = updated_env
+    else:
+        settings.pop("env", None)
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+    logger.info("Wrote managed auth env ({} mode) to {}", derive_auth_mode(managed_env).value, settings_path)
+    return settings_path
 
 
 def _approve_api_key_in_claude_config(config_path: Path, api_key: SecretStr) -> None:
     """Add `api_key` to `customApiKeyResponses.approved` in the Claude config.
 
     Claude Code challenges any `ANTHROPIC_API_KEY` it finds in the
-    environment that isn't pre-approved, via an interactive TUI prompt
-    that a restarted agent would then block on. Approvals are keyed by the
-    last 20 characters of the key (mirrors mngr_claude's
+    environment (including one injected via the settings env block) that
+    isn't pre-approved, via an interactive TUI prompt that a restarted
+    agent would then block on. Approvals are keyed by the last 20
+    characters of the key (mirrors mngr_claude's
     `approve_api_key_for_claude`). This runs while every agent is stopped,
     so a plain read/write is safe -- no concurrent writer to race.
     """
@@ -263,14 +458,14 @@ def _safe_terminate(process: Any) -> None:
     `ptyprocess` errors in `pexpect.ExceptionPexpect`; `terminate()` can
     raise `OSError` on an already-reaped descriptor. Both live inside the
     try so a half-torn-down process never crashes the caller (called from
-    every OAuth teardown path, including the auth-success chokepoint).
+    every setup-token teardown path, including the auth-success chokepoint).
     """
     try:
         if not process.isalive():
             return
         process.terminate(force=True)
     except (OSError, pexpect.ExceptionPexpect) as e:
-        logger.warning("OAuth subprocess terminate raised: {}", e)
+        logger.warning("setup-token subprocess terminate raised: {}", e)
 
 
 def _safe_close(process: Any) -> None:
@@ -284,25 +479,11 @@ def _safe_close(process: Any) -> None:
     try:
         process.close()
     except (OSError, pexpect.ExceptionPexpect) as e:
-        logger.warning("OAuth subprocess close raised: {}", e)
-
-
-def _drive_oauth_code(process: Any, code: str) -> None:
-    process.timeout = _OAUTH_COMPLETE_WAIT_SECONDS
-    try:
-        process.sendline(code)
-    except pexpect.ExceptionPexpect as e:
-        raise ClaudeAuthError(f"claude auth login subprocess failed sending code: {e}") from e
-    try:
-        result = process.expect([pexpect.EOF, pexpect.TIMEOUT])
-    except pexpect.ExceptionPexpect as e:
-        raise ClaudeAuthError(f"claude auth login subprocess failed waiting for completion: {e}") from e
-    if result != 0:
-        raise ClaudeAuthError("Timed out waiting for claude auth login to complete after code submit")
+        logger.warning("setup-token subprocess close raised: {}", e)
 
 
 def _extract_oauth_url(raw_output: str) -> str | None:
-    """Pull the single OAuth URL out of `claude auth login`'s PTY output.
+    """Pull the single OAuth URL out of `claude setup-token`'s PTY output.
 
     The CLI renders the URL as an OSC 8 terminal hyperlink styled with ANSI
     color, so the raw stream carries the URL *twice* -- once as the
@@ -314,6 +495,13 @@ def _extract_oauth_url(raw_output: str) -> str | None:
     """
     cleaned = strip_ansi(raw_output)
     match = _OAUTH_URL_REGEX.search(cleaned)
+    return match.group(0) if match is not None else None
+
+
+def _extract_setup_token(raw_output: str) -> str | None:
+    """Pull the minted `sk-ant-oat01-...` token out of the PTY output."""
+    cleaned = strip_ansi(raw_output)
+    match = _SETUP_TOKEN_REGEX.search(cleaned)
     return match.group(0) if match is not None else None
 
 
@@ -360,14 +548,19 @@ def _build_start_command(name: str) -> list[str]:
     return ["mngr", "start", "--no-resume", name]
 
 
+def _build_message_command(name: str, message: str) -> list[str]:
+    """Build the ``mngr message`` argv for one agent. Pure (see above)."""
+    return ["mngr", "message", name, "-m", message]
+
+
 class ClaudeAuthService(MutableModel):
-    """Stateful entry point for the in-mind Claude auth-recovery flows.
+    """Stateful entry point for the in-mind Claude auth flows.
 
     Holds the injected `command_runner` / `pexpect_spawner` dependencies
-    and the in-flight OAuth subprocess. One instance is created per
-    application and stored on `app.state`; the OAuth subprocess held
-    between `start_oauth_login` and `submit_oauth_code` rides that
-    instance. Tests construct isolated instances with deterministic fakes.
+    and the in-flight setup-token subprocess. One instance is created per
+    application and stored on `app.state`; the subprocess held between
+    `start_setup_token` and its poll/submit calls rides that instance.
+    Tests construct isolated instances with deterministic fakes.
     """
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
@@ -375,12 +568,13 @@ class ClaudeAuthService(MutableModel):
     command_runner: CommandRunner = _default_command_runner
     pexpect_spawner: PexpectSpawner = _default_pexpect_spawner
 
-    # Only one OAuth flow can be live at a time per instance, which matches
-    # the single-mind / single-user deployment model. The lock and the live
-    # subprocess are private runtime state, not configuration data.
-    _oauth_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _current_oauth_record: _OAuthSessionRecord | None = PrivateAttr(default=None)
-    _current_oauth_process: Any = PrivateAttr(default=None)
+    # Only one setup-token flow can be live at a time per instance, which
+    # matches the single-mind / single-user deployment model. The lock and
+    # the live subprocess are private runtime state, not configuration data.
+    _setup_token_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _current_setup_token_record: _SetupTokenSessionRecord | None = PrivateAttr(default=None)
+    _current_setup_token_process: Any = PrivateAttr(default=None)
+    _current_setup_token_output: str = PrivateAttr(default="")
 
     def get_auth_status(self, extra_env: Mapping[str, str] | None = None) -> AuthStatus:
         """Invoke `claude auth status --json` and parse the result.
@@ -389,14 +583,18 @@ class ClaudeAuthService(MutableModel):
         doesn't produce output, rather than raising, since the whole point
         of the modal is to recover from broken auth state.
 
-        `extra_env` is overlaid on the current environment for the status
-        subprocess. The API-key path needs this: `submit_api_key` writes
-        `ANTHROPIC_API_KEY` to the host env *file*, but the long-lived
-        system-interface process that runs this check never received that
-        variable, so without overlaying the key here `claude auth status`
-        would report `loggedIn=false` for a perfectly valid key.
+        The managed env currently in settings.json is overlaid on the
+        status subprocess's environment (with `extra_env` layered on top):
+        the settings env applies to *new claude processes*, and the status
+        subprocess IS one, but the fresh values may not have reached this
+        long-lived system-interface process -- the overlay makes the check
+        reflect the mind's actual auth source of truth. The settings-derived
+        `auth_mode` / `masked_key_suffix` are folded into the returned
+        status for the modal's header.
         """
-        runner_env = {**os.environ, **extra_env} if extra_env is not None else None
+        managed_env = self._read_managed_env_tolerant()
+        combined_extra = {**managed_env, **(dict(extra_env) if extra_env else {})}
+        runner_env = {**os.environ, **combined_extra} if combined_extra else None
         try:
             result = (
                 self.command_runner(
@@ -409,25 +607,51 @@ class ClaudeAuthService(MutableModel):
             )
         except ProcessSetupError as e:
             logger.warning("claude auth status failed to launch: {}", e)
-            return AuthStatus(logged_in=False)
+            return self._with_derived_mode(AuthStatus(logged_in=False), managed_env)
 
         stdout = result.stdout.strip() if isinstance(result.stdout, str) else ""
         if not stdout:
-            return AuthStatus(logged_in=False)
+            return self._with_derived_mode(AuthStatus(logged_in=False), managed_env)
         try:
             payload = json.loads(stdout)
         except json.JSONDecodeError as e:
             raise ClaudeAuthError(f"claude auth status returned non-JSON output: {stdout!r}") from e
         if not isinstance(payload, dict):
             raise ClaudeAuthError(f"claude auth status returned non-object JSON: {payload!r}")
-        return _parse_status_payload(payload)
+        return self._with_derived_mode(_parse_status_payload(payload), managed_env)
 
-    def list_claude_agent_names(self) -> list[str]:
-        """Return the names of every `type: claude` agent in the local mind.
+    def _read_managed_env_tolerant(self) -> dict[str, str]:
+        """Read the managed settings env, tolerating an unset CLAUDE_CONFIG_DIR.
 
-        Uses `mngr list --format json` and filters to `type == "claude"`.
-        This excludes the `main`-type system-services agent, which has no
-        interactive claude process to restart.
+        Status checks must not explode merely because the env var is
+        missing (e.g. in a degraded mind) -- they degrade to "no managed
+        credentials" and the modal walks the user through recovery.
+        """
+        try:
+            return read_managed_auth_env()
+        except ClaudeAuthError as e:
+            logger.warning("Cannot read managed auth env: {}", e)
+            return {}
+
+    @staticmethod
+    def _with_derived_mode(status: AuthStatus, managed_env: Mapping[str, str]) -> AuthStatus:
+        return AuthStatus(
+            **{
+                **status.model_dump(),
+                "auth_mode": derive_auth_mode(managed_env),
+                "masked_key_suffix": masked_credential_suffix(managed_env),
+                "workspace_host_id": read_workspace_host_id(),
+            }
+        )
+
+    def snapshot_claude_binary_agents(self) -> list[AgentSnapshot]:
+        """Return name + state of every claude-binary agent in the local mind.
+
+        Uses `mngr list --format json` and filters to the claude-binary
+        types (``claude`` and ``worker``). This excludes the `main`-type
+        system-services agent, which has no interactive claude process to
+        restart -- and whose restart would tear down every background
+        service in the mind.
         """
         result = self.command_runner(_build_list_command(), _MNGR_COMMAND_TIMEOUT_SECONDS)
         # Exit EXIT_CODE_PROVIDER_INACCESSIBLE means some enabled provider was
@@ -449,80 +673,99 @@ class ClaudeAuthService(MutableModel):
         agents = payload.get("agents", [])
         if not isinstance(agents, list):
             raise ClaudeAuthError(f"mngr list 'agents' field is not a list: {agents!r}")
-        names: list[str] = []
+        snapshots: list[AgentSnapshot] = []
         for agent in agents:
             if not isinstance(agent, dict):
                 continue
-            if agent.get("type") != "claude":
+            if agent.get("type") not in CLAUDE_BINARY_AGENT_TYPES:
                 continue
             name = agent.get("name")
-            if isinstance(name, str) and name:
-                names.append(name)
-        return names
+            if not (isinstance(name, str) and name):
+                continue
+            state = agent.get("state")
+            snapshots.append(AgentSnapshot(name=name, state=state if isinstance(state, str) else ""))
+        return snapshots
 
     def restart_all_claude_agents(self, api_key: SecretStr | None = None) -> list[str]:
-        """Restart every `type: claude` agent via `mngr stop` then `mngr start`.
+        """Restart every live claude-binary agent via `mngr stop` then `mngr start`.
 
-        Stops every agent first, then prepares the shared Claude config
-        (see `_prepare_claude_config_for_restart`), then starts them again.
-        The stop-all/prepare/start-all ordering matters: editing
-        `.claude.json` while an agent is still running would be silently
-        overwritten by that agent's stale in-memory copy on its next write.
+        Snapshots agent states first, then stops every live (RUNNING or
+        WAITING) agent, prepares the shared Claude config (see
+        `_prepare_claude_config_for_restart`), starts them again, and
+        finally messages the agents that were RUNNING so interrupted work
+        resumes. STOPPED agents are left stopped. The
+        stop-all/prepare/start-all ordering matters: editing `.claude.json`
+        while an agent is still running would be silently overwritten by
+        that agent's stale in-memory copy on its next write.
 
         Agents are started with `--no-resume` so mngr does not deliver the
-        configured resume message (e.g. "Continue from where you left
-        off") after the restart -- an auth recovery is not a work
-        interruption the agent should pick back up from, and that message
-        would otherwise appear as a spurious turn in the chat.
+        configured resume message after the restart; the previously-RUNNING
+        agents instead get the explicit auth-aware continue message, which
+        explains the interruption rather than pretending it did not happen.
 
         `api_key`, when given, is additionally approved in the Claude
-        config so the API-key auth path's freshly-written key doesn't trip
-        Claude's custom-key challenge.
+        config so a freshly-written key doesn't trip Claude's custom-key
+        challenge.
 
         Returns the list of agent names that were restarted.
         """
-        names = self.list_claude_agent_names()
-        for name in names:
-            logger.info("Stopping type:claude agent {} via mngr stop", name)
-            stop_result = self.command_runner(_build_stop_command(name), _MNGR_COMMAND_TIMEOUT_SECONDS)
+        snapshots = self.snapshot_claude_binary_agents()
+        live_agents = [s for s in snapshots if s.state in (_AGENT_STATE_RUNNING, _AGENT_STATE_WAITING)]
+        for snapshot in live_agents:
+            logger.info("Stopping claude-binary agent {} via mngr stop", snapshot.name)
+            stop_result = self.command_runner(_build_stop_command(snapshot.name), _MNGR_COMMAND_TIMEOUT_SECONDS)
             if stop_result.returncode != 0:
                 raise ClaudeAuthError(
-                    f"mngr stop {name} failed (exit {stop_result.returncode}): {stop_result.stderr.strip()}"
+                    f"mngr stop {snapshot.name} failed (exit {stop_result.returncode}): {stop_result.stderr.strip()}"
                 )
         _prepare_claude_config_for_restart(api_key)
-        for name in names:
-            logger.info("Starting type:claude agent {} via mngr start --no-resume", name)
-            start_result = self.command_runner(_build_start_command(name), _MNGR_COMMAND_TIMEOUT_SECONDS)
+        for snapshot in live_agents:
+            logger.info("Starting claude-binary agent {} via mngr start --no-resume", snapshot.name)
+            start_result = self.command_runner(_build_start_command(snapshot.name), _MNGR_COMMAND_TIMEOUT_SECONDS)
             if start_result.returncode != 0:
                 raise ClaudeAuthError(
-                    f"mngr start {name} failed (exit {start_result.returncode}): {start_result.stderr.strip()}"
+                    f"mngr start {snapshot.name} failed (exit {start_result.returncode}): {start_result.stderr.strip()}"
                 )
-        return names
+        # Message the agents that were mid-task so their work resumes. A
+        # delivery failure must not fail the whole auth flow (auth itself
+        # succeeded); it is logged so the user can nudge the agent manually.
+        for snapshot in live_agents:
+            if snapshot.state != _AGENT_STATE_RUNNING:
+                continue
+            logger.info("Messaging previously-RUNNING agent {} to continue after auth restart", snapshot.name)
+            message_result = self.command_runner(
+                _build_message_command(snapshot.name, RESTART_CONTINUE_MESSAGE), _MNGR_MESSAGE_TIMEOUT_SECONDS
+            )
+            if message_result.returncode != 0:
+                logger.warning(
+                    "Failed to deliver continue message to agent {} (exit {}): {}",
+                    snapshot.name,
+                    message_result.returncode,
+                    message_result.stderr.strip() if isinstance(message_result.stderr, str) else "",
+                )
+        return [s.name for s in live_agents]
 
-    def submit_api_key(self, api_key: SecretStr) -> AuthStatus:
-        """Write `ANTHROPIC_API_KEY` to host env then restart every claude agent.
+    def submit_credentials(self, pasted_text: str) -> AuthStatus:
+        """Parse pasted credentials, write the settings env block, restart agents.
 
-        All `type: claude` agents must be restarted: env vars are read at
-        process start, so already-running claudes won't pick up the new key
-        until their tmux sessions are torn down and respawned. The key is
-        also passed to the restart so it gets pre-approved in the Claude
-        config.
-
-        The final status check overlays `ANTHROPIC_API_KEY` onto the
-        subprocess environment: the key was written to the host env *file*,
-        which the long-lived system-interface process never sourced, so a
-        plain `claude auth status` would report `loggedIn=false` for a
-        valid key and the modal would wrongly tell the user it was
-        rejected.
+        The single chokepoint for the API-key field, the Imbue blob
+        textarea, and the subtle direct-token paste: all three arrive as
+        env-var-style lines and land in the fully-controlled settings env
+        block. All claude-binary agents must be restarted: settings env is
+        read at process start, so already-running claudes won't pick up the
+        new credentials until their tmux sessions are torn down and
+        respawned.
         """
-        write_api_key_to_host_env(api_key)
-        self.restart_all_claude_agents(api_key=api_key)
-        return self.get_auth_status(extra_env={_ANTHROPIC_API_KEY_ENV_VAR: api_key.get_secret_value()})
+        managed_env = parse_credential_lines(pasted_text)
+        write_managed_auth_env(managed_env)
+        api_key_value = managed_env.get(ANTHROPIC_API_KEY_ENV_VAR)
+        self.restart_all_claude_agents(api_key=SecretStr(api_key_value) if api_key_value else None)
+        return self.get_auth_status(extra_env=managed_env)
 
-    def _spawn_oauth_and_parse_url(self, provider: OAuthProvider) -> tuple[Any, str]:
+    def _spawn_setup_token_and_parse_url(self) -> tuple[Any, str, str]:
         process = self.pexpect_spawner(
             "claude",
-            ["auth", "login", f"--{provider.value}"],
+            ["setup-token"],
             _OAUTH_URL_WAIT_SECONDS,
         )
         match_index = process.expect([_OAUTH_URL_REGEX, pexpect.EOF, pexpect.TIMEOUT])
@@ -530,8 +773,8 @@ class ClaudeAuthService(MutableModel):
             _safe_terminate(process)
             _safe_close(process)
             if match_index == 1:
-                raise ClaudeAuthError("claude auth login exited before printing OAuth URL")
-            raise ClaudeAuthError("Timed out waiting for OAuth URL from claude auth login")
+                raise ClaudeAuthError("claude setup-token exited before printing the OAuth URL")
+            raise ClaudeAuthError("Timed out waiting for the OAuth URL from claude setup-token")
         # `process.match` spans the raw stream, where the CLI's OSC 8
         # hyperlink renders the URL twice and wraps it in escape sequences.
         # Re-extract from the full consumed buffer (`before` + `after`, which
@@ -545,64 +788,116 @@ class ClaudeAuthService(MutableModel):
             raise ClaudeAuthError(
                 "OAuth URL matched in the stream but could not be extracted after stripping terminal escape sequences"
             )
-        return process, oauth_url
+        return process, oauth_url, consumed
 
-    def start_oauth_login(self, provider: OAuthProvider) -> OAuthStartResult:
-        """Spawn `claude auth login --<provider>` and return the parsed OAuth URL.
+    def start_setup_token(self) -> SetupTokenStartResult:
+        """Spawn `claude setup-token` and return the parsed OAuth URL.
 
-        Replaces any prior in-flight session: only one OAuth flow can be
-        live at a time per instance, which matches the single-mind /
-        single-user deployment model.
+        Replaces any prior in-flight session: only one setup-token flow can
+        be live at a time per instance, which matches the single-mind /
+        single-user deployment model. The subprocess then polls Anthropic
+        on its own; the frontend drives `poll_setup_token` until the token
+        appears (or pastes a code via `submit_setup_token_code` if the CLI
+        demands one).
         """
-        with self._oauth_lock:
-            if self._current_oauth_process is not None:
-                _safe_terminate(self._current_oauth_process)
-                _safe_close(self._current_oauth_process)
-                self._current_oauth_record = None
-                self._current_oauth_process = None
-            process, oauth_url = self._spawn_oauth_and_parse_url(provider)
-            record = _OAuthSessionRecord(session_id=uuid.uuid4().hex, provider=provider, oauth_url=oauth_url)
-            self._current_oauth_record = record
-            self._current_oauth_process = process
-        return OAuthStartResult(session_id=record.session_id, oauth_url=record.oauth_url)
+        with self._setup_token_lock:
+            self._drop_current_session_locked()
+            process, oauth_url, consumed = self._spawn_setup_token_and_parse_url()
+            record = _SetupTokenSessionRecord(session_id=uuid.uuid4().hex, oauth_url=oauth_url)
+            self._current_setup_token_record = record
+            self._current_setup_token_process = process
+            self._current_setup_token_output = consumed
+        return SetupTokenStartResult(session_id=record.session_id, oauth_url=record.oauth_url)
 
-    def submit_oauth_code(self, session_id: str, code: str) -> AuthStatus:
-        """Send the user's pasted `CODE#STATE` to the live OAuth subprocess.
+    def _drop_current_session_locked(self) -> None:
+        if self._current_setup_token_process is not None:
+            _safe_terminate(self._current_setup_token_process)
+            _safe_close(self._current_setup_token_process)
+        self._current_setup_token_record = None
+        self._current_setup_token_process = None
+        self._current_setup_token_output = ""
 
-        The Console (`--console`) provider writes its credential as
-        `primaryApiKey` inside the cached `.claude.json`, which an
-        already-running agent never re-reads -- so the console path
-        restarts every `type: claude` agent once the login completes. The
-        subscription (`--claudeai`) provider's credential is re-read live,
-        so it skips the restart.
+    def _pump_setup_token_output_locked(self, timeout_seconds: float) -> str | None:
+        """Read newly available subprocess output; return the token if it appeared.
+
+        Uses a short expect against the token pattern so each poll returns
+        promptly. On EOF the accumulated buffer is scanned once more (the
+        token and process exit can arrive together); an EOF without a token
+        anywhere in the output means the subprocess failed.
         """
-        with self._oauth_lock:
-            record = self._current_oauth_record
-            process = self._current_oauth_process
-            if record is None or process is None or record.session_id != session_id:
-                raise ClaudeAuthError("No active OAuth session matches the provided session_id")
-            provider = record.provider
+        process = self._current_setup_token_process
+        try:
+            match_index = process.expect([_SETUP_TOKEN_REGEX, pexpect.EOF, pexpect.TIMEOUT], timeout=timeout_seconds)
+        except pexpect.ExceptionPexpect as e:
+            raise ClaudeAuthError(f"claude setup-token subprocess failed while waiting for the token: {e}") from e
+        self._current_setup_token_output += (process.before or "") + (
+            process.after if isinstance(process.after, str) else ""
+        )
+        token = _extract_setup_token(self._current_setup_token_output)
+        if token is not None:
+            return token
+        if match_index == 1:
+            raise ClaudeAuthError("claude setup-token exited without printing a token")
+        return None
+
+    def _complete_setup_token_locked(self, token: str) -> AuthStatus:
+        """Write the minted token to settings env, restart agents, drop the session."""
+        self._drop_current_session_locked()
+        managed_env = {CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR: token}
+        write_managed_auth_env(managed_env)
+        self.restart_all_claude_agents(api_key=None)
+        return self.get_auth_status(extra_env=managed_env)
+
+    def poll_setup_token(self, session_id: str) -> SetupTokenPollResult:
+        """Check whether the in-flight setup-token subprocess minted the token yet.
+
+        The browser approval completes the flow CLI-side without any code
+        paste (the CLI polls Anthropic), so the frontend just calls this
+        periodically. On completion the token is written to the settings
+        env block and the claude agents are restarted before returning.
+        """
+        with self._setup_token_lock:
+            record = self._current_setup_token_record
+            if record is None or record.session_id != session_id:
+                raise ClaudeAuthError("No active setup-token session matches the provided session_id")
             try:
-                _drive_oauth_code(process, code)
-            finally:
-                # Terminate-then-close runs unconditionally so a timed-out
-                # `claude auth login` subprocess doesn't outlive the cleared
-                # instance-state slot. _safe_terminate is a no-op when the
-                # process already reached EOF (the success path), so this
-                # is safe on both success and failure branches.
-                _safe_terminate(process)
-                _safe_close(process)
-                self._current_oauth_record = None
-                self._current_oauth_process = None
-        if provider is OAuthProvider.CONSOLE:
-            self.restart_all_claude_agents()
-        return self.get_auth_status()
+                token = self._pump_setup_token_output_locked(_SETUP_TOKEN_POLL_SECONDS)
+            except ClaudeAuthError:
+                self._drop_current_session_locked()
+                raise
+            if token is None:
+                return SetupTokenPollResult(is_complete=False)
+            status = self._complete_setup_token_locked(token)
+        return SetupTokenPollResult(is_complete=True, status=status)
 
-    def abort_oauth_login(self) -> None:
-        """Drop any in-flight OAuth session (e.g. user closed the modal)."""
-        with self._oauth_lock:
-            if self._current_oauth_process is not None:
-                _safe_terminate(self._current_oauth_process)
-                _safe_close(self._current_oauth_process)
-            self._current_oauth_record = None
-            self._current_oauth_process = None
+    def submit_setup_token_code(self, session_id: str, code: str) -> AuthStatus:
+        """Send the user's pasted `CODE#STATE` to the live setup-token subprocess.
+
+        The fallback path for flows where the CLI actually prompts for a
+        code paste instead of completing via its own polling.
+        """
+        with self._setup_token_lock:
+            record = self._current_setup_token_record
+            process = self._current_setup_token_process
+            if record is None or process is None or record.session_id != session_id:
+                raise ClaudeAuthError("No active setup-token session matches the provided session_id")
+            try:
+                process.sendline(code)
+            except pexpect.ExceptionPexpect as e:
+                self._drop_current_session_locked()
+                raise ClaudeAuthError(f"claude setup-token subprocess failed sending code: {e}") from e
+            try:
+                token = self._pump_setup_token_output_locked(_SETUP_TOKEN_CODE_WAIT_SECONDS)
+            except ClaudeAuthError:
+                self._drop_current_session_locked()
+                raise
+            if token is None:
+                self._drop_current_session_locked()
+                raise ClaudeAuthError("Timed out waiting for claude setup-token to print the token after code submit")
+            status = self._complete_setup_token_locked(token)
+        return status
+
+    def abort_setup_token(self) -> None:
+        """Drop any in-flight setup-token session (e.g. user closed the modal)."""
+        with self._setup_token_lock:
+            self._drop_current_session_locked()

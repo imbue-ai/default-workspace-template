@@ -6,10 +6,20 @@
 """Copyable helper for calling headless ``claude -p`` from a service.
 
 COPY THIS FILE into your service and adapt it -- it is a reference snippet, not an
-importable package. It is the **keyless** path for an AI-driven service: when
-``ANTHROPIC_API_KEY`` is set, call ``litellm`` directly instead (cheaper for
-non-agentic work; see the use-ai-integration skill). When no key is set,
-``claude -p`` runs on the local Claude subscription's programmatic pool.
+importable package. It is the **keyless** path for an AI-driven service: when an
+``ANTHROPIC_API_KEY`` is configured for the workspace, call ``litellm`` directly
+instead (cheaper for non-agentic work; see the use-ai-integration skill). With no
+key, ``claude -p`` runs on the local Claude subscription's programmatic pool.
+
+Workspace credentials live in the ``env`` block of the shared
+``$CLAUDE_CONFIG_DIR/settings.json`` (written by the in-UI Claude sign-in
+modal), NOT in the process environment -- long-lived services inherit a
+frozen env from supervisord, so an env-var check would go stale the moment
+the user changes auth. ``read_workspace_ai_credentials`` resolves the
+current credentials from that file (falling back to the process env for
+non-workspace contexts); every fresh ``claude -p`` subprocess reads the
+same settings itself, so the keyless path always uses current auth with no
+service restarts.
 
 Two entry points cover the two non-agent scenarios; both share one core that
 handles the things that are easy to get wrong by hand:
@@ -57,6 +67,57 @@ _DEFAULT_MODEL = "claude-haiku-4-5"
 
 class ClaudeCLIError(RuntimeError):
     """A ``claude -p`` invocation failed or returned unparseable / error output."""
+
+
+@dataclass(frozen=True)
+class WorkspaceAICredentials:
+    """The workspace's current Anthropic credentials, resolved at call time.
+
+    ``api_key`` present means the keyed (litellm-direct) path applies;
+    ``base_url`` accompanies it for proxy (Imbue/LiteLLM) setups. With no
+    key, use the keyless ``claude -p`` path (a subscription ``oauth_token``
+    may be present but is consumed by claude itself, not by litellm).
+    """
+
+    api_key: str | None
+    base_url: str | None
+    oauth_token: str | None
+
+
+def read_workspace_ai_credentials() -> WorkspaceAICredentials:
+    """Resolve current credentials from the shared Claude settings, then the env.
+
+    The settings.json env block is the workspace's source of truth (the
+    sign-in modal writes it; running services never see those values in
+    their own environment). The process env is only a fallback so this
+    helper still works outside a workspace (e.g. local development with an
+    exported key). Settings values win over process-env values, mirroring
+    Claude Code's own behavior for settings-defined env vars.
+    """
+    settings_env: dict[str, object] = {}
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    if config_dir:
+        settings_path = os.path.join(config_dir, "settings.json")
+        try:
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+            if isinstance(settings, dict) and isinstance(settings.get("env"), dict):
+                settings_env = settings["env"]
+        except (OSError, ValueError):
+            settings_env = {}
+
+    def resolve(key: str) -> str | None:
+        settings_value = settings_env.get(key)
+        if isinstance(settings_value, str) and settings_value.strip():
+            return settings_value.strip()
+        env_value = os.environ.get(key, "").strip()
+        return env_value or None
+
+    return WorkspaceAICredentials(
+        api_key=resolve("ANTHROPIC_API_KEY"),
+        base_url=resolve("ANTHROPIC_BASE_URL"),
+        oauth_token=resolve("CLAUDE_CODE_OAUTH_TOKEN"),
+    )
 
 
 @dataclass(frozen=True)
