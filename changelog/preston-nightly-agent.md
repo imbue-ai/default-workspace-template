@@ -79,8 +79,9 @@ manage-scheduled-tasks skill; CLAUDE.md gains just one sentence pointing at the
 manage-scheduled-tasks and check-app-errors skills.
 
 **Surfacing scheduled agents in the workspace** needs no UI changes at all:
-at the start of each run the woken agent surfaces its own chat tab (focused)
-with one best-effort `scripts/layout.py open` call -- the same existing
+right after its first message of each run, the woken agent surfaces its own
+chat tab (focused) with one best-effort `scripts/layout.py open` call -- after
+the message, so the tab never pops up empty -- the same existing
 mechanism web apps are surfaced with. Doing it from inside the agent avoids
 the create-time race where the browser has not yet learned a brand-new agent.
 
