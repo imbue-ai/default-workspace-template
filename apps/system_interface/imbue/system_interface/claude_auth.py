@@ -58,6 +58,7 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from collections.abc import Mapping
@@ -83,8 +84,6 @@ from imbue.mngr_claude.claude_config import acknowledge_cost_threshold
 from imbue.mngr_claude.claude_config import complete_onboarding
 from imbue.mngr_claude.claude_config import dismiss_effort_callout
 from imbue.mngr_claude.claude_config import read_claude_config
-from imbue.mngr_claude.resources.stream_snapshot import strip_ansi
-
 logger = _loguru_logger
 
 _CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
@@ -106,9 +105,43 @@ _API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
 # Characters of the key/token shown in the modal's "currently signed in via"
 # header; long enough to disambiguate, short enough to stay a non-secret.
 _DISPLAY_SUFFIX_LENGTH: Final = 4
+# Fires on the first sight of the OAuth URL in the PTY stream. This is only a
+# *trigger*: the CLI's Ink renderer hard-wraps the visible URL at the terminal
+# width (pexpect's default PTY is 80 columns) and pexpect can match mid
+# render-frame, so the buffer may hold just a prefix. The actual URL is
+# recovered by `_extract_oauth_url` after draining the stream.
 _OAUTH_URL_REGEX = re.compile(r"https://\S*oauth/authorize\S*")
-# The long-lived token `claude setup-token` prints on completion.
+# An OSC 8 terminal hyperlink: `ESC ] 8 ; params ; target (BEL | ESC \)`.
+# The params field is not always empty (the CLI emits `id=...`). The target
+# carries the full URL with no width-wrapping, so it survives narrow PTYs
+# that hard-wrap the visible label.
+_OSC8_HYPERLINK_REGEX = re.compile(r"\x1b\]8;[^;\x07\x1b]*;([^\x07\x1b]+)(?:\x07|\x1b\\)")
+# Strict charset for re-assembling a width-wrapped URL from visible text:
+# unlike `\S`, it excludes stray control bytes left between render fragments.
+_OAUTH_URL_CHARSET = r"[A-Za-z0-9%&=?_.~/:+#-]"
+_OAUTH_URL_STRICT_REGEX = re.compile(rf"https://{_OAUTH_URL_CHARSET}*oauth/authorize{_OAUTH_URL_CHARSET}*")
+_OAUTH_URL_CONTINUATION_REGEX = re.compile(rf"^{_OAUTH_URL_CHARSET}+$")
+# Every terminal escape sequence (CSI, OSC, and stray two-byte escapes like
+# cursor save/restore) plus non-newline control bytes. Replacing these with
+# newlines -- instead of deleting them like `strip_ansi` -- keeps adjacent
+# render fragments from being glued into one bogus run of text.
+_TERMINAL_ESCAPE_OR_CONTROL_REGEX = re.compile(
+    r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b.|[\x00-\x08\x0b-\x1f\x7f]"
+)
+# The long-lived token `claude setup-token` prints on completion. Like the
+# URL regex, only a trigger -- extraction re-assembles the possibly
+# width-wrapped token from the drained stream.
 _SETUP_TOKEN_REGEX = re.compile(r"sk-ant-oat01-[A-Za-z0-9_-]+")
+_SETUP_TOKEN_STRICT_REGEX = re.compile(r"sk-ant-oat01-[A-Za-z0-9_-]*")
+_SETUP_TOKEN_CONTINUATION_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
+# Real setup tokens are ~110 characters. A much shorter extraction is a
+# wrapped fragment, not the token -- keep waiting rather than storing it.
+_MIN_SETUP_TOKEN_LENGTH: Final = 60
+# After a trigger regex fires, keep draining the PTY until extraction yields
+# a complete value; the spinner animates forever, so completion is judged by
+# the caller's predicate with this hard deadline as backstop.
+_STREAM_DRAIN_DEADLINE_SECONDS: Final = 6.0
+_STREAM_DRAIN_READ_SECONDS: Final = 0.25
 _OAUTH_URL_WAIT_SECONDS: Final = 30.0
 _SETUP_TOKEN_POLL_SECONDS: Final = 0.2
 _SETUP_TOKEN_CODE_WAIT_SECONDS: Final = 30.0
@@ -482,27 +515,147 @@ def _safe_close(process: Any) -> None:
         logger.warning("setup-token subprocess close raised: {}", e)
 
 
+@pure
+def _split_into_render_fragments(raw_output: str) -> list[str]:
+    """Split raw PTY output into visible-text fragments.
+
+    Escape sequences and control bytes become fragment boundaries (rather
+    than being deleted, which would glue adjacent fragments into one bogus
+    run of text -- the CLI's Ink renderer emits diff-based frames full of
+    cursor-positioning escapes between fragments).
+    """
+    return _TERMINAL_ESCAPE_OR_CONTROL_REGEX.sub("\n", raw_output).split("\n")
+
+
+@pure
+def _join_wrapped_fragments(
+    fragments: list[str],
+    start_idx: int,
+    start_col: int,
+    continuation_regex: re.Pattern[str],
+) -> tuple[str, bool]:
+    """Re-assemble a value hard-wrapped across terminal rows.
+
+    A wrapped row runs to the full terminal width, so every row of the value
+    except the last is as wide as the widest fragment in the capture. Join
+    the following fragment (leading indentation stripped) only while the
+    current row ran full-width and the next fragment is charset-pure.
+
+    Also reports whether the value provably *ended*: its last row stopped
+    short of full width, or the following fragment broke the charset. A
+    full-width row with nothing after it may still be mid-stream.
+    """
+    width = max(len(fragment) for fragment in fragments)
+    value = fragments[start_idx][start_col:]
+    idx = start_idx
+    while len(fragments[idx]) == width:
+        # Line endings and escape sequences leave empty fragments between
+        # rendered rows; skip them to find the actual next row.
+        next_idx = idx + 1
+        while next_idx < len(fragments) and fragments[next_idx] == "":
+            next_idx += 1
+        if next_idx >= len(fragments):
+            return value, False
+        candidate = fragments[next_idx].lstrip()
+        if continuation_regex.match(candidate) is None:
+            return value, True
+        value += candidate
+        idx = next_idx
+    return value, True
+
+
+@pure
+def _extract_wrapped_value(
+    raw_output: str,
+    start_regex: re.Pattern[str],
+    continuation_regex: re.Pattern[str],
+    is_termination_required: bool,
+) -> str | None:
+    """Find `start_regex` in the visible PTY text, de-wrapping across rows.
+
+    With `is_termination_required`, a value whose end is not yet provable
+    (the stream may still be mid-value) yields None so the caller keeps
+    draining.
+    """
+    fragments = _split_into_render_fragments(raw_output)
+    for idx, fragment in enumerate(fragments):
+        match = start_regex.search(fragment)
+        if match is not None:
+            value, is_terminated = _join_wrapped_fragments(fragments, idx, match.start(), continuation_regex)
+            if is_termination_required and not is_terminated:
+                return None
+            return value
+    return None
+
+
+@pure
+def _extract_oauth_url_from_hyperlink(raw_output: str) -> str | None:
+    """Pull the OAuth URL from an OSC 8 hyperlink target in the raw stream.
+
+    The CLI renders the URL as an OSC 8 terminal hyperlink; the (invisible)
+    target carries the full URL with no width-wrapping, unlike the visible
+    label, which Ink hard-wraps at the terminal width. Only *terminated*
+    sequences match, so a half-received target is never returned.
+    """
+    for match in _OSC8_HYPERLINK_REGEX.finditer(raw_output):
+        target_match = _OAUTH_URL_STRICT_REGEX.search(match.group(1))
+        if target_match is not None:
+            return target_match.group(0)
+    return None
+
+
+@pure
 def _extract_oauth_url(raw_output: str) -> str | None:
     """Pull the single OAuth URL out of `claude setup-token`'s PTY output.
 
-    The CLI renders the URL as an OSC 8 terminal hyperlink styled with ANSI
-    color, so the raw stream carries the URL *twice* -- once as the
-    hyperlink target and once as the styled visible label -- interleaved
-    with escape sequences (`ESC]8;;<url>ST <colored url> ESC]8;;ST`).
-    Matching the URL straight off that stream captures both copies plus the
-    escapes. Stripping the escapes first collapses the hyperlink back to its
-    bare visible label, leaving exactly one clean URL for the regex.
+    Prefers the OSC 8 hyperlink target (complete by construction); falls
+    back to re-assembling the width-wrapped visible label when the CLI did
+    not emit a hyperlink.
     """
-    cleaned = strip_ansi(raw_output)
-    match = _OAUTH_URL_REGEX.search(cleaned)
-    return match.group(0) if match is not None else None
+    from_hyperlink = _extract_oauth_url_from_hyperlink(raw_output)
+    if from_hyperlink is not None:
+        return from_hyperlink
+    return _extract_wrapped_value(
+        raw_output, _OAUTH_URL_STRICT_REGEX, _OAUTH_URL_CONTINUATION_REGEX, is_termination_required=False
+    )
 
 
-def _extract_setup_token(raw_output: str) -> str | None:
-    """Pull the minted `sk-ant-oat01-...` token out of the PTY output."""
-    cleaned = strip_ansi(raw_output)
-    match = _SETUP_TOKEN_REGEX.search(cleaned)
-    return match.group(0) if match is not None else None
+@pure
+def _extract_setup_token(raw_output: str, is_termination_required: bool) -> str | None:
+    """Pull the minted `sk-ant-oat01-...` token out of the PTY output.
+
+    The token is longer than an 80-column row, so it may be width-wrapped
+    just like the OAuth URL (but has no hyperlink copy). A too-short
+    extraction is a wrapped fragment, not the token -- return None so the
+    caller keeps draining instead of storing a truncated token.
+    """
+    token = _extract_wrapped_value(
+        raw_output, _SETUP_TOKEN_STRICT_REGEX, _SETUP_TOKEN_CONTINUATION_REGEX, is_termination_required
+    )
+    if token is None or len(token) < _MIN_SETUP_TOKEN_LENGTH:
+        return None
+    return token
+
+
+def _drain_pty_stream(process: Any, consumed: str, is_complete: Callable[[str], bool]) -> str:
+    """Keep reading PTY output until `is_complete(consumed)` or a deadline.
+
+    `process.expect` returns as soon as its trigger pattern matches, which
+    can be mid-escape-sequence or mid-render-frame, so the buffer may hold
+    only a prefix of the value being extracted. The CLI animates its spinner
+    indefinitely, so there is no reliable quiet gap; completion is judged by
+    the caller's predicate, with a hard deadline as backstop.
+    """
+    deadline = time.monotonic() + _STREAM_DRAIN_DEADLINE_SECONDS
+    while not is_complete(consumed) and time.monotonic() < deadline:
+        try:
+            chunk = process.read_nonblocking(size=65536, timeout=_STREAM_DRAIN_READ_SECONDS)
+        except pexpect.TIMEOUT:
+            continue
+        except pexpect.EOF:
+            break
+        consumed = consumed + (chunk or "")
+    return consumed
 
 
 def _build_list_command() -> list[str]:
@@ -775,12 +928,19 @@ class ClaudeAuthService(MutableModel):
             if match_index == 1:
                 raise ClaudeAuthError("claude setup-token exited before printing the OAuth URL")
             raise ClaudeAuthError("Timed out waiting for the OAuth URL from claude setup-token")
-        # `process.match` spans the raw stream, where the CLI's OSC 8
-        # hyperlink renders the URL twice and wraps it in escape sequences.
-        # Re-extract from the full consumed buffer (`before` + `after`, which
-        # together hold the hyperlink's opening `ESC]8;;` and both URL copies)
-        # with the escapes stripped, so we hand back one clean URL.
-        consumed = (process.before or "") + (process.after or "")
+        # The expect trigger can fire mid-render-frame -- e.g. inside the OSC 8
+        # hyperlink's opening sequence or on the first width-wrapped row of the
+        # visible label -- so the consumed buffer may hold only a prefix of the
+        # URL. Drain until a *terminated* hyperlink target is extractable (the
+        # normal case, satisfied within the same frame); if the CLI emitted no
+        # hyperlink, the deadline expires and the visible label is de-wrapped
+        # from everything drained.
+        initial_consumed = (process.before or "") + (process.after or "")
+        consumed = _drain_pty_stream(
+            process,
+            initial_consumed,
+            lambda buffer: _extract_oauth_url_from_hyperlink(buffer) is not None,
+        )
         oauth_url = _extract_oauth_url(consumed)
         if oauth_url is None:
             _safe_terminate(process)
@@ -833,7 +993,20 @@ class ClaudeAuthService(MutableModel):
         self._current_setup_token_output += (process.before or "") + (
             process.after if isinstance(process.after, str) else ""
         )
-        token = _extract_setup_token(self._current_setup_token_output)
+        if match_index == 0:
+            # The trigger fires on the first (possibly width-wrapped) token
+            # fragment; the CLI prints the token as its final output and
+            # exits, so drain the remainder before extracting. During the
+            # drain a token only counts once its end is provable; the final
+            # extraction below takes the best available value (the drain
+            # ends at EOF or the deadline, so the stream is as complete as
+            # it is going to get).
+            self._current_setup_token_output = _drain_pty_stream(
+                process,
+                self._current_setup_token_output,
+                lambda buffer: _extract_setup_token(buffer, is_termination_required=True) is not None,
+            )
+        token = _extract_setup_token(self._current_setup_token_output, is_termination_required=False)
         if token is not None:
             return token
         if match_index == 1:
