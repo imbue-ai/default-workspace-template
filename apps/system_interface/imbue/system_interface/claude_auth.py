@@ -134,6 +134,18 @@ _TERMINAL_ESCAPE_OR_CONTROL_REGEX = re.compile(
 _SETUP_TOKEN_REGEX = re.compile(r"sk-ant-oat01-[A-Za-z0-9_-]+")
 _SETUP_TOKEN_STRICT_REGEX = re.compile(r"sk-ant-oat01-[A-Za-z0-9_-]*")
 _SETUP_TOKEN_CONTINUATION_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
+# Printed by the CLI when Anthropic rejects a pasted code (wrong, expired, or
+# from an earlier attempt's state) or its own polling hits an error; the CLI
+# then parks on a "Press Enter to retry." prompt, so without failing fast the
+# session would just time out with a misleading message.
+_OAUTH_ERROR_REGEX = re.compile(r"OAuth error")
+# The CLI's Ink input treats a rapid burst of characters ending in a newline
+# as pasted *content* -- the newline lands in the field instead of acting as
+# the Enter keypress -- so the code and Enter must be sent as two separate
+# writes with a pause in between (same pattern mngr uses to type into claude
+# TUIs). Verified against the live CLI: `sendline` leaves the code sitting in
+# the field forever; send + pause + CR submits it.
+_SETUP_TOKEN_CODE_ENTER_DELAY_SECONDS: Final = 0.6
 # Real setup tokens are ~110 characters. A much shorter extraction is a
 # wrapped fragment, not the token -- keep waiting rather than storing it.
 _MIN_SETUP_TOKEN_LENGTH: Final = 60
@@ -987,12 +999,19 @@ class ClaudeAuthService(MutableModel):
         """
         process = self._current_setup_token_process
         try:
-            match_index = process.expect([_SETUP_TOKEN_REGEX, pexpect.EOF, pexpect.TIMEOUT], timeout=timeout_seconds)
+            match_index = process.expect(
+                [_SETUP_TOKEN_REGEX, _OAUTH_ERROR_REGEX, pexpect.EOF, pexpect.TIMEOUT], timeout=timeout_seconds
+            )
         except pexpect.ExceptionPexpect as e:
             raise ClaudeAuthError(f"claude setup-token subprocess failed while waiting for the token: {e}") from e
         self._current_setup_token_output += (process.before or "") + (
             process.after if isinstance(process.after, str) else ""
         )
+        if match_index == 1:
+            raise ClaudeAuthError(
+                "Sign-in was not accepted (OAuth error). The pasted code may be wrong, expired, "
+                "or from an earlier sign-in attempt. Please start over."
+            )
         if match_index == 0:
             # The trigger fires on the first (possibly width-wrapped) token
             # fragment; the CLI prints the token as its final output and
@@ -1009,7 +1028,7 @@ class ClaudeAuthService(MutableModel):
         token = _extract_setup_token(self._current_setup_token_output, is_termination_required=False)
         if token is not None:
             return token
-        if match_index == 1:
+        if match_index == 2:
             raise ClaudeAuthError("claude setup-token exited without printing a token")
         return None
 
@@ -1055,7 +1074,13 @@ class ClaudeAuthService(MutableModel):
             if record is None or process is None or record.session_id != session_id:
                 raise ClaudeAuthError("No active setup-token session matches the provided session_id")
             try:
-                process.sendline(code)
+                # Two separate writes: the CLI's paste heuristic swallows a
+                # newline arriving in the same burst as the code (it becomes
+                # field content, not a submit), so Enter goes as its own
+                # deferred keystroke.
+                process.send(code)
+                time.sleep(_SETUP_TOKEN_CODE_ENTER_DELAY_SECONDS)
+                process.send("\r")
             except pexpect.ExceptionPexpect as e:
                 self._drop_current_session_locked()
                 raise ClaudeAuthError(f"claude setup-token subprocess failed sending code: {e}") from e

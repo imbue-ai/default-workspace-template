@@ -50,6 +50,10 @@ def _status_to_response(status: claude_auth.AuthStatus) -> ClaudeAuthStatusRespo
 
 
 def _error_response(detail: str, status_code: int = 400) -> Response:
+    # Every auth-flow failure funnels through here; without this log the
+    # container's service log shows only the access line for the 4xx/5xx,
+    # leaving no server-side trace of what actually went wrong.
+    logger.warning("Returning claude-auth error response ({}): {}", status_code, detail)
     return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=status_code)
 
 
