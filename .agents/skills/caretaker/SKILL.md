@@ -61,10 +61,6 @@ introduction can show the user what you found, then send the welcome message
 below. Everything except that one message is silent tool work; the user's whole
 first impression of you is that single message.
 
-0. **Surface your tab.** Silently run
-   `python3 scripts/layout.py open "chat:$MNGR_AGENT_NAME"` so your chat tab
-   opens (focused) in the user's workspace view -- the same way web apps are
-   surfaced. Best-effort: if it fails, continue anyway.
 1. **Open a log.** Create `runtime/caretaker/<timestamp>.md` (format
    `YYYY-MM-DDTHH-MM-SS`) and note what you check and find as you go. This file is
    private -- none of it appears in the chat.
@@ -116,9 +112,11 @@ You're always in control: everything here is adjustable any time -- the schedule
 
 ---
 
-That is the whole message. After sending it (and nothing else around it), create
-your permissions file at `runtime/caretaker/permissions.md` with the template
-below -- this is an internal file write, not shown to the user, and the file's
+That is the whole message. Right after sending it, silently surface your tab
+so the user sees it: run `python3 scripts/layout.py open "chat:$MNGR_AGENT_NAME"`
+(the same way web apps are surfaced; best-effort -- continue if it fails). Then
+create your permissions file at `runtime/caretaker/permissions.md` with the
+template below -- this is an internal file write, not shown to the user, and the file's
 existence is what marks you as introduced. Leave every value as `not set yet` --
 the user has not answered yet -- and then **stop**: do not fix anything and do not
 scan again. The next time you are invoked the file will exist, so you will fall
@@ -164,12 +162,12 @@ finds something.
 
 ## The run
 
-1. **Surface your tab, then say hello -- as a chat message, before any `tk`
-   step.** First silently run
-   `python3 scripts/layout.py open "chat:$MNGR_AGENT_NAME"` so your tab opens
-   (focused) for this run; best-effort, continue on failure. Then send the hello
+1. **Say hello first -- as a chat message, before any `tk` step.** Send the hello
    as your opening reply *before* you create or start any step, so it lands in the
-   conversation and never as a step title, caption, or ticket. It is one short,
+   conversation and never as a step title, caption, or ticket. Right after the
+   hello is sent, silently surface your tab with
+   `python3 scripts/layout.py open "chat:$MNGR_AGENT_NAME"` (best-effort,
+   continue on failure) -- after, not before, so the tab never pops up empty. It is one short,
    friendly opening message -- who you are and what you're about to do -- shaped by
    whether they've allowed you to check their apps (read it from
    `runtime/caretaker/permissions.md`):
