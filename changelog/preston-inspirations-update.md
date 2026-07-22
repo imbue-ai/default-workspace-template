@@ -3,9 +3,12 @@
   a `## Workspace` line for the template version it was created from and one per
   `update-self` landing, and a `## Inspirations` entry per published inspiration
   (`- v1  <date>  first published  <sha>`, then `v2`, `v3`, ... under the same
-  heading). Each line ends in the commit it was cut from, entries are appended
-  by a shared helper so both skills write identical formatting, and earlier lines
-  are never rewritten. `update-self` appends its line as part of landing an
+  heading). Each line ends in the commit it was cut from, and earlier lines are
+  never rewritten. The new **`update-version`** skill owns the whole contract --
+  the file format, which commit gets recorded, seeding the creation line, and the
+  rules that keep a retried step from double-recording -- so both flows write
+  identical lines and there is no separate helper program to maintain.
+  `update-self` appends its line as part of landing an
   update; `publish-inspiration` appends its entry only after the push has
   succeeded -- the single sanctioned one-file commit back to the live workspace,
   documented as an explicit exception so it is never confused with the

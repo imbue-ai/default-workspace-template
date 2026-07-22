@@ -96,10 +96,9 @@ the merge.
 
 **Do not touch `VERSION_HISTORY.md`.** The workspace's version entry records the
 *merge commit sha*, which does not exist until the lead fast-forwards onto your
-branch, so the lead appends it (via
-`.agents/shared/scripts/version_history.py add-workspace`) as part of landing --
-see the skill's Step 5b. A line written here would carry the wrong sha and would
-conflict with the lead's.
+branch, so the lead appends it (per the `update-version` skill) as part of
+landing -- see the skill's Step 5b. A line written here would carry the wrong sha
+and would conflict with the lead's.
 
 ## 4. Classify and validate the merged set
 
