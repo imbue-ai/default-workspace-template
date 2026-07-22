@@ -1055,6 +1055,101 @@ class LiveBrowser(MutableModel):
             if 0 <= index < len(self._context.pages):
                 await self._context.pages[index].close()
 
+    # --- clipboard bridge (human viewer <-> the browser's X11 clipboard) ------
+    # The browser runs headful under Xvfb (see _HEADLESS), so it has a real X11
+    # clipboard. xclip reads/writes it from OUTSIDE the page, so a paste/copy is
+    # fully native -- no page-origin Async Clipboard API, no https/user-activation
+    # constraints, and images work the same as text. Gated on _input_enabled: only
+    # the controlling human, never an agent mid-task, drives the clipboard.
+
+    async def clipboard_paste(self, data: bytes, mime: str) -> dict[str, Any]:
+        """Write the user's clipboard payload into the browser's X11 clipboard, then
+        fire a native paste into the focused element. ``mime`` is text/* or image/*."""
+        async with self._control_lock:
+            if not self._input_enabled.is_set():
+                return {"ok": False, "status": "not_controlling"}
+            cdp = self._active_cdp
+            if cdp is None:
+                return {"ok": False, "status": "no_page"}
+            if not await self._xclip_write(data, mime):
+                return {"ok": False, "status": "clipboard_error"}
+            # The "paste" editing command reads the X11 clipboard we just populated,
+            # independent of the user's keymap.
+            try:
+                await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": 2, "commands": ["paste"]})
+                await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": 2})
+            except _BROWSER_ERRORS as e:
+                logger.debug("clipboard paste dispatch ignored ({})", e)
+                return {"ok": False, "status": "error"}
+        return {"ok": True}
+
+    async def clipboard_copy(self, *, cut: bool = False) -> dict[str, Any]:
+        """Fire a native copy (or cut) of the current selection, then read the X11
+        clipboard out for the user. Returns ``{ok, mime, text|data}``; ``mime`` is None
+        when nothing is selected. Binary payloads come back base64 in ``data``, text in
+        ``text``."""
+        async with self._control_lock:
+            if not self._input_enabled.is_set():
+                return {"ok": False, "status": "not_controlling"}
+            cdp = self._active_cdp
+            if cdp is None:
+                return {"ok": False, "status": "no_page"}
+            command = "cut" if cut else "copy"
+            key, code, vk = ("x", "KeyX", 88) if cut else ("c", "KeyC", 67)
+            try:
+                await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": key, "code": code, "windowsVirtualKeyCode": vk, "modifiers": 2, "commands": [command]})
+                await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk, "modifiers": 2})
+            except _BROWSER_ERRORS as e:
+                logger.debug("clipboard {} dispatch ignored ({})", command, e)
+                return {"ok": False, "status": "error"}
+            data, mime = await self._xclip_read()
+        if data is None or mime is None:
+            return {"ok": True, "mime": None}  # nothing selected / empty clipboard
+        if mime.startswith("text/"):
+            return {"ok": True, "mime": mime, "text": data.decode("utf-8", "replace")}
+        return {"ok": True, "mime": mime, "data": base64.b64encode(data).decode("ascii")}
+
+    async def _xclip_write(self, data: bytes, mime: str) -> bool:
+        """Load ``data`` into the X11 CLIPBOARD selection. xclip forks a background owner
+        that serves the selection until another app claims it, so it persists for the
+        paste. DISPLAY is inherited from the browser service's env (:99)."""
+        args = ["xclip", "-selection", "clipboard"]
+        if not mime.startswith("text/"):
+            args += ["-t", mime]
+        args += ["-i"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+            )
+            await proc.communicate(data)
+            return proc.returncode == 0
+        except OSError as e:
+            logger.warning("xclip write failed for browser {} ({})", self.browser_id, e)
+            return False
+
+    async def _xclip_read(self) -> tuple[bytes | None, str | None]:
+        """Read the X11 CLIPBOARD selection, preferring an image if present. A short
+        wait lets the just-issued copy command land in the clipboard first."""
+        await asyncio.sleep(0.12)
+        targets = await self._xclip_out("TARGETS")
+        mime = "image/png" if targets and b"image/png" in targets else "text/plain"
+        data = await self._xclip_out(mime)
+        if not data:
+            return None, None
+        return data, mime
+
+    async def _xclip_out(self, target: str) -> bytes | None:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "xclip", "-selection", "clipboard", "-o", "-t", target,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+            return out if proc.returncode == 0 else None
+        except OSError as e:
+            logger.warning("xclip read failed for browser {} ({})", self.browser_id, e)
+            return None
+
     # --- ownership state machine ----------------------------------------------
 
     def _state_tuple(self) -> tuple[ControlOwner, str | None, bool]:

@@ -377,8 +377,37 @@
     sendCast({ type: "mouse", event: { type: "mouseWheel", x: p.x, y: p.y, button: "none", deltaX: e.deltaX, deltaY: e.deltaY, modifiers: modifiers(e) } });
   }, { passive: false });
 
+  // --- clipboard bridge -------------------------------------------------------
+  // The remote browser runs headful with a real OS clipboard; these sync it with
+  // the USER's clipboard over HTTP (not the cast socket -- images exceed its cap).
+  // Triggered by the standard shortcuts (Ctrl OR Cmd + C/V/X, so Mac and Linux both
+  // work), reading/writing navigator.clipboard = the user's actual clipboard.
+  function clipUrl() { return new URL("browsers/" + browserId + "/clipboard", document.baseURI).toString(); }
+
+  async function clipboard(kind) {
+    if (!navigator.clipboard) return;  // needs a secure context (https/localhost)
+    try {
+      if (kind === "v") {  // paste: user's clipboard -> remote browser
+        const text = await navigator.clipboard.readText();
+        if (text) await fetch(clipUrl(), { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
+      } else {  // c (copy) or x (cut): remote selection -> user's clipboard
+        const r = await fetch(clipUrl() + (kind === "x" ? "?cut=1" : ""));
+        const j = await r.json();
+        if (j.ok && j.mime && j.mime.indexOf("text/") === 0 && j.text) await navigator.clipboard.writeText(j.text);
+      }
+    } catch (_) { /* permission denied / not controlling / nothing selected: ignore */ }
+  }
+
   function key(type, e) {
     if (controlOwner === "agent" || !hasFrame) return;
+    // Clipboard shortcuts are bridged to the user's real OS clipboard (clipboard()
+    // above), not forwarded as keystrokes -- the remote browser has its own
+    // clipboard. Handle on keyDown; swallow the matching keyUp too.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && ["c", "v", "x"].includes(e.key.toLowerCase())) {
+      e.preventDefault();
+      if (type === "keyDown") clipboard(e.key.toLowerCase());
+      return;
+    }
     e.preventDefault();
     const isChar = type === "keyDown" && e.key.length === 1;
     sendCast({ type: "key", event: {
