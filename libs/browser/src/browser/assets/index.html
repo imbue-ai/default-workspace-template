@@ -388,8 +388,9 @@
   // --- clipboard bridge -------------------------------------------------------
   // The remote browser runs headful with a real OS clipboard; these sync it with
   // the USER's clipboard over HTTP (not the cast socket -- images exceed its cap).
-  // Triggered by the standard shortcuts (Ctrl OR Cmd + C/V/X, so Mac and Linux both
-  // work), reading/writing navigator.clipboard = the user's actual clipboard.
+  // Driven by the real copy/paste/cut EVENTS (below), so it's OS- and keymap-
+  // agnostic: fires on Ctrl+C, Cmd+C, Ctrl+Insert, the right-click menu, or the Edit
+  // menu alike -- never tied to guessing specific keystrokes.
   function clipUrl() { return new URL("browsers/" + browserId + "/clipboard", document.baseURI).toString(); }
 
   // Non-blocking progress pill for larger clipboard ops. Delayed so instant text
@@ -407,46 +408,58 @@
     return new Blob([arr], { type: mime });
   }
 
-  // Read the user's clipboard as {mime, body}: prefer an image, fall back to text.
-  async function readLocalClipboard() {
-    try {
-      const items = await navigator.clipboard.read();
-      for (const it of items) {
-        const imgType = it.types.find((t) => t.indexOf("image/") === 0);
-        if (imgType) return { mime: imgType, body: await it.getType(imgType) };
-      }
-    } catch (_) { /* read() unsupported/denied -> text fallback below */ }
-    const text = await navigator.clipboard.readText();
-    return text ? { mime: "text/plain", body: text } : null;
-  }
+  function clipActive() { return controlOwner !== "agent" && hasFrame && castWs && castWs.readyState === 1; }
 
-  async function clipboard(kind) {
-    if (!navigator.clipboard) return;  // needs a secure context (https/localhost)
-    const done = withClipToast(kind === "v" ? "Pasting…" : "Copying…");
-    try {
-      if (kind === "v") {  // paste: user's clipboard -> remote browser
-        const c = await readLocalClipboard();
-        if (c) await fetch(clipUrl(), { method: "POST", headers: { "Content-Type": c.mime }, body: c.body });
-      } else {  // c (copy) or x (cut): remote selection -> user's clipboard
-        const r = await fetch(clipUrl() + (kind === "x" ? "?cut=1" : ""));
-        const j = await r.json();
-        if (j.ok && j.mime) {
-          if (j.mime.indexOf("text/") === 0) { if (j.text) await navigator.clipboard.writeText(j.text); }
-          else if (j.data) await navigator.clipboard.write([new ClipboardItem({ [j.mime]: b64ToBlob(j.data, j.mime) })]);
-        }
-      }
-    } catch (_) { /* permission denied / not controlling / nothing selected: ignore */ }
+  // PASTE: the event's own clipboardData carries text + images with no permission
+  // prompt (it's a user-initiated paste gesture). Send the raw bytes to the remote.
+  async function sendPaste(body, mime) {
+    const done = withClipToast("Pasting…");
+    try { await fetch(clipUrl(), { method: "POST", headers: { "Content-Type": mime }, body }); }
+    catch (_) { /* not controlling / network: ignore */ }
     finally { done(); }
   }
+  document.addEventListener("paste", (e) => {
+    if (!clipActive()) return;
+    e.preventDefault();
+    for (const it of e.clipboardData.items) {
+      if (it.type.indexOf("image/") === 0) {
+        const blob = it.getAsFile();
+        if (blob) { sendPaste(blob, it.type); return; }
+      }
+    }
+    const text = e.clipboardData.getData("text/plain");
+    if (text) sendPaste(new Blob([text], { type: "text/plain" }), "text/plain");
+  });
+
+  // COPY/CUT: pull the remote browser's selection and write it to the user's real
+  // clipboard (text via writeText, image via ClipboardItem).
+  async function copyFromRemote(cut) {
+    if (!navigator.clipboard) return;  // needs a secure context (https/localhost)
+    const done = withClipToast("Copying…");
+    try {
+      const r = await fetch(clipUrl() + (cut ? "?cut=1" : ""));
+      const j = await r.json();
+      if (j.ok && j.mime) {
+        if (j.mime.indexOf("text/") === 0) { if (j.text) await navigator.clipboard.writeText(j.text); }
+        else if (j.data) await navigator.clipboard.write([new ClipboardItem({ [j.mime]: b64ToBlob(j.data, j.mime) })]);
+      }
+    } catch (_) { /* denied / nothing selected: ignore */ }
+    finally { done(); }
+  }
+  document.addEventListener("copy", (e) => { if (clipActive()) { e.preventDefault(); copyFromRemote(false); } });
+  document.addEventListener("cut", (e) => { if (clipActive()) { e.preventDefault(); copyFromRemote(true); } });
 
   function key(type, e) {
     if (controlOwner === "agent" || !hasFrame) return;
-    // Clipboard shortcuts are bridged to the user's real OS clipboard (clipboard()
-    // above), not forwarded as keystrokes -- the remote browser has its own
-    // clipboard. Handle on keyDown; swallow the matching keyUp too.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && ["c", "v", "x"].includes(e.key.toLowerCase())) {
-      e.preventDefault();
-      if (type === "keyDown") clipboard(e.key.toLowerCase());
+    // Clipboard shortcuts are handled by the copy/paste/cut EVENT listeners above.
+    // Let the browser's DEFAULT fire those events -- so DON'T preventDefault and
+    // DON'T forward, or (a) the paste/copy event never fires and (b) the remote
+    // would paste/cut a second time. Covers Ctrl/Cmd+C/V/X plus the legacy
+    // Ctrl/Shift+Insert and Shift+Delete bindings; every other key passes through.
+    const kl = e.key.toLowerCase();
+    if (((e.ctrlKey || e.metaKey) && !e.altKey && ["c", "v", "x"].includes(kl))
+        || (e.key === "Insert" && (e.ctrlKey || e.shiftKey))
+        || (e.key === "Delete" && e.shiftKey)) {
       return;
     }
     e.preventDefault();
