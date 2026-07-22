@@ -722,6 +722,57 @@ body {
   background: var(--color-accent-light);
 }
 
+.model-selector-trigger:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.model-selector-trigger:disabled:hover {
+  border-color: var(--color-border);
+}
+
+/* ── Composer model/fast controls row ── */
+.message-input-controls {
+  gap: 6px;
+  padding: 4px 2px 0;
+}
+
+.fast-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-sidebar);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition:
+    border-color 120ms,
+    color 120ms,
+    background 120ms;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.fast-toggle:hover {
+  border-color: var(--color-accent);
+}
+
+.fast-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.fast-toggle--on,
+.fast-toggle--on:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+
 /* ── Markdown content styling ── */
 .markdown-content {
   line-height: 1.5;
