@@ -109,6 +109,9 @@ manager = BrowserSessionManager()
 
 application = Flask(__name__, static_folder=None)
 application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
+# Clipboard paste bodies carry raw image bytes (the WS proxy's ~1 MiB cap is why
+# clipboard rides HTTP, not the cast socket). Bound it so a giant paste can't OOM.
+application.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 sock = Sock(application)
 
 # Init gate: cleared at import, set when startup restore finishes (always, even on
@@ -734,6 +737,28 @@ def cmd_tab(browser_id: str) -> Response:
     )
 
 
+def cmd_clipboard_copy(browser_id: str) -> Response:
+    """Human viewer copies (or cuts, ``?cut=1``) the browser's current selection to
+    their local clipboard. Not agent-gated -- the session gates on human control.
+    Returns ``{ok, mime, text|data}``; ``mime`` is null when nothing is selected."""
+    resolved = _resolve_sync(browser_id)
+    if isinstance(resolved, Response):
+        return resolved
+    cut = request.args.get("cut") == "1"
+    return jsonify(bridge.run(resolved.clipboard_copy(cut=cut), timeout=_DIRECT_ACTION_TIMEOUT))
+
+
+def cmd_clipboard_paste(browser_id: str) -> Response:
+    """Human viewer pastes their local clipboard into the browser. Body is the raw
+    clipboard bytes; Content-Type is the mime (text/plain or image/*)."""
+    resolved = _resolve_sync(browser_id)
+    if isinstance(resolved, Response):
+        return resolved
+    data = request.get_data()
+    mime = (request.content_type or "text/plain").split(";")[0].strip() or "text/plain"
+    return jsonify(bridge.run(resolved.clipboard_paste(data, mime), timeout=_DIRECT_ACTION_TIMEOUT))
+
+
 # --- screencast WebSocket ----------------------------------------------------
 
 
@@ -876,6 +901,8 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/keys", view_func=cmd_keys, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/screenshot", view_func=cmd_screenshot, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/tab", view_func=cmd_tab, methods=["POST"])
+    application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_copy, methods=["GET"], endpoint="clipboard_copy")
+    application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_paste, methods=["POST"], endpoint="clipboard_paste")
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
 
 
