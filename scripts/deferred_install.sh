@@ -91,10 +91,33 @@ _install_playwright() {
     fi
 }
 
+_install_xvfb() {
+    local marker
+    marker="$(_marker_for xvfb)"
+    if [ -f "$marker" ]; then
+        _log "xvfb: marker present at $marker, skipping"
+        return 0
+    fi
+    # Headful Chromium needs a display; Xvfb is a headless X server that gives it
+    # one (the browser runs headful under it -- see session.py's _HEADLESS). xclip
+    # bridges the resulting X11 clipboard to/from the user for native copy/paste
+    # (images included). Recover any interrupted dpkg first, same as playwright.
+    _recover_interrupted_dpkg
+    _log "xvfb: installing xvfb + xclip"
+    if apt-get update -y && apt-get install -y --no-install-recommends xvfb xclip; then
+        touch "$marker"
+        _log "xvfb: install complete, marker written to $marker"
+    else
+        _log "xvfb: install FAILED; marker not written so the next boot retries"
+        return 1
+    fi
+}
+
 main() {
     mkdir -p "$MARKER_DIR"
     local rc=0
     _install_playwright || rc=$?
+    _install_xvfb || rc=$?
     if [ "$rc" -eq 0 ]; then
         _log "all deferred installs complete"
     else
