@@ -1,135 +1,109 @@
 ---
 name: latchkey
-description: Use whenever you want to use latchkey commands or interact with third-party or self-hosted services (Slack, Google Workspace, Dropbox, GitHub, Linear, Coolify...) using their HTTP APIs on the user's behalf.
-compatibility: Requires node.js, curl and latchkey (npm install -g latchkey).
+description: Use whenever you want to interact with third-party or self-hosted services (Slack, Google Workspace, Dropbox, GitHub, Linear, Coolify...) using their HTTP APIs on the user's behalf.
+compatibility: Requires curl and the latchkey OpenHost app installed in this compute space.
 ---
 
 # Latchkey
 
 ## Instructions
 
-Latchkey is a CLI tool that automatically injects credentials into curl commands. Credentials are managed on the outside by the Minds app - sending a permission request also triggers a login flow if necessary.
+Latchkey is a credential-injection proxy: you send your HTTP request through it, and it adds the
+user's stored credentials (OAuth tokens, API keys) before forwarding to the real service. You
+never see the credentials. It runs as a separate OpenHost app in this compute space, reached
+through the router's service interface.
 
-Use this skill when the user asks you to work on their behalf with services that have HTTP APIs, like AWS, GitLab, Google Drive, Discord or others.
+Every call goes to `$LATCHKEY_GATEWAY` (already in your environment) and must carry the app
+token header: `Authorization: Bearer $OPENHOST_APP_TOKEN`.
 
-Usage:
-
-1. **Use `latchkey curl`** instead of regular `curl` for supported services.
-2. **Pass through all regular curl arguments** - latchkey is a transparent wrapper.
-3. **Check for `latchkey services list`** to get a list of supported services. Use `--viable` to only show the currently configured ones.
-4. **Use `latchkey services info <service_name>`** to get information about a specific service (auth options, credentials status, API docs links, special requirements, etc.).
-5. **Submit a permission request to the user if necessary** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` (see the "Ask for user permission" example below) when either there are no valid credentials for the given service or the curl requests come back with the "request not permitted by the user" message.
-6. **Look for the newest documentation of the desired public API online.** Avoid bot-only endpoints.
-
+Use this skill when the user asks you to work on their behalf with services that have HTTP APIs,
+like AWS, GitLab, Google Drive, Discord or others. Look for the newest documentation of the
+desired public API online, and avoid bot-only endpoints.
 
 ## Examples
 
-### Make an authenticated curl request
+### Make an authenticated request
+
+Prefix the real URL with `$LATCHKEY_GATEWAY/proxy/`:
+
 ```bash
-latchkey curl [curl arguments]
+curl -sS -H "Authorization: Bearer $OPENHOST_APP_TOKEN" \
+  "$LATCHKEY_GATEWAY/proxy/https://slack.com/api/conversations.list"
 ```
+
+Method, headers, query string, and body are forwarded; credentials are injected server-side.
+(Do NOT add the service's own `Authorization` header — the gateway sets it.)
 
 ### Creating a Slack channel
+
 ```bash
-latchkey curl -X POST 'https://slack.com/api/conversations.create' \
+curl -sS -X POST -H "Authorization: Bearer $OPENHOST_APP_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"my-channel"}'
+  -d '{"name":"my-channel"}' \
+  "$LATCHKEY_GATEWAY/proxy/https://slack.com/api/conversations.create"
 ```
 
-(Notice that `-H 'Authorization: Bearer` is not present in the invocation.)
+### List services / check credentials
 
-### Getting Discord user info
 ```bash
-latchkey curl 'https://discord.com/api/v10/users/@me'
+# All known services:
+curl -sS -H "Authorization: Bearer $OPENHOST_APP_TOKEN" "$LATCHKEY_GATEWAY/services"
+
+# One service's status (credentialStatus: missing / valid / invalid / unknown):
+curl -sS -H "Authorization: Bearer $OPENHOST_APP_TOKEN" "$LATCHKEY_GATEWAY/services/slack"
 ```
+
+If `credentialStatus` is not `valid`, the user has to connect the service first: send them to the
+latchkey app's console at `https://latchkey.$OPENHOST_ZONE_DOMAIN/` and ask them to log in to the
+service there, then retry.
 
 ### Ask for user permission
 
-When either there are no valid credentials for the given service or our
-requests come back with the "request not permitted by the user"
-message, ask the user for permission. The requests are sent to
-Latchkey via the reserved `latchkey-self.invalid` host:
+A `403` JSON response with `"error": "permission_required"` means this app has no grant covering
+the request. The response includes a `grant_url`; requesting a specific grant yields one too:
 
 ```bash
-# 1. Retrieve the list of available permissions if necessary.
-latchkey curl http://latchkey-self.invalid/permissions/available/discord
-
-# 2. Retrieve the list of your existing permissions if necessary.
-latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
-
-# 3. Ask for the necessary missing permissions.
-# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
-latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
+curl -sS -X POST -H "Authorization: Bearer $OPENHOST_APP_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "discord-api", "permissions": ["discord-read-all"]}, "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
+  -d '{"grant": {"scope": "discord-api", "permissions": ["discord-read-all"]},
+       "return_to": "https://'"$OPENHOST_APP_NAME"'.'"$OPENHOST_ZONE_DOMAIN"'/"}' \
+  "$LATCHKEY_GATEWAY/grants/request"
 ```
 
-The body must be a JSON object with exactly four fields:
-`agent_id` (use `$MNGR_AGENT_ID`), `type` (use "predefined"), `payload`, and `rationale`.
+Then:
 
-`payload` must be an object with exactly two fields: `scope` (string) and `permissions` (array of strings). `scope` needs to be one of the scopes specified in the response to the `/permissions/available/<service_name>` call.
+1. Post the returned `grant_url` to the user as a clickable link, with one short sentence saying
+   what you want to access and why.
+2. End your turn and wait. The user approves on the latchkey consent page and is redirected back.
+3. When the user returns (or tells you to continue), retry the original request.
 
-When not sure (and if applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
-
-After posting, wait for a system message indicating whether the user
-approved or denied the permission request.
-
+Available scope/permission names for a service come from `$LATCHKEY_GATEWAY/services/<name>`
+(detent schema names, e.g. scope `slack-api`, permission `slack-read-all`). When not sure (and if
+applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
 
 ### Git operations on GitHub (clone / fetch / push)
 
-The gateway natively proxies GitHub's git smart-HTTP endpoints, so plain
-`git` works through latchkey too: point git at the gateway's proxy URL and
-pass the gateway's two auth headers (both values are already in this
-environment):
+The gateway proxies GitHub's git smart-HTTP endpoints, so plain `git` works through it: point git
+at the proxy URL and pass the app token header:
 
 ```bash
-git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
-    -c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE" \
-    push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" <refspec>
+git -c "http.extraHeader=Authorization: Bearer $OPENHOST_APP_TOKEN" \
+    push "$LATCHKEY_GATEWAY/proxy/https://github.com/<owner>/<repo>.git" <refspec>
 ```
 
-(`clone`, `fetch`, and `ls-remote` take the same proxy URL and headers.) The
-GitHub credential is injected server-side -- no token enters the container.
-This is gated by the `github-git` scope: `github-git-read` covers clone and
-fetch, `github-git-write` covers push. Request them like any other permission
-(see "Ask for user permission" above). Only `https://github.com/<owner>/<repo>[.git]`
-URLs are supported; prefer one-shot `-c` options over persisting the gateway
-URL or headers into git config.
-
-### List usable services
-
-```bash
-latchkey services list --viable
-```
-
-Lists services that either have stored credentials or can be easily authenticated into via a browser.
-
-### Get service-specific info
-```bash
-latchkey services info slack
-```
-
-Returns auth options, credentials status, and developer notes about the service.
-
-
-## Secondary gateway
-
-By default, most of the commands above are actually routed through a gateway that runs on the user's computer.
-For `latchkey curl` calls specifically, when the user's computer is offline, you would typically get "Exit code 7".
-Sometimes, there's a secondary Latchkey gateway available running in the cloud that you can use instead.
-To do that, repeat your call with the following env var overrides:
-    - `LATCHKEY_GATEWAY=$LATCHKEY_GATEWAY_SECONDARY`
-    - `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE=""`
-If you're still not able to connect, it means the secondary gateway hasn't actually been configured.
-Permission management, or any other commands other than `latchkey curl`, are not supported by the secondary gateway.
-
+(`clone`, `fetch`, and `ls-remote` take the same proxy URL and header.) The GitHub credential is
+injected server-side — no token enters this container. This is gated by the `github-git` scope:
+`github-git-read` covers clone and fetch, `github-git-write` covers push. Request them like any
+other permission (see above). Only `https://github.com/<owner>/<repo>[.git]` URLs are supported;
+prefer one-shot `-c` options over persisting the gateway URL or headers into git config.
 
 ## Notes
 
-- All curl arguments are passed through unchanged
-- Return code, stdout and stderr are passed back from curl
-- Unless the user explicitly asks about it, don't discuss Latchkey or the technical details (it's easy for the user to get confused).
-- Unless the user explicitly asks you to do that, do not directly call `latchkey auth browser` or `latchkey auth browser-prepare`. (The Minds app is supposed to do that as part of the permission request approval process.)
+- A `400` from the gateway means the target URL doesn't belong to a known service or no
+  credentials are stored — the message says which. Upstream errors (including upstream 403s) pass
+  through with the upstream's own body.
+- Unless the user explicitly asks about it, don't discuss Latchkey or the technical details (it's
+  easy for the user to get confused).
 
 ## Currently supported services
 
@@ -140,4 +114,5 @@ Linear, Mailchimp, Notion, Ramp, Sentry, Slack, Stripe, Telegram, Todoist, Umami
 
 ## Notion hack
 
-Always use the `notion-mcp` latchkey service (`latchkey services info notion-mcp`) rather than the legacy plain `notion` one.
+Always use the `notion-mcp` latchkey service (via `$LATCHKEY_GATEWAY/services/notion-mcp`) rather
+than the legacy plain `notion` one.

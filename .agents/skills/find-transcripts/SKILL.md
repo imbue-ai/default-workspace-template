@@ -36,11 +36,8 @@ help you identify which is which.
   stored on this host. To access them you'd need to pull in that data separately
   via their own export features.
 
-- **Other Minds workspaces**: each workspace is a separate host with its own
-  `/mngr/`. Transcripts from agents in another workspace live there, not here.
-  To read them, SSH into that workspace via the Minds API: use the `minds-api`
-  skill to request the `minds-workspaces-ssh` latchkey permission, then run this
-  skill's read commands over SSH on that host.
+- **Other Minds workspaces**: this app hosts a single workspace; there are no
+  sibling workspaces reachable from here.
 
 ## 1. See what's on this host
 

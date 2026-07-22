@@ -85,39 +85,12 @@ Whatever the path, verify that the symptom you reproduced in step 1 is actually 
 
 ## 6. Report built-in issues to imbue
 
-Report **any built-in-code issue** (per A) to imbue -- even if you already fixed it (the upstream copy still needs the fix). Do **not** report purely user-created issues; those are yours and the user's to handle.
-
-To report, do **not** submit directly. POST your diagnosis to the minds report route through the latchkey gateway. The desktop app then opens a pre-filled "report a bug" modal for the user to review and submit (the human gates the send):
-
-```bash
-DESCRIPTION="$(cat <<'EOF'
-<one-paragraph summary of the problem>
-
-Root cause: <file:line and what is wrong>
-Classification: built-in (<vendor / template / update-self>), <fixable here | needs a new desktop-app version>
-Fix: <what you changed, or why it cannot be fixed from here>
-EOF
-)"
-
-# Report against the workspace's PRIMARY agent id, not your own ($MNGR_AGENT_ID).
-# The desktop app pops the modal in the window showing that workspace, and it
-# identifies the window by the primary (is_primary) agent id. If you are an
-# /assist chat (a sub-agent spawned in this workspace), $MNGR_AGENT_ID is your
-# own id, not the workspace's -- reporting under it would pop the modal in
-# whatever window is focused instead of this one. Resolve the primary id from
-# the local agent list (only this workspace's agents are visible from here, so
-# exactly one agent carries is_primary); fall back to your own id if the lookup
-# comes up empty.
-WORKSPACE_AGENT_ID="$(mngr ls --include 'has(labels.is_primary) && has(labels.workspace)' --ids)"
-WORKSPACE_AGENT_ID="${WORKSPACE_AGENT_ID:-$MNGR_AGENT_ID}"
-
-latchkey curl -sS -X POST \
-  "http://latchkey-self.invalid/minds-api-proxy/api/v1/agents/$WORKSPACE_AGENT_ID/report" \
-  -H "Content-Type: application/json" \
-  -d "$(jq -n --arg d "$DESCRIPTION" '{description: $d}')"
-```
-
-A successful call returns `{"ok": true}` and pops the pre-filled modal in the app. Tell the user a report has been opened for their review.
+For **any built-in-code issue** (per A) -- even one you already fixed (the upstream copy still
+needs the fix) -- write up a report for the user to pass along: a one-paragraph summary, the root
+cause (file:line and what is wrong), the classification (vendor / template / update-self;
+fixable here or not), and the fix you applied or why it cannot be fixed from here. Present it in
+chat and ask the user to forward it to imbue. Do **not** write reports for purely user-created
+issues; those are yours and the user's to handle.
 
 ## Summary of decisions
 

@@ -175,7 +175,7 @@ They are inherently flaky due to timing and useless in CI, but valuable for agen
 
 # Communication
 
-If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox -- use the `file-sharing` skill to bridge the two.
+If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox. There is no direct bridge to their local filesystem; ask them to upload files through the chat, or share content back to them via the UI.
 
 # Work delegation
 
