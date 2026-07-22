@@ -18,11 +18,23 @@
 # last converges the window on the real client size. Same scheme as mngr's
 # sigwinch_panes.sh uses for agent windows; agent sessions are excluded here
 # because those hooks already own them.
+#
+# Only the client's pty (always shell-safe) is passed in; the session name is
+# read from tmux itself rather than received as a shell argument, since the
+# hook's run-shell would re-expand a name containing shell metacharacters
+# (same convention as notify_terminal_session.py).
 
 set -uo pipefail
 
-SESSION="${1:?session name required}"
+CLIENT_TTY="${1:?client tty required}"
 
+# Resolve which session the triggering client is attached to (tab-separated so
+# the tty key can never collide with the name; empty if the client detached).
+SESSION="$(tmux list-clients -F "#{client_tty}$(printf '\t')#{client_session}" 2>/dev/null \
+    | awk -F '\t' -v tty="${CLIENT_TTY}" '$1 == tty {print $2; exit}')"
+
+# The guard also ensures the name is safe to use in tmux targets below:
+# terminal-<N> names contain no whitespace or metacharacters.
 case "${SESSION}" in
     terminal-*) ;;
     *) exit 0 ;;
