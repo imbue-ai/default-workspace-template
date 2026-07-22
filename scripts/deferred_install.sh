@@ -71,12 +71,12 @@ _recover_interrupted_dpkg() {
 # official release yet (tiliondev/fortress#28, open as of 2026-07-19) so this
 # points at a fork build in the meantime -- swap _FORTRESS_ARM64_URL/_SHA256
 # to the official tiliondev/fortress release once that PR merges.
-# Fork build: https://github.com/MT-GoCode/fortress/releases/tag/linux-arm64-151.0.7908.0
+# Fork build: https://github.com/MT-GoCode/fortress/releases/tag/linux-arm64-151.0.7908.0-debian12
 # PR:         https://github.com/tiliondev/fortress/pull/28
 readonly _FORTRESS_X64_URL="https://github.com/tiliondev/fortress/releases/download/v151.0.7908.0/tilion-fortress-linux-x64.tar.gz"
 readonly _FORTRESS_X64_SHA256="243238b2b8a8b944b7ba2b63533d2b917da7d569dcb290ce96bf28151294b873"
-readonly _FORTRESS_ARM64_URL="https://github.com/MT-GoCode/fortress/releases/download/linux-arm64-151.0.7908.0/tilion-fortress-linux-arm64.tar.gz"
-readonly _FORTRESS_ARM64_SHA256="af83b768887161b22b1e06d0c0ba30b77ef10aec83ba68d59cbd333187f9cf78"
+readonly _FORTRESS_ARM64_URL="https://github.com/MT-GoCode/fortress/releases/download/linux-arm64-151.0.7908.0-debian12/tilion-fortress-linux-arm64-debian12.tar.gz"
+readonly _FORTRESS_ARM64_SHA256="da6965af8fa8e995d137bcabdca8d163fde7f32ba483eaf5e029223995f19ada"
 readonly _FORTRESS_INSTALL_DIR="/opt/fortress"
 
 _install_fortress() {
