@@ -236,10 +236,11 @@ too-old-base problems in seconds instead of a full worker round-trip.
 a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
 
-(The same marker walk is implemented in
-`.agents/shared/scripts/version_history.py` -- `resolve-base-ref` prints exactly
-this `BASE_REF`, and its `seed-workspace` uses the same walk for the ledger's
-creation line. Keep the two in step if either ever changes.)
+(The same marker walk is documented in the `update-version` skill, which seeds
+the version ledger's creation line from it -- with one deliberate difference: it
+takes the OLDEST marker (where the mind started) where this section takes the
+NEWEST (the base the mind is on now). The bash here is the primary; keep the two
+in step if either ever changes.)
 
 **Also capture `SOURCE_SHA` -- the source commit the snapshot is cut from.**
 The worker's worktree branches off `/code`'s current `HEAD`, so that commit is
@@ -927,13 +928,14 @@ the exception in the CWD-INVARIANT callout at the top of this skill before
 running it. Nothing is recorded for a publish that did not happen: if step 2's
 push failed, or the user aborted, SKIP this entirely.
 
+Append the entry per the **`update-version`** skill -- its §1 (seed the ledger's
+creation line if it never had one) and §3 (append the inspiration entry) -- with
+`SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo_name>"`, `NOTE="first
+published"`, and `SOURCE_SHA` from §2. Those steps run with cwd `/code` and
+write `VERSION_HISTORY.md` and nothing else; then commit that one file:
+
 ```bash
 ( cd /code \
-    && python3 .agents/shared/scripts/version_history.py add-inspiration \
-        --slug <slug> \
-        --repo-url "github.com/<owner>/<repo_name>" \
-        --note "first published" \
-        --sha "$SOURCE_SHA" \
     && git add VERSION_HISTORY.md \
     && git commit -m "version history: published inspiration <slug> v1" )
 ```
@@ -942,13 +944,13 @@ Exactly that: one file staged by name, one commit, on whatever branch `/code`
 is already on. NEVER `git add -A` (it would sweep up the mind's unrelated
 working state), never a merge, checkout, or reset. `$SOURCE_SHA` is the source
 commit from §2 -- the snapshot's provenance anchor -- NOT `BASE_REF` and not
-anything from `$WT`. The helper creates
+anything from `$WT`. `update-version` creates
 `VERSION_HISTORY.md`'s `### <slug>  --  <repo-url>` heading on a first publish
 and appends `- v1  <date>  first published  <source sha>`; a later update of the
 same inspiration appends `v2`, `v3`, ... under the same heading, so the version
 number is computed, never typed. It is a no-op if the same entry is already
 recorded (a retried step cannot double-record) -- then there is nothing to
-commit and you skip the commit. The same helper writes `update-self`'s
+commit and you skip the commit. The same skill writes `update-self`'s
 `## Workspace` lines, so both flows produce identical formatting.
 
 If the commit fails (e.g. a hook rejects it), the publish still succeeded --
@@ -1085,10 +1087,11 @@ What it does, in order (see the script for the exact commands):
 9. Overwrites the snapshot's `welcome/SKILL.md` with a generated
    inspiration-specific welcome describing the
    newly-published inspiration.
-10. Resets `VERSION_HISTORY.md` in the snapshot to the pristine template file
-    (via `.agents/shared/scripts/version_history.py init --force`): that ledger
-    is the SOURCE workspace's own record of what it came from and everything it
-    has published, and none of it belongs in the published repo. Runs after the
-    no-diff guard, so it can never make an empty include set look publishable.
+10. Resets `VERSION_HISTORY.md` in the snapshot to the pristine starter ledger
+    (written inline, byte-identical to the one the template ships and to the
+    copy in the `update-version` skill): that ledger is the SOURCE workspace's
+    own record of what it came from and everything it has published, and none of
+    it belongs in the published repo. Runs after the no-diff guard, so it can
+    never make an empty include set look publishable.
 11. Validates `supervisord.conf` WITHOUT starting the daemon (never
     `supervisord -t`), then makes a single commit for the assembled snapshot.

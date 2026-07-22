@@ -583,17 +583,26 @@ README_EOF
 # from, and every inspiration it has ever published (slugs, repo URLs, source
 # commits). None of that belongs to this snapshot -- and after an update-self,
 # BASE_REF's tree carries an accumulated copy of it -- so replace it with the
-# pristine template file, which a mind created from this inspiration then seeds
-# for itself. Deterministic, like the /welcome and README writes above. This
-# runs AFTER the no-diff guard so it can never make an empty include set look
-# like it had something to publish.
-VERSION_HISTORY_HELPER=".agents/shared/scripts/version_history.py"
-rm -f VERSION_HISTORY.md
-if [ -f "$VERSION_HISTORY_HELPER" ]; then
-    if ! python3 "$VERSION_HISTORY_HELPER" init --force; then
-        echo "build_inspiration.sh: warning: could not write a pristine VERSION_HISTORY.md; the snapshot ships without one" >&2
-    fi
-fi
+# pristine starter ledger, which a mind created from this inspiration then seeds
+# for itself. Deterministic and self-contained, like the /welcome and README
+# writes above -- no external program. This runs AFTER the no-diff guard so it
+# can never make an empty include set look like it had something to publish.
+#
+# The text below must stay BYTE-IDENTICAL to the VERSION_HISTORY.md the template
+# ships at its repo root (and to the copy in the `update-version` skill, which
+# owns the ledger's format).
+cat > VERSION_HISTORY.md <<'VERSION_HISTORY_EOF'
+# Version history
+
+Where this workspace came from and what it has published. Entries are appended
+automatically -- by `update-self` when it lands a template update, and by
+`publish-inspiration` when it publishes -- and earlier lines are never
+rewritten. Each line ends in the commit it was cut from.
+
+## Workspace
+
+## Inspirations
+VERSION_HISTORY_EOF
 
 # --- 9. boot smoke-check WITHOUT side effects, then single commit -------------
 
