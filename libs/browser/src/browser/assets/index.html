@@ -71,6 +71,12 @@
   /* While init/crashed cover the pane, hide the tab + nav chrome so a half-built
      browser never peeks through. Toggled by the `chrome-hidden` class on #app. */
   #app.chrome-hidden #tabbar, #app.chrome-hidden #navbar, #app.chrome-hidden #returnbar { display: none; }
+
+  /* Non-blocking top-center pill shown while a larger clipboard op is in flight
+     (image paste/copy, long text). pointer-events:none so it never traps the user
+     -- the paste is already server-owned, so they can navigate away freely. */
+  #cliptoast { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 30; background: rgba(14, 99, 156, 0.92); color: #fff; padding: 6px 16px; border-radius: 999px; font-size: 13px; pointer-events: none; opacity: 0; transition: opacity .15s; }
+  #cliptoast.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -89,6 +95,7 @@
   <div id="stage">
     <canvas id="screen" tabindex="0"></canvas>
     <div id="placeholder">Starting browser…</div>
+    <div id="cliptoast"></div>
     <div id="overlay">
       <div class="msg" id="overlaymsg">An agent has control.</div>
       <div class="sub" id="overlaysub"></div>
@@ -109,6 +116,7 @@
   "use strict";
   const app = document.getElementById("app");
   const stage = document.getElementById("stage");
+  const cliptoast = document.getElementById("cliptoast");
   const canvas = document.getElementById("screen");
   const ctx = canvas.getContext("2d");
   const placeholder = document.getElementById("placeholder");
@@ -384,18 +392,51 @@
   // work), reading/writing navigator.clipboard = the user's actual clipboard.
   function clipUrl() { return new URL("browsers/" + browserId + "/clipboard", document.baseURI).toString(); }
 
+  // Non-blocking progress pill for larger clipboard ops. Delayed so instant text
+  // ops don't flicker; returns a done() that clears it. pointer-events:none (CSS)
+  // means it never traps the user -- the paste is server-owned once uploaded, so
+  // they can navigate away and it still lands.
+  function withClipToast(label) {
+    const t = setTimeout(() => { cliptoast.textContent = label; cliptoast.classList.add("show"); }, 200);
+    return () => { clearTimeout(t); cliptoast.classList.remove("show"); };
+  }
+
+  function b64ToBlob(b64, mime) {
+    const bin = atob(b64), arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  }
+
+  // Read the user's clipboard as {mime, body}: prefer an image, fall back to text.
+  async function readLocalClipboard() {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const it of items) {
+        const imgType = it.types.find((t) => t.indexOf("image/") === 0);
+        if (imgType) return { mime: imgType, body: await it.getType(imgType) };
+      }
+    } catch (_) { /* read() unsupported/denied -> text fallback below */ }
+    const text = await navigator.clipboard.readText();
+    return text ? { mime: "text/plain", body: text } : null;
+  }
+
   async function clipboard(kind) {
     if (!navigator.clipboard) return;  // needs a secure context (https/localhost)
+    const done = withClipToast(kind === "v" ? "Pasting…" : "Copying…");
     try {
       if (kind === "v") {  // paste: user's clipboard -> remote browser
-        const text = await navigator.clipboard.readText();
-        if (text) await fetch(clipUrl(), { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
+        const c = await readLocalClipboard();
+        if (c) await fetch(clipUrl(), { method: "POST", headers: { "Content-Type": c.mime }, body: c.body });
       } else {  // c (copy) or x (cut): remote selection -> user's clipboard
         const r = await fetch(clipUrl() + (kind === "x" ? "?cut=1" : ""));
         const j = await r.json();
-        if (j.ok && j.mime && j.mime.indexOf("text/") === 0 && j.text) await navigator.clipboard.writeText(j.text);
+        if (j.ok && j.mime) {
+          if (j.mime.indexOf("text/") === 0) { if (j.text) await navigator.clipboard.writeText(j.text); }
+          else if (j.data) await navigator.clipboard.write([new ClipboardItem({ [j.mime]: b64ToBlob(j.data, j.mime) })]);
+        }
       }
     } catch (_) { /* permission denied / not controlling / nothing selected: ignore */ }
+    finally { done(); }
   }
 
   function key(type, e) {
