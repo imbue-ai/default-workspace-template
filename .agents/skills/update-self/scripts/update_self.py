@@ -25,12 +25,18 @@ validation depth, reveal by change class). This script owns the parts that are
     the worker's "what's new" report.
 
 ``bootstrap-skill``
-    Extract the target ref's *own* copy of the update-self skill (SKILL.md,
-    references, scripts) into a staging dir and report whether it differs from the
-    local copy. This is what lets the flow, after resolving the target, hand off
-    to the update-self process *as it exists at the version being updated to* --
-    so fixes to the update flow itself are applied live rather than being gated on
-    the possibly-stale local copy.
+    Stage the copy of the update-self skill (SKILL.md, references, scripts) that
+    the rest of the pass runs, at a single fixed path, and report whether it
+    differs from the local copy. Normally that staged copy is the target ref's
+    *own* copy (extracted from the already-fetched object); when the ref predates
+    the skill it is the local copy instead. Either way the fixed path is left
+    populated with a runnable flow, so the lead and worker can dispatch against it
+    by literal path without carrying any value across shell invocations. This is
+    what lets the flow, after resolving the target, hand off to the update-self
+    process *as it exists at the version being updated to* -- so fixes to the
+    update flow itself are applied live rather than being gated on the
+    possibly-stale local copy. ``differs`` gates only which SKILL.md prose the
+    lead follows, not the path.
 
 Impact analysis -- which services and skills depend on a changed file -- is
 deliberately NOT scripted here: it requires open-ended exploration (imports,
@@ -424,24 +430,43 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args).resolve()
     dest = Path(args.dest)
     dest_root = (dest if dest.is_absolute() else repo_root / dest).resolve()
+    staged_skill = dest_root / SKILL_DIR_REL
 
-    # If the target ref predates the skill, there is nothing to bootstrap from --
-    # report no staged copy so the caller stays on the local flow.
+    # Always stage into a clean dir. The flow runs the skill from ``staged_skill``
+    # unconditionally (a single fixed path the lead and worker both reference by
+    # literal -- no state carried across shell invocations), so this command must
+    # leave a runnable copy there in *every* case, including the ref-predates-skill
+    # fallback below.
+    if dest_root.exists():
+        shutil.rmtree(dest_root)
+    dest_root.mkdir(parents=True)
+
     exists = subprocess.run(
         ["git", "cat-file", "-e", f"{args.ref}:{SKILL_DIR_REL}"],
         cwd=repo_root,
         capture_output=True,
     )
     if exists.returncode != 0:
-        print(json.dumps({"skill_dir": None, "differs": False, "ref": args.ref}))
+        # The target ref predates the skill, so there is no target copy to hand
+        # off to: stage the *local* copy at the fixed path (so the worker still
+        # finds the flow there) and report ``differs=False`` -- the caller stays
+        # on the local flow. Skip ``__pycache__`` so an imported-script artifact
+        # never rides along.
+        shutil.copytree(
+            repo_root / SKILL_DIR_REL,
+            staged_skill,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        print(
+            json.dumps(
+                {"skill_dir": str(staged_skill), "differs": False, "ref": args.ref}
+            )
+        )
         return 0
 
     # Extract the ref's own copy of the skill via ``git archive`` (reads the
-    # already-fetched object, no network, no working-tree mutation) into a clean
-    # staging dir. The archive lays the tree down under ``SKILL_DIR_REL``.
-    if dest_root.exists():
-        shutil.rmtree(dest_root)
-    dest_root.mkdir(parents=True)
+    # already-fetched object, no network, no working-tree mutation). The archive
+    # lays the tree down under ``SKILL_DIR_REL``.
     archive = subprocess.run(
         ["git", "archive", args.ref, SKILL_DIR_REL],
         cwd=repo_root,
@@ -451,7 +476,6 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
         tar.extractall(dest_root, filter="data")
 
-    staged_skill = dest_root / SKILL_DIR_REL
     # Whether the ref's skill differs from the local working-tree copy. Let git
     # do the compare: ``git diff`` ignores untracked files, so the ``__pycache__/
     # *.pyc`` that importing the script drops into ``scripts/`` never registers as
