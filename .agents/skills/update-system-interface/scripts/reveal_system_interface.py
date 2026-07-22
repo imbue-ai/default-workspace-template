@@ -41,9 +41,11 @@ The ``preview`` / ``unpreview`` subcommands are thin system-interface adapters
 over the shared ``serve_isolated_instance.py`` motion (the previewable-instance
 substrate every service flow shares). They hand it the system-interface
 specifics -- boot ``uv run system-interface`` from the worker's already-built
-``--work-dir`` on a free port, with layout persistence neutered (drop
-MNGR_AGENT_ID so it can't clobber the live ``layout.json``) but agent discovery
-kept, probe ``/api/agents``, and register the inner app plus the labeled
+``--work-dir`` on a free port; point layout persistence at a throwaway copy of
+the live layout (``SYSTEM_INTERFACE_LAYOUT_DIR``) so the preview renders the
+user's real tabs while its autosaves land in the copy, with MNGR_AGENT_ID also
+dropped as a guard against clobbering the live ``layout.json``; keep agent
+discovery; probe ``/api/agents``; and register the inner app plus the labeled
 "preview" wrapper frame the user opens. The shared script owns the ports, the
 process/service teardown, and the state file; no fetch, checkout, or rebuild
 happens, and the served tree and the worker's folder are never touched. The
@@ -86,6 +88,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -140,6 +143,22 @@ _INSTANCE_STATE_FILENAME = "instance.json"
 # script injects the free port into PORT and 127.0.0.1 into HOST.
 PREVIEW_PORT_ENV = "SYSTEM_INTERFACE_PORT"
 PREVIEW_HOST_ENV = "SYSTEM_INTERFACE_HOST"
+
+# Seed the preview with the user's real tab layout. The preview boots pointed at
+# a throwaway *copy* of the live layout (via SYSTEM_INTERFACE_LAYOUT_DIR, which
+# the server honors ahead of the MNGR_AGENT_ID-derived path) so it renders the
+# user's existing tabs while its own layout autosaves land in the copy -- never
+# clobbering the live layout. This script owns the copy (the shared serve
+# script wipes its own state dir on every boot, so the seed can't live there):
+# ``preview`` re-seeds it fresh, ``unpreview`` removes it. Only the layout files
+# are copied, never the client-activity log or terminal banner that also live
+# under workspace_layout/. The seed persists across a ``preview-refresh`` because
+# the shared script records the env override at ``up`` time and reapplies it.
+PREVIEW_LAYOUT_DIR_ENV = "SYSTEM_INTERFACE_LAYOUT_DIR"
+_PREVIEW_LAYOUT_SEED_ROOT = "runtime/si-preview-layout"
+_WORKSPACE_LAYOUT_SUBDIR = "workspace_layout"
+_SEEDED_LAYOUT_ENTRIES = ("layouts", "layouts_meta.json", "layout.json")
+ENV_MNGR_HOST_DIR = "MNGR_HOST_DIR"
 
 # Endpoints used to probe liveness. ``/api/agents`` exercises the mngr plugin
 # discovery path -- exactly what a missing backend dependency or a broken
@@ -703,18 +722,65 @@ def _find_other_preview(repo_root: Path, slug: str) -> str | None:
     return None
 
 
+def _live_layout_dir() -> Path | None:
+    """The live workspace's layout dir, resolved from the ambient env, or None.
+
+    Mirrors the system interface's own resolver: the layout lives at
+    ``$MNGR_HOST_DIR/agents/<MNGR_AGENT_ID>/workspace_layout/`` (host dir falling
+    back to ``~/.mngr``). Returns None when MNGR_AGENT_ID is unset (dev/test) --
+    there is then nothing to seed and the preview boots to the fresh-workspace
+    state, exactly as it did before seeding existed.
+    """
+    agent_id = os.environ.get(ENV_MNGR_AGENT_ID, "")
+    if not agent_id:
+        return None
+    host_dir = Path(os.environ.get(ENV_MNGR_HOST_DIR, "") or (Path.home() / ".mngr"))
+    return host_dir / "agents" / agent_id / _WORKSPACE_LAYOUT_SUBDIR
+
+
+def _preview_layout_seed_dir(repo_root: Path, slug: str) -> Path:
+    """Where this slug's throwaway layout copy lives (gitignored runtime state)."""
+    return repo_root / _PREVIEW_LAYOUT_SEED_ROOT / _preview_instance_name(slug)
+
+
+def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
+    """Copy the live layout files into a fresh throwaway dir and return it.
+
+    Re-seeded from scratch on every ``preview`` call, since the live layout is
+    the source of truth at preview time. When there is no live layout to copy
+    (MNGR_AGENT_ID unset, or the workspace has no saved layout yet) the dir is
+    left empty and the preview simply renders the fresh-workspace state.
+    """
+    seed_dir = _preview_layout_seed_dir(repo_root, slug)
+    shutil.rmtree(seed_dir, ignore_errors=True)
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    live_dir = _live_layout_dir()
+    if live_dir is None or not live_dir.is_dir():
+        return seed_dir
+    for entry in _SEEDED_LAYOUT_ENTRIES:
+        source = live_dir / entry
+        if source.is_dir():
+            shutil.copytree(source, seed_dir / entry)
+        elif source.exists():
+            shutil.copy2(source, seed_dir / entry)
+    return seed_dir
+
+
 def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int:
     """Stand up a pre-merge preview of the worker's ``work_dir``.
 
     Thin system-interface adapter over the shared ``serve_isolated_instance.py``
     ``up`` motion: validate the worker's app dir, then hand the shared script the
     system-interface specifics -- boot ``uv run system-interface`` from the
-    worker's already-built app dir on a free port; neuter layout persistence by
-    dropping MNGR_AGENT_ID (so the preview can't clobber the live ``layout.json``)
-    while keeping discovery, so the real conversations still render; probe
-    ``/api/agents``; register the inner app and the labeled wrapper frame. The
-    shared script owns the ports, the process/service teardown, and the state
-    file. ``work_dir`` must still exist -- run this before the worker is destroyed.
+    worker's already-built app dir on a free port; point layout persistence at a
+    throwaway copy of the live layout (``SYSTEM_INTERFACE_LAYOUT_DIR``) so the
+    preview renders the user's real tabs while its autosaves land in the copy, and
+    additionally drop MNGR_AGENT_ID as a belt-and-suspenders guard against
+    clobbering the live ``layout.json``; keep discovery so real conversations
+    still render; probe ``/api/agents``; register the inner app and the labeled
+    wrapper frame. The shared script owns the ports, the process/service teardown,
+    and the state file. ``work_dir`` must still exist -- run this before the
+    worker is destroyed.
     """
     # Sanity-check the work_dir before disturbing anything: a wrong --work-dir
     # should fail fast rather than reaching the shared script.
@@ -736,6 +802,7 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             f"'unpreview --slug {other_slug}'.\n"
         )
         return 1
+    seed_dir = _seed_preview_layout(repo_root, slug)
     result = runner.run(
         [
             sys.executable,
@@ -749,6 +816,8 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             PREVIEW_PORT_ENV,
             "--host-env",
             PREVIEW_HOST_ENV,
+            "--env",
+            f"{PREVIEW_LAYOUT_DIR_ENV}={seed_dir}",
             "--unset-env",
             ENV_MNGR_AGENT_ID,
             "--health-path",
@@ -819,6 +888,9 @@ def unpreview(slug: str, repo_root: Path, *, runner: Runner) -> int:
         cwd=str(repo_root),
         check=False,
     )
+    # Remove the throwaway layout copy this preview booted from (the shared
+    # script only tears down its own state dir, not ours). Idempotent.
+    shutil.rmtree(_preview_layout_seed_dir(repo_root, slug), ignore_errors=True)
     return int(getattr(result, "returncode", 0))
 
 

@@ -549,11 +549,20 @@ _recently_allocated_terminal_names: set[str] = set()
 def _primary_agent_layout_dir() -> Path | None:
     """Return the workspace layout directory for this workspace's primary agent.
 
-    The system_interface always serves a single workspace (its own primary
-    agent); the layout lives at $MNGR_HOST_DIR/agents/<MNGR_AGENT_ID>/workspace_layout/.
-    Returns None if either env var is missing, which should only happen in
+    An explicit ``SYSTEM_INTERFACE_LAYOUT_DIR`` override wins when set: the
+    pre-merge preview points it at a throwaway copy of the live layout so the
+    preview renders the user's real tabs while its own autosaves land in the copy,
+    never clobbering the live layout.
+
+    Otherwise the system_interface serves a single workspace (its own primary
+    agent) and the layout lives at
+    $MNGR_HOST_DIR/agents/<MNGR_AGENT_ID>/workspace_layout/. Returns None if the
+    override is unset and MNGR_AGENT_ID is missing, which should only happen in
     dev/test setups that don't care about persistence.
     """
+    override = os.environ.get("SYSTEM_INTERFACE_LAYOUT_DIR", "")
+    if override:
+        return Path(override)
     agent_id = os.environ.get("MNGR_AGENT_ID", "")
     if not agent_id:
         return None

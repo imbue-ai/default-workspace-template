@@ -288,7 +288,11 @@ tests, or exercise its scripts -- and called out in the report.
   (`uv run pytest` + `uv run ruff check`) covers `libs/**`, `scripts/**`,
   `.agents/**`; `apps/system_interface` runs its own `uv run pytest` (and `npm run
   lint && npm run test` when the frontend merged); `vendor/mngr` its own `uv run
-  pytest`.
+  pytest`. Run the **fast** subset locally: skip the CI-only slow markers with
+  `-m 'not tmux and not modal and not docker and not docker_sdk and not acceptance
+  and not release'` (plus `--no-cov --cov-fail-under=0`), per CLAUDE.md -- those
+  suites run in CI, not here. Don't try to run acceptance/release tests locally to
+  gate a pull; let CI own them.
 - **Isolated-service boots** for each impacted service (per 4a) -- boot against a
   scratch data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
   `update-service`), never the live store; a service that won't boot on the merged
