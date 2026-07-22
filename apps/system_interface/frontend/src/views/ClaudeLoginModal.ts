@@ -1,20 +1,31 @@
 /**
- * Modal that walks the user through re-authenticating Claude inside a mind
- * when credentials didn't sync from the host. Three sign-in paths:
+ * Modal that walks the user through signing Claude in inside a mind. It is
+ * the sole auth surface for a workspace: credentials live in the `env`
+ * block of the shared Claude settings.json and are written only by the
+ * backend behind this modal. Three sign-in paths:
  *
- * - Claude subscription: drive `claude auth login --claudeai` via the PTY
- *   subprocess on the backend, parse the printed OAuth URL, paste back the
- *   user's CODE#STATE.
- * - Anthropic Console: same flow but `--console`.
- * - Raw API key: paste a `sk-ant-...` value; backend writes it to the host
- *   env file and restarts every running claude agent.
+ * - Claude subscription (default): drive `claude setup-token` via the PTY
+ *   subprocess on the backend. The CLI prints an OAuth URL and then polls
+ *   Anthropic itself, so the modal shows the URL and polls the backend
+ *   until the 1-year token is minted -- no code paste needed in the normal
+ *   flow (a paste-code fallback and a subtle "already have a token" paste
+ *   affordance are provided).
+ * - Sign in with Imbue: link to the desktop app's key-mint page (keyed by
+ *   this workspace's host id), then paste the copied env-style blob into a
+ *   textarea. Clicking the link while the workspace is opened remotely
+ *   pops an alert to do it from the desktop client instead.
+ * - Raw API key: paste a `sk-ant-...` value (wrapped into an env-style
+ *   line client-side).
  *
- * The modal is purely reactive and a single app-level instance: global
- * auth state (models/ClaudeAuth.ts) opens it when any agent surfaces an
- * auth-error, and it closes only when the user dismisses it. It does not
- * poll the backend status endpoint, because `claude auth status` reflects
- * the system-interface process's view of auth which can disagree with the
- * already-running agent's cached in-process auth decision.
+ * All three submission paths hit the same strict backend endpoint
+ * (`/api/claude-auth/submit-credentials`), which writes the settings env
+ * block and restarts the mind's claude agents.
+ *
+ * The modal is a single app-level instance: global auth state
+ * (models/ClaudeAuth.ts) opens it on load-time status failure, on any
+ * transcript auth-error, and from the persistent "Agent auth" entry in the
+ * chat footer. A muted header line shows how the mind is currently signed
+ * in (derived server-side from the settings env content).
  */
 
 import m from "mithril";
@@ -29,20 +40,46 @@ interface ClaudeAuthStatus {
   org_id?: string | null;
   org_name?: string | null;
   subscription_type?: string | null;
+  auth_mode?: string;
+  masked_key_suffix?: string | null;
+  workspace_host_id?: string | null;
 }
 
-interface OAuthStartResponse {
+interface SetupTokenStartResponse {
   session_id: string;
   oauth_url: string;
 }
 
-type Mode = "select_provider" | "api_key_form" | "awaiting_oauth_code" | "verifying" | "success" | "error";
+interface SetupTokenPollResponse {
+  is_complete: boolean;
+  status?: ClaudeAuthStatus | null;
+}
+
+type Mode = "select_provider" | "api_key_form" | "imbue_form" | "awaiting_setup_token" | "verifying" | "success" | "error";
+
+// How often the modal asks the backend whether `claude setup-token` has
+// minted the token yet while the awaiting screen is up.
+const SETUP_TOKEN_POLL_INTERVAL_MS = 2000;
 
 export interface ClaudeLoginModalAttrs {
   // Called when the user closes the modal -- either after a successful
   // sign-in flow ("Done" button) or via the close affordance before
   // signing in. A subsequent auth-error event will reopen it.
   onDismiss: () => void;
+}
+
+// Compute the desktop client's main-app origin from the workspace's own
+// origin. Workspaces are served at `<agent-id>.localhost:<port>` by the
+// desktop client, whose own UI lives at `localhost:<port>` -- so dropping
+// the leading agent label yields the main app. Returns null when the
+// workspace is NOT being accessed through the local desktop client (e.g.
+// via its Cloudflare tunnel), in which case the mint page is unreachable
+// from this browser.
+export function computeDesktopAppOrigin(hostname: string, port: string, protocol: string): string | null {
+  if (hostname !== "localhost" && !hostname.endsWith(".localhost")) return null;
+  const baseHost = hostname === "localhost" ? hostname : hostname.split(".").slice(1).join(".");
+  const portSuffix = port ? `:${port}` : "";
+  return `${protocol}//${baseHost}${portSuffix}`;
 }
 
 export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
@@ -52,16 +89,29 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   let code = "";
   let apiKey = "";
   let apiKeyRevealed = false;
+  let imbueBlob = "";
+  let directToken = "";
+  // Whether the paste-code fallback / direct-token affordances on the
+  // awaiting screen are expanded. Both stay collapsed by default so the
+  // "approve in browser and wait" happy path carries the visual weight.
+  let codeEntryExpanded = false;
+  let tokenPasteExpanded = false;
   let urlCopied = false;
   // Set when a clipboard write was attempted but rejected (insecure context,
   // denied permission). Drives the "Failed to copy" label and the raw-URL
   // fallback block so the user can still select and copy the link by hand.
   let urlCopyFailed = false;
   let urlCopiedResetHandle: ReturnType<typeof setTimeout> | null = null;
+  let pollHandle: ReturnType<typeof setInterval> | null = null;
+  let pollInFlight = false;
   let errorMessage: string | null = null;
   let verifyingTitle = "Working...";
   let verifyingDetail: string | null = null;
   let successStatus: ClaudeAuthStatus | null = null;
+  // Fetched when the modal opens; drives the muted "currently signed in
+  // via ..." header on the provider-selection screen and the Imbue
+  // mint-page link (which needs the workspace host id).
+  let currentStatus: ClaudeAuthStatus | null = null;
   let attrsRef: ClaudeLoginModalAttrs | null = null;
   // Whether the "Other ways to sign in" section on the provider-selection
   // screen is expanded. Collapsed by default so the Claude subscription
@@ -73,69 +123,129 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   }
 
   function setError(message: string): void {
+    stopPolling();
     errorMessage = message;
     mode = "error";
     m.redraw();
   }
 
-  // Surface a failure inline within the API-key form, where the user can
-  // simply re-submit the same key in place, instead of swapping to the
-  // full-screen `error` view. OAuth code failures do NOT use this: a submitted
-  // code consumes the single-use OAuth session, so they route to `setError`
-  // (the full "Start over" screen), which also covers `startOAuth` failures.
-  function setInlineError(message: string, formMode: "awaiting_oauth_code" | "api_key_form"): void {
+  // Surface a failure inline within a form, where the user can simply
+  // re-submit in place, instead of swapping to the full-screen `error`
+  // view. Setup-token failures do NOT use this: a failed session is
+  // consumed backend-side, so they route to `setError` (the full "Start
+  // over" screen).
+  function setInlineError(message: string, formMode: "api_key_form" | "imbue_form" | "awaiting_setup_token"): void {
     errorMessage = message;
     mode = formMode;
     m.redraw();
   }
 
   function startVerifying(title: string, detail: string | null): void {
+    stopPolling();
     verifyingTitle = title;
     verifyingDetail = detail;
     mode = "verifying";
     m.redraw();
   }
 
-  async function startOAuth(chosen: "claudeai" | "console"): Promise<void> {
+  function loadCurrentStatus(): void {
+    void m
+      .request<ClaudeAuthStatus>({ method: "GET", url: apiUrl("/api/claude-auth/status") })
+      .then((status) => {
+        currentStatus = status;
+        m.redraw();
+      })
+      .catch(() => {
+        // The header line is progressive enhancement; a failed status
+        // check just leaves it blank.
+        currentStatus = null;
+      });
+  }
+
+  function stopPolling(): void {
+    if (pollHandle !== null) {
+      clearInterval(pollHandle);
+      pollHandle = null;
+    }
+    pollInFlight = false;
+  }
+
+  function startPolling(): void {
+    stopPolling();
+    pollHandle = setInterval(() => {
+      void pollSetupToken();
+    }, SETUP_TOKEN_POLL_INTERVAL_MS);
+  }
+
+  async function startSetupToken(): Promise<void> {
     clearError();
-    startVerifying(
-      "Starting sign-in...",
-      chosen === "claudeai"
-        ? "Spawning the Claude subscription OAuth flow."
-        : "Spawning the Anthropic Console OAuth flow.",
-    );
+    startVerifying("Starting sign-in...", "Preparing your Claude subscription sign-in.");
     try {
-      const response = await m.request<OAuthStartResponse>({
+      const response = await m.request<SetupTokenStartResponse>({
         method: "POST",
-        url: apiUrl("/api/claude-auth/start"),
-        body: { provider: chosen },
+        url: apiUrl("/api/claude-auth/setup-token/start"),
       });
       sessionId = response.session_id;
       oauthUrl = response.oauth_url;
-      mode = "awaiting_oauth_code";
+      codeEntryExpanded = false;
+      tokenPasteExpanded = false;
+      mode = "awaiting_setup_token";
+      startPolling();
       m.redraw();
     } catch (error) {
       const errResp = (error as { response?: { detail?: string } }).response;
-      setError(errResp?.detail ?? "Failed to start OAuth login");
+      setError(errResp?.detail ?? "Failed to start the subscription sign-in");
     }
   }
 
-  async function submitOAuthCode(): Promise<void> {
+  async function pollSetupToken(): Promise<void> {
+    if (sessionId === null || pollInFlight || mode !== "awaiting_setup_token") return;
+    pollInFlight = true;
+    const polledSessionId = sessionId;
+    try {
+      const response = await m.request<SetupTokenPollResponse>({
+        method: "POST",
+        url: apiUrl("/api/claude-auth/setup-token/poll"),
+        body: { session_id: polledSessionId },
+      });
+      if (response.is_complete && response.status) {
+        stopPolling();
+        sessionId = null;
+        if (response.status.logged_in) {
+          successStatus = response.status;
+          mode = "success";
+        } else {
+          setError("Sign-in completed but Claude still reports it is not authenticated.");
+          return;
+        }
+        m.redraw();
+      }
+    } catch (error) {
+      // A poll error means the backend session is gone (crashed subprocess,
+      // replaced session). There is nothing to retry against in place.
+      stopPolling();
+      sessionId = null;
+      const errResp = (error as { response?: { detail?: string } }).response;
+      setError(errResp?.detail ?? "The sign-in session was interrupted");
+    } finally {
+      pollInFlight = false;
+    }
+  }
+
+  async function submitSetupTokenCode(): Promise<void> {
     if (!sessionId || !code.trim()) return;
     clearError();
     startVerifying("Verifying code...", "Completing sign-in.");
     const submittedSessionId = sessionId;
-    // The backend's submit_oauth_code clears its in-flight session record
-    // unconditionally (in its finally block) once the code is sent, so the
-    // id we just submitted is consumed regardless of whether auth succeeded.
-    // Clear it locally too so a later modal-unmount (e.g. Done after a
-    // successful sign-in) does not fire a spurious /abort against a session
-    // the backend has already discarded.
+    // The backend clears its in-flight session record once the code is
+    // sent, so the id we just submitted is consumed regardless of whether
+    // auth succeeded. Clear it locally too so a later modal-unmount does
+    // not fire a spurious /abort against a discarded session.
     sessionId = null;
     try {
       const status = await m.request<ClaudeAuthStatus>({
         method: "POST",
-        url: apiUrl("/api/claude-auth/submit-code"),
+        url: apiUrl("/api/claude-auth/setup-token/submit-code"),
         body: {
           session_id: submittedSessionId,
           code: code.trim(),
@@ -146,33 +256,34 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         mode = "success";
         m.redraw();
       } else {
-        // A submitted code consumes the single-use OAuth session -- the backend
-        // terminates its `claude auth login` subprocess unconditionally, and
-        // `sessionId` was cleared above -- so there is nothing left to retry in
-        // place. Route to the full error screen, whose only action is "Start
-        // over" (a fresh sign-in flow); a code-entry form here would be a dead
-        // end (its submit would no-op on the now-null session).
+        // A submitted code consumes the single-use session, so there is
+        // nothing left to retry in place. Route to the full error screen,
+        // whose only action is "Start over" (a fresh sign-in flow).
         setError("Authentication did not succeed.");
       }
     } catch (error) {
       const errResp = (error as { response?: { detail?: string } }).response;
-      // Same single-use-session reasoning as the branch above: the OAuth
-      // session is already gone, so there is no in-place retry -- send the user
-      // to the "Start over" error screen rather than back to the code form.
+      // Same single-use-session reasoning as the branch above.
       setError(errResp?.detail ?? "Failed to verify code");
     }
   }
 
-  async function submitApiKey(): Promise<void> {
-    if (!apiKey.trim()) return;
+  // All three paste paths (API key, Imbue blob, direct token) submit
+  // env-var-style lines to the same strict backend endpoint, which writes
+  // the settings env block and restarts the mind's claude agents.
+  async function submitCredentialLines(
+    credentialLines: string,
+    verifyingCopy: string,
+    failureFormMode: "api_key_form" | "imbue_form" | "awaiting_setup_token",
+  ): Promise<void> {
     clearError();
-    startVerifying("Saving your API key...", "Applying it to this mind.");
+    startVerifying(verifyingCopy, "Applying to this mind and restarting its agents.");
     try {
       const status = await m.request<ClaudeAuthStatus>({
         method: "POST",
-        url: apiUrl("/api/claude-auth/submit-api-key"),
+        url: apiUrl("/api/claude-auth/submit-credentials"),
         body: {
-          api_key: apiKey.trim(),
+          credentials: credentialLines,
         },
       });
       if (status.logged_in) {
@@ -180,15 +291,38 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         mode = "success";
         m.redraw();
       } else {
-        setInlineError("Anthropic did not accept the API key. Double-check and try again.", "api_key_form");
+        setInlineError("Claude did not accept the credentials. Double-check and try again.", failureFormMode);
       }
     } catch (error) {
       const errResp = (error as { response?: { detail?: string } }).response;
-      setInlineError(errResp?.detail ?? "Failed to save API key", "api_key_form");
+      setInlineError(errResp?.detail ?? "Failed to save credentials", failureFormMode);
     }
   }
 
-  function abortOAuthIfActive(): void {
+  function submitApiKey(): void {
+    if (!apiKey.trim()) return;
+    void submitCredentialLines(`ANTHROPIC_API_KEY=${apiKey.trim()}`, "Saving your API key...", "api_key_form");
+  }
+
+  function submitImbueBlob(): void {
+    if (!imbueBlob.trim()) return;
+    void submitCredentialLines(imbueBlob, "Saving your Imbue credentials...", "imbue_form");
+  }
+
+  function submitDirectToken(): void {
+    if (!directToken.trim()) return;
+    // The direct-token paste replaces the in-flight setup-token session,
+    // so drop that session first.
+    abortSetupTokenIfActive();
+    void submitCredentialLines(
+      `CLAUDE_CODE_OAUTH_TOKEN=${directToken.trim()}`,
+      "Saving your token...",
+      "awaiting_setup_token",
+    );
+  }
+
+  function abortSetupTokenIfActive(): void {
+    stopPolling();
     if (sessionId !== null) {
       void m.request({ method: "POST", url: apiUrl("/api/claude-auth/abort") });
     }
@@ -237,22 +371,56 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   }
 
   function goBackToProviderSelection(): void {
-    abortOAuthIfActive();
+    abortSetupTokenIfActive();
     apiKey = "";
     apiKeyRevealed = false;
+    imbueBlob = "";
+    directToken = "";
     clearError();
+    loadCurrentStatus();
     mode = "select_provider";
     m.redraw();
   }
 
+  function openImbueMintPage(): void {
+    const desktopOrigin = computeDesktopAppOrigin(
+      window.location.hostname,
+      window.location.port,
+      window.location.protocol,
+    );
+    if (desktopOrigin === null) {
+      // Reached via the Cloudflare tunnel (or any non-local route): the
+      // desktop client's own UI is not reachable from this browser.
+      window.alert(
+        "The Imbue key page is part of the Minds desktop app. Open this workspace from the desktop app on your computer to mint a key, then paste it here.",
+      );
+      return;
+    }
+    const hostId = currentStatus?.workspace_host_id ?? "";
+    const target = `${desktopOrigin}/settings/ai-keys${hostId ? `?workspace=${encodeURIComponent(hostId)}` : ""}`;
+    window.open(target, "_blank", "noopener,noreferrer");
+  }
+
   // ----- Renderers -----
+
+  function describeCurrentMode(status: ClaudeAuthStatus | null): string | null {
+    if (status === null) return null;
+    const suffix = status.masked_key_suffix ? ` (...${status.masked_key_suffix})` : "";
+    if (status.auth_mode === "subscription") return "Currently signed in with your Claude subscription.";
+    if (status.auth_mode === "imbue") return `Currently signed in with Imbue${suffix}.`;
+    if (status.auth_mode === "api_key") return `Currently signed in with an API key${suffix}.`;
+    if (status.logged_in) return "Currently signed in.";
+    return "Not signed in.";
+  }
 
   // The provider-selection screen leads with the Claude subscription as the
   // recommended default -- a logo, headline, and full-width primary button --
-  // and tucks the Anthropic Console and API-key paths behind a collapsed
-  // "Other ways to sign in" disclosure so they don't compete for attention.
+  // and tucks the Imbue and API-key paths behind a collapsed "Other ways to
+  // sign in" disclosure so they don't compete for attention.
   function renderProviderSelection(): m.Vnode {
+    const currentModeLine = describeCurrentMode(currentStatus);
     return m("div.claude-login-select", [
+      currentModeLine !== null ? m("p.claude-login-current-mode", currentModeLine) : null,
       m("div.claude-login-primary", [
         m.trust(claudeLogoIcon()),
         m("h3.claude-login-primary-headline", "Sign in with your Claude subscription"),
@@ -262,7 +430,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         ),
         m(
           "button.claude-login-button.claude-login-button--primary.claude-login-button--block",
-          { type: "button", onclick: () => void startOAuth("claudeai") },
+          { type: "button", onclick: () => void startSetupToken() },
           "Continue with Claude subscription",
         ),
       ]),
@@ -287,13 +455,23 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         ),
         alternativesExpanded
           ? m("div.claude-login-alts-list", [
-              m("button.claude-login-alt", { type: "button", onclick: () => void startOAuth("console") }, [
-                m("span.claude-login-alt-text", [
-                  m("span.claude-login-alt-name", "Anthropic Console"),
-                  m("span.claude-login-alt-desc", "Sign in with an API-billing account from console.anthropic.com."),
-                ]),
-                m("span.claude-login-alt-go", m.trust(icon("chevron-right", { size: 18 }))),
-              ]),
+              m(
+                "button.claude-login-alt",
+                {
+                  type: "button",
+                  onclick: () => {
+                    mode = "imbue_form";
+                    m.redraw();
+                  },
+                },
+                [
+                  m("span.claude-login-alt-text", [
+                    m("span.claude-login-alt-name", "Sign in with Imbue"),
+                    m("span.claude-login-alt-desc", "Use an Imbue account to pay per token, no Claude account needed."),
+                  ]),
+                  m("span.claude-login-alt-go", m.trust(icon("chevron-right", { size: 18 }))),
+                ],
+              ),
               m(
                 "button.claude-login-alt",
                 {
@@ -319,7 +497,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
 
   function renderApiKeyForm(): m.Vnode[] {
     return [
-      m("p.claude-login-lead", "Paste an Anthropic API key. It's saved to this mind's host env file."),
+      m("p.claude-login-lead", "Paste an Anthropic API key. It's saved to this mind's shared Claude settings."),
       m("div.claude-login-field", [
         m("label.claude-login-step-label", { for: "claude-login-api-key-input" }, [
           m("span.claude-login-step-num", "1"),
@@ -339,7 +517,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
             onkeydown: (event: KeyboardEvent) => {
               if (event.key === "Enter" && apiKey.trim()) {
                 event.preventDefault();
-                void submitApiKey();
+                submitApiKey();
               }
             },
           }),
@@ -361,9 +539,53 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     ];
   }
 
-  function renderOAuthCodeEntry(): m.Vnode[] {
+  function renderImbueForm(): m.Vnode[] {
     return [
-      m("p.claude-login-lead", "Approve access in your browser, then paste the code Claude gives you back here."),
+      m(
+        "p.claude-login-lead",
+        "Get credentials from the Minds desktop app, then paste them here. Your usage is billed to your Imbue account.",
+      ),
+      m("div.claude-login-step", [
+        m("div.claude-login-step-label", [m("span.claude-login-step-num", "1"), "Get your credentials"]),
+        m(
+          "a.claude-login-button.claude-login-button--primary.claude-login-button--block.claude-login-button--link",
+          {
+            href: "#",
+            onclick: (event: MouseEvent) => {
+              event.preventDefault();
+              openImbueMintPage();
+            },
+          },
+          [m("span", "Open the Imbue key page"), m.trust(icon("external-link", { size: 15 }))],
+        ),
+        m(
+          "p.claude-login-helper",
+          "The key page creates a key for this workspace and copies the credentials to your clipboard.",
+        ),
+      ]),
+      m("div.claude-login-step", [
+        m("label.claude-login-step-label", { for: "claude-login-imbue-blob-input" }, [
+          m("span.claude-login-step-num", "2"),
+          "Paste your credentials",
+        ]),
+        m("textarea.claude-login-input.claude-login-input--mono.claude-login-textarea", {
+          id: "claude-login-imbue-blob-input",
+          rows: 3,
+          placeholder: "ANTHROPIC_BASE_URL=...\nANTHROPIC_API_KEY=sk-...",
+          value: imbueBlob,
+          spellcheck: false,
+          autocomplete: "off",
+          oninput: (event: InputEvent) => {
+            imbueBlob = (event.target as HTMLTextAreaElement).value;
+          },
+        }),
+      ]),
+    ];
+  }
+
+  function renderAwaitingSetupToken(): m.Vnode[] {
+    return [
+      m("p.claude-login-lead", "Approve access in your browser. This screen finishes on its own once you have."),
       m("div.claude-login-step", [
         m("div.claude-login-step-label", [m("span.claude-login-step-num", "1"), "Open the sign-in page"]),
         m(
@@ -394,31 +616,103 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         urlCopyFailed && oauthUrl !== null ? m("div.claude-login-rawurl", { tabindex: 0 }, oauthUrl) : null,
       ]),
       m("div.claude-login-step", [
-        m("label.claude-login-step-label", { for: "claude-login-code-input" }, [
-          m("span.claude-login-step-num", "2"),
-          "Paste your code",
+        m("div.claude-login-step-label", [m("span.claude-login-step-num", "2"), "Approve in the browser"]),
+        m("div.claude-login-waiting", [
+          m.trust(loginSpinnerIcon()),
+          m("span", "Waiting for your approval..."),
         ]),
-        m("input.claude-login-input.claude-login-input--mono", {
-          id: "claude-login-code-input",
-          type: "text",
-          placeholder: "CODE#STATE",
-          value: code,
-          spellcheck: false,
-          autocomplete: "off",
-          oninput: (event: InputEvent) => {
-            code = (event.target as HTMLInputElement).value;
-          },
-          onkeydown: (event: KeyboardEvent) => {
-            if (event.key === "Enter" && code.trim()) {
-              event.preventDefault();
-              void submitOAuthCode();
-            }
-          },
-        }),
-        m(
-          "p.claude-login-helper",
-          "Claude shows a CODE#STATE string after you approve. Paste the whole thing, including the part after the #.",
-        ),
+      ]),
+      // Paste-code fallback: some sign-in flows show a CODE#STATE string
+      // instead of completing on their own.
+      m("div.claude-login-subtle", [
+        codeEntryExpanded
+          ? m("div.claude-login-subtle-body", [
+              m("input.claude-login-input.claude-login-input--mono", {
+                id: "claude-login-code-input",
+                type: "text",
+                placeholder: "CODE#STATE",
+                value: code,
+                spellcheck: false,
+                autocomplete: "off",
+                oninput: (event: InputEvent) => {
+                  code = (event.target as HTMLInputElement).value;
+                },
+                onkeydown: (event: KeyboardEvent) => {
+                  if (event.key === "Enter" && code.trim()) {
+                    event.preventDefault();
+                    void submitSetupTokenCode();
+                  }
+                },
+              }),
+              m(
+                "button.claude-login-button.claude-login-button--primary",
+                {
+                  type: "button",
+                  disabled: !code.trim(),
+                  onclick: () => {
+                    void submitSetupTokenCode();
+                  },
+                },
+                "Verify code",
+              ),
+            ])
+          : m(
+              "button.claude-login-subtle-toggle",
+              {
+                type: "button",
+                onclick: () => {
+                  codeEntryExpanded = true;
+                  m.redraw();
+                },
+              },
+              "The page showed a code? Paste it instead",
+            ),
+      ]),
+      // Subtle direct-token affordance: developers who already have a
+      // long-lived token can skip the browser flow entirely.
+      m("div.claude-login-subtle", [
+        tokenPasteExpanded
+          ? m("div.claude-login-subtle-body", [
+              m("input.claude-login-input.claude-login-input--mono", {
+                id: "claude-login-token-input",
+                type: "password",
+                placeholder: "sk-ant-oat01-...",
+                value: directToken,
+                spellcheck: false,
+                autocomplete: "off",
+                oninput: (event: InputEvent) => {
+                  directToken = (event.target as HTMLInputElement).value;
+                },
+                onkeydown: (event: KeyboardEvent) => {
+                  if (event.key === "Enter" && directToken.trim()) {
+                    event.preventDefault();
+                    submitDirectToken();
+                  }
+                },
+              }),
+              m(
+                "button.claude-login-button.claude-login-button--primary",
+                {
+                  type: "button",
+                  disabled: !directToken.trim(),
+                  onclick: () => {
+                    submitDirectToken();
+                  },
+                },
+                "Use token",
+              ),
+            ])
+          : m(
+              "button.claude-login-subtle-toggle",
+              {
+                type: "button",
+                onclick: () => {
+                  tokenPasteExpanded = true;
+                  m.redraw();
+                },
+              },
+              "Already have a token? Paste it instead",
+            ),
       ]),
     ];
   }
@@ -440,12 +734,17 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   function renderSuccess(): m.Vnode {
     const status = successStatus;
     const email = status?.email ?? null;
-    const tier = status?.subscription_type ?? null;
+    if (status?.auth_mode === "subscription") {
+      return m("div", [
+        renderStatus("success", "All set", "Signed in with your Claude subscription."),
+        m("p.claude-login-helper.claude-login-helper--center", "Your sign-in token is valid for about a year."),
+      ]);
+    }
     let detail: string;
-    if (email && tier) {
-      detail = `Signed in as ${email}. Plan: ${tier}.`;
+    if (status?.auth_mode === "imbue") {
+      detail = "Signed in with Imbue.";
     } else if (email) {
-      detail = `Signed in as ${email} via Anthropic Console.`;
+      detail = `Signed in as ${email}.`;
     } else {
       detail = "You're signed in.";
     }
@@ -463,7 +762,8 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     if (mode === "error") return "Something went wrong";
     if (mode === "verifying") return "Just a moment";
     if (mode === "api_key_form") return "Sign in with API key";
-    if (mode === "awaiting_oauth_code") return "Finish signing in";
+    if (mode === "imbue_form") return "Sign in with Imbue";
+    if (mode === "awaiting_setup_token") return "Finish signing in";
     return "Sign in to Claude";
   }
 
@@ -473,8 +773,9 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       return renderStatus("error", "Couldn't complete sign-in", errorMessage ?? "An unexpected error occurred.");
     }
     if (mode === "verifying") return renderStatus("loading", verifyingTitle, verifyingDetail);
-    if (mode === "awaiting_oauth_code") return renderOAuthCodeEntry();
+    if (mode === "awaiting_setup_token") return renderAwaitingSetupToken();
     if (mode === "api_key_form") return renderApiKeyForm();
+    if (mode === "imbue_form") return renderImbueForm();
     return renderProviderSelection();
   }
 
@@ -490,10 +791,10 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       ]);
     }
     if (mode === "error") {
-      // A sign-in failure (failed OAuth start, or a submitted OAuth code that
-      // consumed the single-use session) leaves no live session to retry
-      // against, so the only forward action is to start the whole flow over.
-      // The header close button and backdrop click still dismiss the modal, so
+      // A sign-in failure (failed setup-token start, or a consumed
+      // single-use session) leaves no live session to retry against, so
+      // the only forward action is to start the whole flow over. The
+      // header close button and backdrop click still dismiss the modal, so
       // a single primary action here is not a dead end.
       return m("div.claude-login-footer", [
         m(
@@ -516,30 +817,41 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
             type: "button",
             disabled: !apiKey.trim(),
             onclick: () => {
-              void submitApiKey();
+              submitApiKey();
             },
           },
           "Save & finish",
         ),
       ]);
     }
-    // awaiting_oauth_code
-    return m("div.claude-login-footer.claude-login-footer--spread", [
+    if (mode === "imbue_form") {
+      return m("div.claude-login-footer.claude-login-footer--spread", [
+        m(
+          "button.claude-login-button.claude-login-button--ghost",
+          { type: "button", onclick: () => goBackToProviderSelection() },
+          "Back",
+        ),
+        m(
+          "button.claude-login-button.claude-login-button--primary",
+          {
+            type: "button",
+            disabled: !imbueBlob.trim(),
+            onclick: () => {
+              submitImbueBlob();
+            },
+          },
+          "Save & finish",
+        ),
+      ]);
+    }
+    // awaiting_setup_token: no primary action -- the flow completes via
+    // polling (or one of the subtle affordances, which carry their own
+    // buttons). Back returns to provider selection and aborts the session.
+    return m("div.claude-login-footer", [
       m(
         "button.claude-login-button.claude-login-button--ghost",
         { type: "button", onclick: () => goBackToProviderSelection() },
         "Back",
-      ),
-      m(
-        "button.claude-login-button.claude-login-button--primary",
-        {
-          type: "button",
-          disabled: !code.trim(),
-          onclick: () => {
-            void submitOAuthCode();
-          },
-        },
-        "Verify & finish",
       ),
     ]);
   }
@@ -547,6 +859,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   return {
     oncreate(vnode: m.VnodeDOM<ClaudeLoginModalAttrs>) {
       attrsRef = vnode.attrs;
+      loadCurrentStatus();
     },
 
     onupdate(vnode: m.VnodeDOM<ClaudeLoginModalAttrs>) {
@@ -554,7 +867,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     },
 
     onremove() {
-      abortOAuthIfActive();
+      abortSetupTokenIfActive();
     },
 
     view() {
@@ -584,7 +897,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
             ]),
             m(
               "div.claude-login-body",
-              mode === "awaiting_oauth_code" || mode === "api_key_form"
+              mode === "awaiting_setup_token" || mode === "api_key_form" || mode === "imbue_form"
                 ? [errorMessage !== null ? renderInlineError() : null, renderBody()]
                 : renderBody(),
             ),
