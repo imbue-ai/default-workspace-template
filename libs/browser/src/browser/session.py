@@ -111,10 +111,11 @@ _RENDER_MAX_HEIGHT = 1080
 # tab feels snappier. Slightly more bandwidth than skipping frames.
 _SCREENCAST_EVERY_NTH_FRAME = 1
 
-# Deferred-install marker (see scripts/deferred_install.sh). Chromium installs
-# asynchronously on first container boot; launching a browser before it exists
-# fails, so callers gate on this. No Xvfb: CDP streaming/input are headless.
+# Deferred-install markers (see scripts/deferred_install.sh). Chromium and the
+# Xvfb virtual display install asynchronously on first container boot; launching
+# a browser before they exist fails, so callers gate on these.
 _PLAYWRIGHT_MARKER = Path("/var/lib/minds/deferred-install/done.playwright")
+_XVFB_MARKER = Path("/var/lib/minds/deferred-install/done.xvfb")
 
 # Default model. browser-use's own default LLM is ChatBrowserUse (its hosted
 # model), so to drive with the user's Anthropic key we pass ChatAnthropic
@@ -122,10 +123,14 @@ _PLAYWRIGHT_MARKER = Path("/var/lib/minds/deferred-install/done.playwright")
 # API as-is (browser-use accepts an arbitrary model string).
 _DEFAULT_MODEL = os.environ.get("BROWSER_USE_MODEL", "claude-sonnet-4-6")
 
-# Headless by default. CDP screencast + input are display-independent (they work
-# in headless Chromium), so no Xvfb is needed. Set BROWSER_HEADLESS=0 to run
-# headful (stronger anti-bot fidelity) if a site blocks headless.
-_HEADLESS = os.environ.get("BROWSER_HEADLESS", "1") != "0"
+# Headful under a virtual display (Xvfb) by default: the browser service runs an
+# Xvfb server and exports DISPLAY, so Chromium renders into a real X11 session.
+# That is what makes the OS clipboard usable -- xclip populates/reads the X11
+# clipboard for native copy/paste (images included), which a headless Chromium
+# has no reachable clipboard for. Falls back to headless where no DISPLAY exists
+# (tests, bare dev boxes) so those still run. Force either mode with
+# BROWSER_HEADLESS=1/0.
+_HEADLESS = os.environ.get("BROWSER_HEADLESS", "0" if os.environ.get("DISPLAY") else "1") != "0"
 
 # Page the browser opens on, and the default for "New tab".
 _HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com")
@@ -359,6 +364,10 @@ def deferred_install_ready() -> tuple[bool, str]:
         return True, "ready"  # host/CI testing without the deferred-install marker
     if not _PLAYWRIGHT_MARKER.exists():
         return False, "Chromium is still installing in this workspace; try again in a minute."
+    # Headful needs the Xvfb display present; wait for its install too (headless
+    # runs -- tests, bare dev boxes -- don't need it).
+    if not _HEADLESS and not _XVFB_MARKER.exists():
+        return False, "The virtual display is still installing in this workspace; try again in a minute."
     return True, "ready"
 
 
