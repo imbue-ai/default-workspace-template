@@ -162,15 +162,16 @@ def _ensure_host_claude_config_dir(target: Path) -> None:
 def _read_host_name() -> str | None:
     """Read host_name from $MNGR_HOST_DIR/data.json.
 
-    Same source as system_interface._read_host_name. Returns None if any
-    step fails so callers can decide whether to fall back.
+    Same source as system_interface._read_host_name. On OpenHost the local
+    provider's default host has no data.json, so fall back to the app name.
+    Returns None if every source fails so callers can decide what to do.
     """
     host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
     if not host_dir:
         return None
     data_path = Path(host_dir) / "data.json"
     if not data_path.exists():
-        return None
+        return os.environ.get("OPENHOST_APP_NAME") or None
     try:
         data = json.loads(data_path.read_text())
     except (json.JSONDecodeError, OSError) as e:

@@ -138,7 +138,8 @@ def _inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
 
 
 def _read_host_name() -> str:
-    """Read the host name from $MNGR_HOST_DIR/data.json, falling back to socket.gethostname()."""
+    """Read the host name from $MNGR_HOST_DIR/data.json, falling back to
+    $OPENHOST_APP_NAME (no data.json exists on OpenHost) then socket.gethostname()."""
     host_dir = os.environ.get("MNGR_HOST_DIR", "")
     if host_dir:
         data_path = Path(host_dir) / "data.json"
@@ -150,7 +151,7 @@ def _read_host_name() -> str:
                     return str(name)
             except (json.JSONDecodeError, OSError):
                 pass
-    return socket.gethostname()
+    return os.environ.get("OPENHOST_APP_NAME") or socket.gethostname()
 
 
 def _inject_hostname_meta_tag(html_content: str) -> str:
