@@ -167,8 +167,7 @@ finds something.
 1. **Surface your tab, then say hello -- as a chat message, before any `tk`
    step.** First silently run
    `python3 scripts/layout.py open "chat:$MNGR_AGENT_NAME"` so your tab opens
-   (focused) for this run; best-effort, continue on failure. Then send the
-   hello. Send the hello
+   (focused) for this run; best-effort, continue on failure. Then send the hello
    as your opening reply *before* you create or start any step, so it lands in the
    conversation and never as a step title, caption, or ticket. It is one short,
    friendly opening message -- who you are and what you're about to do -- shaped by
