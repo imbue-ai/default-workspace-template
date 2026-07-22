@@ -7,9 +7,13 @@ never restart a live service or reveal anything** -- you validate in isolation
 and report; the lead applies the update.
 
 The deterministic pieces (target resolution, merged-vs-pulled classification,
-changelog gathering) live in `$UPDATE_SELF_SKILL_DIR/scripts/update_self.py` --
-call it, don't reimplement. (`$UPDATE_SELF_SKILL_DIR` is the copy of the
-update-self flow shipped with the version being updated to; Step 1 sets it.)
+changelog gathering) live in
+`runtime/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py`
+-- call it, don't reimplement. That
+`runtime/update-self/skill-at-target/.agents/skills/update-self` path is the copy
+of the update-self flow shipped with the version being updated to (the lead staged
+it and it was synced into this worktree with the runtime dir); running from it
+means you use the target version's flow, not this worktree's possibly-stale copy.
 Impact analysis (who depends on a changed file) is deliberately *not* scripted;
 Step 4a is your recipe for it.
 
@@ -17,15 +21,14 @@ Step 4a is your recipe for it.
 
 ```bash
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'runtime/update-self/task.md')"
-UPDATE_SELF_SKILL_DIR="${UPDATE_SELF_SKILL_DIR:-.agents/skills/update-self}"
 ```
 
-Sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, `TARGET_REF`, and
-`UPDATE_SELF_SKILL_DIR` (from the task's `update_self_skill_dir` frontmatter --
-run every `update_self.py` call below from `$UPDATE_SELF_SKILL_DIR/scripts/` so
-you use the target version's flow, not this worktree's possibly-stale copy; the
-fallback keeps an older task file that omits the field working). If the worktree
-has no `.venv`, `uv sync --all-packages` once. Ensure the ref is present:
+Sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, and `TARGET_REF`. Run every
+`update_self.py` call below from
+`runtime/update-self/skill-at-target/.agents/skills/update-self/scripts/` (a fixed
+path -- reference it by literal each time rather than stashing it in a shell
+variable, since each bash invocation starts a fresh shell). If the worktree has no
+`.venv`, `uv sync --all-packages` once. Ensure the ref is present:
 
 ```bash
 git fetch upstream --tags
@@ -40,7 +43,7 @@ renamed interface a local customization depends on, both sides rewriting the sam
 region) -- so you can frame a precise `question` before committing to the merge:
 
 ```bash
-python3 "$UPDATE_SELF_SKILL_DIR/scripts/update_self.py" \
+python3 runtime/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     classify-merge --local HEAD --target "$TARGET_REF" --base "$BASE"
 ```
 
@@ -106,7 +109,7 @@ Split what upstream changed into the reconciled **merged** set (validate) vs the
 clean **pulled-in** set (trust as upstream-tested):
 
 ```bash
-python3 "$UPDATE_SELF_SKILL_DIR/scripts/update_self.py" \
+python3 runtime/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     classify-merge --local HEAD^1 --target "$TARGET_REF"
 ```
 
@@ -311,7 +314,7 @@ and gate verdicts for your report.
 ## 5. Gather the "what's new" inputs
 
 ```bash
-python3 "$UPDATE_SELF_SKILL_DIR/scripts/update_self.py" \
+python3 runtime/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     changelog-entries --base "$BASE" --target "$TARGET_REF"
 ```
 

@@ -292,6 +292,7 @@ def test_bootstrap_skill_reports_no_difference_when_local_matches_tag(
     repo = tmp_path / "repo"
     _init_repo_with_skill(repo, skill_body="STABLE FLOW\n")
 
+    dest = tmp_path / "staging"
     assert (
         update_self.main(
             [
@@ -299,14 +300,20 @@ def test_bootstrap_skill_reports_no_difference_when_local_matches_tag(
                 "--ref",
                 "minds-v1.0.0",
                 "--dest",
-                str(tmp_path / "staging"),
+                str(dest),
                 "--repo-root",
                 str(repo),
             ]
         )
         == 0
     )
-    assert json.loads(capsys.readouterr().out)["differs"] is False
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["differs"] is False
+    # Even when identical, the fixed path is left populated with a runnable copy --
+    # the flow always dispatches from it, so it must never be empty.
+    staged_skill = Path(payload["skill_dir"])
+    assert staged_skill == dest / update_self.SKILL_DIR_REL
+    assert staged_skill.joinpath("SKILL.md").read_text() == "STABLE FLOW\n"
 
 
 def test_bootstrap_skill_ignores_untracked_build_artifacts(tmp_path, capsys) -> None:
@@ -338,23 +345,32 @@ def test_bootstrap_skill_ignores_untracked_build_artifacts(tmp_path, capsys) -> 
     assert json.loads(capsys.readouterr().out)["differs"] is False
 
 
-def test_bootstrap_skill_reports_null_when_ref_predates_skill(
+def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
     tmp_path, capsys
 ) -> None:
-    # A ref with no update-self skill at all yields no staged copy, so the caller
-    # falls back to the local flow instead of trying to follow a missing one.
+    # A ref with no update-self skill at all has no target copy to hand off to, so
+    # the command stages the *local* copy at the fixed path (the flow always runs
+    # from that one path) and reports differs=False so the caller stays on the
+    # local flow.
     repo = tmp_path / "repo"
 
     def _git(*args: str) -> None:
         subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
+    # Tag an empty root commit that predates the skill dir, then add the skill to
+    # the working tree -- so `minds-v0.0.1` has no skill but the local copy does.
     repo.mkdir()
     _git("init", "-q")
     _git("config", "user.email", "test@example.com")
     _git("config", "user.name", "test")
     _git("commit", "--allow-empty", "-q", "-m", "root")
     _git("tag", "minds-v0.0.1")
+    skill_dir = repo / update_self.SKILL_DIR_REL
+    (skill_dir / "scripts").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("LOCAL FLOW\n", encoding="utf-8")
+    (skill_dir / "scripts" / "update_self.py").write_text("# local\n", encoding="utf-8")
 
+    dest = tmp_path / "staging"
     assert (
         update_self.main(
             [
@@ -362,7 +378,7 @@ def test_bootstrap_skill_reports_null_when_ref_predates_skill(
                 "--ref",
                 "minds-v0.0.1",
                 "--dest",
-                str(tmp_path / "staging"),
+                str(dest),
                 "--repo-root",
                 str(repo),
             ]
@@ -370,5 +386,9 @@ def test_bootstrap_skill_reports_null_when_ref_predates_skill(
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["skill_dir"] is None
     assert payload["differs"] is False
+    staged_skill = Path(payload["skill_dir"])
+    assert staged_skill == dest / update_self.SKILL_DIR_REL
+    # The staged copy is the local working-tree flow, present and runnable.
+    assert staged_skill.joinpath("SKILL.md").read_text() == "LOCAL FLOW\n"
+    assert staged_skill.joinpath("scripts", "update_self.py").exists()

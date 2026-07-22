@@ -30,6 +30,10 @@ Because the update flow itself evolves, once the target is resolved this pass
 (Step 2a) and runs the rest -- lead *and* worker -- from there. So a fix to the
 conflict triage, validation, or reveal logic that shipped in the release is
 applied on the way *in*, instead of staying a release behind in the local copy.
+That copy is staged at one fixed path --
+`runtime/update-self/skill-at-target/.agents/skills/update-self` -- which the lead
+and worker both address by literal (no shell state carried between commands, since
+each bash invocation starts a fresh shell).
 
 ## 1. Preconditions
 
@@ -97,44 +101,42 @@ git diff --name-status "$(git merge-base HEAD "$REF")" "$REF"
 ### 2a. Hand off to the target's own update-self flow
 
 Now re-point the rest of this pass at the update-self skill **as it exists at
-`$REF`**. Extract the target's copy (from the already-fetched objects -- no
-network, no working-tree mutation) and compare it to your local one:
+`$REF`**. Stage that copy (from the already-fetched objects -- no network, no
+working-tree mutation) at the fixed path
+`runtime/update-self/skill-at-target/.agents/skills/update-self`, and learn
+whether it differs from your local one:
 
 ```bash
-BOOTSTRAP=$(python3 .agents/skills/update-self/scripts/update_self.py bootstrap-skill --ref "$REF")
-echo "$BOOTSTRAP"
-SKILL_DIR=$(echo "$BOOTSTRAP" | python3 -c 'import sys, json; print(json.load(sys.stdin)["skill_dir"] or "")')
-DIFFERS=$(echo "$BOOTSTRAP" | python3 -c 'import sys, json; print(json.load(sys.stdin)["differs"])')
-echo "skill_dir=$SKILL_DIR differs=$DIFFERS"
+DIFFERS=$(python3 .agents/skills/update-self/scripts/update_self.py bootstrap-skill --ref "$REF" \
+    | python3 -c 'import sys, json; print(json.load(sys.stdin)["differs"])')
+echo "differs=$DIFFERS"
 ```
 
-Then branch on the result:
+`bootstrap-skill` always leaves a runnable flow at that fixed path (the target's
+copy, or -- when the ref predates the skill -- the local copy), so **the worker
+runs from `runtime/update-self/skill-at-target/.agents/skills/update-self`
+regardless**. `differs` decides only which `SKILL.md` prose *you* follow next:
 
-- **`differs` is `False`** (the target's flow is byte-identical to yours), **or
-  `$SKILL_DIR` is empty** (the ref predates the skill, so there is nothing to
-  bootstrap from) -> **continue with this document** and set
+- **`differs` is `False`** (the staged flow is byte-identical to yours, or the ref
+  predates the skill) -> **continue with this document**.
 
-  ```bash
-  export UPDATE_SELF_SKILL_DIR=.agents/skills/update-self
-  ```
-
-- **`differs` is `True`** -> the target's copy of the flow differs from your
-  local one (it shipped changes, or this workspace customized the flow locally).
-  **Stop following this document.** Export the extracted copy as your skill dir
-  and follow *its* `SKILL.md` from **Step 3** onward:
+- **`differs` is `True`** -> the target's copy of the flow differs from your local
+  one (it shipped changes, or this workspace customized the flow locally). **Stop
+  following this document** and follow the staged copy's `SKILL.md` from **Step 3**
+  onward:
 
   ```bash
-  export UPDATE_SELF_SKILL_DIR="$SKILL_DIR"   # absolute path to the target's copy
-  # now read and follow "$UPDATE_SELF_SKILL_DIR/SKILL.md" from Step 3
+  # read and follow "runtime/update-self/skill-at-target/.agents/skills/update-self/SKILL.md" from Step 3
   ```
 
   You have already completed Steps 1-2 (backup, single-flight, clean tree, target
-  resolved), so do **not** re-run the extracted doc's Step 2 or re-extract -- just
-  carry `$REF` and `$UPDATE_SELF_SKILL_DIR` forward into its Step 3.
+  resolved), so do **not** re-run the staged doc's Step 2 or re-stage -- just carry
+  `$REF` forward into its Step 3.
 
-Either way, `$UPDATE_SELF_SKILL_DIR` now names the copy of the flow to run.
-Everything below reaches the skill's scripts and worker reference through it (and
-passes it to the worker), so both paths dispatch against the correct version.
+Either way, `runtime/update-self/skill-at-target/.agents/skills/update-self` now
+holds the copy of the flow to run. Everything below reaches the skill's scripts
+and worker reference through that literal path (and points the worker at it), so
+both dispatch against the correct version.
 
 **The handoff contract (keep this boundary stable when editing this skill).**
 Steps 1-2 -- preconditions and target resolution -- always run from the *local*
@@ -143,12 +145,13 @@ target. The target's flow is entered at **Step 3**. So an edit to this skill mus
 preserve that boundary: a future version's Steps 1-2 must stay "capture a backup,
 the single-flight/clean-tree checks, then resolve a ref into `$REF`", and its
 Step 3 must stay the worker dispatch -- otherwise an older initiator handing off
-into a newer copy (or vice versa) lands at the wrong step. Note also that this
-handoff runs the target ref's `update_self.py` and follows its prose *before* the
-Step 5a approval gate; for the default target (a stable, already-tested `minds-v*`
-tag) that is the same trust basis as the merge itself, but a `--override` to an
-untrusted ref means trusting that ref's flow code and instructions -- only
-override to a ref you trust.
+into a newer copy (or vice versa) lands at the wrong step. Keep the staging path
+(`runtime/update-self/skill-at-target/.agents/skills/update-self`) stable for the
+same reason. Note also that this handoff runs the target ref's `update_self.py`
+and follows its prose *before* the Step 5a approval gate; for the default target
+(a stable, already-tested `minds-v*` tag) that is the same trust basis as the
+merge itself, but a `--override` to an untrusted ref means trusting that ref's
+flow code and instructions -- only override to a ref you trust.
 
 ## 3. Dispatch the worker
 
@@ -180,7 +183,6 @@ cat << FRONTMATTER_EOF
 lead_agent: $MNGR_AGENT_NAME
 finish_report_path: runtime/update-self/reports/report.md
 target_ref: $REF
-update_self_skill_dir: $UPDATE_SELF_SKILL_DIR
 ---
 FRONTMATTER_EOF
 cat << 'BODY_EOF'
@@ -188,14 +190,15 @@ cat << 'BODY_EOF'
 # Task: safe update-self
 
 ## What to do
-Follow the worker guide at `$UPDATE_SELF_SKILL_DIR/references/update-self-worker.md`
+Follow the worker guide at
+`runtime/update-self/skill-at-target/.agents/skills/update-self/references/update-self-worker.md`
 end to end: trial-merge conflict triage, complete the merge (preserving the
 `update-self:` merge-commit subject), validate the merged set, generate the
-"what's new" report, and report `done`. `$UPDATE_SELF_SKILL_DIR` is set for you
-from this file's `update_self_skill_dir` frontmatter by the worker guide's Step 1
-`parse_task_frontmatter.py` eval, and points at the copy of the update-self flow
-shipped with the version being updated to -- run *all* its `update_self.py` calls
-from `$UPDATE_SELF_SKILL_DIR/scripts/` too. Your target is the `target_ref` in
+"what's new" report, and report `done`. That
+`runtime/update-self/skill-at-target/.agents/skills/update-self` path is the copy
+of the update-self flow shipped with the version being updated to (staged by the
+lead and synced into your worktree with this runtime dir) -- run *all* its
+`update_self.py` calls from its `scripts/` too. Your target is the `target_ref` in
 this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
