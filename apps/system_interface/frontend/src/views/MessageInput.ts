@@ -85,55 +85,59 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
     }
   }
 
-  // The model picker + fast-mode toggle sit in a bottom row of the composer. The
-  // current selection is read from the agent's Claude Code settings (fetched on
-  // agent switch); picking a model or flipping fast mode posts a `/model` /
-  // `/fast` command that the running session applies immediately (see
-  // ModelSettings.ts + server.py). The fast toggle only appears for a model that
-  // supports fast mode (Opus).
-  function renderModelControls(agentId: string): m.Vnode {
+  // The model picker + fast-mode toggle live in the composer toolbar, alongside
+  // the attach and stop/send buttons. The current selection is read from the
+  // agent's Claude Code settings (fetched on agent switch); picking a model or
+  // flipping fast mode posts a `/model` / `/fast` command that the running
+  // session applies immediately (see ModelSettings.ts + server.py). The fast
+  // toggle is an icon button that only appears for a model that supports fast
+  // mode (Opus) and lights up while it is on. Returns the toolbar items (model
+  // pill first, then the fast toggle when applicable) for the caller to place.
+  function renderModelControls(agentId: string): m.Children[] {
     const settings = getModelSettings(agentId);
     const selected = getSelectedOption(agentId);
     const triggerLabel = selected?.label ?? "Model";
 
-    return m("div", { class: "message-input-controls flex flex-row items-center" }, [
-      m(
-        "div",
-        {
-          class: "model-selector-wrapper",
-          oncreate: (wrapperVnode: m.VnodeDOM) => {
-            modelSelectorElement = wrapperVnode.dom as HTMLElement;
-          },
-          onremove: () => {
-            modelSelectorElement = null;
-          },
+    const modelWrapper = m(
+      "div",
+      {
+        class: "model-selector-wrapper",
+        oncreate: (wrapperVnode: m.VnodeDOM) => {
+          modelSelectorElement = wrapperVnode.dom as HTMLElement;
         },
-        [
-          m(
-            "button",
-            {
-              type: "button",
-              class: "model-selector-trigger",
-              disabled: settings === null,
-              onclick: (event: MouseEvent) => {
-                event.stopPropagation();
-                isModelDropdownOpen = !isModelDropdownOpen;
-              },
+        onremove: () => {
+          modelSelectorElement = null;
+        },
+      },
+      [
+        m(
+          "button",
+          {
+            type: "button",
+            class: "model-selector-trigger",
+            disabled: settings === null,
+            title: "Select model",
+            onclick: (event: MouseEvent) => {
+              event.stopPropagation();
+              isModelDropdownOpen = !isModelDropdownOpen;
             },
-            [
-              m("span", triggerLabel),
-              m("span", { class: "model-selector-chevron" }, m.trust(icon("chevron-down", { size: 12 }))),
-            ],
-          ),
-          isModelDropdownOpen && settings !== null
-            ? m(
-                "div",
-                {
-                  class: "model-selector-dropdown",
-                  // Close on any click outside the picker while it is open.
-                  oncreate: () => document.addEventListener("mousedown", handleModelOutsideMousedown),
-                  onremove: () => document.removeEventListener("mousedown", handleModelOutsideMousedown),
-                },
+          },
+          [
+            m("span", { class: "model-selector-label" }, triggerLabel),
+            m("span", { class: "model-selector-chevron" }, m.trust(icon("chevron-down", { size: 12 }))),
+          ],
+        ),
+        isModelDropdownOpen && settings !== null
+          ? m(
+              "div",
+              {
+                class: "model-selector-dropdown",
+                // Close on any click outside the picker while it is open.
+                oncreate: () => document.addEventListener("mousedown", handleModelOutsideMousedown),
+                onremove: () => document.removeEventListener("mousedown", handleModelOutsideMousedown),
+              },
+              [
+                m("div", { class: "model-selector-dropdown-header" }, "Model"),
                 m(
                   "ul",
                   { class: "model-selector-dropdown-list" },
@@ -156,24 +160,29 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                     ),
                   ),
                 ),
-              )
-            : null,
-        ],
-      ),
+              ],
+            )
+          : null,
+      ],
+    );
+
+    const fastToggle =
       settings !== null && settings.fast_mode_supported
         ? m(
             "button",
             {
               type: "button",
               class: `fast-toggle${settings.fast_mode ? " fast-toggle--on" : ""}`,
-              title: settings.fast_mode ? "Fast mode on (click to turn off)" : "Fast mode off (click to turn on)",
+              title: settings.fast_mode ? "Disable fast mode" : "Enable fast mode",
+              "aria-label": settings.fast_mode ? "Disable fast mode" : "Enable fast mode",
               "aria-pressed": settings.fast_mode ? "true" : "false",
               onclick: () => setFastMode(agentId, !settings.fast_mode),
             },
-            [m("span", { class: "fast-toggle-icon" }, m.trust(icon("zap", { size: 13 }))), m("span", "Fast")],
+            m.trust(icon("zap", { size: 16 })),
           )
-        : null,
-    ]);
+        : null;
+
+    return [modelWrapper, fastToggle];
   }
 
   function renderComposerAttachment(agentId: string, attachment: ComposerAttachment): m.Vnode {
@@ -426,6 +435,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               onpaste: handlePaste,
             }),
             m("div", { class: "message-input-toolbar" }, [
+              ...renderModelControls(agentId),
               m(
                 "button",
                 {
@@ -460,7 +470,6 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                 : null,
             ]),
           ]),
-          renderModelControls(agentId),
         ]),
       ]);
     },
