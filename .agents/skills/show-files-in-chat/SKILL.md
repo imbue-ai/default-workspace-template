@@ -19,10 +19,11 @@ any other file is offered as a download.
    GitHub sync when the user has enabled the `github-sync` skill).
 
    Give each image a unique, descriptive filename, e.g.
-   `revenue-by-quarter-2026.png`. The chat freezes a per-message copy of each
-   referenced image, so reusing a filename cannot corrupt an already-posted
-   message -- but distinct names still make every image identifiable in the
-   lightbox title and as a download.
+   `revenue-by-quarter-2026.png`. The chat detects when a referenced file
+   changes after a message is posted and replaces the image with a "file has
+   been changed" notice -- so reusing a filename breaks the display of every
+   earlier message that referenced it. A fresh name per image keeps old
+   messages rendering.
 
 2. Reference it by its **absolute** on-disk path with markdown image syntax:
 

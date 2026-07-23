@@ -18,36 +18,37 @@ export function renderMarkdown(source: string): string {
 
 // Extensions the backend serves as inline images (mirrors
 // file_serving._IMAGE_EXTENSION_TO_MIME_TYPE); anything else is a download
-// link, which is not snapshotted.
+// link, which is not change-checked.
 const INLINE_IMAGE_EXTENSION_PATTERN = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
 
-/** Build the per-message snapshot URL for an absolute on-disk image path. */
-export function chatImageSnapshotUrl(sourcePath: string, eventId: string): string {
+/** Build the per-message change-checking URL for an absolute on-disk image path. */
+export function chatImageUrl(sourcePath: string, eventId: string): string {
   const encodedPath = sourcePath.slice(1).split("/").map(encodeURIComponent).join("/");
   return apiUrl(`/api/chat-images/${encodeURIComponent(eventId)}/${encodedPath}`);
 }
 
 /**
- * Point every inline chat image at its per-message snapshot.
+ * Point every inline chat image at its per-message change-checking URL.
  *
  * Chat markdown references an image by its absolute on-disk path, and the
  * backend serves that path with a one-year immutable cache policy -- so if the
  * file is later overwritten, a new message would show the browser's stale
- * cached copy and an old message re-fetched from a cold cache would show the
- * new content. Routing through /api/chat-images/<event_id>/<path> fixes both:
- * the backend freezes the file's bytes the first time each (event, path) pair
- * is seen, the event id makes the URL fresh for every new message, and an old
- * message's URL resolves to its frozen copy forever.
+ * cached copy and an old message would silently change appearance. Routing
+ * through /api/chat-images/<event_id>/<path> fixes both: the backend records
+ * the file's mtime+size the first time each (event, path) pair is seen and
+ * serves the file uncached, so every render refetches; once the file no
+ * longer matches, the backend serves a "file has been changed" notice image
+ * in its place.
  */
 function rewriteChatImageSources(container: HTMLElement, eventId: string): void {
   for (const image of Array.from(container.querySelectorAll("img"))) {
     // The raw attribute, not image.src, which the browser resolves to a full URL.
     const src = image.getAttribute("src") ?? "";
-    // Only same-origin absolute on-disk paths are snapshotted: external URLs
+    // Only same-origin absolute on-disk paths are change-checked: external URLs
     // ("https://...", "//...") and app routes ("/api/...") pass through.
     if (!src.startsWith("/") || src.startsWith("//") || src.startsWith("/api/")) continue;
     if (!INLINE_IMAGE_EXTENSION_PATTERN.test(src)) continue;
-    image.setAttribute("src", chatImageSnapshotUrl(src, eventId));
+    image.setAttribute("src", chatImageUrl(src, eventId));
   }
 }
 
