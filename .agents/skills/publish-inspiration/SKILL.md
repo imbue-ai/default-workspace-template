@@ -353,9 +353,13 @@ worktree to a clean template base and deletes gitignored state -- including
 
 3. **Flesh out the manifest.** `inspiration-<slug>.md` at the repo root has
    `<!-- FILL-IN (publishing agent): ... -->` comment blocks in "What it is,"
-   "How it works," "Recipe," "Prerequisites," and "Holes" -- generated
-   placeholders, not real content. Replace EVERY block with real, specific
-   content.
+   "How it works," "Recipe," "Prerequisites," "Holes," and "Publication
+   history" -- generated placeholders, not real content. Replace EVERY block
+   with real, specific content. "Publication history" is this inspiration's
+   changelog: replace its FILL-IN with the first entry `### v1 (YYYY-MM-DD) --
+   <one line: what this first version publishes>` using today's date; later
+   updates append `### v2 (date) -- what changed`. It is the PUBLISHER's log --
+   never write into "Adaptation history", which is the adopters' log.
    "Prerequisites" is the strictest: one machine-readable line per activation
    requirement in the exact `requires_permission:` / `requires_secret:` forms
    the template shows, derived from the included code (inspect every service

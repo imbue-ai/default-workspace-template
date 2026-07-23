@@ -54,6 +54,14 @@
   forking cannot be disabled on a personal public repo (GitHub allows that only
   on org-owned repos). Keeping the inspiration private avoids both.
 
+- **Published manifests now carry a changelog.** Each `inspiration-<slug>.md`
+  has a "Publication history" section -- the inspiration's own changelog of what
+  each published version changed, seeded at v1 with `### v1 (date) -- what this
+  first version publishes`. It is the publisher's log (a later update appends
+  `### v2 (date) -- what changed`), kept distinct from the adopters'
+  "Adaptation history". The section is FILL-IN-gated like the rest of the
+  manifest, so a publish cannot complete with it left as a placeholder.
+
 - **Published manifests now carry a version and a recipe.** Each
   `inspiration-<slug>.md` records `version: v1` and a "Recipe" section: the
   include paths, the deliberate exclusions, and the published-version
