@@ -444,6 +444,18 @@ is missing and what a working replacement looks like. Do NOT list activation
 requirements here (permissions, tokens, accounts) -- those belong in
 "Prerequisites" above. If there are genuinely no holes, say so explicitly. -->
 
+## Publication history
+
+This inspiration's changelog: what each published version changed. The PUBLISHER
+appends one entry per version (newest last); earlier entries are never rewritten.
+This is distinct from "Adaptation history" below, which is the ADOPTERS' log.
+
+<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment with
+the first entry, in the form:
+### v1 (YYYY-MM-DD) -- <one line: what this first version publishes>
+using today's date. A later update of this inspiration (the update-inspiration
+flow) appends "### v2 (date) -- what changed since v1", and so on. -->
+
 ## Adaptation history
 
 Each mind that adapts this inspiration appends one dated entry below. Earlier
@@ -679,7 +691,7 @@ echo "  readme:    README.md (regenerated to describe this inspiration)"
 echo "  boot smoke-check: passed"
 echo "  NEXT: ${MANIFEST} still has <!-- FILL-IN (publishing agent): ... --> placeholders in"
 echo "  'What it is', 'How it works', 'Recipe' (exclude + modification_rules), 'Prerequisites',"
-echo "  and 'Holes'; README.md has one FILL-IN"
+echo "  'Holes', and 'Publication history' (the v1 changelog entry); README.md has one FILL-IN"
 echo "  (its overview); and ${THUMBNAIL}"
 echo "  is a generic placeholder (marker comment inside). Replace ALL FILL-INs with real content"
 echo "  (or explicit 'none' prose) AND replace the placeholder with a bespoke SVG for this app,"
