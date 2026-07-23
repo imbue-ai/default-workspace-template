@@ -1,31 +1,35 @@
 /**
  * Modal that walks the user through signing Claude in inside a mind. It is
- * the sole auth surface for a workspace: credentials live in the `env`
- * block of the shared Claude settings.json and are written only by the
- * backend behind this modal. Three sign-in paths:
+ * the sole auth surface for a workspace. Five sign-in paths:
  *
- * - Claude subscription (default): drive `claude setup-token` via the PTY
- *   subprocess on the backend. The CLI prints an OAuth URL and then polls
- *   Anthropic itself, so the modal shows the URL and polls the backend
- *   until the 1-year token is minted -- no code paste needed in the normal
- *   flow (a paste-code fallback and a subtle "already have a token" paste
- *   affordance are provided).
+ * - Claude subscription (primary): drive `claude auth login --claudeai`
+ *   via the backend's PTY subprocess. The CLI stores a credential that
+ *   running claudes re-read on their next API call, so a fresh workspace
+ *   signs in with NO agent restart; when managed settings-env keys are
+ *   active they are cleared and the agents restarted (the switching case).
  * - Sign in with Imbue: link to the desktop app's key-mint page (keyed by
  *   this workspace's host id), then paste the copied env-style blob into a
  *   textarea. Clicking the link while the workspace is opened remotely
  *   pops an alert to do it from the desktop client instead.
  * - Raw API key: paste a `sk-ant-...` value (wrapped into an env-style
  *   line client-side).
+ * - Get a long-lived token: `claude setup-token` mints a 1-year token
+ *   written into the settings env block (restarts the agents).
+ * - Anthropic Console (API billing): `claude auth login --console`; its
+ *   key lives in `.claude.json`, so it always restarts the agents.
  *
- * All three submission paths hit the same strict backend endpoint
- * (`/api/claude-auth/submit-credentials`), which writes the settings env
- * block and restarts the mind's claude agents.
+ * The paste paths (Imbue blob, API key, subtle direct-token affordance)
+ * hit one strict backend endpoint (`/api/claude-auth/submit-credentials`),
+ * which writes the settings env block and restarts the mind's claude
+ * agents; restarts run in the background and are rendered as a step
+ * checklist driven by the status endpoint's restart_* fields.
  *
  * The modal is a single app-level instance: global auth state
  * (models/ClaudeAuth.ts) opens it on load-time status failure, on any
  * transcript auth-error, and from the persistent "Agent auth" entry in the
  * chat footer. A muted header line shows how the mind is currently signed
- * in (derived server-side from the settings env content).
+ * in (derived server-side from the settings env content, folding in
+ * `claude auth status` for the credentials-based browser sign-ins).
  */
 
 import m from "mithril";
@@ -46,7 +50,12 @@ interface ClaudeAuthStatus {
   restart_phase?: string | null;
   restart_detail?: string | null;
   restart_error?: string | null;
+  restart_reason?: string | null;
 }
+
+// Which PTY-driven browser flow the awaiting screen is running: the primary
+// subscription sign-in, the Console sign-in, or the long-lived-token minting.
+type AuthFlow = "claudeai" | "console" | "setup_token";
 
 interface SetupTokenStartResponse {
   session_id: string;
@@ -99,6 +108,7 @@ export function computeDesktopAppOrigin(hostname: string, port: string, protocol
 
 export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   let mode: Mode = "select_provider";
+  let activeFlow: AuthFlow = "claudeai";
   let sessionId: string | null = null;
   let oauthUrl: string | null = null;
   let code = "";
@@ -261,13 +271,31 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     }
   }
 
+  // Endpoint families for the two PTY session kinds: the browser sign-ins
+  // (claudeai / console) share the oauth endpoints; the long-lived-token
+  // flow keeps its setup-token endpoints.
+  function flowBaseUrl(): string {
+    return activeFlow === "setup_token" ? "/api/claude-auth/setup-token" : "/api/claude-auth/oauth";
+  }
+
   async function startSetupToken(): Promise<void> {
+    activeFlow = "setup_token";
+    await startAuthFlowSession({ url: apiUrl("/api/claude-auth/setup-token/start"), body: undefined });
+  }
+
+  async function startOauthLogin(provider: "claudeai" | "console"): Promise<void> {
+    activeFlow = provider;
+    await startAuthFlowSession({ url: apiUrl("/api/claude-auth/oauth/start"), body: { provider } });
+  }
+
+  async function startAuthFlowSession(request: { url: string; body: object | undefined }): Promise<void> {
     clearError();
-    startVerifying("Starting sign-in...", "Preparing your Claude subscription sign-in.");
+    startVerifying("Starting sign-in...", "Preparing your sign-in.");
     try {
       const response = await m.request<SetupTokenStartResponse>({
         method: "POST",
-        url: apiUrl("/api/claude-auth/setup-token/start"),
+        url: request.url,
+        body: request.body,
       });
       sessionId = response.session_id;
       oauthUrl = response.oauth_url;
@@ -277,7 +305,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       m.redraw();
     } catch (error) {
       const errResp = (error as { response?: { detail?: string } }).response;
-      setError(errResp?.detail ?? "Failed to start the subscription sign-in");
+      setError(errResp?.detail ?? "Failed to start the sign-in");
     }
   }
 
@@ -288,7 +316,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     try {
       const response = await m.request<SetupTokenPollResponse>({
         method: "POST",
-        url: apiUrl("/api/claude-auth/setup-token/poll"),
+        url: apiUrl(`${flowBaseUrl()}/poll`),
         body: { session_id: polledSessionId },
       });
       if (response.is_complete && response.status) {
@@ -326,7 +354,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     try {
       const status = await m.request<ClaudeAuthStatus>({
         method: "POST",
-        url: apiUrl("/api/claude-auth/setup-token/submit-code"),
+        url: apiUrl(`${flowBaseUrl()}/submit-code`),
         body: {
           session_id: submittedSessionId,
           code: code.trim(),
@@ -484,7 +512,12 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   function describeCurrentMode(status: ClaudeAuthStatus | null): string | null {
     if (status === null) return null;
     const suffix = status.masked_key_suffix ? ` (...${status.masked_key_suffix})` : "";
-    if (status.auth_mode === "subscription") return "Currently signed in with your Claude subscription.";
+    if (status.auth_mode === "subscription") {
+      return status.email
+        ? `Currently signed in with your Claude subscription (${status.email}).`
+        : "Currently signed in with your Claude subscription.";
+    }
+    if (status.auth_mode === "console") return "Currently signed in with your Anthropic Console account.";
     if (status.auth_mode === "imbue") return `Currently signed in with Imbue${suffix}.`;
     if (status.auth_mode === "api_key") return `Currently signed in with an API key${suffix}.`;
     if (status.logged_in) return "Currently signed in.";
@@ -508,7 +541,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         ),
         m(
           "button.claude-login-button.claude-login-button--primary.claude-login-button--block",
-          { type: "button", onclick: () => void startSetupToken() },
+          { type: "button", onclick: () => void startOauthLogin("claudeai") },
           "Continue with Claude subscription",
         ),
       ]),
@@ -566,6 +599,40 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
                   m("span.claude-login-alt-text", [
                     m("span.claude-login-alt-name", "Use an API key"),
                     m("span.claude-login-alt-desc", "Paste a raw sk-ant-... API key."),
+                  ]),
+                  m("span.claude-login-alt-go", m.trust(icon("chevron-right", { size: 18 }))),
+                ],
+              ),
+              m(
+                "button.claude-login-alt",
+                {
+                  type: "button",
+                  onclick: () => void startSetupToken(),
+                },
+                [
+                  m("span.claude-login-alt-text", [
+                    m("span.claude-login-alt-name", "Get a long-lived token"),
+                    m(
+                      "span.claude-login-alt-desc",
+                      "Mint a 1-year subscription token (restarts this mind's agents).",
+                    ),
+                  ]),
+                  m("span.claude-login-alt-go", m.trust(icon("chevron-right", { size: 18 }))),
+                ],
+              ),
+              m(
+                "button.claude-login-alt",
+                {
+                  type: "button",
+                  onclick: () => void startOauthLogin("console"),
+                },
+                [
+                  m("span.claude-login-alt-text", [
+                    m("span.claude-login-alt-name", "Anthropic Console (API billing)"),
+                    m(
+                      "span.claude-login-alt-desc",
+                      "Sign in with a Console account to pay per token (restarts this mind's agents).",
+                    ),
                   ]),
                   m("span.claude-login-alt-go", m.trust(icon("chevron-right", { size: 18 }))),
                 ],
@@ -664,7 +731,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     ];
   }
 
-  function renderAwaitingSetupToken(): m.Vnode[] {
+  function renderAwaitingSetupToken(): Array<m.Vnode | null> {
     return [
       m("p.claude-login-lead", "Approve access in your browser, then paste the code it shows you."),
       m("div.claude-login-step", [
@@ -734,8 +801,12 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         ]),
       ]),
       // Subtle direct-token affordance: developers who already have a
-      // long-lived token can skip the browser flow entirely.
-      m("div.claude-login-subtle", [
+      // long-lived token can skip the browser flow entirely. Only offered
+      // on the token-minting flow -- it writes the settings env, which
+      // would be misleading on the credentials-based sign-ins.
+      activeFlow !== "setup_token"
+        ? null
+        : m("div.claude-login-subtle", [
         tokenPasteExpanded
           ? m("div.claude-login-subtle-body", [
               m("input.claude-login-input.claude-login-input--mono", {
@@ -783,18 +854,30 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   }
 
   // The step checklist shown while the background credential apply runs,
-  // tracking the status endpoint's restart_phase: validate against
-  // Anthropic first, then restart agents, then resume.
+  // tracking the status endpoint's restart_phase. The leading (already
+  // completed) steps depend on why the restart is happening: a plain
+  // credential save, or a switch away from managed keys after a browser
+  // sign-in (subscription or Console).
   function renderApplying(): m.Vnode {
-    const phase = applyingStatus?.restart_phase ?? "validating";
+    const phase = applyingStatus?.restart_phase ?? "restarting";
     const detail = applyingStatus?.restart_detail ?? null;
-    const phaseOrder = ["validating", "restarting", "finishing"];
+    const reason = applyingStatus?.restart_reason ?? "credentials_saved";
+    const leadLabels =
+      reason === "subscription_switch"
+        ? ["Signed in with your subscription", "Removing old credentials"]
+        : reason === "console_switch"
+          ? ["Signed in with your Anthropic Console account", "Removing old credentials"]
+          : ["Credentials saved"];
+    const phaseOrder = ["restarting", "finishing"];
     const activeIdx = Math.max(0, phaseOrder.indexOf(phase));
-    const labels = ["Checking credentials", "Restarting agents", "Resuming your agent"];
-    const steps: { label: string; state: "done" | "active" | "pending" }[] = labels.map((label, idx) => ({
-      label,
-      state: idx < activeIdx ? "done" : idx === activeIdx ? "active" : "pending",
-    }));
+    const tailLabels = ["Restarting agents", "Resuming your agent"];
+    const steps: { label: string; state: "done" | "active" | "pending" }[] = [
+      ...leadLabels.map((label) => ({ label, state: "done" as const })),
+      ...tailLabels.map((label, idx) => ({
+        label,
+        state: idx < activeIdx ? ("done" as const) : idx === activeIdx ? ("active" as const) : ("pending" as const),
+      })),
+    ];
     return m("div.claude-login-applying", [
       m(
         "ul.claude-login-checklist",
@@ -834,13 +917,22 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     const status = successStatus;
     const email = status?.email ?? null;
     if (status?.auth_mode === "subscription") {
-      return m("div", [
-        renderStatus("success", "All set", "Signed in with your Claude subscription."),
-        m("p.claude-login-helper.claude-login-helper--center", "Your sign-in token is valid for about a year."),
-      ]);
+      const detail = email
+        ? `Signed in as ${email} with your Claude subscription.`
+        : "Signed in with your Claude subscription.";
+      // Only the minted-token flow carries an expiry worth mentioning.
+      if (activeFlow === "setup_token") {
+        return m("div", [
+          renderStatus("success", "All set", detail),
+          m("p.claude-login-helper.claude-login-helper--center", "Your sign-in token is valid for about a year."),
+        ]);
+      }
+      return renderStatus("success", "All set", detail);
     }
     let detail: string;
-    if (status?.auth_mode === "imbue") {
+    if (status?.auth_mode === "console") {
+      detail = "Signed in with your Anthropic Console account.";
+    } else if (status?.auth_mode === "imbue") {
       detail = "Signed in with Imbue.";
     } else if (email) {
       detail = `Signed in as ${email}.`;
@@ -867,7 +959,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     return "Sign in to Claude";
   }
 
-  function renderBody(): m.Vnode | m.Vnode[] {
+  function renderBody(): m.Vnode | Array<m.Vnode | null> {
     if (mode === "success") return renderSuccess();
     if (mode === "error") {
       return renderStatus("error", "Couldn't complete sign-in", errorMessage ?? "An unexpected error occurred.");
