@@ -131,6 +131,43 @@ instruction for agentic work, so overwrite it only when you have a good reason.
 Cost is dominated by per-call overhead, so **batch** items into fewer, larger
 calls rather than one call per item.
 
+### Do not let the headless run inherit the repo's agent harness
+
+This is the recurring footgun for scenario-2/agent runs, and `claude_p.py`
+already handles it -- do **not** strip these safeguards, and replicate them if
+you hand-roll a `claude -p` invocation instead of using the helper:
+
+- **Hooks.** A `claude -p` started with its cwd inside a repo loads that repo's
+  `.claude/settings.json` hooks. A mngr **Stop hook fires `exit 2` on a headless
+  child that has no `.git` in its cwd, so the child can never stop and hangs.**
+  The fix is `--setting-sources user` (load only user-level settings, so
+  project/local hooks never load, *regardless of cwd*) plus setting
+  `MNGR_CLAUDE_SUBAGENT_PROXY_CHILD=1` in the child env (the marker mngr's own
+  hooks honor). This is the **auth-safe** switch: `--bare` also disables hooks
+  but forces `ANTHROPIC_API_KEY`, which the keyless path lacks.
+- **CLAUDE.md.** Memory is *not* a setting source, so it is still auto-discovered
+  from the cwd. A task rooted in a repo will read that repo's `CLAUDE.md` (e.g.
+  "commit your changes after modifications") and may act on it -- running git/tk
+  work you never asked for. Counter it with a firm `append_system`/`system`, and
+  when pointing at an **untrusted checkout** (a repo you fetched, not your own
+  service tree) pass an isolated `work_dir` and reference target files by
+  absolute path in the prompt rather than running inside the tree:
+
+  ```python
+  import tempfile
+  with tempfile.TemporaryDirectory() as work_dir:
+      result = claude_p_task(
+          f"The repository is checked out at {checkout}. Read {checkout}/{path} "
+          "and answer the question. Do not modify anything or run git.",
+          work_dir=work_dir,          # neutral cwd: no repo CLAUDE.md, no repo hooks
+          append_system="You are read-only; investigate and answer only.",
+      )
+  ```
+
+  (An in-tree run is only appropriate when the task *must* be rooted there -- e.g.
+  installing dependencies where the `package.json` lives -- and even then keep
+  `--setting-sources user` so the tree's hooks stay out.)
+
 ## Scenario 3 -- full agent
 
 Reach for this over scenario 2 when the work needs its **own git worktree**:
