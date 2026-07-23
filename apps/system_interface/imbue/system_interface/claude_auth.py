@@ -8,18 +8,24 @@ and its services) at boot, so changing it would require tearing down the
 whole workspace, while a settings.json edit only requires restarting the
 claude agents themselves.
 
-Three sign-in paths, all converging on the same settings-env write:
+Five sign-in paths:
 
-1. Subscription: `claude setup-token` is driven via pexpect. The CLI prints
-   an `oauth/authorize` URL and then *polls Anthropic itself*: once the user
-   approves in the browser, the CLI prints the minted 1-year token without
-   requiring a code paste (verified on the pinned Claude Code version; a
-   `Paste code here if prompted >` fallback exists for flows that do demand
-   one). The frontend polls `poll_setup_token` until the token appears; the
-   token is written as ``CLAUDE_CODE_OAUTH_TOKEN``.
-2. Raw API key: written as ``ANTHROPIC_API_KEY``.
+1. Subscription (primary): `claude auth login --claudeai` is driven via
+   pexpect. The CLI prints an `oauth/authorize` URL, the user approves in
+   the browser and pastes the shown code (the CLI can also complete on its
+   own via its polling). The credential is stored by the CLI itself and
+   running claudes re-read it on their next API call, so a fresh workspace
+   signs in with NO restart. Managed settings-env keys outrank this
+   credential, so when any are active the sign-in clears them and restarts
+   the agents (the switching case).
+2. Raw API key: written as ``ANTHROPIC_API_KEY`` into the settings env.
 3. Imbue (LiteLLM): an env-var-style blob pasted from the desktop app's
    mint page, written as ``ANTHROPIC_API_KEY`` + ``ANTHROPIC_BASE_URL``.
+4. Long-lived token: `claude setup-token` via the same PTY machinery; the
+   minted 1-year token is written as ``CLAUDE_CODE_OAUTH_TOKEN``.
+5. Anthropic Console: `claude auth login --console`; its key lands inside
+   `.claude.json` (cached at claude process start), so it always clears
+   the managed keys and restarts the agents.
 
 Paths 2 and 3 (and a subtle "paste an existing token" affordance) share one
 strict env-lines parser: only the three managed keys are accepted, and
@@ -41,10 +47,9 @@ env); STOPPED agents are left stopped.
 Restarts touch nothing outside the settings env block: settings-env
 credentials do not trip Claude Code's API-key challenge, and the startup
 dialog dismissals in `.claude.json` are guaranteed by mngr's claude
-plugin at agent-creation time. Before any restart, the freshly written
-credentials are validated with a real `claude -p` round-trip, so agents
-are never torn down onto dead auth and a rejected credential fails
-visibly (with the previous settings restored).
+plugin at agent-creation time. There is deliberately no pre-restart
+credential probe: a bad credential surfaces on the agent's first request,
+where the transcript auth-error detection reopens the modal.
 
 Dependencies that touch the outside world (subprocess invocation and
 pexpect-driven PTY spawning) are injected into `ClaudeAuthService` at
@@ -137,6 +142,11 @@ _SETUP_TOKEN_CONTINUATION_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
 # then parks on a "Press Enter to retry." prompt, so without failing fast the
 # session would just time out with a misleading message.
 _OAUTH_ERROR_REGEX = re.compile(r"OAuth error")
+# Printed plainly (outside the Ink renderer) by `claude auth login` right
+# before it exits 0 / 1 respectively, so no screen replay is needed to
+# detect completion of the credentials-based browser sign-ins.
+_LOGIN_SUCCESS_REGEX = re.compile(r"Login successful")
+_LOGIN_FAILED_LINE_REGEX = re.compile(r"Login failed: ?([^\r\n]*)")
 # The CLI's Ink input treats a rapid burst of characters ending in a newline
 # as pasted *content* -- the newline lands in the field instead of acting as
 # the Enter keypress -- so the code and Enter must be sent as two separate
@@ -156,9 +166,6 @@ _OAUTH_URL_WAIT_SECONDS: Final = 30.0
 _SETUP_TOKEN_POLL_SECONDS: Final = 0.2
 _SETUP_TOKEN_CODE_WAIT_SECONDS: Final = 30.0
 _MNGR_COMMAND_TIMEOUT_SECONDS: Final = 60.0
-# A real `claude -p` round-trip against the freshly written credentials;
-# generous because it includes model inference on a short prompt.
-_CREDENTIAL_VALIDATION_TIMEOUT_SECONDS: Final = 120.0
 # A fused `mngr start --restart` call stops, starts, readiness-waits, and
 # (for previously-RUNNING agents) messages a whole batch of agents. It runs
 # on the background restart thread, so the generous ceiling costs nothing
@@ -212,31 +219,63 @@ def _default_pexpect_spawner(executable: str, args: list[str], timeout: float) -
 
 
 class AuthMode(str, Enum):
-    """The auth mode implied by the managed settings-env keys."""
+    """The workspace's effective auth mode.
+
+    Derived from the managed settings-env keys when any are present; with
+    an empty managed env, folded from `claude auth status` so the
+    credentials-based browser sign-ins (subscription and Console) surface
+    correctly.
+    """
 
     SUBSCRIPTION = "subscription"
+    CONSOLE = "console"
     IMBUE = "imbue"
     API_KEY = "api_key"
     NONE = "none"
 
 
-class AuthStatus(FrozenModel):
-    """Parsed output of `claude auth status --json`, plus the settings-derived mode.
+class OAuthProvider(str, Enum):
+    """Which `claude auth login` provider a browser sign-in session targets."""
 
-    `subscription_type` is unset for Console accounts and for setup-token
-    (oauth_token) sessions, so the frontend conditionally renders the
-    success-state copy. `auth_mode` / `masked_key_suffix` are derived from
-    the shared settings.json env block, not from the status subprocess.
+    CLAUDEAI = "claudeai"
+    CONSOLE = "console"
+
+
+class AuthFlowKind(str, Enum):
+    """Which PTY-driven auth flow an in-flight session is running."""
+
+    SETUP_TOKEN = "setup_token"
+    OAUTH_LOGIN = "oauth_login"
+
+
+class RestartReason(str, Enum):
+    """Why the background agent restart is running (drives the checklist copy)."""
+
+    CREDENTIALS_SAVED = "credentials_saved"
+    SUBSCRIPTION_SWITCH = "subscription_switch"
+    CONSOLE_SWITCH = "console_switch"
+
+
+class AuthStatus(FrozenModel):
+    """Parsed output of `claude auth status --json`, plus the derived mode.
+
+    On the pinned Claude Code version, both browser sign-ins report
+    `authMethod: "claude.ai"` (the Console-stored key resolves through the
+    "/login managed key" source); `subscription_type` is present only for
+    subscription accounts, which is the discriminator. It is also unset
+    for setup-token (`oauth_token`) sessions.
     """
 
     logged_in: bool = Field(description="Whether claude is currently authenticated")
-    auth_method: str | None = Field(default=None, description="e.g. 'oauth', 'api_key', 'oauth_token'")
+    auth_method: str | None = Field(
+        default=None, description="e.g. 'claude.ai', 'api_key', 'oauth_token', 'api_key_helper', 'none'"
+    )
     api_provider: str | None = Field(default=None, description="e.g. 'anthropic', 'claudeai', 'firstParty'")
     email: str | None = Field(default=None)
     org_id: str | None = Field(default=None)
     org_name: str | None = Field(default=None)
     subscription_type: str | None = Field(default=None, description="e.g. 'Max'; absent for token/Console sessions")
-    auth_mode: AuthMode = Field(default=AuthMode.NONE, description="Mode derived from the managed settings env keys")
+    auth_mode: AuthMode = Field(default=AuthMode.NONE, description="The workspace's effective auth mode")
     masked_key_suffix: str | None = Field(
         default=None, description="Last few characters of the managed key/token, for display"
     )
@@ -248,12 +287,14 @@ class AuthStatus(FrozenModel):
     )
     restart_detail: str | None = Field(default=None, description="Human-readable detail for the current restart phase")
     restart_error: str | None = Field(default=None, description="Error message when restart_phase is 'failed'")
+    restart_reason: str | None = Field(
+        default=None, description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'"
+    )
 
 
 class RestartPhase(str, Enum):
     """Lifecycle of the background credential apply that follows an auth change."""
 
-    VALIDATING = "validating"
     RESTARTING = "restarting"
     FINISHING = "finishing"
     DONE = "done"
@@ -266,30 +307,33 @@ class RestartProgress(FrozenModel):
     phase: RestartPhase = Field(description="Current phase of the restart")
     detail: str | None = Field(default=None, description="Human-readable detail for the phase")
     error: str | None = Field(default=None, description="Error message when the phase is FAILED")
+    reason: RestartReason = Field(description="Why the restart is running (drives the checklist copy)")
 
 
-class SetupTokenStartResult(FrozenModel):
-    """Result of spawning `claude setup-token`."""
+class AuthFlowStartResult(FrozenModel):
+    """Result of spawning a PTY auth flow (`claude setup-token` or `claude auth login`)."""
 
-    session_id: str = Field(description="Opaque token for the in-flight setup-token session")
+    session_id: str = Field(description="Opaque token for the in-flight session")
     oauth_url: str = Field(description="URL the user opens to authorize the login")
 
 
-class SetupTokenPollResult(FrozenModel):
-    """Result of polling an in-flight setup-token session."""
+class AuthFlowPollResult(FrozenModel):
+    """Result of polling an in-flight PTY auth flow."""
 
-    is_complete: bool = Field(description="Whether the token was minted and written")
+    is_complete: bool = Field(description="Whether the flow completed and was applied")
     status: AuthStatus | None = Field(default=None, description="Auth status after completion; None while pending")
 
 
-class _SetupTokenSessionRecord(FrozenModel):
-    """Immutable handle for an in-flight setup-token subprocess.
+class _AuthFlowSessionRecord(FrozenModel):
+    """Immutable handle for an in-flight PTY auth subprocess.
 
     Pairs with a parallel non-frozen slot that holds the live pexpect
     process object, since that object is not Pydantic-serializable.
     """
 
     session_id: str
+    kind: AuthFlowKind
+    provider: OAuthProvider | None
     oauth_url: str
 
 
@@ -718,7 +762,7 @@ class ClaudeAuthService(MutableModel):
     # matches the single-mind / single-user deployment model. The lock and
     # the live subprocess are private runtime state, not configuration data.
     _setup_token_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _current_setup_token_record: _SetupTokenSessionRecord | None = PrivateAttr(default=None)
+    _current_setup_token_record: _AuthFlowSessionRecord | None = PrivateAttr(default=None)
     _current_setup_token_process: Any = PrivateAttr(default=None)
     _current_setup_token_output: str = PrivateAttr(default="")
 
@@ -789,15 +833,24 @@ class ClaudeAuthService(MutableModel):
 
     def _with_derived_mode(self, status: AuthStatus, managed_env: Mapping[str, str]) -> AuthStatus:
         progress = self.current_restart_progress()
+        # Managed env keys outrank everything claude reads elsewhere, so
+        # they define the mode when present. With an empty managed env the
+        # mode folds in the credentials-based browser sign-ins: both report
+        # authMethod "claude.ai" on the pinned version, discriminated by
+        # subscription_type (present only for subscription accounts).
+        derived_mode = derive_auth_mode(managed_env)
+        if derived_mode is AuthMode.NONE and status.logged_in and status.auth_method == "claude.ai":
+            derived_mode = AuthMode.SUBSCRIPTION if status.subscription_type else AuthMode.CONSOLE
         return AuthStatus(
             **{
                 **status.model_dump(),
-                "auth_mode": derive_auth_mode(managed_env),
+                "auth_mode": derived_mode,
                 "masked_key_suffix": masked_credential_suffix(managed_env),
                 "workspace_host_id": read_workspace_host_id(),
                 "restart_phase": progress.phase.value if progress is not None else None,
                 "restart_detail": progress.detail if progress is not None else None,
                 "restart_error": progress.error if progress is not None else None,
+                "restart_reason": progress.reason.value if progress is not None else None,
             }
         )
 
@@ -884,21 +937,26 @@ class ClaudeAuthService(MutableModel):
 
     def _set_restart_progress(self, phase: RestartPhase, detail: str | None, error: str | None) -> None:
         with self._restart_state_lock:
-            self._restart_progress = RestartProgress(phase=phase, detail=detail, error=error)
+            reason = self._restart_progress.reason if self._restart_progress is not None else RestartReason.CREDENTIALS_SAVED
+            self._restart_progress = RestartProgress(phase=phase, detail=detail, error=error, reason=reason)
 
     def current_restart_progress(self) -> RestartProgress | None:
         with self._restart_state_lock:
             return self._restart_progress
 
-    def start_background_apply(self, managed_env: Mapping[str, str], on_complete: Callable[[], None] | None) -> None:
-        """Validate, write, and apply new credentials on a background thread.
+    def start_background_apply(
+        self,
+        managed_env: Mapping[str, str],
+        on_complete: Callable[[], None] | None,
+        reason: RestartReason,
+    ) -> None:
+        """Write new managed credentials and restart agents on a background thread.
 
         The submit endpoints call this and return immediately; the frontend
         follows the apply through the `restart_*` fields on the status
-        endpoint. The credentials are probed against Anthropic with a real
-        request BEFORE any agent restarts, so a rejected credential fails
-        visibly (with the previous settings restored) instead of tearing
-        agents down onto dead auth and reporting success. `on_complete`
+        endpoint. There is deliberately no pre-restart credential probe: a
+        bad credential surfaces on the agent's first request, where the
+        transcript auth-error detection reopens the modal. `on_complete`
         runs after a successful restart (the welcome-resend check, which
         needs the chat agent back up).
         """
@@ -909,7 +967,7 @@ class ClaudeAuthService(MutableModel):
                     "wait a moment and try again."
                 )
             self._restart_progress = RestartProgress(
-                phase=RestartPhase.VALIDATING, detail="Checking the credential with Anthropic", error=None
+                phase=RestartPhase.RESTARTING, detail="Preparing to restart agents", error=None, reason=reason
             )
             thread = threading.Thread(
                 target=self._run_apply_in_background,
@@ -920,39 +978,13 @@ class ClaudeAuthService(MutableModel):
             self._restart_thread = thread
             thread.start()
 
-    def _validate_written_credentials(self) -> None:
-        """Probe Anthropic through a real `claude -p` round-trip.
-
-        A fresh claude process reads the just-written settings env exactly
-        like a restarted agent would, so a passing probe means the agents
-        will come back working. Raises ClaudeAuthError on rejection, with
-        the CLI's own error text (e.g. `API Error: 401 Invalid bearer
-        token`, or a litellm budget rejection) so the modal shows the real
-        reason.
-        """
-        result = self.command_runner(
-            ["claude", "-p", "Reply with exactly: OK"], _CREDENTIAL_VALIDATION_TIMEOUT_SECONDS
-        )
-        stdout = result.stdout.strip() if isinstance(result.stdout, str) else ""
-        stderr = result.stderr.strip() if isinstance(result.stderr, str) else ""
-        if result.returncode != 0 or not stdout:
-            raise ClaudeAuthError(f"The credential did not work: {stderr or stdout or 'claude produced no output'}")
-
     def _run_apply_in_background(self, managed_env: dict[str, str], on_complete: Callable[[], None] | None) -> None:
         # Thread entry point: this is the top-level handler for the apply
         # thread, so any escaping exception is caught, logged, and surfaced
         # to the frontend through the FAILED progress phase instead of
         # dying silently.
         try:
-            previous_env = self._read_managed_env_tolerant()
             write_managed_auth_env(managed_env)
-            try:
-                self._validate_written_credentials()
-            except Exception:
-                # Restore-on-failure guard, not error handling: the settings
-                # must never keep a credential that failed validation.
-                write_managed_auth_env(previous_env)
-                raise
             self.restart_all_claude_agents()
             self._set_restart_progress(RestartPhase.FINISHING, "Resuming your agent", None)
             if on_complete is not None:
@@ -978,13 +1010,13 @@ class ClaudeAuthService(MutableModel):
         status carries its initial `restart_*` progress fields.
         """
         managed_env = parse_credential_lines(pasted_text)
-        self.start_background_apply(managed_env, on_restart_complete)
+        self.start_background_apply(managed_env, on_restart_complete, RestartReason.CREDENTIALS_SAVED)
         return self.get_auth_status(extra_env=managed_env)
 
-    def _spawn_setup_token_and_parse_url(self) -> tuple[Any, str, str]:
+    def _spawn_auth_flow_and_parse_url(self, args: list[str]) -> tuple[Any, str, str]:
         process = self.pexpect_spawner(
             "claude",
-            ["setup-token"],
+            args,
             _OAUTH_URL_WAIT_SECONDS,
         )
         match_index = process.expect([_OAUTH_URL_REGEX, pexpect.EOF, pexpect.TIMEOUT])
@@ -992,8 +1024,8 @@ class ClaudeAuthService(MutableModel):
             _safe_terminate(process)
             _safe_close(process)
             if match_index == 1:
-                raise ClaudeAuthError("claude setup-token exited before printing the OAuth URL")
-            raise ClaudeAuthError("Timed out waiting for the OAuth URL from claude setup-token")
+                raise ClaudeAuthError(f"claude {' '.join(args)} exited before printing the OAuth URL")
+            raise ClaudeAuthError(f"Timed out waiting for the OAuth URL from claude {' '.join(args)}")
         # The expect trigger can fire mid-render-frame -- e.g. inside the OSC 8
         # hyperlink's opening sequence or on the first width-wrapped row of the
         # visible label -- so the consumed buffer may hold only a prefix of the
@@ -1016,10 +1048,10 @@ class ClaudeAuthService(MutableModel):
             )
         return process, oauth_url, consumed
 
-    def start_setup_token(self) -> SetupTokenStartResult:
+    def start_setup_token(self) -> AuthFlowStartResult:
         """Spawn `claude setup-token` and return the parsed OAuth URL.
 
-        Replaces any prior in-flight session: only one setup-token flow can
+        Replaces any prior in-flight session: only one PTY auth flow can
         be live at a time per instance, which matches the single-mind /
         single-user deployment model. The subprocess then polls Anthropic
         on its own; the frontend drives `poll_setup_token` until the token
@@ -1028,12 +1060,36 @@ class ClaudeAuthService(MutableModel):
         """
         with self._setup_token_lock:
             self._drop_current_session_locked()
-            process, oauth_url, consumed = self._spawn_setup_token_and_parse_url()
-            record = _SetupTokenSessionRecord(session_id=uuid.uuid4().hex, oauth_url=oauth_url)
+            process, oauth_url, consumed = self._spawn_auth_flow_and_parse_url(["setup-token"])
+            record = _AuthFlowSessionRecord(
+                session_id=uuid.uuid4().hex, kind=AuthFlowKind.SETUP_TOKEN, provider=None, oauth_url=oauth_url
+            )
             self._current_setup_token_record = record
             self._current_setup_token_process = process
             self._current_setup_token_output = consumed
-        return SetupTokenStartResult(session_id=record.session_id, oauth_url=record.oauth_url)
+        return AuthFlowStartResult(session_id=record.session_id, oauth_url=record.oauth_url)
+
+    def start_oauth_login(self, provider: OAuthProvider) -> AuthFlowStartResult:
+        """Spawn `claude auth login --<provider>` and return the parsed OAuth URL.
+
+        The credentials-based browser sign-ins: `--claudeai` writes a
+        subscription credential that running claudes re-read on their next
+        API call (no restart when the managed env is empty); `--console`
+        stores its key inside `.claude.json`, which claudes cache at
+        process start, so it always takes the restart path.
+        """
+        with self._setup_token_lock:
+            self._drop_current_session_locked()
+            process, oauth_url, consumed = self._spawn_auth_flow_and_parse_url(
+                ["auth", "login", f"--{provider.value}"]
+            )
+            record = _AuthFlowSessionRecord(
+                session_id=uuid.uuid4().hex, kind=AuthFlowKind.OAUTH_LOGIN, provider=provider, oauth_url=oauth_url
+            )
+            self._current_setup_token_record = record
+            self._current_setup_token_process = process
+            self._current_setup_token_output = consumed
+        return AuthFlowStartResult(session_id=record.session_id, oauth_url=record.oauth_url)
 
     def _drop_current_session_locked(self) -> None:
         if self._current_setup_token_process is not None:
@@ -1095,12 +1151,12 @@ class ClaudeAuthService(MutableModel):
         """Hand the minted token to the background apply, drop the session."""
         self._drop_current_session_locked()
         managed_env = {CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR: token}
-        self.start_background_apply(managed_env, on_restart_complete)
+        self.start_background_apply(managed_env, on_restart_complete, RestartReason.CREDENTIALS_SAVED)
         return self.get_auth_status(extra_env=managed_env)
 
     def poll_setup_token(
         self, session_id: str, on_restart_complete: Callable[[], None] | None
-    ) -> SetupTokenPollResult:
+    ) -> AuthFlowPollResult:
         """Check whether the in-flight setup-token subprocess minted the token yet.
 
         The browser approval completes the flow CLI-side without any code
@@ -1111,7 +1167,7 @@ class ClaudeAuthService(MutableModel):
         """
         with self._setup_token_lock:
             record = self._current_setup_token_record
-            if record is None or record.session_id != session_id:
+            if record is None or record.session_id != session_id or record.kind is not AuthFlowKind.SETUP_TOKEN:
                 raise ClaudeAuthError("No active setup-token session matches the provided session_id")
             try:
                 token = self._pump_setup_token_output_locked(_SETUP_TOKEN_POLL_SECONDS)
@@ -1119,9 +1175,9 @@ class ClaudeAuthService(MutableModel):
                 self._drop_current_session_locked()
                 raise
             if token is None:
-                return SetupTokenPollResult(is_complete=False)
+                return AuthFlowPollResult(is_complete=False)
             status = self._complete_setup_token_locked(token, on_restart_complete)
-        return SetupTokenPollResult(is_complete=True, status=status)
+        return AuthFlowPollResult(is_complete=True, status=status)
 
     def submit_setup_token_code(
         self, session_id: str, code: str, on_restart_complete: Callable[[], None] | None
@@ -1134,19 +1190,14 @@ class ClaudeAuthService(MutableModel):
         with self._setup_token_lock:
             record = self._current_setup_token_record
             process = self._current_setup_token_process
-            if record is None or process is None or record.session_id != session_id:
+            if (
+                record is None
+                or process is None
+                or record.session_id != session_id
+                or record.kind is not AuthFlowKind.SETUP_TOKEN
+            ):
                 raise ClaudeAuthError("No active setup-token session matches the provided session_id")
-            try:
-                # Two separate writes: the CLI's paste heuristic swallows a
-                # newline arriving in the same burst as the code (it becomes
-                # field content, not a submit), so Enter goes as its own
-                # deferred keystroke.
-                process.send(code)
-                time.sleep(_SETUP_TOKEN_CODE_ENTER_DELAY_SECONDS)
-                process.send("\r")
-            except pexpect.ExceptionPexpect as e:
-                self._drop_current_session_locked()
-                raise ClaudeAuthError(f"claude setup-token subprocess failed sending code: {e}") from e
+            self._send_code_locked(process, code)
             try:
                 token = self._pump_setup_token_output_locked(_SETUP_TOKEN_CODE_WAIT_SECONDS)
             except ClaudeAuthError:
@@ -1158,7 +1209,145 @@ class ClaudeAuthService(MutableModel):
             status = self._complete_setup_token_locked(token, on_restart_complete)
         return status
 
-    def abort_setup_token(self) -> None:
-        """Drop any in-flight setup-token session (e.g. user closed the modal)."""
+    def _send_code_locked(self, process: Any, code: str) -> None:
+        """Type a `CODE#STATE` paste into the live PTY, then a deferred Enter.
+
+        Two separate writes: the CLI's paste heuristic swallows a newline
+        arriving in the same burst as the code (it becomes field content,
+        not a submit), so Enter goes as its own deferred keystroke.
+        """
+        try:
+            process.send(code)
+            time.sleep(_SETUP_TOKEN_CODE_ENTER_DELAY_SECONDS)
+            process.send("\r")
+        except pexpect.ExceptionPexpect as e:
+            self._drop_current_session_locked()
+            raise ClaudeAuthError(f"auth subprocess failed sending code: {e}") from e
+
+    def _pump_oauth_login_output_locked(self, timeout_seconds: float) -> bool:
+        """Read `claude auth login` output; return True once it reports success.
+
+        The CLI prints a plain `Login successful.` and exits 0 (or `Login
+        failed: ...` and exits 1), so completion detection needs no screen
+        replay. A transient `OAuth error` (rejected/stale code) fails fast
+        with the same copy as the setup-token flow.
+        """
+        process = self._current_setup_token_process
+        try:
+            match_index = process.expect(
+                [_LOGIN_SUCCESS_REGEX, _LOGIN_FAILED_LINE_REGEX, _OAUTH_ERROR_REGEX, pexpect.EOF, pexpect.TIMEOUT],
+                timeout=timeout_seconds,
+            )
+        except pexpect.ExceptionPexpect as e:
+            raise ClaudeAuthError(f"claude auth login subprocess failed while waiting for completion: {e}") from e
+        self._current_setup_token_output += (process.before or "") + (
+            process.after if isinstance(process.after, str) else ""
+        )
+        if match_index == 2:
+            raise ClaudeAuthError(
+                "Sign-in was not accepted (OAuth error). The pasted code may be wrong, expired, "
+                "or from an earlier sign-in attempt. Please start over."
+            )
+        if match_index == 0:
+            # Drain the goodbye output so the process reaps cleanly.
+            self._current_setup_token_output = _drain_pty_stream(process, self._current_setup_token_output, lambda buffer: False)
+            return True
+        if match_index in (1, 3):
+            # Failure line matched, or EOF: the buffer decides (success and
+            # exit can arrive in one read, so EOF does not imply failure).
+            self._current_setup_token_output = _drain_pty_stream(process, self._current_setup_token_output, lambda buffer: False)
+            if _LOGIN_SUCCESS_REGEX.search(self._current_setup_token_output):
+                return True
+            failed_match = _LOGIN_FAILED_LINE_REGEX.search(self._current_setup_token_output)
+            failure_detail = failed_match.group(1).strip() if failed_match is not None else ""
+            raise ClaudeAuthError(
+                f"Sign-in did not complete: {failure_detail or 'claude auth login exited without logging in'}"
+            )
+        return False
+
+    def _complete_oauth_login_locked(
+        self, provider: OAuthProvider, on_restart_complete: Callable[[], None] | None
+    ) -> AuthStatus:
+        """Apply a finished browser sign-in: fast path or switch-restart.
+
+        The credential is already stored by the CLI itself. With an empty
+        managed env and the subscription provider, nothing else is needed:
+        running claudes re-read the credential on their next API call, so
+        the welcome-resend hook runs inline and no restart happens. When
+        managed keys are active they would keep outranking the fresh
+        credential, so they are cleared and the agents restarted; Console
+        always restarts (its key lives in `.claude.json`, cached at claude
+        process start).
+        """
+        self._drop_current_session_locked()
+        managed_env = self._read_managed_env_tolerant()
+        if provider is OAuthProvider.CLAUDEAI and not managed_env:
+            status = self.get_auth_status()
+            if on_restart_complete is not None:
+                on_restart_complete()
+            return status
+        reason = (
+            RestartReason.CONSOLE_SWITCH if provider is OAuthProvider.CONSOLE else RestartReason.SUBSCRIPTION_SWITCH
+        )
+        self.start_background_apply({}, on_restart_complete, reason)
+        return self.get_auth_status()
+
+    def poll_oauth_login(
+        self, session_id: str, on_restart_complete: Callable[[], None] | None
+    ) -> AuthFlowPollResult:
+        """Check whether the in-flight `claude auth login` finished on its own.
+
+        Like setup-token, the CLI polls Anthropic itself after the browser
+        approval, so the frontend just calls this periodically; the pasted
+        code is the always-available path.
+        """
+        with self._setup_token_lock:
+            record = self._current_setup_token_record
+            if record is None or record.session_id != session_id or record.kind is not AuthFlowKind.OAUTH_LOGIN:
+                raise ClaudeAuthError("No active browser sign-in session matches the provided session_id")
+            provider = record.provider
+            if provider is None:
+                raise ClaudeAuthError("Browser sign-in session is missing its provider")
+            try:
+                is_complete = self._pump_oauth_login_output_locked(_SETUP_TOKEN_POLL_SECONDS)
+            except ClaudeAuthError:
+                self._drop_current_session_locked()
+                raise
+            if not is_complete:
+                return AuthFlowPollResult(is_complete=False)
+            status = self._complete_oauth_login_locked(provider, on_restart_complete)
+        return AuthFlowPollResult(is_complete=True, status=status)
+
+    def submit_oauth_login_code(
+        self, session_id: str, code: str, on_restart_complete: Callable[[], None] | None
+    ) -> AuthStatus:
+        """Send the user's pasted `CODE#STATE` to the live `claude auth login`."""
+        with self._setup_token_lock:
+            record = self._current_setup_token_record
+            process = self._current_setup_token_process
+            if (
+                record is None
+                or process is None
+                or record.session_id != session_id
+                or record.kind is not AuthFlowKind.OAUTH_LOGIN
+            ):
+                raise ClaudeAuthError("No active browser sign-in session matches the provided session_id")
+            provider = record.provider
+            if provider is None:
+                raise ClaudeAuthError("Browser sign-in session is missing its provider")
+            self._send_code_locked(process, code)
+            try:
+                is_complete = self._pump_oauth_login_output_locked(_SETUP_TOKEN_CODE_WAIT_SECONDS)
+            except ClaudeAuthError:
+                self._drop_current_session_locked()
+                raise
+            if not is_complete:
+                self._drop_current_session_locked()
+                raise ClaudeAuthError("Timed out waiting for claude auth login to complete after code submit")
+            status = self._complete_oauth_login_locked(provider, on_restart_complete)
+        return status
+
+    def abort_auth_flow(self) -> None:
+        """Drop any in-flight PTY auth session (e.g. user closed the modal)."""
         with self._setup_token_lock:
             self._drop_current_session_locked()

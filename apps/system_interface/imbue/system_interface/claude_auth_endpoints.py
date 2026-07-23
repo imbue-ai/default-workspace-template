@@ -28,6 +28,7 @@ from imbue.system_interface import claude_auth
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.models import ClaudeAuthCredentialsRequest
 from imbue.system_interface.models import ClaudeAuthStatusResponse
+from imbue.system_interface.models import ClaudeOAuthLoginStartRequest
 from imbue.system_interface.models import ClaudeSetupTokenPollRequest
 from imbue.system_interface.models import ClaudeSetupTokenPollResponse
 from imbue.system_interface.models import ClaudeSetupTokenStartResponse
@@ -169,10 +170,73 @@ def submit_credentials() -> Response:
     return _json_response(_status_to_response(status).model_dump())
 
 
+def start_oauth_login() -> Response:
+    """POST /api/claude-auth/oauth/start -- spawn `claude auth login --<provider>`."""
+    service: claude_auth.ClaudeAuthService = get_state().claude_auth_service
+    try:
+        body = ClaudeOAuthLoginStartRequest.model_validate(request.get_json())
+    except (ValueError, TypeError) as e:
+        return _error_response(f"Invalid request body: {e}")
+    try:
+        provider = claude_auth.OAuthProvider(body.provider)
+    except ValueError:
+        return _error_response(f"Unknown provider: {body.provider!r}")
+    try:
+        result = service.start_oauth_login(provider)
+    except claude_auth.ClaudeAuthError as e:
+        return _error_response(str(e), status_code=500)
+    return _json_response(
+        ClaudeSetupTokenStartResponse(session_id=result.session_id, oauth_url=result.oauth_url).model_dump()
+    )
+
+
+def poll_oauth_login() -> Response:
+    """POST /api/claude-auth/oauth/poll -- check for browser sign-in completion.
+
+    On completion the fast path (subscription, empty managed env) returns a
+    plain signed-in status with no restart fields; the switching cases and
+    Console return a status whose restart_* fields drive the checklist.
+    """
+    state = get_state()
+    service: claude_auth.ClaudeAuthService = state.claude_auth_service
+    welcome_resender: WelcomeResender = state.welcome_resender
+    try:
+        body = ClaudeSetupTokenPollRequest.model_validate(request.get_json())
+    except (ValueError, TypeError) as e:
+        return _error_response(f"Invalid request body: {e}")
+    try:
+        result = service.poll_oauth_login(body.session_id, _restart_completion_callback(welcome_resender))
+    except claude_auth.ClaudeAuthError as e:
+        return _error_response(str(e), status_code=400)
+    if not result.is_complete or result.status is None:
+        return _json_response(ClaudeSetupTokenPollResponse(is_complete=False).model_dump())
+    return _json_response(
+        ClaudeSetupTokenPollResponse(is_complete=True, status=_status_to_response(result.status)).model_dump()
+    )
+
+
+def submit_oauth_login_code() -> Response:
+    """POST /api/claude-auth/oauth/submit-code -- paste-code path for browser sign-in."""
+    state = get_state()
+    service: claude_auth.ClaudeAuthService = state.claude_auth_service
+    welcome_resender: WelcomeResender = state.welcome_resender
+    try:
+        body = ClaudeSetupTokenSubmitCodeRequest.model_validate(request.get_json())
+    except (ValueError, TypeError) as e:
+        return _error_response(f"Invalid request body: {e}")
+    try:
+        status = service.submit_oauth_login_code(
+            body.session_id, body.code, _restart_completion_callback(welcome_resender)
+        )
+    except claude_auth.ClaudeAuthError as e:
+        return _error_response(str(e), status_code=400)
+    return _json_response(_status_to_response(status).model_dump())
+
+
 def abort_setup_token() -> Response:
     """POST /api/claude-auth/abort -- drop the in-flight setup-token subprocess."""
     service: claude_auth.ClaudeAuthService = get_state().claude_auth_service
-    service.abort_setup_token()
+    service.abort_auth_flow()
     return _json_response({"status": "ok"})
 
 
@@ -190,4 +254,7 @@ def register_routes(application: Flask) -> None:
         "/api/claude-auth/setup-token/submit-code", view_func=submit_setup_token_code, methods=["POST"]
     )
     application.add_url_rule("/api/claude-auth/submit-credentials", view_func=submit_credentials, methods=["POST"])
+    application.add_url_rule("/api/claude-auth/oauth/start", view_func=start_oauth_login, methods=["POST"])
+    application.add_url_rule("/api/claude-auth/oauth/poll", view_func=poll_oauth_login, methods=["POST"])
+    application.add_url_rule("/api/claude-auth/oauth/submit-code", view_func=submit_oauth_login_code, methods=["POST"])
     application.add_url_rule("/api/claude-auth/abort", view_func=abort_setup_token, methods=["POST"])
