@@ -2,8 +2,9 @@
 
 Given the conversation so far (from the local system_interface) and the case persona, ask the
 Anthropic API for the single next casual thing the client would say -- one short sentence or a few
-words -- and return it. Pure stdlib (urllib); the Anthropic key comes from ANTHROPIC_API_KEY in the
-workspace env (forwarded by the template's pass_host_env), the same key the agent runs on.
+words -- and return it. Pure stdlib (urllib); the Anthropic key is supplied by the harness via
+test_case_metadata.json (config["anthropic_api_key"]), with ANTHROPIC_API_KEY in the env as a
+local-testing fallback -- a harness-controlled source, not the workspace's own agent auth.
 """
 
 from __future__ import annotations
@@ -47,13 +48,15 @@ def _prompt(persona: str, conversation: str) -> str:
     ).format(who=who, conversation=conversation)
 
 
-def decide_next_message(agent_id: str, persona: str) -> str:
+def decide_next_message(agent_id: str, persona: str, api_key: str = "") -> str:
     """Ask the API for the client's next casual line. Falls back to 'Sounds good.' on any error, so a
-    flaky API call never stalls the eval. The key is read from ANTHROPIC_API_KEY in the workspace env
-    (forwarded by the template's pass_host_env -- the same key the agent already uses)."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    flaky API call never stalls the eval. The key comes from the harness via test_case_metadata.json
+    (config["anthropic_api_key"]), falling back to ANTHROPIC_API_KEY in the env for local testing --
+    a harness-controlled source, since the decider needs its own key independent of how the workspace
+    agent authenticates."""
+    api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        print("[eval] no ANTHROPIC_API_KEY in env -- sending '{}'".format(_FALLBACK), flush=True)
+        print("[eval] no anthropic key (metadata or env) -- sending '{}'".format(_FALLBACK), flush=True)
         return _FALLBACK
     try:
         conversation = _render_conversation(watcher.fetch_all_events(agent_id))

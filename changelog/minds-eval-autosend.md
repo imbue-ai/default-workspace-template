@@ -8,4 +8,4 @@ The sink now writes to Cloudflare R2 (S3-compatible) rather than AWS S3: the bot
 
 Renamed the eval worker's `eval_aws_sink.py` / `AwsSink` to `eval_sink.py` / `EvalSink` -- results go to R2 (S3-compatible), so the AWS-specific naming no longer fit.
 
-Reverted the global `[create_templates.modal]` sandbox timeout to 24h (86310s) and added a `[create_templates.modal_eval]` overlay (3h) that eval workers stack on top -- so eval-specific timeouts no longer alter the shared Modal template. The role-play decider now reads `ANTHROPIC_API_KEY` from the workspace env (forwarded by the template's `pass_host_env`) instead of from the slotted `test_case_metadata.json`.
+Reverted the global `[create_templates.modal]` sandbox timeout to 24h (86310s) and added a `[create_templates.modal_eval]` overlay (3h) that eval workers stack on top -- so eval-specific timeouts no longer alter the shared Modal template. The role-play decider gets its Anthropic key from the harness-written `test_case_metadata.json` (with `ANTHROPIC_API_KEY` in the env as a local-testing fallback), a harness-controlled source independent of the workspace agent's own auth.
