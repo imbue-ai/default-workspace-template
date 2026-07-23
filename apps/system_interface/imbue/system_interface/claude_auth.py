@@ -62,6 +62,7 @@ import time
 import uuid
 from collections.abc import Callable
 from collections.abc import Mapping
+from collections.abc import Sequence
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -71,7 +72,6 @@ import pexpect
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
-from pydantic import SecretStr
 
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
@@ -80,10 +80,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.cli.exit_codes import EXIT_CODE_PROVIDER_INACCESSIBLE
 from imbue.mngr.utils.env_utils import parse_env_file
-from imbue.mngr_claude.claude_config import acknowledge_cost_threshold
-from imbue.mngr_claude.claude_config import complete_onboarding
-from imbue.mngr_claude.claude_config import dismiss_effort_callout
-from imbue.mngr_claude.claude_config import read_claude_config
+
 logger = _loguru_logger
 
 _CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
@@ -100,8 +97,6 @@ CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR: Final[str] = "CLAUDE_CODE_OAUTH_TOKEN"
 MANAGED_AUTH_ENV_KEYS: Final[frozenset[str]] = frozenset(
     (ANTHROPIC_API_KEY_ENV_VAR, ANTHROPIC_BASE_URL_ENV_VAR, CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR)
 )
-# Claude stores per-key approvals keyed by the last 20 characters of the key.
-_API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
 # Characters of the key/token shown in the modal's "currently signed in via"
 # header; long enough to disambiguate, short enough to stay a non-secret.
 _DISPLAY_SUFFIX_LENGTH: Final = 4
@@ -158,9 +153,11 @@ _OAUTH_URL_WAIT_SECONDS: Final = 30.0
 _SETUP_TOKEN_POLL_SECONDS: Final = 0.2
 _SETUP_TOKEN_CODE_WAIT_SECONDS: Final = 30.0
 _MNGR_COMMAND_TIMEOUT_SECONDS: Final = 60.0
-# Message delivery waits for durable submission evidence inside mngr, which
-# polls the agent's transcript -- give it more headroom than plain commands.
-_MNGR_MESSAGE_TIMEOUT_SECONDS: Final = 120.0
+# A fused `mngr start --restart` call stops, starts, readiness-waits, and
+# (for previously-RUNNING agents) messages a whole batch of agents. It runs
+# on the background restart thread, so the generous ceiling costs nothing
+# in the request path.
+_MNGR_RESTART_TIMEOUT_SECONDS: Final = 600.0
 _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
 
 # Agent types whose window-0 process is a real claude binary and therefore
@@ -235,6 +232,28 @@ class AuthStatus(FrozenModel):
     workspace_host_id: str | None = Field(
         default=None, description="This mind's mngr host id, for the desktop app's key-mint page link"
     )
+    restart_phase: str | None = Field(
+        default=None, description="Phase of the post-auth agent restart: 'restarting', 'finishing', 'done', 'failed'"
+    )
+    restart_detail: str | None = Field(default=None, description="Human-readable detail for the current restart phase")
+    restart_error: str | None = Field(default=None, description="Error message when restart_phase is 'failed'")
+
+
+class RestartPhase(str, Enum):
+    """Lifecycle of the background agent restart that follows an auth change."""
+
+    RESTARTING = "restarting"
+    FINISHING = "finishing"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class RestartProgress(FrozenModel):
+    """Snapshot of the background agent restart's progress."""
+
+    phase: RestartPhase = Field(description="Current phase of the restart")
+    detail: str | None = Field(default=None, description="Human-readable detail for the phase")
+    error: str | None = Field(default=None, description="Error message when the phase is FAILED")
 
 
 class SetupTokenStartResult(FrozenModel):
@@ -388,11 +407,6 @@ def _resolve_claude_settings_path() -> Path:
     return _resolve_claude_config_dir() / "settings.json"
 
 
-def _resolve_claude_config_path() -> Path:
-    """Locate the shared `$CLAUDE_CONFIG_DIR/.claude.json` for the mind."""
-    return _resolve_claude_config_dir() / ".claude.json"
-
-
 def read_managed_auth_env(settings_path_override: Path | None = None) -> dict[str, str]:
     """Read the managed auth keys currently in the shared settings.json env block."""
     settings_path = settings_path_override or _resolve_claude_settings_path()
@@ -448,52 +462,6 @@ def write_managed_auth_env(managed_env: Mapping[str, str], settings_path_overrid
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
     logger.info("Wrote managed auth env ({} mode) to {}", derive_auth_mode(managed_env).value, settings_path)
     return settings_path
-
-
-def _approve_api_key_in_claude_config(config_path: Path, api_key: SecretStr) -> None:
-    """Add `api_key` to `customApiKeyResponses.approved` in the Claude config.
-
-    Claude Code challenges any `ANTHROPIC_API_KEY` it finds in the
-    environment (including one injected via the settings env block) that
-    isn't pre-approved, via an interactive TUI prompt that a restarted
-    agent would then block on. Approvals are keyed by the last 20
-    characters of the key (mirrors mngr_claude's
-    `approve_api_key_for_claude`). This runs while every agent is stopped,
-    so a plain read/write is safe -- no concurrent writer to race.
-    """
-    config = read_claude_config(config_path)
-    responses = config.get("customApiKeyResponses")
-    if not isinstance(responses, dict):
-        responses = {}
-    approved = list(responses.get("approved", []))
-    suffix = api_key.get_secret_value()[-_API_KEY_APPROVAL_SUFFIX_LENGTH:]
-    if suffix not in approved:
-        approved.append(suffix)
-    responses["approved"] = approved
-    responses.setdefault("rejected", [])
-    config["customApiKeyResponses"] = responses
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(config, indent=2) + "\n")
-
-
-def _prepare_claude_config_for_restart(api_key: SecretStr | None) -> None:
-    """Pre-dismiss Claude Code's startup dialogs before agents restart.
-
-    A freshly restarted agent re-runs Claude Code's first-launch flow
-    (theme picker, onboarding, custom-API-key challenge). Any of those is
-    an interactive TUI prompt that the agent would block on. mngr's claude
-    plugin dismisses them at agent-creation time; the modal's restart
-    paths must do the same so the recovered agent comes up usable.
-
-    Called between stopping and starting the agents, so the running agents
-    cannot clobber the file from their stale in-memory copy.
-    """
-    config_path = _resolve_claude_config_path()
-    complete_onboarding(config_path)
-    dismiss_effort_callout(config_path)
-    acknowledge_cost_threshold(config_path)
-    if api_key is not None:
-        _approve_api_key_in_claude_config(config_path, api_key)
 
 
 def _safe_terminate(process: Any) -> None:
@@ -703,19 +671,23 @@ def _log_inaccessible_providers(payload: dict[str, Any]) -> None:
         logger.debug("Skipped inaccessible provider {} while listing agents: {}", provider_name, message)
 
 
-def _build_stop_command(name: str) -> list[str]:
-    """Build the ``mngr stop`` argv for one agent. Pure (see above)."""
-    return ["mngr", "stop", name]
+def _build_restart_with_message_command(names: Sequence[str], message: str) -> list[str]:
+    """Build the fused restart argv for previously-RUNNING agents. Pure (see above).
+
+    ``--restart`` stops each agent first; ``--resume-message`` delivers the
+    auth-aware continue message through mngr's readiness-aware resume
+    machinery after each agent starts.
+    """
+    return ["mngr", "start", "--restart", "--resume-message", message, *names]
 
 
-def _build_start_command(name: str) -> list[str]:
-    """Build the ``mngr start --no-resume`` argv for one agent. Pure (see above)."""
-    return ["mngr", "start", "--no-resume", name]
+def _build_restart_no_resume_command(names: Sequence[str]) -> list[str]:
+    """Build the fused restart argv for previously-WAITING agents. Pure (see above).
 
-
-def _build_message_command(name: str, message: str) -> list[str]:
-    """Build the ``mngr message`` argv for one agent. Pure (see above)."""
-    return ["mngr", "message", name, "-m", message]
+    ``--no-resume`` suppresses any message: idle agents come back idle and
+    pick up the fresh credentials on their next user message.
+    """
+    return ["mngr", "start", "--restart", "--no-resume", *names]
 
 
 class ClaudeAuthService(MutableModel):
@@ -740,6 +712,14 @@ class ClaudeAuthService(MutableModel):
     _current_setup_token_record: _SetupTokenSessionRecord | None = PrivateAttr(default=None)
     _current_setup_token_process: Any = PrivateAttr(default=None)
     _current_setup_token_output: str = PrivateAttr(default="")
+
+    # The post-auth agent restart runs on a background thread so the submit
+    # endpoints return in seconds (the proxied request path has a 30s
+    # ceiling, and a batch restart can take minutes). Single-flight: a new
+    # credential change is rejected while a restart is still running.
+    _restart_state_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _restart_thread: threading.Thread | None = PrivateAttr(default=None)
+    _restart_progress: RestartProgress | None = PrivateAttr(default=None)
 
     def get_auth_status(self, extra_env: Mapping[str, str] | None = None) -> AuthStatus:
         """Invoke `claude auth status --json` and parse the result.
@@ -798,14 +778,17 @@ class ClaudeAuthService(MutableModel):
             logger.warning("Cannot read managed auth env: {}", e)
             return {}
 
-    @staticmethod
-    def _with_derived_mode(status: AuthStatus, managed_env: Mapping[str, str]) -> AuthStatus:
+    def _with_derived_mode(self, status: AuthStatus, managed_env: Mapping[str, str]) -> AuthStatus:
+        progress = self.current_restart_progress()
         return AuthStatus(
             **{
                 **status.model_dump(),
                 "auth_mode": derive_auth_mode(managed_env),
                 "masked_key_suffix": masked_credential_suffix(managed_env),
                 "workspace_host_id": read_workspace_host_id(),
+                "restart_phase": progress.phase.value if progress is not None else None,
+                "restart_detail": progress.detail if progress is not None else None,
+                "restart_error": progress.error if progress is not None else None,
             }
         )
 
@@ -851,67 +834,108 @@ class ClaudeAuthService(MutableModel):
             snapshots.append(AgentSnapshot(name=name, state=state if isinstance(state, str) else ""))
         return snapshots
 
-    def restart_all_claude_agents(self, api_key: SecretStr | None = None) -> list[str]:
-        """Restart every live claude-binary agent via `mngr stop` then `mngr start`.
+    def restart_all_claude_agents(self) -> list[str]:
+        """Restart every live claude-binary agent via fused `mngr start --restart` calls.
 
-        Snapshots agent states first, then stops every live (RUNNING or
-        WAITING) agent, prepares the shared Claude config (see
-        `_prepare_claude_config_for_restart`), starts them again, and
-        finally messages the agents that were RUNNING so interrupted work
-        resumes. STOPPED agents are left stopped. The
-        stop-all/prepare/start-all ordering matters: editing `.claude.json`
-        while an agent is still running would be silently overwritten by
-        that agent's stale in-memory copy on its next write.
-
-        Agents are started with `--no-resume` so mngr does not deliver the
-        configured resume message after the restart; the previously-RUNNING
-        agents instead get the explicit auth-aware continue message, which
-        explains the interruption rather than pretending it did not happen.
-
-        `api_key`, when given, is additionally approved in the Claude
-        config so a freshly-written key doesn't trip Claude's custom-key
-        challenge.
+        Snapshots agent states first, then issues one batched call per
+        behavior group: previously-RUNNING agents restart with
+        `--resume-message` so the auth-aware continue message is delivered
+        by mngr's readiness-aware resume machinery, and previously-WAITING
+        agents restart with `--no-resume` so they come back idle. STOPPED
+        agents are left stopped. Nothing outside the settings env block is
+        touched: settings-env credentials do not trip Claude Code's
+        API-key challenge (verified empirically on the pinned version),
+        and the onboarding dismissals are guaranteed by mngr's claude
+        plugin at agent-creation time.
 
         Returns the list of agent names that were restarted.
         """
         snapshots = self.snapshot_claude_binary_agents()
-        live_agents = [s for s in snapshots if s.state in (_AGENT_STATE_RUNNING, _AGENT_STATE_WAITING)]
-        for snapshot in live_agents:
-            logger.info("Stopping claude-binary agent {} via mngr stop", snapshot.name)
-            stop_result = self.command_runner(_build_stop_command(snapshot.name), _MNGR_COMMAND_TIMEOUT_SECONDS)
-            if stop_result.returncode != 0:
-                raise ClaudeAuthError(
-                    f"mngr stop {snapshot.name} failed (exit {stop_result.returncode}): {stop_result.stderr.strip()}"
-                )
-        _prepare_claude_config_for_restart(api_key)
-        for snapshot in live_agents:
-            logger.info("Starting claude-binary agent {} via mngr start --no-resume", snapshot.name)
-            start_result = self.command_runner(_build_start_command(snapshot.name), _MNGR_COMMAND_TIMEOUT_SECONDS)
-            if start_result.returncode != 0:
-                raise ClaudeAuthError(
-                    f"mngr start {snapshot.name} failed (exit {start_result.returncode}): {start_result.stderr.strip()}"
-                )
-        # Message the agents that were mid-task so their work resumes. A
-        # delivery failure must not fail the whole auth flow (auth itself
-        # succeeded); it is logged so the user can nudge the agent manually.
-        for snapshot in live_agents:
-            if snapshot.state != _AGENT_STATE_RUNNING:
-                continue
-            logger.info("Messaging previously-RUNNING agent {} to continue after auth restart", snapshot.name)
-            message_result = self.command_runner(
-                _build_message_command(snapshot.name, RESTART_CONTINUE_MESSAGE), _MNGR_MESSAGE_TIMEOUT_SECONDS
+        running = [s.name for s in snapshots if s.state == _AGENT_STATE_RUNNING]
+        waiting = [s.name for s in snapshots if s.state == _AGENT_STATE_WAITING]
+        if running:
+            self._set_restart_progress(
+                RestartPhase.RESTARTING, f"Restarting {len(running)} active agent(s)", None
             )
-            if message_result.returncode != 0:
-                logger.warning(
-                    "Failed to deliver continue message to agent {} (exit {}): {}",
-                    snapshot.name,
-                    message_result.returncode,
-                    message_result.stderr.strip() if isinstance(message_result.stderr, str) else "",
-                )
-        return [s.name for s in live_agents]
+            logger.info("Restarting previously-RUNNING agents {} via mngr start --restart", running)
+            self._run_restart_command(_build_restart_with_message_command(running, RESTART_CONTINUE_MESSAGE))
+        if waiting:
+            self._set_restart_progress(
+                RestartPhase.RESTARTING, f"Restarting {len(waiting)} idle agent(s)", None
+            )
+            logger.info("Restarting previously-WAITING agents {} via mngr start --restart", waiting)
+            self._run_restart_command(_build_restart_no_resume_command(waiting))
+        return running + waiting
 
-    def submit_credentials(self, pasted_text: str) -> AuthStatus:
-        """Parse pasted credentials, write the settings env block, restart agents.
+    def _run_restart_command(self, command: list[str]) -> None:
+        result = self.command_runner(command, _MNGR_RESTART_TIMEOUT_SECONDS)
+        if result.returncode != 0:
+            stderr = result.stderr.strip() if isinstance(result.stderr, str) else ""
+            raise ClaudeAuthError(f"{' '.join(command[:3])} failed (exit {result.returncode}): {stderr}")
+
+    def _set_restart_progress(self, phase: RestartPhase, detail: str | None, error: str | None) -> None:
+        with self._restart_state_lock:
+            self._restart_progress = RestartProgress(phase=phase, detail=detail, error=error)
+
+    def current_restart_progress(self) -> RestartProgress | None:
+        with self._restart_state_lock:
+            return self._restart_progress
+
+    def _ensure_no_restart_in_flight(self) -> None:
+        """Raises if the background restart from a previous change is still running.
+
+        Called before writing new credentials so a rejected submit leaves
+        the settings env untouched (`start_background_restart` re-checks
+        under the same lock as the authoritative guard).
+        """
+        with self._restart_state_lock:
+            if self._restart_thread is not None and self._restart_thread.is_alive():
+                raise ClaudeAuthError(
+                    "An agent restart from a previous credential change is still in progress; "
+                    "wait a moment and try again."
+                )
+
+    def start_background_restart(self, on_complete: Callable[[], None] | None) -> None:
+        """Kick the post-auth agent restart onto a background thread.
+
+        The submit endpoints call this after writing the settings env and
+        return immediately; the frontend follows the restart through the
+        `restart_*` fields on the status endpoint. `on_complete` runs after
+        a successful restart (used for the welcome-resend check, which
+        needs the chat agent back up).
+        """
+        with self._restart_state_lock:
+            if self._restart_thread is not None and self._restart_thread.is_alive():
+                raise ClaudeAuthError(
+                    "An agent restart from a previous credential change is still in progress; "
+                    "wait a moment and try again."
+                )
+            self._restart_progress = RestartProgress(
+                phase=RestartPhase.RESTARTING, detail="Preparing to restart agents", error=None
+            )
+            thread = threading.Thread(
+                target=self._run_restart_in_background, args=(on_complete,), name="claude-auth-restart", daemon=True
+            )
+            self._restart_thread = thread
+            thread.start()
+
+    def _run_restart_in_background(self, on_complete: Callable[[], None] | None) -> None:
+        # Thread entry point: this is the top-level handler for the restart
+        # thread, so any escaping exception is caught, logged, and surfaced
+        # to the frontend through the FAILED progress phase instead of
+        # dying silently.
+        try:
+            self.restart_all_claude_agents()
+            self._set_restart_progress(RestartPhase.FINISHING, "Resuming your agent", None)
+            if on_complete is not None:
+                on_complete()
+            self._set_restart_progress(RestartPhase.DONE, None, None)
+        except Exception as e:
+            logger.opt(exception=e).error("Background agent restart failed")
+            self._set_restart_progress(RestartPhase.FAILED, None, str(e))
+
+    def submit_credentials(self, pasted_text: str, on_restart_complete: Callable[[], None] | None) -> AuthStatus:
+        """Parse pasted credentials, write the settings env block, start the restart.
 
         The single chokepoint for the API-key field, the Imbue blob
         textarea, and the subtle direct-token paste: all three arrive as
@@ -919,12 +943,13 @@ class ClaudeAuthService(MutableModel):
         block. All claude-binary agents must be restarted: settings env is
         read at process start, so already-running claudes won't pick up the
         new credentials until their tmux sessions are torn down and
-        respawned.
+        respawned. The restart runs on a background thread; the returned
+        status carries its initial `restart_*` progress fields.
         """
         managed_env = parse_credential_lines(pasted_text)
+        self._ensure_no_restart_in_flight()
         write_managed_auth_env(managed_env)
-        api_key_value = managed_env.get(ANTHROPIC_API_KEY_ENV_VAR)
-        self.restart_all_claude_agents(api_key=SecretStr(api_key_value) if api_key_value else None)
+        self.start_background_restart(on_restart_complete)
         return self.get_auth_status(extra_env=managed_env)
 
     def _spawn_setup_token_and_parse_url(self) -> tuple[Any, str, str]:
@@ -1032,21 +1057,25 @@ class ClaudeAuthService(MutableModel):
             raise ClaudeAuthError("claude setup-token exited without printing a token")
         return None
 
-    def _complete_setup_token_locked(self, token: str) -> AuthStatus:
-        """Write the minted token to settings env, restart agents, drop the session."""
+    def _complete_setup_token_locked(self, token: str, on_restart_complete: Callable[[], None] | None) -> AuthStatus:
+        """Write the minted token to settings env, start the restart, drop the session."""
         self._drop_current_session_locked()
         managed_env = {CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR: token}
+        self._ensure_no_restart_in_flight()
         write_managed_auth_env(managed_env)
-        self.restart_all_claude_agents(api_key=None)
+        self.start_background_restart(on_restart_complete)
         return self.get_auth_status(extra_env=managed_env)
 
-    def poll_setup_token(self, session_id: str) -> SetupTokenPollResult:
+    def poll_setup_token(
+        self, session_id: str, on_restart_complete: Callable[[], None] | None
+    ) -> SetupTokenPollResult:
         """Check whether the in-flight setup-token subprocess minted the token yet.
 
         The browser approval completes the flow CLI-side without any code
         paste (the CLI polls Anthropic), so the frontend just calls this
         periodically. On completion the token is written to the settings
-        env block and the claude agents are restarted before returning.
+        env block and the background agent restart starts; the returned
+        status carries its initial `restart_*` progress fields.
         """
         with self._setup_token_lock:
             record = self._current_setup_token_record
@@ -1059,10 +1088,12 @@ class ClaudeAuthService(MutableModel):
                 raise
             if token is None:
                 return SetupTokenPollResult(is_complete=False)
-            status = self._complete_setup_token_locked(token)
+            status = self._complete_setup_token_locked(token, on_restart_complete)
         return SetupTokenPollResult(is_complete=True, status=status)
 
-    def submit_setup_token_code(self, session_id: str, code: str) -> AuthStatus:
+    def submit_setup_token_code(
+        self, session_id: str, code: str, on_restart_complete: Callable[[], None] | None
+    ) -> AuthStatus:
         """Send the user's pasted `CODE#STATE` to the live setup-token subprocess.
 
         The fallback path for flows where the CLI actually prompts for a
@@ -1092,7 +1123,7 @@ class ClaudeAuthService(MutableModel):
             if token is None:
                 self._drop_current_session_locked()
                 raise ClaudeAuthError("Timed out waiting for claude setup-token to print the token after code submit")
-            status = self._complete_setup_token_locked(token)
+            status = self._complete_setup_token_locked(token, on_restart_complete)
         return status
 
     def abort_setup_token(self) -> None:

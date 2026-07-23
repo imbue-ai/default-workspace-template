@@ -43,6 +43,9 @@ interface ClaudeAuthStatus {
   auth_mode?: string;
   masked_key_suffix?: string | null;
   workspace_host_id?: string | null;
+  restart_phase?: string | null;
+  restart_detail?: string | null;
+  restart_error?: string | null;
 }
 
 interface SetupTokenStartResponse {
@@ -61,12 +64,17 @@ type Mode =
   | "imbue_form"
   | "awaiting_setup_token"
   | "verifying"
+  | "applying"
   | "success"
   | "error";
 
 // How often the modal asks the backend whether `claude setup-token` has
 // minted the token yet while the awaiting screen is up.
 const SETUP_TOKEN_POLL_INTERVAL_MS = 2000;
+
+// How often the modal refreshes the status endpoint while the background
+// agent restart runs (the "applying" checklist screen).
+const APPLYING_POLL_INTERVAL_MS = 1000;
 
 export interface ClaudeLoginModalAttrs {
   // Called when the user closes the modal -- either after a successful
@@ -98,10 +106,9 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   let apiKeyRevealed = false;
   let imbueBlob = "";
   let directToken = "";
-  // Whether the paste-code fallback / direct-token affordances on the
-  // awaiting screen are expanded. Both stay collapsed by default so the
-  // "approve in browser and wait" happy path carries the visual weight.
-  let codeEntryExpanded = false;
+  // Whether the direct-token affordance on the awaiting screen is
+  // expanded. Collapsed by default: it is a developer shortcut, unlike the
+  // always-visible paste-code input.
   let tokenPasteExpanded = false;
   let urlCopied = false;
   // Set when a clipboard write was attempted but rejected (insecure context,
@@ -111,6 +118,11 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   let urlCopiedResetHandle: ReturnType<typeof setTimeout> | null = null;
   let pollHandle: ReturnType<typeof setInterval> | null = null;
   let pollInFlight = false;
+  // Status polling for the "applying" screen: the background agent restart
+  // reports its progress through the status endpoint's restart_* fields.
+  let applyingPollHandle: ReturnType<typeof setInterval> | null = null;
+  let applyingPollInFlight = false;
+  let applyingStatus: ClaudeAuthStatus | null = null;
   let errorMessage: string | null = null;
   let verifyingTitle = "Working...";
   let verifyingDetail: string | null = null;
@@ -131,6 +143,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
 
   function setError(message: string): void {
     stopPolling();
+    stopApplyingPoll();
     errorMessage = message;
     mode = "error";
     m.redraw();
@@ -191,6 +204,63 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     }, SETUP_TOKEN_POLL_INTERVAL_MS);
   }
 
+  function stopApplyingPoll(): void {
+    if (applyingPollHandle !== null) {
+      clearInterval(applyingPollHandle);
+      applyingPollHandle = null;
+    }
+    applyingPollInFlight = false;
+  }
+
+  // Route a successful credential submit: the backend has written the
+  // settings env and kicked the agent restart onto a background thread, so
+  // the returned status carries the restart's initial progress. Show the
+  // step checklist and follow the restart via the status endpoint until it
+  // reports done (success screen) or failed (error screen).
+  function enterApplyingOrSuccess(status: ClaudeAuthStatus): void {
+    if (status.restart_phase === "failed") {
+      setError(status.restart_error ?? "Restarting the agents failed.");
+      return;
+    }
+    if (status.restart_phase === "done" || status.restart_phase == null) {
+      successStatus = status;
+      mode = "success";
+      m.redraw();
+      return;
+    }
+    applyingStatus = status;
+    mode = "applying";
+    stopApplyingPoll();
+    applyingPollHandle = setInterval(() => {
+      void pollApplying();
+    }, APPLYING_POLL_INTERVAL_MS);
+    m.redraw();
+  }
+
+  async function pollApplying(): Promise<void> {
+    if (mode !== "applying" || applyingPollInFlight) return;
+    applyingPollInFlight = true;
+    try {
+      const status = await m.request<ClaudeAuthStatus>({ method: "GET", url: apiUrl("/api/claude-auth/status") });
+      applyingStatus = status;
+      if (status.restart_phase === "done") {
+        stopApplyingPoll();
+        successStatus = status;
+        mode = "success";
+      } else if (status.restart_phase === "failed") {
+        stopApplyingPoll();
+        setError(status.restart_error ?? "Restarting the agents failed.");
+        return;
+      }
+      m.redraw();
+    } catch {
+      // A transient status failure just means this tick learns nothing;
+      // keep polling -- the restart continues server-side regardless.
+    } finally {
+      applyingPollInFlight = false;
+    }
+  }
+
   async function startSetupToken(): Promise<void> {
     clearError();
     startVerifying("Starting sign-in...", "Preparing your Claude subscription sign-in.");
@@ -201,7 +271,6 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       });
       sessionId = response.session_id;
       oauthUrl = response.oauth_url;
-      codeEntryExpanded = false;
       tokenPasteExpanded = false;
       mode = "awaiting_setup_token";
       startPolling();
@@ -226,13 +295,11 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         stopPolling();
         sessionId = null;
         if (response.status.logged_in) {
-          successStatus = response.status;
-          mode = "success";
+          enterApplyingOrSuccess(response.status);
         } else {
           setError("Sign-in completed but Claude still reports it is not authenticated.");
           return;
         }
-        m.redraw();
       }
     } catch (error) {
       // A poll error means the backend session is gone (crashed subprocess,
@@ -266,9 +333,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         },
       });
       if (status.logged_in) {
-        successStatus = status;
-        mode = "success";
-        m.redraw();
+        enterApplyingOrSuccess(status);
       } else {
         // A submitted code consumes the single-use session, so there is
         // nothing left to retry in place. Route to the full error screen,
@@ -301,9 +366,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         },
       });
       if (status.logged_in) {
-        successStatus = status;
-        mode = "success";
-        m.redraw();
+        enterApplyingOrSuccess(status);
       } else {
         setInlineError("Claude did not accept the credentials. Double-check and try again.", failureFormMode);
       }
@@ -386,6 +449,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
 
   function goBackToProviderSelection(): void {
     abortSetupTokenIfActive();
+    stopApplyingPoll();
     apiKey = "";
     apiKeyRevealed = false;
     imbueBlob = "";
@@ -602,7 +666,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
 
   function renderAwaitingSetupToken(): m.Vnode[] {
     return [
-      m("p.claude-login-lead", "Approve access in your browser. This screen finishes on its own once you have."),
+      m("p.claude-login-lead", "Approve access in your browser, then paste the code it shows you."),
       m("div.claude-login-step", [
         m("div.claude-login-step-label", [m("span.claude-login-step-num", "1"), "Open the sign-in page"]),
         m(
@@ -634,53 +698,47 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       ]),
       m("div.claude-login-step", [
         m("div.claude-login-step-label", [m("span.claude-login-step-num", "2"), "Approve in the browser"]),
-        m("div.claude-login-waiting", [m.trust(loginSpinnerIcon()), m("span", "Waiting for your approval...")]),
+        // The CLI can also complete on its own via its background polling
+        // (the muted line below); the pasted code is the reliable path.
+        m("div.claude-login-waiting", [
+          m.trust(loginSpinnerIcon()),
+          m("span", "Waiting in case the sign-in finishes on its own..."),
+        ]),
       ]),
-      // Paste-code fallback: some sign-in flows show a CODE#STATE string
-      // instead of completing on their own.
-      m("div.claude-login-subtle", [
-        codeEntryExpanded
-          ? m("div.claude-login-subtle-body", [
-              m("input.claude-login-input.claude-login-input--mono", {
-                id: "claude-login-code-input",
-                type: "text",
-                placeholder: "CODE#STATE",
-                value: code,
-                spellcheck: false,
-                autocomplete: "off",
-                oninput: (event: InputEvent) => {
-                  code = (event.target as HTMLInputElement).value;
-                },
-                onkeydown: (event: KeyboardEvent) => {
-                  if (event.key === "Enter" && code.trim()) {
-                    event.preventDefault();
-                    void submitSetupTokenCode();
-                  }
-                },
-              }),
-              m(
-                "button.claude-login-button.claude-login-button--primary",
-                {
-                  type: "button",
-                  disabled: !code.trim(),
-                  onclick: () => {
-                    void submitSetupTokenCode();
-                  },
-                },
-                "Verify code",
-              ),
-            ])
-          : m(
-              "button.claude-login-subtle-toggle",
-              {
-                type: "button",
-                onclick: () => {
-                  codeEntryExpanded = true;
-                  m.redraw();
-                },
+      // The approval page shows a CODE#STATE string -- pasting it here is
+      // the primary way to finish, so the input is always visible.
+      m("div.claude-login-step", [
+        m("div.claude-login-step-label", [m("span.claude-login-step-num", "3"), "Paste the code shown"]),
+        m("div.claude-login-subtle-body", [
+          m("input.claude-login-input.claude-login-input--mono", {
+            id: "claude-login-code-input",
+            type: "text",
+            placeholder: "CODE#STATE",
+            value: code,
+            spellcheck: false,
+            autocomplete: "off",
+            oninput: (event: InputEvent) => {
+              code = (event.target as HTMLInputElement).value;
+            },
+            onkeydown: (event: KeyboardEvent) => {
+              if (event.key === "Enter" && code.trim()) {
+                event.preventDefault();
+                void submitSetupTokenCode();
+              }
+            },
+          }),
+          m(
+            "button.claude-login-button.claude-login-button--primary",
+            {
+              type: "button",
+              disabled: !code.trim(),
+              onclick: () => {
+                void submitSetupTokenCode();
               },
-              "The page showed a code? Paste it instead",
-            ),
+            },
+            "Verify code",
+          ),
+        ]),
       ]),
       // Subtle direct-token affordance: developers who already have a
       // long-lived token can skip the browser flow entirely.
@@ -731,6 +789,38 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     ];
   }
 
+  // The step checklist shown while the background agent restart runs. The
+  // credentials are already saved by the time this screen appears; the
+  // remaining steps track the status endpoint's restart_phase.
+  function renderApplying(): m.Vnode {
+    const phase = applyingStatus?.restart_phase ?? "restarting";
+    const detail = applyingStatus?.restart_detail ?? null;
+    const steps: { label: string; state: "done" | "active" | "pending" }[] = [
+      { label: "Credentials saved", state: "done" },
+      { label: "Restarting agents", state: phase === "restarting" ? "active" : "done" },
+      { label: "Resuming your agent", state: phase === "finishing" ? "active" : phase === "restarting" ? "pending" : "done" },
+    ];
+    return m("div.claude-login-applying", [
+      m(
+        "ul.claude-login-checklist",
+        steps.map((step) =>
+          m(`li.claude-login-checklist-item.claude-login-checklist-item--${step.state}`, [
+            m(
+              "span.claude-login-checklist-icon",
+              step.state === "done"
+                ? m.trust(icon("check", { size: 14, strokeWidth: 2.5 }))
+                : step.state === "active"
+                  ? m.trust(loginSpinnerIcon())
+                  : null,
+            ),
+            m("span.claude-login-checklist-label", step.label),
+          ]),
+        ),
+      ),
+      detail !== null ? m("p.claude-login-helper.claude-login-helper--center", detail) : null,
+    ]);
+  }
+
   function renderStatus(kind: "loading" | "success" | "error", title: string, detail: string | null): m.Vnode {
     const statusGlyph =
       kind === "loading"
@@ -775,6 +865,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     if (mode === "success") return "Signed in";
     if (mode === "error") return "Something went wrong";
     if (mode === "verifying") return "Just a moment";
+    if (mode === "applying") return "Finishing up";
     if (mode === "api_key_form") return "Sign in with API key";
     if (mode === "imbue_form") return "Sign in with Imbue";
     if (mode === "awaiting_setup_token") return "Finish signing in";
@@ -787,6 +878,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       return renderStatus("error", "Couldn't complete sign-in", errorMessage ?? "An unexpected error occurred.");
     }
     if (mode === "verifying") return renderStatus("loading", verifyingTitle, verifyingDetail);
+    if (mode === "applying") return renderApplying();
     if (mode === "awaiting_setup_token") return renderAwaitingSetupToken();
     if (mode === "api_key_form") return renderApiKeyForm();
     if (mode === "imbue_form") return renderImbueForm();
@@ -794,7 +886,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   }
 
   function renderFooter(): m.Vnode | null {
-    if (mode === "select_provider" || mode === "verifying") return null;
+    if (mode === "select_provider" || mode === "verifying" || mode === "applying") return null;
     if (mode === "success") {
       return m("div.claude-login-footer", [
         m(
@@ -882,6 +974,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
 
     onremove() {
       abortSetupTokenIfActive();
+      stopApplyingPoll();
     },
 
     view() {
