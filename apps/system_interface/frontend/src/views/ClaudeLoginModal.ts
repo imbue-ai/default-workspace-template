@@ -696,19 +696,12 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         // user is never stranded without a way to reach the sign-in page.
         urlCopyFailed && oauthUrl !== null ? m("div.claude-login-rawurl", { tabindex: 0 }, oauthUrl) : null,
       ]),
-      m("div.claude-login-step", [
-        m("div.claude-login-step-label", [m("span.claude-login-step-num", "2"), "Approve in the browser"]),
-        // The CLI can also complete on its own via its background polling
-        // (the muted line below); the pasted code is the reliable path.
-        m("div.claude-login-waiting", [
-          m.trust(loginSpinnerIcon()),
-          m("span", "Waiting in case the sign-in finishes on its own..."),
-        ]),
-      ]),
       // The approval page shows a CODE#STATE string -- pasting it here is
-      // the primary way to finish, so the input is always visible.
+      // the primary way to finish, so the input is always visible. (The
+      // background poll still runs silently: if the CLI's own polling ever
+      // completes the flow first, the modal just finishes early.)
       m("div.claude-login-step", [
-        m("div.claude-login-step-label", [m("span.claude-login-step-num", "3"), "Paste the code shown"]),
+        m("div.claude-login-step-label", [m("span.claude-login-step-num", "2"), "Approve, then paste the code shown"]),
         m("div.claude-login-subtle-body", [
           m("input.claude-login-input.claude-login-input--mono", {
             id: "claude-login-code-input",

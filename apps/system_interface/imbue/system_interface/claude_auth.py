@@ -38,13 +38,13 @@ restart so unattended workers resume instead of silently dying; WAITING
 agents need nothing (their next user message starts them with the fresh
 env); STOPPED agents are left stopped.
 
-Every restart first runs `_prepare_claude_config_for_restart`, which
-pre-dismisses the Claude Code startup dialogs (onboarding, theme, custom
-API-key challenge) in `.claude.json` so the freshly restarted agents come
-up clean instead of blocking on an interactive TUI prompt -- mirroring
-what mngr's claude plugin does at agent-creation time. The config edit
-runs while every agent is stopped, so no still-running agent clobbers it
-from its stale in-memory copy.
+Restarts touch nothing outside the settings env block: settings-env
+credentials do not trip Claude Code's API-key challenge, and the startup
+dialog dismissals in `.claude.json` are guaranteed by mngr's claude
+plugin at agent-creation time. Before any restart, the freshly written
+credentials are validated with a real `claude -p` round-trip, so agents
+are never torn down onto dead auth and a rejected credential fails
+visibly (with the previous settings restored).
 
 Dependencies that touch the outside world (subprocess invocation and
 pexpect-driven PTY spawning) are injected into `ClaudeAuthService` at
@@ -117,6 +117,9 @@ _OSC8_HYPERLINK_REGEX = re.compile(r"\x1b\]8;[^;\x07\x1b]*;([^\x07\x1b]+)(?:\x07
 _OAUTH_URL_CHARSET = r"[A-Za-z0-9%&=?_.~/:+#-]"
 _OAUTH_URL_STRICT_REGEX = re.compile(rf"https://{_OAUTH_URL_CHARSET}*oauth/authorize{_OAUTH_URL_CHARSET}*")
 _OAUTH_URL_CONTINUATION_REGEX = re.compile(rf"^{_OAUTH_URL_CHARSET}+$")
+# End-of-frame marker for Ink's synchronized-update rendering; the replay
+# in _extract_wrapped_value snapshots the screen at each of these.
+_FRAME_END_MARKER: Final = "\x1b[?2026l"
 # The PTY geometry used for `claude setup-token`. Pinned explicitly on the
 # spawn AND used to replay the stream through the terminal emulator during
 # extraction -- the two must match or the reconstructed screen's wrapping
@@ -144,10 +147,10 @@ _SETUP_TOKEN_CODE_ENTER_DELAY_SECONDS: Final = 0.6
 # Real setup tokens are ~110 characters. A much shorter extraction is a
 # wrapped fragment, not the token -- keep waiting rather than storing it.
 _MIN_SETUP_TOKEN_LENGTH: Final = 60
-# After a trigger regex fires, keep draining the PTY until extraction yields
-# a complete value; the spinner animates forever, so completion is judged by
-# the caller's predicate with this hard deadline as backstop.
-_STREAM_DRAIN_DEADLINE_SECONDS: Final = 6.0
+# After a trigger regex fires, keep draining the PTY until the caller's
+# completion predicate is satisfied or EOF; this hard deadline is only a
+# hang backstop (generous: the token path drains to process exit).
+_STREAM_DRAIN_DEADLINE_SECONDS: Final = 15.0
 _STREAM_DRAIN_READ_SECONDS: Final = 0.25
 _OAUTH_URL_WAIT_SECONDS: Final = 30.0
 _SETUP_TOKEN_POLL_SECONDS: Final = 0.2
@@ -505,41 +508,23 @@ def _safe_close(process: Any) -> None:
 
 
 @pure
-def _render_final_screen(raw_output: str) -> list[str]:
-    """Replay the raw PTY stream through a terminal emulator; return the screen rows.
-
-    The CLI's Ink renderer emits diff-based frames full of cursor
-    positioning, so the raw stream's byte order does not correspond to the
-    visual layout -- regex/fragment heuristics on the stream mis-assemble
-    wrapped values. Replaying into a real terminal emulator at the exact
-    PTY geometry recovers the final screen, where a wrapped value's rows
-    are physically adjacent. Rows come back space-padded to the full width
-    (pyte's display invariant), which the extraction relies on to detect
-    wrapping.
-    """
-    screen = pyte.Screen(_PTY_COLUMNS, _PTY_LINES)
-    stream = pyte.Stream(screen)
-    stream.feed(raw_output)
-    return list(screen.display)
-
-
-@pure
-def _extract_wrapped_value(
-    raw_output: str,
+def _extract_value_from_screen_rows(
+    rows: list[str],
     start_regex: re.Pattern[str],
     continuation_regex: re.Pattern[str],
-    is_termination_required: bool,
-) -> str | None:
-    """Find `start_regex` on the rendered screen, de-wrapping across rows.
+) -> tuple[str, bool] | None:
+    """Find `start_regex` on one rendered screen, de-wrapping across rows.
 
     A value hard-wrapped by the renderer occupies its row through the last
     column and continues on the next row; a row with trailing blank space
-    is the value's final row. With `is_termination_required`, a value whose
-    last row runs to the screen edge with no non-continuation row after it
-    yields None (the stream may still be mid-value) so the caller keeps
-    draining.
+    is the value's final row. Rows arrive space-padded to the full screen
+    width (pyte's display invariant), which the wrap detection relies on.
+
+    Returns the value plus whether it provably *ended*: a full-width row
+    with only blank space under it is ambiguous (the continuation may not
+    have been drawn yet on this frame), so only non-continuation content
+    under the row proves the value ended at the screen edge.
     """
-    rows = _render_final_screen(raw_output)
     for idx, row in enumerate(rows):
         match = start_regex.search(row)
         if match is None:
@@ -550,17 +535,50 @@ def _extract_wrapped_value(
         while rows[row_idx].rstrip() and len(rows[row_idx].rstrip()) == len(rows[row_idx]):
             candidate = rows[row_idx + 1].strip() if row_idx + 1 < len(rows) else ""
             if candidate == "":
-                # A full-width row with nothing under it is ambiguous: the
-                # continuation may simply not have been drawn yet. Only
-                # non-continuation *content* under the row proves the value
-                # ended at the screen edge.
-                return None if is_termination_required else value
+                return value, False
             if continuation_regex.match(candidate) is None:
-                return value
+                return value, True
             value += candidate
             row_idx += 1
-        return value
+        return value, True
     return None
+
+
+@pure
+def _extract_wrapped_value(
+    raw_output: str,
+    start_regex: re.Pattern[str],
+    continuation_regex: re.Pattern[str],
+) -> str | None:
+    """Recover a possibly width-wrapped value from a raw PTY stream.
+
+    The CLI's Ink renderer emits diff-based frames full of cursor
+    positioning, so the raw stream's byte order does not correspond to the
+    visual layout -- only a terminal-emulator replay at the exact PTY
+    geometry recovers what was actually on screen. The stream is replayed
+    frame by frame (split on the synchronized-update end marker Ink emits
+    after each frame) and the longest provably-terminated candidate across
+    ALL frames wins: a single mid-frame screen can show a truncated prefix
+    over the previous frame's stale content, and the final screen alone
+    can miss the value entirely if the CLI clears it on exit. A truncated
+    candidate is a strict prefix of the real one, so longest-wins selects
+    the fully drawn frame.
+    """
+    screen = pyte.Screen(_PTY_COLUMNS, _PTY_LINES)
+    stream = pyte.Stream(screen)
+    best_terminated: str | None = None
+    best_any: str | None = None
+    for frame_chunk in raw_output.split(_FRAME_END_MARKER):
+        stream.feed(frame_chunk)
+        extracted = _extract_value_from_screen_rows(list(screen.display), start_regex, continuation_regex)
+        if extracted is None:
+            continue
+        value, is_terminated = extracted
+        if best_any is None or len(value) > len(best_any):
+            best_any = value
+        if is_terminated and (best_terminated is None or len(value) > len(best_terminated)):
+            best_terminated = value
+    return best_terminated if best_terminated is not None else best_any
 
 
 @pure
@@ -590,13 +608,11 @@ def _extract_oauth_url(raw_output: str) -> str | None:
     from_hyperlink = _extract_oauth_url_from_hyperlink(raw_output)
     if from_hyperlink is not None:
         return from_hyperlink
-    return _extract_wrapped_value(
-        raw_output, _OAUTH_URL_STRICT_REGEX, _OAUTH_URL_CONTINUATION_REGEX, is_termination_required=False
-    )
+    return _extract_wrapped_value(raw_output, _OAUTH_URL_STRICT_REGEX, _OAUTH_URL_CONTINUATION_REGEX)
 
 
 @pure
-def _extract_setup_token(raw_output: str, is_termination_required: bool) -> str | None:
+def _extract_setup_token(raw_output: str) -> str | None:
     """Pull the minted `sk-ant-oat01-...` token out of the PTY output.
 
     The token is longer than an 80-column row, so it may be width-wrapped
@@ -604,9 +620,7 @@ def _extract_setup_token(raw_output: str, is_termination_required: bool) -> str 
     extraction is a wrapped fragment, not the token -- return None so the
     caller keeps draining instead of storing a truncated token.
     """
-    token = _extract_wrapped_value(
-        raw_output, _SETUP_TOKEN_STRICT_REGEX, _SETUP_TOKEN_CONTINUATION_REGEX, is_termination_required
-    )
+    token = _extract_wrapped_value(raw_output, _SETUP_TOKEN_STRICT_REGEX, _SETUP_TOKEN_CONTINUATION_REGEX)
     if token is None or len(token) < _MIN_SETUP_TOKEN_LENGTH:
         return None
     return token
@@ -945,7 +959,10 @@ class ClaudeAuthService(MutableModel):
                 on_complete()
             self._set_restart_progress(RestartPhase.DONE, None, None)
         except Exception as e:
-            logger.opt(exception=e).error("Background credential apply failed")
+            # Deliberately NOT logger.opt(exception=...): loguru's diagnose
+            # mode renders frame locals into the log, and this thread's
+            # frames hold the raw credential.
+            logger.error("Background credential apply failed: {}: {}", type(e).__name__, e)
             self._set_restart_progress(RestartPhase.FAILED, None, str(e))
 
     def submit_credentials(self, pasted_text: str, on_restart_complete: Callable[[], None] | None) -> AuthStatus:
@@ -1051,19 +1068,24 @@ class ClaudeAuthService(MutableModel):
             )
         if match_index == 0:
             # The trigger fires on the first (possibly width-wrapped) token
-            # fragment; the CLI prints the token as its final output and
-            # exits, so drain the remainder before extracting. During the
-            # drain a token only counts once its end is provable; the final
-            # extraction below takes the best available value (the drain
-            # ends at EOF or the deadline, so the stream is as complete as
-            # it is going to get).
+            # fragment, but ANY mid-render screen is racy: while the token's
+            # first row is drawn, the row under it can still hold the
+            # previous frame's content, which is indistinguishable from a
+            # terminated one-row value. `claude setup-token` exits right
+            # after printing the token, so drain all the way to EOF (the
+            # deadline is only a hang backstop) and extract from the final,
+            # stable screen.
             self._current_setup_token_output = _drain_pty_stream(
                 process,
                 self._current_setup_token_output,
-                lambda buffer: _extract_setup_token(buffer, is_termination_required=True) is not None,
+                lambda buffer: False,
             )
-        token = _extract_setup_token(self._current_setup_token_output, is_termination_required=False)
+        token = _extract_setup_token(self._current_setup_token_output)
         if token is not None:
+            # Length is safe metadata and the key diagnostic for wrap bugs
+            # (a real token is ~108 characters; a screen-width multiple
+            # means a truncated extraction).
+            logger.info("Extracted setup token (length={})", len(token))
             return token
         if match_index == 2:
             raise ClaudeAuthError("claude setup-token exited without printing a token")

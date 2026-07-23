@@ -19,6 +19,7 @@ import {
   removePendingMessage,
 } from "../models/PendingMessages";
 import { describeRequestError } from "../models/request-error";
+import { openLoginModal } from "../models/ClaudeAuth";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { icon, stopIcon } from "./icons";
 
@@ -59,6 +60,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   let messageText = "";
   let currentAgentId: string | null = null;
   let messageTextareaElement: HTMLTextAreaElement | null = null;
+  // Shown instead of sending when the user types claude's /logout command:
+  // delivered to the TUI it would exit the agent's process and wipe shared
+  // onboarding state without actually signing the workspace out (auth lives
+  // in settings.json, managed by the agent-auth screen).
+  let isLogoutNoticeVisible = false;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
 
@@ -129,6 +135,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       async function handleSend(): Promise<void> {
         if (!agentId) {
+          return;
+        }
+        if (messageText.trim().toLowerCase() === "/logout") {
+          isLogoutNoticeVisible = true;
+          m.redraw();
           return;
         }
         // Wait for in-flight uploads so a just-dropped file is included rather
@@ -247,6 +258,58 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         fileInputElement?.click();
       }
 
+      function dismissLogoutNotice(): void {
+        isLogoutNoticeVisible = false;
+        messageText = "";
+        if (agentId) {
+          localStorage.removeItem(messageTextKey(agentId));
+        }
+        m.redraw();
+      }
+
+      function renderLogoutNotice(): m.Vnode {
+        return m(
+          "div.custom-url-dialog-overlay",
+          {
+            onclick(e: MouseEvent) {
+              if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
+                dismissLogoutNotice();
+              }
+            },
+          },
+          m(
+            "div.custom-url-dialog",
+            {
+              onclick(e: MouseEvent) {
+                e.stopPropagation();
+              },
+            },
+            [
+              m("h3.custom-url-dialog-title", "Sign-out is managed here"),
+              m(
+                "p.logout-notice-body",
+                "This workspace's Claude sign-in is managed by this interface. " +
+                  "Sending /logout to the agent would shut it down without signing the workspace out. " +
+                  "Use the agent auth screen to switch or remove credentials.",
+              ),
+              m("div.custom-url-dialog-actions", [
+                m("button.custom-url-dialog-cancel", { onclick: () => dismissLogoutNotice() }, "Cancel"),
+                m(
+                  "button.custom-url-dialog-open",
+                  {
+                    onclick: () => {
+                      dismissLogoutNotice();
+                      openLoginModal();
+                    },
+                  },
+                  "Open agent auth",
+                ),
+              ]),
+            ],
+          ),
+        );
+      }
+
       const attachments = getComposerAttachments(agentId);
       const hasMessageText = messageText.trim().length > 0;
       const canSend = hasMessageText || hasReadyAttachments(agentId);
@@ -260,6 +323,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       const isStopButtonVisible = isAgentWorking && !isInterruptInFlight;
 
       return m("div", { class: "message-input mx-auto w-full" }, [
+        isLogoutNoticeVisible ? renderLogoutNotice() : null,
         m("input", {
           type: "file",
           multiple: true,
