@@ -2868,6 +2868,14 @@ body {
   padding: 6px 0;
 }
 
+/* Body copy for the /logout interception notice dialog */
+.logout-notice-body {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 8px 0 4px;
+}
+
 /* Step checklist shown while the background agent restart runs */
 .claude-login-applying {
   padding: 8px 0;
