@@ -42,4 +42,4 @@ def test_prompt_without_persona_omits_persona_line() -> None:
 
 def test_decide_falls_back_without_key(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert eval_decider.decide_next_message("agent-1", "persona") == eval_decider._FALLBACK
+    assert eval_decider.decide_next_message("agent-1", "persona", "") == eval_decider._FALLBACK
