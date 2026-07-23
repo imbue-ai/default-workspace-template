@@ -229,6 +229,71 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
         assert '"minds-v0.1.0"' in capsys.readouterr().out, argv
 
 
+def test_changelog_entries_collects_every_bucket_not_just_top_level(
+    tmp_path, capsys
+) -> None:
+    # Per-PR changelog entries live in a ``changelog/`` dir under each project
+    # bucket, not only the legacy top-level ``changelog/``. The command must
+    # surface entries from every bucket -- else the update-self "what's new"
+    # digest silently drops everything on the current (bucketed) convention --
+    # while ignoring the vendored subtree's separate changelog system and files
+    # that only happen to sit next to a changelog dir.
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    def _write(rel: str, text: str = "entry\n") -> None:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    _git("init", "-q")
+    _git("config", "user.email", "test@example.com")
+    _git("config", "user.name", "test")
+    # Base commit: one pre-existing top-level entry (must NOT be reported as
+    # newly added), plus a source file the target will leave untouched.
+    _write("changelog/old-entry.md")
+    _write("libs/browser/src/browser/session.py", "print('hi')\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "base")
+    _git("tag", "base")
+
+    # Target commit: newly-added entries across every bucket, a vendored-subtree
+    # entry (excluded), and a non-changelog source change (ignored).
+    _write(".agents/changelog/my-branch.md")
+    _write("dev/changelog/my-branch.md")
+    _write("libs/browser/changelog/my-branch.md")
+    _write("apps/system_interface/changelog/my-branch.md")
+    _write("changelog/my-branch.md")
+    _write("vendor/mngr/libs/mngr/changelog/upstream-entry.md")
+    _write("libs/browser/src/browser/session.py", "print('bye')\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "target")
+    _git("tag", "target")
+
+    assert (
+        update_self.main(
+            [
+                "changelog-entries",
+                "--base",
+                "base",
+                "--target",
+                "target",
+                "--repo-root",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    added = json.loads(capsys.readouterr().out)["added"]
+    assert sorted(added) == [
+        ".agents/changelog/my-branch.md",
+        "apps/system_interface/changelog/my-branch.md",
+        "changelog/my-branch.md",
+        "dev/changelog/my-branch.md",
+        "libs/browser/changelog/my-branch.md",
+    ]
+
+
 # --- bootstrap-skill --------------------------------------------------------
 
 

@@ -408,6 +408,14 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
 
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
+    # Per-PR changelog entries live in a ``changelog/`` dir under each project
+    # bucket -- ``dev/changelog/``, ``.agents/changelog/``, ``libs/<name>/
+    # changelog/``, ``apps/<name>/changelog/`` -- plus the legacy top-level
+    # ``changelog/`` (see scripts/check_changelog_entries.py for the bucket
+    # definition). Match every one of them at any depth with a single glob rather
+    # than the top-level dir alone, or the "what's new" digest silently drops
+    # everything landed under the bucketed layout. Exclude the vendored subtree,
+    # which carries its own separate changelog system.
     added = _list_names(
         _git(
             [
@@ -417,7 +425,8 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
                 args.base,
                 args.target,
                 "--",
-                "changelog/",
+                ":(glob)**/changelog/*",
+                ":(exclude)vendor",
             ],
             repo_root,
         )
@@ -558,7 +567,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     changelog_parser = sub.add_parser(
         "changelog-entries",
-        help="List changelog/ entries newly added between two refs.",
+        help="List per-PR changelog entries newly added between two refs "
+        "(across every project bucket, not just the top-level changelog/).",
         parents=[common],
     )
     changelog_parser.add_argument("--base", required=True, help="Base ref.")
