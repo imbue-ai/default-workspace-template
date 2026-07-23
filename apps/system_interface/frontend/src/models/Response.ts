@@ -346,11 +346,14 @@ class TranscriptStore {
     });
   }
 
-  /** A newer page came back empty: the window reaches the live tail; reconcile the
-   *  total the server now reports. */
-  reconcileTotalAtTail(total: number): void {
+  /** A newer page came back empty: the window reaches the live tail. Mirror
+   *  markReachedStart on the forward side -- force hasMoreAfter false by making the
+   *  window define the total, regardless of a higher server count (which can
+   *  outrun the held count via dedup/merge on the paging path and would otherwise
+   *  leave hasMoreAfter stuck true, freezing live updates). */
+  reconcileTotalAtTail(): void {
     this.#commit(() => {
-      this.#total = total;
+      this.#total = this.#firstOffset + this.#events.length;
       return true;
     });
   }
@@ -561,9 +564,11 @@ export async function fetchForwardEvents(agentId: string): Promise<void> {
     });
     if (result.events.length > 0) {
       appendForwardEvents(agentId, result.events, result.total);
-    } else if (result.total !== undefined) {
-      // Nothing after the cursor: the window reaches the live tail.
-      storeFor(agentId).reconcileTotalAtTail(result.total);
+    } else {
+      // Nothing after the cursor: the window reaches the live tail. Authoritative
+      // regardless of the server's reported total -- clamp hasMoreAfter false so
+      // append() re-anchors and live SSE events resume.
+      storeFor(agentId).reconcileTotalAtTail();
     }
   } catch (error) {
     console.warn(`Failed to load newer events for agent ${agentId}`, error);
