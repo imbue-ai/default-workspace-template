@@ -2868,6 +2868,62 @@ body {
   padding: 6px 0;
 }
 
+/* Step checklist shown while the background agent restart runs */
+.claude-login-applying {
+  padding: 8px 0;
+}
+
+.claude-login-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.claude-login-checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.875rem;
+}
+
+.claude-login-checklist-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.claude-login-checklist-item--done {
+  color: var(--color-text-secondary);
+}
+
+.claude-login-checklist-item--done .claude-login-checklist-icon {
+  color: var(--color-success, #22a06b);
+}
+
+.claude-login-checklist-item--active {
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.claude-login-checklist-item--pending {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+}
+
+.claude-login-checklist-item--pending .claude-login-checklist-icon::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.4;
+}
+
 /* Collapsed-by-default affordances (paste-code fallback, direct-token paste) */
 .claude-login-subtle {
   margin-top: 10px;

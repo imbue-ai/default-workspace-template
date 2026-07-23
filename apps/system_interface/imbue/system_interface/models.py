@@ -180,6 +180,11 @@ class ClaudeAuthStatusResponse(FrozenModel):
     workspace_host_id: str | None = Field(
         default=None, description="This mind's mngr host id, for the desktop app's key-mint page link"
     )
+    restart_phase: str | None = Field(
+        default=None, description="Phase of the post-auth agent restart: 'restarting', 'finishing', 'done', 'failed'"
+    )
+    restart_detail: str | None = Field(default=None, description="Human-readable detail for the current restart phase")
+    restart_error: str | None = Field(default=None, description="Error message when restart_phase is 'failed'")
 
 
 class ClaudeSetupTokenStartResponse(FrozenModel):

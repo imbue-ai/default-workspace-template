@@ -42,10 +42,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from pydantic import SecretStr
 
 from imbue.mngr.utils.env_utils import parse_env_file
-from imbue.system_interface.claude_auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.system_interface.claude_auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.system_interface.claude_auth import MANAGED_AUTH_ENV_KEYS
 from imbue.system_interface.claude_auth import ClaudeAuthService
@@ -130,13 +128,10 @@ def _spawn_detached_restart() -> None:
 
 def _run_restart_phase() -> None:
     managed_env = read_managed_auth_env()
-    api_key_value = managed_env.get(ANTHROPIC_API_KEY_ENV_VAR)
     has_token = bool(managed_env.get(CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR))
     print(f"Restarting claude agents (settings mode: {derive_auth_mode(managed_env).value}, token={has_token}).")
     service = ClaudeAuthService()
-    restarted = service.restart_all_claude_agents(
-        api_key=SecretStr(api_key_value) if api_key_value else None,
-    )
+    restarted = service.restart_all_claude_agents()
     print(f"Restarted agents: {', '.join(restarted) if restarted else '(none running)'}")
 
 
