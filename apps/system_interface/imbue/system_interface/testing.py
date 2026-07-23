@@ -33,6 +33,7 @@ from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.claude_auth import ClaudeAuthService
+from imbue.system_interface.claude_auth import RestartProgress
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.layout_ops import LayoutMutex
@@ -175,6 +176,24 @@ class FakePexpectProcess:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+def wait_for_background_apply(service: ClaudeAuthService) -> RestartProgress:
+    """Join the service's background credential-apply thread; return its final progress.
+
+    Tests that trigger an apply (submit paths, switch-flavored oauth
+    completions) call this so post-apply state -- the settings write, the
+    recorded mngr calls, the welcome-resend hook -- is stable before
+    asserting on it. Callers assert on the returned progress themselves
+    (most expect DONE; failure tests expect FAILED).
+    """
+    thread = service._restart_thread
+    assert thread is not None, "no background apply was started"
+    thread.join(timeout=10)
+    assert not thread.is_alive(), "background apply did not finish in time"
+    progress = service.current_restart_progress()
+    assert progress is not None
+    return progress
 
 
 def _find_free_port() -> int:

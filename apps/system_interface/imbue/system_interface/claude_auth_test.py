@@ -24,6 +24,7 @@ from imbue.mngr.cli.exit_codes import EXIT_CODE_PROVIDER_INACCESSIBLE
 from imbue.system_interface import claude_auth
 from imbue.system_interface.testing import FakeFinishedProcess
 from imbue.system_interface.testing import FakePexpectProcess
+from imbue.system_interface.testing import wait_for_background_apply
 
 _FAKE_URL = "https://claude.com/cai/oauth/authorize?code=true&state=abc"
 _FAKE_TOKEN = "sk-ant-oat01-" + "FAKETOKEN0" * 9 + "12345"
@@ -394,17 +395,6 @@ def test_restart_raises_when_start_fails(isolated_claude_config: Path) -> None:
 # ----- submit_credentials -----
 
 
-def _wait_for_background_apply(service: claude_auth.ClaudeAuthService) -> claude_auth.RestartProgress:
-    """Join the background apply thread and return its final progress."""
-    thread = service._restart_thread
-    assert thread is not None, "no background apply was started"
-    thread.join(timeout=10)
-    assert not thread.is_alive(), "background apply did not finish in time"
-    progress = service.current_restart_progress()
-    assert progress is not None
-    return progress
-
-
 def test_submit_credentials_writes_settings_and_restarts_in_background(isolated_claude_config: Path) -> None:
     command_log: list[tuple[str, ...]] = []
     service = _build_restart_recording_service(command_log)
@@ -414,7 +404,7 @@ def test_submit_credentials_writes_settings_and_restarts_in_background(isolated_
     assert status.restart_phase == claude_auth.RestartPhase.RESTARTING.value
     assert status.restart_reason == claude_auth.RestartReason.CREDENTIALS_SAVED.value
     assert status.auth_mode is claude_auth.AuthMode.API_KEY
-    progress = _wait_for_background_apply(service)
+    progress = wait_for_background_apply(service)
     assert progress.phase is claude_auth.RestartPhase.DONE
     settings = json.loads((isolated_claude_config / "settings.json").read_text())
     assert settings["env"] == {"ANTHROPIC_API_KEY": "sk-ant-fresh"}
@@ -435,7 +425,7 @@ def test_submit_credentials_reports_failed_phase_when_restart_fails(isolated_cla
 
     service = claude_auth.ClaudeAuthService(command_runner=_runner)
     service.submit_credentials("ANTHROPIC_API_KEY=sk-ant-fresh", None)
-    progress = _wait_for_background_apply(service)
+    progress = wait_for_background_apply(service)
     assert progress.phase is claude_auth.RestartPhase.FAILED
     assert progress.error is not None and "mngr start" in progress.error
 
@@ -455,7 +445,7 @@ def test_submit_credentials_rejects_second_change_while_apply_is_running(isolate
     with pytest.raises(claude_auth.ClaudeAuthError, match="still in progress"):
         service.submit_credentials("ANTHROPIC_API_KEY=sk-ant-second", None)
     release_start.set()
-    _wait_for_background_apply(service)
+    wait_for_background_apply(service)
 
 
 def test_submit_credentials_rejects_bad_paste_without_touching_anything(isolated_claude_config: Path) -> None:
@@ -534,7 +524,7 @@ def test_poll_setup_token_pending_then_completes(isolated_claude_config: Path) -
     assert complete.is_complete is True
     assert complete.status is not None
     assert complete.status.auth_mode is claude_auth.AuthMode.SUBSCRIPTION
-    progress = _wait_for_background_apply(service)
+    progress = wait_for_background_apply(service)
     assert progress.phase is claude_auth.RestartPhase.DONE
     settings = json.loads((isolated_claude_config / "settings.json").read_text())
     assert settings["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": _FAKE_TOKEN}
@@ -586,7 +576,7 @@ def test_submit_setup_token_code_drives_subprocess_and_completes(isolated_claude
     # (a single sendline would be swallowed by the CLI's paste heuristic).
     assert fake_process.send_calls == ["FAKE#CODE", "\r"]
     assert status.auth_mode is claude_auth.AuthMode.SUBSCRIPTION
-    progress = _wait_for_background_apply(service)
+    progress = wait_for_background_apply(service)
     assert progress.phase is claude_auth.RestartPhase.DONE
     settings = json.loads((isolated_claude_config / "settings.json").read_text())
     assert settings["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == _FAKE_TOKEN
@@ -683,7 +673,7 @@ def test_oauth_login_fast_path_clears_stale_failed_restart_progress(isolated_cla
     service = claude_auth.ClaudeAuthService(command_runner=_runner, pexpect_spawner=lambda *_a, **_k: fake_process)
     # A subscription-switch apply clears the managed env, then its restart fails.
     service.start_background_apply({}, None, claude_auth.RestartReason.SUBSCRIPTION_SWITCH)
-    progress = _wait_for_background_apply(service)
+    progress = wait_for_background_apply(service)
     assert progress.phase is claude_auth.RestartPhase.FAILED
 
     start = service.start_oauth_login(claude_auth.OAuthProvider.CLAUDEAI)
@@ -716,7 +706,7 @@ def test_oauth_login_with_managed_keys_clears_them_and_restarts(isolated_claude_
     assert complete.is_complete is True
     assert complete.status is not None
     assert complete.status.restart_reason == claude_auth.RestartReason.SUBSCRIPTION_SWITCH.value
-    progress = _wait_for_background_apply(service)
+    progress = wait_for_background_apply(service)
     assert progress.phase is claude_auth.RestartPhase.DONE
     settings = json.loads((isolated_claude_config / "settings.json").read_text())
     assert settings.get("env", {}) == {}
@@ -739,7 +729,7 @@ def test_oauth_login_console_always_restarts(isolated_claude_config: Path) -> No
     assert complete.is_complete is True
     assert complete.status is not None
     assert complete.status.restart_reason == claude_auth.RestartReason.CONSOLE_SWITCH.value
-    progress = _wait_for_background_apply(service)
+    progress = wait_for_background_apply(service)
     assert progress.phase is claude_auth.RestartPhase.DONE
 
 
