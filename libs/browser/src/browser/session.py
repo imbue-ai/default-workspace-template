@@ -101,14 +101,25 @@ _SCREENCAST_FORMAT = "jpeg"
 _SCREENCAST_QUALITY = 55
 _SCREENCAST_MAX_WIDTH = 1280
 _SCREENCAST_MAX_HEIGHT = 800
+# The live render size floats between the floor above (also a sane desktop baseline --
+# smaller reflows sites to mobile layouts) and this cap: the viewer reports its pane
+# size and we grow the browser to fill it, never above the cap (memory -- up to
+# _MAX_SESSIONS headless Chromiums render concurrently).
+_RENDER_MAX_WIDTH = 1920
+_RENDER_MAX_HEIGHT = 1080
+# Floor for the clamp -- small enough that a typical (sub-1280) panel actually
+# tracks its size instead of pinning to a too-big minimum, but not degenerate.
+_RENDER_MIN_WIDTH = 640
+_RENDER_MIN_HEIGHT = 480
 # Every frame: the first frame after a tab switch arrives sooner, so clicking a
 # tab feels snappier. Slightly more bandwidth than skipping frames.
 _SCREENCAST_EVERY_NTH_FRAME = 1
 
-# Deferred-install marker (see scripts/deferred_install.sh). Chromium installs
-# asynchronously on first container boot; launching a browser before it exists
-# fails, so callers gate on this. No Xvfb: CDP streaming/input are headless.
+# Deferred-install markers (see scripts/deferred_install.sh). Chromium and the
+# Xvfb virtual display install asynchronously on first container boot; launching
+# a browser before they exist fails, so callers gate on these.
 _PLAYWRIGHT_MARKER = Path("/var/lib/minds/deferred-install/done.playwright")
+_XVFB_MARKER = Path("/var/lib/minds/deferred-install/done.xvfb")
 
 # Default model. browser-use's own default LLM is ChatBrowserUse (its hosted
 # model), so to drive with the user's Anthropic key we pass ChatAnthropic
@@ -116,10 +127,14 @@ _PLAYWRIGHT_MARKER = Path("/var/lib/minds/deferred-install/done.playwright")
 # API as-is (browser-use accepts an arbitrary model string).
 _DEFAULT_MODEL = os.environ.get("BROWSER_USE_MODEL", "claude-sonnet-4-6")
 
-# Headless by default. CDP screencast + input are display-independent (they work
-# in headless Chromium), so no Xvfb is needed. Set BROWSER_HEADLESS=0 to run
-# headful (stronger anti-bot fidelity) if a site blocks headless.
-_HEADLESS = os.environ.get("BROWSER_HEADLESS", "1") != "0"
+# Headful under a virtual display (Xvfb) by default: the browser service runs an
+# Xvfb server and exports DISPLAY, so Chromium renders into a real X11 session.
+# That is what makes the OS clipboard usable -- xclip populates/reads the X11
+# clipboard for native copy/paste (images included), which a headless Chromium
+# has no reachable clipboard for. Falls back to headless where no DISPLAY exists
+# (tests, bare dev boxes) so those still run. Force either mode with
+# BROWSER_HEADLESS=1/0.
+_HEADLESS = os.environ.get("BROWSER_HEADLESS", "0" if os.environ.get("DISPLAY") else "1") != "0"
 
 # Page the browser opens on, and the default for "New tab".
 _HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com")
@@ -353,6 +368,10 @@ def deferred_install_ready() -> tuple[bool, str]:
         return True, "ready"  # host/CI testing without the deferred-install marker
     if not _PLAYWRIGHT_MARKER.exists():
         return False, "Chromium is still installing in this workspace; try again in a minute."
+    # Headful needs the Xvfb display present; wait for its install too (headless
+    # runs -- tests, bare dev boxes -- don't need it).
+    if not _HEADLESS and not _XVFB_MARKER.exists():
+        return False, "The virtual display is still installing in this workspace; try again in a minute."
     return True, "ready"
 
 
@@ -454,6 +473,15 @@ class LiveBrowser(MutableModel):
     _selector_map: dict[int, Any] = PrivateAttr(default_factory=dict)
     _lease_touched_at: float = PrivateAttr(default=0.0)
     _screenshot_seq: int = PrivateAttr(default=0)
+    # Live render size (viewport / device-metrics / screencast), grown to the human's
+    # pane by _apply_resize between the floor (_SCREENCAST_MAX_*) and cap (_RENDER_MAX_*).
+    # Frozen while an agent drives so its `state` element indices don't shift mid-task.
+    _render_w: int = PrivateAttr(default=_SCREENCAST_MAX_WIDTH)
+    _render_h: int = PrivateAttr(default=_SCREENCAST_MAX_HEIGHT)
+    # The render size the current agent started with -- compared on resume to tell it
+    # if the human resized (reflowing the page) while they held control (see _wake_agent).
+    _agent_render_w: int = PrivateAttr(default=_SCREENCAST_MAX_WIDTH)
+    _agent_render_h: int = PrivateAttr(default=_SCREENCAST_MAX_HEIGHT)
     # Direct-control resume queue: agents whose command was rejected (a human or
     # another agent held the browser). They ended their turns; when the browser
     # frees they are handed it FIFO and messaged to resume (see _wake_agent). This
@@ -694,18 +722,19 @@ class LiveBrowser(MutableModel):
                     self._active_target_id = info["targetInfo"]["targetId"]
                 except _BROWSER_ERRORS:
                     self._active_target_id = None
-                # Force a uniform render size on EVERY tab. browser-use pins the
+                # Force the current render size on EVERY tab. browser-use pins the
                 # viewport on the first page, but tabs opened later (by the agent or
                 # by the site) can come up at a different size, so their frames would
                 # stream at a different resolution and the viewer would letterbox them
                 # inconsistently. Overriding the device metrics on each screencast
-                # target makes every tab stream at exactly the screencast cap.
+                # target makes every tab stream at exactly _render_w x _render_h, and
+                # re-applies the human's latest resize (see _apply_resize).
                 try:
                     await cdp.send(
                         "Emulation.setDeviceMetricsOverride",
                         {
-                            "width": _SCREENCAST_MAX_WIDTH,
-                            "height": _SCREENCAST_MAX_HEIGHT,
+                            "width": self._render_w,
+                            "height": self._render_h,
                             "deviceScaleFactor": 1,
                             "mobile": False,
                         },
@@ -718,8 +747,8 @@ class LiveBrowser(MutableModel):
                     {
                         "format": _SCREENCAST_FORMAT,
                         "quality": _SCREENCAST_QUALITY,
-                        "maxWidth": _SCREENCAST_MAX_WIDTH,
-                        "maxHeight": _SCREENCAST_MAX_HEIGHT,
+                        "maxWidth": self._render_w,
+                        "maxHeight": self._render_h,
                         "everyNthFrame": _SCREENCAST_EVERY_NTH_FRAME,
                     },
                 )
@@ -965,7 +994,16 @@ class LiveBrowser(MutableModel):
         stale human input land after the handoff (the input/control TOCTOU).
         """
         kind = message.get("type")
-        if kind in ("mouse", "key", "tab", "navigate", "back", "forward", "reload"):
+        if kind == "resize":
+            # Same gate as input: _input_enabled is set iff the human (or an idle-free
+            # browser) owns it, so resizes are dropped while an agent drives -- that's
+            # the "aspect locked during agent control" freeze, for free.
+            async with self._control_lock:
+                if not self._input_enabled.is_set():
+                    logger.info("browser {} resize ignored: input not enabled (an agent controls it)", self.browser_id)
+                    return
+                await self._apply_resize(message)
+        elif kind in ("mouse", "key", "tab", "navigate", "back", "forward", "reload"):
             async with self._control_lock:
                 if not self._input_enabled.is_set():
                     return
@@ -992,6 +1030,23 @@ class LiveBrowser(MutableModel):
         except _BROWSER_ERRORS as e:
             logger.debug("cast input ignored ({})", e)
 
+    async def _apply_resize(self, message: dict[str, Any]) -> None:
+        """Human/idle resized their pane: re-render the browser to fill it, clamped to
+        [floor .. cap]. Reached only while input is enabled (human owns it), so an
+        agent's cached `state` indices never shift mid-task. Reuses _set_active_page,
+        which re-applies the new size to the device-metrics override + screencast."""
+        raw_w, raw_h = int(message.get("width", 0)), int(message.get("height", 0))
+        w = max(_RENDER_MIN_WIDTH, min(_RENDER_MAX_WIDTH, raw_w))
+        h = max(_RENDER_MIN_HEIGHT, min(_RENDER_MAX_HEIGHT, raw_h))
+        logger.info(
+            "browser {} resize request {}x{} -> clamped {}x{} (was {}x{}, headless={})",
+            self.browser_id, raw_w, raw_h, w, h, self._render_w, self._render_h, _HEADLESS,
+        )
+        if (w, h) == (self._render_w, self._render_h) or self._active_page is None:
+            return
+        self._render_w, self._render_h = w, h
+        await self._set_active_page(self._active_page)
+
     async def _handle_tab_control(self, message: dict[str, Any]) -> None:
         if self._context is None:
             return
@@ -1009,6 +1064,102 @@ class LiveBrowser(MutableModel):
             index = int(message.get("index", 0))
             if 0 <= index < len(self._context.pages):
                 await self._context.pages[index].close()
+
+    # --- clipboard bridge (human viewer <-> the browser's X11 clipboard) ------
+    # The browser runs headful under Xvfb (see _HEADLESS), so it has a real X11
+    # clipboard. xclip reads/writes it from OUTSIDE the page, so a paste/copy is
+    # fully native -- no page-origin Async Clipboard API, no https/user-activation
+    # constraints, and images work the same as text. Gated on _input_enabled: only
+    # the controlling human, never an agent mid-task, drives the clipboard.
+
+    async def clipboard_paste(self, data: bytes, mime: str) -> dict[str, Any]:
+        """Write the user's clipboard payload into the browser's X11 clipboard, then
+        fire a native paste into the focused element. ``mime`` is text/* or image/*."""
+        async with self._control_lock:
+            if not self._input_enabled.is_set():
+                return {"ok": False, "status": "not_controlling"}
+            cdp = self._active_cdp
+            if cdp is None:
+                return {"ok": False, "status": "no_page"}
+            if not await self._xclip_write(data, mime):
+                return {"ok": False, "status": "clipboard_error"}
+            # The "paste" editing command reads the X11 clipboard we just populated,
+            # independent of the user's keymap.
+            try:
+                await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": 2, "commands": ["paste"]})
+                await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": 2})
+            except _BROWSER_ERRORS as e:
+                logger.debug("clipboard paste dispatch ignored ({})", e)
+                return {"ok": False, "status": "error"}
+        return {"ok": True}
+
+    async def clipboard_copy(self, *, cut: bool = False) -> dict[str, Any]:
+        """Fire a native copy (or cut) of the current selection, then read the X11
+        clipboard out for the user. Returns ``{ok, mime, text|data}``; ``mime`` is None
+        when nothing is selected. Binary payloads come back base64 in ``data``, text in
+        ``text``."""
+        async with self._control_lock:
+            if not self._input_enabled.is_set():
+                return {"ok": False, "status": "not_controlling"}
+            cdp = self._active_cdp
+            if cdp is None:
+                return {"ok": False, "status": "no_page"}
+            command = "cut" if cut else "copy"
+            key, code, vk = ("x", "KeyX", 88) if cut else ("c", "KeyC", 67)
+            try:
+                await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": key, "code": code, "windowsVirtualKeyCode": vk, "modifiers": 2, "commands": [command]})
+                await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk, "modifiers": 2})
+            except _BROWSER_ERRORS as e:
+                logger.debug("clipboard {} dispatch ignored ({})", command, e)
+                return {"ok": False, "status": "error"}
+            data, mime = await self._xclip_read()
+        if data is None or mime is None:
+            # nothing selected / empty clipboard
+            return {"ok": True, "mime": None}
+        if mime.startswith("text/"):
+            return {"ok": True, "mime": mime, "text": data.decode("utf-8", "replace")}
+        return {"ok": True, "mime": mime, "data": base64.b64encode(data).decode("ascii")}
+
+    async def _xclip_write(self, data: bytes, mime: str) -> bool:
+        """Load ``data`` into the X11 CLIPBOARD selection. xclip forks a background owner
+        that serves the selection until another app claims it, so it persists for the
+        paste. DISPLAY is inherited from the browser service's env (:99)."""
+        args = ["xclip", "-selection", "clipboard"]
+        if not mime.startswith("text/"):
+            args += ["-t", mime]
+        args += ["-i"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+            )
+            await proc.communicate(data)
+            return proc.returncode == 0
+        except OSError as e:
+            logger.warning("xclip write failed for browser {} ({})", self.browser_id, e)
+            return False
+
+    async def _xclip_read(self) -> tuple[bytes | None, str | None]:
+        """Read the X11 CLIPBOARD selection, preferring an image if present. A short
+        wait lets the just-issued copy command land in the clipboard first."""
+        await asyncio.sleep(0.12)
+        targets = await self._xclip_out("TARGETS")
+        mime = "image/png" if targets and b"image/png" in targets else "text/plain"
+        data = await self._xclip_out(mime)
+        if not data:
+            return None, None
+        return data, mime
+
+    async def _xclip_out(self, target: str) -> bytes | None:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "xclip", "-selection", "clipboard", "-o", "-t", target,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+            return out if proc.returncode == 0 else None
+        except OSError as e:
+            logger.warning("xclip read failed for browser {} ({})", self.browser_id, e)
+            return None
 
     # --- ownership state machine ----------------------------------------------
 
@@ -1036,6 +1187,9 @@ class LiveBrowser(MutableModel):
         else:
             self._input_enabled.clear()
             self._lease_touched_at = time.monotonic()  # start the sticky-lease idle clock
+            # Remember the size the agent starts at, so a human resize during a later
+            # takeover can be reported back to it on resume (see _wake_agent).
+            self._agent_render_w, self._agent_render_h = self._render_w, self._render_h
         self._broadcast(self._control_message())
 
     def _waiting_names(self) -> list[str]:
@@ -1081,6 +1235,7 @@ class LiveBrowser(MutableModel):
             "owner_agent_id": self.owner_agent_id,
             "owner_name": self.owner_agent_name,
             "human_pinned": self.human_pinned,
+            "resolution": [self._render_w, self._render_h],
         }
 
     async def acquire_with_state(
@@ -1220,11 +1375,20 @@ class LiveBrowser(MutableModel):
         """Message a queued agent that the browser is its again, so it resumes in a
         fresh turn (it ended its turn when it lost control). If it fails, or the agent
         never shows, the claim window passes the browser on."""
+        if (self._render_w, self._render_h) != (self._agent_render_w, self._agent_render_h):
+            size_note = (
+                f" The view is now {self._render_w}x{self._render_h} "
+                f"(was {self._agent_render_w}x{self._agent_render_h} when you left) -- the page reflowed, "
+                f"so your earlier element numbers are void; recompute from the fresh `state` list."
+            )
+        else:
+            size_note = f" The view is {self._render_w}x{self._render_h} (unchanged)."
         await self._message_agent(
             agent_id,
             agent_name,
             f"Browser {self.browser_id} was handed back to you (the human finished with it). "
-            f"Re-run `state {self.browser_id}` to re-read the page, then continue where you left off.",
+            f"Re-run `state {self.browser_id}` to re-read the page, then continue where you left off."
+            f"{size_note}",
         )
 
     async def _abandon_queues_locked(self, reason: str) -> None:
