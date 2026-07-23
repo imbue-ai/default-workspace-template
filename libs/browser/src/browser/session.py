@@ -105,10 +105,15 @@ _SCREENCAST_MAX_HEIGHT = 800
 # tab feels snappier. Slightly more bandwidth than skipping frames.
 _SCREENCAST_EVERY_NTH_FRAME = 1
 
-# Deferred-install marker (see scripts/deferred_install.sh). Chromium installs
+# Deferred-install marker (see scripts/deferred_install.sh). Fortress installs
 # asynchronously on first container boot; launching a browser before it exists
 # fails, so callers gate on this. No Xvfb: CDP streaming/input are headless.
-_PLAYWRIGHT_MARKER = Path("/var/lib/minds/deferred-install/done.playwright")
+_FORTRESS_MARKER = Path("/var/lib/minds/deferred-install/done.fortress")
+
+# Fortress's fixed install path (see scripts/deferred_install.sh's
+# _install_fortress). A stealth, C++-patched Chromium fork -- replaces
+# vanilla Chromium as the engine for every browser the fleet launches.
+_FORTRESS_EXECUTABLE = "/opt/fortress/tilion-fortress/tilion"
 
 # Default model. browser-use's own default LLM is ChatBrowserUse (its hosted
 # model), so to drive with the user's Anthropic key we pass ChatAnthropic
@@ -205,6 +210,28 @@ def _repo_root() -> Path:
 # Where `screenshot` writes PNGs (relative to the daemon's cwd = repo root). The
 # CLI prints the path and the agent reads the file; agent + daemon share the FS.
 _SCREENSHOT_DIR = Path(os.environ.get("BROWSER_SCREENSHOT_DIR", "runtime/browser-screenshots"))
+
+# Sentinel the fleet wraps its agent-facing nudges in before sending them via
+# `mngr message` (see `_message_agent`). These nudges land in the agent's
+# transcript as an ordinary user turn; without a marker the system_interface
+# transcript UI shows them as a bare user bubble, as if the human had typed
+# them. Wrapping lets that UI recognise the message and render it as a collapsed
+# system chip instead (like Stop-hook feedback).
+#
+# CROSS-LAYER CONTRACT: the reading side is the frontend's `BROWSER_FLEET_TAG` in
+# apps/system_interface/frontend/src/views/message-kinds.ts -- keep the tag in
+# sync. We wrap here in the fleet's OWN service (not in mngr, which is an
+# independent product with no stake in this display concern). The wrapper adds no
+# newlines, so a wrapped message types into the agent's pane identically to the
+# same text sent unwrapped.
+_SYSTEM_MESSAGE_TAG = "agentic-browser-fleet"
+
+
+def _wrap_system_message(text: str) -> str:
+    """Wrap an automated agent-facing nudge in the ``_SYSTEM_MESSAGE_TAG`` sentinel
+    (see its comment). Adds no newlines, so the wrapped text types into the agent's
+    pane identically to ``text`` sent unwrapped."""
+    return f"<{_SYSTEM_MESSAGE_TAG}>{text}</{_SYSTEM_MESSAGE_TAG}>"
 
 # Per-browser persistent Chromium profiles (cookies/logins/history) live here, on the
 # workspace volume under $MNGR_HOST_DIR -- Tier A durability: they survive stop/start
@@ -329,7 +356,7 @@ def deferred_install_ready() -> tuple[bool, str]:
     """Return ``(ready, reason)`` once Chromium is installed."""
     if os.environ.get("BROWSER_SKIP_INSTALL_CHECK") == "1":
         return True, "ready"  # host/CI testing without the deferred-install marker
-    if not _PLAYWRIGHT_MARKER.exists():
+    if not _FORTRESS_MARKER.exists():
         return False, "Chromium is still installing in this workspace; try again in a minute."
     return True, "ready"
 
@@ -542,7 +569,10 @@ class LiveBrowser(MutableModel):
         """
         self._playwright = playwright
         self._input_enabled.set()
-        chromium_path = playwright.chromium.executable_path
+        # Fixed Fortress path, not playwright.chromium.executable_path -- the
+        # fleet's engine is Fortress, not Playwright's own managed Chromium
+        # (which vanilla Playwright calls elsewhere in this image still use).
+        chromium_path = _FORTRESS_EXECUTABLE
         profile_dir = _profile_dir(self.browser_id)
         profile_dir.mkdir(parents=True, exist_ok=True)
         _clear_stale_singleton(profile_dir)  # a prior hard kill may have orphaned a lock
@@ -1167,15 +1197,22 @@ class LiveBrowser(MutableModel):
     async def _message_agent(self, agent_id: str, agent_name: str | None, text: str) -> None:
         """Best-effort: message a queued agent via ``mngr message`` (the same path
         launch-task uses). Failures are logged, not raised -- the claim window / lifecycle
-        handling is the backstop if a message never lands."""
+        handling is the backstop if a message never lands.
+
+        These are automated, non-human nudges, so the text is wrapped in the
+        ``_SYSTEM_MESSAGE_TAG`` sentinel: the transcript UI recognises it and
+        renders a collapsed system chip instead of a bare user bubble. This is
+        display-only -- the agent still receives the message and resumes its turn
+        exactly as before."""
         target = agent_name or agent_id
+        wrapped = _wrap_system_message(text)
         try:
             proc = await asyncio.create_subprocess_exec(
                 "mngr",
                 "message",
                 target,
                 "--message",
-                text,
+                wrapped,
                 # Run from the repo root so the `mngr` dev shim resolves this checkout
                 # (repo-relative paths assume cwd = repo root; don't rely on the
                 # daemon's inherited cwd).

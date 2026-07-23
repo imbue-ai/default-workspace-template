@@ -21,7 +21,7 @@ provision_skip_if_done setup_system
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${NODE_MAJOR:=20}"
-: "${LATCHKEY_VERSION:=2.20.0}"
+: "${LATCHKEY_VERSION:=3.1.0}"
 
 # Install a downloaded binary atomically: fetch to a temp file beside the target,
 # then rename(2) it into place. A plain `curl -o <dest>` truncates <dest> in
