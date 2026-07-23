@@ -27,6 +27,7 @@ from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import FakeFinishedProcess
 from imbue.system_interface.testing import FakePexpectProcess
 from imbue.system_interface.testing import build_test_state
+from imbue.system_interface.testing import wait_for_background_apply
 from imbue.system_interface.welcome_resend import WelcomeResender
 
 # The initial chat agent's id, as the bootstrap would persist it.
@@ -83,16 +84,6 @@ def _client(
     """
     state = build_test_state(claude_auth_service=claude_auth_service, welcome_resender=welcome_resender)
     yield create_application(state).test_client()
-
-
-def _wait_for_background_apply(service: ClaudeAuthService) -> None:
-    """Join the service's background apply thread so post-apply state is stable."""
-    thread = service._restart_thread
-    assert thread is not None, "no background apply was started"
-    thread.join(timeout=10)
-    assert not thread.is_alive(), "background apply did not finish in time"
-    progress = service.current_restart_progress()
-    assert progress is not None and progress.phase is RestartPhase.DONE
 
 
 def _logged_in_runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
@@ -201,7 +192,7 @@ def test_setup_token_flow_via_poll_completion(tmp_path: Path, monkeypatch: pytes
     assert body["status"]["logged_in"] is True
     assert body["status"]["auth_mode"] == "subscription"
     assert body["status"]["restart_phase"] is not None
-    _wait_for_background_apply(service)
+    assert wait_for_background_apply(service).phase is RestartPhase.DONE
     settings = json.loads((config_dir / "settings.json").read_text())
     assert settings["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": _FAKE_TOKEN}
     # The welcome resend runs only after the background restart completes.
@@ -240,7 +231,7 @@ def test_setup_token_submit_code_fallback(tmp_path: Path, monkeypatch: pytest.Mo
     assert submit.status_code == 200
     assert submit.get_json()["auth_mode"] == "subscription"
     assert fake_process.send_calls == ["FAKE#CODE", "\r"]
-    _wait_for_background_apply(service)
+    assert wait_for_background_apply(service).phase is RestartPhase.DONE
     assert welcome_calls == [_CHAT_AGENT_ID]
 
 
@@ -300,7 +291,7 @@ def test_submit_credentials_writes_settings_and_restarts_claude_binary_agents(
     assert body["logged_in"] is True
     assert body["restart_phase"] is not None
     assert body["restart_reason"] == "credentials_saved"
-    _wait_for_background_apply(service)
+    assert wait_for_background_apply(service).phase is RestartPhase.DONE
     settings = json.loads((config_dir / "settings.json").read_text())
     assert settings["env"] == {"ANTHROPIC_API_KEY": "sk-ant-test-key"}
     assert (tmp_path / "env").exists() is False, "the host env file must never be written by the auth flow"
