@@ -24,13 +24,14 @@ provision_skip_if_done setup_system
 : "${LATCHKEY_VERSION:=3.1.0}"
 
 # System packages (tini for signal handling; supervisor runs our background
-# services; earlyoom is the OOM-prevention daemon that sheds memory under
+# services; cron runs the recurring jobs, driven from supervisord rather than an
+# init system; earlyoom is the OOM-prevention daemon that sheds memory under
 # pressure before the kernel kills an arbitrary victim; the rest are
 # agent/runtime deps). supervisor provides the system supervisord + supervisorctl
 # that `uv run bootstrap` execs into the foreground.
 apt-get update
 apt-get install -y --no-install-recommends \
-    bash build-essential ca-certificates curl earlyoom fd-find git git-lfs jq less nano \
+    bash build-essential ca-certificates cron curl earlyoom fd-find git git-lfs jq less nano \
     openssh-server procps restic ripgrep rsync sqlite3 supervisor tini tmux unison util-linux wget \
     xxd xmlstarlet
 rm -rf /var/lib/apt/lists/*
@@ -45,6 +46,10 @@ rm -rf /var/lib/apt/lists/*
 if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now supervisor 2>/dev/null || true
     systemctl mask supervisor 2>/dev/null || true
+    # Same story for cron: our supervisord runs it ([program:cron]), so the
+    # packaged systemd unit would double-run every job on systemd hosts.
+    systemctl disable --now cron.service 2>/dev/null || true
+    systemctl mask cron.service 2>/dev/null || true
 fi
 
 # ttyd (terminal-over-web) binary from GitHub releases (not in apt).
