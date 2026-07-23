@@ -7,7 +7,7 @@ hook, so the welcome-resend check runs exactly once per successful login
 -- after the restarted chat agent is back up (or inline on the no-restart
 subscription fast path).
 
-The `ClaudeAuthService` (which holds the in-flight setup-token subprocess)
+The `ClaudeAuthService` (which holds the in-flight PTY auth subprocess)
 and the `WelcomeResender` are created once in `create_application` and
 stored on the app's `SystemInterfaceState`; each handler reads them via
 `get_state()` so the subprocess survives between the `/setup-token/start`
@@ -58,8 +58,6 @@ def _error_response(detail: str, status_code: int = 400) -> Response:
     # leaving no server-side trace of what actually went wrong.
     logger.warning("Returning claude-auth error response ({}): {}", status_code, detail)
     return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=status_code)
-
-
 
 
 def get_status() -> Response:
@@ -219,8 +217,8 @@ def submit_oauth_login_code() -> Response:
     return _json_response(_status_to_response(status).model_dump())
 
 
-def abort_setup_token() -> Response:
-    """POST /api/claude-auth/abort -- drop the in-flight setup-token subprocess."""
+def abort_auth_flow() -> Response:
+    """POST /api/claude-auth/abort -- drop any in-flight PTY auth session (setup-token or browser sign-in)."""
     service: claude_auth.ClaudeAuthService = get_state().claude_auth_service
     service.abort_auth_flow()
     return _json_response({"status": "ok"})
@@ -243,4 +241,4 @@ def register_routes(application: Flask) -> None:
     application.add_url_rule("/api/claude-auth/oauth/start", view_func=start_oauth_login, methods=["POST"])
     application.add_url_rule("/api/claude-auth/oauth/poll", view_func=poll_oauth_login, methods=["POST"])
     application.add_url_rule("/api/claude-auth/oauth/submit-code", view_func=submit_oauth_login_code, methods=["POST"])
-    application.add_url_rule("/api/claude-auth/abort", view_func=abort_setup_token, methods=["POST"])
+    application.add_url_rule("/api/claude-auth/abort", view_func=abort_auth_flow, methods=["POST"])
