@@ -764,12 +764,6 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   function renderAwaitingSetupToken(): Array<m.Vnode | null> {
     return [
       m("p.claude-login-lead", "Approve access in your browser, then paste the code it shows you."),
-      // Known Anthropic-side sign-in bug (their login page, not this flow);
-      // surface the workaround up front so a hit doesn't dead-end the user.
-      m(
-        "p.claude-login-helper",
-        'If you get "Error: malformed_certificate", try switching accounts or logging out and logging back in.',
-      ),
       m("div.claude-login-step", [
         m("div.claude-login-step-label", [m("span.claude-login-step-num", "1"), "Open the sign-in page"]),
         m(
@@ -795,6 +789,9 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
           ),
           urlCopied ? "" : urlCopyFailed ? " — copy this link manually:" : " and paste it into your browser.",
         ]),
+        // Known Anthropic-side sign-in bug (their login page, not this flow);
+        // surface the workaround so a hit doesn't dead-end the user.
+        m("p.claude-login-copylink", "malformed_certificate? Try switching accounts or logging out first"),
         // When the clipboard write was rejected, surface the raw URL so the
         // user is never stranded without a way to reach the sign-in page.
         urlCopyFailed && oauthUrl !== null ? m("div.claude-login-rawurl", { tabindex: 0 }, oauthUrl) : null,
