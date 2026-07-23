@@ -135,6 +135,14 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   let verifyingTitle = "Working...";
   let verifyingDetail: string | null = null;
   let successStatus: ClaudeAuthStatus | null = null;
+  // True when the flow now underway started while the workspace was signed in
+  // with an API key (raw or Imbue). Switching away leaves any API-integrated
+  // services pinned to the key they were set up with (they snapshot it to
+  // runtime/secrets/anthropic.env; see the use-ai-integration skill), so the
+  // applying/success screens carry a note saying so. Captured at flow start:
+  // by the time those screens render, the live status may already reflect the
+  // new sign-in.
+  let switchedAwayFromApiKey = false;
   // Fetched when the modal opens; drives the muted "currently signed in
   // via ..." header on the provider-selection screen and the Imbue
   // mint-page link (which needs the workspace host id).
@@ -278,11 +286,13 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
 
   async function startSetupToken(): Promise<void> {
     activeFlow = "setup_token";
+    switchedAwayFromApiKey = currentStatus?.auth_mode === "api_key" || currentStatus?.auth_mode === "imbue";
     await startAuthFlowSession("/api/claude-auth/setup-token/start", undefined);
   }
 
   async function startOauthLogin(provider: "claudeai" | "console"): Promise<void> {
     activeFlow = provider;
+    switchedAwayFromApiKey = currentStatus?.auth_mode === "api_key" || currentStatus?.auth_mode === "imbue";
     await startAuthFlowSession("/api/claude-auth/oauth/start", { provider });
   }
 
@@ -482,6 +492,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     apiKeyRevealed = false;
     imbueBlob = "";
     directToken = "";
+    switchedAwayFromApiKey = false;
     clearError();
     loadCurrentStatus();
     mode = "select_provider";
@@ -753,6 +764,12 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   function renderAwaitingSetupToken(): Array<m.Vnode | null> {
     return [
       m("p.claude-login-lead", "Approve access in your browser, then paste the code it shows you."),
+      // Known Anthropic-side sign-in bug (their login page, not this flow);
+      // surface the workaround up front so a hit doesn't dead-end the user.
+      m(
+        "p.claude-login-helper",
+        'If you get "Error: malformed_certificate", try switching accounts or logging out and logging back in.',
+      ),
       m("div.claude-login-step", [
         m("div.claude-login-step-label", [m("span.claude-login-step-num", "1"), "Open the sign-in page"]),
         m(
@@ -915,7 +932,20 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
         ),
       ),
       detail !== null ? m("p.claude-login-helper.claude-login-helper--center", detail) : null,
+      renderOldKeyServicesNote(),
     ]);
+  }
+
+  // Shown while (and after) switching away from an API-key sign-in: services
+  // integrated against the API snapshot the key at their setup time, so the
+  // workspace-level switch does not re-point them.
+  function renderOldKeyServicesNote(): m.Vnode | null {
+    if (!switchedAwayFromApiKey) return null;
+    return m(
+      "p.claude-login-helper.claude-login-helper--center",
+      "Any existing API integrated services will continue using the old API key. " +
+        "Ask the agent to remove those if you need to.",
+    );
   }
 
   function renderStatus(kind: "loading" | "success" | "error", title: string, detail: string | null): m.Vnode {
@@ -939,14 +969,14 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       const detail = email
         ? `Signed in as ${email} with your Claude subscription.`
         : "Signed in with your Claude subscription.";
-      // Only the minted-token flow carries an expiry worth mentioning.
-      if (activeFlow === "setup_token") {
-        return m("div", [
-          renderStatus("success", "All set", detail),
-          m("p.claude-login-helper.claude-login-helper--center", "Your sign-in token is valid for about a year."),
-        ]);
-      }
-      return renderStatus("success", "All set", detail);
+      return m("div", [
+        renderStatus("success", "All set", detail),
+        // Only the minted-token flow carries an expiry worth mentioning.
+        activeFlow === "setup_token"
+          ? m("p.claude-login-helper.claude-login-helper--center", "Your sign-in token is valid for about a year.")
+          : null,
+        renderOldKeyServicesNote(),
+      ]);
     }
     let detail: string;
     if (status?.auth_mode === "console") {
@@ -958,7 +988,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
     } else {
       detail = "You're signed in.";
     }
-    return renderStatus("success", "All set", detail);
+    return m("div", [renderStatus("success", "All set", detail), renderOldKeyServicesNote()]);
   }
 
   function renderInlineError(): m.Vnode {

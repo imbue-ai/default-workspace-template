@@ -19,16 +19,34 @@ Credentials live in the `env` block of the shared `$CLAUDE_CONFIG_DIR/settings.j
 (written by the in-UI Claude sign-in modal), NOT in the process environment --
 services inherit a frozen env from supervisord, so an env-var check goes stale
 when the user changes auth. Check which path applies with the resolver in
-`scripts/claude_p.py` (it reads the settings file and falls back to the env):
+`scripts/claude_p.py`:
 
 ```bash
 uv run python -c "from claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
 ```
 
+**Keyed setups snapshot the key at setup time.** When the check says `keyed`,
+copy the API key (and the proxy base URL that goes with it) into
+`runtime/secrets/anthropic.env` as part of setting up the integration, and have
+the service load its credentials from there -- `read_workspace_ai_credentials()`
+already resolves that file first, so callers using it get this for free. Run
+once while setting up:
+
+```bash
+uv run python -c "from claude_p import write_anthropic_env_snapshot; print(write_anthropic_env_snapshot())"
+```
+
+Only the key + base URL go in the snapshot -- NEVER `CLAUDE_CODE_OAUTH_TOKEN`
+(a subscription token cannot authenticate direct API calls, and the writer
+refuses it). The snapshot pins the integration: if the user later switches the
+workspace's sign-in (e.g. to a subscription), built services keep billing
+against the key they were set up with. To re-key or retire an integration,
+rewrite or delete `runtime/secrets/anthropic.env` when the user asks.
+
 Which path applies rarely changes for a deployment, so **do not branch on it at
-call time in simple flows** -- but keyed callers must resolve the key/base URL
-via `read_workspace_ai_credentials()` at each call (not once at import), so a
-user switching keys in the modal takes effect without a service restart.
+call time in simple flows** -- but keyed callers must still resolve the
+key/base URL via `read_workspace_ai_credentials()` at each call (not once at
+import), so a deliberate re-snapshot takes effect without a service restart.
 
 A caller's model is set **in the code** -- expose it as a top-of-file constant
 plus a `--model` override (e.g. `WRITE_MODEL = "claude-haiku-4-5"`), so switching
@@ -70,9 +88,10 @@ from litellm import completion, completion_cost
 
 from claude_p import read_workspace_ai_credentials  # the file you copied in
 
-# Resolve credentials from the shared Claude settings at call time (falling
-# back to the process env outside a workspace). litellm reads differently-named
-# vars and is picky about a trailing slash, so pass both explicitly.
+# Resolve credentials at call time: the runtime/secrets/anthropic.env snapshot
+# first (see setup above), then the shared Claude settings, then the process
+# env. litellm reads differently-named vars and is picky about a trailing
+# slash, so pass both explicitly.
 creds = read_workspace_ai_credentials()
 api_base = (creds.base_url or "").rstrip("/") or None
 

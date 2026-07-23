@@ -48,13 +48,21 @@ modal. They are deliberately NOT in the process environment: supervisord
 freezes its env at boot, so an env-var credential would go stale the moment
 the user changes auth in the modal.
 
-- `read_workspace_ai_credentials()` (in `scripts/claude_p.py`) resolves the
-  current settings-env credentials at call time, falling back to the process
-  env outside a workspace. `api_key` present -> keyed path (litellm, direct
-  API), with `base_url` for proxy (Imbue/LiteLLM) setups.
-- Otherwise `claude -p`, which authenticates itself from the same shared
-  settings (a `CLAUDE_CODE_OAUTH_TOKEN` there, or a `.credentials.json`
-  login) -- every spawn is a fresh claude, so it always uses current auth.
+- **Keyed integrations pin their key at setup.** A keyed integration
+  snapshots `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL`) into
+  `runtime/secrets/anthropic.env` when it is set up
+  (`write_anthropic_env_snapshot()` in `scripts/claude_p.py`), and
+  `read_workspace_ai_credentials()` resolves that snapshot first, then the
+  settings env, then the process env. So a built service keeps billing
+  against the key it was set up with even after the user switches the
+  workspace's sign-in (the modal tells them so, and points them at the agent
+  to remove or re-key integrations). The subscription
+  `CLAUDE_CODE_OAUTH_TOKEN` is never snapshotted: it cannot authenticate
+  direct API (litellm) calls.
+- With no key anywhere, `claude -p`, which authenticates itself from the
+  shared settings (a `CLAUDE_CODE_OAUTH_TOKEN` there, or a
+  `.credentials.json` login) -- every spawn is a fresh claude, so the keyless
+  path always uses current auth.
 - If neither resolves, the call fails with a clear error from the path it
   attempted (litellm's auth error, or a non-zero `claude -p` exit surfaced as
   `ClaudeCLIError`) rather than hanging.
