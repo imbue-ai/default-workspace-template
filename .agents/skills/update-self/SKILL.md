@@ -289,6 +289,53 @@ If the fast-forward is refused, `HEAD` moved under the pass: treat it as stale
 per `.agents/shared/references/harden-contention.md` and re-dispatch off the
 current `HEAD` -- do not hand-resolve.
 
+**Record the version, in the same landing.** Landing an update is what makes the
+workspace a new version, so the entry belongs in the git tree, right here --
+never left to a later turn. The merge sha only exists once the merge has landed,
+so this is a follow-up commit of exactly one file (the worker never writes it --
+only the lead knows the merge sha).
+
+Capture the merge sha **right here** -- immediately after the fast-forward, while
+`HEAD` still is the merge and before the ledger commit moves it -- then follow
+the **`update-version`** skill, which owns the ledger's format and the append so
+`update-self` and `publish-inspiration` write identical lines:
+
+```bash
+MERGE_SHA=$(git rev-parse HEAD)
+```
+
+Run `update-version` §1 (seed the `## Workspace` "created from" line if the
+ledger never had one) and §2 (append `- <date>  updated to $REF  <merge sha>`),
+then commit the one file:
+
+```bash
+git add VERSION_HISTORY.md
+git commit -m "version history: updated to $REF"
+```
+
+The append is a no-op if the same entry is already recorded (a retried landing
+cannot double-record) -- in which case `git commit` has nothing to commit and you
+skip it.
+
+**Pass `$MERGE_SHA`, never `HEAD`.** The append de-duplicates on note + sha, and
+the `git commit` above moves `HEAD` onto the version-history commit: a re-run
+that reaches for `HEAD` would pass a different sha, defeat the no-op, and append
+a second line pointing at the ledger commit instead of the merge. On a re-run,
+re-derive the merge sha rather than re-reading `HEAD` (see `update-version`'s
+merge-sha trap):
+
+```bash
+MERGE_SHA=$(git log --first-parent --grep '^update-self:' -1 --format=%H)
+```
+
+That prints the newest template-state marker -- the merge you just landed -- and
+keeps printing it afterwards, so the whole block is safe to re-run.
+
+**Never give this commit an `update-self:` subject**: that prefix is the
+template-state marker `assist` and `publish-inspiration` §2 resolve `BASE_REF`
+from, it belongs to the merge commit alone, and `$MERGE_SHA` above depends on it
+staying that way.
+
 ### 5c. Reveal by change class
 
 The report says which classes merged. Apply each; a clean pull-in is still
