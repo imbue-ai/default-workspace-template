@@ -40,7 +40,9 @@ from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.chat_image_timestamps import ChatImageStatus
 from imbue.system_interface.file_serving import image_mime_type_for_path
+from imbue.system_interface.file_serving import serve_changed_image_placeholder
 from imbue.system_interface.file_serving import serve_inline_image
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.layout_ops import LayoutMutex
@@ -440,25 +442,29 @@ def _serve_attachment(relative_path: str) -> Response:
     return send_file(resolved_path)
 
 
-def _serve_chat_image_snapshot(event_id: str, image_path: str) -> Response:
-    """Serve the frozen copy of an image as it was when ``event_id`` referenced it.
+def _serve_chat_image(event_id: str, image_path: str) -> Response:
+    """Serve a chat image, verifying it is still the file ``event_id`` referenced.
 
-    The frontend rewrites chat markdown image URLs to this route so each
-    message's images are immutable per message: the first fetch (or the eager
-    pass in the session watcher fan-out) copies the source file's current
-    bytes, and every later fetch serves that copy even if the file on disk has
-    since changed. 404s when the pair has no snapshot and the source file is
-    missing (or is not an inline-image path), matching the broken-image
+    The frontend rewrites chat markdown image URLs to this route. The file's
+    mtime and size are recorded the first time each (event, path) pair is seen
+    (eagerly in the session watcher fan-out, lazily here on first fetch); the
+    live file is served with caching disabled so every render refetches and
+    re-verifies. Once the file no longer matches its recorded fingerprint --
+    overwritten or deleted after the message was posted -- a placeholder image
+    is served telling the user the file has changed. 404s when there is no
+    record and no file (e.g. a typo'd path), matching the broken-image
     behavior of the direct path route.
     """
     source_path = "/" + image_path
     mime_type = image_mime_type_for_path(source_path)
     if mime_type is None:
         return Response(status=404)
-    snapshot_path = get_state().chat_image_snapshots.snapshot(event_id, source_path)
-    if snapshot_path is None:
+    status = get_state().chat_image_timestamps.check(event_id, source_path)
+    if status is ChatImageStatus.UNKNOWN:
         return Response(status=404)
-    return serve_inline_image(snapshot_path, mime_type)
+    if status is ChatImageStatus.CHANGED:
+        return serve_changed_image_placeholder()
+    return serve_inline_image(Path(source_path), mime_type, cache_control="no-store")
 
 
 def _delete_attachment(relative_path: str) -> Response:
@@ -1544,7 +1550,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule(
         "/api/chat-images/<event_id>/<path:image_path>",
-        view_func=_serve_chat_image_snapshot,
+        view_func=_serve_chat_image,
         methods=["GET"],
     )
     application.add_url_rule("/api/agents/<agent_id>/interrupt", view_func=_interrupt_agent_endpoint, methods=["POST"])

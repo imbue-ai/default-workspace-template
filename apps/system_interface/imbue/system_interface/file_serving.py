@@ -25,14 +25,16 @@ from pathlib import Path
 from flask import Response
 from flask import send_file
 
-# Long-lived caching for inline images. Chat markdown images are rewritten by
-# the frontend to the per-message snapshot route (see ``chat_image_snapshots``),
-# whose URLs are immutable by construction; this direct-path route remains for
-# non-chat fetches (e.g. opening an image URL in a tab), where agents are
-# instructed (see the show-files-in-chat skill) to give each image a unique
-# filename. A one-year max-age plus ``immutable`` lets the browser skip
-# revalidation entirely while a conversation is re-rendered.
+# Long-lived caching for inline images served from this direct-path route,
+# which remains for non-chat fetches (e.g. opening an image URL in a tab):
+# agents are instructed (see the show-files-in-chat skill) to give each image
+# a unique filename, so a one-year max-age plus ``immutable`` lets the browser
+# skip revalidation. Chat markdown images are rewritten by the frontend to the
+# change-detecting route (see ``chat_image_timestamps``), which serves with
+# caching disabled instead.
 _IMAGE_CACHE_MAX_AGE_SECONDS = 31_536_000
+
+IMMUTABLE_IMAGE_CACHE_CONTROL = f"public, max-age={_IMAGE_CACHE_MAX_AGE_SECONDS}, immutable"
 
 # Image extensions served inline, each mapped to an explicit Content-Type so the
 # wire result does not depend on the host's mimetypes registry (macOS and Linux
@@ -64,20 +66,43 @@ def image_mime_type_for_path(url_path: str) -> str | None:
     return _IMAGE_EXTENSION_TO_MIME_TYPE.get(suffix)
 
 
-def serve_inline_image(file_path: Path, mime_type: str) -> Response:
+def serve_inline_image(
+    file_path: Path, mime_type: str, cache_control: str = IMMUTABLE_IMAGE_CACHE_CONTROL
+) -> Response:
     """Stream an image so it renders inline in the chat.
 
-    Public because the chat-image snapshot endpoint (``server``) serves its
-    frozen copies with exactly the same headers -- and for snapshots the
-    ``immutable`` cache policy is true by construction, not by convention.
+    Public because the chat-image change-detection endpoint (``server``)
+    serves the same files with the same hardening but caching disabled, so a
+    message's image is refetched -- and re-verified -- on every render.
     """
     response = send_file(file_path, mimetype=mime_type)
-    # send_file's default cache policy is conservative; override it so the
-    # browser caches aggressively (image filenames are unique by convention).
-    response.headers["Cache-Control"] = f"public, max-age={_IMAGE_CACHE_MAX_AGE_SECONDS}, immutable"
+    response.headers["Cache-Control"] = cache_control
     if file_path.suffix.lower() == _SVG_EXTENSION:
         response.headers["Content-Security-Policy"] = _SVG_CONTENT_SECURITY_POLICY
         response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+# Shown in place of a chat image whose file changed after its message was
+# posted (see the chat-image change-detection endpoint in ``server``). An SVG
+# so it needs no frontend error handling: the <img> simply renders the notice.
+_CHANGED_IMAGE_PLACEHOLDER_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="520" height="96" viewBox="0 0 520 96">'
+    '<rect width="519" height="95" x="0.5" y="0.5" rx="8" fill="#f8f8f8" stroke="#d0d0d0"/>'
+    '<text x="24" y="42" font-family="system-ui, sans-serif" font-size="15" fill="#444">'
+    "This file has been changed.</text>"
+    '<text x="24" y="66" font-family="system-ui, sans-serif" font-size="13" fill="#777">'
+    "Please revert your workspace or ask your agent to recover it.</text>"
+    "</svg>"
+)
+
+
+def serve_changed_image_placeholder() -> Response:
+    """Serve the notice shown in place of a chat image whose file has changed."""
+    response = Response(_CHANGED_IMAGE_PLACEHOLDER_SVG, mimetype="image/svg+xml")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Security-Policy"] = _SVG_CONTENT_SECURITY_POLICY
+    response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
 
