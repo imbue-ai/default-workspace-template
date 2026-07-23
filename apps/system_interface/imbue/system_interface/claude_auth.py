@@ -44,12 +44,17 @@ restart so unattended workers resume instead of silently dying; WAITING
 agents need nothing (their next user message starts them with the fresh
 env); STOPPED agents are left stopped.
 
-Restarts touch nothing outside the settings env block: settings-env
-credentials do not trip Claude Code's API-key challenge, and the startup
-dialog dismissals in `.claude.json` are guaranteed by mngr's claude
-plugin at agent-creation time. There is deliberately no pre-restart
-credential probe: a bad credential surfaces on the agent's first request,
-where the transcript auth-error detection reopens the modal.
+Besides the settings env block, an apply that writes an
+``ANTHROPIC_API_KEY`` also records the key's approval in the shared
+`.claude.json` (``customApiKeyResponses.approved``): interactive claude
+challenges any unapproved key it sees in env -- settings-env keys
+included -- with a TUI dialog that would deadlock the restarted agent
+(mngr's claude plugin records approvals at agent-creation time only, and
+these keys arrive later). The other startup dialog dismissals in
+`.claude.json` are guaranteed by mngr's claude plugin at agent-creation
+time. There is deliberately no pre-restart credential probe: a bad
+credential surfaces on the agent's first request, where the transcript
+auth-error detection reopens the modal.
 
 Dependencies that touch the outside world (subprocess invocation and
 pexpect-driven PTY spawning) are injected into `ClaudeAuthService` at
@@ -107,6 +112,11 @@ MANAGED_AUTH_ENV_KEYS: Final[frozenset[str]] = frozenset(
 # Characters of the key/token shown in the modal's "currently signed in via"
 # header; long enough to disambiguate, short enough to stay a non-secret.
 _DISPLAY_SUFFIX_LENGTH: Final = 4
+# Claude Code identifies an approved ANTHROPIC_API_KEY by its last 20
+# characters in `.claude.json`'s `customApiKeyResponses.approved` (the same
+# suffix length mngr's `approve_api_key_for_claude` records).
+_API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
+_CLAUDE_JSON_FILENAME: Final = ".claude.json"
 # Fires on the first sight of the OAuth URL in the PTY stream. This is only a
 # *trigger*: the CLI's Ink renderer hard-wraps the visible URL at the terminal
 # width (pexpect's default PTY is 80 columns) and pexpect can match mid
@@ -519,6 +529,57 @@ def write_managed_auth_env(managed_env: Mapping[str, str], settings_path_overrid
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
     logger.info("Wrote managed auth env ({} mode) to {}", derive_auth_mode(managed_env).value, settings_path)
     return settings_path
+
+
+def record_api_key_approval(managed_env: Mapping[str, str], claude_json_path_override: Path | None = None) -> None:
+    """Pre-approve a managed ``ANTHROPIC_API_KEY`` in `.claude.json` so claude never challenges it.
+
+    Interactive claude challenges any ``ANTHROPIC_API_KEY`` it sees in its
+    env -- the settings env block included -- whose last-20-character suffix
+    is not in ``customApiKeyResponses.approved``: a "Do you want to use this
+    API key?" TUI dialog that blocks the agent restart following a
+    credential write (and with it the welcome resend, whose message dispatch
+    times out waiting for a TUI prompt that never appears). Headless
+    ``claude -p`` runs skip the dialog, which is why probes and ``-p``-based
+    tests do not reproduce it. mngr's ``approve_api_key_for_claude`` records
+    the approval only for keys present at agent-creation time; keys written
+    later through the sign-in modal (the API-key and Imbue paths) must be
+    approved here, before the restart relaunches the agents. Mirrors that
+    helper's format: append the suffix to ``approved``, reset ``rejected``.
+
+    No-op when the managed env carries no API key: an approval for an
+    absent key is inert, so stale approvals are deliberately not scrubbed
+    on clearing or mode switches.
+    """
+    api_key = managed_env.get(ANTHROPIC_API_KEY_ENV_VAR, "")
+    if not api_key:
+        return
+    claude_json_path = claude_json_path_override or (_resolve_claude_config_dir() / _CLAUDE_JSON_FILENAME)
+    data: dict[str, Any] = {}
+    if claude_json_path.exists():
+        try:
+            loaded = json.loads(claude_json_path.read_text())
+        except json.JSONDecodeError as e:
+            # A corrupt shared claude config would leave the restarted agents
+            # stuck on the interactive challenge; fail the apply loudly
+            # instead of restarting into a deadlock.
+            raise ClaudeAuthError(f"Shared Claude config at {claude_json_path} is corrupt JSON: {e}") from e
+        if not isinstance(loaded, dict):
+            raise ClaudeAuthError(f"Shared Claude config at {claude_json_path} is not a JSON object")
+        data = loaded
+    responses_raw = data.get("customApiKeyResponses")
+    responses: dict[str, Any] = responses_raw if isinstance(responses_raw, dict) else {}
+    approved_raw = responses.get("approved")
+    approved = [entry for entry in approved_raw if isinstance(entry, str)] if isinstance(approved_raw, list) else []
+    suffix = api_key[-_API_KEY_APPROVAL_SUFFIX_LENGTH:]
+    if suffix not in approved:
+        approved.append(suffix)
+    responses["approved"] = approved
+    responses["rejected"] = []
+    data["customApiKeyResponses"] = responses
+    claude_json_path.parent.mkdir(parents=True, exist_ok=True)
+    claude_json_path.write_text(json.dumps(data, indent=2) + "\n")
+    logger.info("Recorded managed API-key approval in {}", claude_json_path)
 
 
 def _safe_terminate(process: Any) -> None:
@@ -1019,6 +1080,9 @@ class ClaudeAuthService(MutableModel):
         # dying silently.
         try:
             write_managed_auth_env(managed_env)
+            # Must precede the restart: a restarted interactive claude blocks
+            # on the custom-API-key challenge for any unapproved key.
+            record_api_key_approval(managed_env)
             self.restart_all_claude_agents()
             self._set_restart_progress(RestartPhase.FINISHING, "Resuming your agent", None)
             if on_complete is not None:

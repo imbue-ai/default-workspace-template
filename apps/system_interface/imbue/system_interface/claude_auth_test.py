@@ -409,10 +409,13 @@ def test_submit_credentials_writes_settings_and_restarts_in_background(isolated_
     settings = json.loads((isolated_claude_config / "settings.json").read_text())
     assert settings["env"] == {"ANTHROPIC_API_KEY": "sk-ant-fresh"}
     assert any(cmd[1] == "start" and "--restart" in cmd for cmd in command_log)
-    # The on-complete hook (welcome resend) ran after the restart finished,
-    # and nothing outside the settings env was touched.
+    # The on-complete hook (welcome resend) ran after the restart finished.
     assert completions == ["done"]
-    assert not (isolated_claude_config / ".claude.json").exists()
+    # The apply also recorded the key's approval so the restarted interactive
+    # claude skips the "Do you want to use this API key?" challenge (which
+    # would otherwise block the agent and the welcome dispatch).
+    claude_json = json.loads((isolated_claude_config / ".claude.json").read_text())
+    assert claude_json["customApiKeyResponses"] == {"approved": ["sk-ant-fresh"], "rejected": []}
 
 
 def test_submit_credentials_reports_failed_phase_when_restart_fails(isolated_claude_config: Path) -> None:
@@ -455,6 +458,76 @@ def test_submit_credentials_rejects_bad_paste_without_touching_anything(isolated
         service.submit_credentials("NOT_A_MANAGED_KEY=x", None)
     assert not (isolated_claude_config / "settings.json").exists()
     assert command_log == []
+
+
+# ----- record_api_key_approval -----
+
+
+def test_record_api_key_approval_appends_suffix_and_preserves_existing(tmp_path: Path) -> None:
+    """The key's last-20-char suffix joins the approved list; unrelated config and prior approvals survive."""
+    claude_json = tmp_path / ".claude.json"
+    claude_json.write_text(
+        json.dumps(
+            {
+                "hasCompletedOnboarding": True,
+                "customApiKeyResponses": {"approved": ["old-approval-entry"], "rejected": ["rejected-once"]},
+            }
+        )
+    )
+    api_key = "sk-ant-api03-" + "x" * 30
+
+    claude_auth.record_api_key_approval({"ANTHROPIC_API_KEY": api_key}, claude_json_path_override=claude_json)
+
+    data = json.loads(claude_json.read_text())
+    assert data["hasCompletedOnboarding"] is True
+    assert data["customApiKeyResponses"]["approved"] == ["old-approval-entry", api_key[-20:]]
+    # Mirrors mngr's approve_api_key_for_claude: a stale rejection would keep
+    # suppressing the key, so the rejected list is reset.
+    assert data["customApiKeyResponses"]["rejected"] == []
+
+    # Idempotent: a second apply of the same key adds no duplicate.
+    claude_auth.record_api_key_approval({"ANTHROPIC_API_KEY": api_key}, claude_json_path_override=claude_json)
+    assert json.loads(claude_json.read_text())["customApiKeyResponses"]["approved"] == [
+        "old-approval-entry",
+        api_key[-20:],
+    ]
+
+
+def test_record_api_key_approval_is_noop_without_api_key(tmp_path: Path) -> None:
+    """Token-mode (and clearing) applies carry no API key, so `.claude.json` is untouched."""
+    claude_json = tmp_path / ".claude.json"
+
+    claude_auth.record_api_key_approval({"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-token"}, claude_json)
+    claude_auth.record_api_key_approval({}, claude_json)
+
+    assert not claude_json.exists()
+
+
+def test_record_api_key_approval_creates_missing_claude_json(tmp_path: Path) -> None:
+    """A mind whose `.claude.json` does not exist yet still gets the approval recorded."""
+    claude_json = tmp_path / ".claude.json"
+
+    claude_auth.record_api_key_approval({"ANTHROPIC_API_KEY": "sk-ant-fresh"}, claude_json)
+
+    assert json.loads(claude_json.read_text())["customApiKeyResponses"] == {
+        "approved": ["sk-ant-fresh"],
+        "rejected": [],
+    }
+
+
+def test_background_apply_fails_loudly_on_corrupt_claude_json(isolated_claude_config: Path) -> None:
+    """A corrupt `.claude.json` fails the apply instead of restarting into the interactive challenge."""
+    (isolated_claude_config / ".claude.json").write_text("not json {{{")
+    command_log: list[tuple[str, ...]] = []
+    service = _build_restart_recording_service(command_log)
+
+    service.submit_credentials("ANTHROPIC_API_KEY=sk-ant-fresh", None)
+    progress = wait_for_background_apply(service)
+
+    assert progress.phase is claude_auth.RestartPhase.FAILED
+    assert progress.error is not None and "corrupt" in progress.error
+    # The apply failed before the restart step.
+    assert not any(cmd[1] == "start" for cmd in command_log)
 
 
 # ----- setup-token flow -----
