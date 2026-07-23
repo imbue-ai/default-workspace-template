@@ -68,11 +68,11 @@ _recover_interrupted_dpkg() {
 
 # Fortress (tiliondev/fortress) stealth Chromium engine, replacing vanilla
 # Playwright-managed Chromium. x64 from the official release; arm64 has no
-# official release yet (tiliondev/fortress#28, open as of 2026-07-19) so this
+# official release yet (tiliondev/fortress#29, open as of 2026-07-23) so this
 # points at a fork build in the meantime -- swap _FORTRESS_ARM64_URL/_SHA256
 # to the official tiliondev/fortress release once that PR merges.
 # Fork build: https://github.com/MT-GoCode/fortress/releases/tag/linux-arm64-151.0.7908.0-debian12
-# PR:         https://github.com/tiliondev/fortress/pull/28
+# PR:         https://github.com/tiliondev/fortress/pull/29
 readonly _FORTRESS_X64_URL="https://github.com/tiliondev/fortress/releases/download/v151.0.7908.0/tilion-fortress-linux-x64.tar.gz"
 readonly _FORTRESS_X64_SHA256="243238b2b8a8b944b7ba2b63533d2b917da7d569dcb290ce96bf28151294b873"
 readonly _FORTRESS_ARM64_URL="https://github.com/MT-GoCode/fortress/releases/download/linux-arm64-151.0.7908.0-debian12/tilion-fortress-linux-arm64-debian12.tar.gz"
