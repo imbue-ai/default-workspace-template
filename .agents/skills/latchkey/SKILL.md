@@ -111,6 +111,32 @@ latchkey services info slack
 
 Returns auth options, credentials status, and developer notes about the service.
 
+### Using multiple accounts
+
+It is possible to associate credentials with a specific account
+(and have credentials for more than a single account per service).
+Currently, the only way to do that is for the user to click "Add
+account" on the "Connectors" settings page in the Minds app.
+
+You can then reference it in curl calls:
+
+```bash
+latchkey --account alice@example.com curl ...
+```
+
+The `--account` option must go right after `latchkey`.
+
+You can see the existing accounts as keys in the credential
+dictionary produced by `latchkey services info`. An empty string
+as the key means "unknown account".
+
+### Expired or invalid credentials
+
+When the existing credentials are expired or invalid, there are currently two ways  to trigger a new login:
+
+- By re-sending the permission request to the user (use this when there's just a single account for the given service)
+- By disconnecting and reconnecting the account on the "Connectors" settings page (tell the user to do that if there are more than one account configured for the given service).
+
 
 ## Secondary gateway
 
