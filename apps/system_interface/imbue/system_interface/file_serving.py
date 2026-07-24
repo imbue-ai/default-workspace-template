@@ -100,6 +100,12 @@ def try_serve_file(url_path: str) -> Response | None:
     than the app shell. A path with no image extension that matches no file
     yields ``None``, so the caller falls through to the single-page-app catch-all
     and client-side routing is unaffected.
+
+    ``url_path`` never includes the query string (Flask splits it off before
+    routing), so the frontend's per-message ``?requested_at=<post time>`` cache
+    key is ignored here: it only makes the browser treat each message's file URL
+    as distinct, so a new message never renders a stale copy cached under a path
+    an earlier message reused. The served bytes are the file's current content.
     """
     image_mime_type = image_mime_type_for_path(url_path)
     file_path = Path("/" + url_path)

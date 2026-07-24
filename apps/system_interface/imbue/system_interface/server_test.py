@@ -1621,6 +1621,25 @@ def test_serves_image_at_its_absolute_path(client: FlaskClient, tmp_path: Path) 
     assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
 
 
+def test_ignores_requested_at_cache_busting_query(client: FlaskClient, tmp_path: Path) -> None:
+    """The frontend's per-message ``?requested_at=`` cache key is ignored server-side.
+
+    The query string never reaches ``try_serve_file`` (Flask splits it off before
+    routing), so a request carrying it serves the same file with the same headers
+    as the bare path. It exists only to make the browser treat each message's URL
+    as distinct so a new message never renders a stale cached copy.
+    """
+    image_path = tmp_path / "chart.png"
+    image_path.write_bytes(b"fake-png-bytes")
+
+    tagged = client.get(f"{image_path}?requested_at=2026-07-24T00%3A00%3A00Z")
+
+    assert tagged.status_code == 200
+    assert tagged.content_type == "image/png"
+    assert tagged.data == b"fake-png-bytes"
+    assert tagged.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+
+
 def test_serves_image_in_nested_subdirectory(client: FlaskClient, tmp_path: Path) -> None:
     """Nested paths under the write directory are served (agents may organize per run)."""
     nested_dir = tmp_path / "chat-images" / "run-3"
