@@ -42,17 +42,33 @@ nearly all of it (measured on this repo, Haiku, a one-line prompt):
 
 ## Credential resolution
 
-- `ANTHROPIC_API_KEY` set -> keyed path (litellm, direct API).
-- Otherwise `claude -p`, authenticating from the inherited `CLAUDE_CONFIG_DIR`
-  (or `~/.claude`).
+Workspace credentials live in the `env` block of the shared
+`$CLAUDE_CONFIG_DIR/settings.json`, written only by the in-UI Claude sign-in
+modal. They are deliberately NOT in the process environment: supervisord
+freezes its env at boot, so an env-var credential would go stale the moment
+the user changes auth in the modal.
+
+- **Keyed integrations pin their key at setup.** A keyed integration
+  snapshots `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL`) into
+  `runtime/secrets/anthropic.env` when it is set up
+  (`write_anthropic_env_snapshot()` in `scripts/claude_p.py`), and
+  `read_workspace_ai_credentials()` resolves that snapshot first, then the
+  settings env, then the process env. So a built service keeps billing
+  against the key it was set up with even after the user switches the
+  workspace's sign-in (the modal tells them so, and points them at the agent
+  to remove or re-key integrations). The subscription
+  `CLAUDE_CODE_OAUTH_TOKEN` is never snapshotted: it cannot authenticate
+  direct API (litellm) calls.
+- With no key anywhere, `claude -p`, which authenticates itself from the
+  shared settings (a `CLAUDE_CODE_OAUTH_TOKEN` there, or a
+  `.credentials.json` login) -- every spawn is a fresh claude, so the keyless
+  path always uses current auth.
 - If neither resolves, the call fails with a clear error from the path it
   attempted (litellm's auth error, or a non-zero `claude -p` exit surfaced as
   `ClaudeCLIError`) rather than hanging.
 
-A service run by supervisord inherits the agent's environment (supervisord is
-launched from the bootstrap shell that sourced the host env files, and its child
-programs inherit it), so in a deployed mngr agent both `CLAUDE_CONFIG_DIR` and
-`ANTHROPIC_API_KEY` should be present and both paths should work.
+A service run by supervisord still inherits `CLAUDE_CONFIG_DIR` from the
+bootstrap shell, which is what makes the settings file findable.
 
 ## The mngr `claude -p` session-hook bug
 
@@ -65,8 +81,8 @@ out to `claude -p` yourself.
 
 ## The footgun
 
-If `ANTHROPIC_API_KEY` is set, `claude -p` bills **full API rates** against the
-API account, not the subscription's programmatic credit. In a deployed mngr agent
-the key is typically forwarded, so a `claude -p` task path there *is* real
-per-token spend. An unattended `claude -p` loop on an API key can run up
+If an `ANTHROPIC_API_KEY` is configured (in the settings env block or the
+process env), `claude -p` bills **full API rates** against the API account, not
+the subscription's programmatic credit. In a key-mode workspace a `claude -p`
+task path therefore *is* real per-token spend. An unattended `claude -p` loop on an API key can run up
 four-figure spend in days, so surface the projected cost before scaling a flow.

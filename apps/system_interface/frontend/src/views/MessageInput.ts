@@ -19,6 +19,7 @@ import {
   removePendingMessage,
 } from "../models/PendingMessages";
 import { describeRequestError } from "../models/request-error";
+import { openLoginModal } from "../models/ClaudeAuth";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { icon, stopIcon } from "./icons";
 
@@ -59,6 +60,13 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   let messageText = "";
   let currentAgentId: string | null = null;
   let messageTextareaElement: HTMLTextAreaElement | null = null;
+  // Set instead of sending when the user types one of claude's own auth
+  // commands. Delivered to the TUI, /logout would exit the agent's process
+  // and wipe shared onboarding state without actually signing the workspace
+  // out, and /login would start claude's interactive sign-in inside the
+  // agent's terminal -- both bypassing the managed agent-auth screen (auth
+  // lives in settings.json / claude's credential store, managed there).
+  let interceptedAuthCommand: "/login" | "/logout" | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
 
@@ -129,6 +137,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       async function handleSend(): Promise<void> {
         if (!agentId) {
+          return;
+        }
+        const trimmedCommand = messageText.trim().toLowerCase();
+        if (trimmedCommand === "/login" || trimmedCommand === "/logout") {
+          interceptedAuthCommand = trimmedCommand;
+          m.redraw();
           return;
         }
         // Wait for in-flight uploads so a just-dropped file is included rather
@@ -247,6 +261,63 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         fileInputElement?.click();
       }
 
+      function dismissAuthCommandNotice(): void {
+        interceptedAuthCommand = null;
+        messageText = "";
+        if (agentId) {
+          localStorage.removeItem(messageTextKey(agentId));
+        }
+        m.redraw();
+      }
+
+      function renderAuthCommandNotice(command: "/login" | "/logout"): m.Vnode {
+        const title = command === "/login" ? "Sign-in is managed here" : "Sign-out is managed here";
+        const explanation =
+          command === "/login"
+            ? "Sending /login to the agent would start Claude's own sign-in inside the agent's terminal, " +
+              "which would not sign the rest of the workspace in. Use the agent auth screen instead."
+            : "Sending /logout to the agent would shut it down without signing the workspace out. " +
+              "Use the agent auth screen to switch or remove credentials.";
+        return m(
+          "div.custom-url-dialog-overlay",
+          {
+            onclick(e: MouseEvent) {
+              if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
+                dismissAuthCommandNotice();
+              }
+            },
+          },
+          m(
+            "div.custom-url-dialog",
+            {
+              onclick(e: MouseEvent) {
+                e.stopPropagation();
+              },
+            },
+            [
+              m("h3.custom-url-dialog-title", title),
+              m(
+                "p.logout-notice-body",
+                `This workspace's Claude sign-in is managed by this interface. ${explanation}`,
+              ),
+              m("div.custom-url-dialog-actions", [
+                m("button.custom-url-dialog-cancel", { onclick: () => dismissAuthCommandNotice() }, "Cancel"),
+                m(
+                  "button.custom-url-dialog-open",
+                  {
+                    onclick: () => {
+                      dismissAuthCommandNotice();
+                      openLoginModal();
+                    },
+                  },
+                  "Open agent auth",
+                ),
+              ]),
+            ],
+          ),
+        );
+      }
+
       const attachments = getComposerAttachments(agentId);
       const hasMessageText = messageText.trim().length > 0;
       const canSend = hasMessageText || hasReadyAttachments(agentId);
@@ -260,6 +331,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       const isStopButtonVisible = isAgentWorking && !isInterruptInFlight;
 
       return m("div", { class: "message-input mx-auto w-full" }, [
+        interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
         m("input", {
           type: "file",
           multiple: true,
