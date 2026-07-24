@@ -939,7 +939,7 @@ push failed, or the user aborted, SKIP this entirely.
 
 Write the entry directly into `VERSION_HISTORY.md` (cwd `/mngr/code`). There is
 no helper skill: this block is the whole recording contract, and it owns the
-format so `publish-inspiration`, `revise-inspiration`, and `update-self` all
+format so `publish-inspiration`, `update-published-inspiration`, and `update-self` all
 write identical lines. Rules: append-only (existing lines copied through
 verbatim, never re-flowed); every `## Inspirations` line ends in a commit; and a
 retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
@@ -977,7 +977,7 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 
   where `<n>` is **computed**, never typed: it is one greater than the highest
   `v<k>` already listed under this slug's heading (so a first publish is `v1`, and
-  a later `revise-inspiration` run appends `v2`, `v3`, ... under the same
+  a later `update-published-inspiration` run appends `v2`, `v3`, ... under the same
   heading). Pad the note (`first published`) to width 35 so the sha lines up.
   Compute the sha as `git rev-parse --short=7 "$SOURCE_SHA"`.
   **Idempotence, scoped to this slug** (two inspirations published from the same

@@ -7,7 +7,7 @@
   mind adopted from a remote. Each line ends in the commit it was cut from,
   earlier lines are never rewritten, so the whole lineage is walkable in git.
   Each skill that writes it (`update-self`, `publish-inspiration`,
-  `revise-inspiration`, `update-from-inspiration`) carries its own instructions
+  `update-published-inspiration`, `update-installed-inspiration`) carries its own instructions
   for exactly what to append -- there is no separate helper skill.
 
 - Added design docs under `blueprint/agent-inspiration-update-awareness/` for

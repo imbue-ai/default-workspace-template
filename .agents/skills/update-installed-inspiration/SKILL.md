@@ -1,13 +1,13 @@
 ---
-name: update-from-inspiration
+name: update-installed-inspiration
 description: Pull a newer version of an inspiration this mind already adopted from its remote repo and merge it in, reconciling it with this mind's own adaptations. Use when the user wants to update, upgrade, or pull the latest version of an adopted inspiration.
 ---
 
-# Updating an adopted inspiration from its remote
+# Update an installed inspiration
 
 Version: v1 (inspirations flow). This is the ADOPTER's update path -- the
 companion to `use-inspiration` (first adopt someone else's), `publish-inspiration`
-(first publish, v1), and `revise-inspiration` (the PUBLISHER cuts v2, v3, ...).
+(first publish, v1), and `update-published-inspiration` (the PUBLISHER cuts v2, v3, ...).
 This mind adopted an inspiration earlier -- either it was created FROM the
 inspiration repo, or it merged one in via `use-inspiration` -- the publisher has
 since shipped a newer version, and this skill pulls that newer version from the

@@ -304,7 +304,7 @@ MERGE_SHA=$(git rev-parse HEAD)
 
 Then write the entry directly into `VERSION_HISTORY.md`. There is no helper
 skill -- this block is the whole recording contract, and it owns the format so
-`update-self`, `publish-inspiration`, and `revise-inspiration` all write
+`update-self`, `publish-inspiration`, and `update-published-inspiration` all write
 identical lines. The rules: append-only (existing lines are copied through
 verbatim, never re-flowed); every `## Workspace` line ends in a commit; and a
 retried landing must be a no-op, never a duplicate. Do the three parts below in
@@ -312,7 +312,7 @@ order.
 
 **Part 1 -- if `VERSION_HISTORY.md` is missing** (deleted since creation),
 recreate the shipped starter first, then append. This heredoc is the canonical
-starter that `publish-inspiration` and `revise-inspiration` recreate by reference
+starter that `publish-inspiration` and `update-published-inspiration` recreate by reference
 to here:
 
 ```bash
@@ -321,8 +321,8 @@ to here:
 
 Where this workspace came from, what it has published, and the inspirations it
 has adopted. Entries are appended automatically -- by `update-self` when it lands
-a template update, by `publish-inspiration` and `revise-inspiration` when they
-publish, and by `update-from-inspiration` when it pulls a newer version of an
+a template update, by `publish-inspiration` and `update-published-inspiration` when they
+publish, and by `update-installed-inspiration` when it pulls a newer version of an
 adopted inspiration -- and earlier lines are never rewritten. Each Workspace and
 Inspirations line ends in the commit it was cut from.
 
@@ -333,7 +333,7 @@ Inspirations line ends in the commit it was cut from.
 ## Adopted inspirations
 
 Each inspiration this mind has adopted and the version it is on;
-`update-from-inspiration` appends here when it pulls a newer version.
+`update-installed-inspiration` appends here when it pulls a newer version.
 VERSION_HISTORY_EOF
 ```
 

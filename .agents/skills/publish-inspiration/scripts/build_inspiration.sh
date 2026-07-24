@@ -453,7 +453,7 @@ This is distinct from "Adaptation history" below, which is the ADOPTERS' log.
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment with
 the first entry, in the form:
 ### v1 (YYYY-MM-DD) -- <one line: what this first version publishes>
-using today's date. A later update of this inspiration (the revise-inspiration
+using today's date. A later update of this inspiration (the update-published-inspiration
 flow) appends "### v2 (date) -- what changed since v1", and so on. -->
 
 ## Adaptation history

@@ -1,4 +1,4 @@
-- New **`revise-inspiration`** skill: the pathway for a publisher to create a new
+- New **`update-published-inspiration`** skill: the pathway for a publisher to create a new
   version of an inspiration they already published (v2, v3, ...). It locates the
   inspiration from the version ledger, shows what changed in the workspace since
   the last publish, and ASKS the user which of those changes they want in the
@@ -13,7 +13,7 @@
   force). The workspace ledger records the new version only after the push
   succeeds.
 
-- New **`update-from-inspiration`** skill: the ADOPTER pathway to pull a newer
+- New **`update-installed-inspiration`** skill: the ADOPTER pathway to pull a newer
   version of an already-adopted inspiration from its remote into the current
   mind. It reuses `use-inspiration`'s safeguards -- the same trust gate (Imbue
   has not verified it, it could be malicious; confirm before fetching), and a
@@ -40,8 +40,8 @@
   landing), `## Inspirations` (each inspiration this mind published, `v1`/`v2`...
   per slug), and `## Adopted inspirations` (each inspiration this mind adopted
   and the version it is on). Instead of a separate helper skill, each writer --
-  `update-self`, `publish-inspiration`, `revise-inspiration`, and
-  `update-from-inspiration` -- carries its own self-contained instructions
+  `update-self`, `publish-inspiration`, `update-published-inspiration`, and
+  `update-installed-inspiration` -- carries its own self-contained instructions
   telling the agent exactly which line to append and how (section, format, how
   the version number is computed, the idempotence check, and that it is one file
   staged by name and committed, never `git add -A`). The two subtle rules are

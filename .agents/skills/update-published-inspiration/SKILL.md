@@ -1,13 +1,13 @@
 ---
-name: revise-inspiration
+name: update-published-inspiration
 description: Create a NEW version of an inspiration you already published (v2, v3, ...) -- re-cut the changes made since the last version on top of the published snapshot and advance the published repo by exactly one clean commit, preserving all of the hand-crafted content in the published repo. Use when the user asks to update, re-publish, revise, or ship a new version of an inspiration they previously published.
 ---
 
-# Revise a published inspiration
+# Update a published inspiration
 
 Version: v1 (inspirations flow). This is the PUBLISHER's re-publish path -- the
 companion to `publish-inspiration` (first publish, v1), `use-inspiration` (adopt
-someone else's), and `update-from-inspiration` (pull a newer version of one you
+someone else's), and `update-installed-inspiration` (pull a newer version of one you
 adopted). It produces the NEXT version (v2, v3, ...) of an
 inspiration THIS mind already published: it re-cuts the changes the source
 workspace has accumulated since the last version, lays them on top of the
