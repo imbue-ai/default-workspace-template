@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Final
 
 _RESTIC_TIMEOUT_SECONDS: Final[float] = 3600.0
+# Tags the minds backup restore stamps on its safety + restored-state snapshots
+# (kept in sync with the desktop client's restore script). The retention forget
+# preserves any snapshot carrying either so a recent "Restored from ..." timeline
+# marker survives the normal hourly/daily thinning; the runner ages old ones out.
+RESTORE_MARKER_TAGS: Final[tuple[str, ...]] = ("restored", "pre-restore")
 _REPO_MISSING_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"unable to open config file", re.IGNORECASE),
     re.compile(r"repository does not exist", re.IGNORECASE),
@@ -108,8 +113,15 @@ def forget(
     keep_monthly: int,
     env_overrides: Mapping[str, str],
 ) -> subprocess.CompletedProcess[str]:
-    """`restic forget --keep-* ...` (does not prune)."""
-    args = (
+    """`restic forget --keep-* ... --keep-tag <restore-marker>...` (does not prune).
+
+    The `--keep-tag` flags keep every snapshot carrying a restore-marker tag so
+    the time-bucketed thinning above cannot drop a recent restore's timeline
+    entry (the markers otherwise share host+paths+hour with the ordinary hourly
+    backups and lose the keep-hourly bucket). The runner ages the old markers
+    out separately so they stay bounded.
+    """
+    args = [
         "forget",
         "--keep-hourly",
         str(keep_hourly),
@@ -119,7 +131,33 @@ def forget(
         str(keep_weekly),
         "--keep-monthly",
         str(keep_monthly),
-    )
+    ]
+    for tag in RESTORE_MARKER_TAGS:
+        args += ["--keep-tag", tag]
+    return run_restic(tuple(args), env_overrides=env_overrides, timeout_seconds=600.0)
+
+
+def list_snapshots_with_any_tag(
+    tags: tuple[str, ...],
+    env_overrides: Mapping[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """`restic snapshots --json --tag <t>...` -- snapshots carrying ANY of `tags`.
+
+    Repeated `--tag` flags are OR'd by restic, so this returns every snapshot
+    that has at least one of the given tags.
+    """
+    args: list[str] = ["snapshots", "--json"]
+    for tag in tags:
+        args += ["--tag", tag]
+    return run_restic(tuple(args), env_overrides=env_overrides, timeout_seconds=120.0)
+
+
+def forget_snapshot_ids(
+    snapshot_ids: tuple[str, ...],
+    env_overrides: Mapping[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """`restic forget <id>...` -- forget specific snapshots by id (does not prune)."""
+    args = ("forget", *snapshot_ids)
     return run_restic(args, env_overrides=env_overrides, timeout_seconds=600.0)
 
 

@@ -4,11 +4,13 @@ Owns the main loop, config-reload state machine, and per-tick orchestration.
 The actual restic and snapshot mechanics live in `restic.py` and `snapshot.py`.
 """
 
+import json
+import re
 import subprocess
 import time
 import traceback
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 from uuid import uuid4
@@ -28,12 +30,15 @@ from host_backup.config import (
     publish_service_events_dir,
 )
 from host_backup.events import BackupEventType, make_event, write_event
+from host_backup.restic import RESTORE_MARKER_TAGS
 from host_backup.restic import backup as restic_backup
 from host_backup.restic import (
     extract_snapshot_id_from_backup_output,
     is_repo_locked_error,
 )
 from host_backup.restic import forget as restic_forget
+from host_backup.restic import forget_snapshot_ids as restic_forget_snapshot_ids
+from host_backup.restic import list_snapshots_with_any_tag as restic_list_snapshots_with_any_tag
 from host_backup.restic import prune as restic_prune
 from host_backup.restic import unlock as restic_unlock
 from host_backup.snapshot import (
@@ -258,6 +263,7 @@ def _run_one_tick(
     if not backup_succeeded:
         return
     _run_forget(state=state, config=config, env_overrides=env_overrides)
+    _age_out_restore_markers(state=state, config=config, env_overrides=env_overrides)
     _maybe_run_prune(state=state, config=config, env_overrides=env_overrides)
 
 
@@ -534,6 +540,107 @@ def _run_forget(
     if result.returncode != 0:
         logger.warning(
             "restic forget failed (rc={}): {}", result.returncode, result.stderr.strip()
+        )
+
+
+def _parse_restic_timestamp(raw: str) -> datetime | None:
+    """Parse restic's RFC3339 snapshot `time` into a UTC datetime, or None if unparseable.
+
+    Normalizes a trailing ``Z`` to an explicit offset and clamps fractional
+    seconds to microseconds (restic can emit nanoseconds, which
+    ``datetime.fromisoformat`` rejects). A naive value is assumed to be UTC.
+    """
+    text = raw.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    # Clamp the fractional-seconds group (the only ``.<digits>`` run) to 6 digits.
+    text = re.sub(r"\.(\d+)", lambda m: "." + m.group(1)[:6], text, count=1)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _age_out_restore_markers(
+    *,
+    state: _LoopState,
+    config: BackupConfig,
+    env_overrides: Mapping[str, str],
+    list_fn: Callable[
+        [tuple[str, ...], Mapping[str, str]], subprocess.CompletedProcess[str]
+    ] = restic_list_snapshots_with_any_tag,
+    forget_ids_fn: Callable[
+        [tuple[str, ...], Mapping[str, str]], subprocess.CompletedProcess[str]
+    ] = restic_forget_snapshot_ids,
+    now_fn: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> None:
+    """Forget restore-marker snapshots older than the configured cutoff.
+
+    The retention forget keeps every ``pre-restore`` / ``restored`` snapshot (so
+    a recent restore's timeline marker is not thinned away); this drops the ones
+    past ``restore_marker_max_age_days`` so they stay bounded. Best-effort: any
+    failure is logged and never fails the tick. A cutoff of 0 disables the age-out
+    (markers are then kept forever).
+    """
+    max_age_days = config.retention.restore_marker_max_age_days
+    if max_age_days <= 0:
+        return
+
+    listed = list_fn(RESTORE_MARKER_TAGS, env_overrides)
+    if listed.returncode != 0:
+        logger.warning(
+            "Could not list restore-marker snapshots (rc={}): {}",
+            listed.returncode,
+            listed.stderr.strip(),
+        )
+        return
+    try:
+        snapshots = json.loads(listed.stdout or "[]")
+    except ValueError as e:
+        logger.warning("restic snapshots returned non-JSON output: {}", e)
+        return
+    if not isinstance(snapshots, list):
+        return
+
+    # Collect the ids of markers older than the cutoff.
+    cutoff = now_fn() - timedelta(days=max_age_days)
+    expired_ids: list[str] = []
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+        snapshot_time = _parse_restic_timestamp(str(snapshot.get("time", "")))
+        snapshot_id = snapshot.get("id")
+        if snapshot_time is not None and isinstance(snapshot_id, str) and snapshot_time < cutoff:
+            expired_ids.append(snapshot_id)
+    if not expired_ids:
+        return
+
+    start = time.monotonic()
+    result = forget_ids_fn(tuple(expired_ids), env_overrides)
+    duration = time.monotonic() - start
+    write_event(
+        state.events_dir,
+        make_event(
+            BackupEventType.RESTORE_MARKERS_FORGOTTEN,
+            tick_id=state.current_tick_id,
+            forgotten_count=len(expired_ids),
+            exit_code=result.returncode,
+            duration_seconds=duration,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        ),
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "Forgetting {} expired restore-marker snapshot(s) failed (rc={}): {}",
+            len(expired_ids),
+            result.returncode,
+            result.stderr.strip(),
         )
 
 

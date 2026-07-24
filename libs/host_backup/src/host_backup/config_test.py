@@ -124,7 +124,17 @@ def test_load_backup_config_applies_user_settings(tmp_path: Path) -> None:
     assert config.retention.keep_hourly == 48
     # Untouched fields keep their defaults.
     assert config.retention.keep_daily == 30
+    assert config.retention.restore_marker_max_age_days == 7.0
     assert config.minimum_backup_gap_seconds == 60.0
+
+
+def test_load_backup_config_applies_restore_marker_max_age(tmp_path: Path) -> None:
+    path = tmp_path / "backup.toml"
+    path.write_text("[retention]\nrestore_marker_max_age_days = 3\n")
+    config = load_backup_config(path)
+    assert config.retention.restore_marker_max_age_days == 3.0
+    # The other retention fields keep their defaults.
+    assert config.retention.keep_hourly == 24
 
 
 def test_load_backup_config_ignores_unknown_keys_but_applies_the_rest(
