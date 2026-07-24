@@ -786,6 +786,17 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                     },
                     "Open agent terminal",
                   ),
+                  m("span", { class: "chat-agent-terminal-link-sep" }, " · "),
+                  // Persistent entry to the Claude sign-in modal so the user
+                  // can switch auth modes without waiting for an auth error.
+                  m(
+                    "button",
+                    {
+                      type: "button",
+                      onclick: () => openLoginModal(),
+                    },
+                    "Agent auth",
+                  ),
                 ]),
               ]),
         ],
