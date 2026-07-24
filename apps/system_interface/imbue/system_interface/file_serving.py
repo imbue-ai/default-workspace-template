@@ -25,11 +25,15 @@ from pathlib import Path
 from flask import Response
 from flask import send_file
 
-# Long-lived caching for inline images: agents are instructed (see the
-# show-files-in-chat skill) to give each image a unique filename, so a served
-# image URL never changes content. A one-year max-age plus ``immutable`` lets
-# the browser skip revalidation entirely while a conversation is re-rendered.
-_IMAGE_CACHE_MAX_AGE_SECONDS = 31_536_000
+# Long-lived caching for chat files: a served file's URL never changes content,
+# either because agents give each image a unique filename (see the
+# show-files-in-chat skill) or because the frontend tags each message's URL with
+# a per-message ``?requested_at=`` cache key (see ``markdown.appendRequestedAt``).
+# A one-year max-age plus ``immutable`` lets the browser skip revalidation
+# entirely, so a re-render (or a re-download) never refetches while a new
+# message -- carrying a fresh URL -- always fetches the file's current bytes.
+_FILE_CACHE_MAX_AGE_SECONDS = 31_536_000
+_IMMUTABLE_CACHE_CONTROL = f"public, max-age={_FILE_CACHE_MAX_AGE_SECONDS}, immutable"
 
 # Image extensions served inline, each mapped to an explicit Content-Type so the
 # wire result does not depend on the host's mimetypes registry (macOS and Linux
@@ -65,8 +69,9 @@ def _serve_inline_image(file_path: Path, mime_type: str) -> Response:
     """Stream an image so it renders inline in the chat."""
     response = send_file(file_path, mimetype=mime_type)
     # send_file's default cache policy is conservative; override it so the
-    # browser caches aggressively (image filenames are unique by convention).
-    response.headers["Cache-Control"] = f"public, max-age={_IMAGE_CACHE_MAX_AGE_SECONDS}, immutable"
+    # browser caches aggressively (each message's URL is unique -- see the
+    # module comment on _IMMUTABLE_CACHE_CONTROL).
+    response.headers["Cache-Control"] = _IMMUTABLE_CACHE_CONTROL
     if file_path.suffix.lower() == _SVG_EXTENSION:
         response.headers["Content-Security-Policy"] = _SVG_CONTENT_SECURITY_POLICY
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -81,9 +86,14 @@ def _serve_download(file_path: Path) -> Response:
     stop content-type sniffing that could re-enable inline execution (e.g. a
     ``.html`` or scripted file). ``send_file`` derives the download filename from
     the path's basename.
+
+    Cached immutably like inline images so a re-download never refetches; the
+    frontend's per-message ``?requested_at=`` cache key makes a new message's
+    link a distinct URL, so it still fetches the file's current bytes.
     """
     response = send_file(file_path, mimetype="application/octet-stream", as_attachment=True)
     response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = _IMMUTABLE_CACHE_CONTROL
     return response
 
 
