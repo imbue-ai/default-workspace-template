@@ -780,28 +780,23 @@ already validated `repo_name` against `^[A-Za-z0-9._-]+$` in §6; keep the
 JSON built from variables, never string-interpolated shell.
 
 **Step 1b -- lock down the collaboration surface (unconditional -- never ask
-the user).** Immediately after the repo exists, close every surface a
-non-collaborator could use to comment on the inspiration, as far as GitHub
-allows for the chosen visibility. Always turn **discussions OFF**. On a
-**public** inspiration, ALSO turn **issues OFF** -- a public repo has no
-"collaborators-only issues" setting, so anyone with a GitHub account could open
-one; the strongest available lockdown is to disable them. On a **private**
-inspiration (the default) leave issues **ON**: there they are already
-collaborators-only, outsiders have no access at all, and collaborators keep a
-useful channel. Set this via the "Update a repository" endpoint (`PATCH
-/repos/<owner>/<repo>`), NOT the create call above -- that is why this is a
-follow-up call.
+the user).** Immediately after the repo exists, close every surface where a
+non-collaborator could open or inject content, so an inspiration can never
+become a public forum on the author's account. Do it in ONE call to the "Update
+a repository" endpoint (`PATCH /repos/<owner>/<repo>`), NOT the create call above
+-- that is why this is a follow-up call. Set, unconditionally (public or
+private):
+
+- `"pull_request_creation_policy": "collaborators_only"` -- only users with write
+  access can open a pull request; arbitrary outsiders cannot.
+- `"has_issues": false`, `"has_wiki": false`, `"has_projects": false`,
+  `"has_discussions": false` -- disable the issue tracker, wiki, projects, and
+  discussions outright.
 
 ```bash
-# private (the default): discussions off; issues stay collaborators-only
 latchkey curl -X PATCH "https://api.github.com/repos/<owner>/<repo_name>" \
     -H 'Content-Type: application/json' \
-    -d '{"has_discussions": false}'
-
-# public: also disable issues (the best lockdown a public repo allows)
-latchkey curl -X PATCH "https://api.github.com/repos/<owner>/<repo_name>" \
-    -H 'Content-Type: application/json' \
-    -d '{"has_discussions": false, "has_issues": false}'
+    -d '{"pull_request_creation_policy": "collaborators_only", "has_issues": false, "has_wiki": false, "has_projects": false, "has_discussions": false}'
 ```
 
 `<owner>` is the `.owner.login` you took from step 1's response; `<repo_name>`
@@ -813,18 +808,18 @@ retry once, and if it still fails, report it as a minor follow-up rather than
 failing the whole publish -- the repo already exists and is private by default,
 so the comment surface is still closed.
 
-Why this is unconditional (the skill never asks the user about it): a published
-inspiration is meant to be adapted by other minds, not turned into a public
-forum on the author's account. **Private-by-default is a full lockdown on its
-own** -- on a private repo only collaborators can open or comment on issues and
-PRs at all, and outsiders cannot fork it, so the discussions-off PATCH is all it
-needs. A **public** inspiration cannot be fully locked down, and you should
-surface that to the user if they chose public (inform them -- do NOT ask
-permission): disabling issues closes that surface, but **pull requests cannot be
-disabled at all** (GitHub has no setting for it) and **forking cannot be
-disabled on a personal public repo** (GitHub only allows `allow_forking: false`
-on org-owned repos), so an outsider can still fork it and open a PR. Keeping the
-inspiration private is the only way to fully guarantee collaborators-only.
+Two residual surfaces GitHub's REST API cannot fully close. On a PRIVATE
+inspiration (the default) neither matters -- outsiders have no access at all --
+so only surface them to the user if they chose PUBLIC visibility (inform them --
+do NOT ask permission):
+
+- **Pull requests can only be RESTRICTED to collaborators, not fully turned off,
+  via the API** -- the "disable pull requests entirely" toggle is UI-only. The
+  `collaborators_only` policy above already blocks arbitrary outsiders, which is
+  what matters.
+- **Forking cannot be disabled on a personal public repo** (GitHub allows
+  `allow_forking: false` only on org-owned repos). Keeping the inspiration
+  private is the only way to also prevent outside forks.
 
 **Step 2 -- mint ONE snapshot commit and push it as `main` (git through the
 latchkey gateway):**

@@ -57,17 +57,18 @@
   adopter on the other method knows to switch the model calls, and a hardcoded
   path is also listed as a Hole.
 
-- **Published inspiration repos are locked down on creation** -- as far as
-  GitHub allows for the chosen visibility, unconditionally and without asking.
-  Discussions are always turned off. A private inspiration (the default) is a
-  full lockdown on its own: outsiders have no access, so issues and PRs are
-  collaborators-only and it cannot be forked; issues stay enabled there so
-  collaborators keep a channel. A public inspiration also gets issues disabled
-  (a public repo has no collaborators-only-issues setting, so that is the
-  strongest available lockdown), and the skill tells the user the two limits it
-  cannot close on a public repo: pull requests cannot be disabled at all, and
+- **Published inspiration repos are locked down on creation** -- unconditionally
+  (public or private) and without asking, using GitHub's 2026 pull-request-access
+  setting. Right after the repo is created, one PATCH restricts pull requests to
+  collaborators (`pull_request_creation_policy: collaborators_only`, so arbitrary
+  outsiders cannot open a PR) and disables issues, wiki, projects, and
+  discussions outright. This closes every surface where a non-collaborator could
+  open or inject content. Two residual limits remain, surfaced only if the user
+  chooses public visibility: the REST API can only RESTRICT pull requests to
+  collaborators, not fully disable them (the disable toggle is UI-only), and
   forking cannot be disabled on a personal public repo (GitHub allows that only
-  on org-owned repos). Keeping the inspiration private avoids both.
+  on org-owned repos). On a private inspiration neither matters, since outsiders
+  have no access at all.
 
 - **Published manifests now carry a changelog.** Each `inspiration-<slug>.md`
   has a "Publication history" section -- the inspiration's own changelog of what
