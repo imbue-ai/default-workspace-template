@@ -17,13 +17,13 @@ want to surface, inspect, or rearrange tabs. Do not hand-edit the
 dockview layout config.
 
 > **Where the script lives:** `layout.py` is at the **repo root**, at
-> `scripts/layout.py` (i.e. `/code/scripts/layout.py`). It is **NOT**
-> inside this skill's folder -- there is no
-> `.agents/skills/manage-layout/scripts/layout.py`. Every command below
-> is written as `python3 scripts/layout.py ...`, a path relative to the
-> **repo root** (`/code`), which is the cwd for all commands in this
-> repo. Run these from the repo root (or use the absolute path
-> `/code/scripts/layout.py`); do not prefix them with the skill
+> `scripts/layout.py` (i.e. `/mngr/code/scripts/layout.py`, the
+> container WORKDIR). It is **NOT** inside this skill's folder -- there
+> is no `.agents/skills/manage-layout/scripts/layout.py`. Every command
+> below is written as `python3 scripts/layout.py ...`, a path relative
+> to the **repo root** (`/mngr/code`), which is the cwd for all commands
+> in this repo. Run these from the repo root (or use the absolute path
+> `/mngr/code/scripts/layout.py`); do not prefix them with the skill
 > directory.
 
 ## Named layouts (read this first)
