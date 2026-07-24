@@ -133,22 +133,57 @@ def test_parser_accepts_direct_verbs() -> None:
 def test_pull_in_pane_opens_each_browser_in_its_own_pane(monkeypatch: pytest.MonkeyPatch) -> None:
     # A user-started agent surfaces each browser as its OWN pane (--new-group), beside
     # its own chat (--relative-to self), not tabbed into an existing browser pane. The
-    # session ref keys on the NAME.
+    # split carries the resolved --layout, and the session ref keys on the NAME.
     calls: list[tuple] = []
+    monkeypatch.setattr(fleet, "_resolve_active_layout", lambda: (True, "desktop"))
     monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
     monkeypatch.delenv("BROWSER_FLEET_ANCHOR", raising=False)
     fleet._pull_in_pane("alex-smith")
     assert calls and "--new-group" in calls[0] and "right" in calls[0] and "self" in calls[0]
+    assert "--layout" in calls[0] and "desktop" in calls[0]
     assert any("session=alex-smith" in arg for arg in calls[0])
 
 
 def test_pull_in_pane_warns_cleanly_when_it_cant_show_a_pane(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A background/sub-agent (no chat in this UI) can't land the split: we attempt it,
-    # then warn in one clean line -- never crash, never leak the raw 5s "not registered"
+    # Reachable layout server, but the split never lands (human isn't viewing that layout):
+    # we attempt it, then warn in one clean line -- never crash, never leak layout.py's raw
     # error (the browser is still running).
+    monkeypatch.setattr(fleet, "_resolve_active_layout", lambda: (True, "desktop"))
     monkeypatch.setattr(fleet, "_layout", lambda *a, **k: False)  # layout never lands
     monkeypatch.delenv("BROWSER_FLEET_ANCHOR", raising=False)
     fleet._pull_in_pane("riley-jones")  # must not raise
+
+
+def test_pull_in_pane_skips_silently_when_layout_server_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An isolated launch-task sub-agent can't reach the layout server: _resolve_active_layout
+    # returns (False, None). We must NOT attempt the split and NOT print anything.
+    attempted: list[tuple] = []
+    printed: list[str] = []
+    monkeypatch.setattr(fleet, "_resolve_active_layout", lambda: (False, None))
+    monkeypatch.setattr(fleet, "_layout", lambda *a, **k: attempted.append(a) or True)
+    monkeypatch.setattr(fleet, "_out", lambda msg: printed.append(msg))
+    fleet._pull_in_pane("riley-jones")
+    assert attempted == [] and printed == []
+
+
+def test_resolve_active_layout_prefers_client_that_messaged_this_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two connected clients on different layouts; pick the one whose recent messages named
+    # OUR agent (context exposes agent_name, not id).
+    stdout = (
+        '[{"is_connected": true, "current_layout": "mobile",'
+        '  "recent_messages": [{"agent_name": "someone-else"}]},'
+        ' {"is_connected": true, "current_layout": "desktop",'
+        '  "recent_messages": [{"agent_name": "riley-jones"}]}]'
+    )
+    monkeypatch.setenv("MNGR_AGENT_NAME", "riley-jones")
+    monkeypatch.setattr(fleet.subprocess, "run", lambda *a, **k: fleet.subprocess.CompletedProcess([], 0, stdout, ""))
+    assert fleet._resolve_active_layout() == (True, "desktop")
+
+
+def test_resolve_active_layout_unreachable_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A non-zero context exit (isolated sub-agent / no daemon) -> (False, None): skip silently.
+    monkeypatch.setattr(fleet.subprocess, "run", lambda *a, **k: fleet.subprocess.CompletedProcess([], 1, "", "boom"))
+    assert fleet._resolve_active_layout() == (False, None)
 
 
 def test_cmd_new_pulls_a_pane_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
