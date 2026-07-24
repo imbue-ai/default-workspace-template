@@ -937,7 +937,7 @@ the exception in the CWD-INVARIANT callout at the top of this skill before
 running it. Nothing is recorded for a publish that did not happen: if step 2's
 push failed, or the user aborted, SKIP this entirely.
 
-Write the entry directly into `/code/VERSION_HISTORY.md` (cwd `/code`). There is
+Write the entry directly into `VERSION_HISTORY.md` (cwd `/code`). There is
 no helper skill: this block is the whole recording contract, and it owns the
 format so `publish-inspiration`, `revise-inspiration`, and `update-self` all
 write identical lines. Rules: append-only (existing lines copied through
@@ -947,7 +947,7 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 `SOURCE_SHA` from §2 -- the source workspace commit the snapshot was cut from
 (NOT `BASE_REF`, not anything from `$WT`).
 
-- **If `/code/VERSION_HISTORY.md` is missing** (deleted since creation), recreate
+- **If `VERSION_HISTORY.md` is missing** (deleted since creation), recreate
   the shipped starter first -- the `# Version history` heading, its explanatory
   paragraph, and the three empty sections `## Workspace`, `## Inspirations`,
   `## Adopted inspirations` in that order (byte-identical to the shipped root

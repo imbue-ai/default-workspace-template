@@ -302,7 +302,7 @@ Capture the merge sha **right here** -- immediately after the fast-forward, whil
 MERGE_SHA=$(git rev-parse HEAD)
 ```
 
-Then write the entry directly into `/code/VERSION_HISTORY.md`. There is no helper
+Then write the entry directly into `VERSION_HISTORY.md`. There is no helper
 skill -- this block is the whole recording contract, and it owns the format so
 `update-self`, `publish-inspiration`, and `revise-inspiration` all write
 identical lines. The rules: append-only (existing lines are copied through
@@ -310,13 +310,13 @@ verbatim, never re-flowed); every `## Workspace` line ends in a commit; and a
 retried landing must be a no-op, never a duplicate. Do the three parts below in
 order.
 
-**Part 1 -- if `/code/VERSION_HISTORY.md` is missing** (deleted since creation),
+**Part 1 -- if `VERSION_HISTORY.md` is missing** (deleted since creation),
 recreate the shipped starter first, then append. This heredoc is the canonical
 starter that `publish-inspiration` and `revise-inspiration` recreate by reference
 to here:
 
 ```bash
-[ -f /code/VERSION_HISTORY.md ] || cat > /code/VERSION_HISTORY.md <<'VERSION_HISTORY_EOF'
+[ -f VERSION_HISTORY.md ] || cat > VERSION_HISTORY.md <<'VERSION_HISTORY_EOF'
 # Version history
 
 Where this workspace came from, what it has published, and the inspirations it
@@ -345,7 +345,7 @@ workspace commit`), and resolve its date/version/sha **from that commit itself**
 so seeding late still records when the workspace was actually created:
 
 ```bash
-if ! grep -q "created from" /code/VERSION_HISTORY.md; then
+if ! grep -q "created from" VERSION_HISTORY.md; then
     CREATION=$(git log --first-parent --format='%H %s' HEAD \
         | awk '{h=$1; sub(/^[^ ]+ /,""); if ($0 ~ /^update-self:/ || $0 == "Initial workspace commit") last=h} END {if (last) print last}')
     # Fallback (a hand-made or pre-bootstrap repo with no marker): the FIRST-PARENT
@@ -386,11 +386,11 @@ already recorded -- change nothing and skip the commit below.
 Then commit exactly this one file:
 
 ```bash
-git add /code/VERSION_HISTORY.md
+git add VERSION_HISTORY.md
 git commit -m "version history: updated to $REF"
 ```
 
-Stage `/code/VERSION_HISTORY.md` **by name** -- NEVER `git add -A` (it would sweep
+Stage `VERSION_HISTORY.md` **by name** -- NEVER `git add -A` (it would sweep
 up the mind's unrelated working state), and never a merge, checkout, or reset as
 part of recording. If the idempotence check found the entry already recorded,
 nothing is staged and you skip the commit.

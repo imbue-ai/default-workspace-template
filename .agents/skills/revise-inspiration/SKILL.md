@@ -72,7 +72,7 @@ worker's worktree.
 
 ## Shared conventions
 
-- **The ledger** is `/code/VERSION_HISTORY.md`. Its `## Inspirations` section is
+- **The ledger** is `VERSION_HISTORY.md`. Its `## Inspirations` section is
   where a publish/revise is recorded (the same format `publish-inspiration` §8
   step 4 and `update-self` §5b write); §1 reads it and §8 appends to it.
 - **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees under
@@ -424,7 +424,7 @@ The single sanctioned write back to `/code` -- read the CWD-INVARIANT callout at
 the top before running it. If the push failed or the user aborted, SKIP this
 entirely: an update that did not publish is never recorded.
 
-Write the entry directly into `/code/VERSION_HISTORY.md` (cwd `/code`) -- the same
+Write the entry directly into `VERSION_HISTORY.md` (cwd `/code`) -- the same
 `## Inspirations` recording contract `publish-inspiration` §8 step 4 owns, just
 computing the NEXT version instead of v1. Append-only; every `## Inspirations`
 line ends in a commit; a retried step is a no-op, never a duplicate. Inputs:
@@ -435,7 +435,7 @@ from `$WT`).
 
 - The slug's `### <slug>  --  <repo-url>` heading already exists (this mind
   published v1 through `publish-inspiration`). In the unlikely event
-  `/code/VERSION_HISTORY.md` is missing, recreate the shipped three-section
+  `VERSION_HISTORY.md` is missing, recreate the shipped three-section
   starter (`## Workspace`, `## Inspirations`, `## Adopted inspirations`; the exact
   heredoc lives in `update-self` §5b) and re-add the heading before appending.
 - Append one line under that heading:

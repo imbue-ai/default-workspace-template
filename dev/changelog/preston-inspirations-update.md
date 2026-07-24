@@ -1,4 +1,4 @@
-- Workspaces now ship **`/code/VERSION_HISTORY.md`** -- a plain, human-readable
+- Workspaces now ship **`VERSION_HISTORY.md`** -- a plain, human-readable
   record of where the workspace came from and what it has published or adopted.
   A `## Workspace` section holds the template version it was created from plus
   one line per update; an `## Inspirations` section holds one entry per

@@ -164,17 +164,17 @@ against this mind's adaptations>
 
 Earlier history entries are left exactly as they are.
 
-## 5. Record the new adopted version in `/code/VERSION_HISTORY.md`
+## 5. Record the new adopted version in `VERSION_HISTORY.md`
 
 Record which version of the inspiration this mind is now on. Write the entry
-directly into `/code/VERSION_HISTORY.md`'s `## Adopted inspirations` section
+directly into `VERSION_HISTORY.md`'s `## Adopted inspirations` section
 (cwd `/code`). There is no helper skill: this block is the whole recording
 contract for the adopter side. Append-only (existing lines copied through
 verbatim, never re-flowed); a retried update is a no-op, never a duplicate.
 Inputs: `SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo>"`, and the target
 version `<n>` you pulled in §1.
 
-- **If `/code/VERSION_HISTORY.md` is missing** (deleted since creation), recreate
+- **If `VERSION_HISTORY.md` is missing** (deleted since creation), recreate
   the shipped three-section starter first -- the `# Version history` heading, its
   explanatory paragraph, and the sections `## Workspace`, `## Inspirations`,
   `## Adopted inspirations` in that order (byte-identical to the shipped root
@@ -205,7 +205,7 @@ Commit the update per the repo's git conventions (a plain local commit; when the
 user has enabled GitHub sync, the post-commit hook handles any push). This is one
 commit for the adaptation work -- the merged-in tree, the resolved holes, the
 updated manifest with its new "Adaptation history" entry, and
-`/code/VERSION_HISTORY.md`.
+`VERSION_HISTORY.md`.
 
 The version-history entry itself, if committed on its own, is exactly one file
 staged **by name** -- NEVER `git add -A` as part of recording, and never a merge,
