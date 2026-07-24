@@ -39,23 +39,23 @@ worker's worktree.
 > published tip, STOP -- do not fall back to a from-`BASE_REF` rebuild.
 
 > **CWD INVARIANT -- where each step runs.** The source mind's live checkout at
-> `/code` is touched in exactly two read-only ways and one write:
-> - §2 does a **read-only object fetch** of the published repo into `/code`'s
+> `/mngr/code` is touched in exactly two read-only ways and one write:
+> - §2 does a **read-only object fetch** of the published repo into `/mngr/code`'s
 >   object store and reads the delta with `git diff`/`git show`. A fetch adds
->   objects; it NEVER changes `/code`'s working tree or branch. This is safe, and
+>   objects; it NEVER changes `/mngr/code`'s working tree or branch. This is safe, and
 >   is the same read-only fetch `use-inspiration` §1 uses.
 > - Everything from §3's worker `done` through §7's push runs with **cwd = `$WT`**
->   (the worker's worktree), NEVER `/code`. There is no merge-back: `$WT`'s tree,
+>   (the worker's worktree), NEVER `/mngr/code`. There is no merge-back: `$WT`'s tree,
 >   built by the worker on top of the fetched published tip, IS what gets pushed,
 >   as-is, from `$WT`. IGNORE `lead-proxy.md`'s default `done -> merge the
 >   worker's branch` handling -- as in `publish-inspiration`, merging the assembly
->   branch into `/code` is forbidden (it once reset a live mind's tree to an old
->   base). Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/code`, or
->   any step that mutates `/code`'s tree after assembly.
-> - **The ONE sanctioned write to `/code`: §8, the version-history entry.** After
->   the push SUCCEEDS, `/code` gets exactly one write -- appending the v(n+1)
+>   branch into `/mngr/code` is forbidden (it once reset a live mind's tree to an old
+>   base). Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/mngr/code`, or
+>   any step that mutates `/mngr/code`'s tree after assembly.
+> - **The ONE sanctioned write to `/mngr/code`: §8, the version-history entry.** After
+>   the push SUCCEEDS, `/mngr/code` gets exactly one write -- appending the v(n+1)
 >   entry to `VERSION_HISTORY.md` and committing that single file on the branch
->   `/code` is already on (`git add VERSION_HISTORY.md` + `git commit`, NEVER a
+>   `/mngr/code` is already on (`git add VERSION_HISTORY.md` + `git commit`, NEVER a
 >   merge, checkout, reset, or `git add -A`). If the push did not happen, it does
 >   not run at all.
 
@@ -120,8 +120,8 @@ delta, only the full current state of the recipe's paths.
 
 ## 2. Fetch the published tip, verify it, compute the delta, and run the scope gate
 
-**cwd = `/code` for this section** (read-only fetch + `git diff`; nothing in
-`/code`'s working tree changes).
+**cwd = `/mngr/code` for this section** (read-only fetch + `git diff`; nothing in
+`/mngr/code`'s working tree changes).
 
 **2a. Get read access and fetch the published tip.** Route git through the
 latchkey gateway exactly as `use-inspiration` §1 does for a private fetch (the
@@ -237,7 +237,7 @@ over as a frozen bundle is deliberate: it keeps the worker offline (matching
 in the lead (matching `publish-inspiration`), and lets divergence (§2b) be
 surfaced in chat rather than discovered deep inside the worker.
 
-**3b. Commit pending `/code` work, then write the task file and launch.** (`mngr
+**3b. Commit pending `/mngr/code` work, then write the task file and launch.** (`mngr
 create` refuses a dirty tree; commit -- never stash.) Substitute the real values:
 the slug, repo URL, `PUBLISHED_TIP` sha, the user-confirmed changed paths as a
 `--name-status` delta (added / modified / deleted, scoped to what the user
@@ -420,16 +420,16 @@ create one or change its settings. Never fall back to a token-in-URL push.
 
 ## 8. Record the v(n+1) entry in the ledger (ONLY after the push succeeded)
 
-The single sanctioned write back to `/code` -- read the CWD-INVARIANT callout at
+The single sanctioned write back to `/mngr/code` -- read the CWD-INVARIANT callout at
 the top before running it. If the push failed or the user aborted, SKIP this
 entirely: an update that did not publish is never recorded.
 
-Write the entry directly into `VERSION_HISTORY.md` (cwd `/code`) -- the same
+Write the entry directly into `VERSION_HISTORY.md` (cwd `/mngr/code`) -- the same
 `## Inspirations` recording contract `publish-inspiration` §8 step 4 owns, just
 computing the NEXT version instead of v1. Append-only; every `## Inspirations`
 line ends in a commit; a retried step is a no-op, never a duplicate. Inputs:
 `SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo>"`, `NOTE="<one line: what
-changed>"`, and `SOURCE_SHA` = the current `/code` HEAD the update was cut from
+changed>"`, and `SOURCE_SHA` = the current `/mngr/code` HEAD the update was cut from
 (the source anchor for v(n+1) -- NOT `BASE_REF`, NOT `PUBLISHED_TIP`, NOT anything
 from `$WT`).
 
@@ -454,12 +454,12 @@ from `$WT`).
 Then commit that one file:
 
 ```bash
-( cd /code \
+( cd /mngr/code \
     && git add VERSION_HISTORY.md \
     && git commit -m "version history: updated inspiration <slug> to v(n+1)" )
 ```
 
-Exactly one file staged by name, one commit, on whatever branch `/code` is on.
+Exactly one file staged by name, one commit, on whatever branch `/mngr/code` is on.
 NEVER `git add -A`, never a merge/checkout/reset. If the idempotence check found
 the entry already recorded, nothing is staged and you skip the commit. If the
 commit fails (a hook rejects it), the update still succeeded -- say so and fix the

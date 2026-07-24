@@ -15,7 +15,7 @@ sibling `inspiration-<slug>.svg` thumbnail). Adapting an inspiration means bring
 that snapshot into *this* mind and then working through its "holes" — the parts
 the original author left stubbed or unwired — together with the user.
 
-All git commands run with cwd = the repo root (`/code`).
+All git commands run with cwd = the repo root (`/mngr/code`).
 
 ## Two entry points
 
@@ -69,7 +69,7 @@ treated as trusted -- go straight to adapting it.
 Only after the trust gate (§0). The inspiration is unverified third-party code,
 so NEVER merge it straight into the live tree: do the merge in an ISOLATED
 worktree, confirm it went well there, and only then bring the verified result
-into `/code`. This mirrors how `update-self` validates an upstream merge off the
+into `/mngr/code`. This mirrors how `update-self` validates an upstream merge off the
 live tree before landing it.
 
 Do NOT use `git subtree add --prefix=.` — subtree does not support the repo root
@@ -109,7 +109,7 @@ git worktree add -q "$WT" HEAD
   inspiration and this mind's tree disagree. Do NOT resolve them mechanically or
   land a half-merged tree -- remove the worktree (`git worktree remove --force
   "$WT"`), tell the user what conflicts (step 4, plain language), and only then
-  redo the merge in `/code` and resolve it interactively with them.
+  redo the merge in `/mngr/code` and resolve it interactively with them.
 - **Boot smoke-check** the merged worktree -- validate `supervisord.conf` WITHOUT
   launching the daemon (never `supervisord -t`, which launches it):
 
@@ -128,10 +128,10 @@ git worktree add -q "$WT" HEAD
 
   If this fails, the merged tree does not boot -- the inspiration broke this
   mind (a wiring mistake, or something hostile). STOP: tell the user plainly,
-  remove the worktree, and do NOT bring it into `/code`.
+  remove the worktree, and do NOT bring it into `/mngr/code`.
 
 **Land the verified result.** Only once the merge is clean and the boot check
-passes, fast-forward `/code` onto the exact commit you checked, then remove the
+passes, fast-forward `/mngr/code` onto the exact commit you checked, then remove the
 worktree:
 
 ```bash

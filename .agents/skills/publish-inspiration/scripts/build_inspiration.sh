@@ -2,7 +2,7 @@
 # Assemble a clean, shareable "inspiration" snapshot on top of the DEFAULT_WORKSPACE_TEMPLATE base the
 # mind was created from, then commit it. Run by the launch-task WORKER the
 # publish-inspiration skill dispatches, from the worker's own git worktree
-# (cwd = worktree repo root); the live mind's /code is never touched. This is
+# (cwd = worktree repo root); the live mind's /mngr/code is never touched. This is
 # v1 of the inspirations flow (see INSPIRATION_FLOW_VERSION below); the
 # generated manifest records it as `format: v1` in its front-matter.
 #
