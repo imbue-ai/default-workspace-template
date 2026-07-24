@@ -103,6 +103,12 @@ git commit -m "update-self: merge upstream template ($TARGET_REF)"
 If a fix needs a new dependency, add it and commit the manifest change so it's in
 the merge.
 
+**Do not touch `VERSION_HISTORY.md`.** The workspace's version entry records the
+*merge commit sha*, which does not exist until the lead fast-forwards onto your
+branch, so the lead appends it (per its own inlined recording block) as part of
+landing -- see the `update-self` skill's Step 5b. A line written here would carry
+the wrong sha and would conflict with the lead's.
+
 ## 4. Classify and validate the merged set
 
 Split what upstream changed into the reconciled **merged** set (validate) vs the
