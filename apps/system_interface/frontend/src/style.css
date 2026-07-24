@@ -2839,6 +2839,130 @@ body {
   line-height: 1.4;
 }
 
+.claude-login-helper--center {
+  text-align: center;
+}
+
+/* Muted "currently signed in via ..." header on the provider-selection screen */
+.claude-login-current-mode {
+  font-size: 0.75rem;
+  color: var(--color-text-faint);
+  text-align: center;
+  margin: 0 0 10px;
+}
+
+/* Multi-line credential paste (the Imbue env-blob textarea) */
+.claude-login-textarea {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.5;
+}
+
+/* Waiting-for-browser-approval indicator on the setup-token screen */
+.claude-login-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  padding: 6px 0;
+}
+
+/* Body copy for the /logout interception notice dialog */
+.logout-notice-body {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 8px 0 4px;
+}
+
+/* Step checklist shown while the background agent restart runs */
+.claude-login-applying {
+  padding: 8px 0;
+}
+
+.claude-login-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.claude-login-checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.875rem;
+}
+
+.claude-login-checklist-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.claude-login-checklist-item--done {
+  color: var(--color-text-secondary);
+}
+
+.claude-login-checklist-item--done .claude-login-checklist-icon {
+  color: var(--color-success, #22a06b);
+}
+
+.claude-login-checklist-item--active {
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.claude-login-checklist-item--pending {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+}
+
+.claude-login-checklist-item--pending .claude-login-checklist-icon::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.4;
+}
+
+/* Collapsed-by-default affordances (paste-code fallback, direct-token paste) */
+.claude-login-subtle {
+  margin-top: 10px;
+}
+
+.claude-login-subtle-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.claude-login-subtle-toggle:hover {
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+}
+
+.claude-login-subtle-body {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.claude-login-subtle-body .claude-login-input {
+  flex: 1;
+}
+
 /* Buttons */
 .claude-login-button {
   padding: 8px 16px;
