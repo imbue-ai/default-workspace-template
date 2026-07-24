@@ -19,7 +19,7 @@ provision_skip_if_done setup_system
 : "${CLOUDFLARED_VERSION:=2026.3.0}"
 : "${UV_VERSION:=0.11.7}"
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
-: "${CODEX_VERSION:=0.144.3}"
+: "${CODEX_VERSION:=0.145.0}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${NODE_MAJOR:=20}"
 : "${LATCHKEY_VERSION:=2.21.0}"
