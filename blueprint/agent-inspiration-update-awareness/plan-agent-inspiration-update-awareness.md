@@ -1,6 +1,6 @@
 # Plan: agent inspiration update awareness (status, drift, and updating a published inspiration)
 
-> **Give every published inspiration a durable back-link to the exact source state it was cut from, so an agent can tell whether it is stale and what changed since -- and add an `update-inspiration` flow that re-assembles the delta and advances the published repo by exactly one clean commit (v2, v3, ...), without ever loosening publish-inspiration's bootable / base-history / no-pre-cleanup-leak invariants.**
+> **Give every published inspiration a durable back-link to the exact source state it was cut from, so an agent can tell whether it is stale and what changed since -- and add an `revise-inspiration` flow that re-assembles the delta and advances the published repo by exactly one clean commit (v2, v3, ...), without ever loosening publish-inspiration's bootable / base-history / no-pre-cleanup-leak invariants.**
 >
 > ### The gap
 > * A publish writes nothing back to `/code` (the CWD invariant makes the live checkout "done being touched" after assembly) and mints the snapshot commit parented on `BASE_REF` (the shared template base), never on the source workspace's HEAD (an explicit privacy invariant). So today the only trace a publish leaves is the remote repo existing on GitHub -- there is no record, anywhere the source-side agent can read, of *which slug was published, from what source commit, to which repo, at what version*. An agent cannot answer "is my inspiration stale?" and an adopter cannot answer "has it drifted?"
@@ -10,7 +10,7 @@
 > * **Complemented by an annotated git tag `inspiration/<slug>/v<n>`** pushed into the **published repo** at each snapshot commit -- the durable, adopter-facing version marker and the recovery index for the version counter if the ledger is lost. A same-named lightweight tag in the source is an optional convenience for `git diff`, not the record of record (source refs are not reliably synced).
 >
 > ### Updating a published inspiration
-> * `update-inspiration <slug>` reads the ledger, fetches the published repo's current `main`, verifies its tip matches the recorded snapshot sha, and computes the delta (`git diff <recorded-source-sha> HEAD` over the recorded include paths). No delta -> tell the user it is already current.
+> * `revise-inspiration <slug>` reads the ledger, fetches the published repo's current `main`, verifies its tip matches the recorded snapshot sha, and computes the delta (`git diff <recorded-source-sha> HEAD` over the recorded include paths). No delta -> tell the user it is already current.
 > * The update **re-assembles from the published tip's tree** (not from raw `BASE_REF`), so the finished manifest prose, Prerequisites/Holes, bespoke thumbnail, and adopters' Adaptation history are preserved; only the newer app changes are overlaid, re-scanned for secrets, and the same published-version modifications re-applied.
 > * It mints **one clean commit parented on the previous published tip** (fast-forward push, no force), appends a **Publication history** entry (distinct from adopters' Adaptation history), bumps to **v(n+1)**, moves the tag, and updates the ledger. The base-history + all-commits-above-base-are-post-cleanup invariant holds; `merge-base(template, tip)` stays `BASE_REF`, so composability is unchanged.
 >
@@ -22,7 +22,7 @@
 - An "inspiration" is a bootable snapshot of what a mind built, published to a fresh GitHub repo that another mind can be created from or adapt (`publish-inspiration`, `use-inspiration`). The publish flow is deliberately one-directional and privacy-preserving: an isolated worker assembles a clean tree on top of `BASE_REF`, the lead confirms with the user and pushes a single snapshot commit, and `/code` is never touched after assembly (the CWD invariant). That one-directionality is exactly what leaves no provenance behind.
 - The motivating capability: an agent (in the source mind) should be able to say "the `slack-inbox` inspiration you published is 14 commits behind your current app -- want me to update it?" and then actually do the update; and an adopter should be able to learn its source inspiration moved and see what changed. Neither is possible today because nothing links the published snapshot back to the exact source state.
 - The structuring principle mirrors the existing split of readers: the **source-side agent** (answering "is what I published stale, and what changed since?") and the **adopter-side agent** (answering "has what I adopted drifted or been updated?") need different records. The source-side record must live in the source workspace and be durable; the adopter-facing record must live in the published repo. The design gives each its own home rather than overloading one.
-- The design is strictly additive to `publish-inspiration`: every existing invariant (bootable-or-nothing, two-commit / base-history, no-pre-cleanup-leak, private-by-default, hard secret scan, both chat gates) is preserved verbatim. The new material is (1) provenance recording appended after a successful publish, (2) a status/awareness read path, and (3) a new `update-inspiration` lead that reuses the same worker + `build_inspiration.sh` machinery with an "update" starting tree.
+- The design is strictly additive to `publish-inspiration`: every existing invariant (bootable-or-nothing, two-commit / base-history, no-pre-cleanup-leak, private-by-default, hard secret scan, both chat gates) is preserved verbatim. The new material is (1) provenance recording appended after a successful publish, (2) a status/awareness read path, and (3) a new `revise-inspiration` lead that reuses the same worker + `build_inspiration.sh` machinery with an "update" starting tree.
 
 ## The problem
 
@@ -86,7 +86,7 @@ Given the ledger row for `<slug>`:
 
 ## Updating a published inspiration
 
-Flow for "update my inspiration `<slug>`". It is a new lead, `update-inspiration`, that reuses `publish-inspiration`'s worker + `build_inspiration.sh` machinery rather than duplicating it. It preserves every publish invariant.
+Flow for "update my inspiration `<slug>`". It is a new lead, `revise-inspiration`, that reuses `publish-inspiration`'s worker + `build_inspiration.sh` machinery rather than duplicating it. It preserves every publish invariant.
 
 1. **Find the existing repo (from the ledger).** Read the `<slug>` row: repo URL/owner/name, last source sha, last snapshot sha, last version n, include set, prior published-version modifications. If there is no row (published before this feature, or ledger lost), fall back to the published-repo tags for the version counter and ask the user to confirm the repo URL; reconstruct a minimal row before proceeding.
 2. **Verify the remote is where we left it.** Fetch `main`; require its tip == recorded snapshot sha. On divergence, stop and surface it -- do not silently overwrite an out-of-band change.
@@ -129,7 +129,7 @@ Flow for "update my inspiration `<slug>`". It is a new lead, `update-inspiration
 
 - **Phase 1 -- record provenance (minimal, additive, low risk).** On a successful publish, (a) append the ledger row in the source (the one sanctioned post-push `/code` commit) and (b) push the `inspiration/<slug>/v1` tag into the published repo. No update flow yet. This alone makes app-delta and base-delta computable (`git diff <recorded-sha> HEAD`) -- it closes the core gap.
 - **Phase 2 -- status/awareness read path.** A lightweight source-side capability that reads the ledger and reports per-slug drift (app-delta + base-delta + remote-integrity check), plainly, on demand.
-- **Phase 3 -- `update-inspiration <slug>`.** The full re-assembly-from-published-tip flow: delta -> `--update` assembly -> re-scan -> Publication-history entry -> v(n+1) mint on the published tip -> fast-forward push -> tag bump -> ledger update, with both chat gates.
+- **Phase 3 -- `revise-inspiration <slug>`.** The full re-assembly-from-published-tip flow: delta -> `--update` assembly -> re-scan -> Publication-history entry -> v(n+1) mint on the published tip -> fast-forward push -> tag bump -> ledger update, with both chat gates.
 - **Phase 4 -- adopter-side awareness.** Record the adopted anchor in `use-inspiration`, and add the poll-and-summarize update check.
 
 ## Grounding and assumptions (flagged)

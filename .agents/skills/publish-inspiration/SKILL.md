@@ -236,11 +236,11 @@ too-old-base problems in seconds instead of a full worker round-trip.
 a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
 
-(The same marker walk is documented in the `update-version` skill, which seeds
-the version ledger's creation line from it -- with one deliberate difference: it
-takes the OLDEST marker (where the mind started) where this section takes the
-NEWEST (the base the mind is on now). The bash here is the primary; keep the two
-in step if either ever changes.)
+(The same marker walk seeds the version ledger's `## Workspace` creation line in
+§8 step 4 below (and in `update-self` §5b) -- with one deliberate difference: the
+creation-line walk takes the OLDEST marker (where the mind started) where this
+section takes the NEWEST (the base the mind is on now). This `BASE_REF` bash is
+the primary; keep the two in step if either ever changes.)
 
 **Also capture `SOURCE_SHA` -- the source commit the snapshot is cut from.**
 The worker's worktree branches off `/code`'s current `HEAD`, so that commit is
@@ -937,11 +937,55 @@ the exception in the CWD-INVARIANT callout at the top of this skill before
 running it. Nothing is recorded for a publish that did not happen: if step 2's
 push failed, or the user aborted, SKIP this entirely.
 
-Append the entry per the **`update-version`** skill -- its §1 (seed the ledger's
-creation line if it never had one) and §3 (append the inspiration entry) -- with
-`SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo_name>"`, `NOTE="first
-published"`, and `SOURCE_SHA` from §2. Those steps run with cwd `/code` and
-write `VERSION_HISTORY.md` and nothing else; then commit that one file:
+Write the entry directly into `/code/VERSION_HISTORY.md` (cwd `/code`). There is
+no helper skill: this block is the whole recording contract, and it owns the
+format so `publish-inspiration`, `revise-inspiration`, and `update-self` all
+write identical lines. Rules: append-only (existing lines copied through
+verbatim, never re-flowed); every `## Inspirations` line ends in a commit; and a
+retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
+`REPO_URL="github.com/<owner>/<repo_name>"`, `NOTE="first published"`, and
+`SOURCE_SHA` from §2 -- the source workspace commit the snapshot was cut from
+(NOT `BASE_REF`, not anything from `$WT`).
+
+- **If `/code/VERSION_HISTORY.md` is missing** (deleted since creation), recreate
+  the shipped starter first -- the `# Version history` heading, its explanatory
+  paragraph, and the three empty sections `## Workspace`, `## Inspirations`,
+  `## Adopted inspirations` in that order (byte-identical to the shipped root
+  file; `update-self` §5b carries the exact heredoc) -- then append.
+
+- **Seed the `## Workspace` creation line if it is absent** -- exactly once per
+  workspace, as the FIRST line under `## Workspace`. Resolve the creation snapshot
+  as the **OLDEST** first-parent template-state marker (`^update-self:` or
+  `Initial workspace commit`; fall back to the first-parent root), and resolve its
+  date/version/sha from that commit itself. **Use `git describe --tags
+  --abbrev=0 --match 'minds-v*' "$CREATION"` (reachability), NEVER `git tag
+  --points-at`** -- no tag is ever *on* a creation snapshot (an `Initial workspace
+  commit` sits on top of the cloned template; an `update-self:` marker is a merge
+  commit; the `minds-v*` tag is always on an ancestor), so a pointing-at lookup
+  comes up empty and the line would silently degrade to the unnamed `created from
+  the workspace template` fallback. Insert `- <date>  created from <version or
+  "the workspace template">  <7-char sha>`, note padded to width 26. (This is the
+  OLDEST-marker end of §2's `BASE_REF` walk -- same markers, opposite pick.)
+
+- **Append the inspiration entry.** Create the heading `### <slug>  --  <repo-url>`
+  under `## Inspirations` if this slug has none yet. Then append one line under
+  that heading:
+
+  ```
+  - v<n>  <today, YYYY-MM-DD>  first published  <7-char SOURCE_SHA>
+  ```
+
+  where `<n>` is **computed**, never typed: it is one greater than the highest
+  `v<k>` already listed under this slug's heading (so a first publish is `v1`, and
+  a later `revise-inspiration` run appends `v2`, `v3`, ... under the same
+  heading). Pad the note (`first published`) to width 35 so the sha lines up.
+  Compute the sha as `git rev-parse --short=7 "$SOURCE_SHA"`.
+  **Idempotence, scoped to this slug** (two inspirations published from the same
+  commit on the same day legitimately share a note and a sha): if a line already
+  under this slug's heading carries this exact note AND this exact 7-char sha, it
+  is already recorded -- change nothing and skip the commit below.
+
+Then commit exactly this one file:
 
 ```bash
 ( cd /code \
@@ -950,17 +994,9 @@ write `VERSION_HISTORY.md` and nothing else; then commit that one file:
 ```
 
 Exactly that: one file staged by name, one commit, on whatever branch `/code`
-is already on. NEVER `git add -A` (it would sweep up the mind's unrelated
-working state), never a merge, checkout, or reset. `$SOURCE_SHA` is the source
-commit from §2 -- the snapshot's provenance anchor -- NOT `BASE_REF` and not
-anything from `$WT`. `update-version` creates
-`VERSION_HISTORY.md`'s `### <slug>  --  <repo-url>` heading on a first publish
-and appends `- v1  <date>  first published  <source sha>`; a later update of the
-same inspiration appends `v2`, `v3`, ... under the same heading, so the version
-number is computed, never typed. It is a no-op if the same entry is already
-recorded (a retried step cannot double-record) -- then there is nothing to
-commit and you skip the commit. The same skill writes `update-self`'s
-`## Workspace` lines, so both flows produce identical formatting.
+is already on. NEVER `git add -A`, never a merge, checkout, or reset. If the
+idempotence check found the entry already recorded, nothing is staged and you
+skip the commit.
 
 If the commit fails (e.g. a hook rejects it), the publish still succeeded --
 say so plainly, and fix the entry rather than re-pushing anything.
@@ -1099,9 +1135,9 @@ What it does, in order (see the script for the exact commands):
 10. Removes `VERSION_HISTORY.md` from the snapshot entirely: that ledger is a
     WORKSPACE artifact -- the SOURCE mind's own record of what it came from and
     everything it has published -- and never belongs in a published inspiration.
-    A mind created from this inspiration grows its own ledger on demand (the
-    `update-version` skill writes the starter the first time it is needed), so
-    nothing is lost by omitting it. Runs after the no-diff guard, so it can
+    A mind created from this inspiration grows its own ledger on demand (this
+    skill's §8 step 4 and `update-self` §5b write the starter the first time it
+    is needed), so nothing is lost by omitting it. Runs after the no-diff guard, so it can
     never make an empty include set look publishable.
 11. Validates `supervisord.conf` WITHOUT starting the daemon (never
     `supervisord -t`), then makes a single commit for the assembled snapshot.

@@ -453,7 +453,7 @@ This is distinct from "Adaptation history" below, which is the ADOPTERS' log.
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment with
 the first entry, in the form:
 ### v1 (YYYY-MM-DD) -- <one line: what this first version publishes>
-using today's date. A later update of this inspiration (the update-inspiration
+using today's date. A later update of this inspiration (the revise-inspiration
 flow) appends "### v2 (date) -- what changed since v1", and so on. -->
 
 ## Adaptation history
@@ -596,8 +596,8 @@ README_EOF
 # URLs, source commits). None of that belongs in a published inspiration -- and
 # after an update-self, BASE_REF's tree can carry an accumulated copy of it --
 # so drop it from the snapshot entirely. A mind created from this inspiration
-# grows its OWN ledger when it first runs update-self or publishes (the
-# `update-version` skill writes the starter on demand if the file is absent), so
+# grows its OWN ledger when it first runs update-self or publishes (update-self
+# and publish-inspiration write the starter on demand if the file is absent), so
 # nothing is lost by omitting it here. `rm -f` is safe whether or not the base
 # tree carried the file. This runs AFTER the no-diff guard so it can never make
 # an empty include set look like it had something to publish.

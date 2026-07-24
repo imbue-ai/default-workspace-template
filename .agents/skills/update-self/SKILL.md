@@ -296,33 +296,110 @@ so this is a follow-up commit of exactly one file (the worker never writes it --
 only the lead knows the merge sha).
 
 Capture the merge sha **right here** -- immediately after the fast-forward, while
-`HEAD` still is the merge and before the ledger commit moves it -- then follow
-the **`update-version`** skill, which owns the ledger's format and the append so
-`update-self` and `publish-inspiration` write identical lines:
+`HEAD` still is the merge and before the ledger commit moves it:
 
 ```bash
 MERGE_SHA=$(git rev-parse HEAD)
 ```
 
-Run `update-version` §1 (seed the `## Workspace` "created from" line if the
-ledger never had one) and §2 (append `- <date>  updated to $REF  <merge sha>`),
-then commit the one file:
+Then write the entry directly into `/code/VERSION_HISTORY.md`. There is no helper
+skill -- this block is the whole recording contract, and it owns the format so
+`update-self`, `publish-inspiration`, and `revise-inspiration` all write
+identical lines. The rules: append-only (existing lines are copied through
+verbatim, never re-flowed); every `## Workspace` line ends in a commit; and a
+retried landing must be a no-op, never a duplicate. Do the three parts below in
+order.
+
+**Part 1 -- if `/code/VERSION_HISTORY.md` is missing** (deleted since creation),
+recreate the shipped starter first, then append. This heredoc is the canonical
+starter that `publish-inspiration` and `revise-inspiration` recreate by reference
+to here:
 
 ```bash
-git add VERSION_HISTORY.md
+[ -f /code/VERSION_HISTORY.md ] || cat > /code/VERSION_HISTORY.md <<'VERSION_HISTORY_EOF'
+# Version history
+
+Where this workspace came from, what it has published, and the inspirations it
+has adopted. Entries are appended automatically -- by `update-self` when it lands
+a template update, by `publish-inspiration` and `revise-inspiration` when they
+publish, and by `update-from-inspiration` when it pulls a newer version of an
+adopted inspiration -- and earlier lines are never rewritten. Each Workspace and
+Inspirations line ends in the commit it was cut from.
+
+## Workspace
+
+## Inspirations
+
+## Adopted inspirations
+
+Each inspiration this mind has adopted and the version it is on;
+`update-from-inspiration` appends here when it pulls a newer version.
+VERSION_HISTORY_EOF
+```
+
+**Part 2 -- seed the `## Workspace` creation line if it is absent** -- exactly
+once per workspace, inserted as the FIRST line under `## Workspace` (the oldest
+event, so it never appends at the end). Resolve the creation snapshot as the
+**OLDEST** first-parent template-state marker (`^update-self:` or `Initial
+workspace commit`), and resolve its date/version/sha **from that commit itself**
+so seeding late still records when the workspace was actually created:
+
+```bash
+if ! grep -q "created from" /code/VERSION_HISTORY.md; then
+    CREATION=$(git log --first-parent --format='%H %s' HEAD \
+        | awk '{h=$1; sub(/^[^ ]+ /,""); if ($0 ~ /^update-self:/ || $0 == "Initial workspace commit") last=h} END {if (last) print last}')
+    # Fallback (a hand-made or pre-bootstrap repo with no marker): the FIRST-PARENT
+    # root -- never `git rev-list --max-parents=0 HEAD`, whose parallel subtree roots
+    # are not the seed.
+    [ -n "$CREATION" ] || CREATION=$(git rev-list --first-parent HEAD | tail -1)
+    C_DATE=$(git log -1 --format=%ad --date=short "$CREATION")
+    C_SHA=$(git rev-parse --short=7 "$CREATION")
+    C_VERSION=$(git describe --tags --abbrev=0 --match 'minds-v*' "$CREATION" 2>/dev/null)
+    # Then insert `- <C_DATE>  created from <C_VERSION or "the workspace template">
+    # <C_SHA>` as the FIRST line under the `## Workspace` heading, note padded to 26.
+fi
+```
+
+**Use `git describe` (reachability), NEVER `git tag --points-at`.** No tag is ever
+*on* a creation snapshot: `Initial workspace commit` is an `--allow-empty` commit
+bootstrap writes ON TOP of the cloned template commit, and an `update-self:`
+marker is a merge commit -- in both cases the `minds-v*` tag is on an ancestor, so
+a pointing-at lookup always comes up empty and every creation line would silently
+degrade to the unnamed `created from the workspace template` fallback. (This walk
+takes the **OLDEST** marker -- where the mind *started*. `publish-inspiration`
+§2's `BASE_REF` walk uses the same markers but takes the **NEWEST**; the
+difference is load-bearing.)
+
+**Part 3 -- append the update line.** Under `## Workspace`, after its last
+existing line, append exactly one line of the form:
+
+```
+- <today, YYYY-MM-DD>  updated to <$REF>  <7-char $MERGE_SHA>
+```
+
+Pad the note (`updated to <$REF>`) to width 26 so the sha lines up; a longer note
+just pushes its own sha right, and earlier lines are never re-flowed. Compute the
+sha as `git rev-parse --short=7 "$MERGE_SHA"`. **Idempotence:** if a `##
+Workspace` line already carries this exact note AND this exact 7-char sha, it is
+already recorded -- change nothing and skip the commit below.
+
+Then commit exactly this one file:
+
+```bash
+git add /code/VERSION_HISTORY.md
 git commit -m "version history: updated to $REF"
 ```
 
-The append is a no-op if the same entry is already recorded (a retried landing
-cannot double-record) -- in which case `git commit` has nothing to commit and you
-skip it.
+Stage `/code/VERSION_HISTORY.md` **by name** -- NEVER `git add -A` (it would sweep
+up the mind's unrelated working state), and never a merge, checkout, or reset as
+part of recording. If the idempotence check found the entry already recorded,
+nothing is staged and you skip the commit.
 
 **Pass `$MERGE_SHA`, never `HEAD`.** The append de-duplicates on note + sha, and
 the `git commit` above moves `HEAD` onto the version-history commit: a re-run
 that reaches for `HEAD` would pass a different sha, defeat the no-op, and append
 a second line pointing at the ledger commit instead of the merge. On a re-run,
-re-derive the merge sha rather than re-reading `HEAD` (see `update-version`'s
-merge-sha trap):
+re-derive the merge sha rather than re-reading `HEAD`:
 
 ```bash
 MERGE_SHA=$(git log --first-parent --grep '^update-self:' -1 --format=%H)

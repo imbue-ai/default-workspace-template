@@ -1,5 +1,5 @@
-- New **`update-inspiration`** skill: the pathway for a publisher to update an
-  inspiration they already published (producing v2, v3, ...). It locates the
+- New **`revise-inspiration`** skill: the pathway for a publisher to create a new
+  version of an inspiration they already published (v2, v3, ...). It locates the
   inspiration from the version ledger, shows what changed in the workspace since
   the last publish, and ASKS the user which of those changes they want in the
   update. It then launches a background worker to implement it -- and the core
@@ -13,6 +13,18 @@
   force). The workspace ledger records the new version only after the push
   succeeds.
 
+- New **`update-from-inspiration`** skill: the ADOPTER pathway to pull a newer
+  version of an already-adopted inspiration from its remote into the current
+  mind. It reuses `use-inspiration`'s safeguards -- the same trust gate (Imbue
+  has not verified it, it could be malicious; confirm before fetching), and a
+  merge done in an isolated worktree with a boot smoke-check that lands into the
+  live tree only when clean. Its central rule is to **preserve this mind's own
+  adaptations**: merge conflicts are surfaced as holes and resolved
+  interactively with the user, never mechanically or with a blanket "take
+  theirs", so the customizations that make it the user's mind are never thrown
+  away. It records the version it moved to under a new `## Adopted inspirations`
+  section of the ledger.
+
 - **Adopting an inspiration is now gated and verified.** Before the merge path
   pulls a third-party inspiration into a mind, `use-inspiration` requires the
   user to confirm they trust the source -- stating plainly that Imbue has not
@@ -23,13 +35,19 @@
   never clobber the mind. A mind created directly FROM an inspiration is treated
   as already trusted (creating it was the trust decision).
 
-- New **`update-version`** skill owns the workspace's version ledger end to end:
-  the `VERSION_HISTORY.md` format, seeding the "created from" line, appending a
-  `## Workspace` line when a template update lands, appending an
-  `## Inspirations` entry when something is published (computing the next
-  `v<n>` per slug), and the rules that keep a retried step from double-recording.
-  Both writers reference the one skill, so there is no helper program to keep in
-  sync.
+- The workspace version ledger is `/code/VERSION_HISTORY.md`, with three
+  sections: `## Workspace` (template version created-from + each `update-self`
+  landing), `## Inspirations` (each inspiration this mind published, `v1`/`v2`...
+  per slug), and `## Adopted inspirations` (each inspiration this mind adopted
+  and the version it is on). Instead of a separate helper skill, each writer --
+  `update-self`, `publish-inspiration`, `revise-inspiration`, and
+  `update-from-inspiration` -- carries its own self-contained instructions
+  telling the agent exactly which line to append and how (section, format, how
+  the version number is computed, the idempotence check, and that it is one file
+  staged by name and committed, never `git add -A`). The two subtle rules are
+  spelled out where they apply: record the `update-self` MERGE commit, not
+  `HEAD` (committing the ledger moves `HEAD`), and resolve the template version
+  by reachability (`git describe`), not `git tag --points-at`.
 
 - **`update-self`** now records the version it moved to as part of landing an
   update, so a workspace's template lineage is visible in its own git tree.

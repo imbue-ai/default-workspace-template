@@ -1,13 +1,14 @@
 ---
-name: update-inspiration
-description: Update an inspiration you already published -- re-cut the changes made since the last version on top of the published snapshot and advance the published repo by exactly one clean commit (v2, v3, ...), preserving all of the hand-crafted content in the published repo. Use when the user asks to update, re-publish, or ship a new version of an inspiration they previously published.
+name: revise-inspiration
+description: Create a NEW version of an inspiration you already published (v2, v3, ...) -- re-cut the changes made since the last version on top of the published snapshot and advance the published repo by exactly one clean commit, preserving all of the hand-crafted content in the published repo. Use when the user asks to update, re-publish, revise, or ship a new version of an inspiration they previously published.
 ---
 
-# Update a published inspiration
+# Revise a published inspiration
 
-Version: v1 (inspirations flow). This is the PUBLISHER's update path -- the
-companion to `publish-inspiration` (first publish, v1) and `use-inspiration`
-(adopt someone else's). It produces the NEXT version (v2, v3, ...) of an
+Version: v1 (inspirations flow). This is the PUBLISHER's re-publish path -- the
+companion to `publish-inspiration` (first publish, v1), `use-inspiration` (adopt
+someone else's), and `update-from-inspiration` (pull a newer version of one you
+adopted). It produces the NEXT version (v2, v3, ...) of an
 inspiration THIS mind already published: it re-cuts the changes the source
 workspace has accumulated since the last version, lays them on top of the
 published snapshot, and fast-forwards the published repo's `main` by exactly one
@@ -71,9 +72,9 @@ worker's worktree.
 
 ## Shared conventions
 
-- **The ledger** is `VERSION_HISTORY.md` at `/code`'s repo root, written by the
-  `update-version` skill. Its `## Inspirations` section is where a publish/update
-  is recorded; §1 reads it and §8 appends to it.
+- **The ledger** is `/code/VERSION_HISTORY.md`. Its `## Inspirations` section is
+  where a publish/revise is recorded (the same format `publish-inspiration` §8
+  step 4 and `update-self` §5b write); §1 reads it and §8 appends to it.
 - **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees under
   `/mngr/worktree/<name>-<uuid>/`; the path cannot be guessed -- resolve it from
   the worker's `done` report per §3. Everything after re-assembly runs with cwd =
@@ -423,13 +424,34 @@ The single sanctioned write back to `/code` -- read the CWD-INVARIANT callout at
 the top before running it. If the push failed or the user aborted, SKIP this
 entirely: an update that did not publish is never recorded.
 
-Append the entry per the **`update-version`** skill's §3 (append an
-`## Inspirations` entry) with `SLUG=<slug>`,
-`REPO_URL="github.com/<owner>/<repo>"`, `NOTE="<one line: what changed>"`, and
-`SOURCE_SHA` = the current `/code` HEAD the update was cut from (the source anchor
-for v(n+1) -- NOT `BASE_REF`, NOT `PUBLISHED_TIP`, NOT anything from `$WT`).
-`update-version` computes the version number from the existing lines under the
-slug's heading, so it appends `v(n+1)` automatically. Then commit that one file:
+Write the entry directly into `/code/VERSION_HISTORY.md` (cwd `/code`) -- the same
+`## Inspirations` recording contract `publish-inspiration` §8 step 4 owns, just
+computing the NEXT version instead of v1. Append-only; every `## Inspirations`
+line ends in a commit; a retried step is a no-op, never a duplicate. Inputs:
+`SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo>"`, `NOTE="<one line: what
+changed>"`, and `SOURCE_SHA` = the current `/code` HEAD the update was cut from
+(the source anchor for v(n+1) -- NOT `BASE_REF`, NOT `PUBLISHED_TIP`, NOT anything
+from `$WT`).
+
+- The slug's `### <slug>  --  <repo-url>` heading already exists (this mind
+  published v1 through `publish-inspiration`). In the unlikely event
+  `/code/VERSION_HISTORY.md` is missing, recreate the shipped three-section
+  starter (`## Workspace`, `## Inspirations`, `## Adopted inspirations`; the exact
+  heredoc lives in `update-self` §5b) and re-add the heading before appending.
+- Append one line under that heading:
+
+  ```
+  - v<n+1>  <today, YYYY-MM-DD>  <NOTE>  <7-char SOURCE_SHA>
+  ```
+
+  where `<n+1>` is **computed**, never typed: one greater than the highest `v<k>`
+  already listed under this slug's heading. Pad the note to width 35 so the sha
+  lines up; compute the sha as `git rev-parse --short=7 "$SOURCE_SHA"`.
+  **Idempotence, scoped to this slug:** if a line already under this slug's
+  heading carries this exact note AND this exact 7-char sha, it is already
+  recorded -- change nothing and skip the commit.
+
+Then commit that one file:
 
 ```bash
 ( cd /code \
@@ -438,10 +460,10 @@ slug's heading, so it appends `v(n+1)` automatically. Then commit that one file:
 ```
 
 Exactly one file staged by name, one commit, on whatever branch `/code` is on.
-NEVER `git add -A`, never a merge/checkout/reset. It is a no-op if the entry is
-already recorded (a retried step cannot double-record). If the commit fails (a
-hook rejects it), the update still succeeded -- say so and fix the entry rather
-than re-pushing anything.
+NEVER `git add -A`, never a merge/checkout/reset. If the idempotence check found
+the entry already recorded, nothing is staged and you skip the commit. If the
+commit fails (a hook rejects it), the update still succeeded -- say so and fix the
+entry rather than re-pushing anything.
 
 ## 9. Close out
 
