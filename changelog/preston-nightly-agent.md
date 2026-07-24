@@ -5,23 +5,29 @@ a deterministic check that wakes the agent only when it finds something --
 plus the supporting skills, docs, and in-workspace tab behavior that make
 scheduled agents visible.
 
-**Recurring jobs with cron + a daily due-checker.** Workspaces schedule
-recurring work with **cron** (`/etc/cron.d/` drop-ins, the daemon running
-under supervisord as `[program:cron]`): plain cron lines for precise times or
-sub-daily cadences, exact but never backfilled, and a daily-job pattern for
-jobs that must not be skipped when the container was off -- an every-minute
-cron line hands the decision to `scripts/run_daily_job.sh`, a ~50-line
-due-checker that stamps the last covered date per job and runs each job at
-most once per interval (daily by default; `--interval-days N` for coarser
-cadences like the Caretaker's weekly): at its due hour when the container is
-up, or within the first minute the container is back up after the window was
-fully missed, at any hour -- and after a covered window, nothing fires at
-midnight. The stamp is written before the job starts, so a failed run retries
-on the next due day rather than every minute. Plain cron alone cannot provide
-this: it fires only when the machine is up at that moment and never backfills
-a missed run -- the checker exists precisely to add "due at the due hour, but
-catch up a missed window the first minute the container is back, at any
-hour". Because cron scrubs
+**Recurring jobs with cron + a completion-tracked runner.** Workspaces
+schedule recurring work with **cron** (`/etc/cron.d/` drop-ins, the daemon
+running under supervisord as `[program:cron]`): plain cron lines for
+exact-moment fire-and-forget jobs, and `scripts/run_job.sh` for anything that
+must not be skipped or half-done -- an every-minute cron line hands the
+decision to the runner, which runs each job once per interval at any cadence
+(`--every 15m` to `--every 7d`, with `--at <hour>` for daily-or-coarser
+jobs): on time when the container is up, within the first minute the
+container is back after a fully-missed window, and never at midnight after a
+covered one. Modeled on the host-backup service's tick loop, a window counts
+as covered **only when the run completes**: the runner records `last_attempt`
+when a run starts and `last_success` only on exit 0 (state under
+`runtime/jobs/`, which survives container recreation and rides the opt-in
+GitHub sync), so a run that fails or is killed mid-flight is retried after
+`--retry-after` (default 2m) instead of being silently lost, with a loud log
+warning after 3 consecutive failures. The runner holds its lock in the
+parent and runs the job with the lock fd closed, so daemons a job starts can
+never inherit the lock and wedge it. Schedule entries themselves keep a
+durable copy under `runtime/cron.d/`, which the bootstrap reinstalls into
+`/etc/cron.d/` at each boot -- so an enabled schedule also survives
+container recreation. Plain cron alone provides none of this: it fires only
+when the machine is up at that moment, never backfills, and never checks
+completion. Because cron scrubs
 the job environment, a small wrapper (`scripts/with_agent_env.sh`) rebuilds
 the workspace environment from the env files mngr maintains on the host dir
 (the same way mngr sources them for agent operations), and every scheduled
@@ -30,8 +36,9 @@ user's local timezone at each boot: the bootstrap pulls it from the minds
 desktop client's `GET /api/v1/timezone` through the latchkey gateway (falling
 back to UTC when unreachable), so schedules run in the user's local time. (An
 earlier iteration of this branch built a custom `libs/scheduler` service --
-about 635 lines -- for the catch-up behavior; the checker replaced it with
-about 50 lines of shell.)
+about 635 lines -- for the catch-up behavior; the runner replaces it with
+about 130 lines of shell plus a deterministic pytest suite,
+`scripts/run_job_test.py`.)
 
 **Scheduled agent tasks and the Caretaker.** A scheduled job can wake an agent
 that runs a skill on a cadence, in its own chat tab. `scripts/run_schedule_agent.sh

@@ -145,11 +145,13 @@ there is no script). The lines are:
   when the check wakes you (`yes` / `no`).
 - "How often to run the automatic check" -- the cadence the user chose (e.g.
   `weekly`, `daily`, `monthly`, `every 3 days`). Recording it is not enough:
-  **apply it** by editing the `--interval-days` value in the schedule entry
-  `/etc/cron.d/minds-caretaker` (daily = 1, weekly = 7, monthly = 30 -- see the
-  manage-scheduled-tasks skill for the entry format). If the user wants no
-  schedule at all, remove that file instead (the disable-caretaker skill) and
-  tell them how to bring you back.
+  **apply it** by editing the `--every` value in the durable schedule entry
+  `runtime/cron.d/minds-caretaker` (daily = 1d, weekly = 7d, monthly = 30d;
+  sub-daily like 15m works too -- see the manage-scheduled-tasks skill), then
+  make it live: `install -m 0644 runtime/cron.d/minds-caretaker
+  /etc/cron.d/minds-caretaker`. If the user wants no schedule at all, remove
+  both copies instead (the disable-caretaker skill) and tell them how to
+  bring you back.
 - "Fix small things on its own, without asking" -- whether you may apply fixes
   (including committing finished work) without asking first (`yes` / `no`).
 - "Also take on bigger fixes, not just small ones" -- whether you may take on

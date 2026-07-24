@@ -17,6 +17,7 @@ from bootstrap.manager import (
     INITIAL_CHAT_AGENT_ID_FILENAME,
     TimezoneFetchError,
     _apply_container_timezone,
+    _install_runtime_cron_entries,
     _build_create_chat_command,
     _configure_git_global,
     _ensure_host_claude_config_dir,
@@ -526,6 +527,64 @@ def test_initialize_workspace_main_branch_is_idempotent_on_clean_main(
     _initialize_workspace_main_branch()
     branch = _git_in(work_dir, "branch", "--show-current").stdout.strip()
     assert branch == "main"
+
+
+# --- _install_runtime_cron_entries ---
+
+
+def test_install_runtime_cron_entries_copies_files_with_0644(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "runtime" / "cron.d"
+    source.mkdir(parents=True)
+    (source / "minds-caretaker").write_text("* * * * * root true\n")
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+
+    _install_runtime_cron_entries(target_dir=target)
+
+    installed = target / "minds-caretaker"
+    assert installed.read_text() == "* * * * * root true\n"
+    assert (installed.stat().st_mode & 0o777) == 0o644
+
+
+def test_install_runtime_cron_entries_skips_names_cron_would_ignore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "runtime" / "cron.d"
+    source.mkdir(parents=True)
+    (source / "bad.name").write_text("* * * * * root true\n")
+    (source / "good-name").write_text("* * * * * root true\n")
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+
+    _install_runtime_cron_entries(target_dir=target)
+
+    assert not (target / "bad.name").exists()
+    assert (target / "good-name").exists()
+
+
+def test_install_runtime_cron_entries_no_ops_without_source_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+    _install_runtime_cron_entries(target_dir=target)
+    assert list(target.iterdir()) == []
+
+
+def test_install_runtime_cron_entries_tolerates_unwritable_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "runtime" / "cron.d"
+    source.mkdir(parents=True)
+    (source / "minds-caretaker").write_text("* * * * * root true\n")
+    # Target dir does not exist: the per-file OSError is logged, not raised.
+    _install_runtime_cron_entries(target_dir=tmp_path / "missing")
 
 
 # --- _apply_container_timezone ---

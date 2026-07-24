@@ -2,9 +2,10 @@
 #
 # caretaker_check.sh -- the Caretaker's deterministic weekly check. The
 # Caretaker is off by default: no cron entry exists until the enable-caretaker
-# skill writes /etc/cron.d/minds-caretaker, whose every-minute tick runs
-# run_daily_job.sh (job id caretaker, due hour 3, --interval-days 7), which
-# execs this script when the weekly check is due. It wakes the Caretaker agent
+# skill writes one (runtime/cron.d/minds-caretaker, installed live), whose
+# every-minute tick runs run_job.sh (--every 7d --at 3), which runs this
+# script when the weekly check is due -- and re-runs it if a check failed or
+# was killed before completing. It wakes the Caretaker agent
 # only when it finds something worth telling the user about -- handing the
 # findings over via runtime/caretaker/findings.md -- or when the agent has
 # never introduced itself (no runtime/caretaker/permissions.md yet).

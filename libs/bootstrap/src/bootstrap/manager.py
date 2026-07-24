@@ -13,6 +13,7 @@ sourced agent environment (MNGR_AGENT_STATE_DIR, CLAUDE_CONFIG_DIR, etc.).
 
 import json
 import os
+import re
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -29,6 +30,16 @@ SUPERVISORD_CONF = Path("supervisord.conf")
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
 
 RUNTIME_DIR = Path("runtime")
+
+# Durable home for user-editable cron entries. /etc/cron.d lives on the
+# container rootfs and is lost when the container is recreated; files under
+# runtime/cron.d ride the persistent volume (and the opt-in GitHub sync), and
+# the bootstrap installs them into /etc/cron.d at each boot. The entry file is
+# still the on/off switch for its job -- it just lives where it survives.
+RUNTIME_CRON_DIR = RUNTIME_DIR / "cron.d"
+# cron silently ignores drop-ins with dots or other odd characters in their
+# names; install only names it will accept and warn about the rest.
+_CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # Signal file gating exactly-once creation of the initial chat agent. Lives
 # under runtime/, which persists with the container volume (and is synced to
@@ -593,6 +604,32 @@ def _apply_container_timezone(
     return True
 
 
+def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> None:
+    """Install runtime/cron.d/* into /etc/cron.d (mode 0644).
+
+    Best-effort per file: a bad name or an OSError is logged and skipped so
+    one broken entry cannot block the rest (or the boot). Runs before
+    supervisord starts cron, though cron would also pick the files up on its
+    minute-level rescan.
+    """
+    if not RUNTIME_CRON_DIR.is_dir():
+        return
+    for entry in sorted(RUNTIME_CRON_DIR.iterdir()):
+        if not entry.is_file():
+            continue
+        if not _CRON_NAME_PATTERN.fullmatch(entry.name):
+            logger.warning("Skipping cron entry with a name cron would ignore: {}", entry.name)
+            continue
+        try:
+            target = target_dir / entry.name
+            target.write_text(entry.read_text())
+            target.chmod(0o644)
+        except OSError as e:
+            logger.warning("Failed to install cron entry {}: {}", entry.name, e)
+            continue
+        logger.info("Installed cron entry {} into {}", entry.name, target_dir)
+
+
 def _ensure_supervisor_log_dir() -> None:
     """Create supervisord's log directory if missing.
 
@@ -634,6 +671,11 @@ def main() -> None:
         _apply_container_timezone(tz_name)
 
     _bootstrap_init_chat_dir()
+
+    # Reinstall any user cron entries persisted under runtime/cron.d (e.g.
+    # the Caretaker's schedule) so they survive container recreation. Must
+    # precede _exec_supervisord so entries exist before cron starts.
+    _install_runtime_cron_entries()
 
     # Make sure supervisord's log directory exists, then hand off: replace this
     # process with supervisord in the foreground. supervisord owns every

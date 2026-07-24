@@ -5,9 +5,10 @@ description: Switch off the weekly Caretaker. Use when the user asks to turn off
 
 # Disable the Caretaker
 
-To switch the Caretaker off, remove its schedule entry:
+To switch the Caretaker off, remove its schedule entry -- both the durable
+copy and the live one:
 
-    rm -f /etc/cron.d/minds-caretaker
+    rm -f /mngr/code/runtime/cron.d/minds-caretaker /etc/cron.d/minds-caretaker
 
 That is the whole switch: cron drops the entry within a minute, nothing runs
 anymore, and the agent is never woken again. Its notes and permissions file
