@@ -88,14 +88,14 @@ def test_prevent_relative_imports() -> None:
 
 def test_prevent_asyncio_import() -> None:
     # browser_use, the Playwright async API, and the per-browser ownership state
-    # machine are all asyncio-native and run on ONE background event loop. Four files
+    # machine are all asyncio-native and run on ONE background event loop. Five files
     # rely on asyncio: session.py (the state machine + run loop), loop_bridge.py (the
-    # single sync<->async quarantine loop -- the one place run.py's old asyncio usage
-    # moved to), and the two test modules that drive session.py with asyncio.run.
-    # runner.py itself is now synchronous Flask and no longer imports asyncio (it
-    # reaches the loop only through the bridge), so the count holds at 4 despite the
-    # FastAPI->Flask swap. Mirrors the system_interface lib's async-WS ratchet.
-    rc.check_asyncio_import(_DIR, snapshot(4))
+    # single sync<->async quarantine loop), display.py (spawns each browser's Xvfb via
+    # asyncio.create_subprocess_exec + polls readiness with asyncio.sleep -- genuinely
+    # async, +1 for the live-view-v2 per-browser display), and the two test modules that
+    # drive session.py with asyncio.run. runner.py is synchronous Flask and reaches the
+    # loop only through the bridge. Mirrors the system_interface lib's async-WS ratchet.
+    rc.check_asyncio_import(_DIR, snapshot(5))
 
 
 def test_prevent_dataclasses_import() -> None:

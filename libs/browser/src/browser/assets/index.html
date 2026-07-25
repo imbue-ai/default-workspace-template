@@ -77,6 +77,17 @@
      -- the paste is already server-owned, so they can navigate away freely. */
   #cliptoast { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 30; background: rgba(14, 99, 156, 0.92); color: #fff; padding: 6px 16px; border-radius: 999px; font-size: 13px; pointer-events: none; opacity: 0; transition: opacity .15s; }
   #cliptoast.show { opacity: 1; }
+
+  /* Focus-capture (focused tier): clicking into the canvas grabs the keyboard so keys
+     go to the remote page. A 2px accent inset glow rings the pane and a chip explains
+     the exit. Both driven by .focused on #stage; z-index below the lifecycle overlays
+     so a dead/starting pane never shows the chip. */
+  #stage.focused { box-shadow: inset 0 0 0 2px #0e9c6b, inset 0 0 10px rgba(14, 156, 107, 0.5); }
+  #focuschip { position: absolute; top: 8px; left: 8px; z-index: 5; display: none; background: rgba(14, 156, 107, 0.92); color: #fff; padding: 4px 10px; border-radius: 999px; font-size: 12px; pointer-events: none; }
+  #stage.focused #focuschip { display: block; }
+  /* Immersive-tier entry: fullscreen + (Chromium) keyboard lock for reserved combos. */
+  #fsbtn { position: absolute; top: 8px; right: 8px; z-index: 5; padding: 4px 10px; background: rgba(51, 51, 51, 0.85); border: 1px solid #555; color: #ddd; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  #fsbtn:hover { background: rgba(61, 61, 61, 0.95); }
 </style>
 </head>
 <body>
@@ -95,6 +106,8 @@
   <div id="stage">
     <canvas id="screen" tabindex="0"></canvas>
     <div id="placeholder">Starting browser…</div>
+    <div id="focuschip">Keys go to the browser — Esc to release</div>
+    <button id="fsbtn" title="Fullscreen. Capturing reserved keys (Ctrl+T/W/N/Tab) needs Chromium.">⛶ Fullscreen</button>
     <div id="cliptoast"></div>
     <div id="overlay">
       <div class="msg" id="overlaymsg">An agent has control.</div>
@@ -119,6 +132,7 @@
   const cliptoast = document.getElementById("cliptoast");
   const canvas = document.getElementById("screen");
   const ctx = canvas.getContext("2d");
+  const fsbtn = document.getElementById("fsbtn");
   const placeholder = document.getElementById("placeholder");
   const tabbar = document.getElementById("tabbar");
   const newtabBtn = document.getElementById("newtab");
@@ -142,6 +156,16 @@
   let castWs = null;
   let hasFrame = false;
   let lastMove = 0;
+  // --- /stream (binary video) socket + WebCodecs decode state ---
+  let streamWs = null;         // separate binary socket; its open/close is the encode-on-demand signal
+  let streamWanted = true;     // false while the pane is hidden (panel-visibility) -> encode paused
+  let streamReconnect = null;
+  const decoders = new Map();  // y_start -> { dec, sawKey }   (one VideoDecoder per H.264 stripe row)
+  const frameQueue = [];       // { img, y }  drained by the rAF render loop (img = VideoFrame | ImageBitmap)
+  let rafPending = false;
+  let focused = false;         // keyboard-capture (focused tier) is on
+  let keyboardLocked = false;  // navigator.keyboard.lock() active (immersive tier) -> forward reserved combos too
+  let pendingClipboard = null; // remote clipboard push deferred until the next user gesture
   let browserId = null;
   let reconnectTimer = null;
   let closedForGood = false;  // set on a 1008 close: the browser is gone, stop reconnecting.
@@ -282,6 +306,7 @@
     crashed = true;
     lifecycle = "crashed";  // keep the explicit lifecycle consistent with the overlay
     hasFrame = false;
+    closeStream();  // stop pulling video and drop every decoder; this browser is gone
     stopIdleTimer();
     overlay.classList.remove("show");
     returnBar.classList.remove("show");
@@ -318,18 +343,118 @@
     });
   }
 
-  function drawFrame(b64) {
-    const img = new Image();
-    img.onload = () => {
-      if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-      }
-      ctx.drawImage(img, 0, 0);
-      placeholder.style.display = "none";
-      hasFrame = true;
+  // --- WebCodecs video decode: per-stripe VideoDecoder (H.264) or ImageBitmap (JPEG) ---
+  // Modeled on Selkies' example/index.html (MPL-2.0): a Map keyed by the stripe's y_start,
+  // each with its own VideoDecoder; decoded frames are queued and painted at (0, y_start)
+  // by a single requestAnimationFrame loop. Stripes are independent -- no reassembly.
+  // Replaces the old JPEG <img>/base64 paint.
+  function resetDecoders() {
+    for (const s of decoders.values()) { try { s.dec.close(); } catch (_) {} }
+    decoders.clear();
+    for (const f of frameQueue) { try { f.img.close(); } catch (_) {} }
+    frameQueue.length = 0;
+  }
+
+  function pushFrame(img, y) {
+    frameQueue.push({ img: img, y: y });
+    if (!rafPending) { rafPending = true; requestAnimationFrame(drainFrames); }
+  }
+
+  function drainFrames() {
+    rafPending = false;
+    let drew = false;
+    while (frameQueue.length) {
+      const f = frameQueue.shift();
+      try { ctx.drawImage(f.img, 0, f.y); drew = true; } catch (_) {}
+      try { f.img.close(); } catch (_) {}
+    }
+    if (drew && !hasFrame) { hasFrame = true; placeholder.style.display = "none"; }
+  }
+
+  // Lazily build + configure the decoder for a stripe row. configure() is synchronous per
+  // the WebCodecs spec (decode() is legal immediately after), so no pre-config buffering is
+  // needed -- we only drop deltas until the first keyframe.
+  function decoderFor(y, w, h) {
+    let s = decoders.get(y);
+    if (s) return s;
+    s = { dec: null, sawKey: false };
+    s.dec = new VideoDecoder({
+      output: (frame) => pushFrame(frame, y),
+      error: () => { try { s.dec.close(); } catch (_) {} decoders.delete(y); },
+    });
+    s.dec.configure({ codec: "avc1.42E01E", codedWidth: w, codedHeight: h, optimizeForLatency: true });
+    decoders.set(y, s);
+    return s;
+  }
+
+  // One pixelflux stripe (big-endian header; DataView defaults to big-endian).
+  function onStripe(buf) {
+    if (crashed) return;
+    const dv = new DataView(buf);
+    const type = dv.getUint8(0);
+    if (type === 0x04) {               // H.264: [1]=frametype, [2:4]=frame_id, [4:6]=y, [6:8]=w, [8:10]=h, [10:]=NALs
+      if (!window.VideoDecoder) return;
+      const frametype = dv.getUint8(1); // 1 = key (IDR), 0 = delta
+      const y = dv.getUint16(4);
+      const w = dv.getUint16(6);
+      const h = dv.getUint16(8);
+      const s = decoderFor(y, w, h);
+      if (!s.sawKey) { if (!frametype) return; s.sawKey = true; }  // drop deltas until the first key
+      try {
+        s.dec.decode(new EncodedVideoChunk({
+          type: frametype ? "key" : "delta",
+          timestamp: Math.round(performance.now() * 1000),  // monotonic microseconds
+          data: new Uint8Array(buf, 10),
+        }));
+      } catch (_) { s.sawKey = false; }  // decoder rejected the chunk; wait for the next key
+    } else if (type === 0x03) {          // JPEG: [2:4]=frame_id, [4:6]=y, [6:]=JFIF
+      const y = dv.getUint16(4);
+      createImageBitmap(new Blob([new Uint8Array(buf, 6)], { type: "image/jpeg" }))
+        .then((bmp) => pushFrame(bmp, y)).catch(() => {});
+    }
+  }
+
+  // The /stream socket: opening it starts capture+encode, closing it stops them (encode on
+  // demand). We send exactly one text frame (the H.264 capability), then only receive binary
+  // stripes. Kept separate from /cast so video never head-of-line-blocks control.
+  function connectStream() {
+    if (streamWs || browserId === null || closedForGood || crashed || !streamWanted) return;
+    const s = new WebSocket(wsUrl("browsers/" + browserId + "/stream"));
+    streamWs = s;
+    s.binaryType = "arraybuffer";
+    s.onopen = async () => {
+      let h264 = false;
+      try {
+        if (window.VideoDecoder) {
+          const r = await VideoDecoder.isConfigSupported({ codec: "avc1.42E01E", codedWidth: 1920, codedHeight: 1080 });
+          h264 = !!(r && r.supported);
+        }
+      } catch (_) { h264 = false; }
+      if (streamWs === s && s.readyState === 1) s.send(JSON.stringify({ h264: h264 }));
     };
-    img.src = "data:image/jpeg;base64," + b64;
+    s.onmessage = (ev) => onStripe(ev.data);
+    s.onclose = () => {
+      if (streamWs === s) streamWs = null;
+      resetDecoders();
+      if (streamWanted) scheduleStreamReconnect();
+    };
+    s.onerror = () => { try { s.close(); } catch (_) {} };
+  }
+  function scheduleStreamReconnect() {
+    if (streamReconnect || !streamWanted || browserId === null || closedForGood || crashed) return;
+    streamReconnect = setTimeout(() => { streamReconnect = null; connectStream(); }, 1000);
+  }
+  function closeStream() {  // pane hidden / crashed / gone: stop encode, drop decoders
+    streamWanted = false;
+    if (streamReconnect) { clearTimeout(streamReconnect); streamReconnect = null; }
+    if (streamWs) { try { streamWs.close(); } catch (_) {} streamWs = null; }
+    resetDecoders();
+  }
+  function openStream() { streamWanted = true; connectStream(); }  // pane visible again
+
+  // Canvas backing store = the full display region; stripes paint into it at their y_start.
+  function sizeCanvas(w, h) {
+    if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) { canvas.width = w; canvas.height = h; }
   }
 
   function sendCast(obj) { if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify(obj)); }
@@ -362,7 +487,7 @@
     if (controlOwner === "agent" || !hasFrame) return;
     if (type === "mouseMoved") {
       const now = performance.now();
-      if (now - lastMove < 30) return;  // throttle moves so they don't starve the frame stream
+      if (now - lastMove < 12) return;  // throttle moves; XTest injection is cheap so we can send more
       lastMove = now;
     }
     const p = scaled(e);
@@ -462,6 +587,14 @@
         || (e.key === "Delete" && e.shiftKey)) {
       return;
     }
+    // Browser-reserved combos (Ctrl/Cmd+T/W/N, Ctrl/Cmd+Tab, Cmd+Q) can't be intercepted
+    // from a page -- let them do their host thing (don't preventDefault, don't forward). The
+    // exception is immersive mode, where navigator.keyboard.lock() has actually captured
+    // them, so we forward them to the remote instead.
+    const reserved = ((e.ctrlKey || e.metaKey) && !e.altKey && ["t", "w", "n"].includes(kl))
+        || ((e.ctrlKey || e.metaKey) && e.key === "Tab")
+        || (e.metaKey && kl === "q");
+    if (reserved && !keyboardLocked) return;
     e.preventDefault();
     const isChar = type === "keyDown" && e.key.length === 1;
     sendCast({ type: "key", event: {
@@ -469,12 +602,75 @@
       windowsVirtualKeyCode: e.keyCode, text: isChar ? e.key : undefined,
       autoRepeat: e.repeat, modifiers: modifiers(e),
     }});
+    // A bare Escape releases keyboard capture (still forwarded above, so the page sees it).
+    if (type === "keyDown" && e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      canvas.blur();
+    }
   }
   // Listen on the canvas (focused by a click), so host/browser shortcuts still
   // work when the browser pane isn't focused, and typing in the URL input is
   // unaffected.
   canvas.addEventListener("keydown", (e) => key("keyDown", e));
   canvas.addEventListener("keyup", (e) => key("keyUp", e));
+
+  // --- focus-capture (focused tier) -------------------------------------------
+  // Clicking into the canvas grabs the keyboard: window-level listeners forward every
+  // (non-reserved) key to the remote, and #stage.focused shows the glow + chip. Releasing
+  // (click outside, Esc, focusing the URL bar) all funnel through the canvas blur.
+  function setFocus(on) { focused = on; stage.classList.toggle("focused", on); }
+  canvas.addEventListener("focus", () => setFocus(true));
+  canvas.addEventListener("blur", () => setFocus(false));
+  function windowKey(type, e) {
+    if (!focused) return;
+    if (e.target === canvas) return;                 // the canvas listener already handled it
+    if (document.activeElement === urlInput) return; // keep the URL bar / tab bar typable
+    key(type, e);
+  }
+  window.addEventListener("keydown", (e) => windowKey("keyDown", e));
+  window.addEventListener("keyup", (e) => windowKey("keyUp", e));
+
+  // --- immersive tier: fullscreen + (Chromium) keyboard lock for reserved combos ---
+  fsbtn.onclick = async () => {
+    try { await stage.requestFullscreen(); } catch (_) { return; }
+    if (navigator.keyboard && navigator.keyboard.lock) {
+      try { await navigator.keyboard.lock(["Tab", "KeyT", "KeyW", "KeyN"]); keyboardLocked = true; } catch (_) {}
+    }
+  };
+  document.addEventListener("fullscreenchange", () => {
+    if (!document.fullscreenElement) {
+      keyboardLocked = false;
+      if (navigator.keyboard && navigator.keyboard.unlock) { try { navigator.keyboard.unlock(); } catch (_) {} }
+    }
+  });
+
+  // --- clipboard IN: the remote page copied something -> user's local clipboard --------
+  // Server sends text/* as a UTF-8 string in `data`, image/* as base64. clipboard writes
+  // need a user gesture, so on denial we stash and flush on the next pointerdown/keydown.
+  async function writeClipboard(mime, data) {
+    if (!navigator.clipboard || !mime) return false;
+    try {
+      if (mime.indexOf("text/") === 0) await navigator.clipboard.writeText(data);
+      else await navigator.clipboard.write([new ClipboardItem({ [mime]: b64ToBlob(data, mime) })]);
+      return true;
+    } catch (_) { return false; }
+  }
+  async function onRemoteClipboard(mime, data) {
+    if (!(await writeClipboard(mime, data))) pendingClipboard = { mime: mime, data: data };
+  }
+  function flushPendingClipboard() {
+    if (!pendingClipboard) return;
+    const p = pendingClipboard; pendingClipboard = null;
+    writeClipboard(p.mime, p.data).then((ok) => { if (!ok) pendingClipboard = p; });
+  }
+  document.addEventListener("pointerdown", flushPendingClipboard);
+  document.addEventListener("keydown", flushPendingClipboard);
+
+  // --- panel visibility (host -> iframe): pause encode while the pane is hidden --------
+  window.addEventListener("message", (e) => {
+    const d = e.data;
+    if (!d || d.type !== "minds:panel-visibility") return;
+    if (d.visible === false) closeStream(); else openStream();
+  });
 
   // --- controls ---
   newtabBtn.onclick = () => { showLoading(); sendCast({ type: "tab", action: "new" }); };  // server opens the home page
@@ -502,6 +698,7 @@
   // --- connect ---
   function connect(id) {
     browserId = id;
+    connectStream();  // separate binary video socket; opening it is the "encode on demand" signal
     castWs = new WebSocket(wsUrl("browsers/" + id + "/cast"));
     castWs.onopen = () => reportSize();  // send our pane size once the socket is live
     castWs.onmessage = (ev) => {
@@ -524,8 +721,14 @@
         // Only show the starting overlay when this browser hasn't reached running yet.
         if (lifecycle !== "running") setLifecycle("init");
       }
-      else if (m.type === "control") { setLifecycle(m.lifecycle); setControl(m); }  // explicit lifecycle drives the overlays
-      else if (m.type === "frame") { if (lifecycle === "running") drawFrame(m.data); }  // only paint once running
+      else if (m.type === "control") {
+        // The display resolution rides the control message; size the canvas backing store to
+        // the full display region so stripes paint at the right y. Explicit lifecycle drives
+        // the overlays. (Video itself now arrives on the /stream socket, not here.)
+        if (Array.isArray(m.resolution) && m.resolution.length === 2) sizeCanvas(m.resolution[0], m.resolution[1]);
+        setLifecycle(m.lifecycle); setControl(m);
+      }
+      else if (m.type === "clipboard") { onRemoteClipboard(m.mime, m.data); }  // remote page copied -> user's clipboard
       else if (m.type === "handoff_request") {
         // An agent handed us the browser for a CAPTCHA/verification it can't do. Latch
         // the ask and re-render the bar (the preceding control message left us pinned).
@@ -542,6 +745,7 @@
       // name is invalid). Terminal -- show a clear message and stop reconnecting.
       if (ev.code === 1008) {
         closedForGood = true;
+        closeStream();
         overlay.classList.remove("show");
         returnBar.classList.remove("show");
         initOverlay.classList.remove("show");

@@ -11,6 +11,11 @@ dependencies = [
     "simple-websocket>=1.0",
     "werkzeug>=3.0",
     "browser-use[core]==0.13.1",
+    # Live-view v2: striped H.264/JPEG capture+encode of the X display (Selkies
+    # stack, GStreamer-free CPU wheel) and display-level XTest input + XFIXES
+    # clipboard watching. See docs/live-view-v2.
+    "pixelflux==2.0.0",
+    "python-xlib>=0.33",
 ]
 
 # Entry point is "browser-service", not "browser": browser-use ships its own

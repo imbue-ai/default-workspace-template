@@ -117,27 +117,41 @@ def test_acquire_release_is_compare_and_set() -> None:
     asyncio.run(go())
 
 
+class _FakeDisplay:
+    """Records XTest injections so the input-gating test can assert what got through."""
+
+    def __init__(self) -> None:
+        self.crop_x = 0
+        self.crop_y = 0
+        self.moves: list[tuple[int, int]] = []
+
+    def move(self, x: int, y: int) -> None:
+        self.moves.append((x, y))
+
+
 def test_input_gating_follows_controller() -> None:
+    # Human input is injected at the DISPLAY level (XTest) now, not CDP; the gating
+    # (flows only while the human controls) is unchanged and is what this asserts.
     browser = _running_browser(browser_id="b1")
-    cdp = _FakeCDP()
-    browser._active_cdp = cdp  # type: ignore[assignment]
+    display = _FakeDisplay()
+    browser._display = display  # type: ignore[assignment]
 
     async def go() -> None:
-        # Human (resting): a mouse event is dispatched to the browser.
-        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved"}})
-        assert any(m == "Input.dispatchMouseEvent" for m, _ in cdp.sends)
-        cdp.sends.clear()
+        # Human (resting): a mouse event is injected into the display.
+        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved", "x": 3, "y": 4}})
+        assert display.moves == [(3, 4)]
+        display.moves.clear()
         # Agent in control: human input is dropped (the input/control TOCTOU guard).
         await browser.acquire("A")
         assert not browser._input_enabled.is_set()
-        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved"}})
+        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved", "x": 5, "y": 6}})
         await browser.handle_cast_message({"type": "tab", "action": "new"})
-        assert cdp.sends == []
+        assert display.moves == []
         # Released back to the human: input flows again.
         await browser.release("A")
         assert browser._input_enabled.is_set()
-        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved"}})
-        assert any(m == "Input.dispatchMouseEvent" for m, _ in cdp.sends)
+        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved", "x": 7, "y": 8}})
+        assert display.moves == [(7, 8)]
 
     asyncio.run(go())
 
@@ -1287,32 +1301,12 @@ def test_register_cast_queue_seeds_initial_control_and_tabs() -> None:
     asyncio.run(go())
 
 
-def test_register_cast_queue_replays_last_frame_to_a_new_client() -> None:
-    # A client connecting mid-stream to a live browser sitting on a static page gets
-    # no fresh screencast frame (CDP only emits on a repaint), so register seeds the
-    # cached last frame after control + tabs -- otherwise the canvas stays black and
-    # the viewer's "Starting browser…" banner never clears.
-    browser = _running_browser(browser_id="b1")
-    browser._context = None
-    browser._latest_frame = "cached-jpeg-b64"
-
-    async def go() -> None:
-        q = await browser.register_cast_queue()
-        assert _pop_json(q)["type"] == "control"
-        assert _pop_json(q)["type"] == "tabs"
-        frame = _pop_json(q)
-        assert frame == {"type": "frame", "data": "cached-jpeg-b64"}
-        assert q.empty()
-
-    asyncio.run(go())
-
-
-def test_register_cast_queue_replays_no_frame_when_crashed() -> None:
-    # A crashed browser seeds the crash state, never a stale frame -- the dead browser
-    # must show as crashed, not as a frozen last frame.
+def test_register_cast_queue_seeds_crash_state_when_crashed() -> None:
+    # A crashed browser seeds the crash state after control + tabs -- the dead browser
+    # must show as crashed. (Video is a separate /stream socket now; there's no frame to
+    # seed on the cast queue at all.)
     browser = bsession.LiveBrowser(browser_id="b1")
     browser._context = None
-    browser._latest_frame = "cached-jpeg-b64"
     browser._crashed = True
 
     async def go() -> None:
@@ -1320,47 +1314,23 @@ def test_register_cast_queue_replays_no_frame_when_crashed() -> None:
         assert _pop_json(q)["type"] == "control"
         assert _pop_json(q)["type"] == "tabs"
         assert _pop_json(q)["type"] == "crashed"
-        assert q.empty()  # crashed -> the cached frame is NOT replayed
+        assert q.empty()
 
     asyncio.run(go())
 
 
-class _ScreenshotCDP:
-    """Fake CDP session whose ``Page.captureScreenshot`` returns a base64 frame, so the
-    on-demand one-off frame capture can be exercised without real Chromium."""
-
-    def __init__(self, data: str = "captured-jpeg-b64") -> None:
-        self.data = data
-        self.sends: list[str] = []
-
-    async def send(self, method: str, params: Any = None) -> dict[str, Any]:
-        self.sends.append(method)
-        if method == "Page.captureScreenshot":
-            return {"data": self.data}
-        return {}
-
-
-def test_register_cast_queue_captures_a_one_off_frame_when_running_without_a_cached_one() -> None:
-    # A browser that just flipped init -> running and hasn't repainted has _latest_frame
-    # is None, so there's no cached frame to replay -- a fresh viewer would sit black
-    # (finding [6]). register_cast_queue forces a one-off Page.captureScreenshot so even
-    # the very first viewer of a static page sees the live page, and caches it for the next.
+def test_register_cast_queue_seeds_only_control_and_tabs_when_running() -> None:
+    # A running browser's cast seed is just control + tabs; the live video rides the
+    # separate /stream socket (a new subscriber gets a fresh keyframe there), so there
+    # is no frame replay on the cast queue.
     browser = _running_browser(browser_id="b1")
     browser._context = None
-    assert browser._latest_frame is None
-    cdp = _ScreenshotCDP()
-    browser._active_cdp = cdp  # type: ignore[assignment]
 
     async def go() -> None:
         q = await browser.register_cast_queue()
         assert _pop_json(q)["type"] == "control"
         assert _pop_json(q)["type"] == "tabs"
-        frame = _pop_json(q)
-        assert frame == {"type": "frame", "data": "captured-jpeg-b64"}  # the on-demand capture
         assert q.empty()
-        assert "Page.captureScreenshot" in cdp.sends
-        # Cached for the next client (which then takes the cheap replay path, no capture).
-        assert browser._latest_frame == "captured-jpeg-b64"
 
     asyncio.run(go())
 

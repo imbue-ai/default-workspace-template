@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import queue
+import shutil
 import socket
 import threading
 import time
@@ -74,30 +75,48 @@ def _drain_cast_queue(cast_queue: Any) -> tuple[list[str], list[dict[str, Any]]]
 
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)  # real-Chromium cold-start + nav exceeds the global 10s locally/offload
-def test_live_browser_streams_and_accepts_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BROWSER_HEADLESS", "1")
+def test_live_browser_streams_video_and_accepts_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HEADFUL end-to-end: per-browser Xvfb + pixelflux capture + XTest input. Streams
+    real encoded video stripes over the /stream subscriber and injects display-level
+    input. Needs a real browser AND Xvfb, so it skips where either is missing (it runs
+    on offload / a real workspace, not the GitHub Actions runner)."""
+    if shutil.which("Xvfb") is None:
+        pytest.skip("Xvfb not installed -- headful capture unavailable")
+    # Force headful in-process (the module default is headless for CI safety).
+    monkeypatch.setattr(bsession, "_HEADLESS", False)
 
     async def go() -> None:
         manager = bsession.BrowserSessionManager()
         try:
             session = await _create_running(manager)
         except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
-            pytest.skip(f"Chromium unavailable in this environment: {e}")
+            pytest.skip(f"headful browser unavailable in this environment: {e}")
         try:
             cast_queue = await session.register_cast_queue()
+            # Subscribe to the video stream (H.264); the encoder starts on demand.
+            stream_queue = await session.add_stream_subscriber(True)
+            assert stream_queue is not None, "expected a running browser to give a stream queue"
             await session.handle_cast_message({"type": "navigate", "url": "https://example.com"})
-            frames: list[str] = []
-            for _ in range(20):
-                await asyncio.sleep(0.5)
-                more_frames, _ = _drain_cast_queue(cast_queue)
-                frames += more_frames
-                if frames:
+            stripes: list[bytes] = []
+            for _ in range(40):
+                await asyncio.sleep(0.25)
+                try:
+                    while True:
+                        stripes.append(stream_queue.get_nowait())
+                except queue.Empty:
+                    pass
+                if stripes:
                     break
-            assert frames, "expected at least one screencast frame"
+            assert stripes, "expected encoded video stripes on the /stream queue"
+            # Each stripe is a pixelflux frame: H.264 (0x04) or JPEG (0x03) header byte.
+            assert stripes[0][0] in (0x03, 0x04)
 
-            # Human input dispatch must not raise against the live target.
+            # Display-level input injection (XTest) must not raise against the live display.
             await session.handle_cast_message(
                 {"type": "mouse", "event": {"type": "mouseMoved", "x": 50, "y": 50, "button": "none"}}
+            )
+            await session.handle_cast_message(
+                {"type": "key", "event": {"type": "keyDown", "key": "a", "code": "KeyA"}}
             )
 
             # Open a second tab and confirm the view follows it (active switches).

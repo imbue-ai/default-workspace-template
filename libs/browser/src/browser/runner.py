@@ -876,6 +876,52 @@ def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
         return None
 
 
+# --- video stream WebSocket --------------------------------------------------
+
+
+def stream_socket(ws: Any, browser_id: str) -> None:
+    """Bridge one video WebSocket: the browser's striped H.264/JPEG frames, binary.
+
+    Separate from the cast socket so video never head-of-line-blocks control. The
+    client sends ONE text frame first -- ``{"h264": bool}`` (whether it can WebCodecs-
+    decode H.264) -- which picks the encoder mode; the encoder starts on this first
+    subscriber and stops when the last one leaves (encode-on-demand). Every subsequent
+    message is a binary stripe, sent verbatim. Runs in its own Flask thread.
+    """
+    session = _resolve_sync_for_ws(browser_id)
+    if session is None:
+        ws.close(1013 if is_valid_browser_name(browser_id) else 1008)
+        return
+    # First inbound frame is the codec-capability handshake; default to JPEG if it's
+    # missing/garbled (safe: pixelflux JPEG decodes anywhere).
+    want_h264 = False
+    try:
+        first = ws.receive(timeout=_ROUTE_TIMEOUT)
+        if first:
+            want_h264 = bool(json.loads(first).get("h264"))
+    except (ConnectionClosed, ValueError, TypeError):
+        pass
+    client_queue = bridge.run(session.add_stream_subscriber(want_h264), timeout=_ROUTE_TIMEOUT)
+    if client_queue is None:
+        ws.close(1013)  # not running yet / headless -- viewer retries
+        return
+    streaming = True
+    try:
+        while streaming:
+            try:
+                frame = client_queue.get(timeout=_CAST_OUTBOUND_POLL_SECONDS)
+            except queue.Empty:
+                continue
+            if frame is None:
+                streaming = False  # encoder shutdown sentinel
+            else:
+                ws.send(frame)
+    except ConnectionClosed:
+        pass
+    finally:
+        bridge.run(session.remove_stream_subscriber(client_queue), timeout=_ROUTE_TIMEOUT)
+
+
 # --- app construction + lifecycle --------------------------------------------
 
 
@@ -904,6 +950,7 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_copy, methods=["GET"], endpoint="clipboard_copy")
     application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_paste, methods=["POST"], endpoint="clipboard_paste")
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
+    sock.route("/browsers/<string:browser_id>/stream")(stream_socket)
 
 
 _register_routes()
