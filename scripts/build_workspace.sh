@@ -41,7 +41,20 @@ cd "$REPO_ROOT"
 git config --global --add safe.directory "$REPO_ROOT"
 
 # Build the system_interface frontend (deps installed by install_dependencies.sh).
-( cd "$REPO_ROOT/apps/system_interface/frontend" && npm run build )
+# The native-binary state is reported first because vite surfaces a missing
+# platform binary (lightningcss, rollup) as an opaque "failed to load config
+# from vite.config.ts", which says nothing about whether npm ci installed the
+# package at all -- and by the time anyone reads the log the host is destroyed.
+(
+    cd "$REPO_ROOT/apps/system_interface/frontend"
+    echo "[frontend] node $(node -v) npm $(npm -v) $(uname -sm)"
+    if [ -d node_modules ]; then
+        echo "[frontend] native dep packages: $(ls -d node_modules/lightningcss* node_modules/@rollup/rollup-* 2>/dev/null | tr '\n' ' ')"
+    else
+        echo "[frontend] node_modules is ABSENT -- install_dependencies.sh did not leave one here"
+    fi
+    npm run build
+)
 
 # Install mngr and system-interface as tools (both need the plugin packages so
 # they can parse plugin-specific config). mngr_modal is intentionally not
