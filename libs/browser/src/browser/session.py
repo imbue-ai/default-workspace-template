@@ -1088,10 +1088,9 @@ class LiveBrowser(MutableModel):
         x, y = int(event.get("x", 0)), int(event.get("y", 0))
         if etype == "mouseMoved":
             self._display.move(x, y)
-        elif etype == "mousePressed":
-            self._display.button(_MOUSE_BUTTONS.get(event.get("button"), 1), True, x, y)
-        elif etype == "mouseReleased":
-            self._display.button(_MOUSE_BUTTONS.get(event.get("button"), 1), False, x, y)
+        elif etype in ("mousePressed", "mouseReleased"):
+            button = _MOUSE_BUTTONS.get(str(event.get("button", "left")), 1)
+            self._display.button(button, etype == "mousePressed", x, y)
         elif etype == "mouseWheel":
             self._display.scroll(float(event.get("deltaX", 0)), float(event.get("deltaY", 0)))
 

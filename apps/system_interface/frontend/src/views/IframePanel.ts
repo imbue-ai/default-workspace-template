@@ -19,8 +19,10 @@ export const IframePanel: m.Component<IframePanelAttrs> = {
       style: "width: 100%; height: 100%; border: none;",
       sandbox: "allow-scripts allow-same-origin allow-forms allow-popups",
       // Let embedded services (e.g. the browser fleet viewer) reach the user's
-      // clipboard via navigator.clipboard for copy/paste into the remote browser.
-      allow: "clipboard-read; clipboard-write",
+      // clipboard via navigator.clipboard for copy/paste into the remote browser, and
+      // enter fullscreen -- the browser viewer's immersive focus-capture mode uses
+      // requestFullscreen() + navigator.keyboard.lock() to capture Ctrl+T/W/Tab.
+      allow: "clipboard-read; clipboard-write; fullscreen",
     };
     if (serviceName) {
       attrs[IFRAME_PANEL_SERVICE_NAME_ATTR] = serviceName;

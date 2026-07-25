@@ -2373,9 +2373,24 @@ function createReactiveIframeRenderer(panelId: string): IContentRenderer {
   element.style.flexDirection = "column";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const iframePanelComponent: m.ComponentTypes<any, any> = IframePanel;
+  let visibilityDisposable: { dispose: () => void } | null = null;
+  // Thread dockview's panel-visibility into the iframe. The browser fleet viewer
+  // uses it to PAUSE its video encoder while the pane is hidden (close the /stream
+  // socket) and resume when shown -- encode-on-demand. Other services ignore a
+  // message whose type they don't recognise, so this is safe to send generically.
+  const postVisibility = (visible: boolean): void => {
+    const iframe = element.querySelector("iframe");
+    if (iframe?.contentWindow) {
+      try {
+        iframe.contentWindow.postMessage({ type: "minds:panel-visibility", visible }, "*");
+      } catch {
+        // cross-origin / not-yet-loaded iframe: the viewer re-reads visibility on load
+      }
+    }
+  };
   return {
     element,
-    init() {
+    init(parameters) {
       m.mount(element, {
         view: () => {
           const p = panelParams.get(panelId);
@@ -2387,8 +2402,14 @@ function createReactiveIframeRenderer(panelId: string): IContentRenderer {
           });
         },
       });
+      postVisibility(parameters.api.isVisible);
+      visibilityDisposable = parameters.api.onDidVisibilityChange((event) => postVisibility(event.isVisible));
     },
     dispose() {
+      if (visibilityDisposable !== null) {
+        visibilityDisposable.dispose();
+        visibilityDisposable = null;
+      }
       m.mount(element, null);
     },
   };

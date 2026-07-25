@@ -1,0 +1,1 @@
+The `agentic-browser-fleet` and `manage-layout` skills clarify how browser panes are surfaced: an agent never opens a bare `browser` pane by hand -- the fleet surfaces its own `service:browser?session=<name>` panes automatically when a user is watching, and an agent only opens one explicitly (always named) when the user asks.
