@@ -1,13 +1,16 @@
-"""Live browser fleet: headless Chromium + CDP screencast + a per-browser ownership state machine.
+"""Live browser fleet: headful Chromium + a display-captured live view + a per-browser ownership state machine.
 
-Each :class:`LiveBrowser` owns one headless Chromium (launched and driven by
-``browser_use.BrowserSession``) plus a second, observer-only Playwright
-connection over the same CDP endpoint. The Playwright side does the things
-browser-use does not: stream the live view to the user (CDP
-``Page.startScreencast`` -> base64 JPEG frames over a WebSocket) and inject the
-user's mouse/keyboard (CDP ``Input.dispatch*Event``). The browser-use side does
-the AI driving (``Agent.run``). Both clients share the one Chromium, so the
-human sees exactly what the agent does and vice versa.
+Each :class:`LiveBrowser` owns one headful Chromium (launched and driven by
+``browser_use.BrowserSession``) running under its OWN X display (see
+:mod:`browser.display`), plus a second, observer-only Playwright connection over
+the same CDP endpoint. The human live view is a striped H.264/JPEG capture of that
+display (:mod:`browser.capture`, streamed over a dedicated ``/stream`` WebSocket and
+decoded with WebCodecs), and the human's mouse/keyboard is injected at the DISPLAY
+level via XTest -- so native right-click menus, ``<select>`` dropdowns, and drag all
+work. The browser-use side does the AI driving (``Agent.run``) over CDP, untouched.
+Both share the one Chromium, so the human sees exactly what the agent does and vice
+versa. (Headless -- tests / bare dev boxes -- skips the display, capture, and XTest;
+only the agent's CDP control is available there.)
 
 Ownership is a small per-browser state machine, and it is the heart of this
 module. Many agents (a chat agent plus its sub-agents, each a distinct
@@ -68,6 +71,8 @@ from playwright.async_api import Error as PlaywrightError
 from pydantic import PrivateAttr
 
 from browser import manifest as fleet_manifest
+from browser.capture import Capture
+from browser.display import SCREEN_H, Display, DisplayError
 from browser.names import generate_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
 
@@ -95,25 +100,22 @@ Lifecycle = Literal["init", "running", "crashed"]
 TaskEvent = dict[str, Any]
 EventSink = Callable[[TaskEvent], Awaitable[None]]
 
-# JPEG screencast tuned so a single base64 JSON frame stays comfortably under the
-# system_interface WebSocket proxy's 1 MiB per-message cap, even on busy pages.
-_SCREENCAST_FORMAT = "jpeg"
-_SCREENCAST_QUALITY = 55
-_SCREENCAST_MAX_WIDTH = 1280
-_SCREENCAST_MAX_HEIGHT = 800
-# The live render size floats between the floor above (also a sane desktop baseline --
-# smaller reflows sites to mobile layouts) and this cap: the viewer reports its pane
-# size and we grow the browser to fill it, never above the cap (memory -- up to
-# _MAX_SESSIONS headless Chromiums render concurrently).
+# The live render size floats between a floor (smaller reflows sites to mobile
+# layouts) and a cap: the viewer reports its pane size and we resize the browser
+# WINDOW to fill it -- never the Xvfb framebuffer, which cannot grow past its initial
+# size. Up to _MAX_SESSIONS browsers render concurrently, so the cap bounds memory.
+_RENDER_DEFAULT_WIDTH = 1280
+_RENDER_DEFAULT_HEIGHT = 800
 _RENDER_MAX_WIDTH = 1920
 _RENDER_MAX_HEIGHT = 1080
 # Floor for the clamp -- small enough that a typical (sub-1280) panel actually
 # tracks its size instead of pinning to a too-big minimum, but not degenerate.
 _RENDER_MIN_WIDTH = 640
 _RENDER_MIN_HEIGHT = 480
-# Every frame: the first frame after a tab switch arrives sooner, so clicking a
-# tab feels snappier. Slightly more bandwidth than skipping frames.
-_SCREENCAST_EVERY_NTH_FRAME = 1
+
+# Viewer mouse button name -> X button number (XTest). Wheel is handled separately
+# (buttons 4-7). "none" (a bare move) never presses a button.
+_MOUSE_BUTTONS = {"left": 1, "middle": 2, "right": 3, "none": 0}
 
 # Deferred-install markers (see scripts/deferred_install.sh). Fortress (the
 # stealth Chromium engine) and the Xvfb virtual display both install asynchronously
@@ -133,14 +135,13 @@ _FORTRESS_EXECUTABLE = "/opt/fortress/tilion-fortress/tilion"
 # API as-is (browser-use accepts an arbitrary model string).
 _DEFAULT_MODEL = os.environ.get("BROWSER_USE_MODEL", "claude-sonnet-4-6")
 
-# Headful under a virtual display (Xvfb) by default: the browser service runs an
-# Xvfb server and exports DISPLAY, so Chromium renders into a real X11 session.
-# That is what makes the OS clipboard usable -- xclip populates/reads the X11
-# clipboard for native copy/paste (images included), which a headless Chromium
-# has no reachable clipboard for. Falls back to headless where no DISPLAY exists
-# (tests, bare dev boxes) so those still run. Force either mode with
-# BROWSER_HEADLESS=1/0.
-_HEADLESS = os.environ.get("BROWSER_HEADLESS", "0" if os.environ.get("DISPLAY") else "1") != "0"
+# Headless by DEFAULT (safe for tests / CI / bare dev boxes with no X server): only
+# the agent's CDP control is available. The workspace's supervisord runs the fleet
+# HEADFUL by setting BROWSER_HEADLESS=0 -- then each browser gets its OWN per-browser
+# Xvfb (see browser.display), the human view is a striped H.264/JPEG capture of that
+# display (browser.capture), and human input is injected at the display level via
+# XTest. Per-browser displays also mean browsers never share an X11 clipboard.
+_HEADLESS = os.environ.get("BROWSER_HEADLESS", "1") != "0"
 
 # Page the browser opens on, and the default for "New tab".
 _HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com")
@@ -149,6 +150,10 @@ _HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com")
 # traffic the system_interface WS proxy closes the idle stream (~30s). A periodic
 # ping keeps the backend->client direction alive between real frames.
 _KEEPALIVE_SECONDS = 10
+
+# How often to poll a watched browser's X clipboard for a copy that happened inside
+# the remote page (right-click -> Copy), to push to the user's local clipboard.
+_CLIPBOARD_POLL_SECONDS = float(os.environ.get("BROWSER_CLIPBOARD_POLL_SECONDS", "0.5"))
 
 # Outbound buffer depth per cast WebSocket. Screencast frames are produced on the
 # loop and drained by a Flask thread; if a client falls behind we drop the OLDEST
@@ -457,10 +462,28 @@ class LiveBrowser(MutableModel):
     # bridge), so _broadcast can iterate it without a lock -- the single-loop
     # serialization is the guard. Mirrors apps/system_interface's WebSocketBroadcaster.
     _cast_queues: list["queue.Queue[str | None]"] = PrivateAttr(default_factory=list)
-    _latest_frame: str | None = PrivateAttr(default=None)
-    _send_in_flight: bool = PrivateAttr(default=False)
     _nav_tracked: set[Page] = PrivateAttr(default_factory=set)
     _active_target_id: str | None = PrivateAttr(default=None)
+    # Per-browser X display (Xvfb) + its striped H.264/JPEG encoder. None when headless
+    # (tests / bare dev boxes): the human view + display input are simply unavailable
+    # there, while the agent's CDP control keeps working. Set in start(), torn down in
+    # close().
+    _display: Display | None = PrivateAttr(default=None)
+    _capture: Capture | None = PrivateAttr(default=None)
+    # Browser-level CDP session (distinct from a page target's) for window bounds --
+    # resize-to-pane sets Browser.setWindowBounds and measures the chrome height.
+    _browser_cdp: CDPSession | None = PrivateAttr(default=None)
+    _window_id: int | None = PrivateAttr(default=None)
+    # Height of the browser's top chrome (tab strip + toolbar), measured once so the
+    # capture region crops it away -- the user sees a chromeless page under our own tab
+    # bar. Input coords add this back to reach true display coords (see display.crop_y).
+    _chrome_crop: int = PrivateAttr(default=0)
+    # Clipboard copy-out watcher: the task, the hash of the value WE last put on the
+    # clipboard (so a paste/copy we made isn't echoed back to the user), and the hash
+    # of the last value we pushed out (so we push each remote copy once).
+    _clip_watch_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
+    _own_clip_hash: int | None = PrivateAttr(default=None)
+    _seen_clip_hash: int | None = PrivateAttr(default=None)
     _keepalive_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
     # The in-flight serialized launch task (set by the manager's _spawn_launch). close()
     # awaits it via the manager so a teardown can't race a suspended start() -- the launch
@@ -479,15 +502,15 @@ class LiveBrowser(MutableModel):
     _selector_map: dict[int, Any] = PrivateAttr(default_factory=dict)
     _lease_touched_at: float = PrivateAttr(default=0.0)
     _screenshot_seq: int = PrivateAttr(default=0)
-    # Live render size (viewport / device-metrics / screencast), grown to the human's
-    # pane by _apply_resize between the floor (_SCREENCAST_MAX_*) and cap (_RENDER_MAX_*).
-    # Frozen while an agent drives so its `state` element indices don't shift mid-task.
-    _render_w: int = PrivateAttr(default=_SCREENCAST_MAX_WIDTH)
-    _render_h: int = PrivateAttr(default=_SCREENCAST_MAX_HEIGHT)
+    # Live render size (the browser WINDOW / capture region), grown to the human's pane
+    # by _apply_resize between the floor (_RENDER_MIN_*) and cap (_RENDER_MAX_*). Frozen
+    # while an agent drives so its `state` element indices don't shift mid-task.
+    _render_w: int = PrivateAttr(default=_RENDER_DEFAULT_WIDTH)
+    _render_h: int = PrivateAttr(default=_RENDER_DEFAULT_HEIGHT)
     # The render size the current agent started with -- compared on resume to tell it
     # if the human resized (reflowing the page) while they held control (see _wake_agent).
-    _agent_render_w: int = PrivateAttr(default=_SCREENCAST_MAX_WIDTH)
-    _agent_render_h: int = PrivateAttr(default=_SCREENCAST_MAX_HEIGHT)
+    _agent_render_w: int = PrivateAttr(default=_RENDER_DEFAULT_WIDTH)
+    _agent_render_h: int = PrivateAttr(default=_RENDER_DEFAULT_HEIGHT)
     # Direct-control resume queue: agents whose command was rejected (a human or
     # another agent held the browser). They ended their turns; when the browser
     # frees they are handed it FIFO and messaged to resume (see _wake_agent). This
@@ -544,24 +567,28 @@ class LiveBrowser(MutableModel):
         profile. ``chromium_sandbox`` is False when Chromium's in-process sandbox must be
         disabled (see _NO_SANDBOX / the start() fallback); browser-use then injects
         ``--no-sandbox`` itself."""
-        return BrowserSession(
+        # Headful: no_viewport=True so browser-use does NOT pin a per-tab device-metrics
+        # override -- the page viewport tracks the real window, which is what lets a
+        # window resize actually reflow the page for the display capture (browser-use
+        # still reads the real viewport via getLayoutMetrics for element indexing).
+        # Headless (tests) keeps a fixed viewport, since browser-use asserts headless
+        # runs have one. We deliberately do NOT set storage_state (it would overwrite
+        # the live persistent profile, whose dir name is load-bearing -- see _profile_dir).
+        kwargs: dict[str, Any] = dict(
             headless=_HEADLESS,
             executable_path=chromium_path,
-            # Persistent profile on the workspace volume -- the whole point of
-            # persistence. The dir name (see _profile_dir) is load-bearing for
-            # browser_use. We deliberately do NOT set storage_state (it would
-            # overwrite the live profile).
             user_data_dir=str(profile_dir),
             args=["--disable-dev-shm-usage"],
             chromium_sandbox=chromium_sandbox,
             keep_alive=True,
-            # Pin a fixed viewport + window so every site renders at the same
-            # resolution -- a consistent "Chromium in a small window", not a size
-            # that shifts per page. Matches the screencast cap so frames never scale.
-            viewport={"width": _SCREENCAST_MAX_WIDTH, "height": _SCREENCAST_MAX_HEIGHT},
-            window_size={"width": _SCREENCAST_MAX_WIDTH, "height": _SCREENCAST_MAX_HEIGHT},
+            window_size={"width": _RENDER_DEFAULT_WIDTH, "height": _RENDER_DEFAULT_HEIGHT},
             device_scale_factor=1,
         )
+        if _HEADLESS:
+            kwargs["viewport"] = {"width": _RENDER_DEFAULT_WIDTH, "height": _RENDER_DEFAULT_HEIGHT}
+        else:
+            kwargs["no_viewport"] = True
+        return BrowserSession(**kwargs)
 
     async def _start_bu_session(self, profile_dir: Path, chromium_path: str) -> BrowserSession:
         """Launch the browser-use session. The Chromium sandbox is disabled up front when
@@ -605,7 +632,29 @@ class LiveBrowser(MutableModel):
         profile_dir = _profile_dir(self.browser_id)
         profile_dir.mkdir(parents=True, exist_ok=True)
         _clear_stale_singleton(profile_dir)  # a prior hard kill may have orphaned a lock
-        self._bu_session = await self._start_bu_session(profile_dir, chromium_path)
+        # Bring up this browser's own X display (headful) and point Chromium at it by
+        # mutating DISPLAY around the launch: browser-use spawns Chromium as a subprocess
+        # that inherits os.environ and takes no env override. Saved + restored so a
+        # concurrent capture-start's DISPLAY change can't leak in (the loop is single-
+        # threaded and browser launches are serialized by the manager's _startup_lock,
+        # so only this launch's DISPLAY is live across its awaits).
+        if not _HEADLESS:
+            try:
+                self._display = Display()
+                await self._display.start()
+            except (DisplayError, OSError) as e:
+                raise BrowserStartupError(f"could not start the browser's X display: {e}") from e
+        prior_display = os.environ.get("DISPLAY")
+        if self._display is not None:
+            os.environ["DISPLAY"] = self._display.name
+        try:
+            self._bu_session = await self._start_bu_session(profile_dir, chromium_path)
+        finally:
+            if self._display is not None:
+                if prior_display is None:
+                    os.environ.pop("DISPLAY", None)
+                else:
+                    os.environ["DISPLAY"] = prior_display
         # The Chromium tree just spawned (and its processes self-write their
         # oom_score_adj moments later): have the OOM sweep re-band it.
         notify_chromium_processes_expected()
@@ -640,14 +689,65 @@ class LiveBrowser(MutableModel):
         # close() didn't serialize against, kill it ourselves to be safe.
         if await self._abort_start_if_torn_down():
             return
+        # Headful: attach the display encoder (started on demand by the first /stream
+        # subscriber), measure the chrome height so the capture crops it away, and start
+        # the clipboard copy-out watcher.
+        if self._display is not None:
+            await self._setup_display_capture(observer)
+            self._clip_watch_task = asyncio.create_task(self._clipboard_out_loop())
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-        # Chromium is up and the screencast is attached: flip init -> running and tell
-        # every connected viewer, so an optimistic pane's "Starting browser…" overlay
-        # comes down and the live canvas shows. Done last (after the screencast is live)
-        # so a viewer that sees ``running`` is guaranteed real frames are coming.
+        # Chromium is up and (headful) the display encoder is ready: flip init -> running
+        # and tell every connected viewer, so an optimistic pane's "Starting browser…"
+        # overlay comes down and the live canvas shows.
         self._lifecycle = "running"
         self._broadcast(self._control_message())
-        logger.info("LiveBrowser {} started (cdp_url={})", self.browser_id, cdp_url)
+        logger.info("LiveBrowser {} started (cdp_url={}, display={})",
+                    self.browser_id, cdp_url, self._display.name if self._display else "headless")
+
+    async def _setup_display_capture(self, observer: Browser) -> None:
+        """Wire up the per-browser display encoder: a browser-level CDP session (for
+        window bounds), a one-off chrome-height measurement so the capture region crops
+        the tab strip + toolbar away, and the pixelflux :class:`Capture` itself. Best-
+        effort: a failure here leaves the browser usable for the agent (CDP) but without
+        the human view, rather than failing the whole launch."""
+        assert self._display is not None
+        try:
+            self._browser_cdp = await observer.new_browser_cdp_session()
+            await self._measure_chrome()
+        except _BROWSER_ERRORS as e:
+            logger.warning("browser {} display-capture setup degraded ({})", self.browser_id, e)
+        self._capture = Capture(self._display.name, self._capture_region)
+
+    def _capture_region(self) -> tuple[int, int, int, int]:
+        """Current pixelflux capture rect on the display: the web-contents area only
+        (the top chrome cropped), at the live render size. The window sits at (0,0)
+        (browser-use injects --window-position=0,0)."""
+        return (0, self._chrome_crop, self._render_w, self._render_h)
+
+    async def _measure_chrome(self) -> None:
+        """Measure the top chrome height once (window outer height - page viewport
+        height) so the capture can crop it. Also records the window id for resize.
+        Coordinates for injected input add this crop back (see display.crop_y)."""
+        if self._browser_cdp is None or self._active_target_id is None or self._display is None:
+            return
+        try:
+            win = await self._browser_cdp.send("Browser.getWindowForTarget", {"targetId": self._active_target_id})
+            self._window_id = win["windowId"]
+            outer_h = int(win["bounds"]["height"])
+        except _BROWSER_ERRORS as e:
+            logger.debug("getWindowForTarget ignored ({})", e)
+            return
+        viewport_h = self._render_h
+        if self._active_cdp is not None:
+            try:
+                metrics = await self._active_cdp.send("Page.getLayoutMetrics")
+                viewport_h = int(metrics.get("cssVisualViewport", metrics.get("visualViewport", {})).get("clientHeight", 0)) or viewport_h
+            except _BROWSER_ERRORS as e:
+                logger.debug("getLayoutMetrics ignored ({})", e)
+        self._chrome_crop = max(0, outer_h - viewport_h)
+        self._display.crop_y = self._chrome_crop
+        logger.info("browser {} chrome crop = {}px (window {} , viewport {})",
+                    self.browser_id, self._chrome_crop, outer_h, viewport_h)
 
     async def _abort_start_if_torn_down(self) -> bool:
         """If close() or a crash landed while ``start`` was suspended at an await, abort the
@@ -702,22 +802,25 @@ class LiveBrowser(MutableModel):
         if 0 <= active_tab < len(pages) and pages[active_tab] is not self._active_page:
             await self._set_active_page(pages[active_tab])
 
-    # --- screencast / active tab ---------------------------------------------
+    # --- active tab ----------------------------------------------------------
 
     async def _set_active_page(self, page: Page) -> None:
-        """Point the screencast at ``page`` and make it the input/agent target.
+        """Make ``page`` the input/agent target and refresh the tab list.
 
-        Serialized by ``_lock`` so overlapping calls (rapid navigations each firing
-        framenavigated) can't interleave at the stop/attach boundary and leak a CDP
-        session or start two screencasts on one target.
+        The live *view* is a capture of the whole display, which always shows whatever
+        tab Chromium has in front -- so switching tabs (via ``bring_to_front``) is all
+        it takes; we just re-key the video so the new tab shows immediately and keep a
+        page-level CDP session for target/window queries. Serialized by ``_lock`` so
+        overlapping calls (rapid navigations each firing framenavigated) can't interleave
+        at the detach/attach boundary and leak a CDP session.
         """
         async with self._lock:
             if self._context is None:
                 return  # torn down -- close() raced a queued nav re-attach
             if self._active_cdp is not None:
-                await self._stop_screencast()
+                await self._detach_active_cdp()
             # Re-check after the await above: close() doesn't take _lock, so it can
-            # null self._context while _stop_screencast() yields. Without this guard
+            # null self._context while _detach_active_cdp() yields. Without this guard
             # new_cdp_session(page) would dereference None and the orphaned task's
             # AttributeError surfaces as "Task exception was never retrieved".
             if self._context is None:
@@ -731,51 +834,22 @@ class LiveBrowser(MutableModel):
                     self._active_target_id = info["targetInfo"]["targetId"]
                 except _BROWSER_ERRORS:
                     self._active_target_id = None
-                # Force the current render size on EVERY tab. browser-use pins the
-                # viewport on the first page, but tabs opened later (by the agent or
-                # by the site) can come up at a different size, so their frames would
-                # stream at a different resolution and the viewer would letterbox them
-                # inconsistently. Overriding the device metrics on each screencast
-                # target makes every tab stream at exactly _render_w x _render_h, and
-                # re-applies the human's latest resize (see _apply_resize).
-                try:
-                    await cdp.send(
-                        "Emulation.setDeviceMetricsOverride",
-                        {
-                            "width": self._render_w,
-                            "height": self._render_h,
-                            "deviceScaleFactor": 1,
-                            "mobile": False,
-                        },
-                    )
-                except _BROWSER_ERRORS as e:
-                    logger.debug("device-metrics override ignored ({})", e)
-                cdp.on("Page.screencastFrame", self._on_screencast_frame)
-                await cdp.send(
-                    "Page.startScreencast",
-                    {
-                        "format": _SCREENCAST_FORMAT,
-                        "quality": _SCREENCAST_QUALITY,
-                        "maxWidth": self._render_w,
-                        "maxHeight": self._render_h,
-                        "everyNthFrame": _SCREENCAST_EVERY_NTH_FRAME,
-                    },
-                )
             except _BROWSER_ERRORS as e:
-                logger.debug("screencast attach ignored ({})", e)
+                logger.debug("active-page cdp attach ignored ({})", e)
                 return
+        if self._capture is not None:
+            self._capture.request_keyframe()  # new tab in front -> push a clean frame now
         await self._broadcast_tabs()
 
-    async def _stop_screencast(self) -> None:
+    async def _detach_active_cdp(self) -> None:
         cdp = self._active_cdp
         self._active_cdp = None
         if cdp is None:
             return
         try:
-            await cdp.send("Page.stopScreencast")
             await cdp.detach()
         except _BROWSER_ERRORS as e:
-            logger.debug("screencast stop ignored ({})", e)
+            logger.debug("cdp detach ignored ({})", e)
 
     def _on_new_page(self, page: Page) -> None:
         """A new tab appeared (human or agent opened it): follow it."""
@@ -813,57 +887,22 @@ class LiveBrowser(MutableModel):
         if page is self._active_page and frame == page.main_frame:
             asyncio.create_task(self._set_active_page(page))
 
-    def _on_screencast_frame(self, params: dict[str, Any]) -> None:
-        """Playwright (sync) callback: stash the frame and schedule ack + send."""
-        self._latest_frame = params.get("data")
-        session_id = params.get("sessionId")
-        asyncio.create_task(self._ack_and_send(session_id))
+    # --- stream (video) subscribers -------------------------------------------
+    # Async so they run ON the loop (reached via the runner's bridge): starting the
+    # encoder briefly mutates os.environ["DISPLAY"], which must happen on the single
+    # loop thread where browser launches also serialize -- never on a Flask thread.
 
-    async def _ack_and_send(self, screencast_session_id: Any) -> None:
-        cdp = self._active_cdp
-        if cdp is None:
-            return
-        try:
-            await cdp.send("Page.screencastFrameAck", {"sessionId": screencast_session_id})
-        except _BROWSER_ERRORS as e:
-            logger.debug("screencast ack ignored ({})", e)
-            return
-        if self._send_in_flight:
-            return
-        self._send_in_flight = True
-        try:
-            frame = self._latest_frame
-            if frame is not None:
-                self._broadcast({"type": "frame", "data": frame})
-        finally:
-            self._send_in_flight = False
-
-    async def _capture_one_frame(self) -> str | None:
-        """Grab a single screencast-shaped JPEG (base64) of the active tab on demand and
-        cache it as ``_latest_frame``.
-
-        The CDP screencast only emits a frame on a REPAINT, so a browser that flipped to
-        ``running`` and then sat on a static page has ``_latest_frame is None`` until it
-        next changes -- a fresh viewer connecting in that window would see a black canvas
-        (finding [6]). ``Page.captureScreenshot`` forces a one-off capture at the same
-        format/quality the screencast uses, so the replayed frame is indistinguishable
-        from a live one. Best-effort: returns None (and changes nothing) if there's no
-        active CDP session or the capture fails."""
-        cdp = self._active_cdp
-        if cdp is None:
+    async def add_stream_subscriber(self, want_h264: bool) -> "queue.Queue[bytes | None] | None":
+        """Register a ``/stream`` video socket, starting the display encoder on demand.
+        Returns its outbound byte queue, or None when there's no encoder (headless, or
+        the browser isn't running yet) -- the handler then closes the socket."""
+        if self._capture is None or not self._is_running:
             return None
-        try:
-            shot = await cdp.send(
-                "Page.captureScreenshot",
-                {"format": _SCREENCAST_FORMAT, "quality": _SCREENCAST_QUALITY},
-            )
-        except _BROWSER_ERRORS as e:
-            logger.debug("one-off frame capture ignored ({})", e)
-            return None
-        data = shot.get("data")
-        if data:
-            self._latest_frame = data
-        return data
+        return self._capture.add_subscriber(want_h264)
+
+    async def remove_stream_subscriber(self, client_queue: "queue.Queue[bytes | None]") -> None:
+        if self._capture is not None:
+            self._capture.remove_subscriber(client_queue)
 
     async def _broadcast_tabs(self) -> None:
         # Stays async: it awaits _tab_list() (a CDP round-trip). The fan-out itself
@@ -1021,11 +1060,10 @@ class LiveBrowser(MutableModel):
     async def _dispatch_input(self, message: dict[str, Any]) -> None:
         kind = message.get("type")
         try:
-            cdp = self._active_cdp
-            if kind == "mouse" and cdp is not None:
-                await cdp.send("Input.dispatchMouseEvent", message["event"])
-            elif kind == "key" and cdp is not None:
-                await cdp.send("Input.dispatchKeyEvent", message["event"])
+            if kind == "mouse":
+                self._inject_mouse(message.get("event", {}))
+            elif kind == "key":
+                self._inject_key(message.get("event", {}))
             elif kind == "tab":
                 await self._handle_tab_control(message)
             elif kind == "navigate" and self._active_page is not None:
@@ -1039,22 +1077,60 @@ class LiveBrowser(MutableModel):
         except _BROWSER_ERRORS as e:
             logger.debug("cast input ignored ({})", e)
 
+    def _inject_mouse(self, event: dict[str, Any]) -> None:
+        """Inject a human mouse event at the DISPLAY level (XTest), so native context
+        menus / ``<select>`` dropdowns / drag all work -- none reachable by CDP's
+        page-scoped input. Coords are frame (capture-region) coords; the Display adds
+        the chrome-crop offset. No-op when headless (no display)."""
+        if self._display is None:
+            return
+        etype = event.get("type")
+        x, y = int(event.get("x", 0)), int(event.get("y", 0))
+        if etype == "mouseMoved":
+            self._display.move(x, y)
+        elif etype == "mousePressed":
+            self._display.button(_MOUSE_BUTTONS.get(event.get("button"), 1), True, x, y)
+        elif etype == "mouseReleased":
+            self._display.button(_MOUSE_BUTTONS.get(event.get("button"), 1), False, x, y)
+        elif etype == "mouseWheel":
+            self._display.scroll(float(event.get("deltaX", 0)), float(event.get("deltaY", 0)))
+
+    def _inject_key(self, event: dict[str, Any]) -> None:
+        """Inject a human key event via XTest (physical ``code`` -> keysym -> keycode).
+        Modifier keys arrive as their own events, so combos replay naturally."""
+        if self._display is None:
+            return
+        self._display.key(str(event.get("code", "")), str(event.get("key", "")), event.get("type") == "keyDown")
+
     async def _apply_resize(self, message: dict[str, Any]) -> None:
-        """Human/idle resized their pane: re-render the browser to fill it, clamped to
-        [floor .. cap]. Reached only while input is enabled (human owns it), so an
-        agent's cached `state` indices never shift mid-task. Reuses _set_active_page,
-        which re-applies the new size to the device-metrics override + screencast."""
+        """Human/idle resized their pane: resize the browser WINDOW to fill it (clamped)
+        and move the capture region. Reached only while input is enabled (human owns it),
+        so an agent's cached ``state`` indices never shift mid-task. Framebuffer-bounded:
+        the window is render height + cropped chrome, kept within the fixed Xvfb screen."""
         raw_w, raw_h = int(message.get("width", 0)), int(message.get("height", 0))
         w = max(_RENDER_MIN_WIDTH, min(_RENDER_MAX_WIDTH, raw_w))
-        h = max(_RENDER_MIN_HEIGHT, min(_RENDER_MAX_HEIGHT, raw_h))
-        logger.info(
-            "browser {} resize request {}x{} -> clamped {}x{} (was {}x{}, headless={})",
-            self.browser_id, raw_w, raw_h, w, h, self._render_w, self._render_h, _HEADLESS,
-        )
-        if (w, h) == (self._render_w, self._render_h) or self._active_page is None:
+        max_h = min(_RENDER_MAX_HEIGHT, SCREEN_H - self._chrome_crop)
+        h = max(_RENDER_MIN_HEIGHT, min(max_h, raw_h))
+        if (w, h) == (self._render_w, self._render_h):
             return
+        logger.info("browser {} resize {}x{} -> {}x{} (was {}x{})",
+                    self.browser_id, raw_w, raw_h, w, h, self._render_w, self._render_h)
         self._render_w, self._render_h = w, h
-        await self._set_active_page(self._active_page)
+        await self._resize_window()
+
+    async def _resize_window(self) -> None:
+        """Set the Chromium window to render-size + chrome and re-point the capture at
+        the new region. No-op when headless (no window/capture)."""
+        if self._browser_cdp is not None and self._window_id is not None:
+            try:
+                await self._browser_cdp.send("Browser.setWindowBounds", {
+                    "windowId": self._window_id,
+                    "bounds": {"left": 0, "top": 0, "width": self._render_w, "height": self._render_h + self._chrome_crop},
+                })
+            except _BROWSER_ERRORS as e:
+                logger.debug("setWindowBounds ignored ({})", e)
+        if self._capture is not None:
+            self._capture.update_region()
 
     async def _handle_tab_control(self, message: dict[str, Any]) -> None:
         if self._context is None:
@@ -1072,68 +1148,103 @@ class LiveBrowser(MutableModel):
         elif action == "close":
             index = int(message.get("index", 0))
             if 0 <= index < len(self._context.pages):
+                # Closing the LAST tab would close the window and take the whole browser
+                # down with it -- but a browser is only ever retired via the explicit
+                # `close` command, not by emptying its tabs. So open a fresh home tab
+                # first (before closing) whenever this is the last one.
+                if len(self._context.pages) == 1:
+                    home = await self._context.new_page()
+                    await home.goto(_HOME_URL)
                 await self._context.pages[index].close()
 
     # --- clipboard bridge (human viewer <-> the browser's X11 clipboard) ------
-    # The browser runs headful under Xvfb (see _HEADLESS), so it has a real X11
-    # clipboard. xclip reads/writes it from OUTSIDE the page, so a paste/copy is
-    # fully native -- no page-origin Async Clipboard API, no https/user-activation
-    # constraints, and images work the same as text. Gated on _input_enabled: only
-    # the controlling human, never an agent mid-task, drives the clipboard.
+    # Each browser runs headful under its OWN Xvfb display, so it has its own X11
+    # clipboard (no shared-:99 cross-talk). xclip reads/writes that clipboard from
+    # OUTSIDE the page and XTest fires the paste/copy, so both are fully native -- no
+    # page-origin Async Clipboard API, no https/user-activation constraints, images
+    # like text. Gated on _input_enabled: only the controlling human, never an agent.
 
     async def clipboard_paste(self, data: bytes, mime: str) -> dict[str, Any]:
         """Write the user's clipboard payload into the browser's X11 clipboard, then
-        fire a native paste into the focused element. ``mime`` is text/* or image/*."""
+        fire a native Ctrl+V (XTest) into the focused element. ``mime`` is text/* or
+        image/*."""
         async with self._control_lock:
             if not self._input_enabled.is_set():
                 return {"ok": False, "status": "not_controlling"}
-            cdp = self._active_cdp
-            if cdp is None:
-                return {"ok": False, "status": "no_page"}
+            if self._display is None:
+                return {"ok": False, "status": "no_display"}
             if not await self._xclip_write(data, mime):
                 return {"ok": False, "status": "clipboard_error"}
-            # The "paste" editing command reads the X11 clipboard we just populated,
-            # independent of the user's keymap.
-            try:
-                await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": 2, "commands": ["paste"]})
-                await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": 2})
-            except _BROWSER_ERRORS as e:
-                logger.debug("clipboard paste dispatch ignored ({})", e)
-                return {"ok": False, "status": "error"}
+            self._own_clip_hash = hash(data)  # so the copy-out watcher doesn't echo it
+            self._clipboard_combo("KeyV", "v")
         return {"ok": True}
 
     async def clipboard_copy(self, *, cut: bool = False) -> dict[str, Any]:
-        """Fire a native copy (or cut) of the current selection, then read the X11
-        clipboard out for the user. Returns ``{ok, mime, text|data}``; ``mime`` is None
-        when nothing is selected. Binary payloads come back base64 in ``data``, text in
-        ``text``."""
+        """Fire a native Ctrl+C / Ctrl+X (XTest) on the current selection, then read the
+        X11 clipboard out for the user. Returns ``{ok, mime, text|data}``; ``mime`` is
+        None when nothing is selected. Binary payloads come back base64 in ``data``,
+        text in ``text``."""
         async with self._control_lock:
             if not self._input_enabled.is_set():
                 return {"ok": False, "status": "not_controlling"}
-            cdp = self._active_cdp
-            if cdp is None:
-                return {"ok": False, "status": "no_page"}
-            command = "cut" if cut else "copy"
-            key, code, vk = ("x", "KeyX", 88) if cut else ("c", "KeyC", 67)
-            try:
-                await cdp.send("Input.dispatchKeyEvent", {"type": "keyDown", "key": key, "code": code, "windowsVirtualKeyCode": vk, "modifiers": 2, "commands": [command]})
-                await cdp.send("Input.dispatchKeyEvent", {"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk, "modifiers": 2})
-            except _BROWSER_ERRORS as e:
-                logger.debug("clipboard {} dispatch ignored ({})", command, e)
-                return {"ok": False, "status": "error"}
-            data, mime = await self._xclip_read()
+            if self._display is None:
+                return {"ok": False, "status": "no_display"}
+            self._clipboard_combo("KeyX" if cut else "KeyC", "x" if cut else "c")
+            data, mime = await self._xclip_read(settle=True)
         if data is None or mime is None:
-            # nothing selected / empty clipboard
-            return {"ok": True, "mime": None}
+            return {"ok": True, "mime": None}  # nothing selected / empty clipboard
+        self._own_clip_hash = hash(data)
         if mime.startswith("text/"):
             return {"ok": True, "mime": mime, "text": data.decode("utf-8", "replace")}
         return {"ok": True, "mime": mime, "data": base64.b64encode(data).decode("ascii")}
 
+    def _clipboard_combo(self, code: str, char: str) -> None:
+        """Ctrl+<key> at the display level (XTest), independent of the user's keymap."""
+        d = self._display
+        if d is None:
+            return
+        d.key("ControlLeft", "Control", True)
+        d.key(code, char, True)
+        d.key(code, char, False)
+        d.key("ControlLeft", "Control", False)
+
+    async def _clipboard_out_loop(self) -> None:
+        """Push a copy that happened INSIDE the remote page (right-click -> Copy, or any
+        app copy) to the viewer, so it reaches the user's local clipboard. Polls the X
+        clipboard (~500ms is plenty for a clipboard) while a human controls a WATCHED
+        browser, skipping the value we ourselves last wrote."""
+        while not self._closed:
+            await asyncio.sleep(_CLIPBOARD_POLL_SECONDS)
+            if (
+                self._display is None
+                or not self._is_running
+                or not self._input_enabled.is_set()
+                or self._capture is None
+                or not self._capture.has_subscribers()
+            ):
+                continue
+            data, mime = await self._xclip_read(settle=False)
+            if data is None or mime is None:
+                continue
+            digest = hash(data)
+            if digest == self._seen_clip_hash or digest == self._own_clip_hash:
+                continue
+            self._seen_clip_hash = digest
+            if mime.startswith("text/"):
+                self._broadcast({"type": "clipboard", "mime": mime, "data": data.decode("utf-8", "replace")})
+            else:
+                self._broadcast({"type": "clipboard", "mime": mime, "data": base64.b64encode(data).decode("ascii")})
+
+    def _xclip_base(self) -> list[str]:
+        base = ["xclip"]
+        if self._display is not None:
+            base += ["-display", self._display.name]  # this browser's own X clipboard
+        return base + ["-selection", "clipboard"]
+
     async def _xclip_write(self, data: bytes, mime: str) -> bool:
-        """Load ``data`` into the X11 CLIPBOARD selection. xclip forks a background owner
-        that serves the selection until another app claims it, so it persists for the
-        paste. DISPLAY is inherited from the browser service's env (:99)."""
-        args = ["xclip", "-selection", "clipboard"]
+        """Load ``data`` into this display's X11 CLIPBOARD selection. xclip forks a
+        background owner that serves the selection until another app claims it."""
+        args = self._xclip_base()
         if not mime.startswith("text/"):
             args += ["-t", mime]
         args += ["-i"]
@@ -1147,10 +1258,11 @@ class LiveBrowser(MutableModel):
             logger.warning("xclip write failed for browser {} ({})", self.browser_id, e)
             return False
 
-    async def _xclip_read(self) -> tuple[bytes | None, str | None]:
-        """Read the X11 CLIPBOARD selection, preferring an image if present. A short
-        wait lets the just-issued copy command land in the clipboard first."""
-        await asyncio.sleep(0.12)
+    async def _xclip_read(self, *, settle: bool) -> tuple[bytes | None, str | None]:
+        """Read the X11 CLIPBOARD selection, preferring an image if present. ``settle``
+        waits briefly first so a just-issued copy command lands before we read."""
+        if settle:
+            await asyncio.sleep(0.12)
         targets = await self._xclip_out("TARGETS")
         mime = "image/png" if targets and b"image/png" in targets else "text/plain"
         data = await self._xclip_out(mime)
@@ -1161,7 +1273,7 @@ class LiveBrowser(MutableModel):
     async def _xclip_out(self, target: str) -> bytes | None:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "xclip", "-selection", "clipboard", "-o", "-t", target,
+                *self._xclip_base(), "-o", "-t", target,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             )
             out, _ = await proc.communicate()
@@ -1221,6 +1333,9 @@ class LiveBrowser(MutableModel):
             "owner_agent_id": self.owner_agent_id,
             "owner_name": self.owner_agent_name,
             "human_pinned": self.human_pinned,
+            # Current render size, so the viewer sizes its canvas to the video (the
+            # capture is _render_w x _render_h; the frame stripes fill exactly that).
+            "resolution": [self._render_w, self._render_h],
             # Agents queued (monitor-and-wait) behind the current owner, in FIFO order.
             "waiting": self._waiting_names(),
         }
@@ -1941,24 +2056,15 @@ class LiveBrowser(MutableModel):
         """Register a new cast WebSocket and SEED its initial sync, atomically on the loop.
 
         Returns an outbound queue for the Flask cast handler to drain. The initial
-        control + tabs (+ crash) sync is pushed BEFORE the queue is added to the
-        fan-out list, so the viewer's first messages are deterministic -- no live
-        frame can interleave ahead of the control/tabs the viewer needs first.
+        control + tabs (+ crash) sync is pushed BEFORE the queue is added to the fan-out
+        list, so the viewer's first messages are deterministic. The video is a SEPARATE
+        socket (``/stream``); a viewer that connects while a browser sits on a static
+        page gets a fresh keyframe from the encoder (``request_idr_frame`` on subscribe),
+        so there is no black-canvas replay to seed here.
 
-        We also replay a screencast frame (``_latest_frame``) to a new client of a
-        RUNNING browser. The CDP screencast only emits a frame on a repaint, so a client
-        connecting to a browser sitting on a static/blank page would otherwise see a
-        black canvas (and the viewer's "Starting browser…" banner would never clear)
-        until the page next changed. If no frame has been cached yet (the common case for
-        a browser that just flipped ``init`` -> ``running`` and hasn't repainted --
-        finding [6]), we force a one-off capture so even the very first viewer sees the
-        live page at once. Skipped when crashed -- a dead browser shows the crash state,
-        not a stale frame.
-
-        The seed is at most four messages onto a fresh, empty queue whose maxsize
+        The seed is at most three messages onto a fresh, empty queue whose maxsize
         (``_CAST_QUEUE_MAX_SIZE`` = 16) is far larger, so the ``put_nowait``s here can
-        never raise ``queue.Full`` -- but the late-frame push goes through the same
-        Full-safe ``_broadcast``-style path for symmetry (finding [8]).
+        never raise ``queue.Full``.
 
         Runs on the loop (the runner calls it via ``bridge.run``), so the list
         mutation is single-threaded with respect to :meth:`_broadcast`.
@@ -1971,12 +2077,6 @@ class LiveBrowser(MutableModel):
         client_queue.put_nowait(json.dumps({"type": "tabs", "tabs": await self._tab_list()}, default=str))
         if self._crashed:  # a viewer opening a crashed browser sees the crash state at once
             client_queue.put_nowait(json.dumps({"type": "crashed", "browser_id": self.browser_id}, default=str))
-        elif self._is_running:
-            # Replay the live page so a new client isn't stuck on black. Capture one on
-            # demand if nothing has been cached yet (just flipped to running, no repaint).
-            frame = self._latest_frame if self._latest_frame is not None else await self._capture_one_frame()
-            if frame is not None:
-                client_queue.put_nowait(json.dumps({"type": "frame", "data": frame}, default=str))
         self._cast_queues.append(client_queue)
         return client_queue
 
@@ -2067,15 +2167,20 @@ class LiveBrowser(MutableModel):
         self._closed = True
         if self._keepalive_task is not None:
             self._keepalive_task.cancel()
+        if self._clip_watch_task is not None:
+            self._clip_watch_task.cancel()
         # Tell every cast socket to tear down (don't wait for the client to disconnect).
         self._shutdown_cast_queues()
+        # Stop the display encoder (and shut its stream sockets) before the display goes.
+        if self._capture is not None:
+            self._capture.close()
         # Release every queued agent so none hangs on a browser being torn down: wait-queue
         # waiters unblock (their acquire returns `closed`); resume-queue agents are messaged
         # it's gone and cleared.
         async with self._control_lock:
             await self._abandon_queues_locked("closed")
         await self._stop_active_agent()
-        await self._stop_screencast()
+        await self._detach_active_cdp()
         self._context = None  # bail out any nav re-attach queued during teardown
         if self._observer is not None:
             try:
@@ -2088,6 +2193,9 @@ class LiveBrowser(MutableModel):
                 await bu_session.kill()
             except _BROWSER_ERRORS as e:
                 logger.debug("browser kill ignored ({})", e)
+        # Kill this browser's Xvfb + XTest connection last, once nothing else needs it.
+        if self._display is not None:
+            await self._display.close()
 
 
 async def _safe_title(page: Page) -> str:
