@@ -1,3 +1,5 @@
 The workspace build now reports the frontend's native-dependency state before building it.
 
 A missing platform binary (lightningcss, rollup) surfaces from vite only as `failed to load config from vite.config.ts`, which says nothing about whether `npm ci` installed the package -- and the host is destroyed on a failed create, so there is nothing left to inspect afterwards. The build now logs the node/npm versions, the architecture, and which native dep packages are present in `node_modules` (or that `node_modules` is absent entirely).
+
+Dropped the frontend native-dep probe added earlier in this branch. It logged node/npm versions and which `lightningcss` / `@rollup` packages were present before every frontend build, to diagnose a `Cannot find module '../lightningcss.linux-arm64-gnu.node'` failure. That failure was transient and never recurred, so the logging was always-on instrumentation for a bug with one data point -- and printed on success as well as failure, which is not where it would ever be read. If it returns, the right shape is a failure-only diagnostic.
