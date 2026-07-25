@@ -1233,10 +1233,8 @@ class LiveBrowser(MutableModel):
             if digest == self._seen_clip_hash or digest == self._own_clip_hash:
                 continue
             self._seen_clip_hash = digest
-            if mime.startswith("text/"):
-                self._broadcast({"type": "clipboard", "mime": mime, "data": data.decode("utf-8", "replace")})
-            else:
-                self._broadcast({"type": "clipboard", "mime": mime, "data": base64.b64encode(data).decode("ascii")})
+            payload = data.decode("utf-8", "replace") if mime.startswith("text/") else base64.b64encode(data).decode("ascii")
+            self._broadcast({"type": "clipboard", "mime": mime, "data": payload})
 
     def _xclip_base(self) -> list[str]:
         base = ["xclip"]

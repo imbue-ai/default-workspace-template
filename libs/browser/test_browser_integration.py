@@ -100,11 +100,12 @@ def test_live_browser_streams_video_and_accepts_input(monkeypatch: pytest.Monkey
             stripes: list[bytes] = []
             for _ in range(40):
                 await asyncio.sleep(0.25)
-                try:
-                    while True:
+                drained = False
+                while not drained:
+                    try:
                         stripes.append(stream_queue.get_nowait())
-                except queue.Empty:
-                    pass
+                    except queue.Empty:
+                        drained = True
                 if stripes:
                     break
             assert stripes, "expected encoded video stripes on the /stream queue"
