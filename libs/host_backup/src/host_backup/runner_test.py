@@ -5,14 +5,17 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from host_backup.capabilities import BackupCapabilities, SnapshotMethod
-from host_backup.config import BackupConfig
+from host_backup.config import BackupConfig, RetentionSettings
 from host_backup.runner import (
     CONSECUTIVE_FAILURE_ALARM_THRESHOLD,
+    _age_out_restore_markers,
     _load_config_if_changed,
     _LoopState,
+    _parse_restic_timestamp,
     _run_restic_backup,
     _should_tick_now,
     _take_snapshot,
@@ -340,3 +343,177 @@ def test_load_config_if_changed_caches_until_mtime_moves(tmp_path: Path) -> None
     reloaded = _load_config_if_changed(state, 222.0, path)
     assert reloaded.backup_interval_seconds == 900.0
     assert state.last_loaded_backup_toml_mtime == 222.0
+
+
+# ---------------------------------------------------------------------------
+# Restore-marker age-out
+# ---------------------------------------------------------------------------
+
+_FIXED_NOW = datetime(2026, 7, 24, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _snapshots_result(
+    snapshots: list[dict[str, object]],
+) -> subprocess.CompletedProcess[str]:
+    return _completed(0, stdout=json.dumps(snapshots))
+
+
+def _age_out_config(max_age_days: float) -> BackupConfig:
+    return BackupConfig(
+        retention=RetentionSettings(restore_marker_max_age_days=max_age_days)
+    )
+
+
+def _age_out_state(tmp_path: Path) -> _LoopState:
+    state = _LoopState(_direct_capabilities())
+    state.events_dir = tmp_path / "events"
+    state.current_tick_id = "tick-age-out"
+    return state
+
+
+def test_parse_restic_timestamp_handles_z_and_nanoseconds() -> None:
+    assert _parse_restic_timestamp("2026-07-24T18:47:38Z") == datetime(
+        2026, 7, 24, 18, 47, 38, tzinfo=timezone.utc
+    )
+    # Nanosecond precision is clamped to microseconds, not rejected.
+    assert _parse_restic_timestamp("2026-07-24T18:47:38.123456789Z") == datetime(
+        2026, 7, 24, 18, 47, 38, 123456, tzinfo=timezone.utc
+    )
+
+
+def test_parse_restic_timestamp_normalizes_offset_to_utc() -> None:
+    # 18:47:38 at -07:00 is 01:47:38 the next day in UTC.
+    assert _parse_restic_timestamp("2026-07-24T18:47:38-07:00") == datetime(
+        2026, 7, 25, 1, 47, 38, tzinfo=timezone.utc
+    )
+
+
+def test_parse_restic_timestamp_returns_none_for_garbage() -> None:
+    assert _parse_restic_timestamp("") is None
+    assert _parse_restic_timestamp("not-a-timestamp") is None
+
+
+def test_age_out_restore_markers_forgets_old_and_keeps_recent(tmp_path: Path) -> None:
+    list_calls: list[tuple[str, ...]] = []
+    forget_calls: list[tuple[str, ...]] = []
+
+    def _list_fn(
+        tags: tuple[str, ...], _env: object
+    ) -> subprocess.CompletedProcess[str]:
+        list_calls.append(tags)
+        return _snapshots_result(
+            [
+                {"id": "old-marker", "time": "2026-07-10T00:00:00Z", "tags": ["restored"]},
+                {"id": "recent-marker", "time": "2026-07-22T00:00:00Z", "tags": ["pre-restore"]},
+            ]
+        )
+
+    def _forget_ids_fn(
+        ids: tuple[str, ...], _env: object
+    ) -> subprocess.CompletedProcess[str]:
+        forget_calls.append(ids)
+        return _completed(0)
+
+    state = _age_out_state(tmp_path)
+    _age_out_restore_markers(
+        state=state,
+        config=_age_out_config(7.0),
+        env_overrides={},
+        list_fn=_list_fn,
+        forget_ids_fn=_forget_ids_fn,
+        now_fn=lambda: _FIXED_NOW,
+    )
+
+    # It queried both marker tags and forgot only the marker past the 7-day cutoff.
+    assert list_calls == [("restored", "pre-restore")]
+    assert forget_calls == [("old-marker",)]
+    forgotten_events = [
+        e for e in _events_in(state.events_dir) if e["type"] == "RESTORE_MARKERS_FORGOTTEN"
+    ]
+    assert len(forgotten_events) == 1
+    assert forgotten_events[0]["forgotten_count"] == 1
+
+
+def test_age_out_restore_markers_noop_when_all_recent(tmp_path: Path) -> None:
+    forget_calls: list[tuple[str, ...]] = []
+
+    def _list_fn(
+        _tags: tuple[str, ...], _env: object
+    ) -> subprocess.CompletedProcess[str]:
+        return _snapshots_result(
+            [{"id": "recent", "time": "2026-07-23T00:00:00Z", "tags": ["restored"]}]
+        )
+
+    def _forget_ids_fn(
+        ids: tuple[str, ...], _env: object
+    ) -> subprocess.CompletedProcess[str]:
+        forget_calls.append(ids)
+        return _completed(0)
+
+    state = _age_out_state(tmp_path)
+    _age_out_restore_markers(
+        state=state,
+        config=_age_out_config(7.0),
+        env_overrides={},
+        list_fn=_list_fn,
+        forget_ids_fn=_forget_ids_fn,
+        now_fn=lambda: _FIXED_NOW,
+    )
+
+    assert forget_calls == []
+    assert not (state.events_dir / "events.jsonl").exists()
+
+
+def test_age_out_restore_markers_disabled_when_max_age_zero(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def _list_fn(
+        _tags: tuple[str, ...], _env: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append("list")
+        return _completed(0)
+
+    def _forget_ids_fn(
+        _ids: tuple[str, ...], _env: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append("forget")
+        return _completed(0)
+
+    _age_out_restore_markers(
+        state=_age_out_state(tmp_path),
+        config=_age_out_config(0.0),
+        env_overrides={},
+        list_fn=_list_fn,
+        forget_ids_fn=_forget_ids_fn,
+        now_fn=lambda: _FIXED_NOW,
+    )
+
+    # A zero cutoff keeps markers forever: nothing is even queried.
+    assert calls == []
+
+
+def test_age_out_restore_markers_tolerates_list_failure(tmp_path: Path) -> None:
+    forget_calls: list[tuple[str, ...]] = []
+
+    def _list_fn(
+        _tags: tuple[str, ...], _env: object
+    ) -> subprocess.CompletedProcess[str]:
+        return _completed(1, stderr="repository is already locked")
+
+    def _forget_ids_fn(
+        ids: tuple[str, ...], _env: object
+    ) -> subprocess.CompletedProcess[str]:
+        forget_calls.append(ids)
+        return _completed(0)
+
+    _age_out_restore_markers(
+        state=_age_out_state(tmp_path),
+        config=_age_out_config(7.0),
+        env_overrides={},
+        list_fn=_list_fn,
+        forget_ids_fn=_forget_ids_fn,
+        now_fn=lambda: _FIXED_NOW,
+    )
+
+    # A failed listing must not forget anything and must not raise.
+    assert forget_calls == []
