@@ -20,9 +20,22 @@ import os
 import queue
 import threading
 from collections.abc import Callable
+from typing import Any
 
 from loguru import logger
-from pixelflux import CaptureSettings, ScreenCapture
+
+# pixelflux's wheel links the VA-API runtime (libva-drm.so.2) at IMPORT time, even in
+# CPU mode. That lib is absent on CI runners and bare dev boxes, where the browser view
+# never actually runs (headless). So keep this module importable there -- guard the
+# import, and fail clearly only if a capture is actually started without the native lib
+# (the workspace's deferred-install apt-installs libva for the headful path).
+try:
+    from pixelflux import CaptureSettings, ScreenCapture
+
+    _PIXELFLUX_IMPORT_ERROR: str | None = None
+except ImportError as _e:  # native lib (libva) missing: capture unavailable in this env
+    CaptureSettings = ScreenCapture = None  # type: ignore[assignment,misc]
+    _PIXELFLUX_IMPORT_ERROR = str(_e)
 
 # Outbound depth per stream socket. Stripes are small (damage-driven, ~hundreds of
 # bytes) so this is generous slack; a client that still overruns drops its oldest
@@ -47,7 +60,7 @@ class Capture:
     def __init__(self, display_name: str, region: Callable[[], tuple[int, int, int, int]]) -> None:
         self._display_name = display_name  # ":N"
         self._region = region  # () -> (x, y, w, h) current capture rect (chrome cropped)
-        self._cap: ScreenCapture | None = None
+        self._cap: Any = None  # pixelflux ScreenCapture while capturing, else None
         self._subscribers: list["queue.Queue[bytes | None]"] = []
         self._lock = threading.Lock()  # guards _subscribers + _cap against the pixelflux thread
         self._mode = _MODE_H264
@@ -105,6 +118,14 @@ class Capture:
                 logger.debug("capture region update ignored ({})", e)
 
     def _start_locked(self) -> None:
+        if CaptureSettings is None or ScreenCapture is None:
+            logger.error(
+                "browser stream {}: pixelflux unavailable ({}); no video for this browser. "
+                "The workspace's deferred-install provides the native lib (libva) for the "
+                "headful path -- confirm it completed.",
+                self._display_name, _PIXELFLUX_IMPORT_ERROR,
+            )
+            return
         x, y, w, h = self._region()
         settings = CaptureSettings()
         settings.capture_x, settings.capture_y = x, y
