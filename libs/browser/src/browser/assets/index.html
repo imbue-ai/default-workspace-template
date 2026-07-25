@@ -453,8 +453,15 @@
   function openStream() { streamWanted = true; connectStream(); }  // pane visible again
 
   // Canvas backing store = the full display region; stripes paint into it at their y_start.
+  // A size change means the capture region resized, so the stripe dimensions changed too:
+  // drop the decoders (keyed by y_start, configured for the old width/height) so the next
+  // keyframe reconfigures them cleanly instead of erroring on a dimension mismatch.
   function sizeCanvas(w, h) {
-    if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) { canvas.width = w; canvas.height = h; }
+    if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
+      canvas.width = w;
+      canvas.height = h;
+      resetDecoders();
+    }
   }
 
   function sendCast(obj) { if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify(obj)); }

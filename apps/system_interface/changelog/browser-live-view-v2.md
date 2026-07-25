@@ -1,0 +1,1 @@
+The embedded browser view can now enter an immersive fullscreen mode that captures browser-reserved shortcuts (Ctrl+T/W/Tab), and the workspace tells the browser pane when it is hidden so it can pause its video stream while you're looking at another tab -- saving CPU. Embedded panes may now request fullscreen.
