@@ -313,10 +313,11 @@ describe("renderToolCallBlock header", () => {
     input_preview: 'const r = await tools.exec_command({"cmd":"ls -la ."}); text(r.output);',
   };
 
-  it("names a codex code-mode exec by its inner operation, keeping the raw JS in the body", () => {
+  it("labels a codex exec header with the same text as the live caption, keeping raw JS in the body", () => {
     const text = allText(renderToolCallBlock(execCall, null, "codex"));
-    // claude-style "Tool: <name>" header, but the real operation, not the opaque wrapper.
-    expect(text).toContain("Tool: exec_command");
+    // Header uses codexToolLabel (one source of truth with the bottom caption), not "Tool: exec".
+    expect(text).toContain("Running ls -la .");
+    expect(text).not.toContain("Tool: exec");
     // preserve-raw: the JS program is still shown in the block body.
     expect(text).toContain("tools.exec_command");
   });

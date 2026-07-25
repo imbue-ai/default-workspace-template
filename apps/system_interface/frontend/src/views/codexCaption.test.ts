@@ -20,10 +20,24 @@ describe("codexToolLabel", () => {
     );
   });
 
+  it("labels apply_patch even when the front-loaded body pushes tools.apply_patch past the truncated preview", () => {
+    // Real shape: codex assigns the huge patch to a var first, so `tools.apply_patch(`
+    // is beyond the 200-char preview and never appears. The patch header must still win.
+    expect(
+      codexToolLabel(exec('const p = "*** Begin Patch\\n*** Add File: /code/libs/x/test_dashboard.py\\n+import json')),
+    ).toBe("Editing test_dashboard.py");
+  });
+
   it("labels web_search with the query in quotes", () => {
     expect(codexToolLabel(exec('await tools.web_search({"query":"tokyo weather"})'))).toBe(
       'Searching the web "tokyo weather"',
     );
+  });
+
+  it("labels the synthesized web_search block (its own tool_name, not a code-mode exec)", () => {
+    expect(
+      codexToolLabel({ tool_call_id: "w1", tool_name: "web_search", input_preview: '{"query":"tokyo weather"}' }),
+    ).toBe('Searching the web "tokyo weather"');
   });
 
   it("labels view_image with the basename", () => {
