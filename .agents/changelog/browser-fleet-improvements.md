@@ -1,3 +1,3 @@
 The `agentic-browser-fleet` skill now notes that, on resume after a human held the browser, the live view may have been resized and the page reflowed -- so every cached element number should be treated as stale and `state` re-run before acting.
 
-The `agentic-browser-fleet` and `manage-layout` skills now tell agents the browser pane is surfaced automatically and must never be opened by hand (`layout.py open browser` / `split browser`) -- a bare `service:browser` has no browser bound and is rejected, and a session-qualified open is redundant with the auto-pane.
+The `agentic-browser-fleet` and `manage-layout` skills now tell agents the browser pane is surfaced automatically when the user is watching that chat, so they shouldn't manage it by hand: never open a bare `service:browser` (rejected -- no browser bound); if a user explicitly asks to open one, use `service:browser?session=<name>`; otherwise point them at the "+ -> browser" menu.
