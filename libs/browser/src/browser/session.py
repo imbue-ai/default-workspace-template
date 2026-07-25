@@ -578,7 +578,11 @@ class LiveBrowser(MutableModel):
             headless=_HEADLESS,
             executable_path=chromium_path,
             user_data_dir=str(profile_dir),
-            args=["--disable-dev-shm-usage"],
+            # --remote-allow-origins=*: newer Chromium (150+) rejects a CDP WebSocket
+            # whose Origin header it doesn't allow, which hangs our observer's
+            # connect_over_cdp. Allowing any origin is the standard fix for driving a
+            # local Chromium over CDP (loopback-only debugging port; not web-reachable).
+            args=["--disable-dev-shm-usage", "--remote-allow-origins=*"],
             chromium_sandbox=chromium_sandbox,
             keep_alive=True,
             window_size={"width": _RENDER_DEFAULT_WIDTH, "height": _RENDER_DEFAULT_HEIGHT},
