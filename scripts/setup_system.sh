@@ -22,7 +22,27 @@ provision_skip_if_done setup_system
 : "${CODEX_VERSION:=0.145.0}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${NODE_MAJOR:=20}"
-: "${LATCHKEY_VERSION:=2.21.0}"
+: "${LATCHKEY_VERSION:=3.1.0}"
+: "${RESTIC_VERSION:=0.18.1}"
+
+# Install a downloaded binary atomically: fetch to a temp file beside the target,
+# then rename(2) it into place. A plain `curl -o <dest>` truncates <dest> in
+# place, which fails with ETXTBSY when <dest> is a currently-running executable --
+# e.g. re-provisioning a live workspace whose `terminal` service is running ttyd,
+# or whose cloudflared tunnel is active (this is what the update-self reveal flow
+# does, and `set -e` then aborts the whole script). rename(2) over a busy
+# executable is allowed: running processes keep the old inode while new execs pick
+# up the replacement, so download-then-mv is safe to re-run on a live host. The
+# temp file shares <dest>'s directory so the mv is a same-filesystem atomic rename,
+# and the explicit 0755 reproduces the old `curl -o` (0644) + `chmod +x` result.
+install_downloaded_binary() {
+    _url="$1"
+    _dest="$2"
+    _tmp="$(mktemp "${_dest}.XXXXXX")"
+    curl -fsSL "$_url" -o "$_tmp"
+    chmod 0755 "$_tmp"
+    mv -f "$_tmp" "$_dest"
+}
 
 # System packages (tini for signal handling; supervisor runs our background
 # services; earlyoom is the OOM-prevention daemon that sheds memory under
@@ -48,15 +68,32 @@ if command -v systemctl >/dev/null 2>&1; then
     systemctl mask supervisor 2>/dev/null || true
 fi
 
+# The distro restic (bookworm ships 0.14) predates `restic restore --delete`,
+# which the minds in-place backup restore requires (restic >= 0.17). Install
+# the pinned release (sha256-verified, from the official SHA256SUMS) at
+# /usr/local/bin so it shadows the apt binary and the whole workspace --
+# including the hourly host-backup service -- runs the same pinned version
+# minds bundles on the desktop side. The apt package above stays as a
+# fallback for anything resolving /usr/bin/restic explicitly.
+restic_arch="$(uname -m)"
+case "${restic_arch}" in
+    x86_64) restic_goarch="amd64"; restic_sha256="680838f19d67151adba227e1570cdd8af12c19cf1735783ed1ba928bc41f363d" ;;
+    aarch64) restic_goarch="arm64"; restic_sha256="87f53fddde38764095e9c058a3b31834052c37e5826d2acf34e18923c006bd45" ;;
+    *) echo "Unsupported architecture for restic: ${restic_arch}" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_${restic_goarch}.bz2" -o /tmp/restic.bz2
+echo "${restic_sha256}  /tmp/restic.bz2" | sha256sum -c -
+bunzip2 -c /tmp/restic.bz2 > /usr/local/bin/restic
+chmod +x /usr/local/bin/restic
+rm /tmp/restic.bz2
+
 # ttyd (terminal-over-web) binary from GitHub releases (not in apt).
 ttyd_arch="$(uname -m)"
-curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${ttyd_arch}" -o /usr/local/bin/ttyd
-chmod +x /usr/local/bin/ttyd
+install_downloaded_binary "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${ttyd_arch}" /usr/local/bin/ttyd
 
 # cloudflared for Cloudflare tunnel support.
 cloudflared_arch="$(dpkg --print-architecture)"
-curl -fsSL "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${cloudflared_arch}" -o /usr/local/bin/cloudflared
-chmod +x /usr/local/bin/cloudflared
+install_downloaded_binary "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${cloudflared_arch}" /usr/local/bin/cloudflared
 
 # GitHub CLI from its official apt repo.
 mkdir -p -m 755 /etc/apt/keyrings

@@ -14,6 +14,7 @@ current process is left over from a turn this process never ran and must not sho
 "Thinking..." indefinitely after a mid-turn restart.
 """
 
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from enum import auto
@@ -59,12 +60,62 @@ def has_unmatched_tool_use(events: Sequence[dict[str, Any]]) -> bool:
     return bool(pending - matched)
 
 
+# The composer's model picker / fast-mode toggle drive Claude Code by sending it
+# `/model ...` and `/fast ...` slash commands (see server.py). Claude Code handles
+# each locally -- it records a normalized command line plus a raw
+# `<local-command-stdout>` confirmation, and NEVER produces a model reply. Neither
+# line is a genuine conversational turn, so a transcript that ends on one is not
+# "the user spoke and Claude is thinking". Recognized here mirroring the frontend
+# detectors in message-classification.ts (matchModelFastCommand /
+# matchModelFastCommandOutput) so the two stay in agreement.
+_MODEL_FAST_COMMAND_RE = re.compile(r"^/(model|fast)\b")
+_LOCAL_COMMAND_STDOUT_MARKER = "<local-command-stdout>"
+_MODEL_FAST_STDOUT_RE = re.compile(r"Set model to|Fast mode")
+
+
+@pure
+def is_non_turn_tail_event(event: dict[str, Any]) -> bool:
+    """True for a trailing transcript event that is NOT a genuine turn awaiting a reply.
+
+    Two families qualify:
+
+    - ``isMeta`` framework injections (the resume-continuation marker, the
+      ``<local-command-caveat>`` wrapper, image-coordinate notes, ...): Claude
+      flags these itself and never acts on them.
+    - the ``/model`` / ``/fast`` slash command the composer's model picker sends,
+      and its ``<local-command-stdout>`` confirmation. These are NOT flagged
+      ``isMeta`` by Claude (only the caveat wrapper is), so they must be matched
+      by content -- otherwise a picker change leaves the indicator stuck on
+      "Thinking..." because the command line / confirmation is the transcript tail
+      yet no model reply is ever coming.
+    """
+    if event.get("is_meta"):
+        return True
+    if event.get("type") != "user_message":
+        return False
+    content = event.get("content")
+    text = content.strip() if isinstance(content, str) else ""
+    if _MODEL_FAST_COMMAND_RE.match(text):
+        return True
+    return text.startswith(_LOCAL_COMMAND_STDOUT_MARKER) and _MODEL_FAST_STDOUT_RE.search(text) is not None
+
+
 @pure
 def last_event_type(events: Sequence[dict[str, Any]]) -> str | None:
-    """Return the ``type`` of the final transcript event, or ``None`` if empty."""
-    if not events:
-        return None
-    return events[-1].get("type")
+    """Return the ``type`` of the last genuine-turn transcript event, or ``None``.
+
+    Trailing non-turn events (see :func:`is_non_turn_tail_event`) are skipped so
+    they cannot drive the THINKING fallback: a picker-sent ``/model`` / ``/fast``
+    command and its confirmation, or an ``isMeta`` framework injection, leave the
+    indicator on whatever the last real turn was rather than pinning it to
+    "Thinking...". Returns ``None`` for an empty transcript or one that is entirely
+    non-turn events.
+    """
+    for event in reversed(events):
+        if is_non_turn_tail_event(event):
+            continue
+        return event.get("type")
+    return None
 
 
 @pure

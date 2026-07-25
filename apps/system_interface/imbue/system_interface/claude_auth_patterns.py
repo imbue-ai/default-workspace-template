@@ -19,6 +19,15 @@ _PATTERN_SOURCES: tuple[str, ...] = (
     r"Invalid authentication credentials",
     r"Credit balance is too low",
     r"organization has been disabled",
+    # LiteLLM proxy rejections (the Imbue sign-in mode routes claude through
+    # a LiteLLM proxy with a per-key rolling budget). Budget exhaustion is
+    # not strictly an auth failure, but the recovery surface is the same
+    # sign-in modal (wait for the daily reset, or mint a fresh key), so it
+    # is flagged the same way. Sourced from litellm's proxy error strings;
+    # tighten against real captured transcripts if they misfire.
+    r"Budget has been exceeded",
+    r"ExceededBudget",
+    r"Authentication Error, Invalid proxy server token passed",
 )
 
 AUTH_ERROR_PATTERNS: tuple[re.Pattern[str], ...] = tuple(

@@ -14,7 +14,6 @@ without ever starting the agent manager.
 
 from __future__ import annotations
 
-import re
 import socket
 import threading
 import time
@@ -24,6 +23,7 @@ from contextlib import closing
 from contextlib import contextmanager
 
 import httpx
+import pexpect
 import simple_websocket
 from flask import Flask
 
@@ -33,6 +33,7 @@ from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.claude_auth import ClaudeAuthService
+from imbue.system_interface.claude_auth import RestartProgress
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.layout_ops import LayoutMutex
@@ -114,60 +115,58 @@ class FakeFinishedProcess:
 
 
 class FakePexpectProcess:
-    """Records the inputs the OAuth flow sends to a `pexpect.spawn`.
+    """Scripted stand-in for a `pexpect.spawn` in the PTY auth flows.
 
-    Constructor arguments parameterize how the fake responds to `expect()`:
+    `expect_script` is a sequence of `(return_index, output_chunk)` pairs:
+    each `expect()` call consumes the next entry (the final entry repeats
+    once the script is exhausted), returns `return_index`, and exposes
+    `output_chunk` through `before`/`after` the way pexpect does after a
+    match (index 0: chunk in `after`) or a non-match (chunk in `before`).
+    The return indexes are positions in the pattern list the production
+    code passes to `expect`, so a test scripting e.g. the token pump must
+    use that pump's pattern order.
 
-    - `url_match`: when non-None, the first `expect()` returns
-      `expect_return_index` (default 0 for the URL-matched branch) and
-      `self.match` is preset to the result of regex-matching `url_match`.
-      When None, the first `expect()` returns `expect_return_index`
-      (typically 1 for EOF or 2 for TIMEOUT) without setting `match`.
-    - `raw_output`: the bytes the real CLI left in the consumed buffer
-      (`process.before + process.after`). Defaults to `url_match` (a bare
-      URL), but a test can inject the escape-wrapped OSC 8 hyperlink the
-      real `claude auth login` emits to exercise the URL-extraction path.
-    - `expect_return_index`: index returned on the first `expect()` call.
-      Lets a test simulate the URL-found / EOF-before-URL / timeout
-      branches of `_spawn_oauth_and_parse_url`.
-    - `eof_return_index`: index returned on every subsequent `expect()`
-      call. Defaults to 0 (the EOF branch in `_drive_oauth_code`'s
-      `[pexpect.EOF, pexpect.TIMEOUT]` pattern) so the post-code-submit
-      teardown lands in the success path.
+    `read_nonblocking` (used by the production drain loop after a trigger
+    match) yields `drain_chunks` one call at a time and then raises
+    `pexpect.EOF`, so drains terminate immediately instead of spinning
+    against their wall-clock deadline.
     """
 
-    def __init__(
-        self,
-        url_match: str | None = None,
-        expect_return_index: int = 0,
-        eof_return_index: int = 0,
-        raw_output: str | None = None,
-    ) -> None:
-        self._expect_return_index = expect_return_index
-        self._eof_return_index = eof_return_index
-        self._expect_call_count = 0
+    def __init__(self, expect_script: Sequence[tuple[int, str]], drain_chunks: Sequence[str] = ()) -> None:
+        assert expect_script, "expect_script must have at least one entry"
+        self._script = list(expect_script)
+        self._call_idx = 0
+        self._drain_chunks = list(drain_chunks)
         self.sendline_calls: list[str] = []
+        self.send_calls: list[str] = []
         self.terminate_calls = 0
         self.close_calls = 0
         self.timeout: float | None = None
-        self.match: re.Match[str] | None = None
-        # Mirror what pexpect leaves after a successful match: everything it
-        # consumed lives in `before` + `after`. `_spawn_oauth_and_parse_url`
-        # reads that pair, so the fake drives extraction through `after`.
         self.before = ""
-        self.after = raw_output if raw_output is not None else (url_match or "")
-        if url_match is not None:
-            self.match = re.compile(r".*").match(url_match)
-            assert self.match is not None
+        self.after: str = ""
 
-    def expect(self, _patterns: object) -> int:
-        self._expect_call_count += 1
-        if self._expect_call_count == 1:
-            return self._expect_return_index
-        return self._eof_return_index
+    def expect(self, _patterns: object, timeout: float | None = None) -> int:
+        entry_idx = min(self._call_idx, len(self._script) - 1)
+        self._call_idx += 1
+        return_index, chunk = self._script[entry_idx]
+        if return_index == 0:
+            self.before = ""
+            self.after = chunk
+        else:
+            self.before = chunk
+            self.after = ""
+        return return_index
+
+    def read_nonblocking(self, size: int = 65536, timeout: float | None = None) -> str:
+        if self._drain_chunks:
+            return self._drain_chunks.pop(0)
+        raise pexpect.EOF("fake stream exhausted")
 
     def sendline(self, s: str) -> None:
         self.sendline_calls.append(s)
+
+    def send(self, s: str) -> None:
+        self.send_calls.append(s)
 
     def isalive(self) -> bool:
         return True
@@ -177,6 +176,24 @@ class FakePexpectProcess:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+def wait_for_background_apply(service: ClaudeAuthService) -> RestartProgress:
+    """Join the service's background credential-apply thread; return its final progress.
+
+    Tests that trigger an apply (submit paths, switch-flavored oauth
+    completions) call this so post-apply state -- the settings write, the
+    recorded mngr calls, the welcome-resend hook -- is stable before
+    asserting on it. Callers assert on the returned progress themselves
+    (most expect DONE; failure tests expect FAILED).
+    """
+    thread = service._restart_thread
+    assert thread is not None, "no background apply was started"
+    thread.join(timeout=10)
+    assert not thread.is_alive(), "background apply did not finish in time"
+    progress = service.current_restart_progress()
+    assert progress is not None
+    return progress
 
 
 def _find_free_port() -> int:
