@@ -8,14 +8,19 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   thread-per-connection) that owns every browser. browser_use, Playwright (async),
   and the per-browser ownership state machine run on one background asyncio event
   loop, reached from the Flask threads through a single `run_coroutine_threadsafe`
-  bridge. Each browser is a **headful** Chromium (under an Xvfb virtual display, so
-  it has a real X11 clipboard for native copy/paste -- see `_HEADLESS` in
-  `session.py`) driven by `browser_use.BrowserSession`, observed over the same CDP
-  endpoint to stream a live view (`Page.startScreencast` -> base64 JPEG frames over
-  a WebSocket) and inject human input. Each browser is
-  addressed by a random ~2-word english NAME (e.g. `alex-smith`), generated on
-  demand and never reused; the fleet starts empty and there is no default
-  browser.
+  bridge. Each browser is a **headful** Chromium driven by
+  `browser_use.BrowserSession`, running under its **own per-browser Xvfb display**
+  (see `browser.display`; so browsers never share an X11 clipboard). The human live
+  view is a striped **H.264/JPEG capture** of that display (`browser.capture`, using
+  `pixelflux`), streamed over a dedicated `/stream` WebSocket and decoded in the
+  viewer with **WebCodecs**; human mouse/keyboard is injected at the **display level
+  via XTest** (python-xlib), so native right-click menus, `<select>` dropdowns, and
+  drag all work. The agent drives over the same CDP endpoint (unchanged). Headless
+  (tests / bare boxes, the default; the fleet sets `BROWSER_HEADLESS=0`) skips the
+  display, capture, and XTest -- only the agent's CDP control is available there.
+  Each browser is addressed by a random ~2-word english NAME (e.g. `alex-smith`),
+  generated on demand and never reused; the fleet starts empty and there is no
+  default browser.
 - **Ownership** is one locked, compare-and-set state machine per browser. Agents
   never preempt each other -- a second agent waits in a FIFO queue
   (monitor-and-wait). The human can take control from the UI at any time, which
