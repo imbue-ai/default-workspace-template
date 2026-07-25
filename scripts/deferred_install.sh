@@ -124,6 +124,25 @@ _install_fortress() {
         return 1
     fi
     chmod +x "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion"
+    # Point Playwright's DEFAULT chromium at Fortress too. A bare `chromium.launch()`
+    # (no executable_path) looks in Playwright's own browser cache, which this install
+    # deliberately leaves empty (we run `install-deps`, not `install`, so no managed
+    # Chromium is downloaded). Symlink Fortress into that expected path -- resolved
+    # from Playwright itself so it tracks the pinned version's revision/layout -- so
+    # ad-hoc Playwright calls use the same one engine instead of erroring on a missing
+    # build. Chromium finds its resources via /proc/self/exe (the real Fortress dir),
+    # so symlinking just the binary is enough.
+    local pw_chrome
+    pw_chrome="$(cd "$REPO_ROOT" && uv run python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()' 2>/dev/null)"
+    if [ -n "$pw_chrome" ]; then
+        mkdir -p "$(dirname "$pw_chrome")"
+        ln -sf "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion" "$pw_chrome"
+        # Some Playwright versions gate launch() on a per-browser install marker.
+        touch "$(dirname "$(dirname "$pw_chrome")")/INSTALLATION_COMPLETE" 2>/dev/null || true
+        _log "fortress: pointed Playwright's default chromium at Fortress ($pw_chrome)"
+    else
+        _log "fortress: WARNING could not resolve Playwright's chromium path; a bare chromium.launch() will still need an explicit executable_path"
+    fi
     touch "$marker"
     _log "fortress: install complete (${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion), marker written to $marker"
 }
