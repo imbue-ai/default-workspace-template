@@ -25,6 +25,16 @@ The default target is the **latest stable `minds-v*` tag** (released,
 already-tested), not `origin/main`. The user may override to a specific tag or to
 `main`.
 
+Because the update flow itself evolves, once the target is resolved this pass
+**re-points itself at the target version's own copy of the update-self skill**
+(Step 2a) and runs the rest -- lead *and* worker -- from there. So a fix to the
+conflict triage, validation, or reveal logic that shipped in the release is
+applied on the way *in*, instead of staying a release behind in the local copy.
+That copy is staged at one fixed path --
+`runtime/update-self/skill-at-target/.agents/skills/update-self` -- which the lead
+and worker both address by literal (no shell state carried between commands, since
+each bash invocation starts a fresh shell).
+
 ## 1. Preconditions
 
 **Back up first.** Before dispatching anything, capture a restore point of the
@@ -88,6 +98,61 @@ change as if upstream were reverting it, which reads as phantom upstream churn:
 git diff --name-status "$(git merge-base HEAD "$REF")" "$REF"
 ```
 
+### 2a. Hand off to the target's own update-self flow
+
+Now re-point the rest of this pass at the update-self skill **as it exists at
+`$REF`**. Stage that copy (from the already-fetched objects -- no network, no
+working-tree mutation) at the fixed path
+`runtime/update-self/skill-at-target/.agents/skills/update-self`, and learn
+whether it differs from your local one:
+
+```bash
+DIFFERS=$(python3 .agents/skills/update-self/scripts/update_self.py bootstrap-skill --ref "$REF" \
+    | python3 -c 'import sys, json; print(json.load(sys.stdin)["differs"])')
+echo "differs=$DIFFERS"
+```
+
+`bootstrap-skill` always leaves a runnable flow at that fixed path (the target's
+copy, or -- when the ref predates the skill -- the local copy), so **the worker
+runs from `runtime/update-self/skill-at-target/.agents/skills/update-self`
+regardless**. `differs` decides only which `SKILL.md` prose *you* follow next:
+
+- **`differs` is `False`** (the staged flow is byte-identical to yours, or the ref
+  predates the skill) -> **continue with this document**.
+
+- **`differs` is `True`** -> the target's copy of the flow differs from your local
+  one (it shipped changes, or this workspace customized the flow locally). **Stop
+  following this document** and follow the staged copy's `SKILL.md` from **Step 3**
+  onward:
+
+  ```bash
+  # read and follow "runtime/update-self/skill-at-target/.agents/skills/update-self/SKILL.md" from Step 3
+  ```
+
+  You have already completed Steps 1-2 (backup, single-flight, clean tree, target
+  resolved), so do **not** re-run the staged doc's Step 2 or re-stage -- just carry
+  `$REF` forward into its Step 3.
+
+Either way, `runtime/update-self/skill-at-target/.agents/skills/update-self` now
+holds the copy of the flow to run. Everything below reaches the skill's scripts
+and worker reference through that literal path (and points the worker at it), so
+both dispatch against the correct version.
+
+**The handoff contract (keep this boundary stable when editing this skill).**
+Steps 1-2 -- preconditions and target resolution -- always run from the *local*
+copy: they are what decide `$REF`, so by construction they cannot come from the
+target. The target's flow is entered at **Step 3**. So an edit to this skill must
+preserve that boundary: a future version's Steps 1-2 must stay "capture a backup,
+the single-flight/clean-tree checks, then resolve a ref into `$REF`", and its
+Step 3 must stay the worker dispatch -- otherwise an older initiator handing off
+into a newer copy (or vice versa) lands at the wrong step. Keep the staging path
+(`runtime/update-self/skill-at-target/.agents/skills/update-self`) stable for the
+same reason. Note also that this handoff runs the target ref's `update_self.py`
+and follows its prose *before* the Step 5a approval gate; for the default target
+(a stable, already-tested `minds-v*` tag) that is the same trust basis as the
+merge itself, but a `--override` to an untrusted ref means trusting that ref's
+flow code and instructions -- only override to a ref you trust.
+
 ## 3. Dispatch the worker
 
 Open a tracking ticket, write the task file, launch via the `launch-task`
@@ -125,11 +190,16 @@ cat << 'BODY_EOF'
 # Task: safe update-self
 
 ## What to do
-Follow `.agents/skills/update-self/references/update-self-worker.md` end to end:
-trial-merge conflict triage, complete the merge (preserving the `update-self:`
-merge-commit subject), validate the merged set, generate the "what's new" report,
-and report `done`. Your target is the `target_ref` in this file's frontmatter
-(already fetched into `upstream`).
+Follow the worker guide at
+`runtime/update-self/skill-at-target/.agents/skills/update-self/references/update-self-worker.md`
+end to end: trial-merge conflict triage, complete the merge (preserving the
+`update-self:` merge-commit subject), validate the merged set, generate the
+"what's new" report, and report `done`. That
+`runtime/update-self/skill-at-target/.agents/skills/update-self` path is the copy
+of the update-self flow shipped with the version being updated to (staged by the
+lead and synced into your worktree with this runtime dir) -- run *all* its
+`update_self.py` calls from its `scripts/` too. Your target is the `target_ref` in
+this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
 Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
@@ -289,6 +359,130 @@ If the fast-forward is refused, `HEAD` moved under the pass: treat it as stale
 per `.agents/shared/references/harden-contention.md` and re-dispatch off the
 current `HEAD` -- do not hand-resolve.
 
+**Record the version, in the same landing.** Landing an update is what makes the
+workspace a new version, so the entry belongs in the git tree, right here --
+never left to a later turn. The merge sha only exists once the merge has landed,
+so this is a follow-up commit of exactly one file (the worker never writes it --
+only the lead knows the merge sha).
+
+Capture the merge sha **right here** -- immediately after the fast-forward, while
+`HEAD` still is the merge and before the ledger commit moves it:
+
+```bash
+MERGE_SHA=$(git rev-parse HEAD)
+```
+
+Then write the entry directly into `VERSION_HISTORY.md`. There is no helper
+skill -- this block is the whole recording contract, and it owns the format so
+`update-self`, `publish-inspiration`, and `update-published-inspiration` all write
+identical lines. The rules: append-only (existing lines are copied through
+verbatim, never re-flowed); every `## Workspace` line ends in a commit; and a
+retried landing must be a no-op, never a duplicate. Do the three parts below in
+order.
+
+**Part 1 -- if `VERSION_HISTORY.md` is missing** (deleted since creation),
+recreate the shipped starter first, then append. This heredoc is the canonical
+starter that `publish-inspiration` and `update-published-inspiration` recreate by reference
+to here:
+
+```bash
+[ -f VERSION_HISTORY.md ] || cat > VERSION_HISTORY.md <<'VERSION_HISTORY_EOF'
+# Version history
+
+Where this workspace came from, what it has published, and the inspirations it
+has adopted. Entries are appended automatically -- by `update-self` when it lands
+a template update, by `publish-inspiration` and `update-published-inspiration` when they
+publish, and by `update-installed-inspiration` when it pulls a newer version of an
+adopted inspiration -- and earlier lines are never rewritten. Each Workspace and
+Inspirations line ends in the commit it was cut from.
+
+## Workspace
+
+## Inspirations
+
+## Adopted inspirations
+
+Each inspiration this mind has adopted and the version it is on;
+`update-installed-inspiration` appends here when it pulls a newer version.
+VERSION_HISTORY_EOF
+```
+
+**Part 2 -- seed the `## Workspace` creation line if it is absent** -- exactly
+once per workspace, inserted as the FIRST line under `## Workspace` (the oldest
+event, so it never appends at the end). Resolve the creation snapshot as the
+**OLDEST** first-parent template-state marker (`^update-self:` or `Initial
+workspace commit`), and resolve its date/version/sha **from that commit itself**
+so seeding late still records when the workspace was actually created:
+
+```bash
+if ! grep -q "created from" VERSION_HISTORY.md; then
+    CREATION=$(git log --first-parent --format='%H %s' HEAD \
+        | awk '{h=$1; sub(/^[^ ]+ /,""); if ($0 ~ /^update-self:/ || $0 == "Initial workspace commit") last=h} END {if (last) print last}')
+    # Fallback (a hand-made or pre-bootstrap repo with no marker): the FIRST-PARENT
+    # root -- never `git rev-list --max-parents=0 HEAD`, whose parallel subtree roots
+    # are not the seed.
+    [ -n "$CREATION" ] || CREATION=$(git rev-list --first-parent HEAD | tail -1)
+    C_DATE=$(git log -1 --format=%ad --date=short "$CREATION")
+    C_SHA=$(git rev-parse --short=7 "$CREATION")
+    C_VERSION=$(git describe --tags --abbrev=0 --match 'minds-v*' "$CREATION" 2>/dev/null)
+    # Then insert `- <C_DATE>  created from <C_VERSION or "the workspace template">
+    # <C_SHA>` as the FIRST line under the `## Workspace` heading, note padded to 26.
+fi
+```
+
+**Use `git describe` (reachability), NEVER `git tag --points-at`.** No tag is ever
+*on* a creation snapshot: `Initial workspace commit` is an `--allow-empty` commit
+bootstrap writes ON TOP of the cloned template commit, and an `update-self:`
+marker is a merge commit -- in both cases the `minds-v*` tag is on an ancestor, so
+a pointing-at lookup always comes up empty and every creation line would silently
+degrade to the unnamed `created from the workspace template` fallback. (This walk
+takes the **OLDEST** marker -- where the mind *started*. `publish-inspiration`
+§2's `BASE_REF` walk uses the same markers but takes the **NEWEST**; the
+difference is load-bearing.)
+
+**Part 3 -- append the update line.** Under `## Workspace`, after its last
+existing line, append exactly one line of the form:
+
+```
+- <today, YYYY-MM-DD>  updated to <$REF>  <7-char $MERGE_SHA>
+```
+
+Pad the note (`updated to <$REF>`) to width 26 so the sha lines up; a longer note
+just pushes its own sha right, and earlier lines are never re-flowed. Compute the
+sha as `git rev-parse --short=7 "$MERGE_SHA"`. **Idempotence:** if a `##
+Workspace` line already carries this exact note AND this exact 7-char sha, it is
+already recorded -- change nothing and skip the commit below.
+
+Then commit exactly this one file:
+
+```bash
+git add VERSION_HISTORY.md
+git commit -m "version history: updated to $REF"
+```
+
+Stage `VERSION_HISTORY.md` **by name** -- NEVER `git add -A` (it would sweep
+up the mind's unrelated working state), and never a merge, checkout, or reset as
+part of recording. If the idempotence check found the entry already recorded,
+nothing is staged and you skip the commit.
+
+**Pass `$MERGE_SHA`, never `HEAD`.** The append de-duplicates on note + sha, and
+the `git commit` above moves `HEAD` onto the version-history commit: a re-run
+that reaches for `HEAD` would pass a different sha, defeat the no-op, and append
+a second line pointing at the ledger commit instead of the merge. On a re-run,
+re-derive the merge sha rather than re-reading `HEAD`:
+
+```bash
+MERGE_SHA=$(git log --first-parent --grep '^update-self:' -1 --format=%H)
+```
+
+That prints the newest template-state marker -- the merge you just landed -- and
+keeps printing it afterwards, so the whole block is safe to re-run.
+
+**Never give this commit an `update-self:` subject**: that prefix is the
+template-state marker `assist` and `publish-inspiration` §2 resolve `BASE_REF`
+from, it belongs to the merge commit alone, and `$MERGE_SHA` above depends on it
+staying that way.
+
 ### 5c. Reveal by change class
 
 The report says which classes merged. Apply each; a clean pull-in is still
@@ -312,9 +506,9 @@ The report says which classes merged. Apply each; a clean pull-in is still
   longer contains the update), surface the failure, and re-dispatch once the
   cause is fixed. Exit 3 means the restore itself failed -- surface immediately.
 
-- **`service` / `supervisord.conf` / `bootstrap`** -- restart the services agent
-  so `bootstrap` re-runs and `supervisord` reloads every program, then refresh
-  any affected tab (`python3 scripts/layout.py refresh <name>`):
+- **`service` / `supervisord.conf` / `bootstrap`** -- restart the whole services
+  agent (do not use `supervisorctl reread && update` here), then refresh any
+  affected tab (`python3 scripts/layout.py refresh <name>`):
 
   ```bash
   mngr start --restart system-services

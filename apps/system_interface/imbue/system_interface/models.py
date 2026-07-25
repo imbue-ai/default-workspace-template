@@ -45,6 +45,37 @@ class SendMessageResponse(FrozenModel):
     status: str = Field(description="Status of the send operation")
 
 
+class ModelOption(FrozenModel):
+    """A selectable Claude Code model shown in the composer model picker."""
+
+    id: str = Field(description="Value sent to Claude Code's /model command (e.g. 'opus[1m]', 'sonnet')")
+    label: str = Field(description="Human-readable model name shown in the picker")
+    supports_fast_mode: bool = Field(description="Whether fast mode applies to this model (Opus only)")
+
+
+class ModelSettingsResponse(FrozenModel):
+    """Response from GET /api/agents/{id}/model-settings."""
+
+    model: str = Field(description="The agent's currently configured model (raw settings.json value, e.g. 'opus[1m]')")
+    fast_mode: bool = Field(description="Whether fast mode is currently enabled for the agent")
+    fast_mode_supported: bool = Field(
+        description="Whether the current model supports fast mode (drives the toggle's visibility)"
+    )
+    options: tuple[ModelOption, ...] = Field(description="The selectable models, in display order")
+
+
+class SetModelRequest(FrozenModel):
+    """Request body for POST /api/agents/{id}/model."""
+
+    model: str = Field(description="Model id to switch to; must be one of the catalog option ids")
+
+
+class SetFastModeRequest(FrozenModel):
+    """Request body for POST /api/agents/{id}/fast."""
+
+    enabled: bool = Field(description="True to enable fast mode, False to disable it")
+
+
 class AttachmentUploadResponse(FrozenModel):
     """Response from the chat attachment upload endpoint."""
 
@@ -162,40 +193,80 @@ class ClaudeAuthStatusResponse(FrozenModel):
     """Response from /api/claude-auth/status."""
 
     logged_in: bool = Field(description="Whether claude is currently authenticated")
-    auth_method: str | None = Field(default=None, description="e.g. 'oauth', 'api_key'")
-    api_provider: str | None = Field(default=None, description="e.g. 'anthropic', 'claudeai'")
+    auth_method: str | None = Field(default=None, description="e.g. 'oauth', 'api_key', 'oauth_token'")
+    api_provider: str | None = Field(default=None, description="e.g. 'anthropic', 'claudeai', 'firstParty'")
     email: str | None = Field(default=None, description="The authenticated user's email, if any")
     org_id: str | None = Field(default=None, description="Anthropic organization ID, if any")
     org_name: str | None = Field(default=None, description="Anthropic organization name, if any")
     subscription_type: str | None = Field(
-        default=None, description="Subscription tier (e.g. 'Max'); absent for Console accounts"
+        default=None, description="Subscription tier (e.g. 'Max'); absent for token/Console sessions"
+    )
+    auth_mode: str = Field(
+        default="none",
+        description="Effective auth mode: 'subscription', 'console', 'imbue', 'api_key', or 'none'. Derived from "
+        "the managed settings-env keys when any are present, otherwise folded from `claude auth status`.",
+    )
+    masked_key_suffix: str | None = Field(
+        default=None, description="Last few characters of the managed key/token, for display"
+    )
+    workspace_host_id: str | None = Field(
+        default=None, description="This mind's mngr host id, for the desktop app's key-mint page link"
+    )
+    restart_phase: str | None = Field(
+        default=None, description="Phase of the post-auth agent restart: 'restarting', 'finishing', 'done', 'failed'"
+    )
+    restart_detail: str | None = Field(default=None, description="Human-readable detail for the current restart phase")
+    restart_error: str | None = Field(default=None, description="Error message when restart_phase is 'failed'")
+    restart_reason: str | None = Field(
+        default=None,
+        description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'",
     )
 
 
-class ClaudeOAuthStartRequest(FrozenModel):
-    """Request body for POST /api/claude-auth/start."""
+class ClaudeOAuthLoginStartRequest(FrozenModel):
+    """Request body for POST /api/claude-auth/oauth/start."""
 
-    provider: str = Field(description="Either 'claudeai' (subscription) or 'console'")
+    provider: str = Field(description="Which browser sign-in to run: 'claudeai' or 'console'")
 
 
-class ClaudeOAuthStartResponse(FrozenModel):
-    """Response from POST /api/claude-auth/start."""
+class ClaudeSetupTokenStartResponse(FrozenModel):
+    """Response from POST /api/claude-auth/setup-token/start."""
 
-    session_id: str = Field(description="Opaque token identifying the in-flight OAuth session")
+    session_id: str = Field(description="Opaque token identifying the in-flight setup-token session")
     oauth_url: str = Field(description="URL the user opens to authorize the login")
 
 
-class ClaudeOAuthSubmitCodeRequest(FrozenModel):
-    """Request body for POST /api/claude-auth/submit-code."""
+class ClaudeSetupTokenPollRequest(FrozenModel):
+    """Request body for POST /api/claude-auth/setup-token/poll."""
 
-    session_id: str = Field(description="session_id returned by /start")
+    session_id: str = Field(description="session_id returned by /setup-token/start")
+
+
+class ClaudeSetupTokenPollResponse(FrozenModel):
+    """Response from POST /api/claude-auth/setup-token/poll."""
+
+    is_complete: bool = Field(description="Whether the token was minted and written")
+    status: ClaudeAuthStatusResponse | None = Field(
+        default=None, description="Auth status after completion; None while still pending"
+    )
+
+
+class ClaudeSetupTokenSubmitCodeRequest(FrozenModel):
+    """Request body for POST /api/claude-auth/setup-token/submit-code."""
+
+    session_id: str = Field(description="session_id returned by /setup-token/start")
     code: str = Field(description="The CODE#STATE the user pasted from the browser")
 
 
-class ClaudeAuthApiKeyRequest(FrozenModel):
-    """Request body for POST /api/claude-auth/submit-api-key."""
+class ClaudeAuthCredentialsRequest(FrozenModel):
+    """Request body for POST /api/claude-auth/submit-credentials.
 
-    api_key: SecretStr = Field(description="A raw `sk-ant-...` API key")
+    `credentials` is env-var-style lines covering the managed auth keys:
+    an `ANTHROPIC_API_KEY=...` line (optionally with `ANTHROPIC_BASE_URL=...`
+    for the Imbue/LiteLLM case), or a `CLAUDE_CODE_OAUTH_TOKEN=...` line.
+    """
+
+    credentials: SecretStr = Field(description="Env-var-style credential lines (KEY=VALUE per line)")
 
 
 class LatchkeyPermissionInfo(FrozenModel):

@@ -115,11 +115,17 @@ _RENDER_MIN_HEIGHT = 480
 # tab feels snappier. Slightly more bandwidth than skipping frames.
 _SCREENCAST_EVERY_NTH_FRAME = 1
 
-# Deferred-install markers (see scripts/deferred_install.sh). Chromium and the
-# Xvfb virtual display install asynchronously on first container boot; launching
-# a browser before they exist fails, so callers gate on these.
-_PLAYWRIGHT_MARKER = Path("/var/lib/minds/deferred-install/done.playwright")
+# Deferred-install markers (see scripts/deferred_install.sh). Fortress (the
+# stealth Chromium engine) and the Xvfb virtual display both install asynchronously
+# on first container boot; launching a browser before they exist fails, so callers
+# gate on these.
+_FORTRESS_MARKER = Path("/var/lib/minds/deferred-install/done.fortress")
 _XVFB_MARKER = Path("/var/lib/minds/deferred-install/done.xvfb")
+
+# Fortress's fixed install path (see scripts/deferred_install.sh's
+# _install_fortress). A stealth, C++-patched Chromium fork -- replaces
+# vanilla Chromium as the engine for every browser the fleet launches.
+_FORTRESS_EXECUTABLE = "/opt/fortress/tilion-fortress/tilion"
 
 # Default model. browser-use's own default LLM is ChatBrowserUse (its hosted
 # model), so to drive with the user's Anthropic key we pass ChatAnthropic
@@ -366,7 +372,7 @@ def deferred_install_ready() -> tuple[bool, str]:
     """Return ``(ready, reason)`` once Chromium is installed."""
     if os.environ.get("BROWSER_SKIP_INSTALL_CHECK") == "1":
         return True, "ready"  # host/CI testing without the deferred-install marker
-    if not _PLAYWRIGHT_MARKER.exists():
+    if not _FORTRESS_MARKER.exists():
         return False, "Chromium is still installing in this workspace; try again in a minute."
     # Headful needs the Xvfb display present; wait for its install too (headless
     # runs -- tests, bare dev boxes -- don't need it).
@@ -592,7 +598,10 @@ class LiveBrowser(MutableModel):
         """
         self._playwright = playwright
         self._input_enabled.set()
-        chromium_path = playwright.chromium.executable_path
+        # Fixed Fortress path, not playwright.chromium.executable_path -- the
+        # fleet's engine is Fortress, not Playwright's own managed Chromium
+        # (which vanilla Playwright calls elsewhere in this image still use).
+        chromium_path = _FORTRESS_EXECUTABLE
         profile_dir = _profile_dir(self.browser_id)
         profile_dir.mkdir(parents=True, exist_ok=True)
         _clear_stale_singleton(profile_dir)  # a prior hard kill may have orphaned a lock
