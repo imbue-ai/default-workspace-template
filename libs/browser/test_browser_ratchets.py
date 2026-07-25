@@ -68,15 +68,15 @@ def test_prevent_builtin_exception_raises() -> None:
 
 def test_prevent_inline_imports() -> None:
     # +2 (MISFIRE) for names.py's module-level `try: from imbue.mngr... except
-    # ImportError: <local fallback>` block. This is the canonical optional-dependency
-    # pattern (the mngr name generator is reused when importable, with a tiny local
-    # word-pair generator as the fallback so the browser lib stands alone). The two
-    # imports are at MODULE level, not "inline within functions" -- the rule's actual
-    # target -- but the regex matches them because a `try` body is indented. Done once
-    # at import time (a `_generate` callable is bound), so the importability check costs
-    # nothing per call. Making the regex distinguish module-level try/except ImportError
-    # from function-inline imports risks missing real violations, so this is bumped.
-    rc.check_inline_imports(_DIR, snapshot(2))
+    # ImportError: <local fallback>` block, and +1 (MISFIRE) for capture.py's
+    # `try: from pixelflux import ... except ImportError:` -- both the canonical
+    # optional-dependency pattern (pixelflux links libva at import, absent on CI / bare
+    # boxes where the live view never runs, so the module stays importable and only a
+    # real capture fails). These are MODULE-level try/except ImportError, not the
+    # "inline within functions" the rule targets; the regex matches them only because a
+    # `try` body is indented. Making the regex distinguish the two risks missing real
+    # violations, so these are bumped.
+    rc.check_inline_imports(_DIR, snapshot(3))
 
 
 def test_prevent_relative_imports() -> None:

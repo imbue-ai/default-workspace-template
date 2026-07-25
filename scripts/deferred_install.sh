@@ -155,12 +155,15 @@ _install_xvfb() {
         return 0
     fi
     # Headful Chromium needs a display; Xvfb is a headless X server that gives it
-    # one (the browser runs headful under it -- see session.py's _HEADLESS). xclip
-    # bridges the resulting X11 clipboard to/from the user for native copy/paste
-    # (images included). Recover any interrupted dpkg first, same as playwright.
+    # one (each fleet browser runs headful under its OWN Xvfb -- see browser.display).
+    # xclip bridges the X11 clipboard to/from the user for native copy/paste (images
+    # included). libva-drm2/libva2 are the VA-API runtime that pixelflux (the live-view
+    # capture/encoder) links at import time even in CPU mode -- without them
+    # `import pixelflux` fails, so the browser service can't stream the live view.
+    # Recover any interrupted dpkg first, same as playwright.
     _recover_interrupted_dpkg
-    _log "xvfb: installing xvfb + xclip"
-    if apt-get update -y && apt-get install -y --no-install-recommends xvfb xclip; then
+    _log "xvfb: installing xvfb + xclip + libva (pixelflux runtime)"
+    if apt-get update -y && apt-get install -y --no-install-recommends xvfb xclip libva2 libva-drm2; then
         touch "$marker"
         _log "xvfb: install complete, marker written to $marker"
     else
