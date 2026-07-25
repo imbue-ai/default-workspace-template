@@ -65,7 +65,7 @@ Consequences for you:
 | Locate one panel + its tab-mates + cardinal neighbors | `python3 scripts/layout.py where <ref> [--layout <name>]` |
 | List everything addressable (services + agents) with open/running flags | `python3 scripts/layout.py list` |
 | Switch a client onto a named layout | `python3 scripts/layout.py load <layout> [--client <id>]` |
-| Surface a service / URL / terminal / chat alongside your chat | `python3 scripts/layout.py open <target> --layout <name>` |
+| Surface a service / URL / terminal / chat alongside your chat (NOT `browser` -- the agentic-browser-fleet auto-surfaces its own panes; never `open browser`) | `python3 scripts/layout.py open <target> --layout <name>` |
 | Put a new terminal in the same tab group as your chat | `python3 scripts/layout.py split terminal --relative-to=self --direction=within --layout <name>` |
 | Close a tab | `python3 scripts/layout.py close <ref> --layout <name>` |
 

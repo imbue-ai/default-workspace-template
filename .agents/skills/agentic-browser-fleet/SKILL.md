@@ -204,7 +204,9 @@ uv run agentic-browser-fleet handoff alex-smith "solve the CAPTCHA on the sign-i
 
 ## Live view vs. your output
 
-The browser shows up live in a UI pane next to your chat so the human can watch you operate it. That pane is **viewer only** -- your actual output (the `state` listings, the `ok:`/error lines, the screenshot paths) is in your CLI output here in the chat. Read and relay the CLI output; don't tell the user to "check the tab" for results.
+The browser shows up live in a UI pane next to your chat so the human can watch you operate it. **This pane is automatic** -- `new`, `task`, and your first direct command each surface (and focus) it for you. **Never open it yourself** with `layout.py open`/`split browser` (or any other tool): a bare `service:browser` has no browser bound and the daemon rejects it, and a session-qualified open is redundant with the auto-pane. If the auto-pane can't land (you're a background/sub-agent with no chat in view), the CLI already prints a one-line "open it from the + menu" note -- relay that; don't retry with layout.py.
+
+That pane is **viewer only** -- your actual output (the `state` listings, the `ok:`/error lines, the screenshot paths) is in your CLI output here in the chat. Read and relay the CLI output; don't tell the user to "check the tab" for results.
 
 ## Multiple browsers, tabs, sub-agents
 
