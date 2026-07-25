@@ -946,6 +946,32 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
         assert "system-interface-hostname" in response.text
 
 
+def test_index_enable_codex_meta_tag_off_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The codex feature flag is injected and defaults to off (button hidden)."""
+    monkeypatch.delenv("FEATURE_FLAG_ENABLE_CODEX", raising=False)
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        response = create_application(build_test_state()).test_client().get("/")
+        assert response.status_code == 200
+        assert '<meta name="system-interface-enable-codex" content="false">' in response.text
+
+
+def test_index_enable_codex_meta_tag_on_when_flag_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting FEATURE_FLAG_ENABLE_CODEX to a truthy value flips the injected flag on."""
+    monkeypatch.setenv("FEATURE_FLAG_ENABLE_CODEX", "1")
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        response = create_application(build_test_state()).test_client().get("/")
+        assert response.status_code == 200
+        assert '<meta name="system-interface-enable-codex" content="true">' in response.text
+
+
 def test_random_name_endpoint(client: FlaskClient) -> None:
     """The random name endpoint returns a non-empty name."""
     response = client.get("/api/random-name")

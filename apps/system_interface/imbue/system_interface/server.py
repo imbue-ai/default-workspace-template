@@ -182,6 +182,22 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
+def _is_codex_enabled() -> bool:
+    """Whether the codex harness UI is enabled, from the ``FEATURE_FLAG_ENABLE_CODEX`` env var.
+
+    Off by default: the "New Codex Agent" launcher appears only when this is set to a
+    truthy value (``1``/``true``/``yes``/``on``), so codex can be dark-launched and
+    turned on per host without a rebuild.
+    """
+    return os.environ.get("FEATURE_FLAG_ENABLE_CODEX", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _inject_enable_codex_meta_tag(html_content: str) -> str:
+    """Inject the codex feature flag so the frontend can gate the codex launcher."""
+    meta_tag = f'<meta name="system-interface-enable-codex" content="{str(_is_codex_enabled()).lower()}">'
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
     if index_path.exists():
@@ -191,6 +207,7 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
+        html_content = _inject_enable_codex_meta_tag(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _html_response(html_content)

@@ -10,3 +10,6 @@ Added codex as a peer harness in the workspace chat UI, alongside claude.
 - Sending to a cold codex agent no longer hangs the request past the proxy
   timeout ("Failed to send: null"): the send is bounded and, if the agent is
   still starting, accepted for background delivery.
+- The "New Codex Agent" launcher is gated behind a FEATURE_FLAG_ENABLE_CODEX
+  feature flag (off by default), so codex can be dark-launched and enabled per
+  host without a rebuild.

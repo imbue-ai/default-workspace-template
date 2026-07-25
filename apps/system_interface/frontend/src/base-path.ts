@@ -45,3 +45,19 @@ export function getPrimaryAgentId(): string {
   cachedPrimaryAgentId = metaElement?.getAttribute("content") ?? "";
   return cachedPrimaryAgentId;
 }
+
+let cachedCodexEnabled: boolean | null = null;
+
+/**
+ * Whether the codex harness is enabled for this host (backend FEATURE_FLAG_ENABLE_CODEX,
+ * delivered as the ``system-interface-enable-codex`` meta tag). Gates the "New Codex
+ * Agent" launcher. Off unless the meta tag is explicitly "true".
+ */
+export function isCodexEnabled(): boolean {
+  if (cachedCodexEnabled !== null) {
+    return cachedCodexEnabled;
+  }
+  const metaElement = document.querySelector('meta[name="system-interface-enable-codex"]');
+  cachedCodexEnabled = metaElement?.getAttribute("content") === "true";
+  return cachedCodexEnabled;
+}

@@ -33,7 +33,7 @@ import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
-import { apiUrl, getPrimaryAgentId } from "../base-path";
+import { apiUrl, getPrimaryAgentId, isCodexEnabled } from "../base-path";
 import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
@@ -768,14 +768,18 @@ function buildDropdownItems(
 
   // New codex agent -- a chat agent running the codex harness (mngr template
   // chat_codex) in the primary's work_dir, alongside the claude chat above.
-  items.push({
-    label: "New Codex Agent",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewCodexModal = true;
-      m.redraw();
-    },
-  });
+  // Gated behind FEATURE_FLAG_ENABLE_CODEX (delivered via meta tag) so codex can
+  // be dark-launched; hidden unless the host explicitly enables it.
+  if (isCodexEnabled()) {
+    items.push({
+      label: "New Codex Agent",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        showNewCodexModal = true;
+        m.redraw();
+      },
+    });
+  }
 
   // New terminal -- allocates a fresh named tmux session anchored at the
   // primary agent's work_dir.
