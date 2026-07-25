@@ -190,3 +190,81 @@ def test_child_env_strips_mngr_vars_when_requested(
     assert "MNGR_AGENT_STATE_DIR" not in env
     # The real environment is untouched (we only scrub the copy).
     assert os.environ.get("MNGR_AGENT_NAME") == "lead"
+
+
+def _isolate_credential_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point every credential source at an empty tmp dir; return a settings path.
+
+    chdir isolates the runtime/secrets/anthropic.env snapshot (a repo-root
+    relative path); CLAUDE_CONFIG_DIR points at the tmp dir for settings; the
+    process-env credential vars are cleared.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    return tmp_path / "settings.json"
+
+
+def test_credentials_prefer_snapshot_over_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The setup-time snapshot pins a keyed integration across later auth changes."""
+    settings = _isolate_credential_sources(tmp_path, monkeypatch)
+    settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-new-key", "ANTHROPIC_BASE_URL": "https://new/"}}')
+    snapshot = tmp_path / "runtime" / "secrets" / "anthropic.env"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text("ANTHROPIC_API_KEY=sk-pinned-key\nANTHROPIC_BASE_URL=https://pinned/\n")
+
+    creds = claude_p.read_workspace_ai_credentials()
+
+    assert creds.api_key == "sk-pinned-key"
+    assert creds.base_url == "https://pinned/"
+
+
+def test_credentials_fall_back_to_settings_without_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _isolate_credential_sources(tmp_path, monkeypatch)
+    settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-settings-key"}}')
+
+    creds = claude_p.read_workspace_ai_credentials()
+
+    assert creds.api_key == "sk-settings-key"
+    assert creds.base_url is None
+
+
+def test_credentials_never_take_oauth_token_from_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hand-edited token line in the snapshot is ignored: tokens cannot auth API calls."""
+    _isolate_credential_sources(tmp_path, monkeypatch)
+    snapshot = tmp_path / "runtime" / "secrets" / "anthropic.env"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-handwritten\n")
+
+    assert claude_p.read_workspace_ai_credentials().oauth_token is None
+
+
+def test_write_snapshot_captures_key_and_base_url_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The snapshot writer records the key + base URL, owner-only, and never the token."""
+    settings = _isolate_credential_sources(tmp_path, monkeypatch)
+    settings.write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-live-key", "ANTHROPIC_BASE_URL": "https://proxy/",'
+        ' "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"}}'
+    )
+
+    written = claude_p.write_anthropic_env_snapshot()
+
+    snapshot = tmp_path / written
+    content = snapshot.read_text()
+    assert content == "ANTHROPIC_API_KEY=sk-live-key\nANTHROPIC_BASE_URL=https://proxy/\n"
+    assert (snapshot.stat().st_mode & 0o777) == 0o600
+
+
+def test_write_snapshot_raises_without_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A keyless workspace has nothing to snapshot; the writer says so instead of writing junk."""
+    settings = _isolate_credential_sources(tmp_path, monkeypatch)
+    settings.write_text('{"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-secret"}}')
+
+    with pytest.raises(claude_p.ClaudeCLIError, match="nothing to snapshot"):
+        claude_p.write_anthropic_env_snapshot()
+    assert not (tmp_path / "runtime" / "secrets" / "anthropic.env").exists()

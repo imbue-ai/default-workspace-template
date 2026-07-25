@@ -11,21 +11,42 @@ which path to use, the call surface, and the cost model. Whatever sent you here
 adding an AI integration elsewhere -- supplies the framing; this skill is the
 how.
 
-Code reaches Claude in one of two ways, depending on whether `ANTHROPIC_API_KEY`
-is set in the environment: with a key, call `litellm` directly; without one, use
-the `claude -p` helper in `scripts/claude_p.py`.
+Code reaches Claude in one of two ways, depending on whether an
+`ANTHROPIC_API_KEY` is configured for the workspace: with a key, call `litellm`
+directly; without one, use the `claude -p` helper in `scripts/claude_p.py`.
 
-Which path applies is fixed for a deployment -- it does not change at runtime, so
-**do not handle both.** Check once, up front, with a shell command, and
-implement only the path that applies:
+Credentials live in the `env` block of the shared `$CLAUDE_CONFIG_DIR/settings.json`
+(written by the in-UI Claude sign-in modal), NOT in the process environment --
+services inherit a frozen env from supervisord, so an env-var check goes stale
+when the user changes auth. Check which path applies with the resolver in
+`scripts/claude_p.py`:
 
 ```bash
-[ -n "$ANTHROPIC_API_KEY" ] && echo keyed || echo keyless
+uv run python -c "from claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
 ```
 
-If keyed, write only the litellm path; if keyless, write only the `claude -p`
-path. Branching on the key at call time is dead weight. If the user decides to
-add an API key, you can do a simple migration.
+**Keyed setups snapshot the key at setup time.** When the check says `keyed`,
+copy the API key (and the proxy base URL that goes with it) into
+`runtime/secrets/anthropic.env` as part of setting up the integration, and have
+the service load its credentials from there -- `read_workspace_ai_credentials()`
+already resolves that file first, so callers using it get this for free. Run
+once while setting up:
+
+```bash
+uv run python -c "from claude_p import write_anthropic_env_snapshot; print(write_anthropic_env_snapshot())"
+```
+
+Only the key + base URL go in the snapshot -- NEVER `CLAUDE_CODE_OAUTH_TOKEN`
+(a subscription token cannot authenticate direct API calls, and the writer
+refuses it). The snapshot pins the integration: if the user later switches the
+workspace's sign-in (e.g. to a subscription), built services keep billing
+against the key they were set up with. To re-key or retire an integration,
+rewrite or delete `runtime/secrets/anthropic.env` when the user asks.
+
+Which path applies rarely changes for a deployment, so **do not branch on it at
+call time in simple flows** -- but keyed callers must still resolve the
+key/base URL via `read_workspace_ai_credentials()` at each call (not once at
+import), so a deliberate re-snapshot takes effect without a service restart.
 
 A caller's model is set **in the code** -- expose it as a top-of-file constant
 plus a `--model` override (e.g. `WRITE_MODEL = "claude-haiku-4-5"`), so switching
@@ -63,16 +84,20 @@ temperature, etc. with no wrapper of ours in the way. `litellm` is in the root
 `pyproject.toml`; read its docs for the call surface. Sketch:
 
 ```python
-import os
 from litellm import completion, completion_cost
 
-# If the deployment routes Claude through a proxy, it advertises ANTHROPIC_BASE_URL.
-# litellm reads a differently-named var and is picky about a trailing slash, so
-# resolve it explicitly -- this keeps the litellm-direct path working everywhere.
-api_base = (os.environ.get("ANTHROPIC_BASE_URL") or "").rstrip("/") or None
+from claude_p import read_workspace_ai_credentials  # the file you copied in
+
+# Resolve credentials at call time: the runtime/secrets/anthropic.env snapshot
+# first (see setup above), then the shared Claude settings, then the process
+# env. litellm reads differently-named vars and is picky about a trailing
+# slash, so pass both explicitly.
+creds = read_workspace_ai_credentials()
+api_base = (creds.base_url or "").rstrip("/") or None
 
 resp = completion(
     model="claude-haiku-4-5",
+    api_key=creds.api_key,
     api_base=api_base,
     messages=[
         {"role": "system", "content": "You are an email triage classifier."},

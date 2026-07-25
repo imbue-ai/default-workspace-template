@@ -15,6 +15,37 @@ export function renderMarkdown(source: string): string {
   return DOMPurify.sanitize(rawHtml);
 }
 
+/**
+ * Append a per-message ``requested_at`` query parameter to chat file URLs.
+ *
+ * Chat markdown references a file by its absolute on-disk path, which the
+ * backend serves with a one-year ``immutable`` cache policy. If an agent
+ * overwrites a previously referenced file, a *new* message reusing that path
+ * would otherwise render the browser's stale cached copy. Tagging each message's
+ * image ``src`` and link ``href`` with the message's post time makes its URL
+ * unique per message: a new message's URL has never been cached, so the browser
+ * fetches the file's current bytes, while re-rendering the *same* message reuses
+ * its stable URL (and the immutable cache) without refetching. The parameter is
+ * a pure cache key -- the server ignores it and serves the file as usual.
+ *
+ * External URLs (``https://``, ``//``), app routes (``/api/...``), and paths
+ * that already carry a query string are left untouched.
+ */
+export function requestedAtUrl(value: string, requestedAt: string): string | null {
+  if (!value.startsWith("/") || value.startsWith("//") || value.startsWith("/api/")) return null;
+  if (value.includes("?")) return null;
+  return `${value}?requested_at=${encodeURIComponent(requestedAt)}`;
+}
+
+function appendRequestedAt(container: HTMLElement, requestedAt: string): void {
+  const tagAttribute = (element: Element, attribute: string): void => {
+    const tagged = requestedAtUrl(element.getAttribute(attribute) ?? "", requestedAt);
+    if (tagged !== null) element.setAttribute(attribute, tagged);
+  };
+  for (const image of Array.from(container.querySelectorAll("img"))) tagAttribute(image, "src");
+  for (const anchor of Array.from(container.querySelectorAll("a"))) tagAttribute(anchor, "href");
+}
+
 function hasToolCallLine(textContent: string): boolean {
   for (const line of textContent.split("\n")) {
     if (line.trim().startsWith(TOOL_CALL_PREFIX)) {
@@ -83,11 +114,14 @@ function handleMarkdownImageClick(event: MouseEvent): void {
   }
 }
 
-export const MarkdownContent: m.Component<{ content: string }> = {
+export const MarkdownContent: m.Component<{ content: string; requestedAt?: string }> = {
   oncreate(vnode) {
     const element = vnode.dom as HTMLElement;
     element.innerHTML = renderMarkdown(vnode.attrs.content);
     wrapToolCallBlocks(element);
+    if (vnode.attrs.requestedAt) {
+      appendRequestedAt(element, vnode.attrs.requestedAt);
+    }
     // Clicking an inline image opens it full-screen. The listener is delegated
     // on the container, which mithril reuses across redraws, so it survives the
     // innerHTML resets in onupdate without needing to be re-attached.
@@ -109,6 +143,9 @@ export const MarkdownContent: m.Component<{ content: string }> = {
     const expanded = saveExpandedState(element);
     element.innerHTML = renderMarkdown(vnode.attrs.content);
     wrapToolCallBlocks(element);
+    if (vnode.attrs.requestedAt) {
+      appendRequestedAt(element, vnode.attrs.requestedAt);
+    }
     restoreExpandedState(element, expanded);
   },
   view() {

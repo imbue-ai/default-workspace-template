@@ -40,6 +40,7 @@ class BackupEventType(UpperCaseStrEnum):
     RESTIC_BACKUP_FAILED = auto()
     BACKUP_REPEATEDLY_FAILING = auto()
     FORGET_COMPLETED = auto()
+    RESTORE_MARKERS_FORGOTTEN = auto()
     PRUNE_COMPLETED = auto()
     PRUNE_SKIPPED = auto()
     CONFIG_RELOADED = auto()
@@ -160,6 +161,21 @@ class ForgetCompletedEvent(BackupEvent):
     """`restic forget` finished (index update, no data deletion)."""
 
     tick_id: str
+    exit_code: int
+    duration_seconds: float
+    stdout: str
+    stderr: str
+
+
+class RestoreMarkersForgottenEvent(BackupEvent):
+    """Old restore-marker snapshots (`pre-restore` / `restored`) were aged out.
+
+    Emitted only when at least one marker past the retention cutoff was found
+    and a `restic forget <ids>` was run to drop it.
+    """
+
+    tick_id: str
+    forgotten_count: int
     exit_code: int
     duration_seconds: float
     stdout: str

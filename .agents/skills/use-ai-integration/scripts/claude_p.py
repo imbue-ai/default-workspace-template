@@ -6,10 +6,27 @@
 """Copyable helper for calling headless ``claude -p`` from a service.
 
 COPY THIS FILE into your service and adapt it -- it is a reference snippet, not an
-importable package. It is the **keyless** path for an AI-driven service: when
-``ANTHROPIC_API_KEY`` is set, call ``litellm`` directly instead (cheaper for
-non-agentic work; see the use-ai-integration skill). When no key is set,
-``claude -p`` runs on the local Claude subscription's programmatic pool.
+importable package. It is the **keyless** path for an AI-driven service: when an
+``ANTHROPIC_API_KEY`` is configured for the workspace, call ``litellm`` directly
+instead (cheaper for non-agentic work; see the use-ai-integration skill). With no
+key, ``claude -p`` runs on the local Claude subscription's programmatic pool.
+
+Workspace credentials live in the ``env`` block of the shared
+``$CLAUDE_CONFIG_DIR/settings.json`` (written by the in-UI Claude sign-in
+modal), NOT in the process environment -- long-lived services inherit a
+frozen env from supervisord, so an env-var check would go stale the moment
+the user changes auth. Keyed (API key) integrations additionally snapshot
+the key + base URL into ``runtime/secrets/anthropic.env`` at setup time
+(``write_anthropic_env_snapshot``): the workspace's sign-in can change
+after a service is built, and a keyed service keeps billing against the
+key it was set up with rather than silently switching. The user removes or
+re-snapshots that file (via the agent) to change an integration's key.
+``read_workspace_ai_credentials`` resolves the snapshot first, then the
+settings file, then the process env (the last for non-workspace contexts);
+every fresh ``claude -p`` subprocess reads the shared settings itself, so
+the keyless path always uses current auth with no service restarts. The
+subscription ``CLAUDE_CODE_OAUTH_TOKEN`` is never snapshotted -- it cannot
+authenticate direct API (litellm) calls.
 
 Two entry points cover the two non-agent scenarios; both share one core that
 handles the things that are easy to get wrong by hand:
@@ -57,6 +74,121 @@ _DEFAULT_MODEL = "claude-haiku-4-5"
 
 class ClaudeCLIError(RuntimeError):
     """A ``claude -p`` invocation failed or returned unparseable / error output."""
+
+
+@dataclass(frozen=True)
+class WorkspaceAICredentials:
+    """The workspace's current Anthropic credentials, resolved at call time.
+
+    ``api_key`` present means the keyed (litellm-direct) path applies;
+    ``base_url`` accompanies it for proxy (Imbue/LiteLLM) setups. With no
+    key, use the keyless ``claude -p`` path (a subscription ``oauth_token``
+    may be present but is consumed by claude itself, not by litellm).
+    """
+
+    api_key: str | None
+    base_url: str | None
+    oauth_token: str | None
+
+
+# Where a keyed integration's snapshot of the workspace API key lives, written
+# at integration-setup time by ``write_anthropic_env_snapshot``. Relative to
+# the repo root, which is every service's working directory (supervisord runs
+# them from /code). Holds ONLY ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL): the
+# subscription oauth token cannot authenticate direct API calls, so it is
+# never written here.
+ANTHROPIC_ENV_SNAPSHOT_PATH = "runtime/secrets/anthropic.env"
+
+
+def _read_env_file(path: str) -> dict[str, str]:
+    """Parse simple ``KEY=VALUE`` lines from an env file; {} if absent/unreadable."""
+    values: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if key.strip() and value.strip():
+                    values[key.strip()] = value.strip()
+    except OSError:
+        return {}
+    return values
+
+
+def read_workspace_ai_credentials() -> WorkspaceAICredentials:
+    """Resolve current credentials: the snapshot file, then shared settings, then env.
+
+    ``runtime/secrets/anthropic.env`` -- the key snapshot a keyed integration
+    writes at setup (``write_anthropic_env_snapshot``) -- wins for the API key
+    and base URL: a built service stays pinned to the key it was set up with
+    even after the user switches the workspace's sign-in in the modal. The
+    settings.json env block (written by the sign-in modal) is next; the
+    process env is only a fallback so this helper still works outside a
+    workspace (e.g. local development with an exported key). The oauth token
+    never comes from the snapshot (it is never written there).
+    """
+    snapshot_env = _read_env_file(ANTHROPIC_ENV_SNAPSHOT_PATH)
+    settings_env: dict[str, object] = {}
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    if config_dir:
+        settings_path = os.path.join(config_dir, "settings.json")
+        try:
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+            if isinstance(settings, dict) and isinstance(settings.get("env"), dict):
+                settings_env = settings["env"]
+        except (OSError, ValueError):
+            settings_env = {}
+
+    def resolve(key: str, use_snapshot: bool = True) -> str | None:
+        if use_snapshot:
+            snapshot_value = snapshot_env.get(key, "").strip()
+            if snapshot_value:
+                return snapshot_value
+        settings_value = settings_env.get(key)
+        if isinstance(settings_value, str) and settings_value.strip():
+            return settings_value.strip()
+        env_value = os.environ.get(key, "").strip()
+        return env_value or None
+
+    return WorkspaceAICredentials(
+        api_key=resolve("ANTHROPIC_API_KEY"),
+        base_url=resolve("ANTHROPIC_BASE_URL"),
+        # The snapshot never legitimately holds a token (see the writer), so a
+        # hand-edited one is ignored rather than trusted.
+        oauth_token=resolve("CLAUDE_CODE_OAUTH_TOKEN", use_snapshot=False),
+    )
+
+
+def write_anthropic_env_snapshot() -> str:
+    """Snapshot the workspace's current API key (+ base URL) for a keyed integration.
+
+    Run once at integration-setup time (and again only to deliberately
+    re-key). Writes ``ANTHROPIC_API_KEY`` and, when present,
+    ``ANTHROPIC_BASE_URL`` to ``runtime/secrets/anthropic.env`` with owner-only
+    permissions, creating ``runtime/secrets/`` if needed. Deliberately never
+    writes ``CLAUDE_CODE_OAUTH_TOKEN`` -- a subscription token cannot
+    authenticate direct API calls. Raises when the workspace has no API key
+    configured (the integration should use the keyless ``claude -p`` path
+    instead). Returns the path written.
+    """
+    creds = read_workspace_ai_credentials()
+    if not creds.api_key:
+        raise ClaudeCLIError(
+            "No ANTHROPIC_API_KEY is configured for this workspace; there is nothing to snapshot. "
+            "Use the keyless claude -p path instead."
+        )
+    lines = [f"ANTHROPIC_API_KEY={creds.api_key}"]
+    if creds.base_url:
+        lines.append(f"ANTHROPIC_BASE_URL={creds.base_url}")
+    directory = os.path.dirname(ANTHROPIC_ENV_SNAPSHOT_PATH)
+    os.makedirs(directory, exist_ok=True)
+    fd = os.open(ANTHROPIC_ENV_SNAPSHOT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return ANTHROPIC_ENV_SNAPSHOT_PATH
 
 
 @dataclass(frozen=True)
