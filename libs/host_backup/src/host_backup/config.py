@@ -68,6 +68,15 @@ class RetentionSettings(FrozenModel):
         default=24.0,
         description="Minimum gap between successive `restic prune` runs",
     )
+    restore_marker_max_age_days: float = Field(
+        default=7.0,
+        description=(
+            "How long to keep the minds restore-marker snapshots (`pre-restore` / "
+            "`restored`) that the retention forget protects from thinning. Older "
+            "ones are forgotten so they don't accumulate without bound. Set to 0 "
+            "to keep them forever."
+        ),
+    )
 
 
 class BackupConfig(FrozenModel):
