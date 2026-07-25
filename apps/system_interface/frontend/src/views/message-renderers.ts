@@ -10,7 +10,7 @@ import { openSubagentTab } from "./DockviewWorkspace";
 import type { PermissionResolution } from "./message-classification";
 import { isPermissionRequestCall, isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard } from "./permission-card";
-import { codexToolName } from "./codexCaption";
+import { codexToolLabel } from "./codexCaption";
 import { getAgentById } from "../models/AgentManager";
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
@@ -257,12 +257,12 @@ export function renderToolCallBlock(
   toolResult: ToolResultEvent | null,
   harness: string = "claude",
 ): m.Vnode {
-  // Codex code mode names every operation `exec`; surface the inner `tools.<fn>`
-  // operation (`exec_command`, `apply_patch`, ...) so the header reads like claude's
-  // `Tool: <name>` instead of an opaque `Tool: exec`. The raw JS program stays in the
-  // block body below (preserve-raw). Claude tools keep their own name.
-  const displayName = harness === "codex" ? codexToolName(toolCall) : toolCall.tool_name;
-  const headerText = `Tool: ${displayName}`;
+  // Codex code mode names every operation `exec` and hides the real one in the JS,
+  // so the header uses the SAME `codexToolLabel` as the live activity caption -- one
+  // source of truth, so "Tool: exec" and the bottom "Running code" can never disagree.
+  // The raw JS program stays in the block body below (preserve-raw). Claude tools keep
+  // the generic `Tool: <name>` header.
+  const headerText = harness === "codex" ? codexToolLabel(toolCall) : `Tool: ${toolCall.tool_name}`;
   const inputText = toolCall.input_preview || "";
   const outputText = toolResult?.output || "";
   const isError = toolResult?.is_error === true;

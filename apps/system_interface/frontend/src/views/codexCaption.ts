@@ -75,23 +75,35 @@ function labelForMcp(fn: string): string | null {
 }
 
 /**
- * The tool *name* to show in a transcript block header for a codex call. Code mode
- * names every operation ``exec``; the meaningful operation is the inner ``tools.<fn>``
- * (``exec_command``, ``apply_patch``, ...). Surfacing that keeps the header in claude's
- * ``Tool: <name>`` form instead of an opaque ``Tool: exec``. Falls back to the raw
- * ``tool_name`` when the input isn't a recognizable code-mode call (or isn't ``exec``
- * at all, e.g. the synthesized ``web_search`` block).
+ * The single human label for a codex tool call, used BOTH for the live activity
+ * caption at the bottom AND for the transcript tool-block header -- one source of
+ * truth so the two never disagree.
+ *
+ * Code mode names every operation ``exec`` and hides the real one in the JS
+ * (``tools.<fn>({...})``); we parse the function name (a literal identifier, robust)
+ * for the verb and make the target best-effort (only a plain string literal).
+ * Anything we can't recognise falls back to "Running code" rather than guessing --
+ * so a bare, unparseable ``exec`` reads as "Running code", NOT "Running <cmd>".
  */
-export function codexToolName(tc: ToolCall): string {
-  if (tc.tool_name !== "exec") return tc.tool_name;
-  const match = CODE_MODE_CALL.exec(tc.input_preview);
-  return match !== null ? match[1] : tc.tool_name;
-}
-
 export function codexToolLabel(tc: ToolCall): string {
-  // Every codex tool in code mode is `exec`; anything else is unexpected -> generic.
+  // The synthesized hosted web search is its own tool_name, not a code-mode exec.
+  if (tc.tool_name === "web_search") {
+    const query = firstStringArg(tc.input_preview, "query", "q");
+    return query !== null ? `Searching the web "${shorten(query)}"` : "Searching the web";
+  }
+  // Every other codex tool in code mode is `exec`; anything else is unexpected -> generic.
   if (tc.tool_name !== "exec") return "Running tool…";
-  const match = CODE_MODE_CALL.exec(tc.input_preview);
+  const js = tc.input_preview;
+
+  // apply_patch front-loads the (often huge) patch body into a variable, e.g.
+  // `const p = "*** Begin Patch\n*** Add File: ..."; await tools.apply_patch(p)`, which
+  // pushes `tools.apply_patch(` past the truncated preview -- so the `tools.<fn>` scan
+  // below can't see it and we'd wrongly say "Running code". The patch header sits at the
+  // START of the body, so detect it directly.
+  const patch = APPLY_PATCH_HEADER.exec(js);
+  if (patch !== null) return `Editing ${basename(patch[1].trim())}`;
+
+  const match = CODE_MODE_CALL.exec(js);
   if (match === null) return "Running code";
   const fn = match[1];
 
