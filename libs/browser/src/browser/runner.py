@@ -38,6 +38,7 @@ relied on).
 import json
 import os
 import queue
+import time
 import signal
 import threading
 from collections.abc import Callable, Iterator
@@ -102,6 +103,10 @@ _CAST_INBOUND_POLL_SECONDS = 0.05
 # A /stream client sends its codec-capability handshake immediately on open; bound the
 # wait tightly so a mute/half-open client can't hold a subscriber slot doing nothing.
 _STREAM_HANDSHAKE_TIMEOUT = float(os.environ.get("BROWSER_STREAM_HANDSHAKE_TIMEOUT", "15"))
+# How long a /stream socket holds open waiting for a still-starting browser to become ready
+# (encoder available) before giving up -- generously longer than a cold Chromium launch, so
+# the first viewer never has to reconnect just because it opened during startup.
+_STREAM_READY_TIMEOUT = float(os.environ.get("BROWSER_STREAM_READY_TIMEOUT", "90"))
 
 # The ONE sync<->async boundary: every route reaches the async world through this
 # bridge's single background loop (see browser.loop_bridge). The manager and all
@@ -918,9 +923,22 @@ def stream_socket(ws: Any, browser_id: str) -> None:
             want_h264 = bool(json.loads(first).get("h264"))
     except (ConnectionClosed, ValueError, TypeError):
         pass
+    # If the browser isn't ready yet (still starting -> add_stream_subscriber returns None),
+    # WAIT on this one socket -- polling until it's ready -- instead of closing and making the
+    # client reconnect. That reconnect churn produced "Invalid frame header" errors and, timed
+    # against the init->running flip, could leave the FIRST viewer stuck reconnecting while a
+    # freshly reopened tab connected cleanly (the "close and reopen fixes it" bug). ws.receive
+    # doubles as the ~250ms wait AND detects the client navigating away.
     client_queue = bridge.run(session.add_stream_subscriber(want_h264), timeout=_ROUTE_TIMEOUT)
+    ready_deadline = time.monotonic() + _STREAM_READY_TIMEOUT
+    while client_queue is None and time.monotonic() < ready_deadline:
+        try:
+            ws.receive(timeout=0.25)
+        except ConnectionClosed:
+            return  # client went away while we waited
+        client_queue = bridge.run(session.add_stream_subscriber(want_h264), timeout=_ROUTE_TIMEOUT)
     if client_queue is None:
-        ws.close(1013)  # not running yet / headless -- viewer retries
+        ws.close(1013)  # never became ready within the window -- viewer retries
         return
     streaming = True
     try:
