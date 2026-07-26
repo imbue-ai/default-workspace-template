@@ -471,6 +471,11 @@ class LiveBrowser(MutableModel):
     _active_cdp: CDPSession | None = PrivateAttr(default=None)
     _agent: Agent | None = PrivateAttr(default=None)
     _agent_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
+    # The in-flight direct-control action (a single click/type/navigate), set for the
+    # duration of run_action's action. A human take_control cancels it (so the human's
+    # XTest never overlaps an agent's still-running CDP action), and the idle-lease sweep
+    # skips while it's set (a long action must not be swept out from under itself).
+    _direct_action_task: "asyncio.Task[Any] | None" = PrivateAttr(default=None)
     _run_on_event: EventSink | None = PrivateAttr(default=None)
     _input_enabled: asyncio.Event = PrivateAttr(default_factory=_enabled_event)
     # Outbound fan-out queues, one per connected cast WebSocket. The WS lives on a
@@ -812,7 +817,7 @@ class LiveBrowser(MutableModel):
     # --- active tab ----------------------------------------------------------
 
     async def _set_active_page(self, page: Page) -> None:
-        """Make ``page`` the input/agent target and refresh the tab list.
+        """Make ``page`` the input/agent target and refresh the tab list, taking ``_lock``.
 
         The live *view* is a capture of the whole display, which always shows whatever
         tab Chromium has in front -- so switching tabs (via ``bring_to_front``) is all
@@ -820,30 +825,38 @@ class LiveBrowser(MutableModel):
         page-level CDP session for target/window queries. Serialized by ``_lock`` so
         overlapping calls (rapid navigations each firing framenavigated) can't interleave
         at the detach/attach boundary and leak a CDP session.
+
+        Callers that ALREADY hold ``_lock`` (the agent's ``run_action`` path, via
+        ``act_tab``) must use :meth:`_set_active_page_locked` instead -- re-taking the
+        non-reentrant ``_lock`` here would deadlock the browser.
         """
         async with self._lock:
-            if self._context is None:
-                return  # torn down -- close() raced a queued nav re-attach
-            if self._active_cdp is not None:
-                await self._detach_active_cdp()
-            # Re-check after the await above: close() doesn't take _lock, so it can
-            # null self._context while _detach_active_cdp() yields. Without this guard
-            # new_cdp_session(page) would dereference None and the orphaned task's
-            # AttributeError surfaces as "Task exception was never retrieved".
-            if self._context is None:
-                return  # torn down mid-teardown -- nothing to (re)attach to
-            self._active_page = page
+            await self._set_active_page_locked(page)
+
+    async def _set_active_page_locked(self, page: Page) -> None:
+        """The body of :meth:`_set_active_page`; the caller must hold ``_lock``."""
+        if self._context is None:
+            return  # torn down -- close() raced a queued nav re-attach
+        if self._active_cdp is not None:
+            await self._detach_active_cdp()
+        # Re-check after the await above: close() doesn't take _lock, so it can
+        # null self._context while _detach_active_cdp() yields. Without this guard
+        # new_cdp_session(page) would dereference None and the orphaned task's
+        # AttributeError surfaces as "Task exception was never retrieved".
+        if self._context is None:
+            return  # torn down mid-teardown -- nothing to (re)attach to
+        self._active_page = page
+        try:
+            cdp = await self._context.new_cdp_session(page)
+            self._active_cdp = cdp
             try:
-                cdp = await self._context.new_cdp_session(page)
-                self._active_cdp = cdp
-                try:
-                    info = await cdp.send("Target.getTargetInfo")
-                    self._active_target_id = info["targetInfo"]["targetId"]
-                except _BROWSER_ERRORS:
-                    self._active_target_id = None
-            except _BROWSER_ERRORS as e:
-                logger.debug("active-page cdp attach ignored ({})", e)
-                return
+                info = await cdp.send("Target.getTargetInfo")
+                self._active_target_id = info["targetInfo"]["targetId"]
+            except _BROWSER_ERRORS:
+                self._active_target_id = None
+        except _BROWSER_ERRORS as e:
+            logger.debug("active-page cdp attach ignored ({})", e)
+            return
         if self._capture is not None:
             self._capture.request_keyframe()  # new tab in front -> push a clean frame now
         await self._broadcast_tabs()
@@ -866,7 +879,6 @@ class LiveBrowser(MutableModel):
         asyncio.create_task(self._follow_new_page(page))
 
     async def _follow_new_page(self, page: Page) -> None:
-        page.on("close", lambda _p: asyncio.create_task(self._broadcast_tabs()))
         self._track_nav(page)
         try:
             await page.wait_for_load_state("domcontentloaded")
@@ -875,17 +887,34 @@ class LiveBrowser(MutableModel):
             logger.debug("follow new page ignored ({})", e)
 
     def _track_nav(self, page: Page) -> None:
-        """Re-point the screencast + refresh tabs whenever the active page navigates.
+        """Re-point the video + refresh tabs on navigation, and handle tab close.
 
-        A screencast is bound to one CDP target; a cross-origin navigation swaps the
-        target and silently stops the old screencast, so without this the view freezes
-        on the old page and the URL bar goes stale. Re-running _set_active_page rebinds
-        to the page's current target and re-broadcasts the tab list.
+        A cross-origin navigation swaps the CDP target, so re-running _set_active_page
+        rebinds the page-level CDP session and re-broadcasts the tab list. The close hook
+        also guards the LAST tab: the human closes tabs on the NATIVE chrome, and closing
+        the final one would exit Chromium (the browser would look "crashed") -- so we
+        best-effort reopen a home tab to keep it alive.
         """
         if page in self._nav_tracked:
             return
         self._nav_tracked.add(page)
         page.on("framenavigated", lambda frame, captured=page: self._on_page_nav(frame, captured))
+        page.on("close", lambda _p: asyncio.create_task(self._on_page_closed()))
+
+    async def _on_page_closed(self) -> None:
+        await self._broadcast_tabs()
+        context = self._context
+        if context is None or self._closed or self._crashed or context.pages:
+            return
+        # Last tab gone (a human closed it on the native chrome): open a fresh home tab so
+        # the browser survives instead of exiting. Best-effort -- it races Chromium's
+        # shutdown; if we lose, the disconnect path reports a genuine close/crash.
+        try:
+            page = await context.new_page()
+            await page.goto(_HOME_URL)
+            await self._set_active_page(page)
+        except _BROWSER_ERRORS as e:
+            logger.debug("last-tab reopen lost the race for browser {} ({})", self.browser_id, e)
 
     def _on_page_nav(self, frame: Any, page: Page) -> None:
         # Any navigation (any frame, human- or agent-driven) can swap in a new
@@ -1005,7 +1034,10 @@ class LiveBrowser(MutableModel):
         """
         async with self._control_lock:
             controller = self.controller
-            agent_running = self._agent_task is not None
+            # A running task OR an in-flight direct action means the agent is actively
+            # here -- never sweep it out from under a long command (a slow navigate can
+            # outlive the idle TTL).
+            agent_running = self._agent_task is not None or self._direct_action_task is not None
             owner_agent_id = self.owner_agent_id
             lease_touched_at = self._lease_touched_at
         if controller == "agent" and not agent_running and time.monotonic() - lease_touched_at > _LEASE_IDLE_TTL:
@@ -1044,12 +1076,13 @@ class LiveBrowser(MutableModel):
     # --- input ----------------------------------------------------------------
 
     async def handle_cast_message(self, message: dict[str, Any]) -> None:
-        """Handle a message from a cast socket: human input or tab control.
+        """Handle a message from a cast socket: human mouse/key input, or a resize.
 
-        Input/tab/nav are gated on ``_input_enabled`` (set only while the human has
-        control). The check and the CDP dispatch happen together under
-        ``_control_lock`` so an agent acquiring the browser mid-dispatch can't let a
-        stale human input land after the handoff (the input/control TOCTOU).
+        The whole browser is streamed, so the human drives tabs / navigation / the URL bar
+        on the NATIVE chrome via mouse+key -- the viewer sends no tab/nav messages. Input is
+        gated on ``_input_enabled`` (set only while the human controls); the check and the
+        XTest injection happen together under ``_control_lock`` so an agent acquiring the
+        browser mid-dispatch can't let a stale human input land after the handoff.
         """
         kind = message.get("type")
         if kind == "resize":
@@ -1061,31 +1094,14 @@ class LiveBrowser(MutableModel):
                     logger.info("browser {} resize ignored: input not enabled (an agent controls it)", self.browser_id)
                     return
                 await self._apply_resize(message)
-        elif kind in ("mouse", "key", "tab", "navigate", "back", "forward", "reload"):
+        elif kind in ("mouse", "key"):
             async with self._control_lock:
                 if not self._input_enabled.is_set():
                     return
-                await self._dispatch_input(message)
-
-    async def _dispatch_input(self, message: dict[str, Any]) -> None:
-        kind = message.get("type")
-        try:
-            if kind == "mouse":
-                self._inject_mouse(message.get("event", {}))
-            elif kind == "key":
-                self._inject_key(message.get("event", {}))
-            elif kind == "tab":
-                await self._handle_tab_control(message)
-            elif kind == "navigate" and self._active_page is not None:
-                await self._active_page.goto(message["url"])
-            elif kind == "back" and self._active_page is not None:
-                await self._active_page.go_back()
-            elif kind == "forward" and self._active_page is not None:
-                await self._active_page.go_forward()
-            elif kind == "reload" and self._active_page is not None:
-                await self._active_page.reload()
-        except _BROWSER_ERRORS as e:
-            logger.debug("cast input ignored ({})", e)
+                if kind == "mouse":
+                    self._inject_mouse(message.get("event", {}))
+                else:
+                    self._inject_key(message.get("event", {}))
 
     def _inject_mouse(self, event: dict[str, Any]) -> None:
         """Inject a human mouse event at the DISPLAY level (XTest), so native context
@@ -1149,18 +1165,23 @@ class LiveBrowser(MutableModel):
             self._capture.update_region()
 
     async def _handle_tab_control(self, message: dict[str, Any]) -> None:
+        """Agent tab control (from ``act_tab``, which runs it under ``_lock``). Uses the
+        lock-free ``_set_active_page_locked`` since the caller already holds ``_lock`` --
+        re-taking it (via ``_set_active_page``) would deadlock the browser."""
         if self._context is None:
             return
         action = message.get("action")
-        if action == "new":
-            page = await self._context.new_page()
-            await page.goto(message.get("url") or _HOME_URL)
-        elif action == "activate":
+        # ``switch`` is the CLI's word for activating an existing tab (agentic-browser-fleet
+        # SKILL: `tab <name> switch <index>`); treat it as ``activate``.
+        if action in ("activate", "switch"):
             index = int(message.get("index", 0))
             if 0 <= index < len(self._context.pages):
                 page = self._context.pages[index]
                 await page.bring_to_front()
-                await self._set_active_page(page)
+                await self._set_active_page_locked(page)
+        elif action == "new":
+            page = await self._context.new_page()
+            await page.goto(message.get("url") or _HOME_URL)
         elif action == "close":
             index = int(message.get("index", 0))
             if 0 <= index < len(self._context.pages):
@@ -1647,12 +1668,14 @@ class LiveBrowser(MutableModel):
         """
         displaced_agent: Agent | None = None
         displaced_task: "asyncio.Task[None] | None" = None
+        displaced_action: "asyncio.Task[Any] | None" = None
         async with self._control_lock:
             if expect is not None and self._state_tuple() != expect:
                 return False
             if preempt:
                 displaced_agent = self._agent
                 displaced_task = self._agent_task
+                displaced_action = self._direct_action_task  # a single in-flight command
                 # A human taking control of a browser an agent is DRIVING queues that agent
                 # at the FRONT of the resume queue, so it resumes first when the human hands
                 # back -- regardless of what it runs next. Without this, a preempted agent
@@ -1668,8 +1691,9 @@ class LiveBrowser(MutableModel):
             await self._settle_queue_locked()
         if displaced_agent is not None:
             displaced_agent.stop()
-        if displaced_task is not None and displaced_task is not asyncio.current_task() and not displaced_task.done():
-            displaced_task.cancel()
+        for task in (displaced_task, displaced_action):
+            if task is not None and task is not asyncio.current_task() and not task.done():
+                task.cancel()
         return True
 
     async def acquire(
@@ -1768,7 +1792,18 @@ class LiveBrowser(MutableModel):
             return "crashed"
         if self._closed:
             return "closed"
-        return "acquired" if waiter.granted else "busy_human"
+        if waiter.granted:
+            return "acquired"
+        # Evicted because a human took control while we waited. If the caller asked to be
+        # resumed (enqueue_on_busy -- task/hold do), enrol it in the resume queue NOW: the
+        # fail-fast enqueue branches never ran for a parked waiter, so without this the
+        # caller is told "you're queued, we'll message you" but is in no queue and is never
+        # woken on hand-back.
+        if enqueue_on_busy:
+            async with self._control_lock:
+                self._enqueue_resume_locked(agent_id, agent_name)
+                self._broadcast(self._control_message())
+        return "busy_human"
 
     async def release(self, agent_id: str) -> bool:
         """Release this agent's control back to the human (free). CAS: only the owner can."""
@@ -1997,20 +2032,28 @@ class LiveBrowser(MutableModel):
                 return {"ok": False, "status": "lost_control", "enqueued": enqueue_on_busy, **self._control_state()}
             self._lease_touched_at = time.monotonic()
             self._granted_at = 0.0  # the agent claimed (sent a command); cancel the claim window
-        async with self._lock:
-            if self._context is None:
-                return {"ok": False, "status": "closed", **self._control_state()}
-            try:
+        self._direct_action_task = asyncio.current_task()
+        try:
+            async with self._lock:
+                if self._context is None:
+                    return {"ok": False, "status": "closed", **self._control_state()}
                 result = await action(self._ensure_action_handler())
-            except _BROWSER_ERRORS as e:
-                logger.debug("direct action failed on browser {} ({})", self.browser_id, e)
-                # If the connection is gone, the browser crashed (the `disconnected`
-                # event may not have fired yet) -- classify it so the agent gets a
-                # clear "crashed, start a new one" rather than a raw CDP exception.
-                if not self._observer_alive():
-                    self._on_disconnected(self._observer)  # idempotent: marks + announces once
-                    return self._crashed_payload()
-                return {"ok": False, "status": "error", "error": str(e), **self._control_state()}
+        except asyncio.CancelledError:
+            # A human take_control preempted this in-flight action (see _transition). Don't
+            # let the human's XTest overlap it -- report lost_control so the agent re-checks
+            # ownership and resumes rather than treating this as a crash.
+            return {"ok": False, "status": "lost_control", **self._control_state()}
+        except _BROWSER_ERRORS as e:
+            logger.debug("direct action failed on browser {} ({})", self.browser_id, e)
+            # If the connection is gone, the browser crashed (the `disconnected` event may
+            # not have fired yet) -- classify it so the agent gets a clear "crashed, start a
+            # new one" rather than a raw CDP exception.
+            if not self._observer_alive():
+                self._on_disconnected(self._observer)  # idempotent: marks + announces once
+                return self._crashed_payload()
+            return {"ok": False, "status": "error", "error": str(e), **self._control_state()}
+        finally:
+            self._direct_action_task = None
         return {"ok": True, "status": "ok", "newly_acquired": not was_mine, **result, **self._control_state()}
 
     def _node(self, index: int) -> Any:
@@ -2095,10 +2138,10 @@ class LiveBrowser(MutableModel):
 
     async def act_tab(self, agent_id: str, agent_name: str | None, action: str, index: int | None, url: str | None) -> dict[str, Any]:
         async def _do(_handler: ActionHandler) -> dict[str, Any]:
-            # Tabs go through OUR Playwright context (same path as the human's tab bar),
-            # so the screencast follows the switch -- not browser-use's separate notion.
-            # "list" is a read-only no-op here; the tab list is returned below.
-            if action in ("activate", "new", "close"):
+            # Tabs go through OUR Playwright context, so the video follows the switch.
+            # "list" is a read-only no-op here (the tab list is returned below); "switch"
+            # is the CLI verb for activating a tab.
+            if action in ("switch", "activate", "new", "close"):
                 await self._handle_tab_control({"action": action, "index": index or 0, "url": url})
                 self._selector_map = {}
             return {"tab_action": action, "tabs": await self._tab_list()}
@@ -2495,7 +2538,13 @@ class BrowserSessionManager(MutableModel):
         return browser_id in self._browsers
 
     async def list_browsers(self) -> list[dict[str, Any]]:
-        return [await self._browsers[name].describe() for name in sorted(self._browsers)]
+        # Snapshot the browser OBJECTS up front (synchronous, one consistent view): each
+        # describe() awaits CDP round-trips, and re-indexing self._browsers by name across
+        # those awaits would KeyError if a concurrent close() popped a name (a human closing
+        # a browser mid-`ls` -> HTTP 500). The snapshot keeps the closing browser's own
+        # describe() valid (it reports its state) instead of exploding the whole list.
+        snapshot = [self._browsers[name] for name in sorted(self._browsers)]
+        return [await browser.describe() for browser in snapshot]
 
     async def close(self, browser_id: str) -> None:
         session = self._browsers.pop(browser_id, None)

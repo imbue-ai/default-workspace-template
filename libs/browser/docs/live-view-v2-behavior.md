@@ -81,14 +81,15 @@ behavior every check verifies against.
 - **Agent handoff** (e.g. CAPTCHA): agent → human PINNED, requester goes FRONT of the
   resume queue, resumes first on hand-back. Direct-control lease auto-releases after
   idle TTL (agents only; humans are sticky). Claim window revokes an un-claimed grant.
-- **Human input (XTest) and agent input (CDP) are mutually exclusive per command**:
-  different injection layers, same serialized `_input_enabled` gate under
-  `_control_lock`. Human input only lands while the human controls; each agent command
-  re-checks ownership (CAS) before it runs, so a `take_control` rejects every *new*
-  agent command. BOUNDED EXCEPTION: one agent direct-control action already past its
-  CAS check and mid-flight (e.g. a multi-second `navigate`/`type`) completes after the
-  human takes control -- so that single action can overlap the human's first inputs.
-  A running `task` IS cancelled by `take_control`. New agent work never overlaps.
+- **Human input (XTest) and agent input (CDP) are mutually exclusive**: different
+  injection layers, same serialized `_input_enabled` gate under `_control_lock`. Human
+  input only lands while the human controls; each agent command re-checks ownership (CAS)
+  before it runs, so a `take_control` rejects every *new* agent command. `take_control`
+  ALSO cancels the agent's in-flight work -- both a running `task` and a single in-flight
+  direct-control action (`_direct_action_task`) -- so the agent stops at once (the one
+  CDP call already awaiting at the cancel point may finish, but no further agent input
+  follows). The idle-lease sweep likewise won't release a browser while a direct action
+  is still in flight.
 - **Lifecycle**: `init` (Chromium not up) → `running` → `crashed` (terminal). Drive/
   ownership only once `running`; crash is detected (observer disconnect) and reported;
   crashed name never restored as healthy.
