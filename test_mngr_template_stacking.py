@@ -145,4 +145,4 @@ def test_scalar_template_options_override_rather_than_stack() -> None:
     """Scalar-typed options (e.g. provider) get overridden by the latter template."""
     result = _apply(("main", "docker"))
     assert result["provider"] == "docker"
-    assert result["target_path"] == "/mngr/code/"
+    assert result["target_path"] == "/home/user/workspace/"

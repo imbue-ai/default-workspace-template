@@ -179,8 +179,8 @@ def test_take_snapshot_emits_snapshot_failed_event_on_failure(tmp_path: Path) ->
 def _direct_snapshot() -> SnapshotResult:
     return SnapshotResult(
         method=SnapshotMethod.DIRECT,
-        snapshot_path="/mngr",
-        read_path=Path("/mngr"),
+        snapshot_path="/home/user/.mngr",
+        read_path=Path("/home/user/.mngr"),
         duration_seconds=0.0,
     )
 

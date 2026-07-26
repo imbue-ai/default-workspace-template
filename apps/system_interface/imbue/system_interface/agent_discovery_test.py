@@ -38,7 +38,7 @@ def test_falls_back_to_host_env_when_per_agent_env_lacks_config_dir(
     in the UI."""
     host_dir = tmp_path / "host"
     host_dir.mkdir()
-    (host_dir / "env").write_text("MNGR_HOST_DIR=/mngr\nCLAUDE_CONFIG_DIR=/shared/claude/config\n")
+    (host_dir / "env").write_text("MNGR_HOST_DIR=/home/user/.mngr\nCLAUDE_CONFIG_DIR=/shared/claude/config\n")
     agent_state_dir = host_dir / "agents" / "agent-1"
     agent_state_dir.mkdir(parents=True)
     # Per-agent env exists but doesn't carry CLAUDE_CONFIG_DIR.

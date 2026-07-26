@@ -25,7 +25,7 @@ from github_sync.config import (
     proxied_url,
 )
 
-HOOKS_PATH = "/mngr/code/scripts/git_hooks"
+HOOKS_PATH = "/home/user/workspace/scripts/git_hooks"
 PASSWORD_HEADER = "X-Latchkey-Gateway-Password"
 PERMISSIONS_OVERRIDE_HEADER = "X-Latchkey-Gateway-Permissions-Override"
 

@@ -161,7 +161,7 @@ What gets updated:
   ```ini
   [program:<name>]
   command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
-  directory=/mngr/code
+  directory=/home/user/workspace
   autostart=true
   autorestart=true
   # plus rotated stdout/stderr logfiles under /var/log/supervisor/<name>-*.log
@@ -297,7 +297,7 @@ Two cases, two patterns:
   snapshots, user records -- anything written and read across runs):
   read and write it under the generated `DATA_DIR` constant, never a
   hardcoded `runtime/<name>/` at the call site. `DATA_DIR` defaults to
-  `runtime/<name>/` (cwd-relative, resolved from `/mngr/code` where the
+  `runtime/<name>/` (cwd-relative, resolved from `/home/user/workspace` where the
   supervisord-managed service runs) but honors the
   `<PACKAGE_UPPER>_DATA_DIR` env var. That override is what makes a
   future edit safe: an agent changing the service can run a throwaway
@@ -418,7 +418,7 @@ shed before any built-in service under memory pressure (see
 ```ini
 [program:<name>]
 command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:<port> --name <name> && <existing_start_command>"
-directory=/mngr/code
+directory=/home/user/workspace
 autostart=true
 autorestart=true
 ```
@@ -430,7 +430,7 @@ Two valid shapes:
   ```ini
   [program:docs-viewer]
   command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:8090 --name docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
-  directory=/mngr/code
+  directory=/home/user/workspace
   autostart=true
   autorestart=true
   ```
@@ -448,7 +448,7 @@ Two valid shapes:
   ```ini
   [program:<name>]
   command=python3 scripts/oom_tag_service.py user bash scripts/run_<name>.sh
-  directory=/mngr/code
+  directory=/home/user/workspace
   autostart=true
   autorestart=true
   ```

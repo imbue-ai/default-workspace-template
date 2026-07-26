@@ -11,12 +11,13 @@ mechanism.
 Detection decision tree (everything is probeable from inside the container):
   - If the trigger dir (`/mngr-snapshot/`) exists as a directory, we are
     inside a vps-docker agent container with the snapshot-trigger volume
-    mounted -> `outer_trigger`.
-  - Else if the host_dir (`/mngr`) is on a btrfs filesystem (lima), we can
-    take snapshots directly via `sudo btrfs subvolume snapshot`
-    -> `btrfs_local`.
+    mounted -> `outer_trigger`. Snapshots cover the whole unified volume, so
+    restic reads the `home/` subtree inside each snapshot (`read_subpath`).
+  - Else if the backup root (`/home/user`, resolved through the provider's
+    home symlink) is on a btrfs filesystem (lima), we can take snapshots
+    directly via `sudo btrfs subvolume snapshot` -> `btrfs_local`.
   - Else (plain docker / any unrecognized provider) -> `direct` (no
-    snapshot; restic reads the host_dir live).
+    snapshot; restic reads the backup root live).
 """
 
 import subprocess
@@ -33,7 +34,10 @@ from pydantic import Field
 # the real outer-side subvolume path at request time, so the inner service
 # never needs outer-side knowledge beyond these constants.
 DEFAULT_TRIGGER_DIR: Final[Path] = Path("/mngr-snapshot")
-DEFAULT_HOST_DIR: Final[Path] = Path("/mngr")
+
+# The tree backups cover: the whole persistent home (workspace, worktrees,
+# mngr state at ~/.mngr, dotfiles) -- NOT just the mngr data dir.
+DEFAULT_BACKUP_ROOT: Final[Path] = Path("/home/user")
 
 _FINDMNT_TIMEOUT_SECONDS: Final[float] = 15.0
 
@@ -91,6 +95,15 @@ class BackupCapabilities(FrozenModel):
             "outer_trigger (e.g. /mngr-snapshot). Present only for outer_trigger."
         ),
     )
+    read_subpath: str | None = Field(
+        default=None,
+        description=(
+            "Subdirectory inside each snapshot that corresponds to the backup "
+            "root. outer_trigger snapshots cover the whole unified volume "
+            "(provider bookkeeping beside home/), so restic reads <snapshot>/home; "
+            "None when the snapshot root IS the backup root."
+        ),
+    )
     outer_helper_timeout_seconds: float = Field(
         default=120.0,
         description="Hard cap on how long to wait for the outer helper's result.json",
@@ -109,7 +122,7 @@ class BackupCapabilities(FrozenModel):
 def detect_backup_capabilities(
     *,
     trigger_dir: Path = DEFAULT_TRIGGER_DIR,
-    host_dir: Path = DEFAULT_HOST_DIR,
+    backup_root: Path = DEFAULT_BACKUP_ROOT,
 ) -> BackupCapabilities:
     """Probe the container's filesystem to choose the right snapshot mechanism."""
     if trigger_dir.is_dir():
@@ -124,23 +137,28 @@ def detect_backup_capabilities(
             snapshot_current_path=Path("/mngr-btrfs/snapshots/current"),
             snapshot_read_path=Path("/mngr-snapshots/current"),
             trigger_dir=trigger_dir,
+            read_subpath="home",
         )
-    fstype = _findmnt_fstype(host_dir)
+    # The provider reaches the persistent home via a symlink (lima: onto the
+    # btrfs data disk), so probe the resolved path -- a symlink itself is
+    # never a mountpoint.
+    resolved_root = backup_root.resolve()
+    fstype = _findmnt_fstype(resolved_root)
     if fstype == "btrfs":
-        # lima attaches a btrfs additional disk and symlinks host_dir to its
-        # mount point, so the btrfs filesystem *is* host_dir. The snapshot must
-        # live on that same btrfs (you cannot snapshot a subvolume onto another
-        # filesystem), so derive every path from host_dir.
+        # lima attaches a btrfs additional disk and symlinks the home tree to
+        # its mount point, so the btrfs filesystem *is* the backup root. The
+        # snapshot must live on that same btrfs (you cannot snapshot a
+        # subvolume onto another filesystem), so derive every path from it.
         return BackupCapabilities(
             method=SnapshotMethod.BTRFS_LOCAL,
-            btrfs_mount_path=host_dir,
-            host_subvolume_path=host_dir,
-            snapshot_current_path=host_dir / "snapshots" / "current",
-            snapshot_read_path=host_dir / "snapshots" / "current",
+            btrfs_mount_path=resolved_root,
+            host_subvolume_path=resolved_root,
+            snapshot_current_path=resolved_root / "snapshots" / "current",
+            snapshot_read_path=resolved_root / "snapshots" / "current",
         )
     return BackupCapabilities(
         method=SnapshotMethod.DIRECT,
-        snapshot_read_path=host_dir,
+        snapshot_read_path=backup_root,
     )
 
 
@@ -148,7 +166,9 @@ def _findmnt_fstype(path: Path) -> str:
     """Return the filesystem type for `path` via `findmnt`; empty string on any failure."""
     try:
         result = subprocess.run(
-            ["findmnt", "-n", "-o", "FSTYPE", str(path)],
+            # -T (--target) walks up to the containing mount, so a path INSIDE
+            # a filesystem (not itself a mountpoint) still reports its fstype.
+            ["findmnt", "-n", "-o", "FSTYPE", "-T", str(path)],
             capture_output=True,
             text=True,
             check=False,

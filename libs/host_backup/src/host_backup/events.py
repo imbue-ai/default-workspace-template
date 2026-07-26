@@ -78,7 +78,7 @@ class BackupStartedEvent(BackupEvent):
 
 
 class SnapshotCreatedEvent(BackupEvent):
-    """A consistent snapshot of /mngr/ is in place for restic to read."""
+    """A consistent snapshot of /home/user/.mngr/ is in place for restic to read."""
 
     tick_id: str
     method: str = Field(description="btrfs_local | outer_trigger | direct")

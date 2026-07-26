@@ -49,7 +49,7 @@ supervisorctl tail -f earlyoom stderr
 ## 3. Confirm the kill was recorded
 
 ```bash
-tail -n 5 /mngr/code/runtime/oom_priority/events/shed.jsonl
+tail -n 5 /home/user/workspace/runtime/oom_priority/events/shed.jsonl
 # the python3 hog -> a process_shed line; agent_name null (it was a subprocess).
 ```
 
@@ -64,7 +64,7 @@ that agent):
 # After the agent's own process is shed, message it (or open its chat). On
 # session start it should print the "you were previously stopped to relieve a
 # memory-pressure situation" notice exactly once.
-grep '"agent_name": *"<agent>"' /mngr/code/runtime/oom_priority/events/shed.jsonl
+grep '"agent_name": *"<agent>"' /home/user/workspace/runtime/oom_priority/events/shed.jsonl
 mngr start <agent> --restart && mngr message <agent> -m continue
 ```
 

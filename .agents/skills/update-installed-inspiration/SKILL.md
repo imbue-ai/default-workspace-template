@@ -14,7 +14,7 @@ since shipped a newer version, and this skill pulls that newer version from the
 inspiration's remote and merges it into this mind WITHOUT discarding the
 adaptations this mind already made to it.
 
-All git commands run with cwd = the repo root (`/mngr/code`).
+All git commands run with cwd = the repo root (`/home/user/workspace`).
 
 ## 0. Trust gate -- confirm before fetching or merging
 
@@ -57,7 +57,7 @@ telling the user you cannot vouch for the code, not certifying it is safe.
 Only after the trust gate (§0). The newer version is unverified third-party code,
 so NEVER merge it straight into the live tree: do the merge in an ISOLATED
 worktree, confirm it went well there, and only then bring the verified result
-into `/mngr/code`. This mirrors `use-inspiration` §1 and how `update-self` validates an
+into `/home/user/workspace`. This mirrors `use-inspiration` §1 and how `update-self` validates an
 upstream merge off the live tree before landing it, so a bad update never
 clobbers the mind.
 
@@ -105,7 +105,7 @@ git worktree add -q "$WT" HEAD
   mechanically or with a blanket "take theirs" -- doing so would silently throw
   away the adaptations that make this the user's mind. Do NOT land a half-merged
   tree: remove the worktree (`git worktree remove --force "$WT"`), tell the user
-  what conflicts in plain language (§3), and only then redo the merge in `/mngr/code`
+  what conflicts in plain language (§3), and only then redo the merge in `/home/user/workspace`
   and resolve it interactively WITH the user, keeping their adaptations wherever
   they and the update collide.
 - **Boot smoke-check** the merged worktree -- validate `supervisord.conf` WITHOUT
@@ -126,10 +126,10 @@ git worktree add -q "$WT" HEAD
 
   If this fails, the updated tree does not boot -- the newer version broke this
   mind (a wiring mistake, or something hostile). STOP: tell the user plainly,
-  remove the worktree, and do NOT bring it into `/mngr/code`.
+  remove the worktree, and do NOT bring it into `/home/user/workspace`.
 
 **Land the verified result.** Only once the merge is clean (no conflicts left
-unresolved) and the boot check passes, fast-forward `/mngr/code` onto the exact commit
+unresolved) and the boot check passes, fast-forward `/home/user/workspace` onto the exact commit
 you checked, then remove the worktree:
 
 ```bash
@@ -168,7 +168,7 @@ Earlier history entries are left exactly as they are.
 
 Record which version of the inspiration this mind is now on. Write the entry
 directly into `VERSION_HISTORY.md`'s `## Adopted inspirations` section
-(cwd `/mngr/code`). There is no helper skill: this block is the whole recording
+(cwd `/home/user/workspace`). There is no helper skill: this block is the whole recording
 contract for the adopter side. Append-only (existing lines copied through
 verbatim, never re-flowed); a retried update is a no-op, never a duplicate.
 Inputs: `SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo>"`, and the target

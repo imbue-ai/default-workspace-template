@@ -487,7 +487,7 @@ def test_parse_tmux_sessions_output_parses_name_id_and_path() -> None:
     assert len(sessions) == 2
     assert sessions[0].session_name == "terminal-1"
     assert sessions[0].session_id == "$3"
-    assert sessions[0].cwd == "/mngr/code"
+    assert sessions[0].cwd == "/home/user/workspace"
     assert sessions[1].session_name == "mngr-alice"
 
 

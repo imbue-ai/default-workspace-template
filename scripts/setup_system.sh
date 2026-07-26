@@ -63,7 +63,7 @@ rm -rf /var/lib/apt/lists/*
 # The Debian `supervisor` package enables a systemd unit that immediately starts
 # a supervisord against the default /etc/supervisor/supervisord.conf. On
 # systemd-based providers (lima/VPS) that daemon grabs /var/run/supervisor.sock
-# and makes `uv run bootstrap`'s `supervisord -c /mngr/code/supervisord.conf`
+# and makes `uv run bootstrap`'s `supervisord -c /home/user/workspace/supervisord.conf`
 # fail with "Another program is already listening". We always launch our own
 # supervisord from bootstrap, so disable + mask the packaged unit. Guarded so
 # it is a no-op on docker (no systemd / no systemctl on the slim image).
@@ -137,10 +137,10 @@ if ! grep -q '/root/.local/bin' /root/.bashrc 2>/dev/null; then
 fi
 printf '%s\n' 'PATH="/root/.local/bin:$PATH"' > /etc/profile.d/default_workspace_template_path.sh
 
-# Source /mngr/env (when present) for interactive bash sessions so terminals can
+# Source /home/user/.mngr/env (when present) for interactive bash sessions so terminals can
 # run mngr commands without manual setup.
-if ! grep -q '/mngr/env' /root/.bashrc 2>/dev/null; then
-    printf '%s\n' 'if [ -f /mngr/env ]; then set -a; . /mngr/env; set +a; fi' >> /root/.bashrc
+if ! grep -q '/home/user/.mngr/env' /root/.bashrc 2>/dev/null; then
+    printf '%s\n' 'if [ -f /home/user/.mngr/env ]; then set -a; . /home/user/.mngr/env; set +a; fi' >> /root/.bashrc
 fi
 
 # Claude Code CLI (pinned; the provisioning-time version check expects this exact version).

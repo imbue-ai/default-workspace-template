@@ -31,17 +31,22 @@ host_env__extend = [
     # Tickets live inside runtime/ so they are covered by the opt-in GitHub
     # sync (github-sync skill) when the user enables it.
     # tk reads TICKETS_DIR if set; absolute path so it works from worktree
-    # subdirs too. /mngr/code/ is the container WORKDIR (set by the Dockerfile);
-    # a /code -> /mngr/code symlink is kept in the image as a safety net.
-    "TICKETS_DIR=/mngr/code/runtime/tickets",
+    # subdirs too. /home/user/workspace/ is the container WORKDIR (set by the Dockerfile).
+    "TICKETS_DIR=/home/user/workspace/runtime/tickets",
     # The OOM shed ledger + agent-pid registry live under runtime/ (so they ride
     # the runtime-backup branch). The container-level earlyoom kill hook runs
-    # with work dir /mngr/code, but each agent's SessionStart hooks resolve paths
+    # with work dir /home/user/workspace, but each agent's SessionStart hooks resolve paths
     # relative to THEIR agent's MNGR_AGENT_WORK_DIR -- which for a worker is its
-    # own worktree, not /mngr/code. Pinning the absolute path here (same
+    # own worktree, not /home/user/workspace. Pinning the absolute path here (same
     # rationale as TICKETS_DIR above) makes the kill hook and every agent's hook
     # resolve one shared ledger and registry, regardless of work dir.
-    "OOM_PRIORITY_RUNTIME_DIR=/mngr/code/runtime/oom_priority",
+    "OOM_PRIORITY_RUNTIME_DIR=/home/user/workspace/runtime/oom_priority",
+    # Keep regenerable caches off the persistent /home/user volume (and out of
+    # backups): XDG-aware tools (uv, pip, playwright) follow XDG_CACHE_HOME,
+    # npm follows npm_config_cache, and the seed script's ~/.cache symlink
+    # catches stragglers that hardcode ~/.cache.
+    "XDG_CACHE_HOME=/var/cache/user",
+    "npm_config_cache=/var/cache/user/npm",
     # Workaround for an Apple M5 lima-VZ guest CPU mismatch: the Debian 12
     # guest kernel advertises SVE / SVE2 in /proc/cpuinfo, but lima-VZ on M5
     # traps the `cntb` SVE instruction emitted by OpenSSL's
@@ -58,14 +63,14 @@ host_env__extend = [
     # guests don't advertise SVE so they don't hit this.
     "OPENSSL_armcap=0",
 ]
-worktree_base_folder = "/mngr/worktree/"
+worktree_base_folder = "/home/user/worktrees/"
 # claude_subagent_proxy is upstream mngr's experimental Claude-Code-Task ->
 # mngr-managed-subagent proxy. It is not used here. Without this disable, when
 # the proxy plugin is present in the system-tool mngr install it gets the
 # on_after_provisioning hook fired, which installs a PreToolUse:Agent hook
 # (spawn.py) into each new agent's .claude/settings.local.json -- and that
 # hook then wedges parent agents in a Haiku retry loop whenever it hits a
-# permanent error (e.g. the proxy package isn't in /mngr/code/.venv, or
+# permanent error (e.g. the proxy package isn't in /home/user/workspace/.venv, or
 # `mngr-proxy-child` isn't a registered agent type in the resolved mngr).
 # The disable is non-strict (commands.create.disable_plugin path), so this is
 # safe even on installs that don't include the proxy plugin at all.
@@ -150,6 +155,13 @@ is_enabled = false
 [providers.docker]
 is_enabled = false
 isolate_host_volumes = true
+# The user-data layout: the per-host volume mounts at /home/user (the ONE
+# persistent tree) with mngr's data dir hidden inside it, and mngr's
+# plain-text service logs go to /var/log/mngr (regenerable diagnostics,
+# never backed up).
+host_dir = "/home/user/.mngr"
+volume_mount_path = "/home/user"
+host_log_dir = "/var/log/mngr"
 # No `docker_runtime` is set here, so containers use Docker's default runtime
 # (runc), which is available everywhere -- notably macOS, where gVisor's `runsc`
 # is not. The gVisor-hardened runtime is selected per-create by stacking the
@@ -166,7 +178,9 @@ isolate_host_volumes = true
 # system_interface -- the workspace then sits on the "Loading workspace" loader
 # forever. A tmpfs /run makes the hard link work. Mirrors the tmpfs /run that the
 # aws-<region> provider start args and the ovh/vultr/imbue_cloud host setup apply.
-default_start_args = ["--tmpfs", "/run"]
+# /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
+# persist or ride a backup.
+default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp"]
 
 [providers.lima]
 # is_enabled=false (mirrors [providers.docker]) is load-bearing: the lima backend
@@ -187,6 +201,12 @@ is_enabled = false
 # config (imbue-ai/mngr#1914).
 is_host_data_volume_exposed = false
 is_run_as_root = true
+# The user-data layout (matching the docker provider): /home/user symlinks to
+# the btrfs data disk with mngr's data dir inside it; plain-text mngr service
+# logs go to /var/log/mngr.
+host_dir = "/home/user/.mngr"
+volume_home_path = "/home/user"
+host_log_dir = "/var/log/mngr"
 # Pin the Lima guest to the same Debian release the docker image uses (trixie),
 # so setup_system.sh provisions an identical toolchain everywhere. Set here
 # (dwt-side) rather than bumping mngr_lima's bookworm default, which outside
@@ -207,6 +227,12 @@ default_image_url_x86_64 = "https://cloud.debian.org/images/cloud/trixie/2026072
 is_enabled = false
 install_gvisor_runtime = true
 docker_runtime = "runsc"
+# The user-data layout (matching the docker provider): /home/user symlinks
+# onto the unified volume's home/ subdir with mngr's data dir inside it;
+# plain-text mngr service logs go to /var/log/mngr.
+host_dir = "/home/user/.mngr"
+volume_home_path = "/home/user"
+host_log_dir = "/var/log/mngr"
 
 # OVH VPS provider (the imbue-cloud pool-bake's default). Same rationale as the
 # vultr block above; the `--workdir=/` / `--security-opt=no-new-privileges` run args
@@ -215,6 +241,12 @@ docker_runtime = "runsc"
 is_enabled = false
 install_gvisor_runtime = true
 docker_runtime = "runsc"
+# The user-data layout (matching the docker provider): /home/user symlinks
+# onto the unified volume's home/ subdir with mngr's data dir inside it;
+# plain-text mngr service logs go to /var/log/mngr.
+host_dir = "/home/user/.mngr"
+volume_home_path = "/home/user"
+host_log_dir = "/var/log/mngr"
 
 # --- Create templates ---
 
@@ -251,11 +283,11 @@ extra_window = ["bootstrap='uv run bootstrap'"]
 # drops these escapes); see libs/mngr_ttyd in the mngr repo.
 #
 # The final `if-shell ... source-file` line pulls in scripts/terminal_tmux.conf
-# (committed to /mngr/code), which holds the in-memory-persistent-terminals
+# (committed to /home/user/workspace), which holds the in-memory-persistent-terminals
 # settings: a larger history-limit, window-size latest, and the tab-title
 # tracking hooks. It lives in its own file so those hook lines stay readable.
 extra_provision_command__extend = [
-    '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' 'set -g set-clipboard on' 'set -as terminal-features ,*:clipboard' 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'if-shell "test -f /mngr/code/scripts/terminal_tmux.conf" "source-file /mngr/code/scripts/terminal_tmux.conf"' > "$HOME/.tmux.conf"''',
+    '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' 'set -g set-clipboard on' 'set -as terminal-features ,*:clipboard' 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'if-shell "test -f /home/user/workspace/scripts/terminal_tmux.conf" "source-file /home/user/workspace/scripts/terminal_tmux.conf"' > "$HOME/.tmux.conf"''',
 ]
 
 # Shared base template for the local docker provider. Used on its own for the
@@ -266,7 +298,7 @@ extra_provision_command__extend = [
 # it -- nothing to keep in sync.
 [create_templates.docker]
 provider = "docker"
-target_path = "/mngr/code/"
+target_path = "/home/user/workspace/"
 setting__extend = ["providers.docker.is_enabled=true"]
 build_arg__extend = ["--file=Dockerfile", "."]
 # Security hardening for `docker run`: block privilege escalation via setuid
@@ -274,13 +306,13 @@ build_arg__extend = ["--file=Dockerfile", "."]
 # isolation boundary now, and the extra capability widened the container's
 # privileges with no upside for untrusted agents.
 #
-# `--workdir=/` overrides the image's `WORKDIR /mngr/code` for the container's
+# `--workdir=/` overrides the image's `WORKDIR /home/user/workspace` for the container's
 # idle entrypoint. Under gVisor (runsc), sandbox startup tries to create the
 # process working directory and aborts with "file exists" when it already
-# exists -- and `/mngr/code` exists inside the mounted `/mngr` volume. runc
+# exists -- and `/home/user/workspace` exists inside the mounted `/home/user` volume. runc
 # tolerates a pre-existing cwd; runsc does not. Pointing the cwd at `/` (always
 # present) sidesteps it; nothing depends on the host container's default cwd
-# (the entrypoint just sleeps; agents set their own work_dir=/mngr/code).
+# (the entrypoint just sleeps; agents set their own work_dir=/home/user/workspace).
 #
 # `--restart=unless-stopped` brings the container back after a docker daemon
 # restart or host reboot; the container entrypoint then self-heals sshd, so the
@@ -290,7 +322,7 @@ start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--resta
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
 idle_mode = "disabled"
-# Seed /mngr/code from /docker_build_code (baked into the image) onto the
+# Seed /home/user/workspace from /docker_build_code (baked into the image) onto the
 # per-host volume. Runs synchronously after the host is online but
 # before any agent work_dir setup, so the workspace is in place by the
 # time the user's git refs land on top. See scripts/default_workspace_template_seed.sh.
@@ -312,7 +344,7 @@ setting__extend = ["providers.docker.docker_runtime=runsc"]
 # template for lima VM provider
 [create_templates.lima]
 provider = "lima"
-target_path = "/mngr/code/"
+target_path = "/home/user/workspace/"
 idle_mode = "disabled"
 start_arg__extend = ["--cpus=2", "--memory=4", "--disk=20"]
 # Mirror the docker template: flip the (default-disabled) lima provider on for
@@ -330,23 +362,31 @@ start_arg__extend = ["--cpus=2", "--memory=4", "--disk=20"]
 # version-check disable is needed.
 setting__extend = ["providers.lima.is_enabled=true"]
 # Run the SAME setup as a Dockerfile-built workspace, directly in the VM as root.
-# These run after the project is synced to /mngr/code (agent-level provisioning,
+# These run after the project is synced to /home/user/workspace (agent-level provisioning,
 # post work_dir sync) and reuse the exact scripts the Dockerfile RUNs. There is
 # no docker build (so no `--file=Dockerfile` build arg) and no /docker_build_code
-# relocation (the repo lands straight on the VM's btrfs /mngr disk), so the
+# relocation (the repo lands straight on the VM's btrfs /home/user disk), so the
 # docker template's build_arg + post_host_create_command (default-workspace-template-seed) are
 # intentionally absent here. extra_provision_command__extend stacks after the
 # main template's entry.
 extra_provision_command__extend = [
-    "bash /mngr/code/scripts/setup_system.sh",
-    "bash /mngr/code/scripts/install_dependencies.sh",
-    "bash /mngr/code/scripts/build_workspace.sh",
+    # Move root's home to the persistent /home/user tree (the Dockerfile does
+    # this for container images; VM/sandbox provisioning does it here) so
+    # $HOME, passwd, and sshd agree. /var/cache/user is the off-volume cache
+    # target the host env points XDG_CACHE_HOME / npm_config_cache at.
+    "usermod -d /home/user root && mkdir -p /var/cache/user",
+    "bash /home/user/workspace/scripts/setup_system.sh",
+    "bash /home/user/workspace/scripts/install_dependencies.sh",
+    "bash /home/user/workspace/scripts/build_workspace.sh",
+    # Same home-skeleton seeding the docker first-boot seed performs
+    # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
+    "sh /home/user/workspace/scripts/seed_home_skeleton.sh",
     # Install a systemd unit that relaunches the system-services agent on VM
     # boot, so the workspace recovers from a VM reboot even when the minds
     # desktop app is not running. The agent runs directly in the VM here, so
     # this runs `mngr start system-services` in the VM (mngr is installed by
     # build_workspace.sh above).
-    "bash /mngr/code/scripts/minds_lima_autostart.sh",
+    "bash /home/user/workspace/scripts/minds_lima_autostart.sh",
 ]
 
 # template for the Modal sandbox provider (the "modal" compute provider).
@@ -358,7 +398,7 @@ extra_provision_command__extend = [
 # this template's setting__extend (below), not in the mngr_modal provider defaults.
 [create_templates.modal]
 provider = "modal"
-target_path = "/mngr/code/"
+target_path = "/home/user/workspace/"
 # Disable idle detection entirely -- the host should never auto-shutdown. The
 # sandbox instead runs until the 24h max-age timeout set in setting__extend below
 # (matching how the vultr/aws/imbue_cloud templates disable idle).
@@ -378,15 +418,23 @@ setting__extend = [
 # Modal has no Dockerfile build (like lima): run the same setup a Dockerfile-built
 # workspace would, directly in the sandbox over SSH.
 extra_provision_command__extend = [
-    "bash /mngr/code/scripts/setup_system.sh",
-    "bash /mngr/code/scripts/install_dependencies.sh",
-    "bash /mngr/code/scripts/build_workspace.sh",
+    # Move root's home to the persistent /home/user tree (the Dockerfile does
+    # this for container images; VM/sandbox provisioning does it here) so
+    # $HOME, passwd, and sshd agree. /var/cache/user is the off-volume cache
+    # target the host env points XDG_CACHE_HOME / npm_config_cache at.
+    "usermod -d /home/user root && mkdir -p /var/cache/user",
+    "bash /home/user/workspace/scripts/setup_system.sh",
+    "bash /home/user/workspace/scripts/install_dependencies.sh",
+    "bash /home/user/workspace/scripts/build_workspace.sh",
+    # Same home-skeleton seeding the docker first-boot seed performs
+    # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
+    "sh /home/user/workspace/scripts/seed_home_skeleton.sh",
 ]
 
 # template for vultr VPS provider (cloud mode)
 [create_templates.vultr]
 provider = "vultr"
-target_path = "/mngr/code/"
+target_path = "/home/user/workspace/"
 # ``--vps-region=sjc`` (Silicon Valley) instead of the mngr_vultr default
 # ``ewr`` (Newark) -- imbue's operators run the bake from west-coast
 # machines, and the New Jersey region routinely produced ~1s SSH RTTs
@@ -403,8 +451,8 @@ idle_mode = "disabled"
 # gVisor runsc hardening for the agent container, matching the docker template.
 # runsc itself is installed+selected on the [providers.vultr] block above; these
 # `docker run` args go via start_arg (vps_docker forwards start_arg to the inner
-# `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /mngr/code,
-# inside the mounted /mngr volume, already exists as the process cwd) and
+# `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /home/user/workspace,
+# inside the mounted /home/user volume, already exists as the process cwd) and
 # `--security-opt=no-new-privileges`. `--restart=unless-stopped` brings the
 # agent container back after a VPS reboot; the entrypoint then self-heals sshd.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
@@ -426,7 +474,7 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 set -u
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
     docker start "$cid" >/dev/null 2>&1 || true
-    docker exec --workdir / "$cid" bash -lc 'exec /mngr/code/scripts/minds_start_services_agent.sh' || true
+    docker exec --workdir / "$cid" bash -lc 'exec /home/user/workspace/scripts/minds_start_services_agent.sh' || true
 done
 BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
@@ -456,7 +504,7 @@ systemctl enable minds-autostart.service
 # `aws` / `imbue_cloud` templates. Declaring `provider = "ovh"` here used to make
 # slice bakes fail ("conflicting providers": the slice address vs this template).
 [create_templates.pool_host]
-target_path = "/mngr/code/"
+target_path = "/home/user/workspace/"
 # No plan / datacenter / sizing baked in: each pool-bake path appends its own per
 # invocation -- the OVH backend appends ``-b --vps-datacenter=<region>`` (plan
 # defaults from ``OvhProviderConfig.default_plan``), the slice backend passes the
@@ -479,7 +527,7 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 # starts the agent container and relaunches the system-services agent inside it
 # -- so the workspace recovers from a VM reboot even when the minds desktop app
 # is not running. Runs once on the VM (post_host_create_command / default-workspace-template-seed has
-# already seeded /mngr/code in the container, so the installer can be copied out
+# already seeded /home/user/workspace in the container, so the installer can be copied out
 # of it). The unit persists across leases and container rebuilds (it finds the
 # container by mngr label, not by name).
 post_host_create_outer_command__extend = [
@@ -496,7 +544,7 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 set -u
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
     docker start "$cid" >/dev/null 2>&1 || true
-    docker exec --workdir / "$cid" bash -lc 'exec /mngr/code/scripts/minds_start_services_agent.sh' || true
+    docker exec --workdir / "$cid" bash -lc 'exec /home/user/workspace/scripts/minds_start_services_agent.sh' || true
 done
 BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
@@ -521,7 +569,7 @@ systemctl enable minds-autostart.service
 
 # template for AWS EC2 VPS provider (aws mode)
 [create_templates.aws]
-target_path = "/mngr/code/"
+target_path = "/home/user/workspace/"
 # No `provider` declared: minds addresses the create as
 # `system-services@<host>.aws-<region>`, which selects the region-specific
 # `[providers.aws-<region>]` block minds writes into its mngr profile settings
@@ -540,8 +588,8 @@ idle_mode = "disabled"
 # templates. runsc is installed+selected via `install_gvisor_runtime` /
 # `docker_runtime` on the minds-written `[providers.aws-<region>]` blocks; these
 # `docker run` args go via start_arg (vps_docker forwards start_arg to the inner
-# `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /mngr/code,
-# inside the mounted /mngr volume, already exists as the process cwd) and
+# `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /home/user/workspace,
+# inside the mounted /home/user volume, already exists as the process cwd) and
 # `--security-opt=no-new-privileges`. `--restart=unless-stopped` brings the
 # agent container back after an EC2 reboot; the entrypoint then self-heals sshd.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
@@ -563,7 +611,7 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 set -u
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
     docker start "$cid" >/dev/null 2>&1 || true
-    docker exec --workdir / "$cid" bash -lc 'exec /mngr/code/scripts/minds_start_services_agent.sh' || true
+    docker exec --workdir / "$cid" bash -lc 'exec /home/user/workspace/scripts/minds_start_services_agent.sh' || true
 done
 BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
@@ -597,12 +645,12 @@ systemctl enable minds-autostart.service
 # Leased pool hosts must never auto-shutdown -- the host is borrowed for a
 # whole user session, not a one-shot job.
 idle_mode = "disabled"
-# The agent workspace lives on the persistent volume at /mngr/code/. The fast
+# The agent workspace lives on the persistent volume at /home/user/workspace/. The fast
 # (adopt) path ignores this -- it reuses the pre-baked agent's recorded
 # work_dir -- but the slow (rebuild) path rebuilds the container from scratch
 # and needs the standard target_path so the DEFAULT_WORKSPACE_TEMPLATE workspace lands in the right
 # place, exactly like the vultr/ovh templates.
-target_path = "/mngr/code/"
+target_path = "/home/user/workspace/"
 # Docker build args forwarded verbatim to the delegated vps_docker build that
 # the imbue_cloud SLOW path runs (it tears down the leased pool host's baked
 # container and rebuilds it from this Dockerfile). The FAST path adopts the
@@ -615,12 +663,12 @@ build_arg__extend = ["--file=Dockerfile", "."]
 # pre-baked container, which already carries this policy.
 start_arg__extend = ["--restart=unless-stopped"]
 # Forward the minds-side MNGR_PREFIX from minds' subprocess env onto the
-# host's ``/mngr/env``, so the in-container mngr sees the same prefix the
+# host's ``/home/user/.mngr/env``, so the in-container mngr sees the same prefix the
 # desktop client used. Anthropic credentials are deliberately NOT forwarded
 # anywhere: workspace Claude auth lives in the env block of the shared
 # CLAUDE_CONFIG_DIR settings.json, written by the in-UI sign-in modal.
 pass_host_env__extend = ["MNGR_PREFIX"]
-# Seed /mngr/code from the baked image on first boot (idempotent warm-boot
+# Seed /home/user/workspace from the baked image on first boot (idempotent warm-boot
 # fast path). Runs after create_host for both paths; on the fast path the
 # code is already present so default-workspace-template-seed is a no-op. Same as the vultr/ovh
 # templates.

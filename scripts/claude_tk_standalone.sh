@@ -10,7 +10,7 @@
 # ...), the transition gets suppressed or mis-positioned, so the step never
 # groups the work done under it. That is exactly what produced the
 # "Confirm the refresh button works for you" bug, where the agent ran
-# `cd /mngr/code; tk start <id> >/dev/null 2>&1; sed ...`: the start output was
+# `cd /home/user/workspace; tk start <id> >/dev/null 2>&1; sed ...`: the start output was
 # swallowed, the step was never seen as open, and its work + close fell out of
 # the timeline as loose blocks. Forbidding the chained/redirected form makes
 # that class of bug structurally impossible at the source.

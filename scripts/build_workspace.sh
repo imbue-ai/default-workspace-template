@@ -23,7 +23,7 @@ export PATH="/root/.local/bin:$PATH"
 # NEON-only paths, which run on both real M-series silicon and the VZ guest.
 # The same env var rides the agent's runtime env via .mngr/settings.toml
 # `host_env__extend`; this export covers the build-time `mngr plugin add`
-# below, which runs before /mngr/env is sourced.
+# below, which runs before /home/user/.mngr/env is sourced.
 export OPENSSL_armcap=0
 
 # Pin uv to a Python that satisfies the lockfile (>=3.12). The Docker base ships
@@ -58,6 +58,6 @@ mngr plugin add \
 uv sync --all-packages --frozen
 
 # Expose the vendored tk ticket tracker on PATH. The target resolves once
-# /mngr/code is in place (on docker, after the first-boot seed).
+# /home/user/workspace is in place (on docker, after the first-boot seed).
 ln -sf "$REPO_ROOT/vendor/tk/ticket" /usr/local/bin/tk
 ln -sf "$REPO_ROOT/vendor/tk/ticket" /usr/local/bin/ticket

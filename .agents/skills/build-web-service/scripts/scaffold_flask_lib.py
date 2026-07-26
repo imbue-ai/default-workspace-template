@@ -16,7 +16,7 @@ Usage:
         --name inbox-status --description "inbox status dashboard" \\
         [--port 8081] [--extra-dep "jinja2>=3.1"] [--extra-dep "anthropic>=0.40"]
 
-Run from the repo root (`/mngr/code`). Fails non-zero with a clear message on
+Run from the repo root (`/home/user/workspace`). Fails non-zero with a clear message on
 any failure (lib already exists, reserved name, sync failure, etc.).
 """
 
@@ -142,7 +142,7 @@ def _lib_runner(name: str, package: str, description: str, port: int) -> str:
     port_env_var = f"{package.upper()}_PORT"
     return f'''"""{description}.
 
-Services run from /mngr/code (the repo root). Conventions:
+Services run from /home/user/workspace (the repo root). Conventions:
 
 - Persistent state (anything written and read across runs -- cursors,
   caches, snapshots, user records): read and write it under ``DATA_DIR``
@@ -152,8 +152,8 @@ Services run from /mngr/code (the repo root). Conventions:
   instance at a *copy* of the data instead of the live store (see the
   update-service skill). Do NOT use ``Path(__file__)``-based paths for
   state -- the bug to avoid is one process writing to
-  ``/mngr/code/runtime/...`` while another reads from
-  ``/mngr/code/libs/<pkg>/runtime/...``.
+  ``/home/user/workspace/runtime/...`` while another reads from
+  ``/home/user/workspace/libs/<pkg>/runtime/...``.
 - Static assets shipped alongside this file (templates, default
   configs, bundled JSON): ``Path(__file__).parent / "assets/..."`` is
   fine and is the right pattern.
@@ -374,7 +374,7 @@ def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
 command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
-directory=/mngr/code
+directory=/home/user/workspace
 autostart=true
 autorestart=true
 startretries=1000000

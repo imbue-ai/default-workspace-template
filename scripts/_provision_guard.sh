@@ -12,7 +12,7 @@
 # IMPORTANT -- only guard steps with GLOBAL effects (e.g. setup_system). Do NOT
 # guard steps that write outputs INTO the workspace repo (install_dependencies ->
 # .venv/node_modules, build_workspace -> frontend dist): the create re-materializes
-# /mngr/code from a git-mirror push (tracked files only), so those in-repo outputs
+# /home/user/workspace from a git-mirror push (tracked files only), so those in-repo outputs
 # are absent at create time and MUST be regenerated every create. Skipping them
 # leaves the workspace half-built (e.g. "Frontend not built").
 #

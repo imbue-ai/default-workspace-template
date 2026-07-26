@@ -9,7 +9,7 @@
 # credentials of its own -- no token ever enters the container.
 #
 # Because core.hooksPath is global, the hook fires for every checkout in the
-# container: the main /mngr/code repo and every worker worktree, each pushing
+# container: the main /home/user/workspace repo and every worker worktree, each pushing
 # its own current branch.
 #
 # Skips the push in these cases -- 1-3 are normal, not errors, and skip

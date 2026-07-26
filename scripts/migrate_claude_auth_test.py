@@ -35,7 +35,7 @@ def workspace_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Pat
 def test_migrate_moves_keys_into_settings_and_scrubs_host_env(workspace_dirs: tuple[Path, Path]) -> None:
     host_dir, config_dir = workspace_dirs
     (host_dir / "env").write_text(
-        "CLAUDE_CONFIG_DIR=/mngr/claude\nANTHROPIC_API_KEY=sk-old-key\nANTHROPIC_BASE_URL=https://litellm.example\n"
+        "CLAUDE_CONFIG_DIR=/home/user/.mngr/claude\nANTHROPIC_API_KEY=sk-old-key\nANTHROPIC_BASE_URL=https://litellm.example\n"
     )
 
     changed = migration._migrate_env_files()
@@ -50,12 +50,12 @@ def test_migrate_moves_keys_into_settings_and_scrubs_host_env(workspace_dirs: tu
     assert "ANTHROPIC_API_KEY" not in host_env_text
     assert "ANTHROPIC_BASE_URL" not in host_env_text
     # Non-managed host env keys survive the scrub.
-    assert "CLAUDE_CONFIG_DIR=/mngr/claude" in host_env_text
+    assert "CLAUDE_CONFIG_DIR=/home/user/.mngr/claude" in host_env_text
 
 
 def test_migrate_is_noop_when_host_env_holds_no_auth_keys(workspace_dirs: tuple[Path, Path]) -> None:
     host_dir, config_dir = workspace_dirs
-    (host_dir / "env").write_text("CLAUDE_CONFIG_DIR=/mngr/claude\n")
+    (host_dir / "env").write_text("CLAUDE_CONFIG_DIR=/home/user/.mngr/claude\n")
 
     changed = migration._migrate_env_files()
 

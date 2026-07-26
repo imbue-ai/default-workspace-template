@@ -18,7 +18,7 @@ does **not** watch the config file -- you apply changes with
 ```ini
 [program:my-service]
 command=python3 scripts/oom_tag_service.py user uv run my-service
-directory=/mngr/code
+directory=/home/user/workspace
 autostart=true
 autorestart=true
 startretries=1000000
@@ -45,7 +45,7 @@ Key fields:
   The `python3 scripts/oom_tag_service.py user` prefix is the **OOM band tag**
   (see below) -- keep it as the outermost command, in front of any `bash -c`
   wrapper.
-- `directory=/mngr/code` -- run from the repo root, so cwd-relative paths
+- `directory=/home/user/workspace` -- run from the repo root, so cwd-relative paths
   (`runtime/...`, `scripts/...`) resolve. Set this on every program.
 - `autostart=true` -- start when supervisord boots.
 - `autorestart=true` -- restart a long-lived daemon whenever it exits. (This is

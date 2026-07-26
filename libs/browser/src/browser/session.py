@@ -241,7 +241,7 @@ def _wrap_system_message(text: str) -> str:
 _PROFILE_ROOT = Path(
     os.environ.get(
         "BROWSER_PROFILE_ROOT",
-        str(Path(os.environ.get("MNGR_HOST_DIR", "/mngr")) / "browser-profiles"),
+        str(Path(os.environ.get("MNGR_HOST_DIR", "/home/user/.mngr")) / "browser-profiles"),
     )
 )
 # Seconds to wait for one tab's navigation during restore, so a slow SSO redirect

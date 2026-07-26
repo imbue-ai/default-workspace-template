@@ -160,7 +160,7 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
     # terminal but before host-backup, matching what runtime-backup used to get.
     [program:github-sync]
     command=python3 scripts/oom_tag_service.py github-sync uv run github-sync run
-    directory=/mngr/code
+    directory=/home/user/workspace
     autostart=true
     autorestart=true
     startretries=1000000

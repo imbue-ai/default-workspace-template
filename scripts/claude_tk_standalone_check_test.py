@@ -44,11 +44,11 @@ _ALLOWED = [
 
 # Commands that must be BLOCKED (classify returns a reason string).
 _BLOCKED = [
-    'cd /mngr/code && tk close cod-step-x "s"',
-    'cd /mngr/code\ntk close cod-step-x "s"',  # the real emaildigest form
+    'cd /home/user/workspace && tk close cod-step-x "s"',
+    'cd /home/user/workspace\ntk close cod-step-x "s"',  # the real emaildigest form
     "tk start cod-step-x >/dev/null 2>&1",
     "tk start cod-step-x 2>err",
-    'cd /mngr/code; tk start cod-step-vl83 >/dev/null 2>&1; sed -n "1,5p" f',
+    'cd /home/user/workspace; tk start cod-step-vl83 >/dev/null 2>&1; sed -n "1,5p" f',
     'tk close a "x" && tk start b',
     'tk close cod-step-x "s" | tee log',
     "tk start cod-step-x &",

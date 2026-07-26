@@ -233,10 +233,13 @@ class OuterTriggerSnapshotTaker(SnapshotTakerInterface):
         outer_snapshot_path = result.snapshot_path or str(
             self.capabilities.snapshot_current_path.parent / snapshot_name
         )
+        read_path = self.capabilities.snapshot_read_path.parent / snapshot_name
+        if self.capabilities.read_subpath is not None:
+            read_path = read_path / self.capabilities.read_subpath
         return SnapshotResult(
             method=SnapshotMethod.OUTER_TRIGGER,
             snapshot_path=outer_snapshot_path,
-            read_path=self.capabilities.snapshot_read_path.parent / snapshot_name,
+            read_path=read_path,
             duration_seconds=duration,
             helper_exit_code=result.exit_code,
             helper_stdout=result.stdout,
@@ -369,7 +372,7 @@ def _list_snapshot_names(read_dir: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# direct: plain docker (no btrfs) -- restic reads /mngr/ live.
+# direct: plain docker (no btrfs) -- restic reads /home/user/.mngr/ live.
 # ---------------------------------------------------------------------------
 
 
@@ -377,7 +380,7 @@ class DirectSnapshotTaker(SnapshotTakerInterface):
     """No-op snapshot; restic reads the host_dir live (used in plain docker dev/test)."""
 
     def take_snapshot(self) -> SnapshotResult:
-        read_path = self.capabilities.snapshot_read_path or Path("/mngr")
+        read_path = self.capabilities.snapshot_read_path or Path("/home/user")
         return SnapshotResult(
             method=SnapshotMethod.DIRECT,
             snapshot_path=str(read_path),
@@ -386,5 +389,5 @@ class DirectSnapshotTaker(SnapshotTakerInterface):
         )
 
     def cleanup_after_backup(self) -> tuple[str, ...]:
-        # Nothing was snapshotted (restic reads /mngr live), so nothing to clean.
+        # Nothing was snapshotted (restic reads /home/user/.mngr live), so nothing to clean.
         return ()

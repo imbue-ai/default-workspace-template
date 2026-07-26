@@ -18,7 +18,7 @@ set -eu
 # agent's env on top, with auto-export so `mngr` and the relaunched agent inherit them.
 set -a
 # shellcheck source=/dev/null
-[ -f /mngr/env ] && . /mngr/env
+[ -f /home/user/.mngr/env ] && . /home/user/.mngr/env
 host_dir="${MNGR_HOST_DIR:-/mngr}"
 for data_file in "$host_dir"/agents/*/data.json; do
     [ -e "$data_file" ] || continue

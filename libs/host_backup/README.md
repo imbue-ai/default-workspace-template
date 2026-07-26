@@ -1,7 +1,7 @@
 # host_backup
 
 Background service that continuously backs up the agent's full `host_dir`
-(`/mngr/`) to a remote restic repository (Cloudflare R2 by default).
+(`/home/user/.mngr/`) to a remote restic repository (Cloudflare R2 by default).
 
 Distinct from the opt-in `github_sync` service, which only ships `runtime/`
 to a GitHub orphan branch as a fine-grained checkpoint. `host_backup` covers the whole
@@ -52,7 +52,7 @@ an encrypted restic repo on cheaper object storage.
     that. After the backup, the oldest snapshots beyond `max_local_snapshots`
     (default 5) are deleted by name via a `cleanup` request that carries the
     snapshot name as `target`.
-  - `direct`: no snapshot; restic reads `/mngr/` directly (plain docker;
+  - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
   `excludes` list (default: `**/.venv`, `**/node_modules`, etc).

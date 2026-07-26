@@ -10,9 +10,9 @@ function parseArgs(url: string): string[] {
 
 describe("buildSessionTerminalUrl", () => {
   it("emits the positional args in ttyd dispatch order", () => {
-    const url = buildSessionTerminalUrl("terminal-1", "term-abc", "/mngr/code");
+    const url = buildSessionTerminalUrl("terminal-1", "term-abc", "/home/user/workspace");
     expect(url.startsWith("/service/terminal/?")).toBe(true);
-    expect(parseArgs(url)).toEqual(["_", "session", "terminal-1", "term-abc", "/mngr/code"]);
+    expect(parseArgs(url)).toEqual(["_", "session", "terminal-1", "term-abc", "/home/user/workspace"]);
   });
 
   it("omits the working directory arg as empty when none is given", () => {

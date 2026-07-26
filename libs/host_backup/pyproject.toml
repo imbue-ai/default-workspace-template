@@ -1,7 +1,7 @@
 [project]
 name = "host-backup"
 version = "0.1.0"
-description = "Continuous restic-based backup of the agent's host_dir (/mngr/) to a remote repository (R2 by default)"
+description = "Continuous restic-based backup of the agent's host_dir (/home/user/.mngr/) to a remote repository (R2 by default)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

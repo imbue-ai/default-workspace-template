@@ -15,22 +15,22 @@
 # `mngr start` itself is idempotent and serializes against any concurrent start
 # (e.g. the desktop client) via a host-level flock, so this never double-launches.
 #
-# Boot ordering is the hard part: lima keeps /mngr on a separate btrfs disk and
-# only mounts it AND creates the /mngr symlink (-> /mnt/lima-mngr-<hash>-data) at
+# Boot ordering is the hard part: lima keeps /home/user/.mngr on a separate btrfs disk and
+# only mounts it AND creates the /home/user/.mngr symlink (-> /mnt/lima-mngr-<hash>-data) at
 # the very end of its per-boot cloud-init provisioning, whose duration is wildly
 # variable (seconds to many minutes). Ordering against fstab/cloud-final or
 # polling with a fixed timeout both lose that race. Instead we use a systemd
-# .path unit that watches for /mngr/code and triggers the start service the
+# .path unit that watches for /home/user/workspace and triggers the start service the
 # moment the workspace appears -- event-driven, no timeout, no race.
 set -eu
 
 SERVICE_PATH=/etc/systemd/system/minds-autostart.service
 PATH_UNIT=/etc/systemd/system/minds-autostart.path
-START_SCRIPT=/mngr/code/scripts/minds_start_services_agent.sh
+START_SCRIPT=/home/user/workspace/scripts/minds_start_services_agent.sh
 
 # The service: start the agent in its full env via the shared start script. No
 # readiness wait needed -- the .path unit only triggers this once the script
-# exists (i.e. /mngr is mounted + symlinked). `bash -lc` gives uv/mngr on PATH.
+# exists (i.e. /home/user/.mngr is mounted + symlinked). `bash -lc` gives uv/mngr on PATH.
 cat > "$SERVICE_PATH" <<UNIT
 [Unit]
 Description=Start the minds system-services agent on boot
@@ -59,6 +59,6 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable minds-autostart.path
-# Start the watcher now too, so it works without a reboot: if /mngr is already
+# Start the watcher now too, so it works without a reboot: if /home/user/.mngr is already
 # mounted (the common case at provision time) the service fires immediately.
 systemctl start minds-autostart.path

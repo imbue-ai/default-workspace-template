@@ -110,6 +110,10 @@ class BackupConfig(FrozenModel):
             "**/build",
             "**/.next",
             "**/.cache",
+            # Provisioning-owned: mngr rewrites authorized_keys on every
+            # start/restore, and restoring an old copy onto a new host would
+            # lock the tooling out.
+            "**/.ssh/authorized_keys",
         ),
         description="Glob patterns passed to `restic backup --exclude=...`",
     )

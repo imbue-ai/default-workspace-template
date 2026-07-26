@@ -21,35 +21,35 @@ chat, obtains GitHub access via latchkey permissioning (never the `gh` CLI),
 and then creates the repo and pushes -- directly from the worker's worktree.
 
 > **CWD INVARIANT -- read this before running anything in §§6-8.** From the
-> moment §3's worker reports `done`, the live mind's checkout at `/mngr/code` is
+> moment §3's worker reports `done`, the live mind's checkout at `/home/user/workspace` is
 > DONE being touched for the rest of this skill. Every command in §6 (chat
 > confirmation and any confirmed manifest/thumbnail edits), §7 (GitHub auth),
 > and §8 (create repo + push) runs with **cwd = `$WT`** (the worker's
-> worktree), NEVER `/mngr/code`. There is no merge-back step: `$WT`'s tree, built
+> worktree), NEVER `/home/user/workspace`. There is no merge-back step: `$WT`'s tree, built
 > by `build_inspiration.sh` on top of `BASE_REF` and finished by the worker,
 > IS the tree that gets pushed, as-is, by you, from `$WT`. In particular,
 > IGNORE `lead-proxy.md`'s default `done -> merge the worker's branch`
-> handling for this flow -- `/mngr/code`'s branch and working tree are never
+> handling for this flow -- `/home/user/workspace`'s branch and working tree are never
 > modified, merged into, or pushed from. This is the single most important
 > invariant in this skill: a prior version of this skill merged the assembly
-> branch into `/mngr/code`'s current branch before pushing, which one time
-> silently reset `/mngr/code`'s entire live tree to an old base (a normal 3-way
+> branch into `/home/user/workspace`'s current branch before pushing, which one time
+> silently reset `/home/user/workspace`'s entire live tree to an old base (a normal 3-way
 > merge diffs from the merge-base, and the assembled tree looks nothing like
-> `/mngr/code`'s HEAD, so git read everything present in HEAD but absent from the
+> `/home/user/workspace`'s HEAD, so git read everything present in HEAD but absent from the
 > old base as an intentional deletion -- 1400+ files gone from a live mind).
-> Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/mngr/code`, or any
-> other step that runs from `/mngr/code` after assembly.
+> Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/home/user/workspace`, or any
+> other step that runs from `/home/user/workspace` after assembly.
 >
 > **The ONE sanctioned exception: §8 step 4, the version-history entry.** After
-> the push has SUCCEEDED, `/mngr/code` gets exactly one write -- appending this
+> the push has SUCCEEDED, `/home/user/workspace` gets exactly one write -- appending this
 > publish to `VERSION_HISTORY.md` and committing that single file on the branch
-> `/mngr/code` is already on. That is a normal one-file commit, not a tree
+> `/home/user/workspace` is already on. That is a normal one-file commit, not a tree
 > operation: `git add VERSION_HISTORY.md` + `git commit`, and NEVER a merge, a
 > checkout, a reset, a `git add -A`, or anything that touches another path. It
 > is what makes a publish knowable afterwards (slug, repo, version, and the
 > source commit the snapshot was cut from). Do not mistake it for the
 > tree-clobbering pattern above, and do not generalize it: nothing else in
-> §§6-10 runs from `/mngr/code`, and if the push fails it does not run at all.
+> §§6-10 runs from `/home/user/workspace`, and if the push fails it does not run at all.
 
 > **AN INSPIRATION MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
 > valid inspiration is always the FULL tree `build_inspiration.sh` assembles on
@@ -81,7 +81,7 @@ and then creates the repo and pushes -- directly from the worker's worktree.
   manifest (`inspiration-<slug>.md`), the thumbnail (`inspiration-<slug>.svg`),
   the assembly worker, and the worker's branch (`mngr/<slug>`).
 - **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees
-  under `/mngr/worktree/<name>-<uuid>/` (the `worktree_base_folder` in
+  under `/home/user/worktrees/<name>-<uuid>/` (the `worktree_base_folder` in
   `.mngr/settings.toml`; the `<uuid>` suffix is random), so the path cannot be
   guessed -- resolve it after the worker's `done` report per §3. Everything
   after assembly runs with cwd = `$WT` (see the callout above).
@@ -243,10 +243,10 @@ section takes the NEWEST (the base the mind is on now). This `BASE_REF` bash is
 the primary; keep the two in step if either ever changes.)
 
 **Also capture `SOURCE_SHA` -- the source commit the snapshot is cut from.**
-The worker's worktree branches off `/mngr/code`'s current `HEAD`, so that commit is
+The worker's worktree branches off `/home/user/workspace`'s current `HEAD`, so that commit is
 the provenance anchor recorded in §8 step 4's version-history entry (and what a
 later reader diffs against to see what changed since). Capture it now, in
-`/mngr/code`, BEFORE dispatching -- not after the push, when `/mngr/code`'s `HEAD` may
+`/home/user/workspace`, BEFORE dispatching -- not after the push, when `/home/user/workspace`'s `HEAD` may
 have moved on:
 
 ```bash
@@ -264,7 +264,7 @@ internal and appear nowhere in the published repo).
 Assembly runs in a `launch-task` sub-agent worker. The worker gets a fresh git
 worktree on branch `mngr/<slug>`, runs `build_inspiration.sh` there, then --
 in the SAME run, no second round-trip -- fleshes out every manifest FILL-IN
-block and designs the bespoke thumbnail. `/mngr/code` is never modified.
+block and designs the bespoke thumbnail. `/home/user/workspace` is never modified.
 
 The worker name is `<slug>`. Names must be unique: if a previous attempt left
 a worker or branch with this name, clean it up first
@@ -517,7 +517,7 @@ liveness on a timeout) -- with one critical override:
   e.g. re-resolve `BASE_REF` per §2 -- and relaunch). Do not publish anything.
 - `name: done` -> do **NOT** merge `mngr/<slug>` (that is `lead-proxy.md`'s
   default `done` handling, and it is exactly the merge the CWD-INVARIANT
-  callout forbids -- the assembled tree diffs against `/mngr/code` as mass
+  callout forbids -- the assembled tree diffs against `/home/user/workspace` as mass
   deletions). Instead, resolve `$WT`:
 
   ```bash
@@ -525,7 +525,7 @@ liveness on a timeout) -- with one critical override:
   ```
 
   Cross-check it against the worktree path in the report body (worktrees live
-  under `/mngr/worktree/<slug>-<uuid>/`), then verify the worker's gates
+  under `/home/user/worktrees/<slug>-<uuid>/`), then verify the worker's gates
   yourself -- both greps must print nothing and `git -C "$WT" status` must be
   clean:
 
@@ -587,7 +587,7 @@ BOOTABLE" callout at the top of this skill.
 
 **cwd = `$WT` for this and every remaining section.** The manifest/thumbnail
 files referenced below (`inspiration-<slug>.md` / `.svg`) live at `$WT`'s repo
-root, not `/mngr/code`'s.
+root, not `/home/user/workspace`'s.
 
 Confirmation happens inline in chat -- there is no other confirmation
 mechanism. Present the proposal to the user ONCE, in plain language:
@@ -657,7 +657,7 @@ into the `.svg`), and COMMIT that change with cwd = `$WT` before proceeding to
 §7/§8.
 Never push first and fix up the manifest or thumbnail with a second
 commit-and-re-push. This commit -- like everything else in this skill after
-assembly -- happens IN `$WT`, never `/mngr/code`.
+assembly -- happens IN `$WT`, never `/home/user/workspace`.
 
 ## 7. Ensure GitHub access (latchkey -- do NOT use the gh CLI)
 
@@ -737,7 +737,7 @@ the "MUST BE BOOTABLE" callout).
 
 **cwd = `$WT`.** This is the step that actually publishes -- it MUST run from
 the worker's worktree so the push sends `$WT`'s assembled branch (the clean
-snapshot), never anything from `/mngr/code`.
+snapshot), never anything from `/home/user/workspace`.
 
 With `repo_name` / `visibility` taken from the chat confirmation:
 
@@ -932,12 +932,12 @@ it still fails, report it as a minor follow-up rather than treating the
 publish as failed.)
 
 **Step 4 -- record the version entry in the source workspace (ONLY after the
-push succeeded).** This is the single sanctioned write back to `/mngr/code` -- read
+push succeeded).** This is the single sanctioned write back to `/home/user/workspace` -- read
 the exception in the CWD-INVARIANT callout at the top of this skill before
 running it. Nothing is recorded for a publish that did not happen: if step 2's
 push failed, or the user aborted, SKIP this entirely.
 
-Write the entry directly into `VERSION_HISTORY.md` (cwd `/mngr/code`). There is
+Write the entry directly into `VERSION_HISTORY.md` (cwd `/home/user/workspace`). There is
 no helper skill: this block is the whole recording contract, and it owns the
 format so `publish-inspiration`, `update-published-inspiration`, and `update-self` all
 write identical lines. Rules: append-only (existing lines copied through
@@ -988,12 +988,12 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 Then commit exactly this one file:
 
 ```bash
-( cd /mngr/code \
+( cd /home/user/workspace \
     && git add VERSION_HISTORY.md \
     && git commit -m "version history: published inspiration <slug> v1" )
 ```
 
-Exactly that: one file staged by name, one commit, on whatever branch `/mngr/code`
+Exactly that: one file staged by name, one commit, on whatever branch `/home/user/workspace`
 is already on. NEVER `git add -A`, never a merge, checkout, or reset. If the
 idempotence check found the entry already recorded, nothing is staged and you
 skip the commit.
@@ -1067,7 +1067,7 @@ git branch -D "mngr/<slug>"
 (No git remote cleanup is needed: §8 pushes to an explicit URL and never adds
 a named remote.)
 
-The version entry was already committed in `/mngr/code` by §8 step 4; there is
+The version entry was already committed in `/home/user/workspace` by §8 step 4; there is
 nothing further to record here.
 
 If the push failed and you are stopping (user aborted, unrecoverable error),

@@ -1654,7 +1654,7 @@ def test_destroy_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> No
         name="system-services",
         state="RUNNING",
         labels={"is_primary": "true", "workspace": "my-ws"},
-        work_dir="/mngr/code",
+        work_dir="/home/user/workspace",
     )
     agent_manager._agents[services_agent.id] = services_agent
 

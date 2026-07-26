@@ -15,33 +15,36 @@ def test_detects_outer_trigger_when_trigger_dir_exists(tmp_path: Path) -> None:
     trigger_dir = tmp_path / "mngr-snapshot"
     trigger_dir.mkdir()
     capabilities = detect_backup_capabilities(
-        trigger_dir=trigger_dir, host_dir=tmp_path / "mngr"
+        trigger_dir=trigger_dir, backup_root=tmp_path / "home"
     )
     assert capabilities.method == SnapshotMethod.OUTER_TRIGGER
     assert capabilities.trigger_dir == trigger_dir
     assert capabilities.snapshot_read_path == Path("/mngr-snapshots/current")
+    # outer_trigger snapshots cover the whole unified volume; restic reads the
+    # home/ subtree inside each snapshot.
+    assert capabilities.read_subpath == "home"
 
 
 def test_detects_direct_when_no_trigger_dir_and_not_btrfs(tmp_path: Path) -> None:
     # tmp_path lives on the test runner's ordinary filesystem (not btrfs), so
-    # detection falls through to DIRECT and restic reads the host_dir live.
-    host_dir = tmp_path / "mngr"
-    host_dir.mkdir()
+    # detection falls through to DIRECT and restic reads the backup root live.
+    backup_root = tmp_path / "home"
+    backup_root.mkdir()
     capabilities = detect_backup_capabilities(
-        trigger_dir=tmp_path / "absent-trigger", host_dir=host_dir
+        trigger_dir=tmp_path / "absent-trigger", backup_root=backup_root
     )
     assert capabilities.method == SnapshotMethod.DIRECT
-    assert capabilities.snapshot_read_path == host_dir
+    assert capabilities.snapshot_read_path == backup_root
     assert capabilities.trigger_dir is None
 
 
 def test_trigger_dir_that_is_a_file_does_not_count(tmp_path: Path) -> None:
     trigger_path = tmp_path / "mngr-snapshot"
     trigger_path.write_text("not a directory")
-    host_dir = tmp_path / "mngr"
-    host_dir.mkdir()
+    backup_root = tmp_path / "home"
+    backup_root.mkdir()
     capabilities = detect_backup_capabilities(
-        trigger_dir=trigger_path, host_dir=host_dir
+        trigger_dir=trigger_path, backup_root=backup_root
     )
     assert capabilities.method == SnapshotMethod.DIRECT
 

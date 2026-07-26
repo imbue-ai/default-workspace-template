@@ -26,12 +26,12 @@ from host_backup.snapshot import (
 def test_direct_snapshot_taker_returns_read_path_from_capabilities() -> None:
     capabilities = BackupCapabilities(
         method=SnapshotMethod.DIRECT,
-        snapshot_read_path=Path("/mngr"),
+        snapshot_read_path=Path("/home/user"),
     )
     taker = DirectSnapshotTaker(capabilities=capabilities)
     result = taker.take_snapshot()
     assert result.method == SnapshotMethod.DIRECT
-    assert result.read_path == Path("/mngr")
+    assert result.read_path == Path("/home/user")
     # Cleanup is a no-op (nothing was snapshotted):
     assert taker.cleanup_after_backup() == ()
 
@@ -41,7 +41,7 @@ def test_direct_snapshot_taker_defaults_read_path_when_unset() -> None:
         capabilities=BackupCapabilities(method=SnapshotMethod.DIRECT)
     )
     result = taker.take_snapshot()
-    assert result.read_path == Path("/mngr")
+    assert result.read_path == Path("/home/user")
 
 
 # --- make_snapshot_taker ---

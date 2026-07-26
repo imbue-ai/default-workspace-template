@@ -10,7 +10,7 @@ import os
 import tomllib
 from pathlib import Path
 
-# All relative paths assume cwd = repo root (/mngr/code), matching
+# All relative paths assume cwd = repo root (/home/user/workspace), matching
 # supervisord's `directory=` and the other template services.
 RUNTIME_DIR = Path("runtime")
 CONFIG_PATH = Path("github_sync.toml")

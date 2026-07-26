@@ -2,8 +2,8 @@
 
 An agent (Claude Code) running in this container can write files and read them
 back, but the browser rendering the chat cannot reach the container's
-filesystem. Markdown like ``![chart](/mngr/code/runtime/chat-images/chart.png)``
-(an inline image) or ``[report](/mngr/code/runtime/chat-files/report.pdf)`` (a
+filesystem. Markdown like ``![chart](/home/user/workspace/runtime/chat-images/chart.png)``
+(an inline image) or ``[report](/home/user/workspace/runtime/chat-files/report.pdf)`` (a
 download link) makes the browser issue an HTTP GET for that path; the system
 interface runs in the same container as the agent, so it answers the GET by
 streaming the file's bytes. The absolute on-disk path therefore doubles as the
