@@ -885,6 +885,12 @@
   setInterval(reconcileStream, 1000);
   window.addEventListener("message", (e) => { if (e.data && e.data.type === "minds:panel-visibility") reconcileStream(); });
   document.addEventListener("visibilitychange", reconcileStream);
+  // Ready-but-blank guard: while the stream is connected but no frame has painted, keep
+  // asking the encoder for a keyframe (fast). This is what kills the "browser is ready but I
+  // don't see it until I reopen" case -- the encoder is damage-driven, so on a STATIC page a
+  // missed initial keyframe means nothing is ever sent until a repaint; we force one. Goes
+  // silent the instant the first frame lands (hasFrame).
+  setInterval(() => { if (streamWs && !hasFrame && !crashed && !closedForGood) sendCast({ type: "request_keyframe" }); }, 500);
 
   // --- controls ---
   // Take control: optimistically hide the overlay so a laggy round-trip can't
