@@ -1175,6 +1175,14 @@ class LiveBrowser(MutableModel):
                     self._inject_mouse(message.get("event", {}))
                 else:
                     self._inject_key(message.get("event", {}))
+        elif kind == "request_keyframe":
+            # The viewer asks for a fresh keyframe when it's connected but hasn't painted a
+            # frame yet: it can subscribe just as the encoder starts (the initial IDR races
+            # it) and, on a STATIC page, no damage ever triggers another -- so the view would
+            # sit blank until the user causes a repaint. It re-asks until a frame lands.
+            # Cheap, idempotent, and NOT input-gated (a watcher should see the live page too).
+            if self._capture is not None:
+                self._capture.request_keyframe()
 
     def _inject_mouse(self, event: dict[str, Any]) -> None:
         """Inject a human mouse event at the DISPLAY level (XTest), so native context
