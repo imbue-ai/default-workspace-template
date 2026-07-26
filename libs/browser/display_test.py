@@ -27,6 +27,17 @@ def test_keysym_for_named_key() -> None:
     assert display._keysym_for("ArrowLeft", "ArrowLeft") == XK.string_to_keysym("Left")
 
 
+def test_extra_keys_are_mapped() -> None:
+    # Keys that were silently dropped before (their `key` names are multi-char so the
+    # char fallback returns 0) now resolve via the code table.
+    assert display._CODE_TO_KEYSYM_NAME["NumLock"] == "Num_Lock"
+    assert display._CODE_TO_KEYSYM_NAME["ContextMenu"] == "Menu"
+    assert display._CODE_TO_KEYSYM_NAME["F13"] == "F13"
+    assert display._keysym_for("NumLock", "NumLock") == XK.string_to_keysym("Num_Lock")
+    assert display._keysym_for("F13", "F13") == XK.string_to_keysym("F13")
+    assert display._CODE_TO_KEYSYM_NAME["Numpad1"] == "KP_1"  # digit, not KP_End (NumLock on)
+
+
 def test_keysym_for_unknown_code_falls_back_to_the_character() -> None:
     # A layout/key our table misses still types via the produced character.
     assert display._keysym_for("IntlBackslash", "é") == ord("é")  # Latin-1 == codepoint

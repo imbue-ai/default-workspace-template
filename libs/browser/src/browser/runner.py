@@ -895,11 +895,13 @@ def stream_socket(ws: Any, browser_id: str) -> None:
     if session is None:
         ws.close(1013 if is_valid_browser_name(browser_id) else 1008)
         return
-    # First inbound frame is the codec-capability handshake; default to JPEG if it's
-    # missing/garbled (safe: pixelflux JPEG decodes anywhere). A real client sends it
-    # immediately on open, so bound the wait tightly (not the 120s route timeout) -- a
-    # mute/half-open client must not hold a slot doing nothing.
-    want_h264 = False
+    # First inbound frame is the codec-capability handshake. Default to H.264 if it's
+    # missing/garbled: a real client sends it immediately on open (so a mute one is a
+    # dying half-open socket whose vote barely matters), and H.264 is the common case --
+    # a genuinely JPEG-only client sends {h264:false} explicitly. Defaulting to JPEG would
+    # let one mute FIRST subscriber pin the shared single-mode encoder to JPEG for every
+    # later H.264 viewer. Bound the wait tightly (not the 120s route timeout).
+    want_h264 = True
     try:
         first = ws.receive(timeout=_STREAM_HANDSHAKE_TIMEOUT)
         if first:

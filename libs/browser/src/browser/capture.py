@@ -50,13 +50,18 @@ def _load_pixelflux() -> "tuple[Any, Any] | None":
             return None
     return _pixelflux
 
-# Outbound depth per stream socket. Stripes are small (damage-driven, ~hundreds of
-# bytes) so this is generous slack; a client that still overruns drops its oldest
-# buffered stripes (it recovers on pixelflux's periodic paint-over full frames).
-_STREAM_QUEUE_MAX = int(os.environ.get("BROWSER_STREAM_QUEUE_MAX", "512"))
+# Outbound depth per stream socket. Kept SMALL to bound latency: a backpressured client
+# riding at the cap would otherwise buffer (queue / stripes-per-frame / fps) seconds of
+# stale video. ~64 stripes ≈ a few frames ≈ ~200 ms; on overflow we flush to the newest
+# stripe and request a keyframe (a dropped delta corrupts that row anyway).
+_STREAM_QUEUE_MAX = int(os.environ.get("BROWSER_STREAM_QUEUE_MAX", "64"))
 
 _TARGET_FPS = float(os.environ.get("BROWSER_STREAM_FPS", "30"))
 _VIDEO_CRF = int(os.environ.get("BROWSER_STREAM_CRF", "25"))
+# A keyframe at least this often, so a client whose decoder ever desyncs (a rejected chunk
+# or a dropped delta on a then-static page) always recovers within the interval instead of
+# waiting for a repaint that may never come.
+_KEYFRAME_INTERVAL_S = float(os.environ.get("BROWSER_STREAM_KEYFRAME_INTERVAL", "2"))
 # Minimum seconds between keyframe requests triggered by a full-queue drop (so a
 # persistently-slow client can't make us re-encode a keyframe on every stripe).
 _IDR_ON_DROP_INTERVAL = 0.5
@@ -166,6 +171,14 @@ class Capture:
         settings.use_cpu = True
         settings.encode_node_index = -1  # force software x264 (no GPU in the sandbox)
         settings.video_crf = _VIDEO_CRF
+        # Guaranteed periodic keyframe: recovery for any desynced decoder on a static page.
+        settings.keyframe_interval_s = _KEYFRAME_INTERVAL_S
+        # Paint-over: after a region goes static, re-encode it at higher quality (sharper
+        # text, the common browser content) at ~zero steady cost. Also supplies IDR refresh.
+        settings.use_paint_over_quality = True
+        # Cap the encoder's rate variability so a full-frame IDR burst (tens of KB) doesn't
+        # spike a thin link; smooths WAN delivery at negligible LAN cost.
+        settings.video_vbv_multiplier = 1.5
         cap = screen_capture_cls()
         # NOTE: we deliberately do NOT enable pixelflux's server-side cursor compositing.
         # Its cursor monitor spawns a thread that reads $DISPLAY LATER (after we restore
@@ -209,11 +222,18 @@ class Capture:
             try:
                 client_queue.put_nowait(data)
             except queue.Full:
+                # Backpressured: flush this client's whole backlog to the newest stripe
+                # (stale video is worthless; a dropped delta corrupts the row regardless),
+                # then it recovers on the keyframe we request below.
                 try:
-                    client_queue.get_nowait()  # drop oldest
+                    while True:
+                        client_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
                     client_queue.put_nowait(data)
                     dropped = True
-                except (queue.Empty, queue.Full):
+                except queue.Full:
                     pass
         # A dropped H.264 delta corrupts that stripe until it next repaints (damage-
         # driven), which a static region may never do. Ask for a keyframe so the client

@@ -81,9 +81,14 @@ behavior every check verifies against.
 - **Agent handoff** (e.g. CAPTCHA): agent → human PINNED, requester goes FRONT of the
   resume queue, resumes first on hand-back. Direct-control lease auto-releases after
   idle TTL (agents only; humans are sticky). Claim window revokes an un-claimed grant.
-- **Human input (XTest) and agent input (CDP) never conflict**: different injection
-  layers, same serialized `_input_enabled` gate under `_control_lock`. Human input only
-  lands while the human controls; agent CDP only while the agent controls.
+- **Human input (XTest) and agent input (CDP) are mutually exclusive per command**:
+  different injection layers, same serialized `_input_enabled` gate under
+  `_control_lock`. Human input only lands while the human controls; each agent command
+  re-checks ownership (CAS) before it runs, so a `take_control` rejects every *new*
+  agent command. BOUNDED EXCEPTION: one agent direct-control action already past its
+  CAS check and mid-flight (e.g. a multi-second `navigate`/`type`) completes after the
+  human takes control -- so that single action can overlap the human's first inputs.
+  A running `task` IS cancelled by `take_control`. New agent work never overlaps.
 - **Lifecycle**: `init` (Chromium not up) → `running` → `crashed` (terminal). Drive/
   ownership only once `running`; crash is detected (observer disconnect) and reported;
   crashed name never restored as healthy.
@@ -104,7 +109,7 @@ behavior every check verifies against.
   clear ERROR log + no video (never a crash).
 - **Per-browser Xvfb + XTest connection** are torn down on close; display numbers freed.
 - **Reconnect**: cast 1013 (not-yet-registered) retries; 1008 (gone) terminal; stream
-  socket reconnects with backoff; decoders reset on reconnect/crash.
+  socket reconnects on a fixed ~1s timer; decoders reset on reconnect/crash.
 - **OOM**: browsers are the most-expendable band; a shed Chromium is dropped from the
   manifest so a respawn restores nothing.
 
