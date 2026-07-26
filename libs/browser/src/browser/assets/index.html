@@ -128,6 +128,9 @@
   let streamWs = null;         // separate binary socket; its open/close is the encode-on-demand signal
   let streamWanted = true;     // false while the pane is hidden (panel-visibility) -> encode paused
   let streamReconnect = null;
+  let h264Failed = false;      // sticky: this browser proved it can't decode our H.264 -> use JPEG
+  let gotH264Bytes = false;    // did the current attempt receive any H.264 stripe? (reset per connect)
+  let h264Watchdog = null;     // fires if H.264 bytes arrive but nothing paints -> fall back to JPEG
   const decoders = new Map();  // y_start -> { dec, sawKey }   (one VideoDecoder per H.264 stripe row)
   const frameQueue = [];       // { img, y }  drained by the rAF render loop (img = VideoFrame | ImageBitmap)
   let rafPending = false;
@@ -340,7 +343,7 @@
       try { ctx.drawImage(f.img, 0, f.y); drew = true; } catch (_) {}
       try { f.img.close(); } catch (_) {}
     }
-    if (drew && !hasFrame) { hasFrame = true; placeholder.style.display = "none"; clearFrameWait(); }
+    if (drew && !hasFrame) { hasFrame = true; placeholder.style.display = "none"; clearFrameWait(); clearH264Watchdog(); }
   }
 
   // Lazily build + configure the decoder for a stripe row. configure() is synchronous per
@@ -375,6 +378,7 @@
     const type = dv.getUint8(0);
     if (type === 0x04) {               // H.264: [1]=frametype, [2:4]=frame_id, [4:6]=y, [6:8]=w, [8:10]=h, [10:]=NALs
       if (!window.VideoDecoder) return;
+      gotH264Bytes = true;             // proof the server IS sending H.264; the watchdog can now judge decode
       const frametype = dv.getUint8(1); // 1 = key (IDR), 0 = delta
       const y = dv.getUint16(4);
       const w = dv.getUint16(6);
@@ -404,24 +408,48 @@
   // The /stream socket: opening it starts capture+encode, closing it stops them (encode on
   // demand). We send exactly one text frame (the H.264 capability), then only receive binary
   // stripes. Kept separate from /cast so video never head-of-line-blocks control.
+  // Safety net for a browser that claims H.264 support but can't actually decode our
+  // striped stream (WebCodecs quirks vary by OS/GPU/browser build). If H.264 stripes keep
+  // arriving but nothing paints, the decode is dead -- switch this session to the JPEG
+  // fallback (works everywhere) and reconnect, so the user ALWAYS sees the browser rather
+  // than an eternal "Loading page…". Cleared the moment a frame paints.
+  function armH264Watchdog() {
+    if (h264Watchdog || h264Failed) return;
+    h264Watchdog = setTimeout(() => {
+      h264Watchdog = null;
+      if (!hasFrame && gotH264Bytes && streamWanted && !crashed) {
+        h264Failed = true;  // sticky for this session; onopen will now request JPEG
+        if (streamWs) { try { streamWs.close(); } catch (_) {} streamWs = null; }
+        resetDecoders();
+        connectStream();
+      }
+    }, 5000);
+  }
+  function clearH264Watchdog() { if (h264Watchdog) { clearTimeout(h264Watchdog); h264Watchdog = null; } }
+
   function connectStream() {
     if (streamWs || browserId === null || closedForGood || crashed || !streamWanted) return;
+    gotH264Bytes = false;
     const s = new WebSocket(wsUrl("browsers/" + browserId + "/stream"));
     streamWs = s;
     s.binaryType = "arraybuffer";
     s.onopen = async () => {
       let h264 = false;
       try {
-        if (window.VideoDecoder) {
+        if (window.VideoDecoder && !h264Failed) {
           const r = await VideoDecoder.isConfigSupported({ codec: "avc1.42E01E", codedWidth: 1920, codedHeight: 1080 });
           h264 = !!(r && r.supported);
         }
       } catch (_) { h264 = false; }
-      if (streamWs === s && s.readyState === 1) s.send(JSON.stringify({ h264: h264 }));
+      if (streamWs === s && s.readyState === 1) {
+        s.send(JSON.stringify({ h264: h264 }));
+        if (h264) armH264Watchdog();  // JPEG can't fail to decode, so only guard H.264
+      }
     };
     s.onmessage = (ev) => onStripe(ev.data);
     s.onclose = () => {
       if (streamWs === s) streamWs = null;
+      clearH264Watchdog();
       resetDecoders();
       if (streamWanted) scheduleStreamReconnect();
     };
@@ -433,6 +461,7 @@
   }
   function closeStream() {  // pane hidden / crashed / gone: stop encode, drop decoders
     streamWanted = false;
+    clearH264Watchdog();
     if (streamReconnect) { clearTimeout(streamReconnect); streamReconnect = null; }
     if (streamWs) { try { streamWs.close(); } catch (_) {} streamWs = null; }
     resetDecoders();
