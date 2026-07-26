@@ -483,9 +483,9 @@
   function sendCast(obj) { if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify(obj)); }
 
   // Report our pane size so the server resizes the browser window to fill it (clamped
-  // to [640x480 .. 1920x1080], ignored while an agent drives). Debounced -- a drag fires
-  // a burst. Skip 0-sized reports: a hidden dockview pane has clientWidth/Height 0, and
-  // a `resize 0x0` would otherwise shove the real window down to the 640x480 floor.
+  // server-side to [640x480 .. 4K], ignored while an agent drives). Debounced -- a drag
+  // fires a burst. Skip 0-sized reports: a hidden dockview pane has clientWidth/Height 0,
+  // and a `resize 0x0` would otherwise shove the real window down to the 640x480 floor.
   let resizeTimer = null;
   function reportSize() {
     clearTimeout(resizeTimer);
@@ -691,6 +691,10 @@
       keyboardLocked = false;
       if (navigator.keyboard && navigator.keyboard.unlock) { try { navigator.keyboard.unlock(); } catch (_) {} }
     }
+    // Entering/leaving fullscreen changes the stage size; the ResizeObserver catches it,
+    // but report explicitly too so the browser window resizes to the new size right away
+    // (the fullscreen transition can settle after the observer's first tick).
+    reportSize();
   });
 
   // --- clipboard IN: the remote page copied something -> user's local clipboard --------

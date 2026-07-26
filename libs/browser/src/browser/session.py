@@ -106,11 +106,12 @@ EventSink = Callable[[TaskEvent], Awaitable[None]]
 # size. Up to _MAX_SESSIONS browsers render concurrently, so the cap bounds memory.
 _RENDER_DEFAULT_WIDTH = 1280
 _RENDER_DEFAULT_HEIGHT = 800
-# Cap the window/capture size. Raised to 1440p so fullscreen fills a larger display
-# instead of letterboxing at 1080p; the initial pane stays small (cheap), only a grown/
-# fullscreen pane pays the extra encode cost. Bounded by the Xvfb framebuffer (SCREEN_*).
-_RENDER_MAX_WIDTH = 2560
-_RENDER_MAX_HEIGHT = 1440
+# Cap the window/capture size. Sized to 4K so fullscreen fills essentially any monitor
+# instead of letterboxing; the initial pane stays small (cheap), only a grown/fullscreen
+# pane pays the extra encode cost. Must not exceed the Xvfb framebuffer (SCREEN_*), which
+# is why it tracks the same 4K default.
+_RENDER_MAX_WIDTH = min(3840, SCREEN_W)
+_RENDER_MAX_HEIGHT = min(2160, SCREEN_H)
 # Floor for the clamp -- small enough that a typical (sub-1280) panel actually
 # tracks its size instead of pinning to a too-big minimum, but not degenerate.
 _RENDER_MIN_WIDTH = 640
