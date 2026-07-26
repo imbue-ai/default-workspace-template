@@ -582,7 +582,21 @@
     catch (_) { /* not controlling / network: ignore */ }
     finally { done(); }
   }
-  document.addEventListener("paste", (e) => {
+  // Read an image straight from the clipboard via the async API. Needed because when the
+  // focused element is our non-editable canvas, Chrome's paste event frequently exposes
+  // only text in clipboardData -- the IMAGE is dropped (there's nothing editable to paste
+  // into), so it never reaches the remote. The async read returns the real clipboard.
+  async function pasteImageFromClipboard() {
+    if (!navigator.clipboard || !navigator.clipboard.read) return false;
+    try {
+      for (const it of await navigator.clipboard.read()) {
+        const mime = it.types.find((t) => t.indexOf("image/") === 0);
+        if (mime) { sendPaste(await it.getType(mime), mime); return true; }
+      }
+    } catch (_) { /* denied / empty: fall through */ }
+    return false;
+  }
+  document.addEventListener("paste", async (e) => {
     if (!clipActive()) return;
     e.preventDefault();
     for (const it of e.clipboardData.items) {
@@ -592,7 +606,9 @@
       }
     }
     const text = e.clipboardData.getData("text/plain");
-    if (text) sendPaste(new Blob([text], { type: "text/plain" }), "text/plain");
+    if (text) { sendPaste(new Blob([text], { type: "text/plain" }), "text/plain"); return; }
+    // No image AND no text in the event -> the event dropped an image; go read it directly.
+    await pasteImageFromClipboard();
   });
 
   // COPY/CUT: pull the remote browser's selection and write it to the user's real
