@@ -9,13 +9,14 @@
 # deliberately advanced (see the update-self flow).
 #
 # Source selection:
-#   - APT_MIRROR_BASE_URL set (imbue's connector-hosted mirror): use
-#     <base>/snap/<T>/debian and <base>/snap/<T>/debian-security. The mirror
+#   - Default: imbue's mirror at https://apt.imbuepackages.com (a Cloudflare
+#     Worker in front of R2; see apps/apt_mirror in the mngr monorepo). It
 #     serves indexes frozen verbatim (upstream Debian signatures intact) and
-#     read-through-caches the pool, so it is fast and unthrottled.
-#   - APT_MIRROR_BASE_URL unset: fall back to snapshot.debian.org at the same
-#     T directly. Identical content, but snapshot.debian.org throttles, so
-#     this is the degraded path, not the default deployment shape.
+#     read-through-caches the pool, so it is fast and unthrottled. Override
+#     the base with APT_MIRROR_BASE_URL.
+#   - APT_MIRROR_BASE_URL set but EMPTY: fall back to snapshot.debian.org at
+#     the same T directly. Identical content, but snapshot.debian.org
+#     throttles, so this is the degraded path for mirror outages.
 # Exactly one source set is written: apt update hard-fails when ANY configured
 # source is unreachable, so listing both would turn a mirror outage into a
 # broken workspace instead of a slow one. Re-run this script to switch.
@@ -38,6 +39,10 @@ case "$SNAPSHOT_TIMESTAMP" in
     [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;;
     *) echo "write_apt_sources: invalid snapshot timestamp '$SNAPSHOT_TIMESTAMP' (expected YYYYMMDDTHHMMSSZ)" >&2; exit 1 ;;
 esac
+
+# Default only when unset: an explicitly empty APT_MIRROR_BASE_URL is the
+# operator's way to force the snapshot.debian.org fallback.
+APT_MIRROR_BASE_URL="${APT_MIRROR_BASE_URL-https://apt.imbuepackages.com}"
 
 if [ -n "${APT_MIRROR_BASE_URL:-}" ]; then
     DEBIAN_URI="${APT_MIRROR_BASE_URL%/}/snap/${SNAPSHOT_TIMESTAMP}/debian"
