@@ -8,6 +8,7 @@ dependencies = [
     "cloudflare-tunnel",
     "app-watcher",
     "github-sync",
+    "env-converge",
     "host-backup",
     "tk-command-parsing",
     "imbue-common",
@@ -54,13 +55,14 @@ package = false
 override-dependencies = ["openai>=2.20.0"]
 
 [tool.uv.workspace]
-members = ["libs/bootstrap", "libs/cloudflare_tunnel", "libs/app_watcher", "libs/github_sync", "libs/host_backup", "libs/mngr_cli_contract", "libs/tk_command_parsing", "libs/oom_priority", "apps/system_interface", "libs/browser"]
+members = ["libs/bootstrap", "libs/cloudflare_tunnel", "libs/app_watcher", "libs/github_sync", "libs/env_converge", "libs/host_backup", "libs/mngr_cli_contract", "libs/tk_command_parsing", "libs/oom_priority", "apps/system_interface", "libs/browser"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }
 cloudflare-tunnel = { workspace = true }
 app-watcher = { workspace = true }
 github-sync = { workspace = true }
+env-converge = { workspace = true }
 host-backup = { workspace = true }
 mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }

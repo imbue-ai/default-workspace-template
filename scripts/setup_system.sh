@@ -155,6 +155,23 @@ apt-get update
 apt-get install -y --no-install-recommends nodejs npm
 rm -rf /var/lib/apt/lists/*
 
+# apt Post-Invoke capture hook: after EVERY apt/dpkg operation at runtime, the
+# environment record under ~/.mngr/plugin/env-converge re-captures from dpkg's
+# own database -- zero agent cooperation required ("dpkg is truth"). The hook
+# no-ops during image builds and provisioning (no mngr host dir yet) and is
+# always best-effort: a capture failure must never break apt itself.
+cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
+#!/bin/sh
+# Best-effort apt Post-Invoke hook: refresh the environment record.
+[ -d /home/user/.mngr ] || exit 0
+[ -d /home/user/workspace/libs/env_converge ] || exit 0
+cd /home/user/workspace || exit 0
+MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run env-converge capture >/dev/null 2>&1 || true
+HOOK
+chmod +x /usr/local/bin/env-converge-capture-hook
+printf 'DPkg::Post-Invoke { "/usr/local/bin/env-converge-capture-hook || true"; };\n' \
+    > /etc/apt/apt.conf.d/90env-converge-capture
+
 # Pre-seed github.com SSH host keys so git operations don't block on interactive
 # host-key confirmation. Idempotent: only added when absent.
 mkdir -p /root/.ssh

@@ -1,31 +1,19 @@
 #!/usr/bin/env bash
-# Idempotent installer for packages that are too heavy to bake into the
-# Docker image but not required to start the chat agent or any boot-time
-# service. Run once per container lifetime by the one-shot `deferred-install`
-# supervisord program, gated by per-package marker files under
-# /var/lib/minds/deferred-install/done.<package>.
+# env.d unit: Fortress (stealth Chromium) + its apt system libs. Too heavy to
+# bake into the Docker image and not required by any boot-time service, so it
+# installs on first boot via the `env-converge` one-shot.
 #
-# Designed to behave the same way across container restarts (no-op when
-# the marker exists) and across fresh image builds (marker absent, install
-# runs once). Crucially, this script never upgrades or reinstalls once a
-# marker is present -- silent in-place version drift on restart is
-# exactly what this pattern is avoiding. The agent decides when to upgrade.
-#
-# Add a new deferred package by adding a `_install_<name>` function and a
-# matching call from `main`. Keep installs independent: a failure in one
-# must not skip the others, and each must write its own per-package marker
-# only on success.
+# env.d contract: idempotent with a fast satisfied-check -- NO marker files.
+# The converger re-runs every unit on every boot; a satisfied unit exits 0 in
+# milliseconds, and version stability comes from the pins in this script (a
+# re-run never silently changes versions -- only a pin bump, landed via
+# update-self, does).
 set -euo pipefail
 
-readonly MARKER_DIR=/var/lib/minds/deferred-install
-readonly REPO_ROOT=/home/user/workspace
+readonly REPO_ROOT="${ENV_CONVERGE_WORKSPACE_DIR:-/home/user/workspace}"
 
 _log() {
-    printf '[deferred-install] %s\n' "$*"
-}
-
-_marker_for() {
-    printf '%s/done.%s\n' "$MARKER_DIR" "$1"
+    printf '[env.d/playwright-fortress] %s\n' "$*"
 }
 
 _recover_interrupted_dpkg() {
@@ -80,10 +68,10 @@ readonly _FORTRESS_ARM64_SHA256="da6965af8fa8e995d137bcabdca8d163fde7f32ba483eaf
 readonly _FORTRESS_INSTALL_DIR="/opt/fortress"
 
 _install_fortress() {
-    local marker
-    marker="$(_marker_for fortress)"
-    if [ -f "$marker" ]; then
-        _log "fortress: marker present at $marker, skipping"
+    # Fast satisfied-check: the pinned engine binary is already in place (its
+    # apt system libs were installed in the same pass that produced it).
+    if [ -x "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion" ]; then
+        _log "fortress: already installed at $_FORTRESS_INSTALL_DIR, satisfied"
         return 0
     fi
     # `install-deps` apt-installs the shared libs Chromium needs (libnss3,
@@ -93,7 +81,7 @@ _install_fortress() {
     _recover_interrupted_dpkg
     _log "fortress: installing apt system libs"
     if ! (cd "$REPO_ROOT" && uv run playwright install-deps chromium); then
-        _log "fortress: apt install FAILED; marker not written so the next boot retries"
+        _log "fortress: apt install FAILED; the next converge retries"
         return 1
     fi
 
@@ -110,7 +98,7 @@ _install_fortress() {
     trap "rm -rf '$tmp_dir'" RETURN
     local asset="$tmp_dir/fortress.tar.gz"
     if ! curl -fsSL -o "$asset" "$url"; then
-        _log "fortress: download FAILED; marker not written so the next boot retries"
+        _log "fortress: download FAILED; the next converge retries"
         return 1
     fi
     if [ "$(sha256sum "$asset" | awk '{print $1}')" != "$sha256" ]; then
@@ -120,22 +108,20 @@ _install_fortress() {
     rm -rf "$_FORTRESS_INSTALL_DIR"
     mkdir -p "$_FORTRESS_INSTALL_DIR"
     if ! tar xzf "$asset" -C "$_FORTRESS_INSTALL_DIR"; then
-        _log "fortress: extract FAILED; marker not written so the next boot retries"
+        _log "fortress: extract FAILED; the next converge retries"
         return 1
     fi
     chmod +x "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion"
-    touch "$marker"
-    _log "fortress: install complete (${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion), marker written to $marker"
+    _log "fortress: install complete (${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion)"
 }
 
 main() {
-    mkdir -p "$MARKER_DIR"
     local rc=0
     _install_fortress || rc=$?
     if [ "$rc" -eq 0 ]; then
-        _log "all deferred installs complete"
+        _log "unit satisfied"
     else
-        _log "one or more deferred installs failed (exit $rc); see logs above"
+        _log "unit failed (exit $rc); see logs above"
     fi
     return "$rc"
 }

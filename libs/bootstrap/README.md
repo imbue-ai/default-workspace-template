@@ -46,46 +46,21 @@ To add, change, or remove a service, edit `supervisord.conf` and run
 <name>` to bounce one). See the `update-service` skill, or
 `.agents/shared/references/service-processes.md`, for details.
 
-## Deferred-install service
+## Environment convergence (env-converge)
 
-The `deferred-install` program in `supervisord.conf` runs
-`scripts/deferred_install.sh`, which installs packages that are too heavy to
-bake into the Docker image but aren't required by any boot-time service.
-Currently it covers:
+Package deferral now lives in `libs/env_converge`: the one-shot `env-converge`
+supervisord program runs every `scripts/env.d/<NNNN>-<name>.sh` unit (each
+idempotent with a fast satisfied-check -- no marker files) and converges the
+rootfs back to the environment record at the pinned apt snapshot timestamp.
+Bootstrap's role is only the fast phase: it applies the overlay symlinks from
+`scripts/env.d/overlay-paths.json` synchronously before exec'ing supervisord,
+so no service ever writes to a rootfs path that should persist.
 
-- Playwright's Chromium browser + its apt system libraries
-  (`uv run playwright install --with-deps chromium`).
-
-(The publish-inspiration scan gate's two secret-scanner binaries --
-`betterleaks`, `kingfisher` -- are NOT deferred: they are baked into the
-workspace image at build time by the common `scripts/setup_system.sh` (which
-the Dockerfile RUNs and the Lima provider runs directly in the VM), which
-invokes `scripts/install_secret_scanners.sh`, the single source of truth for
-the version pins and per-arch sha256 checksums. If a binary is ever missing,
-that script is runnable by hand to install both; the scan gate aborts rather
-than running without either of them.)
-
-It is a one-shot supervisord program (`autorestart=false`, `startsecs=0`,
-`exitcodes=0`): supervisord starts it once on boot and leaves it stopped after a
-clean exit. The script is also **idempotent per image**: each deferred package
-gets its own marker file at `/var/lib/minds/deferred-install/done.<package>`,
-and the script skips any package whose marker already exists. The marker lives
-at a container-local path (not in `runtime/`), so:
-
-- A container restart on the same image sees the marker, skips re-install, and
-  exits immediately. Package versions never silently change on restart -- the
-  agent decides when to upgrade.
-- A fresh image build wipes the marker, so the install runs exactly once on the
-  new image's first boot.
-
-To add another deferred package, add an `_install_<name>` function plus a
-matching call in `main()` in `scripts/deferred_install.sh`. Keep installs
-independent: a failure in one must not skip the others, and each must write its
-own per-package marker only on success.
-
-If something tries to use a deferred package before its install has finished, it
-will fail loudly -- that is acceptable. Check
-`/var/lib/minds/deferred-install/done.<package>`, or
-`supervisorctl status deferred-install` and
-`/var/log/supervisor/deferred-install-stdout.log`, before using browser
-automation in a fresh workspace.
+Heavy packages not needed by boot-time services (currently the Fortress
+browser + its Chromium apt libs) install this way on first boot. If something
+tries to use one before its unit has finished, it fails loudly -- that is
+acceptable. Check `supervisorctl status env-converge`,
+`/var/log/supervisor/env-converge-stdout.log`, or the concrete satisfied
+condition (e.g. `test -x /opt/fortress/tilion-fortress/tilion`) before using
+browser automation in a fresh workspace. See `libs/env_converge/README.md`
+for the full contract.

@@ -496,6 +496,29 @@ def _exec_supervisord() -> None:
     os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
 
 
+def _run_env_converge_fast_phase() -> None:
+    """Apply the overlay symlinks BEFORE any service starts.
+
+    A service that writes to a rootfs path declared in overlay-paths.json must
+    find the symlink already in place, or its data would be orphaned on the
+    rootfs -- so the fast phase (instant, no network) runs synchronously here,
+    pre-supervisord. Best-effort: a failure must not block boot (the slow-phase
+    one-shot logs the environment's real problems).
+    """
+    result = subprocess.run(
+        ["uv", "run", "env-converge", "run", "--phase", "fast"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "env-converge fast phase failed (rc={}): {}",
+            result.returncode,
+            result.stderr.strip()[-500:],
+        )
+
+
 def main() -> None:
     logger.info("Bootstrap starting: first-boot setup, then supervisord")
 
@@ -504,6 +527,9 @@ def main() -> None:
     _configure_git_global()
 
     _bootstrap_init_chat_dir()
+
+    # Overlay symlinks must exist before services start writing.
+    _run_env_converge_fast_phase()
 
     # Make sure supervisord's log directory exists, then hand off: replace this
     # process with supervisord in the foreground. supervisord owns every

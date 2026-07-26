@@ -597,6 +597,26 @@ The report says which classes merged. Apply each; a clean pull-in is still
   (usually `mngr start --restart system-services`). Only "nothing to reveal"
   when the analysis found none.
 
+## 5c. Advance the environment (bundled, not optional)
+
+update-self is the one moment package versions are allowed to move: the merged
+template carries a (possibly newer) committed apt snapshot timestamp in
+`.mngr/apt-snapshot-timestamp`, and the environment stays pinned to the OLD
+timestamp until explicitly advanced. After the merge has landed and revealed,
+run:
+
+```bash
+uv run env-converge upgrade
+```
+
+This re-renders the pinned apt sources at the new timestamp, `apt-get
+full-upgrade`s against that frozen universe, re-runs the `scripts/env.d/`
+units (whose pins may have advanced with the template), re-captures the
+environment record, and prints the package-version deltas as JSON. Summarize
+the delta count for the user in plain language ("system packages moved to the
+newer pinned snapshot; N changed"). If the timestamp did not change, the
+command is a cheap no-op pass -- run it anyway so unit-pin bumps still apply.
+
 ## 6. Teardown
 
 If you previewed a non-system_interface service in 5a, tear that preview down
