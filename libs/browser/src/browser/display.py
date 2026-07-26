@@ -222,6 +222,37 @@ class Display:
             except (xerror.ConnectionClosedError, OSError):
                 pass
 
+    def focus_window(self) -> None:
+        """Give the browser's top-level window explicit X input focus. A bare Xvfb has NO
+        window manager, so focus stays in PointerRoot mode: XTest keystrokes reach the window
+        under the pointer (typing + the browser's native Ctrl+C work), but the window never
+        gets a FocusIn -- so ``document.hasFocus()`` is FALSE in the page, and the JS Clipboard
+        API rejects with 'Document is not focused'. That's why website 'Copy' buttons
+        (navigator.clipboard.writeText) silently fail. Setting explicit focus fixes it.
+        Best-effort; called on each click (a click implies focus) and at startup."""
+        x = self._x
+        root = self._root
+        if x is None or root is None:
+            return
+        try:
+            best = None
+            best_area = -1
+            for win in root.query_tree().children:  # type: ignore[attr-defined]
+                try:
+                    if win.get_attributes().map_state != X.IsViewable:
+                        continue
+                    geo = win.get_geometry()
+                except (xerror.XError, OSError):
+                    continue
+                area = geo.width * geo.height
+                if area > best_area:
+                    best_area, best = area, win
+            if best is not None:
+                best.set_input_focus(X.RevertToParent, X.CurrentTime)
+                self._sync()
+        except (xerror.XError, OSError) as e:
+            logger.debug("focus_window ignored ({})", e)
+
     def move(self, x: int, y: int) -> None:
         if self._x is None:
             return
@@ -240,6 +271,10 @@ class Display:
             xtest.fake_input(self._x, X.ButtonPress if pressed else X.ButtonRelease, button)
             self._sync()
             (self._down_buttons.add if pressed else self._down_buttons.discard)(button)
+            # A click implies focus: assert explicit X input focus so the page's
+            # document.hasFocus() is true and the JS Clipboard API works (see focus_window).
+            if pressed:
+                self.focus_window()
         except (xerror.ConnectionClosedError, OSError) as e:
             logger.debug("xtest button ignored ({})", e)
 
