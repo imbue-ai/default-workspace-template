@@ -7,14 +7,45 @@
 # the build context root under dockerignore syntax; the `**/` prefix
 # makes both formats agree.
 
-# Default Workspace Template runtime state.
-# memory/ now lives at data/memories/ (configured via .claude/settings.json's
-# autoMemoryDirectory) so the opt-in github-sync service (see the github-sync
-# skill) covers it alongside the rest of runtime/.
-**/runtime/
-
-# chat attachment uploads (arbitrary size/format; kept out of version control)
-**/uploads/
+# Workspace data. Everything under data/ is runtime-written user/workspace
+# data (memories, tickets, uploads, per-creation data, machine state,
+# secrets): gitignored, never pushed to GitHub, covered by the restic
+# host-backup service. The README.md negations keep only the folder-guide
+# files tracked -- and, via the .dockerignore symlink, in the image -- so the
+# directory skeleton and its documentation ship without any data ever being
+# committed. The laddered ignore/negate style is required by gitignore
+# semantics: a file cannot be re-included when its parent directory is
+# excluded, so each level re-includes the directory before re-ignoring its
+# contents.
+data/*
+!data/README.md
+!data/creations/
+data/creations/*
+!data/creations/README.md
+!data/memories/
+data/memories/*
+!data/memories/README.md
+!data/uploads/
+data/uploads/*
+!data/uploads/README.md
+!data/chat-files/
+data/chat-files/*
+!data/chat-files/README.md
+!data/chat-images/
+data/chat-images/*
+!data/chat-images/README.md
+!data/system/
+data/system/*
+!data/system/README.md
+!data/.state/
+data/.state/*
+!data/.state/README.md
+!data/.secrets/
+data/.secrets/*
+!data/.secrets/README.md
+!data/.tasks/
+data/.tasks/*
+!data/.tasks/README.md
 
 # Sculptor local config (per-checkout, not shared).
 **/.sculptor/
@@ -27,6 +58,11 @@ docs/system/specs/login-modal-reshape/
 
 # tk tickets (tracker is vendored at system/vendor/tk; the tickets themselves are local state)
 **/.tickets/
+# ...except the folder guide for the workspace's own tickets dir (this must
+# come after the **/.tickets/ rule so the negation wins).
+!data/.tickets/
+data/.tickets/*
+!data/.tickets/README.md
 
 # External repos we're actively working on (e.g. mngr) live here as standalone
 # clones, separate from the read-only vendor/ subtrees. See CLAUDE.md.
