@@ -169,7 +169,6 @@
   // --- /stream (binary video) socket + WebCodecs decode state ---
   let streamWs = null;         // separate binary socket; its open/close is the encode-on-demand signal
   let streamWanted = true;     // false while the pane is hidden (panel-visibility) -> encode paused
-  let streamReconnect = null;
   let h264Failed = false;      // sticky: this browser proved it can't decode our H.264 -> use JPEG
   let gotH264Bytes = false;    // did the current attempt receive any H.264 stripe? (reset per connect)
   let h264Watchdog = null;     // fires if H.264 bytes arrive but nothing paints -> fall back to JPEG
@@ -471,18 +470,14 @@
       if (streamWs === s) streamWs = null;
       clearH264Watchdog();
       resetDecoders();
-      if (streamWanted) scheduleStreamReconnect();
+      // No explicit reconnect timer: the 1s reconcileStream poll reopens the socket (same
+      // worst-case latency) whenever streamWs is null and the pane should stream.
     };
     s.onerror = () => { try { s.close(); } catch (_) {} };
-  }
-  function scheduleStreamReconnect() {
-    if (streamReconnect || !streamWanted || browserId === null || closedForGood || crashed) return;
-    streamReconnect = setTimeout(() => { streamReconnect = null; connectStream(); }, 1000);
   }
   function closeStream() {  // pane hidden / crashed / gone: stop encode, drop decoders
     streamWanted = false;
     clearH264Watchdog();
-    if (streamReconnect) { clearTimeout(streamReconnect); streamReconnect = null; }
     if (streamWs) { try { streamWs.close(); } catch (_) {} streamWs = null; }
     resetDecoders();
   }
@@ -494,7 +489,7 @@
   // server drops silent chunks). Same on-demand gating as video (openAudio/closeAudio ride
   // reconcileStream), so a hidden pane costs no capture. Autoplay policy: the AudioContext
   // starts suspended and is resumed on the first user gesture (see resumeAudio()).
-  let audioCtx = null, audioNode = null, audioWs = null, audioWanted = false, audioReconnect = null, audioBackoff = 1000;
+  let audioCtx = null, audioNode = null, audioWs = null, audioWanted = false, audioReconnect = null, audioBackoff = 1000, audioConnecting = false;
   const AUDIO_WORKLET = `
     class PCMPlayer extends AudioWorkletProcessor {
       constructor() { super(); this.q = []; this.cur = null; this.pos = 0;
@@ -516,34 +511,43 @@
     if (audioNode) return true;
     if (!window.AudioContext || !window.AudioWorklet) return false;
     try {
-      audioCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
+      // Build into locals; publish to the shared audioCtx/audioNode only once fully wired,
+      // so a caller can never observe (or connect a socket to) a half-built graph.
+      const ctx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
       const url = URL.createObjectURL(new Blob([AUDIO_WORKLET], { type: "application/javascript" }));
-      await audioCtx.audioWorklet.addModule(url);
+      await ctx.audioWorklet.addModule(url);
       URL.revokeObjectURL(url);
-      audioNode = new AudioWorkletNode(audioCtx, "pcm-player", { outputChannelCount: [2] });
-      audioNode.connect(audioCtx.destination);
+      const node = new AudioWorkletNode(ctx, "pcm-player", { outputChannelCount: [2] });
+      node.connect(ctx.destination);
+      audioCtx = ctx; audioNode = node;
       return true;
-    } catch (_) { audioNode = null; return false; }
+    } catch (_) { return false; }
   }
   async function openAudio() {
     audioWanted = true;
-    // Guard against the 1s poll AND a pending reconnect both opening a socket.
-    if (audioWs || audioReconnect || browserId === null || crashed) return;
-    if (!(await ensureAudioGraph())) return;
-    resumeAudio();
-    const ws = new WebSocket(wsUrl("browsers/" + browserId + "/audio"));
-    const openedAt = performance.now();
-    audioWs = ws; ws.binaryType = "arraybuffer";
-    ws.onmessage = (ev) => { audioBackoff = 1000; if (audioNode && ev.data.byteLength) audioNode.port.postMessage(new Int16Array(ev.data), [ev.data]); };
-    ws.onclose = () => {
-      if (audioWs === ws) audioWs = null;
-      // A socket that closes almost immediately means there's no audio sink (no PulseAudio
-      // yet, or this browser has no sound). Back off exponentially so we don't spam retries;
-      // reset to fast once audio actually flows. Audio is best-effort -- video doesn't care.
-      audioBackoff = (performance.now() - openedAt < 1500) ? Math.min(audioBackoff * 2, 30000) : 1000;
-      if (audioWanted && !crashed) audioReconnect = setTimeout(() => { audioReconnect = null; openAudio(); }, audioBackoff);
-    };
-    ws.onerror = () => { try { ws.close(); } catch (_) {} };
+    // Synchronous re-entrancy guard: there's an await before we assign audioWs, and openAudio
+    // is called from several places that can fire near-simultaneously at boot (connect(), the
+    // 1s poll, the ResizeObserver's first tick). Without audioConnecting each would build a
+    // SECOND AudioContext + /audio socket and orphan one -- a real leak + doubled audio.
+    if (audioWs || audioReconnect || audioConnecting || browserId === null || crashed) return;
+    audioConnecting = true;
+    try {
+      if (!(await ensureAudioGraph()) || audioWs || crashed || !audioWanted) return;
+      resumeAudio();
+      const ws = new WebSocket(wsUrl("browsers/" + browserId + "/audio"));
+      const openedAt = performance.now();
+      audioWs = ws; ws.binaryType = "arraybuffer";
+      ws.onmessage = (ev) => { audioBackoff = 1000; if (audioNode && ev.data.byteLength) audioNode.port.postMessage(new Int16Array(ev.data), [ev.data]); };
+      ws.onclose = () => {
+        if (audioWs === ws) audioWs = null;
+        // A socket that closes almost immediately means there's no audio sink (no PulseAudio
+        // yet, or this browser has no sound). Back off exponentially so we don't spam retries;
+        // reset to fast once audio actually flows. Audio is best-effort -- video doesn't care.
+        audioBackoff = (performance.now() - openedAt < 1500) ? Math.min(audioBackoff * 2, 30000) : 1000;
+        if (audioWanted && !crashed) audioReconnect = setTimeout(() => { audioReconnect = null; openAudio(); }, audioBackoff);
+      };
+      ws.onerror = () => { try { ws.close(); } catch (_) {} };
+    } finally { audioConnecting = false; }
   }
   function closeAudio() {
     audioWanted = false;
@@ -591,9 +595,6 @@
     const sy = canvas.height / r.height;
     return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
   }
-  function modifiers(e) {
-    return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
-  }
   const BUTTONS = ["left", "middle", "right"];
 
   function mouse(type, e) {
@@ -608,12 +609,10 @@
     }
     const p = scaled(e);
     const button = BUTTONS[e.button] || "left";
-    sendCast({ type: "mouse", event: {
-      type: type, x: p.x, y: p.y,
-      button: (type === "mouseMoved") ? "none" : button,
-      buttons: e.buttons, clickCount: (type === "mousePressed" || type === "mouseReleased") ? 1 : 0,
-      modifiers: modifiers(e),
-    }});
+    // The server injects via XTest, which only reads type/x/y/button (+ deltaX/deltaY for
+    // wheel); the old CDP buttons/clickCount/modifiers fields it used are gone (XTest replays
+    // modifier keys as their own events), so don't send them.
+    sendCast({ type: "mouse", event: { type: type, x: p.x, y: p.y, button: (type === "mouseMoved") ? "none" : button } });
   }
   // Pointer events + pointer capture: a drag that leaves the pane (select text past the
   // edge) still delivers move/up to the canvas, so the remote button is always released
@@ -634,7 +633,7 @@
     if (controlOwner === "agent" || !hasFrame) return;
     e.preventDefault();
     const p = scaled(e);
-    sendCast({ type: "mouse", event: { type: "mouseWheel", x: p.x, y: p.y, button: "none", deltaX: e.deltaX, deltaY: e.deltaY, modifiers: modifiers(e) } });
+    sendCast({ type: "mouse", event: { type: "mouseWheel", x: p.x, y: p.y, button: "none", deltaX: e.deltaX, deltaY: e.deltaY } });
   }, { passive: false });
 
   // --- clipboard bridge -------------------------------------------------------
@@ -762,12 +761,9 @@
         || (e.metaKey && kl === "q");
     if (reserved && !keyboardLocked) return;
     e.preventDefault();
-    const isChar = type === "keyDown" && e.key.length === 1;
-    sendCast({ type: "key", event: {
-      type: type, key: e.key, code: e.code,
-      windowsVirtualKeyCode: e.keyCode, text: isChar ? e.key : undefined,
-      autoRepeat: e.repeat, modifiers: modifiers(e),
-    }});
+    // XTest keying reads only code + key + type (down/up); the old CDP fields
+    // (windowsVirtualKeyCode/text/autoRepeat/modifiers) are dead -- don't send them.
+    sendCast({ type: "key", event: { type: type, key: e.key, code: e.code } });
     // Escape is NOT special-cased -- it passes straight through to the browser (closing a
     // dialog, exiting a page's fullscreen video, etc.). Losing keyboard focus is an explicit
     // action: the "Stop sending keys" button, clicking outside, or the browser going away.
@@ -961,6 +957,7 @@
         closedForGood = true;
         closeStream();
         closeAudio();
+        stopIdleTimer();  // terminal: no more control messages will arrive to stop it (cf. showCrashed)
         overlay.classList.remove("show");
         returnBar.classList.remove("show");
         initOverlay.classList.remove("show");
