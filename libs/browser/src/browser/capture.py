@@ -56,7 +56,11 @@ def _load_pixelflux() -> "tuple[Any, Any] | None":
 # stripe and request a keyframe (a dropped delta corrupts that row anyway).
 _STREAM_QUEUE_MAX = int(os.environ.get("BROWSER_STREAM_QUEUE_MAX", "64"))
 
-_TARGET_FPS = float(os.environ.get("BROWSER_STREAM_FPS", "30"))
+# 20fps, not 30: a browser is mostly static reading + occasional scroll, so 20 is
+# plenty smooth and cuts the CPU-x264 encode cost by a third -- which matters a lot on a
+# small/constrained workspace where a busy encoder starves everything else (and drops
+# sockets -> "Reconnecting…"). Damage-driven capture already idles a static page near 0.
+_TARGET_FPS = float(os.environ.get("BROWSER_STREAM_FPS", "20"))
 _VIDEO_CRF = int(os.environ.get("BROWSER_STREAM_CRF", "25"))
 # A keyframe at least this often, so a client whose decoder ever desyncs (a rejected chunk
 # or a dropped delta on a then-static page) always recovers within the interval instead of

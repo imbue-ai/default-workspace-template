@@ -41,8 +41,8 @@ from Xlib.ext import xtest
 # from this via window-bounds + capture-region, never by growing the framebuffer
 # (Xvfb can't). Matches _RENDER_MAX_* in session.py; session reads SCREEN_H to bound
 # the window height so it always fits.
-SCREEN_W = int(os.environ.get("BROWSER_SCREEN_WIDTH", "1920"))
-SCREEN_H = int(os.environ.get("BROWSER_SCREEN_HEIGHT", "1080"))
+SCREEN_W = int(os.environ.get("BROWSER_SCREEN_WIDTH", "2560"))
+SCREEN_H = int(os.environ.get("BROWSER_SCREEN_HEIGHT", "1440"))
 
 # Where to start allocating display numbers. Kept well clear of a workspace's own
 # :0/:99 so a stray shared display never collides with a per-browser one.

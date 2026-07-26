@@ -751,6 +751,16 @@ def cmd_clipboard_copy(browser_id: str) -> Response:
     return jsonify(bridge.run(resolved.clipboard_copy(cut=cut), timeout=_DIRECT_ACTION_TIMEOUT))
 
 
+def cmd_clipboard_peek(browser_id: str) -> Response:
+    """Read the browser's current X clipboard WITHOUT firing a copy. The viewer calls this
+    after a `{type:"clipboard", mime}` notification (a remote image copy) to fetch the
+    bytes over HTTP instead of over the size-capped cast socket."""
+    resolved = _resolve_sync(browser_id)
+    if isinstance(resolved, Response):
+        return resolved
+    return jsonify(bridge.run(resolved.clipboard_peek(), timeout=_DIRECT_ACTION_TIMEOUT))
+
+
 def cmd_clipboard_paste(browser_id: str) -> Response:
     """Human viewer pastes their local clipboard into the browser. Body is the raw
     clipboard bytes; Content-Type is the mime (text/plain or image/*)."""
@@ -955,6 +965,7 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/screenshot", view_func=cmd_screenshot, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/tab", view_func=cmd_tab, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_copy, methods=["GET"], endpoint="clipboard_copy")
+    application.add_url_rule("/browsers/<string:browser_id>/clipboard/peek", view_func=cmd_clipboard_peek, methods=["GET"], endpoint="clipboard_peek")
     application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_paste, methods=["POST"], endpoint="clipboard_paste")
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
     sock.route("/browsers/<string:browser_id>/stream")(stream_socket)
