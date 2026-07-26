@@ -37,6 +37,9 @@ def _isolate_browser_persistence(tmp_path, monkeypatch: pytest.MonkeyPatch):
     # The manifest path is redirected per-test (above); reset the content-diff cache too,
     # or _save_manifest would think "unchanged" and skip writing to the new tmp path.
     _runner.manager._last_manifest_json = None
+    # Reset the failed-launch ring too, so a launch failure recorded by one HTTP test can't
+    # leak into another's cast-close assertions under random test ordering.
+    _runner.manager._failed_launch_names.clear()
     _runner._init_done.set()
     yield
     _runner._init_done.clear()

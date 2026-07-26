@@ -529,6 +529,50 @@ def test_wait_times_out_and_dequeues() -> None:
     asyncio.run(go())
 
 
+def test_evicted_task_waiter_is_enrolled_to_resume_when_it_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A task/hold waiter (enqueue_on_busy=True) evicted by a human take_control must be
+    # enrolled in the resume queue -- otherwise it's told "you're queued, we'll message
+    # you" but is in no queue and is never woken on hand-back.
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
+    browser = _running_browser(browser_id="b1")
+
+    async def go() -> None:
+        await browser.acquire("A")  # A holds it
+        b_wait = asyncio.create_task(browser.acquire("B", "Bob", wait=True, max_wait=5, enqueue_on_busy=True))
+        await asyncio.sleep(0.05)
+        await browser.take_control()  # human preempts + pins -> B is evicted from the wait queue
+        assert await b_wait == "busy_human"
+        assert browser._wait_queue == []
+        assert ("B", "Bob") in browser._resume_queue  # enrolled to resume, not stranded
+
+    asyncio.run(go())
+
+
+def test_take_control_cancels_an_in_flight_direct_action() -> None:
+    # A human take_control must cancel a long in-flight agent action (e.g. a slow navigate),
+    # so the human's XTest never overlaps the agent's still-running CDP work.
+    browser = _running_browser(browser_id="b1")
+    browser._context = object()  # type: ignore[assignment]  # non-None so run_action proceeds
+    browser._action_handler = object()  # type: ignore[assignment]  # skip real ActionHandler build
+    started = asyncio.Event()
+
+    async def slow_action(_handler: Any) -> dict[str, Any]:
+        started.set()
+        await asyncio.sleep(10)  # take_control should cancel this
+        return {"done": True}
+
+    async def go() -> None:
+        task = asyncio.create_task(browser.run_action("A", "Alice", slow_action))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert browser._direct_action_task is not None
+        assert await browser.take_control() is True
+        result = await task
+        assert result["status"] == "lost_control"
+        assert browser._direct_action_task is None
+
+    asyncio.run(go())
+
+
 def test_take_control_evicts_waiters() -> None:
     browser = _running_browser(browser_id="b4")
 

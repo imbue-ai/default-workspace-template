@@ -120,14 +120,21 @@ def test_live_browser_streams_video_and_accepts_input(monkeypatch: pytest.Monkey
                 {"type": "key", "event": {"type": "keyDown", "key": "a", "code": "KeyA"}}
             )
 
-            # Open a second tab and confirm the view follows it (active switches).
-            await session.handle_cast_message({"type": "tab", "action": "new", "url": "https://example.org"})
+            # Open a second tab via the AGENT tab API (the human now uses native chrome,
+            # not cast messages) and confirm the view follows it (active switches). Then
+            # switch back to tab 0 via `switch` -- the verb that was a silent no-op before.
+            assert (await session.act_tab("A", "A", "new", None, "https://example.org"))["ok"]
             await asyncio.sleep(2)
             _, events = _drain_cast_queue(cast_queue)
             tab_events = [e for e in events if e.get("type") == "tabs"]
             assert tab_events, "expected a tab-list update after opening a tab"
             active = [t for t in tab_events[-1]["tabs"] if t["active"]]
             assert len(active) == 1 and "example.org" in active[0]["url"]
+            # `switch` back to the first tab must actually change the active tab.
+            switched = await session.act_tab("A", "A", "switch", 0, None)
+            assert switched["ok"]
+            active2 = [t for t in switched["tabs"] if t["active"]]
+            assert len(active2) == 1 and "example.com" in active2[0]["url"]
         finally:
             await manager.shutdown()
 

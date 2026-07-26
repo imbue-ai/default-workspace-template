@@ -202,13 +202,19 @@ class Capture:
         return True
 
     def _stop_capture(self, cap: Any) -> None:
-        """Stop a capture. Must be called with ``_lock`` NOT held (stop_capture joins the
-        pixelflux callback thread, which takes ``_lock`` in ``_on_stripe``)."""
-        try:
-            cap.stop_capture()
-        except _PIXELFLUX_ERRORS as e:
-            logger.debug("capture stop ignored ({})", e)
-        logger.info("browser stream {}: encoder stopped", self._display_name)
+        """Stop a capture in a short-lived daemon thread. ``stop_capture`` JOINS pixelflux's
+        callback thread; the caller is the single asyncio loop, and a wedged Xvfb (dead
+        display) could make that join hang -- freezing every browser, route, and launch in
+        the fleet. The subscriber list + ``_cap`` are already cleared synchronously before
+        we get here, so the browser is logically stopped; only the native teardown runs off
+        the loop. (Also keeps _lock uncontended: the join would deadlock under it.)"""
+        def _stop() -> None:
+            try:
+                cap.stop_capture()
+            except _PIXELFLUX_ERRORS as e:
+                logger.debug("capture stop ignored ({})", e)
+        threading.Thread(target=_stop, name=f"pixelflux-stop{self._display_name}", daemon=True).start()
+        logger.info("browser stream {}: encoder stopping", self._display_name)
 
     def _on_stripe(self, frame: object) -> None:
         """pixelflux native-thread callback: copy the stripe bytes out (the frame
@@ -224,12 +230,13 @@ class Capture:
             except queue.Full:
                 # Backpressured: flush this client's whole backlog to the newest stripe
                 # (stale video is worthless; a dropped delta corrupts the row regardless),
-                # then it recovers on the keyframe we request below.
-                try:
-                    while True:
+                # then it recovers on the keyframe we request below. Bounded by the queue
+                # size (never unbounded).
+                for _ in range(_STREAM_QUEUE_MAX):
+                    try:
                         client_queue.get_nowait()
-                except queue.Empty:
-                    pass
+                    except queue.Empty:
+                        break
                 try:
                     client_queue.put_nowait(data)
                     dropped = True
