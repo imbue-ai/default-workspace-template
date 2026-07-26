@@ -346,6 +346,9 @@
       const h = dv.getUint16(8);
       const s = decoderFor(y, w, h);
       if (!s) return;  // codec unsupported; decoder couldn't configure
+      // Decoder falling behind (CPU-starved viewer): drop DELTAS to shed load and mark
+      // desynced; keyframes still go through, so the periodic keyframe re-syncs it.
+      if (s.dec.decodeQueueSize > 8 && !frametype) { s.sawKey = false; return; }
       if (!s.sawKey) { if (!frametype) return; s.sawKey = true; }  // drop deltas until the first key
       try {
         s.dec.decode(new EncodedVideoChunk({
@@ -646,12 +649,20 @@
   document.addEventListener("pointerdown", flushPendingClipboard);
   document.addEventListener("keydown", flushPendingClipboard);
 
-  // --- panel visibility (host -> iframe): pause encode while the pane is hidden --------
+  // --- visibility: pause encode while not actually watched --------------------
+  // Two independent signals: the dockview pane being hidden (host->iframe postMessage)
+  // and the whole host TAB being backgrounded (document.hidden -- rAF stops there, so
+  // without this the frame queue would grow with unclosed VideoFrames and leak while the
+  // server keeps encoding). Stream only when BOTH say visible.
+  let paneVisible = true, pageVisible = !document.hidden;
+  function syncStream() { if (paneVisible && pageVisible) openStream(); else closeStream(); }
   window.addEventListener("message", (e) => {
     const d = e.data;
     if (!d || d.type !== "minds:panel-visibility") return;
-    if (d.visible === false) closeStream(); else openStream();
+    paneVisible = d.visible !== false;
+    syncStream();
   });
+  document.addEventListener("visibilitychange", () => { pageVisible = !document.hidden; syncStream(); });
 
   // --- controls ---
   // Take control: optimistically hide the overlay so a laggy round-trip can't

@@ -3,11 +3,53 @@
 
 import queue
 
+import pytest
+from browser import capture as capture_mod
 from browser.capture import Capture
 
 
 def _capture() -> Capture:
     return Capture(":0", lambda: (0, 0, 100, 100))
+
+
+class _FakeCap:
+    """Stand-in for a pixelflux ScreenCapture: records stop, so we can assert the encoder
+    is torn down when the last subscriber leaves."""
+
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def stop_capture(self) -> None:
+        self.stopped = True
+
+    def request_idr_frame(self) -> None:
+        pass
+
+
+def test_removing_the_last_subscriber_nulls_and_stops_the_encoder() -> None:
+    # The stop must run with _cap already nulled (and, in production, OUTSIDE the lock --
+    # the deadlock fix): here we just assert the last-out path stops + clears the capture.
+    cap = _capture()
+    fake = _FakeCap()
+    cap._cap = fake  # type: ignore[assignment]
+    q: "queue.Queue[bytes | None]" = queue.Queue()
+    cap._subscribers = [q]
+    cap.remove_subscriber(q)
+    assert fake.stopped
+    assert cap._cap is None
+    assert not cap._subscribers
+
+
+def test_add_subscriber_returns_none_and_does_not_register_when_pixelflux_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Native libs missing (CI / deferred-install still running): the first subscriber must
+    # NOT be registered (so the handler closes the socket and the viewer retries) instead
+    # of holding a videoless slot forever.
+    monkeypatch.setattr(capture_mod, "_load_pixelflux", lambda: None)
+    cap = _capture()
+    assert cap.add_subscriber(True) is None
+    assert not cap._subscribers
 
 
 def test_on_stripe_fans_out_verbatim_to_every_subscriber() -> None:
