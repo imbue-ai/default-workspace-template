@@ -1911,7 +1911,13 @@ class LiveBrowser(MutableModel):
             summary = agent.history.final_result()
             await on_event({"type": "done", "result": summary or "Done."})
         except asyncio.CancelledError:
-            await on_event({"type": "preempted"})
+            # Distinguish a human take_control (resume on hand-back) from the browser being
+            # closed/gone (no resume will ever come) -- otherwise the agent is told "you were
+            # preempted" and waits forever for a browser that no longer exists.
+            if self._closed or self._crashed:
+                await on_event({"type": "error", "text": f"Browser {self.browser_id} was closed."})
+            else:
+                await on_event({"type": "preempted"})
             raise
         except TimeoutError:
             agent.stop()
