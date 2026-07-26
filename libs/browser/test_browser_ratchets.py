@@ -68,14 +68,13 @@ def test_prevent_builtin_exception_raises() -> None:
 
 def test_prevent_inline_imports() -> None:
     # +2 (MISFIRE) for names.py's module-level `try: from imbue.mngr... except
-    # ImportError: <local fallback>` block, and +1 (MISFIRE) for capture.py's
-    # `try: from pixelflux import ... except ImportError:` -- both the canonical
-    # optional-dependency pattern (pixelflux links libva at import, absent on CI / bare
-    # boxes where the live view never runs, so the module stays importable and only a
-    # real capture fails). These are MODULE-level try/except ImportError, not the
-    # "inline within functions" the rule targets; the regex matches them only because a
-    # `try` body is indented. Making the regex distinguish the two risks missing real
-    # violations, so these are bumped.
+    # ImportError` block (the canonical optional-dependency pattern; the regex matches it
+    # only because a try body is indented). +1 (JUSTIFIED) for capture.py's DELIBERATELY
+    # lazy `from pixelflux import ...` inside _load_pixelflux(): pixelflux links native
+    # libs (libva*/libgbm) at import time that deferred-install apt-installs AFTER the
+    # browser service has already started, so importing at module load would cache a
+    # permanent failure and need a restart. Deferring the import to the first capture
+    # lets it self-heal once the libs land -- the exact case a lazy import is for.
     rc.check_inline_imports(_DIR, snapshot(3))
 
 

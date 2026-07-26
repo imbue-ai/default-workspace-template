@@ -157,13 +157,15 @@ _install_xvfb() {
     # Headful Chromium needs a display; Xvfb is a headless X server that gives it
     # one (each fleet browser runs headful under its OWN Xvfb -- see browser.display).
     # xclip bridges the X11 clipboard to/from the user for native copy/paste (images
-    # included). libva-drm2/libva2 are the VA-API runtime that pixelflux (the live-view
-    # capture/encoder) links at import time even in CPU mode -- without them
-    # `import pixelflux` fails, so the browser service can't stream the live view.
-    # Recover any interrupted dpkg first, same as playwright.
+    # included). The libva*/libgbm/libdrm libs are the runtime that pixelflux (the
+    # live-view capture/encoder) links at import time even in CPU mode -- without the
+    # FULL set (verified via `ldd` on the wheel: libva2, libva-drm2, libva-x11-2,
+    # libgbm1, and libdrm2 which apt pulls transitively), `import pixelflux` fails and
+    # the browser service can't stream the live view. Recover interrupted dpkg first.
     _recover_interrupted_dpkg
-    _log "xvfb: installing xvfb + xclip + libva (pixelflux runtime)"
-    if apt-get update -y && apt-get install -y --no-install-recommends xvfb xclip libva2 libva-drm2; then
+    _log "xvfb: installing xvfb + xclip + pixelflux runtime libs (libva*/libgbm)"
+    if apt-get update -y && apt-get install -y --no-install-recommends \
+        xvfb xclip libva2 libva-drm2 libva-x11-2 libgbm1; then
         touch "$marker"
         _log "xvfb: install complete, marker written to $marker"
     else
