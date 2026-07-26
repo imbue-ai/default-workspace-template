@@ -80,7 +80,12 @@ _install_fortress() {
     # can actually complete on retry.
     _recover_interrupted_dpkg
     _log "fortress: installing apt system libs"
-    if ! (cd "$REPO_ROOT" && uv run playwright install-deps chromium); then
+    # `python -m playwright` (not the console script) on purpose: console-script
+    # shebangs are path-bound to the venv's build location, which breaks when
+    # this unit runs against the relocated /docker_build_code tree during the
+    # imbue_cloud slice bake. `python -m` resolves through the interpreter
+    # symlink and works from either location.
+    if ! (cd "$REPO_ROOT" && uv run python -m playwright install-deps chromium); then
         _log "fortress: apt install FAILED; the next converge retries"
         return 1
     fi
