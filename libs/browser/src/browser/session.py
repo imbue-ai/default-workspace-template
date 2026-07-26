@@ -155,6 +155,25 @@ _KEEPALIVE_SECONDS = 10
 # the remote page (right-click -> Copy), to push to the user's local clipboard.
 _CLIPBOARD_POLL_SECONDS = float(os.environ.get("BROWSER_CLIPBOARD_POLL_SECONDS", "0.5"))
 
+# Hard cap on any xclip subprocess. The clipboard paths hold _control_lock while running
+# xclip, so a hung xclip (a wedged X server) would otherwise stall every acquire /
+# take-control / sweep for that browser. On timeout we kill the child and treat it as a
+# clipboard error.
+_XCLIP_TIMEOUT = float(os.environ.get("BROWSER_XCLIP_TIMEOUT", "5"))
+
+
+async def _communicate_bounded(proc: "asyncio.subprocess.Process", data: bytes | None = None) -> tuple[bytes, bytes]:
+    """``proc.communicate(data)`` with a hard timeout; kills the child if it overruns so a
+    wedged xclip can't hold a lock forever. Raises TimeoutError on overrun."""
+    try:
+        return await asyncio.wait_for(proc.communicate(data), timeout=_XCLIP_TIMEOUT)
+    except TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        raise
+
 # Outbound buffer depth per cast WebSocket. Screencast frames are produced on the
 # loop and drained by a Flask thread; if a client falls behind we drop the OLDEST
 # frame (a stale frame is worthless -- only the latest matters) rather than block
@@ -882,9 +901,12 @@ class LiveBrowser(MutableModel):
 
     async def add_stream_subscriber(self, want_h264: bool) -> "queue.Queue[bytes | None] | None":
         """Register a ``/stream`` video socket, starting the display encoder on demand.
-        Returns its outbound byte queue, or None when there's no encoder (headless, or
-        the browser isn't running yet) -- the handler then closes the socket."""
-        if self._capture is None or not self._is_running:
+        Returns its outbound byte queue, or None when there's no encoder (headless, the
+        browser isn't running, or it's being torn down) -- the handler closes the socket.
+        The ``_closed`` guard matters: a subscribe can race close() (the /stream handshake
+        waits before subscribing), and starting a capture against a just-freed display
+        whose number may be reused would stream the WRONG browser."""
+        if self._capture is None or not self._is_running or self._closed:
             return None
         return self._capture.add_subscriber(want_h264)
 
@@ -1094,7 +1116,12 @@ class LiveBrowser(MutableModel):
         and move the capture region. Reached only while input is enabled (human owns it),
         so an agent's cached ``state`` indices never shift mid-task. Framebuffer-bounded:
         the window is render height + cropped chrome, kept within the fixed Xvfb screen."""
-        raw_w, raw_h = int(message.get("width", 0)), int(message.get("height", 0))
+        try:
+            raw_w, raw_h = int(message.get("width", 0)), int(message.get("height", 0))
+        except (TypeError, ValueError):
+            return  # malformed resize (null / non-numeric) -- ignore, don't kill the socket
+        if raw_w <= 0 or raw_h <= 0:
+            return  # a hidden pane reports 0x0; don't shove the window down to the floor
         w = max(_RENDER_MIN_WIDTH, min(min(_RENDER_MAX_WIDTH, SCREEN_W), raw_w))
         h = max(_RENDER_MIN_HEIGHT, min(min(_RENDER_MAX_HEIGHT, SCREEN_H), raw_h))
         if (w, h) == (self._render_w, self._render_h):
@@ -1103,6 +1130,9 @@ class LiveBrowser(MutableModel):
                     self.browser_id, raw_w, raw_h, w, h, self._render_w, self._render_h)
         self._render_w, self._render_h = w, h
         await self._resize_window()
+        # Tell every viewer the new resolution so it resizes its canvas + click mapping;
+        # otherwise the canvas stays the old size and clicks land off by the size ratio.
+        self._broadcast(self._control_message())
 
     async def _resize_window(self) -> None:
         """Set the Chromium window to render-size + chrome and re-point the capture at
@@ -1177,9 +1207,12 @@ class LiveBrowser(MutableModel):
                 return {"ok": False, "status": "no_display"}
             self._clipboard_combo("KeyX" if cut else "KeyC", "x" if cut else "c")
             data, mime = await self._xclip_read(settle=True)
+            # Mark our own read INSIDE the lock: the copy-out poll runs lock-free and would
+            # otherwise read this fresh Chromium-owned selection in the gap and echo it back.
+            if data is not None:
+                self._own_clip_hash = hash(data)
         if data is None or mime is None:
             return {"ok": True, "mime": None}  # nothing selected / empty clipboard
-        self._own_clip_hash = hash(data)
         if mime.startswith("text/"):
             return {"ok": True, "mime": mime, "text": data.decode("utf-8", "replace")}
         return {"ok": True, "mime": mime, "data": base64.b64encode(data).decode("ascii")}
@@ -1199,20 +1232,31 @@ class LiveBrowser(MutableModel):
         app copy) to the viewer, so it reaches the user's local clipboard. Polls the X
         clipboard (~500ms is plenty for a clipboard) while a human controls a WATCHED
         browser, skipping the value we ourselves last wrote."""
+        prev_enabled = True
         while not self._closed:
             await asyncio.sleep(_CLIPBOARD_POLL_SECONDS)
+            enabled = self._input_enabled.is_set()
             if (
                 self._display is None
                 or not self._is_running
-                or not self._input_enabled.is_set()
+                or not enabled
                 or self._capture is None
                 or not self._capture.has_subscribers()
             ):
+                prev_enabled = enabled
                 continue
             data, mime = await self._xclip_read(settle=False)
             if data is None or mime is None:
+                prev_enabled = enabled
                 continue
             digest = hash(data)
+            if not prev_enabled:
+                # Just regained control from an agent: the X clipboard may hold whatever
+                # the agent copied during its run. Prime _seen WITHOUT pushing, so we don't
+                # clobber the user's local clipboard with the agent's leftover.
+                self._seen_clip_hash = digest
+                prev_enabled = True
+                continue
             if digest == self._seen_clip_hash or digest == self._own_clip_hash:
                 continue
             self._seen_clip_hash = digest
@@ -1236,9 +1280,9 @@ class LiveBrowser(MutableModel):
             proc = await asyncio.create_subprocess_exec(
                 *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
             )
-            await proc.communicate(data)
+            await _communicate_bounded(proc, data)
             return proc.returncode == 0
-        except OSError as e:
+        except (OSError, TimeoutError) as e:
             logger.warning("xclip write failed for browser {} ({})", self.browser_id, e)
             return False
 
@@ -1260,9 +1304,9 @@ class LiveBrowser(MutableModel):
                 *self._xclip_base(), "-o", "-t", target,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             )
-            out, _ = await proc.communicate()
+            out, _ = await _communicate_bounded(proc)
             return out if proc.returncode == 0 else None
-        except OSError as e:
+        except (OSError, TimeoutError) as e:
             logger.warning("xclip read failed for browser {} ({})", self.browser_id, e)
             return None
 
@@ -1291,6 +1335,11 @@ class LiveBrowser(MutableModel):
             self._input_enabled.set()
         else:
             self._input_enabled.clear()
+            # The human's input stream is cut mid-whatever-they-held: synthesize the
+            # missing releases, or a held key AUTOREPEATS on the display forever (XTest
+            # holds are sticky) and a held button becomes a permanent drag.
+            if self._display is not None:
+                self._display.release_all()
             self._lease_touched_at = time.monotonic()  # start the sticky-lease idle clock
             # Remember the size the agent starts at, so a human resize during a later
             # takeover can be reported back to it on resume (see _wake_agent).
@@ -1404,9 +1453,11 @@ class LiveBrowser(MutableModel):
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
-    def _spawn_wake(self, agent_id: str, agent_name: str | None) -> None:
-        """Schedule a wake, holding a strong ref so the task isn't GC'd before it runs."""
-        self._spawn(self._wake_agent(agent_id, agent_name))
+    def _spawn_wake(self, agent_id: str, agent_name: str | None, baseline: tuple[int, int]) -> None:
+        """Schedule a wake, holding a strong ref so the task isn't GC'd before it runs.
+        ``baseline`` is the render size the agent last saw (captured BEFORE re-granting),
+        so the wake can tell whether the human resized meanwhile."""
+        self._spawn(self._wake_agent(agent_id, agent_name, baseline))
 
     def _on_disconnected(self, _browser: Browser | None) -> None:
         """Playwright fires this when the Chromium CDP connection drops. During our own
@@ -1424,6 +1475,11 @@ class LiveBrowser(MutableModel):
 
     async def _announce_crash(self) -> None:
         logger.warning("browser {} crashed (Chromium connection lost)", self.browser_id)
+        # Stop the encoder against the dead browser and send every /stream viewer the
+        # shutdown sentinel -- otherwise the capture keeps running (and viewers hold
+        # open, frozen sockets) until each happens to disconnect on its own.
+        if self._capture is not None:
+            self._capture.close()
         self._broadcast({"type": "crashed", "browser_id": self.browser_id})
         # Release anyone queued for this browser: it will never free, so wait-queue waiters
         # must not hang and resume-queue agents must be told rather than wait for a wake
@@ -1479,14 +1535,19 @@ class LiveBrowser(MutableModel):
         except OSError as e:
             logger.warning("could not message agent {} for browser {} ({})", target, self.browser_id, e)
 
-    async def _wake_agent(self, agent_id: str, agent_name: str | None) -> None:
+    async def _wake_agent(self, agent_id: str, agent_name: str | None, baseline: tuple[int, int]) -> None:
         """Message a queued agent that the browser is its again, so it resumes in a
         fresh turn (it ended its turn when it lost control). If it fails, or the agent
-        never shows, the claim window passes the browser on."""
-        if (self._render_w, self._render_h) != (self._agent_render_w, self._agent_render_h):
+        never shows, the claim window passes the browser on.
+
+        ``baseline`` is the size the agent last saw, captured by ``_settle_queue_locked``
+        BEFORE the re-grant -- comparing against ``self._agent_render_*`` here would always
+        say "unchanged", since the re-grant's ``_write_control_locked`` just reset those to
+        the current size."""
+        if (self._render_w, self._render_h) != baseline:
             size_note = (
                 f" The view is now {self._render_w}x{self._render_h} "
-                f"(was {self._agent_render_w}x{self._agent_render_h} when you left) -- the page reflowed, "
+                f"(was {baseline[0]}x{baseline[1]} when you left) -- the page reflowed, "
                 f"so your earlier element numbers are void; recompute from the fresh `state` list."
             )
         else:
@@ -1557,9 +1618,13 @@ class LiveBrowser(MutableModel):
             waiter.event.set()
         elif self._resume_queue:
             agent_id, agent_name = self._resume_queue.pop(0)
+            # Capture the size the agent last saw BEFORE the re-grant -- _write_control_locked
+            # resets _agent_render_* to the current size, so the wake must compare against
+            # this snapshot to detect a human resize.
+            baseline = (self._agent_render_w, self._agent_render_h)
             await self._write_control_locked("agent", agent_id, agent_name, pinned=False)
             self._granted_at = time.monotonic()  # start the claim window
-            self._spawn_wake(agent_id, agent_name)
+            self._spawn_wake(agent_id, agent_name, baseline)
 
     async def _transition(
         self,
@@ -1650,6 +1715,12 @@ class LiveBrowser(MutableModel):
             if self.controller == "agent" and self.owner_agent_id == agent_id:
                 self.owner_agent_name = agent_name  # refresh display name on re-acquire
                 self._dequeue_resume_locked(agent_id)
+                # Count this as claiming a pending grant: an agent woken to resume that
+                # claims via `acquire` (not a direct command) must clear the claim window
+                # and touch the lease, or _sweep_unclaimed_grant revokes its grant ~12s
+                # later and it loses its fronted CAPTCHA-resume slot.
+                self._granted_at = 0.0
+                self._lease_touched_at = time.monotonic()
                 return "acquired"
             # ``reclaim`` deliberately overrides a human pin for ANY agent, not just the
             # displaced owner: it is the "the human told me to keep going / take over" verb,
@@ -2083,6 +2154,10 @@ class LiveBrowser(MutableModel):
         respect to :meth:`_broadcast` -- no lock needed because the loop serializes it."""
         if client_queue in self._cast_queues:
             self._cast_queues.remove(client_queue)
+        # Last viewer gone: a human who disconnected mid-drag / holding a key would leave
+        # that button/key stuck down on the display (XTest holds are sticky). Release them.
+        if not self._cast_queues and self._display is not None:
+            self._display.release_all()
 
     async def describe(self) -> dict[str, Any]:
         """Snapshot for ``GET /browsers``: id, lifecycle, owner, and the tab list.
