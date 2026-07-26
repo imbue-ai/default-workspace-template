@@ -41,8 +41,13 @@ from Xlib.ext import xtest
 # from this via window-bounds + capture-region, never by growing the framebuffer
 # (Xvfb can't). Matches _RENDER_MAX_* in session.py; session reads SCREEN_H to bound
 # the window height so it always fits.
-SCREEN_W = int(os.environ.get("BROWSER_SCREEN_WIDTH", "2560"))
-SCREEN_H = int(os.environ.get("BROWSER_SCREEN_HEIGHT", "1440"))
+# The virtual screen is the hard ceiling on how big the browser window (and thus the
+# live view) can get -- Xvfb cannot grow its framebuffer at runtime. Sized to 4K so
+# fullscreen fills essentially any real monitor; the window starts small and only grows
+# to the pane, so the only always-on cost is the framebuffer (~33 MB/browser). Env-tunable
+# down (BROWSER_SCREEN_WIDTH/HEIGHT) to trade fullscreen fidelity for encode CPU/memory.
+SCREEN_W = int(os.environ.get("BROWSER_SCREEN_WIDTH", "3840"))
+SCREEN_H = int(os.environ.get("BROWSER_SCREEN_HEIGHT", "2160"))
 
 # Where to start allocating display numbers. Kept well clear of a workspace's own
 # :0/:99 so a stray shared display never collides with a per-browser one.
@@ -175,7 +180,14 @@ class Display:
             if numlock:
                 xtest.fake_input(self._x, X.KeyPress, numlock)
                 xtest.fake_input(self._x, X.KeyRelease, numlock)
-                self._sync()
+            # Disable X keyboard autorepeat on this display. XTest injects a discrete
+            # KeyPress/KeyRelease per browser key event; if a KeyRelease is ever lost --
+            # Chrome notoriously drops keyups for letters while Ctrl/Cmd is held -- X
+            # autorepeat would otherwise spam that key forever ("Ctrl+A -> infinite a's").
+            # Off, a stuck key is harmless, and genuine hold-to-repeat still works because
+            # the browser sends its OWN repeat keydown events, which we inject as presses.
+            self._x.change_keyboard_control(auto_repeat_mode=X.AutoRepeatModeOff)
+            self._sync()
         except (DisplayError, xerror.XError, OSError, ConnectionError) as e:
             await self.close()  # kill Xvfb + free the display number
             raise DisplayError(f"could not bring up display {self.name}: {e}") from e
