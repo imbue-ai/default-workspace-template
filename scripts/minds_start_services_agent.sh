@@ -19,7 +19,7 @@ set -eu
 set -a
 # shellcheck source=/dev/null
 [ -f /home/user/.mngr/env ] && . /home/user/.mngr/env
-host_dir="${MNGR_HOST_DIR:-/mngr}"
+host_dir="${MNGR_HOST_DIR:-/home/user/.mngr}"
 for data_file in "$host_dir"/agents/*/data.json; do
     [ -e "$data_file" ] || continue
     if [ "$(jq -r '.name // empty' "$data_file" 2>/dev/null)" = "system-services" ]; then

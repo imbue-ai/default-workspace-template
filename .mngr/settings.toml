@@ -374,7 +374,9 @@ extra_provision_command__extend = [
     # this for container images; VM/sandbox provisioning does it here) so
     # $HOME, passwd, and sshd agree. /var/cache/user is the off-volume cache
     # target the host env points XDG_CACHE_HOME / npm_config_cache at.
-    "usermod -d /home/user root && mkdir -p /var/cache/user",
+    # (Direct passwd edit rather than `usermod -d`: usermod refuses to modify
+    # a user with running processes, and root always has one here.)
+    "sed -i 's|^root:\\([^:]*:[^:]*:[^:]*:[^:]*\\):/root:|root:\\1:/home/user:|' /etc/passwd && grep -q '^root:.*:/home/user:' /etc/passwd && mkdir -p /home/user /var/cache/user",
     "bash /home/user/workspace/scripts/setup_system.sh",
     "bash /home/user/workspace/scripts/install_dependencies.sh",
     "bash /home/user/workspace/scripts/build_workspace.sh",
@@ -422,7 +424,9 @@ extra_provision_command__extend = [
     # this for container images; VM/sandbox provisioning does it here) so
     # $HOME, passwd, and sshd agree. /var/cache/user is the off-volume cache
     # target the host env points XDG_CACHE_HOME / npm_config_cache at.
-    "usermod -d /home/user root && mkdir -p /var/cache/user",
+    # (Direct passwd edit rather than `usermod -d`: usermod refuses to modify
+    # a user with running processes, and root always has one here.)
+    "sed -i 's|^root:\\([^:]*:[^:]*:[^:]*:[^:]*\\):/root:|root:\\1:/home/user:|' /etc/passwd && grep -q '^root:.*:/home/user:' /etc/passwd && mkdir -p /home/user /var/cache/user",
     "bash /home/user/workspace/scripts/setup_system.sh",
     "bash /home/user/workspace/scripts/install_dependencies.sh",
     "bash /home/user/workspace/scripts/build_workspace.sh",

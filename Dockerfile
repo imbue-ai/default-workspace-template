@@ -44,15 +44,6 @@ COPY scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
 RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners && default-workspace-template-setup-system
 
-# The user-data layout: the per-host persistent volume mounts at /home/user
-# (the ONE persistent tree -- workspace checkout, worktrees, mngr state at
-# ~/.mngr, dotfiles), and root's home is moved there so $HOME, passwd, and
-# sshd's authorized_keys lookup all agree. Everything outside /home/user is
-# regenerable image content: the toolchain installed above lives in
-# /root/.local (reachable at runtime via the ENV PATH at the top), and
-# anything baked under /home/user would be shadowed by the runtime mount.
-RUN usermod -d /home/user root && mkdir -p /home/user /var/cache/user
-
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
 # build layers below (dependency pre-warm) and the runtime container cache to
 # the same image-layer path: warm caches stay baked into the image instead of
@@ -119,6 +110,21 @@ RUN bash /home/user/workspace/scripts/build_workspace.sh
 # until first boot, where the post-host-create seed step (see below)
 # atomically relocates it onto the volume.
 RUN mv /home/user/workspace /docker_build_code
+
+# The user-data layout: the per-host persistent volume mounts at /home/user
+# (the ONE persistent tree -- workspace checkout, worktrees, mngr state at
+# ~/.mngr, dotfiles), and root's home moves there so $HOME, passwd, and
+# sshd's authorized_keys lookup all agree at RUNTIME. This is deliberately
+# the LAST build step: every earlier layer must keep HOME=/root so the
+# build-time toolchain (uv, claude, uv-tool shims from setup_system and
+# build_workspace) lands in /root/.local -- image content, reachable via the
+# ENV PATH at the top -- and never under /home/user, where the runtime mount
+# would shadow it. Direct passwd edit rather than `usermod -d`: usermod
+# refuses to modify a user with running processes (exit 8), and root always
+# has one in a build container (this very shell) or a live VM.
+RUN sed -i 's|^root:\([^:]*:[^:]*:[^:]*:[^:]*\):/root:|root:\1:/home/user:|' /etc/passwd \
+    && grep -q '^root:.*:/home/user:' /etc/passwd \
+    && mkdir -p /home/user /var/cache/user
 
 # Install the first-boot seed script at a stable image-layer path. It
 # has to live OUTSIDE /home/user (the volume mount path) so the runtime

@@ -22,7 +22,7 @@ if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 
     export UV_PYTHON=3.12
 fi
 
-REPO_ROOT="${REPO_ROOT:-/mngr/code}"
+REPO_ROOT="${REPO_ROOT:-/home/user/workspace}"
 
 # Python and JavaScript dependency installs are independent and could run in
 # parallel; kept sequential for now (clarity), structured so parallelizing is a

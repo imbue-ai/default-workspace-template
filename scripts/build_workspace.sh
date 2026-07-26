@@ -33,7 +33,7 @@ if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 
     export UV_PYTHON=3.12
 fi
 
-REPO_ROOT="${REPO_ROOT:-/mngr/code}"
+REPO_ROOT="${REPO_ROOT:-/home/user/workspace}"
 cd "$REPO_ROOT"
 
 # Mark the repo a git safe.directory so in-container/in-VM git commands don't

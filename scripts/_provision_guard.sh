@@ -34,7 +34,7 @@ set -euo pipefail
 
 # Canonical workspace repo location in the VM: the Lima bake clones here and a
 # create syncs the workspace here. Overridable for tests.
-_PROVISION_REPO_ROOT="${PROVISION_REPO_ROOT:-/mngr/code}"
+_PROVISION_REPO_ROOT="${PROVISION_REPO_ROOT:-/home/user/workspace}"
 _PROVISION_MARKER_DIR="${PROVISION_MARKER_DIR:-/var/lib/minds/provision}"
 
 _provision_tree_fingerprint() {
