@@ -98,7 +98,7 @@ operation: crystallize
 artifact: skill
 FRONTMATTER_EOF
 # If a wrapper staged artifacts, add this line inside the frontmatter:
-#   source_artifacts_dir: runtime/<calling-skill>/$NAME/
+#   source_artifacts_dir: data/.tasks/<calling-skill>/$NAME/
 cat << FRONTMATTER_CLOSE
 ---
 FRONTMATTER_CLOSE

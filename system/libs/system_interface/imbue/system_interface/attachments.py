@@ -8,11 +8,11 @@ from werkzeug.utils import secure_filename
 
 from imbue.system_interface.models import AttachmentError
 
-# Chat attachments live under a top-level, gitignored ``data/uploads/`` directory.
-# They are kept OUT of ``runtime/`` because a user upload can be arbitrarily
-# large and of any format, which does not belong in the runtime-backed content;
-# the directory is gitignored so uploads are never committed to the main branch.
-_UPLOADS_SUBPATH = Path("uploads")
+# Chat attachments live under the gitignored ``data/uploads/`` directory,
+# beside the rest of the user's workspace data. A user upload can be
+# arbitrarily large and of any format, so uploads are never committed to git;
+# they ride the restic host backup with the rest of ``data/``.
+_UPLOADS_SUBPATH = Path("data/uploads")
 
 _DEFAULT_UPLOAD_FILENAME = "upload"
 
@@ -21,9 +21,9 @@ def get_uploads_directory() -> Path:
     """Return the directory where chat attachments are stored on the agent VM.
 
     Resolved under the primary agent's work dir (the workspace repo root, where
-    ``runtime/`` lives), falling back to the current working directory when
+    ``data/`` lives), falling back to the current working directory when
     ``MNGR_AGENT_WORK_DIR`` is unset -- mirroring how the rest of the app
-    resolves runtime paths.
+    resolves workspace-data paths.
     """
     work_dir = os.environ.get("MNGR_AGENT_WORK_DIR")
     base_directory = Path(work_dir) if work_dir else Path.cwd()

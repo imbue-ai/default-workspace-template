@@ -3,11 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = ["tomlkit>=0.12"]
 # ///
-"""Stand up a new Flask web-service lib (and its supervisord program entry).
+"""Stand up a new Flask web-service creation (and its supervisord program entry).
 
-Creates `libs/<package>/` with a Flask starter (synchronous; flask-sock is
-available for WebSockets), updates the root pyproject.toml
-workspace/sources/dependencies, appends a `[program:<name>]` block to
+Creates `creations/<package>/` with a Flask starter (synchronous; flask-sock
+is available for WebSockets), updates the root pyproject.toml
+sources/dependencies (the `creations/*` member glob picks the package up
+automatically), appends a `[program:<name>]` block to
 system/supervisord.conf, and runs `uv sync --all-packages` to materialize the
 workspace.
 
@@ -95,7 +96,7 @@ def _applications_toml_ports(applications_toml: Path) -> set[int]:
 def _pick_port(repo_root: Path, requested: int | None) -> int:
     in_use = _supervisord_conf_ports(
         repo_root / "system/supervisord.conf"
-    ) | _applications_toml_ports(repo_root / "runtime" / "applications.toml")
+    ) | _applications_toml_ports(repo_root / "data" / ".state" / "applications.toml")
     if requested is not None:
         if requested in in_use:
             sys.exit(f"error: --port {requested} is already in use by another service")
@@ -146,14 +147,14 @@ Services run from /home/user/workspace (the repo root). Conventions:
 
 - Persistent state (anything written and read across runs -- cursors,
   caches, snapshots, user records): read and write it under ``DATA_DIR``
-  (defined below), never a hardcoded ``runtime/{name}/`` at the call
-  site. ``DATA_DIR`` defaults to ``runtime/{name}/`` but honors the
-  ``{env_var}`` env var, so an editing agent can point a throwaway
-  instance at a *copy* of the data instead of the live store (see the
-  update-service skill). Do NOT use ``Path(__file__)``-based paths for
-  state -- the bug to avoid is one process writing to
-  ``/home/user/workspace/runtime/...`` while another reads from
-  ``/home/user/workspace/libs/<pkg>/runtime/...``.
+  (defined below), never a hardcoded ``data/creations/{name}/`` at the
+  call site. ``DATA_DIR`` defaults to ``data/creations/{name}/`` but
+  honors the ``{env_var}`` env var, so an editing agent can point a
+  throwaway instance at a *copy* of the data instead of the live store
+  (see the update-service skill). Do NOT use ``Path(__file__)``-based
+  paths for state -- the bug to avoid is one process writing to
+  ``/home/user/workspace/data/creations/...`` while another reads from
+  ``/home/user/workspace/creations/<pkg>/data/...``.
 - Static assets shipped alongside this file (templates, default
   configs, bundled JSON): ``Path(__file__).parent / "assets/..."`` is
   fine and is the right pattern.
@@ -177,13 +178,13 @@ from flask import Flask, Response
 from werkzeug.serving import run_simple
 
 # Persistent state for this service lives under DATA_DIR. It defaults to
-# ``runtime/{name}/`` but is overridable via the ``{env_var}`` env var so a
-# throwaway instance can run against a *copy* of the data while editing --
+# ``data/creations/{name}/`` but is overridable via the ``{env_var}`` env var
+# so a throwaway instance can run against a *copy* of the data while editing --
 # see the update-service skill. Always read/write state through DATA_DIR;
-# never hardcode ``runtime/{name}/`` at a call site, or the override is
+# never hardcode ``data/creations/{name}/`` at a call site, or the override is
 # bypassed. A writing call site should ``DATA_DIR.mkdir(parents=True,
 # exist_ok=True)`` before writing.
-DATA_DIR = Path(os.environ.get("{env_var}", "runtime/{name}"))
+DATA_DIR = Path(os.environ.get("{env_var}", "data/creations/{name}"))
 
 # Listen port. Defaults to this service's assigned port but is overridable via
 # the ``{port_env_var}`` env var so an editing agent can boot a throwaway
@@ -308,7 +309,7 @@ def _write_lib(
     repo_root: Path, name: str, description: str, port: int, extras: list[str]
 ) -> Path:
     package = _kebab_to_snake(name)
-    lib_dir = repo_root / "libs" / package
+    lib_dir = repo_root / "creations" / package
     if lib_dir.exists():
         sys.exit(f"error: {lib_dir} already exists")
     src_dir = lib_dir / "src" / package
@@ -355,11 +356,8 @@ def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
     workspace = uv.get("workspace")
     if not isinstance(workspace, Table):
         sys.exit("error: root pyproject.toml is missing [tool.uv.workspace]")
-    members = workspace.get("members")
-    if not isinstance(members, Array):
-        sys.exit("error: [tool.uv.workspace].members is missing or not an array")
-    _ensure_in_array(members, f"libs/{package}")
-
+    # No members edit needed: the root pyproject's "creations/*" member glob
+    # already covers every package under creations/.
     sources = uv.get("sources")
     if not isinstance(sources, Table):
         sys.exit("error: root pyproject.toml is missing [tool.uv.sources]")

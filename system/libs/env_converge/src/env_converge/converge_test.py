@@ -103,7 +103,7 @@ def test_overlay_paths_missing_file_is_empty(tmp_path: Path) -> None:
 
 
 def test_overlay_paths_rejects_relative_entries(tmp_path: Path) -> None:
-    overlay_file = tmp_path / "scripts" / "env.d" / "overlay-paths.json"
+    overlay_file = tmp_path / "system" / "scripts" / "env.d" / "overlay-paths.json"
     overlay_file.parent.mkdir(parents=True)
     overlay_file.write_text('["relative/path"]')
     with pytest.raises(OverlayEntryError):

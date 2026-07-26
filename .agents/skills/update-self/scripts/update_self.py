@@ -228,18 +228,18 @@ def classify_path(path: str) -> PathClass:
       restarting the services agent (``mngr start --restart system-services``).
     - ``editable_tool`` -- ``system/vendor/mngr/**``; ``.py`` picked up live, a manifest
       change needs ``uv sync --all-packages`` / an editable reinstall.
-    - ``shared_runtime`` -- ``system/scripts/**``, other ``libs/**``, and ``.agents/**``:
-      may be a live runtime dependency of a service or a workspace-added skill,
-      so it needs the worker's impact analysis before it can be called a silent
-      merge.
+    - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,
+      ``creations/**``, and ``.agents/**``: may be a live runtime dependency of
+      a service or a workspace-added skill/creation, so it needs the worker's
+      impact analysis before it can be called a silent merge.
     - ``provisioner`` -- the pinned-toolchain scripts and the ``.mngr/`` create
       config (see :func:`_is_provisioner`); shapes image-build / create-time
       provisioning, so a change is re-run live (idempotent scripts) or flagged
       for a workspace rebuild, never revealed by a service restart.
-    - ``dockerfile`` -- ``Dockerfile``; split by hunk into live-applicable vs
-      rebuild-only by worker judgement.
-    - ``docs`` -- any ``README.md``, ``CLAUDE.md``, ``changelog/**``, and
-      top-level ``*.md``.
+    - ``dockerfile`` -- ``system/Dockerfile``; split by hunk into live-applicable
+      vs rebuild-only by worker judgement.
+    - ``docs`` -- any ``README.md``, ``CLAUDE.md``, changelog entries, and
+      any other ``*.md`` (including everything under ``docs/``).
     - ``other`` -- anything else.
     """
     is_manifest = Path(path).name in _MANIFEST_BASENAMES
@@ -263,15 +263,16 @@ def classify_path(path: str) -> PathClass:
         return PathClass(CLASS_SERVICE, project, is_manifest)
     if path.startswith("system/vendor/mngr/"):
         return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest)
-    if path == "Dockerfile":
+    if path == "system/Dockerfile":
         return PathClass(CLASS_DOCKERFILE, project, is_manifest)
     if (
         path.startswith("system/scripts/")
         or path.startswith(".agents/")
-        or path.startswith("libs/")
+        or path.startswith("system/libs/")
+        or path.startswith("creations/")
     ):
         return PathClass(CLASS_SHARED_RUNTIME, project, is_manifest)
-    if path == "CLAUDE.md" or path.startswith("changelog/") or path.endswith(".md"):
+    if path == "CLAUDE.md" or "/changelog/" in path or path.endswith(".md"):
         return PathClass(CLASS_DOCS, project, is_manifest)
     return PathClass(CLASS_OTHER, project, is_manifest)
 
@@ -409,13 +410,13 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
     # Per-PR changelog entries live in a ``changelog/`` dir under each project
-    # bucket -- ``system/changelog/``, ``.agents/changelog/``, ``libs/<name>/
-    # changelog/``, ``apps/<name>/changelog/`` -- plus the legacy top-level
-    # ``changelog/`` (see system/scripts/check_changelog_entries.py for the bucket
-    # definition). Match every one of them at any depth with a single glob rather
-    # than the top-level dir alone, or the "what's new" digest silently drops
-    # everything landed under the bucketed layout. Exclude the vendored subtree,
-    # which carries its own separate changelog system.
+    # bucket -- ``system/changelog/``, ``.agents/changelog/``,
+    # ``system/libs/<name>/changelog/``, ``creations/<name>/changelog/`` (see
+    # system/scripts/check_changelog_entries.py for the bucket definition).
+    # Match every one of them at any depth with a single glob rather than one
+    # dir alone, or the "what's new" digest silently drops everything landed
+    # under the bucketed layout. Exclude the vendored subtree, which carries
+    # its own separate changelog system.
     added = _list_names(
         _git(
             [
@@ -426,7 +427,7 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
                 args.target,
                 "--",
                 ":(glob)**/changelog/*",
-                ":(exclude)vendor",
+                ":(exclude)system/vendor",
             ],
             repo_root,
         )

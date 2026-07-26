@@ -3,7 +3,7 @@
 Background service that continuously backs up the agent's full `host_dir`
 (`/home/user/.mngr/`) to a remote restic repository (Cloudflare R2 by default).
 
-Distinct from the opt-in `github_sync` service, which only ships `runtime/`
+Distinct from the opt-in `github_sync` service, which only ships git commits
 to a GitHub orphan branch as a fine-grained checkpoint. `host_backup` covers the whole
 host_dir (code, worktrees, agent state, chat sessions, logs) and pushes to
 an encrypted restic repo on cheaper object storage.
@@ -32,7 +32,8 @@ an encrypted restic repo on cheaper object storage.
     `AWS_SECRET_ACCESS_KEY` for an S3/R2 backend). Written only by the minds
     app (injected whole); a missing file means backups are not configured.
     `restic.env` is gitignored (rides nothing). `backup.toml` is *not*
-    gitignored, so it also rides the opt-in GitHub sync of runtime/ when
+    gitignored (everything under data/ is), so it survives via these restic
+    backups themselves when
     that is enabled.
 - A tick only runs once both `RESTIC_REPOSITORY` and `RESTIC_PASSWORD` are
   set in `restic.env`. Backend credentials are not gated by host_backup --
@@ -73,7 +74,7 @@ an encrypted restic repo on cheaper object storage.
   M --keep-weekly W --keep-monthly O` runs (cheap, index-only). At most
   once per `prune_interval_hours` (default 24) we additionally run
   `restic prune` (the slow data deletion step); gated by
-  `data/.state/last-restic-prune` (a timestamp file under runtime/, covered by
+  `data/.state/last-restic-prune` (a timestamp file under data/, covered by
   the opt-in GitHub sync when enabled).
 - The outer loop never exits. Every exception is logged with full traceback
   to loguru and as a `tick_error` event in the jsonl stream; the loop

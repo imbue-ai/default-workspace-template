@@ -13,7 +13,7 @@
 
    (See `.agents/shared/references/service-processes.md` for the
    mechanics.)
-3. If you scaffolded a lib, also: `rm -rf libs/<package>/` and revert
+3. If you scaffolded a lib, also: `rm -rf creations/<package>/` and revert
    the matching diff in the root `pyproject.toml` (drop from
    `[project].dependencies`, `[tool.uv.workspace].members`, and
    `[tool.uv.sources]`).

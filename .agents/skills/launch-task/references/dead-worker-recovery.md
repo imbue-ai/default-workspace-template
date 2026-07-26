@@ -8,8 +8,8 @@ A worker can die because the **OOM daemon** (earlyoom) shed it -- the container 
 
 ```bash
 # Did the OOM daemon shed this worker? (look for your worker's name)
-# Absolute path: the ledger is shared at /home/user/workspace/runtime/, but your cwd is
-# your own worktree, so a relative `runtime/...` would miss it.
+# Absolute path: the ledger is shared at /home/user/workspace/data/, but your cwd is
+# your own worktree, so a relative `data/...` would miss it.
 grep '"agent_name": *"<worker>"' /home/user/workspace/data/.state/oom_priority/events/shed.jsonl
 ```
 

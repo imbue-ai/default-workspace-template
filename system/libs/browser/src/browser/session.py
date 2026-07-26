@@ -202,7 +202,7 @@ def _repo_root() -> Path:
     rather than cwd -- used as the wake subprocess's cwd so the ``mngr`` dev shim
     resolves this checkout regardless of where the daemon was started."""
     for candidate in Path(__file__).resolve().parents:
-        if (candidate / "scripts").is_dir() and (candidate / "libs").is_dir():
+        if (candidate / "system" / "scripts").is_dir() and (candidate / "system" / "libs").is_dir():
             return candidate
     return Path.cwd()
 

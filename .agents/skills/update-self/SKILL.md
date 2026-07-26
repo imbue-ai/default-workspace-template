@@ -553,7 +553,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
     upstream template -- the same release tested it against the new dep),
     hot-running the provisioner is safe; apply it live as above. If the dependent
     is **user-created** (built in this workspace, absent from upstream -- e.g. a
-    `build-web-service` app, which also lives under `libs/`), do **not** hot-run
+    `build-web-service` app under `creations/`), do **not** hot-run
     the provisioner: upstream never tested that code against the new dep and the
     worker couldn't validate it either, so treat it as **rebuild-only** -- surface
     it to the user for a workspace recreate (which provisions the new substrate and
@@ -591,7 +591,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
     is landed.)
 
 - **`shared_runtime` (`system/scripts/**` other than the provisioning scripts above,
-  `libs/**`, `.agents/**`)** -- applies to
+  `system/libs/**`, `creations/**`, `.agents/**`)** -- applies to
   future agents automatically unless a live service depends on the file. The
   report's impact analysis names any live consumer; restart that service
   (usually `mngr start --restart system-services`). Only "nothing to reveal"

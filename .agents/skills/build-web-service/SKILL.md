@@ -83,7 +83,7 @@ behavior. Use the escape hatch instead.
 
 Do not extend `system/libs/system_interface/` to add a new view. That app runs
 the top-level workspace UI; new web views go in their own scaffolded lib
-under `libs/<your-package>/` so they get an isolated tab and prefix.
+under `creations/<your-package>/` so they get an isolated tab and prefix.
 
 ## Pre-flight (both paths)
 
@@ -131,31 +131,31 @@ is taken, or `uv sync` fails.
 
 What gets generated:
 
-- `libs/<package>/pyproject.toml` -- declares
+- `creations/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`.
-- `libs/<package>/src/<package>/__init__.py` -- empty.
-- `libs/<package>/src/<package>/runner.py` -- sync Flask starter.
+- `creations/<package>/src/<package>/__init__.py` -- empty.
+- `creations/<package>/src/<package>/runner.py` -- sync Flask starter.
   Builds a `Flask` app and serves it with
   `werkzeug.serving.run_simple(..., threaded=True)`. It serves at `/`;
   the system_interface proxy handles the `/service/<name>/` prefixing,
   so no `root_path`/`ROOT_PATH` is needed. It also defines a `DATA_DIR`
-  constant (defaults to `runtime/<name>/`, overridable via the
+  constant (defaults to `data/creations/<name>/`, overridable via the
   `<PACKAGE_UPPER>_DATA_DIR` env var) -- route all persistent state
   through it (see File-path conventions below) -- and a `PORT` constant
   (defaults to this service's assigned port, overridable via the
   `<PACKAGE_UPPER>_PORT` env var) bound in `run_simple`. Both overrides
   are what let a future edit boot a throwaway instance on a spare port
   against a data copy (see `update-service`).
-- `libs/<package>/test_<package>_ratchets.py` -- standard ratchets at
+- `creations/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
-- `libs/<package>/README.md` -- one-line description.
+- `creations/<package>/README.md` -- one-line description.
 
 What gets updated:
 
 - Root `pyproject.toml` -- adds `<service-name>` to
-  `[project].dependencies`, `libs/<package>` to
-  `[tool.uv.workspace].members`, and `<service-name> = { workspace = true }`
-  to `[tool.uv.sources]`.
+  `[project].dependencies` and `<service-name> = { workspace = true }` to
+  `[tool.uv.sources]` (the `creations/*` member glob picks the package up
+  without a members edit).
 - `system/supervisord.conf` -- appends a program block:
 
   ```ini
@@ -296,14 +296,14 @@ Two cases, two patterns:
 - **Persistent state** (caches, cursors, last-visit timestamps, JSON
   snapshots, user records -- anything written and read across runs):
   read and write it under the generated `DATA_DIR` constant, never a
-  hardcoded `runtime/<name>/` at the call site. `DATA_DIR` defaults to
-  `runtime/<name>/` (cwd-relative, resolved from `/home/user/workspace` where the
+  hardcoded `data/creations/<name>/` at the call site. `DATA_DIR` defaults to
+  `data/creations/<name>/` (cwd-relative, resolved from `/home/user/workspace` where the
   supervisord-managed service runs) but honors the
   `<PACKAGE_UPPER>_DATA_DIR` env var. That override is what makes a
   future edit safe: an agent changing the service can run a throwaway
   instance against a *copy* of the data instead of the live store (see
   `update-service`), so keep every read/write going through `DATA_DIR`
-  -- a hardcoded `runtime/<name>/` silently bypasses the override and
+  -- a hardcoded `data/creations/<name>/` silently bypasses the override and
   re-exposes the live data. Do NOT use `Path(__file__)`-based paths for
   state.
 - **Static assets shipped alongside the .py file** (templates,

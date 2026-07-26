@@ -3,7 +3,7 @@
 Run this after you have merged the worker's `mngr/crystallize-$NAME`
 branch into your branch. The new skill is now installed
 at `.agents/skills/<name>/`, but the calling-skill's runtime artifacts
-(under `runtime/<calling-skill>/<slug>/`) and any code that referred
+(under `data/.tasks/<calling-skill>/<slug>/`) and any code that referred
 to them are still pointing at the temporary scratch shape. This doc
 walks through the cleanup so nothing is left dangling.
 
@@ -16,14 +16,14 @@ consumer ever ran against the runtime path), and that's fine.
 Look for code on the merged branch that referenced either:
 
 - `data/.tasks/fetch-process-show/<slug>/...`
-- `runtime/<other-calling-skill>/<slug>/...`
+- `data/.tasks/<other-calling-skill>/<slug>/...`
 - A symlink, env var, or hardcoded constant pointing at one of the above.
 
 Use ripgrep (or your grep tool) with the slug as the search anchor:
 
 ```bash
-rg -n "data/.tasks/fetch-process-show/<slug>" -g '!runtime/'
-rg -n "<slug>/fetch.py" -g '!runtime/'
+rg -n "data/.tasks/fetch-process-show/<slug>" -g '!data/'
+rg -n "<slug>/fetch.py" -g '!data/'
 ```
 
 For each hit, decide whether the consumer should switch to the
@@ -42,12 +42,12 @@ PR description that the fallback is now dead code.
 
 ## 2. Decide whether to delete the runtime artifact directory
 
-Default: delete `runtime/<calling-skill>/<slug>/`. The skill is the
+Default: delete `data/.tasks/<calling-skill>/<slug>/`. The skill is the
 canonical source going forward; if the user wants fresh sample data,
 they re-run the skill.
 
 ```bash
-rm -rf runtime/<calling-skill>/<slug>/
+rm -rf data/.tasks/<calling-skill>/<slug>/
 ```
 
 Skip the delete if any of the following:

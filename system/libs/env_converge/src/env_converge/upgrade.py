@@ -64,7 +64,7 @@ def run_upgrade(
         "write_apt_sources",
         [
             "bash",
-            str(workspace_dir / "scripts" / "write_apt_sources.sh"),
+            str(workspace_dir / "system" / "scripts" / "write_apt_sources.sh"),
             target_timestamp,
         ],
     )

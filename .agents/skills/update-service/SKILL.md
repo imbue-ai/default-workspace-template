@@ -118,7 +118,7 @@ Make the change interactive and keep the user's view in sync as you go.
 
 ### 1. Make the change
 
-Edit the service's code under `libs/<package>/` (or wherever the program's
+Edit the service's code under `creations/<package>/` (or wherever the program's
 command points). If the change renders HTML a person looks at, invoke the
 `frontend-design` skill before writing markup, and if it calls Claude,
 follow `use-ai-integration` -- the same rules as when the service was
@@ -186,7 +186,7 @@ would (not just "the process is up"):
 
 ### Protect the user's data while you verify
 
-The service's persistent store -- `runtime/<name>/` (whatever `DATA_DIR`
+The service's persistent store -- `data/creations/<name>/` (whatever `DATA_DIR`
 resolves to) -- **is the user's real data**. The recurring, expensive
 failure mode is not the code edit: it is *verifying* a change by writing
 test data into the live store and then "cleaning up" with a delete/reset
@@ -200,7 +200,7 @@ where the data dies. Encode these, cheapest first:
 
 - **If exercising the change must write, mutate, or delete data, never
   point it at the live store.** Copy the store to a scratch path *outside*
-  `runtime/` (so it is neither served nor swept into runtime-backup), boot a
+  `data/` (so it is neither served by the live service nor backed up), boot a
   throwaway instance against the copy on a *spare* port, exercise it there,
   then delete the *copy*. The shared
   [`serve_isolated_instance.py`](../../shared/scripts/serve_isolated_instance.py)
@@ -209,7 +209,7 @@ where the data dies. Encode these, cheapest first:
   instance to answer, and prints its URL:
 
   ```bash
-  cp -r runtime/<name> /tmp/<name>-scratch
+  cp -r data/creations/<name> /tmp/<name>-scratch
   URL=$(python3 .agents/shared/scripts/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
@@ -240,7 +240,7 @@ where the data dies. Encode these, cheapest first:
 
 - **Snapshot before any genuinely in-place change to the real store.** If a
   change truly must rewrite the live store (a data migration you can't run
-  on a copy), `cp -r runtime/<name> /tmp/<name>-pre-<change>` first, run the
+  on a copy), `cp -r data/creations/<name> /tmp/<name>-pre-<change>` first, run the
   change, confirm the real data survived, and only then remove the snapshot.
   The snapshot is a *recovery net* -- do **not** turn it into a routine
   "wipe live and restore backup" step: overwriting a running service's store
@@ -248,10 +248,10 @@ where the data dies. Encode these, cheapest first:
   are silently lost on restore.
 
 - **Retrofit older services when you touch them.** A service that predates
-  this convention hardcodes `runtime/<name>/` and its listen port at its call
+  this convention hardcodes `data/creations/<name>/` and its listen port at its call
   sites. Add both overrides the scaffold now emits, as part of your change, so
   the throwaway instance above works: the data-dir override
-  `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "runtime/<name>"))`
+  `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "data/creations/<name>"))`
   (route reads/writes through it), and the port override
   `PORT = int(os.environ.get("<PACKAGE_UPPER>_PORT", "<assigned-port>"))`
   (bind `PORT` in `run_simple`, never a hardcoded literal). If you genuinely
@@ -273,7 +273,7 @@ scaffolded web lib, `build-web-service`'s `cleanup.md` reference has the
 full teardown.
 
 Teardown stops at the code and the process. **Leave the service's data
-(`runtime/<name>/`) in place** -- removing a service is not license to
+(`data/creations/<name>/`) in place** -- removing a service is not license to
 delete the user's records. Delete the data dir only if the user explicitly
 asks, and confirm before you do.
 

@@ -21,7 +21,7 @@ Do **not** push agent-specific content:
 
 - `PURPOSE.md`
 - Memory contents
-- Runtime state (`runtime/`)
+- Workspace data and runtime state (`data/`)
 - Agent-specific services, settings, or CLAUDE.md sections
 
 ## PR conventions

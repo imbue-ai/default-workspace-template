@@ -1,13 +1,12 @@
 """Global git config wiring that routes GitHub traffic through the latchkey gateway.
 
 Applied by the github-sync skill at enable time and re-applied by the service
-when a push fails (self-healing a gateway URL that changed across container
+on every tick (self-healing a gateway URL that changed across container
 restarts). With the wiring in place, plain `git push` / `git fetch` against any
 https://github.com/... remote is transparently rewritten to the gateway's git
 proxy and authenticated with the gateway headers -- for every checkout in the
-container (main repo, worker worktrees, the runtime/ worktree). The GitHub
-credential itself is injected server-side by the gateway; no token ever enters
-the container.
+container (main repo and worker worktrees). The GitHub credential itself is
+injected server-side by the gateway; no token ever enters the container.
 
 The wiring also points core.hooksPath at the repo's git_hooks so the
 post-commit auto-push hook applies everywhere.

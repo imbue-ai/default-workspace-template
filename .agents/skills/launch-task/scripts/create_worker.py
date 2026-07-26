@@ -46,7 +46,7 @@ report without a code change.
 
 The caller is responsible for writing the task file (with whatever YAML
 frontmatter the worker template requires) and for placing it -- and any
-gitignored auxiliary state -- under ``runtime/<feature>/<slug>/`` before
+gitignored auxiliary state -- under ``data/.tasks/<feature>/<slug>/`` before
 calling ``launch``. This script orchestrates the lifecycle commands; it does
 not compose task content.
 
@@ -285,7 +285,7 @@ def rsync_dir(name: str, source_dir: Path, runner: Runner) -> None:
 
     - The local SOURCE is ``./``-prefixed when ``source_dir`` is relative.
       ``mngr rsync`` only treats a path starting with ``/``, ``./``, ``../`` or
-      ``~/`` as local; a bare ``runtime/foo/`` would be misparsed as an *agent
+      ``~/`` as local; a bare ``data/foo/`` would be misparsed as an *agent
       name* and the command would fail.
     - The agent DESTINATION keeps the bare repo-relative path. mngr resolves a
       relative agent ``:PATH`` against the worker's workdir (its worktree root),
@@ -474,7 +474,7 @@ def _oom_priority_src() -> Path:
     misconfiguration, not a condition to paper over.
     """
     for ancestor in Path(__file__).resolve().parents:
-        candidate = ancestor / "libs" / "oom_priority" / "src"
+        candidate = ancestor / "system" / "libs" / "oom_priority" / "src"
         if candidate.is_dir():
             return candidate
     raise RuntimeError(

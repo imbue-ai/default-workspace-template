@@ -62,7 +62,7 @@ Triage each conflict, first rule that applies wins:
   produces a file the tool can't parse. Resolve the corresponding manifest
   first, then regenerate from it (`uv lock` in the lock's directory; `npm
   install --package-lock-only` for npm) and `git add` the result.
-- **Agent-owned files -> keep local** (`PURPOSE.md`, `runtime/`):
+- **Agent-owned files -> keep local** (`PURPOSE.md`, `data/`):
   `git checkout --ours -- <path> && git add <path>`.
 - **Mixed files (`CLAUDE.md` and similar) -> merge by judgment.** Do not blanket
   keep-local: upstream additions (new sections, updated shared guidance) are
@@ -129,12 +129,12 @@ local question of who depends on the file.
 ### 4a. Identify impacted services and skills
 
 No script can enumerate what depends on a changed file -- this is exploration
-work, and you must do it for every changed `system/scripts/**`, `libs/**`, and
-`.agents/**` path. Build the impact set like this:
+work, and you must do it for every changed `system/scripts/**`, `system/libs/**`,
+`creations/**`, and `.agents/**` path. Build the impact set like this:
 
 1. **Enumerate the consumer universe** up front, independent of the diff: every
    `system/supervisord.conf` program (and everything its `command` invokes, directly or
-   through a wrapper), every service under `libs/`, every workspace-added skill
+   through a wrapper), every service under `system/libs/` and `creations/`, every workspace-added skill
    under `.agents/skills/` (e.g. a crystallized `fetch-process-show` pipeline
    whose scripts a daemon or scheduled job runs), and any cron/scheduled
    runners.
@@ -151,10 +151,10 @@ work, and you must do it for every changed `system/scripts/**`, `libs/**`, and
    you checked and how, so the lead sees the coverage instead of trusting an
    unstated search.
 5. **When you label a lib or skill "workspace-added," verify it -- do not infer
-   it from the directory.** "Not under `vendor/`" does **not** mean
-   workspace-added: most `libs/` and `.agents/skills/` entries are built-in
-   template code. A path is built-in if it exists at the target ref; check
-   before labeling: `git ls-tree -r --name-only "$TARGET_REF" -- libs/<name>`
+   it from the directory.** The layout is a strong hint (`system/libs/` holds
+   built-in template services, `creations/` holds workspace-built ones), but
+   the check is provenance: a path is built-in if it exists at the target ref;
+   check before labeling: `git ls-tree -r --name-only "$TARGET_REF" -- <dir>`
    (empty output = genuinely workspace-added). This matters because only
    genuinely workspace-added code is un-validated-by-upstream -- mislabeling
    built-in code as workspace-added misattributes pre-existing issues (a failing
@@ -240,15 +240,16 @@ not the host-global toolchain, so your env still has the **old** dep; do **not**
 globally install the new one to test, that mutates the shared toolchain the live
 workspace and other agents run on. So decide by the **provenance** of the
 dependent -- does its code come from the upstream template, or was it built in
-this workspace? Decide this by *origin, not directory*: path is not the signal
-(a workspace's own `build-web-service` app lands as a new lib under `libs/`, right
-alongside the template's built-in `libs/*` services). The check is whether the
+this workspace? Decide this by *origin, not directory*: the layout is only a
+hint (a workspace's own `build-web-service` app lands under `creations/`, and
+the template's built-in services under `system/libs/`, but an adapted
+inspiration can bring third-party creations along). The check is whether the
 dependent's code exists in upstream at the target ref -- e.g. `git cat-file -e
 "$TARGET_REF":<path>` for its files, or whether it's part of the merge base's
 template rather than added locally.
 
 - **Dependent is built-in code** (present in the upstream template at the target
-  ref -- e.g. `system/libs/system_interface`, a template-shipped `libs/*` service, a
+  ref -- e.g. `system/libs/system_interface`, a template-shipped `system/libs/*` service, a
   `.agents/shared/` script): **classify it live-applicable and report that** -- the
   upstream release tested that built-in code against the bumped dependency
   *together*, so it's safe to apply on the same "trust upstream's testing" basis
@@ -260,7 +261,7 @@ template rather than added locally.
   don't validate the built-in against the new dep either, because you're trusting
   upstream's testing rather than re-doing it.
 - **Dependent is user-created** (absent from upstream -- built in this workspace:
-  a `build-web-service` app in its own `libs/` lib, a crystallized skill's scripts
+  a `build-web-service` app in its own `creations/` package, a crystallized skill's scripts
   under `.agents/skills/<skill>/`, a local script): **unsafe to hot-apply.**
   Upstream never saw that code, so it never tested it against the new dependency,
   and you can't either (shared toolchain). Classify it **rebuild-only** -- the safe
@@ -300,7 +301,7 @@ tests, or exercise its scripts -- and called out in the report.
   mode: `bootstrap` is `uv run`-launched, so an unparseable root lock means no
   service in the workspace can start.
 - **Suites/lint/ratchets** for each project in `projects_to_validate`: root `.`
-  (`uv run pytest` + `uv run ruff check`) covers `libs/**`, `system/scripts/**`,
+  (`uv run pytest` + `uv run ruff check`) covers `system/libs/**`, `creations/**`, `system/scripts/**`,
   `.agents/**`; `system/libs/system_interface` runs its own `uv run pytest` (and `npm run
   lint && npm run test` when the frontend merged); `system/vendor/mngr` its own `uv run
   pytest`.

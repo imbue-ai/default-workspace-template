@@ -76,7 +76,7 @@ def _repo_root() -> Path:
     """Walk up from cwd to the workspace root (where ``system/scripts/layout.py`` lives)."""
     here = Path.cwd()
     for candidate in (here, *here.parents):
-        if (candidate / "scripts" / "layout.py").exists():
+        if (candidate / "system" / "scripts" / "layout.py").exists():
             return candidate
     return here
 

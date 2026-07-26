@@ -17,6 +17,12 @@ from github_sync.config import (
 )
 
 
+def _config_path_in(workspace: Path) -> Path:
+    config_path = workspace / "data" / "system" / "github_sync.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    return config_path
+
+
 def test_load_repo_url_returns_none_when_unconfigured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -28,7 +34,7 @@ def test_load_repo_url_normalizes_git_suffix_and_trailing_slash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    config_path = tmp_path / "github_sync.toml"
+    config_path = _config_path_in(tmp_path)
     config_path.write_text(
         'repo_url = "https://github.com/some-user/my-workspace.git"\n'
     )
@@ -45,7 +51,7 @@ def test_load_repo_url_raises_on_malformed_toml(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "github_sync.toml").write_text("repo_url = [not toml")
+    _config_path_in(tmp_path).write_text("repo_url = [not toml")
     with pytest.raises(GithubSyncConfigError):
         load_repo_url()
 
@@ -54,7 +60,7 @@ def test_load_repo_url_raises_on_non_github_url(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "github_sync.toml").write_text(
+    _config_path_in(tmp_path).write_text(
         'repo_url = "https://gitlab.com/user/repo"\n'
     )
     with pytest.raises(GithubSyncConfigError):
@@ -65,7 +71,7 @@ def test_load_repo_url_raises_when_repo_url_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "github_sync.toml").write_text('other_key = "value"\n')
+    _config_path_in(tmp_path).write_text('other_key = "value"\n')
     with pytest.raises(GithubSyncConfigError):
         load_repo_url()
 
@@ -77,7 +83,7 @@ def test_load_repo_url_raises_when_owner_or_repo_segment_missing(
     # time (where callers handle GithubSyncConfigError), not later inside the
     # service tick via parse_owner_and_name.
     monkeypatch.chdir(tmp_path)
-    config_path = tmp_path / "github_sync.toml"
+    config_path = _config_path_in(tmp_path)
     config_path.write_text('repo_url = "https://github.com/just-an-owner"\n')
     with pytest.raises(GithubSyncConfigError):
         load_repo_url()

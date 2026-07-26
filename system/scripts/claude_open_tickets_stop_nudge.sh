@@ -9,7 +9,7 @@ set -euo pipefail
 repo_root="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
 # Honor any externally-set TICKETS_DIR (the agent's env normally pins it
 # via .mngr/settings.toml -- e.g. /home/user/workspace/data/.tickets -- so the tk
-# tickets live under runtime/ with the rest of the synced state). Fall back to tk's
+# tickets live under data/ with the rest of the workspace data). Fall back to tk's
 # unset-default of <repo>/.tickets when nothing is set.
 tickets_dir="${TICKETS_DIR:-${repo_root}/.tickets}"
 

@@ -1,7 +1,7 @@
 """Shared configuration and constants for the opt-in GitHub sync.
 
 GitHub sync is disabled by default. The github-sync skill enables it by
-writing github_sync.toml at the repo root (the presence of that file is the
+writing data/system/github_sync.toml (the presence of that file is the
 "sync is configured" marker), wiring git up to push through the latchkey
 gateway, and adding the [program:github-sync] supervisord service.
 """
@@ -11,13 +11,10 @@ import tomllib
 from pathlib import Path
 
 # All relative paths assume cwd = repo root (/home/user/workspace), matching
-# supervisord's `directory=` and the other template services.
-RUNTIME_DIR = Path("runtime")
-CONFIG_PATH = Path("github_sync.toml")
-
-# The stable branch that runtime/ state is synced to. The sync repo is a
-# dedicated private repo per workspace, so no per-agent namespacing is needed.
-SYNC_BRANCH = "runtime-sync"
+# supervisord's `directory=` and the other template services. The config lives
+# under data/system/ (gitignored, runtime-written) with the other
+# runtime-written workspace config.
+CONFIG_PATH = Path("data/system/github_sync.toml")
 
 GITHUB_URL_PREFIX = "https://github.com/"
 

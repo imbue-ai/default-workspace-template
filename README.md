@@ -21,7 +21,7 @@ mngr create my-workspace main -t local \
 - `system/supervisord.conf` - Supervisord config defining the background services
 - `system/libs/bootstrap/` - First-boot setup, then launches supervisord to supervise the services
 - `system/vendor/mngr/` - A vendored, mutable copy of mngr. Note that making changes here *will* affect the behavior of the `mngr` command
-- `system/vendor/tk/` - A vendored copy of the [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script (also callable as `tk`) manages tickets stored as markdown. We point `TICKETS_DIR` at `data/.tickets/` (set in `.mngr/settings.toml`'s `host_env`) so tickets live alongside the rest of `runtime/` (and are covered by the opt-in GitHub sync when the `github-sync` skill has enabled it).
+- `system/vendor/tk/` - A vendored copy of the [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script (also callable as `tk`) manages tickets stored as markdown. We point `TICKETS_DIR` at `data/.tickets/` (set in `.mngr/settings.toml`'s `host_env`) so tickets live alongside the rest of the workspace's data (covered by the restic host backup).
 
 ## Create templates
 

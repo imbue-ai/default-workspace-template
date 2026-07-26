@@ -98,7 +98,7 @@ Ask the user, in plain language. Never enumerate files at them:
 - what they want to include -- an app or feature, but equally a skill, a chat
   customization or behavior, a workflow, a service, config, or seed data:
   anything committable that lives in the repo tree. You translate this into a set
-  of repo-root-relative include paths (e.g. `apps/slack-inbox`, `libs/slack_inbox`
+  of repo-root-relative include paths (e.g. `creations/slack_inbox`
   plus their service wiring, or `.agents/skills/<name>` for a skill) -- you reason
   about the backing paths, the user does not;
 - what data should be included -- and this is NOT an all-or-nothing default.
@@ -306,7 +306,7 @@ then finish its manifest and thumbnail. Do ALL of it in this one run.
 **Before anything else**, extract `LEAD_AGENT` / `FINISH_REPORT_PATH` per
 `.agents/shared/references/worker-reporting.md`: step 1's script resets your
 worktree to a clean template base and deletes gitignored state -- including
-`runtime/` and this task file -- so parse the frontmatter FIRST.
+`data/` and this task file -- so parse the frontmatter FIRST.
 
 1. **Run the assembly script** from your worktree root, verbatim (every value
    below was already resolved by the lead):
@@ -332,7 +332,7 @@ worktree to a clean template base and deletes gitignored state -- including
    you do here touches it:
 
    <one line per modification: file + the change to make, e.g.
-   "libs/slack_zen_garden/config.py: replace the hardcoded '#team-garden'
+   "creations/slack_zen_garden/config.py: replace the hardcoded '#team-garden'
    channel with a neutral default the adopter sets" -- or the single line
    "None requested.">
 
@@ -476,7 +476,7 @@ procedure. Substitutions for this task:
 
 - `<TASK_FILE_GLOB>` -> `data/.tasks/launch-task/*/task.md`
 - `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/launch-task/<slug>/reports/` (recreate
-  it with `mkdir -p` -- the assembly script deleted `runtime/`)
+  it with `mkdir -p` -- the assembly script deleted `data/`)
 - Valid `name:` values: `question` (mid-flight gate), `done` / `stuck`
   (terminal).
 
@@ -1103,7 +1103,7 @@ What it does, in order (see the script for the exact commands):
 3. Resets the worktree to the clean base with
    `git read-tree -u --reset <BASE_REF>` then `git clean -fdxq` -- this drops
    tracked-but-not-in-base files AND gitignored cruft (secrets, runtime state,
-   including the worker's `runtime/` task file). It never
+   including the worker's `data/` task file). It never
    `git checkout <ref> -- .` (that leaks the mind's whole committed tree) and
    never fetches/pulls upstream.
 4. Overlays the staged paths onto the clean base with

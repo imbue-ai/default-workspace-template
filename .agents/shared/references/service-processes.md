@@ -46,7 +46,7 @@ Key fields:
   (see below) -- keep it as the outermost command, in front of any `bash -c`
   wrapper.
 - `directory=/home/user/workspace` -- run from the repo root, so cwd-relative paths
-  (`runtime/...`, `system/scripts/...`) resolve. Set this on every program.
+  (`data/...`, `system/scripts/...`) resolve. Set this on every program.
 - `autostart=true` -- start when supervisord boots.
 - `autorestart=true` -- restart a long-lived daemon whenever it exits. (This is
   the replacement for the old `restart = "on-failure"`; the standard daemons all
@@ -57,7 +57,7 @@ Key fields:
   group on stop, so a wrapped command shuts down cleanly.
 - `stdout_logfile` / `stderr_logfile` (+ `*_maxbytes` / `*_backups`) --
   separate, rotated, container-local logs under `/var/log/supervisor/`. These
-  are **not** under `runtime/`, so they are not backed up. If you omit them,
+  are **not** under `data/`, so they are not backed up. If you omit them,
   supervisord writes AUTO logs into its `childlogdir` (`/var/log/supervisor`)
   instead.
 

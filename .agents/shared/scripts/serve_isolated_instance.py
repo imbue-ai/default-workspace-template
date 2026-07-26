@@ -70,7 +70,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 # State (detached pids, ports, registered service names) lives under the caller's
-# ``runtime/`` so it is gitignored and survives between the separate ``up`` and
+# ``data/`` so it is gitignored and survives between the separate ``up`` and
 # ``down`` invocations. One instance per ``--name``; ``up`` tears down any stale
 # instance for the name first.
 STATE_ROOT = "data/.state/isolated-instances"

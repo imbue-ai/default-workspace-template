@@ -22,15 +22,14 @@ from loguru import logger
 # config that defines every background service.
 SUPERVISORD_CONF = Path("system/supervisord.conf")
 # Container-local directory for supervisord's own log + the per-service logs. Not
-# under runtime/, so these are never backed up.
+# under data/, so these are never backed up.
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
 
-RUNTIME_DIR = Path("runtime")
+STATE_DIR = Path("data/.state")
 
 # Signal file gating exactly-once creation of the initial chat agent. Lives
-# under runtime/, which persists with the container volume (and is synced to
-# GitHub when the opt-in github-sync skill has been enabled).
-INITIAL_CHAT_SIGNAL = RUNTIME_DIR / "initial_chat_created"
+# under data/.state/, which persists with the container volume.
+INITIAL_CHAT_SIGNAL = STATE_DIR / "initial_chat_created"
 # Basename (under $MNGR_HOST_DIR) of the file holding the initial chat agent's id,
 # read by system_interface's welcome_resend to address the resend by id.
 INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
@@ -415,7 +414,7 @@ def _maybe_create_initial_chat() -> None:
     Touches the signal file only on a successful create -- a failed create
     leaves the signal file absent so the next bootstrap run retries. The
     user's manually-destroyed initial chat agent is *not* recreated,
-    because the signal file persists in runtime/.
+    because the signal file persists in data/.state/.
     """
     if INITIAL_CHAT_SIGNAL.exists():
         logger.debug(

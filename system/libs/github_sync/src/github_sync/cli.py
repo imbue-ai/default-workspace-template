@@ -13,7 +13,6 @@ from github_sync import runner
 from github_sync.config import GithubSyncConfigError, load_repo_url
 from github_sync.visibility import VISIBILITY_PRIVATE, check_repo_visibility
 from github_sync.wiring import apply_git_wiring, remove_git_wiring
-from github_sync.worktree import init_runtime_worktree, is_runtime_worktree
 
 
 @click.group()
@@ -23,7 +22,7 @@ def main() -> None:
 
 @main.command()
 def run() -> None:
-    """Run the periodic runtime/ sync service loop (used by supervisord)."""
+    """Run the periodic wiring + visibility watchdog loop (used by supervisord)."""
     runner.run_forever()
 
 
@@ -40,14 +39,6 @@ def unwire_git() -> None:
     """Remove the gateway git config and the hooks path (disable path)."""
     remove_git_wiring()
     click.echo("unwired")
-
-
-@main.command("setup-worktree")
-def setup_worktree() -> None:
-    """Create runtime/ as a worktree of runtime-sync, restoring from origin if it exists there."""
-    if not init_runtime_worktree():
-        raise SystemExit(1)
-    click.echo("ready")
 
 
 @main.command("check-visibility")
@@ -85,7 +76,6 @@ def status() -> None:
         "is_configured": repo_url is not None,
         "repo_url": repo_url,
         "config_error": config_error,
-        "is_runtime_worktree": is_runtime_worktree(),
         "service": service_status,
     }
     click.echo(json.dumps(payload, indent=2))

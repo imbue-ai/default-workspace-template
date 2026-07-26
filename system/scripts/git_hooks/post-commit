@@ -12,13 +12,11 @@
 # container: the main /home/user/workspace repo and every worker worktree, each pushing
 # its own current branch.
 #
-# Skips the push in these cases -- 1-3 are normal, not errors, and skip
-# silently; 4 is a security halt and logs a line to the log file:
-#   1. GitHub sync is not configured (github_sync.toml absent).
+# Skips the push in these cases -- 1-2 are normal, not errors, and skip
+# silently; 3 is a security halt and logs a line to the log file:
+#   1. GitHub sync is not configured (data/system/github_sync.toml absent).
 #   2. HEAD is detached (no branch to push to).
-#   3. The current branch is runtime-sync -- that branch belongs to the
-#      github-sync polling service, which handles its own pushes.
-#   4. The github-sync service has halted pushes because the sync repo is
+#   3. The github-sync service has halted pushes because the sync repo is
 #      public or its visibility could not be confirmed.
 #
 # Runs the push in the background so the commit never blocks. All output
@@ -38,7 +36,7 @@ export GIT_TERMINAL_PROMPT=0
 # Env overrides exist for tests; production always uses the defaults.
 # GITHUB_SYNC_STATUS_FILE is the same override the github-sync service honors
 # when writing the file this hook reads.
-CONFIG_FILE="${GITHUB_SYNC_CONFIG_FILE:-/home/user/workspace/github_sync.toml}"
+CONFIG_FILE="${GITHUB_SYNC_CONFIG_FILE:-/home/user/workspace/data/system/github_sync.toml}"
 STATUS_FILE="${GITHUB_SYNC_STATUS_FILE:-/tmp/github-sync-status.json}"
 LOG_FILE="${GITHUB_SYNC_HOOK_LOG_FILE:-/tmp/post-commit-push.log}"
 
@@ -53,12 +51,7 @@ if [ -z "$branch" ]; then
     exit 0
 fi
 
-# 3. The runtime-sync branch pushes itself via the github-sync service.
-case "$branch" in
-    runtime-sync) exit 0 ;;
-esac
-
-# 4. Respect a visibility halt: the service refuses to push while the sync
+# 3. Respect a visibility halt: the service refuses to push while the sync
 #    repo is public (or unconfirmed), and so must we. A missing status file or
 #    field reads as "null"/empty, which is not "false", so the default is to
 #    allow (the service simply hasn't reported yet). Note: jq's `//` operator

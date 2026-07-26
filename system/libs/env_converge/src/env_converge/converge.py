@@ -71,7 +71,7 @@ class OverlayEntryError(EnvConvergeError, ValueError):
 
 def read_overlay_paths(workspace_dir: Path) -> list[Path]:
     """The declared overlay entries (absolute rootfs paths that must persist)."""
-    overlay_file = workspace_dir / "scripts" / "env.d" / "overlay-paths.json"
+    overlay_file = workspace_dir / "system" / "scripts" / "env.d" / "overlay-paths.json"
     if not overlay_file.exists():
         return []
     entries = json.loads(overlay_file.read_text())
@@ -131,7 +131,7 @@ def run_fast_phase(workspace_dir: Path, overlay_dir: Path) -> list[OverlayApplyR
 
 
 def _list_unit_scripts(workspace_dir: Path) -> list[Path]:
-    unit_dir = workspace_dir / "scripts" / "env.d"
+    unit_dir = workspace_dir / "system" / "scripts" / "env.d"
     if not unit_dir.is_dir():
         return []
     return sorted(path for path in unit_dir.iterdir() if path.name.endswith(".sh"))
