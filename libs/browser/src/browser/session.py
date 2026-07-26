@@ -106,8 +106,11 @@ EventSink = Callable[[TaskEvent], Awaitable[None]]
 # size. Up to _MAX_SESSIONS browsers render concurrently, so the cap bounds memory.
 _RENDER_DEFAULT_WIDTH = 1280
 _RENDER_DEFAULT_HEIGHT = 800
-_RENDER_MAX_WIDTH = 1920
-_RENDER_MAX_HEIGHT = 1080
+# Cap the window/capture size. Raised to 1440p so fullscreen fills a larger display
+# instead of letterboxing at 1080p; the initial pane stays small (cheap), only a grown/
+# fullscreen pane pays the extra encode cost. Bounded by the Xvfb framebuffer (SCREEN_*).
+_RENDER_MAX_WIDTH = 2560
+_RENDER_MAX_HEIGHT = 1440
 # Floor for the clamp -- small enough that a typical (sub-1280) panel actually
 # tracks its size instead of pinning to a too-big minimum, but not degenerate.
 _RENDER_MIN_WIDTH = 640
@@ -153,7 +156,7 @@ _KEEPALIVE_SECONDS = 10
 
 # How often to poll a watched browser's X clipboard for a copy that happened inside
 # the remote page (right-click -> Copy), to push to the user's local clipboard.
-_CLIPBOARD_POLL_SECONDS = float(os.environ.get("BROWSER_CLIPBOARD_POLL_SECONDS", "0.5"))
+_CLIPBOARD_POLL_SECONDS = float(os.environ.get("BROWSER_CLIPBOARD_POLL_SECONDS", "1.0"))
 
 # Hard cap on any xclip subprocess. The clipboard paths hold _control_lock while running
 # xclip, so a hung xclip (a wedged X server) would otherwise stall every acquire /
@@ -603,6 +606,10 @@ class LiveBrowser(MutableModel):
             # connect_over_cdp. Allowing any origin is the standard fix for driving a
             # local Chromium over CDP (loopback-only debugging port; not web-reachable).
             args=["--disable-dev-shm-usage", "--remote-allow-origins=*"],
+            # Strip browser-use's default --disable-gpu-sandbox: it's redundant with
+            # --no-sandbox and triggers Chromium's yellow "unsupported command-line flag"
+            # infobar -- which, now that we stream the WHOLE browser window, the user sees.
+            ignore_default_args=["--disable-gpu-sandbox"],
             chromium_sandbox=chromium_sandbox,
             keep_alive=True,
             window_size={"width": _RENDER_DEFAULT_WIDTH, "height": _RENDER_DEFAULT_HEIGHT},
@@ -703,30 +710,31 @@ class LiveBrowser(MutableModel):
         page = pages[0] if pages else await self._context.new_page()
         self._track_nav(page)
         await self._set_active_page(page)
-        await self._open_initial_tabs(page, restore_tabs, active_tab)
         # Re-check ONE more time right before the terminal flip: a close() (or a crash
         # detected via the observer's disconnected event) may have landed during any of
-        # the awaits above (connect_over_cdp / _set_active_page / _open_initial_tabs).
-        # Without this we'd flip a torn-down / removed browser to "running" and broadcast
-        # a stale live state. The observer is already attached here, so close()'s own
-        # teardown covers the Chromium kill -- but if we got here via a launch that
-        # close() didn't serialize against, kill it ourselves to be safe.
+        # the awaits above (connect_over_cdp / _set_active_page). Without this we'd flip a
+        # torn-down / removed browser to "running". The observer is already attached here,
+        # so close()'s own teardown covers the Chromium kill -- but if we got here via a
+        # launch that close() didn't serialize against, kill it ourselves to be safe.
         if await self._abort_start_if_torn_down():
             return
         # Headful: attach the display encoder (started on demand by the first /stream
-        # subscriber), measure the chrome height so the capture crops it away, and start
-        # the clipboard copy-out watcher.
+        # subscriber), measure the window so resize works, and start the clipboard watcher.
         if self._display is not None:
             await self._setup_display_capture(observer)
             self._clip_watch_task = asyncio.create_task(self._clipboard_out_loop())
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-        # Chromium is up and (headful) the display encoder is ready: flip init -> running
-        # and tell every connected viewer, so an optimistic pane's "Starting browser…"
-        # overlay comes down and the live canvas shows.
+        # Flip init -> running NOW -- Chromium + the encoder are ready -- so the viewer
+        # starts streaming AT ONCE and watches the home page load in the live view, rather
+        # than waiting behind the "Starting browser…" overlay through a slow first nav.
         self._lifecycle = "running"
         self._broadcast(self._control_message())
         logger.info("LiveBrowser {} started (cdp_url={}, display={})",
                     self.browser_id, cdp_url, self._display.name if self._display else "headless")
+        # Navigate to the home page (or restore saved tabs) AFTER going running, so the
+        # user sees the browser + loading progress instead of a blank wait. A close during
+        # this nav is handled by close()/the _BROWSER_ERRORS guards in _open_initial_tabs.
+        await self._open_initial_tabs(page, restore_tabs, active_tab)
 
     async def _setup_display_capture(self, observer: Browser) -> None:
         """Wire up the per-browser display encoder: a browser-level CDP session (for
@@ -1238,6 +1246,23 @@ class LiveBrowser(MutableModel):
             return {"ok": True, "mime": mime, "text": data.decode("utf-8", "replace")}
         return {"ok": True, "mime": mime, "data": base64.b64encode(data).decode("ascii")}
 
+    async def clipboard_peek(self) -> dict[str, Any]:
+        """Read the CURRENT X clipboard WITHOUT firing a copy -- for a remote-initiated
+        copy (right-click -> Copy) that the poll detected and only NOTIFIED the viewer of
+        (an image is too big to inline over the cast socket). Returns ``{ok, mime,
+        text|data}``; binary comes back base64 in ``data``."""
+        async with self._control_lock:
+            if not self._input_enabled.is_set():
+                return {"ok": False, "status": "not_controlling"}
+            if self._display is None:
+                return {"ok": False, "status": "no_display"}
+            data, mime = await self._xclip_read(settle=False)
+        if data is None or mime is None:
+            return {"ok": True, "mime": None}
+        if mime.startswith("text/"):
+            return {"ok": True, "mime": mime, "text": data.decode("utf-8", "replace")}
+        return {"ok": True, "mime": mime, "data": base64.b64encode(data).decode("ascii")}
+
     def _clipboard_combo(self, code: str, char: str) -> None:
         """Ctrl+<key> at the display level (XTest), independent of the user's keymap."""
         d = self._display
@@ -1281,8 +1306,14 @@ class LiveBrowser(MutableModel):
             if digest == self._seen_clip_hash or digest == self._own_clip_hash:
                 continue
             self._seen_clip_hash = digest
-            payload = data.decode("utf-8", "replace") if mime.startswith("text/") else base64.b64encode(data).decode("ascii")
-            self._broadcast({"type": "clipboard", "mime": mime, "data": payload})
+            if mime.startswith("text/"):
+                # Text is small: inline it over the cast socket.
+                self._broadcast({"type": "clipboard", "mime": mime, "data": data.decode("utf-8", "replace")})
+            else:
+                # An image's base64 can blow past the WS proxy's ~1 MiB per-message cap,
+                # which closes the cast socket ("Reconnecting…"). Push only a NOTIFICATION;
+                # the viewer fetches the bytes over HTTP (GET .../clipboard/peek).
+                self._broadcast({"type": "clipboard", "mime": mime})
 
     def _xclip_base(self) -> list[str]:
         base = ["xclip"]

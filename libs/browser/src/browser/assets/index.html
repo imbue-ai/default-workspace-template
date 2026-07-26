@@ -303,9 +303,20 @@
 
   function drainFrames() {
     rafPending = false;
+    if (!frameQueue.length) return;
+    // Keep only the LATEST frame per stripe row and draw just that -- any earlier frame
+    // for the same row is already superseded, so drawing it would be wasted work and,
+    // worse, would let a backlog build into latency. Close the dropped ones. This is what
+    // keeps the view at "now" instead of playing catch-up.
+    const latest = new Map();
+    for (const f of frameQueue) {
+      const prev = latest.get(f.y);
+      if (prev) { try { prev.img.close(); } catch (_) {} }
+      latest.set(f.y, f);
+    }
+    frameQueue.length = 0;
     let drew = false;
-    while (frameQueue.length) {
-      const f = frameQueue.shift();
+    for (const f of latest.values()) {
       try { ctx.drawImage(f.img, 0, f.y); drew = true; } catch (_) {}
       try { f.img.close(); } catch (_) {}
     }
@@ -351,8 +362,10 @@
       const s = decoderFor(y, w, h);
       if (!s) return;  // codec unsupported; decoder couldn't configure
       // Decoder falling behind (CPU-starved viewer): drop DELTAS to shed load and mark
-      // desynced; keyframes still go through, so the periodic keyframe re-syncs it.
-      if (s.dec.decodeQueueSize > 8 && !frametype) { s.sawKey = false; return; }
+      // desynced; keyframes still go through, so the periodic keyframe re-syncs it. Kept
+      // tight (2) so latency can't ACCUMULATE -- a real-time stream must stay near "now",
+      // dropping frames rather than playing a growing backlog.
+      if (s.dec.decodeQueueSize > 2 && !frametype) { s.sawKey = false; return; }
       if (!s.sawKey) { if (!frametype) return; s.sawKey = true; }  // drop deltas until the first key
       try {
         s.dec.decode(new EncodedVideoChunk({
@@ -642,7 +655,21 @@
       return true;
     } catch (_) { return false; }
   }
+  function peekUrl() { return new URL("browsers/" + browserId + "/clipboard/peek", document.baseURI).toString(); }
   async function onRemoteClipboard(mime, data) {
+    if (!mime) return;
+    if (data === undefined) {
+      // Image notification: the server didn't inline the bytes (too big for the cast
+      // socket) -- fetch them over HTTP, with a toast since a big image can take a moment.
+      const done = withClipToast("Copying image from browser…");
+      try {
+        const j = await (await fetch(peekUrl())).json();
+        if (j.ok && j.mime) data = j.data !== undefined ? j.data : j.text;
+        mime = (j && j.mime) || mime;
+      } catch (_) { done(); return; }
+      finally { done(); }
+      if (data === undefined) return;
+    }
     if (!(await writeClipboard(mime, data))) pendingClipboard = { mime: mime, data: data };
   }
   function flushPendingClipboard() {
