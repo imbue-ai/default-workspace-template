@@ -14,13 +14,13 @@ from pathlib import Path
 from loguru import logger
 
 from env_converge.capture import parse_dpkg_versions
-from env_converge.converge import capture_all
-from env_converge.converge import read_pinned_snapshot_timestamp
-from env_converge.converge import run_unit_scripts
-from env_converge.events import EnvConvergeEventType
-from env_converge.events import emit_event
-from env_converge.record import EnvConvergeError
-from env_converge.record import read_apt_state
+from env_converge.converge import (
+    capture_all,
+    read_pinned_snapshot_timestamp,
+    run_unit_scripts,
+)
+from env_converge.events import EnvConvergeEventType, emit_event
+from env_converge.record import EnvConvergeError, read_apt_state
 
 _APT_TIMEOUT_SECONDS = 1800.0
 
@@ -47,17 +47,26 @@ def _run_upgrade_step(step: str, command: list[str]) -> None:
         raise UpgradeCommandError(step, completed.stderr.strip()[-1000:])
 
 
-def run_upgrade(record_dir: Path, workspace_dir: Path, overlay_dir: Path) -> dict[str, str]:
+def run_upgrade(
+    record_dir: Path, workspace_dir: Path, overlay_dir: Path
+) -> dict[str, str]:
     """Advance to the committed timestamp; returns the package-version deltas."""
     target_timestamp = read_pinned_snapshot_timestamp(workspace_dir)
     recorded = read_apt_state(record_dir)
     versions_before = dict(recorded.version_by_package) if recorded is not None else {}
-    emit_event(EnvConvergeEventType.UPGRADE_STARTED, {"target_timestamp": target_timestamp})
+    emit_event(
+        EnvConvergeEventType.UPGRADE_STARTED, {"target_timestamp": target_timestamp}
+    )
 
     # Re-render the pinned sources at the (possibly new) committed timestamp,
     # then move every package to its version in that frozen universe.
     _run_upgrade_step(
-        "write_apt_sources", ["bash", str(workspace_dir / "scripts" / "write_apt_sources.sh"), target_timestamp]
+        "write_apt_sources",
+        [
+            "bash",
+            str(workspace_dir / "scripts" / "write_apt_sources.sh"),
+            target_timestamp,
+        ],
     )
     _run_upgrade_step("apt_update", ["apt-get", "update", "-qq"])
     _run_upgrade_step("apt_full_upgrade", ["apt-get", "full-upgrade", "-y", "-qq"])
@@ -74,10 +83,16 @@ def run_upgrade(record_dir: Path, workspace_dir: Path, overlay_dir: Path) -> dic
         for package, version in sorted(versions_after.items())
         if versions_before.get(package) != version
     }
-    logger.info("Upgrade to {} changed {} package versions", target_timestamp, len(deltas))
+    logger.info(
+        "Upgrade to {} changed {} package versions", target_timestamp, len(deltas)
+    )
     emit_event(
         EnvConvergeEventType.UPGRADE_COMPLETED,
-        {"target_timestamp": target_timestamp, "changed_count": len(deltas), "deltas": deltas},
+        {
+            "target_timestamp": target_timestamp,
+            "changed_count": len(deltas),
+            "deltas": deltas,
+        },
     )
     return deltas
 

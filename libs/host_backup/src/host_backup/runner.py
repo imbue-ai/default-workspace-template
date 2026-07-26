@@ -30,12 +30,12 @@ from host_backup.config import (
     publish_service_events_dir,
 )
 from host_backup.events import BackupEventType, make_event, write_event
-from host_backup.restic import RESTORE_MARKER_TAGS
-from host_backup.restic import backup as restic_backup
 from host_backup.restic import (
+    RESTORE_MARKER_TAGS,
     extract_snapshot_id_from_backup_output,
     is_repo_locked_error,
 )
+from host_backup.restic import backup as restic_backup
 from host_backup.restic import forget as restic_forget
 from host_backup.restic import forget_snapshot_ids as restic_forget_snapshot_ids
 from host_backup.restic import (

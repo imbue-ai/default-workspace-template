@@ -8,18 +8,22 @@ installed.
 """
 
 import json
+import re
+import shutil
 import subprocess
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from imbue.imbue_common.pure import pure
 from loguru import logger
 
-from env_converge.data_types import AptState
-from env_converge.data_types import BaseIdentity
-from env_converge.data_types import NpmGlobalState
-from env_converge.data_types import UvToolState
+from env_converge.data_types import (
+    AptState,
+    BaseIdentity,
+    CargoState,
+    NpmGlobalState,
+    UvToolState,
+)
 from env_converge.record import EnvConvergeError
 
 _COMMAND_TIMEOUT_SECONDS = 60.0
@@ -62,7 +66,9 @@ def parse_dpkg_versions(dpkg_output: str) -> dict[str, str]:
 @pure
 def parse_manual_packages(apt_mark_output: str) -> tuple[str, ...]:
     """Parse `apt-mark showmanual` output into the sorted manual install-set."""
-    return tuple(sorted(line.strip() for line in apt_mark_output.splitlines() if line.strip()))
+    return tuple(
+        sorted(line.strip() for line in apt_mark_output.splitlines() if line.strip())
+    )
 
 
 @pure
@@ -92,7 +98,9 @@ def parse_uv_tool_versions(uv_tool_list_output: str) -> dict[str, str]:
 
 
 def capture_apt_state() -> AptState:
-    dpkg_output = _run_capture_command(["dpkg-query", "-W", "-f", "${Package}\t${Version}\n"])
+    dpkg_output = _run_capture_command(
+        ["dpkg-query", "-W", "-f", "${Package}\t${Version}\n"]
+    )
     manual_output = _run_capture_command(["apt-mark", "showmanual"])
     return AptState(
         manual_packages=parse_manual_packages(manual_output),
@@ -130,7 +138,109 @@ def capture_uv_tool_state() -> UvToolState:
     )
 
 
-def capture_base_identity(snapshot_timestamp: str, workspace_dir: Path | None) -> BaseIdentity:
+# `cargo install --list` top-level lines: `name vX.Y.Z:` for registry crates,
+# `name vX.Y.Z (/path or git url):` for path/git installs; installed binaries
+# follow on indented lines.
+_CARGO_INSTALL_LINE = re.compile(r"^(?P<name>\S+) v(?P<version>\S+):$")
+
+
+@pure
+def parse_cargo_install_list(cargo_install_list_output: str) -> dict[str, str]:
+    """Parse `cargo install --list` output into crate -> version.
+
+    Registry crates only: path/git installs (their lines carry a source suffix
+    before the colon) cannot be replayed from crates.io and are skipped.
+    """
+    version_by_crate: dict[str, str] = {}
+    for line in cargo_install_list_output.splitlines():
+        if line.startswith((" ", "\t")):
+            continue
+        match = _CARGO_INSTALL_LINE.match(line.strip())
+        if match is not None:
+            version_by_crate[match.group("name")] = match.group("version")
+    return version_by_crate
+
+
+@pure
+def parse_rustup_toolchain_list(
+    rustup_list_output: str,
+) -> tuple[tuple[str, ...], str | None]:
+    """Parse `rustup toolchain list` output into (toolchains, default).
+
+    Lines are `<name>` optionally followed by a parenthesized marker -- rustup
+    emits `(default)` historically and `(active, default)` since 1.28.
+    """
+    toolchains: list[str] = []
+    default: str | None = None
+    for line in rustup_list_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        name = stripped.split()[0]
+        toolchains.append(name)
+        if "default" in stripped[len(name) :]:
+            default = name
+    return tuple(toolchains), default
+
+
+def resolve_cargo_binary(home_dir: Path = Path("/home/user")) -> str | None:
+    """Locate cargo: PATH first, then the conventional ~/.cargo/bin.
+
+    The explicit fallback matters because rustup wires PATH via ~/.bashrc
+    (`. ~/.cargo/env`), which service processes never source -- and after a
+    backup restore, ~/.cargo/bin exists before any shell profile ran.
+    """
+    found = shutil.which("cargo")
+    if found is not None:
+        return found
+    candidate = home_dir / ".cargo" / "bin" / "cargo"
+    if candidate.is_file():
+        return str(candidate)
+    return None
+
+
+def resolve_rustup_binary(home_dir: Path = Path("/home/user")) -> str | None:
+    """Locate rustup, with the same ~/.cargo/bin fallback as cargo."""
+    found = shutil.which("rustup")
+    if found is not None:
+        return found
+    candidate = home_dir / ".cargo" / "bin" / "rustup"
+    if candidate.is_file():
+        return str(candidate)
+    return None
+
+
+def capture_cargo_state() -> CargoState:
+    """Capture cargo/rustup state; rust being absent yields an empty state.
+
+    Unlike npm/uv (always in the base image), rust is agent-installed, so a
+    missing cargo is normal -- captured as empty rather than raising, which
+    also makes a deliberate rust removal stick under capture-first ordering.
+    """
+    cargo = resolve_cargo_binary()
+    version_by_crate: dict[str, str] = {}
+    if cargo is not None:
+        version_by_crate = parse_cargo_install_list(
+            _run_capture_command([cargo, "install", "--list"])
+        )
+    rustup = resolve_rustup_binary()
+    toolchains: tuple[str, ...] = ()
+    default_toolchain: str | None = None
+    if rustup is not None:
+        toolchains, default_toolchain = parse_rustup_toolchain_list(
+            _run_capture_command([rustup, "toolchain", "list"])
+        )
+    return CargoState(
+        version_by_crate=version_by_crate,
+        toolchains=toolchains,
+        default_toolchain=default_toolchain,
+        recorded_at=datetime.now(timezone.utc),
+    )
+
+
+def capture_base_identity(
+    snapshot_timestamp: str, workspace_dir: Path | None
+) -> BaseIdentity:
     architecture = _run_capture_command(["dpkg", "--print-architecture"]).strip()
     template_commit: str | None = None
     if workspace_dir is not None and (workspace_dir / ".git").exists():

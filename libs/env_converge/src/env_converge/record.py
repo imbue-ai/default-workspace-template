@@ -2,8 +2,8 @@
 
 The record lives at `$MNGR_HOST_DIR/plugin/env-converge/` (i.e. inside the
 persistent, backed-up home tree) as one JSON file per source -- `base.json`,
-`apt.json`, `npm.json`, `uv.json` -- each rewritten atomically. JSON (not
-toml) so shell scripts can consume the state with jq.
+`apt.json`, `npm.json`, `uv.json`, `cargo.json` -- each rewritten atomically.
+JSON (not toml) so shell scripts can consume the state with jq.
 
 The rootfs identity stamp lives OUTSIDE the record, on the container rootfs
 (`/var/lib/minds/env-converge/rootfs-id`): its presence means "this rootfs has
@@ -20,10 +20,13 @@ from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
 
-from env_converge.data_types import AptState
-from env_converge.data_types import BaseIdentity
-from env_converge.data_types import NpmGlobalState
-from env_converge.data_types import UvToolState
+from env_converge.data_types import (
+    AptState,
+    BaseIdentity,
+    CargoState,
+    NpmGlobalState,
+    UvToolState,
+)
 
 
 class EnvConvergeError(Exception):
@@ -43,6 +46,7 @@ _BASE_FILE: Final[str] = "base.json"
 _APT_FILE: Final[str] = "apt.json"
 _NPM_FILE: Final[str] = "npm.json"
 _UV_FILE: Final[str] = "uv.json"
+_CARGO_FILE: Final[str] = "cargo.json"
 
 
 def default_record_dir() -> Path:
@@ -103,6 +107,16 @@ def write_uv_tool_state(record_dir: Path, state: UvToolState) -> None:
 def read_uv_tool_state(record_dir: Path) -> UvToolState | None:
     model = _read_model(record_dir / _UV_FILE, UvToolState)
     assert model is None or isinstance(model, UvToolState)
+    return model
+
+
+def write_cargo_state(record_dir: Path, state: CargoState) -> None:
+    _write_json_atomic(record_dir / _CARGO_FILE, json.loads(state.model_dump_json()))
+
+
+def read_cargo_state(record_dir: Path) -> CargoState | None:
+    model = _read_model(record_dir / _CARGO_FILE, CargoState)
+    assert model is None or isinstance(model, CargoState)
     return model
 
 

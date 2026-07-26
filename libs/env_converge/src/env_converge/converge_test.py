@@ -1,22 +1,26 @@
 import json
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from env_converge.converge import OverlayEntryError
-from env_converge.converge import apply_overlay_entry
-from env_converge.converge import read_overlay_paths
-from env_converge.converge import read_pinned_snapshot_timestamp
-from env_converge.data_types import AptState
-from env_converge.data_types import BaseIdentity
-from env_converge.record import is_rootfs_stamped
-from env_converge.record import read_apt_state
-from env_converge.record import read_base_identity
-from env_converge.record import stamp_rootfs
-from env_converge.record import write_apt_state
-from env_converge.record import write_base_identity
+from env_converge.converge import (
+    OverlayEntryError,
+    apply_overlay_entry,
+    read_overlay_paths,
+    read_pinned_snapshot_timestamp,
+)
+from env_converge.data_types import AptState, BaseIdentity, CargoState
+from env_converge.record import (
+    is_rootfs_stamped,
+    read_apt_state,
+    read_base_identity,
+    read_cargo_state,
+    stamp_rootfs,
+    write_apt_state,
+    write_base_identity,
+    write_cargo_state,
+)
 from env_converge.upgrade import compute_version_deltas
 
 
@@ -31,7 +35,10 @@ def _now() -> datetime:
 def test_record_round_trips_atomically(tmp_path: Path) -> None:
     record_dir = tmp_path / "record"
     identity = BaseIdentity(
-        snapshot_timestamp="20260720T000000Z", architecture="amd64", template_commit=None, recorded_at=_now()
+        snapshot_timestamp="20260720T000000Z",
+        architecture="amd64",
+        template_commit=None,
+        recorded_at=_now(),
     )
     write_base_identity(record_dir, identity)
     reloaded = read_base_identity(record_dir)
@@ -39,7 +46,9 @@ def test_record_round_trips_atomically(tmp_path: Path) -> None:
     assert reloaded.snapshot_timestamp == "20260720T000000Z"
 
     apt_state = AptState(
-        manual_packages=("curl", "git"), version_by_package={"curl": "8.0", "git": "2.45"}, recorded_at=_now()
+        manual_packages=("curl", "git"),
+        version_by_package={"curl": "8.0", "git": "2.45"},
+        recorded_at=_now(),
     )
     write_apt_state(record_dir, apt_state)
     reloaded_apt = read_apt_state(record_dir)
@@ -50,9 +59,28 @@ def test_record_round_trips_atomically(tmp_path: Path) -> None:
     assert raw["version_by_package"]["curl"] == "8.0"
 
 
+def test_cargo_record_round_trips(tmp_path: Path) -> None:
+    record_dir = tmp_path / "record"
+    state = CargoState(
+        version_by_crate={"ripgrep": "14.1.0"},
+        toolchains=("stable-x86_64-unknown-linux-gnu",),
+        default_toolchain="stable-x86_64-unknown-linux-gnu",
+        recorded_at=_now(),
+    )
+    write_cargo_state(record_dir, state)
+    reloaded = read_cargo_state(record_dir)
+    assert reloaded is not None
+    assert reloaded.version_by_crate == {"ripgrep": "14.1.0"}
+    assert reloaded.default_toolchain == "stable-x86_64-unknown-linux-gnu"
+    # The on-disk shape is plain jq-friendly JSON.
+    raw = json.loads((record_dir / "cargo.json").read_text())
+    assert raw["version_by_crate"]["ripgrep"] == "14.1.0"
+
+
 def test_read_absent_record_returns_none(tmp_path: Path) -> None:
     assert read_base_identity(tmp_path / "nowhere") is None
     assert read_apt_state(tmp_path / "nowhere") is None
+    assert read_cargo_state(tmp_path / "nowhere") is None
 
 
 def test_rootfs_stamp_round_trip(tmp_path: Path) -> None:
@@ -93,7 +121,9 @@ def test_apply_overlay_entry_adopts_existing_content(tmp_path: Path) -> None:
     assert result.is_adopted
     assert rootfs_dir.is_symlink()
     assert (rootfs_dir / "state.txt").read_text() == "precious"
-    assert (overlay_dir / str(rootfs_dir).lstrip("/") / "state.txt").read_text() == "precious"
+    assert (
+        overlay_dir / str(rootfs_dir).lstrip("/") / "state.txt"
+    ).read_text() == "precious"
 
 
 def test_apply_overlay_entry_overlay_wins_when_both_exist(tmp_path: Path) -> None:

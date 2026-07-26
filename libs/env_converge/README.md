@@ -2,9 +2,9 @@
 
 Environment record + boot-time convergence for default-workspace-template
 hosts: everything installed into the environment (apt packages, npm globals,
-uv tools, pinned binaries) is captured into a record that rides the persistent
-`/home/user` volume, and every boot converges the (regenerable) rootfs back to
-that record at the pinned apt snapshot timestamp.
+uv tools, cargo crates, pinned binaries) is captured into a record that rides
+the persistent `/home/user` volume, and every boot converges the (regenerable)
+rootfs back to that record at the pinned apt snapshot timestamp.
 
 ## The model
 
@@ -15,8 +15,18 @@ that record at the pinned apt snapshot timestamp.
 - **Captured state IS the manifest.** For anything with a real package
   database there is no intent file: an apt `DPkg::Post-Invoke` hook (installed
   by `scripts/setup_system.sh`) re-captures from dpkg after every apt
-  operation, and boot-time probes capture `npm ls -g` and `uv tool list`.
+  operation, and boot-time probes capture `npm ls -g`, `uv tool list`, and
+  `cargo install --list` + `rustup toolchain list` (rust is agent-installed,
+  not in the base image, so an absent cargo captures as an empty state).
   Agents install things normally; nothing needs to be declared.
+- **Cargo is a non-critical source.** Unlike npm globals (which live on the
+  rootfs and exist in a restored workspace only via the record), `~/.cargo/bin`
+  binaries ride the backup as real files -- so the cargo record matters for
+  inspiration manifests and genuinely fresh homes, not ordinary restores. The
+  replay uses `cargo install --locked <crate>@<version>` (registry crates
+  only; path/git installs are not recorded) and installs the recorded rustup
+  default toolchain first; when rust itself is absent, entries are reported
+  `package_unavailable` rather than bootstrapping rustup.
 - **Versions are a function of the snapshot timestamp.** All apt sources are
   pinned to the committed `.mngr/apt-snapshot-timestamp` (see
   `scripts/write_apt_sources.sh`), so replaying the recorded *names* yields
@@ -54,7 +64,7 @@ that record at the pinned apt snapshot timestamp.
 
 ## On-disk shape
 
-- Record: `$MNGR_HOST_DIR/plugin/env-converge/{base,apt,npm,uv}.json`,
+- Record: `$MNGR_HOST_DIR/plugin/env-converge/{base,apt,npm,uv,cargo}.json`,
   atomically rewritten, jq-friendly.
 - Events: `$MNGR_HOST_DIR/plugin/env-converge/events/env_converge/events.jsonl`
   (captures, unit runs, package_installed / package_unavailable, upgrades).

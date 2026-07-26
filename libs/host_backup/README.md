@@ -64,7 +64,11 @@ an encrypted restic repo on cheaper object storage.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
-  `excludes` list (default: `**/.venv`, `**/node_modules`, etc).
+  `excludes` list (default: `**/.venv`, `**/node_modules`, etc). Rust's
+  regenerable caches (`~/.cargo/registry`, `~/.cargo/git`,
+  `~/.rustup/toolchains`, `~/.rustup/downloads`) are excluded by default while
+  the user-data parts of those trees (`~/.cargo/bin` binaries, config,
+  credentials, rustup's `settings.toml`) ride the backup.
 - After every successful backup, `restic forget --keep-hourly N --keep-daily
   M --keep-weekly W --keep-monthly O` runs (cheap, index-only). At most
   once per `prune_interval_hours` (default 24) we additionally run

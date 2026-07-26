@@ -28,25 +28,31 @@ from pathlib import Path
 
 from loguru import logger
 
-from env_converge.capture import capture_apt_state
-from env_converge.capture import capture_base_identity
-from env_converge.capture import capture_npm_state
-from env_converge.capture import capture_uv_tool_state
-from env_converge.data_types import ConvergeResult
-from env_converge.data_types import OverlayApplyResult
-from env_converge.data_types import UnitRunResult
-from env_converge.events import EnvConvergeEventType
-from env_converge.events import emit_event
-from env_converge.record import EnvConvergeError
-from env_converge.record import is_rootfs_stamped
-from env_converge.record import read_apt_state
-from env_converge.record import read_npm_state
-from env_converge.record import read_uv_tool_state
-from env_converge.record import stamp_rootfs
-from env_converge.record import write_apt_state
-from env_converge.record import write_base_identity
-from env_converge.record import write_npm_state
-from env_converge.record import write_uv_tool_state
+from env_converge.capture import (
+    capture_apt_state,
+    capture_base_identity,
+    capture_cargo_state,
+    capture_npm_state,
+    capture_uv_tool_state,
+    resolve_cargo_binary,
+    resolve_rustup_binary,
+)
+from env_converge.data_types import ConvergeResult, OverlayApplyResult, UnitRunResult
+from env_converge.events import EnvConvergeEventType, emit_event
+from env_converge.record import (
+    EnvConvergeError,
+    is_rootfs_stamped,
+    read_apt_state,
+    read_cargo_state,
+    read_npm_state,
+    read_uv_tool_state,
+    stamp_rootfs,
+    write_apt_state,
+    write_base_identity,
+    write_cargo_state,
+    write_npm_state,
+    write_uv_tool_state,
+)
 
 _UNIT_TIMEOUT_SECONDS = 3600.0
 _INSTALL_TIMEOUT_SECONDS = 900.0
@@ -155,16 +161,30 @@ def run_unit_scripts(workspace_dir: Path, overlay_dir: Path) -> list[UnitRunResu
             exit_code = -1
             stderr_tail = str(e)
         duration = time.monotonic() - start
-        result = UnitRunResult(unit_name=unit_path.name, exit_code=exit_code, duration_seconds=duration)
+        result = UnitRunResult(
+            unit_name=unit_path.name, exit_code=exit_code, duration_seconds=duration
+        )
         results.append(result)
         if exit_code == 0:
-            emit_event(EnvConvergeEventType.UNIT_RUN, {"unit": unit_path.name, "duration_seconds": duration})
+            emit_event(
+                EnvConvergeEventType.UNIT_RUN,
+                {"unit": unit_path.name, "duration_seconds": duration},
+            )
         else:
             # Failure isolation: one broken unit never blocks the others (or boot).
-            logger.warning("env.d unit {} failed (rc={}): {}", unit_path.name, exit_code, stderr_tail)
+            logger.warning(
+                "env.d unit {} failed (rc={}): {}",
+                unit_path.name,
+                exit_code,
+                stderr_tail,
+            )
             emit_event(
                 EnvConvergeEventType.UNIT_FAILED,
-                {"unit": unit_path.name, "exit_code": exit_code, "stderr_tail": stderr_tail},
+                {
+                    "unit": unit_path.name,
+                    "exit_code": exit_code,
+                    "stderr_tail": stderr_tail,
+                },
             )
     return results
 
@@ -186,26 +206,92 @@ def _install_missing(
             timeout=_INSTALL_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
-        emit_event(EnvConvergeEventType.PACKAGE_UNAVAILABLE, {"kind": kind, "packages": missing, "error": str(e)})
-        return [], missing
-    if completed.returncode != 0:
-        logger.warning("Installing recorded {} packages failed: {}", kind, completed.stderr[-1000:])
         emit_event(
             EnvConvergeEventType.PACKAGE_UNAVAILABLE,
-            {"kind": kind, "packages": missing, "stderr_tail": completed.stderr[-2000:]},
+            {"kind": kind, "packages": missing, "error": str(e)},
         )
         return [], missing
-    emit_event(EnvConvergeEventType.PACKAGE_INSTALLED, {"kind": kind, "packages": missing})
+    if completed.returncode != 0:
+        logger.warning(
+            "Installing recorded {} packages failed: {}", kind, completed.stderr[-1000:]
+        )
+        emit_event(
+            EnvConvergeEventType.PACKAGE_UNAVAILABLE,
+            {
+                "kind": kind,
+                "packages": missing,
+                "stderr_tail": completed.stderr[-2000:],
+            },
+        )
+        return [], missing
+    emit_event(
+        EnvConvergeEventType.PACKAGE_INSTALLED, {"kind": kind, "packages": missing}
+    )
     return missing, []
 
 
-def install_missing_from_record(record_dir: Path) -> tuple[list[str], list[str], list[str], list[str]]:
+def _install_missing_cargo(record_dir: Path) -> tuple[list[str], list[str]]:
+    """Replay recorded cargo crates (and the rustup default toolchain) missing here.
+
+    Returns (installed, unavailable). Non-critical by design: cargo binaries in
+    ~/.cargo/bin ride the backup as files, so this replay only matters on a
+    genuinely fresh home. When the record names crates but rust itself is
+    absent, everything is reported unavailable rather than bootstrapping
+    rustup here. `--locked` uses each crate's committed lockfile so the
+    recorded version resolves the same dependency set every time.
+    """
+    recorded = read_cargo_state(record_dir)
+    if recorded is None:
+        return [], []
+
+    installed: list[str] = []
+    unavailable: list[str] = []
+
+    if recorded.default_toolchain is not None:
+        rustup = resolve_rustup_binary()
+        if rustup is None:
+            unavailable.append(f"rust-toolchain:{recorded.default_toolchain}")
+        else:
+            current = capture_cargo_state()
+            if recorded.default_toolchain not in current.toolchains:
+                toolchain_installed, toolchain_unavailable = _install_missing(
+                    "rust_toolchain",
+                    [recorded.default_toolchain],
+                    [rustup, "toolchain", "install", recorded.default_toolchain],
+                )
+                installed.extend(toolchain_installed)
+                unavailable.extend(toolchain_unavailable)
+
+    if recorded.version_by_crate:
+        cargo = resolve_cargo_binary()
+        if cargo is None:
+            unavailable.extend(
+                f"{crate}@{version}"
+                for crate, version in sorted(recorded.version_by_crate.items())
+            )
+            return installed, unavailable
+        current_crates = capture_cargo_state().version_by_crate
+        missing = sorted(set(recorded.version_by_crate) - set(current_crates))
+        for crate in missing:
+            spec = f"{crate}@{recorded.version_by_crate[crate]}"
+            crate_installed, crate_unavailable = _install_missing(
+                "cargo", [spec], [cargo, "install", "--locked", spec]
+            )
+            installed.extend(crate_installed)
+            unavailable.extend(crate_unavailable)
+
+    return installed, unavailable
+
+
+def install_missing_from_record(
+    record_dir: Path,
+) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
     """Install record entries absent from this rootfs.
 
-    Returns (installed_apt, installed_npm, installed_uv, unavailable). The apt
-    install-set is the recorded manual set (dependencies follow via apt at the
-    pinned snapshot timestamp, so versions are deterministic without pinning
-    each name).
+    Returns (installed_apt, installed_npm, installed_uv, installed_cargo,
+    unavailable). The apt install-set is the recorded manual set (dependencies
+    follow via apt at the pinned snapshot timestamp, so versions are
+    deterministic without pinning each name).
     """
     unavailable: list[str] = []
 
@@ -213,11 +299,26 @@ def install_missing_from_record(record_dir: Path) -> tuple[list[str], list[str],
     installed_apt: list[str] = []
     if recorded_apt is not None:
         current = capture_apt_state()
-        missing_apt = sorted(set(recorded_apt.manual_packages) - set(current.version_by_package))
+        missing_apt = sorted(
+            set(recorded_apt.manual_packages) - set(current.version_by_package)
+        )
         if missing_apt:
-            subprocess.run(["apt-get", "update", "-qq"], check=False, timeout=_INSTALL_TIMEOUT_SECONDS)
+            subprocess.run(
+                ["apt-get", "update", "-qq"],
+                check=False,
+                timeout=_INSTALL_TIMEOUT_SECONDS,
+            )
         installed_apt, unavailable_apt = _install_missing(
-            "apt", missing_apt, ["apt-get", "install", "-y", "-qq", "--no-install-recommends", *missing_apt]
+            "apt",
+            missing_apt,
+            [
+                "apt-get",
+                "install",
+                "-y",
+                "-qq",
+                "--no-install-recommends",
+                *missing_apt,
+            ],
         )
         unavailable.extend(unavailable_apt)
 
@@ -225,32 +326,50 @@ def install_missing_from_record(record_dir: Path) -> tuple[list[str], list[str],
     installed_npm: list[str] = []
     if recorded_npm is not None:
         current_npm = capture_npm_state()
-        missing_npm = sorted(set(recorded_npm.version_by_package) - set(current_npm.version_by_package))
-        npm_specs = [f"{name}@{recorded_npm.version_by_package[name]}" for name in missing_npm]
-        installed_npm, unavailable_npm = _install_missing("npm", npm_specs, ["npm", "install", "-g", *npm_specs])
+        missing_npm = sorted(
+            set(recorded_npm.version_by_package) - set(current_npm.version_by_package)
+        )
+        npm_specs = [
+            f"{name}@{recorded_npm.version_by_package[name]}" for name in missing_npm
+        ]
+        installed_npm, unavailable_npm = _install_missing(
+            "npm", npm_specs, ["npm", "install", "-g", *npm_specs]
+        )
         unavailable.extend(unavailable_npm)
 
     recorded_uv = read_uv_tool_state(record_dir)
     installed_uv: list[str] = []
     if recorded_uv is not None:
         current_uv = capture_uv_tool_state()
-        missing_uv = sorted(set(recorded_uv.version_by_tool) - set(current_uv.version_by_tool))
+        missing_uv = sorted(
+            set(recorded_uv.version_by_tool) - set(current_uv.version_by_tool)
+        )
         for tool in missing_uv:
             spec = f"{tool}=={recorded_uv.version_by_tool[tool]}"
-            installed, not_installed = _install_missing("uv_tool", [spec], ["uv", "tool", "install", spec])
+            installed, not_installed = _install_missing(
+                "uv_tool", [spec], ["uv", "tool", "install", spec]
+            )
             installed_uv.extend(installed)
             unavailable.extend(not_installed)
 
-    return installed_apt, installed_npm, installed_uv, unavailable
+    installed_cargo, unavailable_cargo = _install_missing_cargo(record_dir)
+    unavailable.extend(unavailable_cargo)
+
+    return installed_apt, installed_npm, installed_uv, installed_cargo, unavailable
 
 
 def capture_all(record_dir: Path, snapshot_timestamp: str, workspace_dir: Path) -> None:
     """Capture every source's actual state into the record ("dpkg is truth")."""
-    write_base_identity(record_dir, capture_base_identity(snapshot_timestamp, workspace_dir))
+    write_base_identity(
+        record_dir, capture_base_identity(snapshot_timestamp, workspace_dir)
+    )
     write_apt_state(record_dir, capture_apt_state())
     write_npm_state(record_dir, capture_npm_state())
     write_uv_tool_state(record_dir, capture_uv_tool_state())
-    emit_event(EnvConvergeEventType.STATE_CAPTURED, {"snapshot_timestamp": snapshot_timestamp})
+    write_cargo_state(record_dir, capture_cargo_state())
+    emit_event(
+        EnvConvergeEventType.STATE_CAPTURED, {"snapshot_timestamp": snapshot_timestamp}
+    )
 
 
 def read_pinned_snapshot_timestamp(workspace_dir: Path) -> str:
@@ -273,7 +392,9 @@ def run_slow_phase(
         capture_all(record_dir, snapshot_timestamp, workspace_dir)
 
     unit_results = run_unit_scripts(workspace_dir, overlay_dir)
-    installed_apt, installed_npm, installed_uv, unavailable = install_missing_from_record(record_dir)
+    installed_apt, installed_npm, installed_uv, installed_cargo, unavailable = (
+        install_missing_from_record(record_dir)
+    )
 
     # Reality changed (units ran, packages installed) -- or this is a fresh
     # rootfs whose record predates it; either way, re-capture and stamp.
@@ -286,6 +407,7 @@ def run_slow_phase(
         installed_apt_packages=tuple(installed_apt),
         installed_npm_packages=tuple(installed_npm),
         installed_uv_tools=tuple(installed_uv),
+        installed_cargo_crates=tuple(installed_cargo),
         unavailable_packages=tuple(unavailable),
         is_fresh_rootfs=is_fresh,
     )
@@ -297,6 +419,7 @@ def run_slow_phase(
             "installed_apt": installed_apt,
             "installed_npm": installed_npm,
             "installed_uv": installed_uv,
+            "installed_cargo": installed_cargo,
             "unavailable": unavailable,
         },
     )

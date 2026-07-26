@@ -179,7 +179,9 @@ def _snapshot_ids(env: dict[str, str]) -> set[str]:
     return {entry["id"] for entry in json.loads(result.stdout)}
 
 
-def test_forget_keeps_restore_marker_that_hourly_thinning_would_drop(tmp_path: Path) -> None:
+def test_forget_keeps_restore_marker_that_hourly_thinning_would_drop(
+    tmp_path: Path,
+) -> None:
     """`--keep-tag` protects a `restored` snapshot the keep-hourly bucket would otherwise forget."""
     repo_dir = tmp_path / "repo"
     source_dir = tmp_path / "source"
@@ -192,21 +194,42 @@ def test_forget_keeps_restore_marker_that_hourly_thinning_would_drop(tmp_path: P
     # A restore marker, then two ordinary backups -- all in the same hour, so
     # keep-hourly=1 keeps only the newest ordinary one and would forget the
     # marker if it were not tag-protected.
-    marker = restic_backup(source_path=source_dir, excludes=(), tag="restored", env_overrides=env)
+    marker = restic_backup(
+        source_path=source_dir, excludes=(), tag="restored", env_overrides=env
+    )
     marker_id = extract_snapshot_id_from_backup_output(marker.stdout)
     (source_dir / "f.txt").write_text("v2")
-    ordinary_old = restic_backup(source_path=source_dir, excludes=(), tag="2026-hourly-a", env_overrides=env)
+    ordinary_old = restic_backup(
+        source_path=source_dir, excludes=(), tag="2026-hourly-a", env_overrides=env
+    )
     ordinary_old_id = extract_snapshot_id_from_backup_output(ordinary_old.stdout)
     (source_dir / "f.txt").write_text("v3")
-    ordinary_new = restic_backup(source_path=source_dir, excludes=(), tag="2026-hourly-b", env_overrides=env)
+    ordinary_new = restic_backup(
+        source_path=source_dir, excludes=(), tag="2026-hourly-b", env_overrides=env
+    )
     ordinary_new_id = extract_snapshot_id_from_backup_output(ordinary_new.stdout)
 
-    assert restic_forget(keep_hourly=1, keep_daily=1, keep_weekly=1, keep_monthly=1, env_overrides=env).returncode == 0
+    assert (
+        restic_forget(
+            keep_hourly=1,
+            keep_daily=1,
+            keep_weekly=1,
+            keep_monthly=1,
+            env_overrides=env,
+        ).returncode
+        == 0
+    )
 
     surviving = _snapshot_ids(env)
-    assert marker_id in surviving, "the restore marker must survive keep-hourly thinning"
-    assert ordinary_new_id in surviving, "the newest ordinary backup is the hour's representative"
-    assert ordinary_old_id not in surviving, "the older ordinary backup is still thinned normally"
+    assert marker_id in surviving, (
+        "the restore marker must survive keep-hourly thinning"
+    )
+    assert ordinary_new_id in surviving, (
+        "the newest ordinary backup is the hour's representative"
+    )
+    assert ordinary_old_id not in surviving, (
+        "the older ordinary backup is still thinned normally"
+    )
 
 
 def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
@@ -222,7 +245,16 @@ def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
     # An old restore marker (backdated 30 days via restic --time), a recent
     # restore marker, and an ordinary backup.
     old_backup = subprocess.run(
-        ["restic", "backup", "--json", "--tag", "restored", "--time", "2000-01-01 00:00:00", str(source_dir)],
+        [
+            "restic",
+            "backup",
+            "--json",
+            "--tag",
+            "restored",
+            "--time",
+            "2000-01-01 00:00:00",
+            str(source_dir),
+        ],
         env={**env, "PATH": _path_for_subprocess()},
         capture_output=True,
         text=True,
@@ -231,11 +263,15 @@ def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
     old_marker_id = extract_snapshot_id_from_backup_output(old_backup.stdout)
     (source_dir / "f.txt").write_text("data2")
     recent_marker_id = extract_snapshot_id_from_backup_output(
-        restic_backup(source_path=source_dir, excludes=(), tag="restored", env_overrides=env).stdout
+        restic_backup(
+            source_path=source_dir, excludes=(), tag="restored", env_overrides=env
+        ).stdout
     )
     (source_dir / "f.txt").write_text("data3")
     ordinary_id = extract_snapshot_id_from_backup_output(
-        restic_backup(source_path=source_dir, excludes=(), tag="2026-hourly", env_overrides=env).stdout
+        restic_backup(
+            source_path=source_dir, excludes=(), tag="2026-hourly", env_overrides=env
+        ).stdout
     )
 
     state = _LoopState(BackupCapabilities(method=SnapshotMethod.DIRECT))
@@ -243,11 +279,17 @@ def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
     state.current_tick_id = "tick-integration"
     _age_out_restore_markers(
         state=state,
-        config=BackupConfig(retention=RetentionSettings(restore_marker_max_age_days=7.0)),
+        config=BackupConfig(
+            retention=RetentionSettings(restore_marker_max_age_days=7.0)
+        ),
         env_overrides=env,
     )
 
     surviving = _snapshot_ids(env)
-    assert old_marker_id not in surviving, "the marker older than the cutoff must be forgotten"
+    assert old_marker_id not in surviving, (
+        "the marker older than the cutoff must be forgotten"
+    )
     assert recent_marker_id in surviving, "a marker within the cutoff must be kept"
-    assert ordinary_id in surviving, "ordinary backups are never touched by the marker age-out"
+    assert ordinary_id in surviving, (
+        "ordinary backups are never touched by the marker age-out"
+    )

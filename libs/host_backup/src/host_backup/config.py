@@ -110,6 +110,16 @@ class BackupConfig(FrozenModel):
             "**/build",
             "**/.next",
             "**/.cache",
+            # Rust keeps its regenerable caches inside ~/.cargo and ~/.rustup
+            # (no env-var cache/data split like npm/uv have), so the cache
+            # subdirs are excluded here while the user-data parts -- installed
+            # binaries in ~/.cargo/bin, config/credentials, and rustup's
+            # settings.toml (which names the default toolchain, letting a
+            # restored workspace reinstall it on demand) -- ride the backup.
+            "**/.cargo/registry",
+            "**/.cargo/git",
+            "**/.rustup/toolchains",
+            "**/.rustup/downloads",
             # Provisioning-owned: mngr rewrites authorized_keys on every
             # start/restore, and restoring an old copy onto a new host would
             # lock the tooling out.

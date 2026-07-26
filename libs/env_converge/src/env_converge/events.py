@@ -7,19 +7,20 @@ line per event with the standard envelope.
 
 import json
 import os
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from enum import auto
 from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
-from imbue.imbue_common.event_envelope import EventEnvelope
-from imbue.imbue_common.event_envelope import EventId
-from imbue.imbue_common.event_envelope import EventSource
-from imbue.imbue_common.event_envelope import EventType
-from imbue.imbue_common.event_envelope import IsoTimestamp
+from imbue.imbue_common.event_envelope import (
+    EventEnvelope,
+    EventId,
+    EventSource,
+    EventType,
+    IsoTimestamp,
+)
 from loguru import logger
 from pydantic import Field
 
@@ -43,7 +44,9 @@ class EnvConvergeEventType(UpperCaseStrEnum):
 class EnvConvergeEvent(EventEnvelope):
     """Base envelope for env-converge events; payload rides in `detail`."""
 
-    detail: dict[str, object] = Field(default_factory=dict, description="Event-specific payload")
+    detail: dict[str, object] = Field(
+        default_factory=dict, description="Event-specific payload"
+    )
 
 
 def default_events_path() -> Path | None:
@@ -51,14 +54,23 @@ def default_events_path() -> Path | None:
     host_dir = os.environ.get("MNGR_HOST_DIR", "")
     if not host_dir:
         return None
-    return Path(host_dir) / "plugin" / "env-converge" / "events" / "env_converge" / "events.jsonl"
+    return (
+        Path(host_dir)
+        / "plugin"
+        / "env-converge"
+        / "events"
+        / "env_converge"
+        / "events.jsonl"
+    )
 
 
 def emit_event(event_type: EnvConvergeEventType, detail: dict[str, object]) -> None:
     """Append one event line; best-effort (environment work must not fail on logging)."""
     events_path = default_events_path()
     if events_path is None:
-        logger.debug("Skipping env-converge event {} (MNGR_HOST_DIR unset)", event_type.value)
+        logger.debug(
+            "Skipping env-converge event {} (MNGR_HOST_DIR unset)", event_type.value
+        )
         return
     event = EnvConvergeEvent(
         timestamp=IsoTimestamp(datetime.now(timezone.utc).isoformat()),

@@ -1,3 +1,5 @@
 Backups now cover the whole persistent home tree (`/home/user`) instead of the mngr host dir: detection resolves the provider's home symlink for lima btrfs probing (findmnt -T), vps snapshots are read through their `home/` subtree, and the provisioning-owned `.ssh/authorized_keys` joins the default excludes so a restore can never lock the tooling out.
 
 - Every backup tick now runs `env-converge capture` before taking the snapshot (best-effort, 120s bound, `env_record_capture_completed` event), so the environment record inside each backup reflects the packages installed at backup time -- restoring onto a fresh base replays what was actually there, not what was there at last boot.
+
+- Rust's regenerable caches (`~/.cargo/registry`, `~/.cargo/git`, `~/.rustup/toolchains`, `~/.rustup/downloads`) are excluded from backups by default; the user-data parts of those trees (installed binaries in `~/.cargo/bin`, cargo config/credentials, rustup's `settings.toml`) are backed up as before.
