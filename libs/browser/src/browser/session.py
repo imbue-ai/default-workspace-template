@@ -605,7 +605,22 @@ class LiveBrowser(MutableModel):
             # whose Origin header it doesn't allow, which hangs our observer's
             # connect_over_cdp. Allowing any origin is the standard fix for driving a
             # local Chromium over CDP (loopback-only debugging port; not web-reachable).
-            args=["--disable-dev-shm-usage", "--remote-allow-origins=*"],
+            # --disable-dev-shm-usage: use /tmp not /dev/shm (some containers cap /dev/shm).
+            # --remote-allow-origins=*: newer Chromium rejects a CDP WebSocket whose Origin
+            # it doesn't allow (see below). The rest trim Chromium's cold-start: skip the
+            # first-run/onboarding/search-engine dialogs and background component/sync work
+            # that otherwise add seconds to a fresh-profile launch (every new browser is a
+            # fresh profile). None touch the page-facing fingerprint, so stealth is intact.
+            args=[
+                "--disable-dev-shm-usage",
+                "--remote-allow-origins=*",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-search-engine-choice-screen",
+                "--disable-component-update",
+                "--disable-sync",
+                "--disable-features=Translate,MediaRouter",
+            ],
             # Strip browser-use's default --disable-gpu-sandbox: it's redundant with
             # --no-sandbox and triggers Chromium's yellow "unsupported command-line flag"
             # infobar -- which, now that we stream the WHOLE browser window, the user sees.
