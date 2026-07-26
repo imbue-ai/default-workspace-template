@@ -19,7 +19,11 @@
   #returnbtn { padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
 
   #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-  #screen { max-width: 100%; max-height: 100%; cursor: default; }
+  /* Fill the pane. The backing store tracks the pane size up to the render cap, so this is
+     1:1 (sharp) at normal sizes and upscales only when the pane exceeds the cap (e.g. a
+     large fullscreen) -- filling the screen without encoding a bigger frame. Input coords
+     scale off getBoundingClientRect (see scaled()), so a stretched canvas stays accurate. */
+  #screen { width: 100%; height: 100%; cursor: default; }
   #screen:focus { outline: none; }
   #placeholder { position: absolute; color: #777; font-size: 13px; text-align: center; padding: 0 20px; }
 

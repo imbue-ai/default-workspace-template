@@ -42,12 +42,13 @@ from Xlib.ext import xtest
 # (Xvfb can't). Matches _RENDER_MAX_* in session.py; session reads SCREEN_H to bound
 # the window height so it always fits.
 # The virtual screen is the hard ceiling on how big the browser window (and thus the
-# live view) can get -- Xvfb cannot grow its framebuffer at runtime. Sized to 4K so
-# fullscreen fills essentially any real monitor; the window starts small and only grows
-# to the pane, so the only always-on cost is the framebuffer (~33 MB/browser). Env-tunable
-# down (BROWSER_SCREEN_WIDTH/HEIGHT) to trade fullscreen fidelity for encode CPU/memory.
-SCREEN_W = int(os.environ.get("BROWSER_SCREEN_WIDTH", "3840"))
-SCREEN_H = int(os.environ.get("BROWSER_SCREEN_HEIGHT", "2160"))
+# ENCODED resolution) can get -- Xvfb cannot grow its framebuffer at runtime. Kept at
+# 1440p, NOT 4K: the viewer canvas is CSS-stretched to fill its pane (see index.html), so
+# fullscreen fills any monitor without encoding 4K -- it just upscales from here. This is
+# the sharpness/CPU knob: raise it (BROWSER_SCREEN_WIDTH/HEIGHT) for crisper fullscreen at
+# more encode cost, lower it for a lighter encoder on a constrained box.
+SCREEN_W = int(os.environ.get("BROWSER_SCREEN_WIDTH", "2560"))
+SCREEN_H = int(os.environ.get("BROWSER_SCREEN_HEIGHT", "1440"))
 
 # Where to start allocating display numbers. Kept well clear of a workspace's own
 # :0/:99 so a stray shared display never collides with a per-browser one.
