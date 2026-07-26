@@ -94,7 +94,10 @@ def test_prevent_asyncio_import() -> None:
     # async, +1 for the live-view-v2 per-browser display), and the two test modules that
     # drive session.py with asyncio.run. runner.py is synchronous Flask and reaches the
     # loop only through the bridge. Mirrors the system_interface lib's async-WS ratchet.
-    rc.check_asyncio_import(_DIR, snapshot(5))
+    # +1 for scripts/selfcheck.py, the standalone load-time diagnostic, which drives the
+    # async manager via asyncio.run to time a real browser launch (a dev/debug tool, not
+    # production code).
+    rc.check_asyncio_import(_DIR, snapshot(6))
 
 
 def test_prevent_dataclasses_import() -> None:

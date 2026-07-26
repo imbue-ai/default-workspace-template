@@ -5,3 +5,5 @@ Full-fidelity interaction now works: native right-click context menus, native dr
 Because every browser now has its own display, copy/paste no longer leaks between two open browsers, and a copy made inside the remote page (for example via right-click -> Copy) now reaches your local clipboard automatically.
 
 Resizing the pane resizes the real browser window (and the capture) to match, still frozen while an agent is driving and reported back to the agent on hand-back. The old CDP screencast, its JPEG frames, and page-scoped input have been removed -- this stack replaces them entirely.
+
+Opening a browser cold-starts a real headful Chromium, which takes several seconds; if the live view is still waiting on the video encoder (for example while a fresh workspace finishes installing it) the pane now says so instead of sitting on a silent "Loading page…". A `libs/browser/scripts/selfcheck.py` helper measures where those startup seconds actually go on a given box.

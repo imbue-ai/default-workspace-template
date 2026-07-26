@@ -260,9 +260,28 @@
       // Running means Chromium is up, but the first video frame may not have decoded yet
       // (encoder spin-up / first keyframe). Keep a light "Loading page…" note instead of a
       // bare black canvas; drainFrames() clears it the instant the first frame paints.
-      if (hasFrame) placeholder.style.display = "none";
-      else { placeholder.textContent = "Loading page…"; placeholder.style.display = "block"; }
+      if (hasFrame) { placeholder.style.display = "none"; clearFrameWait(); }
+      else { placeholder.textContent = "Loading page…"; placeholder.style.display = "block"; armFrameWait(); }
     }
+  }
+
+  // Running but no frame yet is normal for a beat (encoder spin-up). If it drags on, the
+  // video encoder probably isn't up -- e.g. the workspace is still installing its native
+  // libs -- and the stream socket is silently retrying. Say so instead of an eternal
+  // "Loading page…". Cleared the instant a frame paints (drainFrames) or the browser dies.
+  let frameWaitTimer = null;
+  function armFrameWait() {
+    if (frameWaitTimer || hasFrame) return;
+    frameWaitTimer = setTimeout(() => {
+      frameWaitTimer = null;
+      if (!hasFrame && lifecycle === "running") {
+        placeholder.textContent = "Live view is taking longer than usual — the workspace may still be setting up video. Still trying…";
+        placeholder.style.display = "block";
+      }
+    }, 8000);
+  }
+  function clearFrameWait() {
+    if (frameWaitTimer) { clearTimeout(frameWaitTimer); frameWaitTimer = null; }
   }
 
   // The browser's Chromium died (OS/OOM kill, crash). Show a clear, terminal dead
@@ -272,6 +291,7 @@
     crashed = true;
     lifecycle = "crashed";  // keep the explicit lifecycle consistent with the overlay
     hasFrame = false;
+    clearFrameWait();
     closeStream();  // stop pulling video and drop every decoder; this browser is gone
     stopIdleTimer();
     overlay.classList.remove("show");
@@ -320,7 +340,7 @@
       try { ctx.drawImage(f.img, 0, f.y); drew = true; } catch (_) {}
       try { f.img.close(); } catch (_) {}
     }
-    if (drew && !hasFrame) { hasFrame = true; placeholder.style.display = "none"; }
+    if (drew && !hasFrame) { hasFrame = true; placeholder.style.display = "none"; clearFrameWait(); }
   }
 
   // Lazily build + configure the decoder for a stripe row. configure() is synchronous per
