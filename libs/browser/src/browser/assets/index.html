@@ -871,7 +871,12 @@
         // the full display region so stripes paint at the right y. Explicit lifecycle drives
         // the overlays. (Video itself now arrives on the /stream socket, not here.)
         if (Array.isArray(m.resolution) && m.resolution.length === 2) sizeCanvas(m.resolution[0], m.resolution[1]);
+        const wasRunning = lifecycle === "running";
         setLifecycle(m.lifecycle); setControl(m);
+        // The browser only honors a resize once RUNNING; any size we sent during the ~5s
+        // startup was dropped. Re-assert the pane size on the init->running transition so
+        // the window fits the pane on first load, no manual resize needed.
+        if (!wasRunning && m.lifecycle === "running") reportSize();
       }
       else if (m.type === "clipboard") { onRemoteClipboard(m.mime, m.data); }  // remote page copied -> user's clipboard
       else if (m.type === "handoff_request") {

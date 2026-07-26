@@ -197,9 +197,29 @@ _install_audio() {
     fi
 }
 
+_write_chromium_policy() {
+    # Suppress Chromium's yellow "You are using an unsupported command-line flag:
+    # --no-sandbox" banner. We MUST pass --no-sandbox (Chromium's sandbox needs user
+    # namespaces we don't have running as root in-container), and the banner then shows in
+    # the streamed view. CommandLineFlagSecurityWarningsEnabled=false is the documented
+    # managed policy for exactly this -- it changes NO browser behavior (unlike --test-type,
+    # which we avoid for stealth). Written to the standard Chromium managed-policy dirs;
+    # idempotent, so it's not marker-gated. If Fortress reads a different dir, the banner
+    # persists and we add that dir here.
+    local written=0 dir
+    for dir in /etc/chromium/policies/managed /etc/opt/chrome/policies/managed /etc/chromium-browser/policies/managed; do
+        if mkdir -p "$dir" 2>/dev/null && \
+           printf '{"CommandLineFlagSecurityWarningsEnabled": false}\n' > "$dir/minds-flag-warnings.json" 2>/dev/null; then
+            written=1
+        fi
+    done
+    [ "$written" -eq 1 ] && _log "chromium policy: flag-warning banner suppressed" || _log "chromium policy: could not write managed policy"
+}
+
 main() {
     mkdir -p "$MARKER_DIR"
     local rc=0
+    _write_chromium_policy
     _install_fortress || rc=$?
     _install_xvfb || rc=$?
     _install_audio || rc=$?
