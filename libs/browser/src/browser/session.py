@@ -72,7 +72,7 @@ from pydantic import PrivateAttr
 
 from browser import manifest as fleet_manifest
 from browser.capture import Capture
-from browser.display import SCREEN_H, Display, DisplayError
+from browser.display import SCREEN_H, SCREEN_W, Display, DisplayError
 from browser.names import generate_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
 
@@ -474,10 +474,6 @@ class LiveBrowser(MutableModel):
     # resize-to-pane sets Browser.setWindowBounds and measures the chrome height.
     _browser_cdp: CDPSession | None = PrivateAttr(default=None)
     _window_id: int | None = PrivateAttr(default=None)
-    # Height of the browser's top chrome (tab strip + toolbar), measured once so the
-    # capture region crops it away -- the user sees a chromeless page under our own tab
-    # bar. Input coords add this back to reach true display coords (see display.crop_y).
-    _chrome_crop: int = PrivateAttr(default=0)
     # Clipboard copy-out watcher: the task, the hash of the value WE last put on the
     # clipboard (so a paste/copy we made isn't echoed back to the user), and the hash
     # of the last value we pushed out (so we push each remote copy once).
@@ -717,41 +713,29 @@ class LiveBrowser(MutableModel):
         assert self._display is not None
         try:
             self._browser_cdp = await observer.new_browser_cdp_session()
-            await self._measure_chrome()
+            await self._measure_window()
         except _BROWSER_ERRORS as e:
             logger.warning("browser {} display-capture setup degraded ({})", self.browser_id, e)
         self._capture = Capture(self._display.name, self._capture_region)
 
     def _capture_region(self) -> tuple[int, int, int, int]:
-        """Current pixelflux capture rect on the display: the web-contents area only
-        (the top chrome cropped), at the live render size. The window sits at (0,0)
-        (browser-use injects --window-position=0,0)."""
-        return (0, self._chrome_crop, self._render_w, self._render_h)
+        """Current pixelflux capture rect on the display: the WHOLE Chromium window --
+        native tab strip, toolbar, and URL bar included -- at the live render size. The
+        window sits at (0,0) (browser-use injects --window-position=0,0), so input coords
+        map straight through (no crop offset)."""
+        return (0, 0, self._render_w, self._render_h)
 
-    async def _measure_chrome(self) -> None:
-        """Measure the top chrome height once (window outer height - page viewport
-        height) so the capture can crop it. Also records the window id for resize.
-        Coordinates for injected input add this crop back (see display.crop_y)."""
-        if self._browser_cdp is None or self._active_target_id is None or self._display is None:
+    async def _measure_window(self) -> None:
+        """Record the browser window id (for resize). The live view streams the whole
+        Chromium window -- the user drives its native chrome (tabs, new-tab, URL bar) via
+        XTest -- so there is nothing to crop."""
+        if self._browser_cdp is None or self._active_target_id is None:
             return
         try:
             win = await self._browser_cdp.send("Browser.getWindowForTarget", {"targetId": self._active_target_id})
             self._window_id = win["windowId"]
-            outer_h = int(win["bounds"]["height"])
         except _BROWSER_ERRORS as e:
             logger.debug("getWindowForTarget ignored ({})", e)
-            return
-        viewport_h = self._render_h
-        if self._active_cdp is not None:
-            try:
-                metrics = await self._active_cdp.send("Page.getLayoutMetrics")
-                viewport_h = int(metrics.get("cssVisualViewport", metrics.get("visualViewport", {})).get("clientHeight", 0)) or viewport_h
-            except _BROWSER_ERRORS as e:
-                logger.debug("getLayoutMetrics ignored ({})", e)
-        self._chrome_crop = max(0, outer_h - viewport_h)
-        self._display.crop_y = self._chrome_crop
-        logger.info("browser {} chrome crop = {}px (window {} , viewport {})",
-                    self.browser_id, self._chrome_crop, outer_h, viewport_h)
 
     async def _abort_start_if_torn_down(self) -> bool:
         """If close() or a crash landed while ``start`` was suspended at an await, abort the
@@ -1111,9 +1095,8 @@ class LiveBrowser(MutableModel):
         so an agent's cached ``state`` indices never shift mid-task. Framebuffer-bounded:
         the window is render height + cropped chrome, kept within the fixed Xvfb screen."""
         raw_w, raw_h = int(message.get("width", 0)), int(message.get("height", 0))
-        w = max(_RENDER_MIN_WIDTH, min(_RENDER_MAX_WIDTH, raw_w))
-        max_h = min(_RENDER_MAX_HEIGHT, SCREEN_H - self._chrome_crop)
-        h = max(_RENDER_MIN_HEIGHT, min(max_h, raw_h))
+        w = max(_RENDER_MIN_WIDTH, min(min(_RENDER_MAX_WIDTH, SCREEN_W), raw_w))
+        h = max(_RENDER_MIN_HEIGHT, min(min(_RENDER_MAX_HEIGHT, SCREEN_H), raw_h))
         if (w, h) == (self._render_w, self._render_h):
             return
         logger.info("browser {} resize {}x{} -> {}x{} (was {}x{})",
@@ -1128,7 +1111,7 @@ class LiveBrowser(MutableModel):
             try:
                 await self._browser_cdp.send("Browser.setWindowBounds", {
                     "windowId": self._window_id,
-                    "bounds": {"left": 0, "top": 0, "width": self._render_w, "height": self._render_h + self._chrome_crop},
+                    "bounds": {"left": 0, "top": 0, "width": self._render_w, "height": self._render_h},
                 })
             except _BROWSER_ERRORS as e:
                 logger.debug("setWindowBounds ignored ({})", e)
