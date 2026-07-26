@@ -16,7 +16,19 @@ provision_skip_if_done setup_system
 # Pin all apt operations to the committed archive snapshot timestamp before the
 # first apt-get below. Idempotent: the docker build already ran this (the image
 # carries the pinned sources); lima/modal VMs get their sources pinned here.
-bash "$(dirname "$0")/write_apt_sources.sh"
+# Baked into a docker image this script lives at
+# /usr/local/bin/default-workspace-template-setup-system beside the RENAMED
+# sources script (and the timestamp baked at /etc/...); run straight from the
+# repo (Lima/Modal) the sibling write_apt_sources.sh reads the committed
+# .mngr/apt-snapshot-timestamp itself. Mirrors the secret-scanner dual-name
+# resolution at the bottom of this script.
+sources_dir="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$sources_dir/write_apt_sources.sh" ]; then
+    bash "$sources_dir/write_apt_sources.sh"
+else
+    bash "$sources_dir/default-workspace-template-write-apt-sources" \
+        "$(cat /etc/default-workspace-template-apt-snapshot-timestamp)"
+fi
 
 # Pinned versions (single source of truth; override via env if needed). Keep
 # CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
