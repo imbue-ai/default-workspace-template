@@ -56,7 +56,10 @@ def test_prevent_broad_exception_catch() -> None:
     # boundary so any failure is surfaced to the user's chat instead of being
     # swallowed as an unretrieved-task exception. The error is re-logged and
     # reported, not silenced.
-    rc.check_broad_exception_catch(_DIR, snapshot(1))
+    # +1 for scripts/selfcheck.py's per-section guard: a diagnostic that runs several
+    # independent probes must still report the ones that work when one throws unexpectedly
+    # (the error type is printed, not silenced). A dev tool, not production code.
+    rc.check_broad_exception_catch(_DIR, snapshot(2))
 
 
 def test_prevent_builtin_exception_raises() -> None:
