@@ -101,16 +101,23 @@ class Capture:
                 self._mode = _MODE_H264 if want_h264 else _MODE_JPEG
                 if not self._start_locked():
                     return None
-            elif self._cap is not None:
-                if want_h264 != (self._mode == _MODE_H264):
-                    logger.warning(
-                        "browser stream {}: subscriber wants {} but encoder is running {} "
-                        "(one mode per capture); this viewer may not decode",
-                        self._display_name, "h264" if want_h264 else "jpeg",
-                        "h264" if self._mode == _MODE_H264 else "jpeg",
-                    )
-                self._cap.request_idr_frame()  # keyframe so the newcomer starts clean
+            elif self._cap is not None and want_h264 != (self._mode == _MODE_H264):
+                logger.warning(
+                    "browser stream {}: subscriber wants {} but encoder is running {} "
+                    "(one mode per capture); this viewer may not decode",
+                    self._display_name, "h264" if want_h264 else "jpeg",
+                    "h264" if self._mode == _MODE_H264 else "jpeg",
+                )
             self._subscribers.append(client_queue)
+            # Force a keyframe NOW that this subscriber is REGISTERED, so it gets a full
+            # frame at once. Critical for a browser sitting on an already-loaded STATIC page
+            # (common: the home page finished loading during init, before any viewer): the
+            # encoder is damage-driven, so with no repaint it would emit nothing, and the
+            # encoder's own start-time initial frame fired into an empty subscriber list
+            # (before this append) and was lost -- leaving the viewer BLACK until the next
+            # damage (a mouse move, a nav). Requesting an IDR here paints immediately.
+            if self._cap is not None:
+                self._cap.request_idr_frame()
         return client_queue
 
     def remove_subscriber(self, client_queue: "queue.Queue[bytes | None]") -> None:

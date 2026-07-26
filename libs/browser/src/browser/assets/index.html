@@ -257,7 +257,11 @@
       placeholder.style.display = "none";  // the full overlay covers the pane instead
     } else if (next === "running") {
       initOverlay.classList.remove("show");
-      placeholder.style.display = "none";
+      // Running means Chromium is up, but the first video frame may not have decoded yet
+      // (encoder spin-up / first keyframe). Keep a light "Loading page…" note instead of a
+      // bare black canvas; drainFrames() clears it the instant the first frame paints.
+      if (hasFrame) placeholder.style.display = "none";
+      else { placeholder.textContent = "Loading page…"; placeholder.style.display = "block"; }
     }
   }
 
