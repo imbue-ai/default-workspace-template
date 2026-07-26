@@ -13,10 +13,27 @@
   /* A small persistent status bar shown whenever the human can drive the browser
      (resting/AI-untouched OR explicitly taken). Always-on "You have control"
      indicator; the hand-back button appears only when an agent is queued for it. */
-  #returnbar { display: none; align-items: center; gap: 10px; padding: 6px 10px; background: #2a2a2a; border-bottom: 1px solid #333; font-size: 12px; color: #4ec9b0; }
+  #returnbar { display: none; align-items: center; gap: 8px; padding: 6px 10px; background: #2a2a2a; border-bottom: 1px solid #333; font-size: 12px; color: #4ec9b0; }
   #returnbar.show { display: flex; }
   #returnbar.handoff { background: #5a3a1a; color: #ffcc66; }
-  #returnbtn { padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+  /* The status text flexes and ellipsis-truncates so a long "agents waiting: …" line never
+     pushes the buttons off the bar; the buttons keep their size and stay on the right. */
+  #returnqueue { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #returnbar button { flex: none; padding: 5px 11px; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+  #returnbtn { background: #0e639c; }
+  #losefocusbtn { background: #3a7a5c; }
+  #tipsbtn { background: #444; }
+  .hidden { display: none !important; }
+
+  /* Tips modal: a centered card over the pane, opened from the bar's "View tips". */
+  #tipsmodal { display: none; position: absolute; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.6); align-items: center; justify-content: center; padding: 24px; }
+  #tipsmodal.show { display: flex; }
+  #tipscard { background: #252526; border: 1px solid #3a3a3a; border-radius: 8px; max-width: 560px; max-height: 82%; overflow: auto; padding: 20px 22px; color: #ddd; font-size: 13px; line-height: 1.5; }
+  #tipscard h2 { margin: 0 0 12px; font-size: 16px; color: #fff; }
+  #tipscard ul { margin: 0; padding-left: 18px; }
+  #tipscard li { margin: 9px 0; }
+  #tipscard b { color: #4ec9b0; }
+  #tipsclose { margin-top: 18px; padding: 6px 14px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
 
   #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
   /* Fill the pane. The backing store tracks the pane size up to the render cap, so this is
@@ -69,8 +86,6 @@
      the exit. Both driven by .focused on #stage; z-index below the lifecycle overlays
      so a dead/starting pane never shows the chip. */
   #stage.focused { box-shadow: inset 0 0 0 2px #0e9c6b, inset 0 0 10px rgba(14, 156, 107, 0.5); }
-  #focuschip { position: absolute; top: 8px; left: 8px; z-index: 5; display: none; background: rgba(14, 156, 107, 0.92); color: #fff; padding: 4px 10px; border-radius: 999px; font-size: 12px; pointer-events: none; }
-  #stage.focused #focuschip { display: block; }
   /* Immersive-tier entry: fullscreen + (Chromium) keyboard lock for reserved combos. */
   #fsbtn { position: absolute; top: 8px; right: 8px; z-index: 5; padding: 4px 10px; background: rgba(51, 51, 51, 0.85); border: 1px solid #555; color: #ddd; border-radius: 4px; cursor: pointer; font-size: 12px; }
   #fsbtn:hover { background: rgba(61, 61, 61, 0.95); }
@@ -80,12 +95,13 @@
 <div id="app">
   <div id="returnbar">
     <span id="returnqueue">You have control.</span>
+    <button id="losefocusbtn" class="hidden">Lose browser focus</button>
+    <button id="tipsbtn">View tips</button>
     <button id="returnbtn">Return control to agents</button>
   </div>
   <div id="stage">
     <canvas id="screen" tabindex="0"></canvas>
     <div id="placeholder">Starting browser…</div>
-    <div id="focuschip">Keys go to the browser — Esc to release</div>
     <button id="fsbtn" title="Fullscreen. Capturing reserved keys (Ctrl+T/W/N/Tab) needs Chromium.">⛶ Fullscreen</button>
     <div id="cliptoast"></div>
     <div id="overlay">
@@ -100,6 +116,19 @@
     <div id="initoverlay">
       <div class="spinner"></div>
       <div class="msg">Starting browser…</div>
+    </div>
+  </div>
+  <div id="tipsmodal">
+    <div id="tipscard">
+      <h2>Using this browser</h2>
+      <ul>
+        <li><b>Use it like a normal browser.</b> Click, type, scroll, copy and paste text and images, manage tabs, and watch videos (with sound) — it all works.</li>
+        <li><b>You share each browser with agents, through a queue.</b> Only one of you drives at a time; whoever else wants it waits in line. Click “Return control to agents” to hand it back when you're done.</li>
+        <li><b>An agent may hand a browser to you</b> for something it can't do itself — a captcha or a login check. Control comes to you and this bar turns amber; finish the step, then return control.</li>
+        <li><b>Logins are saved.</b> Each browser keeps its own cookies and sign-ins, and they persist across restarts — so you stay logged in.</li>
+        <li><b>Keyboard shortcuts mostly pass through</b> to the browser (Ctrl+A, Ctrl+F, Ctrl+L, Ctrl+R, copy/paste, …). Ctrl+T, Ctrl+W, Ctrl+N and Ctrl+Tab control your OWN browser's tabs and can't be captured here — use Fullscreen to send those too. On a Mac, use Ctrl (not Cmd) for these.</li>
+      </ul>
+      <button id="tipsclose">Got it</button>
     </div>
   </div>
 </div>
@@ -121,10 +150,18 @@
   const returnBar = document.getElementById("returnbar");
   const returnBtn = document.getElementById("returnbtn");
   const returnQueue = document.getElementById("returnqueue");
+  const loseFocusBtn = document.getElementById("losefocusbtn");
+  const tipsBtn = document.getElementById("tipsbtn");
+  const tipsModal = document.getElementById("tipsmodal");
+  const tipsCloseBtn = document.getElementById("tipsclose");
 
   // Latest control state from the server's {type:"control"} broadcast. The
   // human can only drive the page while owner === "human".
   let controlOwner = "human";
+  // Control-bar text is composed from control state (barBaseText) plus the live focus
+  // state, so both a control broadcast and a focus change re-render it (see renderBar).
+  let barBaseText = "You have control.";
+  let barCanDrive = true;
   let castWs = null;
   let hasFrame = false;
   let lastMove = 0;
@@ -227,16 +264,18 @@
     if (!agentDriving) {
       const waiting = Array.isArray(state.waiting) ? state.waiting : [];
       if (humanPinned && handoffReason) {
-        returnQueue.textContent = (handoffAgent || "An agent") + " needs your help: " + handoffReason +
+        barBaseText = (handoffAgent || "An agent") + " needs your help: " + handoffReason +
           ". Do it in this pane, then click “Return to agent” to hand control back.";
         returnBtn.style.display = "";
       } else {
-        returnQueue.textContent = waiting.length
+        barBaseText = waiting.length
           ? "You have control. Agents waiting to use this browser: " + waiting.join(", ")
           : "You have control.";
         returnBtn.style.display = waiting.length ? "" : "none";
       }
     }
+    barCanDrive = !agentDriving;
+    renderBar();
     returnBar.classList.toggle("show", !agentDriving);
     returnBar.classList.toggle("handoff", !agentDriving && !!handoffReason);
   }
@@ -643,33 +682,38 @@
     catch (_) { /* not controlling / network: ignore */ }
     finally { done(); }
   }
-  // Read an image straight from the clipboard via the async API. Needed because when the
-  // focused element is our non-editable canvas, Chrome's paste event frequently exposes
-  // only text in clipboardData -- the IMAGE is dropped (there's nothing editable to paste
-  // into), so it never reaches the remote. The async read returns the real clipboard.
+  // Image paste is driven off the Ctrl/Cmd+V GESTURE (see the key handler), not just the
+  // paste event: when a non-editable canvas is focused, Chrome's paste event usually drops
+  // the image from clipboardData (nothing editable to receive it), so it never reaches the
+  // remote. navigator.clipboard.read() returns the real clipboard (the iframe is granted
+  // clipboard-read). Both paths can fire for one paste, so dedup image sends by time.
+  let lastImageAt = 0;
+  function sendImagePaste(blob, mime) {
+    const now = performance.now();
+    if (now - lastImageAt < 800) return;  // the paste event AND the keydown may both fire
+    lastImageAt = now;
+    sendPaste(blob, mime);
+  }
   async function pasteImageFromClipboard() {
-    if (!navigator.clipboard || !navigator.clipboard.read) return false;
+    if (!navigator.clipboard || !navigator.clipboard.read) return;
     try {
       for (const it of await navigator.clipboard.read()) {
         const mime = it.types.find((t) => t.indexOf("image/") === 0);
-        if (mime) { sendPaste(await it.getType(mime), mime); return true; }
+        if (mime) { sendImagePaste(await it.getType(mime), mime); return; }
       }
-    } catch (_) { /* denied / empty: fall through */ }
-    return false;
+    } catch (_) { /* denied / empty: nothing to paste */ }
   }
-  document.addEventListener("paste", async (e) => {
+  document.addEventListener("paste", (e) => {
     if (!clipActive()) return;
     e.preventDefault();
     for (const it of e.clipboardData.items) {
       if (it.type.indexOf("image/") === 0) {
         const blob = it.getAsFile();
-        if (blob) { sendPaste(blob, it.type); return; }
+        if (blob) { sendImagePaste(blob, it.type); return; }
       }
     }
     const text = e.clipboardData.getData("text/plain");
-    if (text) { sendPaste(new Blob([text], { type: "text/plain" }), "text/plain"); return; }
-    // No image AND no text in the event -> the event dropped an image; go read it directly.
-    await pasteImageFromClipboard();
+    if (text) sendPaste(new Blob([text], { type: "text/plain" }), "text/plain");
   });
 
   // COPY/CUT: pull the remote browser's selection and write it to the user's real
@@ -707,6 +751,9 @@
     if (clipCombo
         || (e.key === "Insert" && (e.ctrlKey || e.shiftKey))
         || (e.key === "Delete" && e.shiftKey)) {
+      // Ctrl/Cmd+V: also read the clipboard for an image on the gesture itself -- the paste
+      // event usually drops images when our non-editable canvas is focused (deduped).
+      if (type === "keyDown" && kl === "v" && clipActive()) pasteImageFromClipboard();
       return;
     }
     // Browser-reserved combos (Ctrl/Cmd+T/W/N, Ctrl/Cmd+Tab, Cmd+Q) can't be intercepted
@@ -724,13 +771,9 @@
       windowsVirtualKeyCode: e.keyCode, text: isChar ? e.key : undefined,
       autoRepeat: e.repeat, modifiers: modifiers(e),
     }});
-    // A bare Escape releases focus -- but on keyUP, AFTER the keyup above is forwarded,
-    // so the remote sees a complete down+up. Blurring on keyDown dropped the keyup
-    // (target became body once unfocused), leaving Esc HELD and autorepeating on the
-    // remote forever (XTest holds are sticky).
-    if (type === "keyUp" && e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-      canvas.blur();
-    }
+    // Escape is NOT special-cased -- it passes straight through to the browser (closing a
+    // dialog, exiting a page's fullscreen video, etc.). Losing keyboard focus is an explicit
+    // action: the "Stop sending keys" button, clicking outside, or the browser going away.
   }
   // Listen on the canvas (focused by a click), so host/browser shortcuts still
   // work when the browser pane isn't focused.
@@ -739,11 +782,24 @@
 
   // --- focus-capture (focused tier) -------------------------------------------
   // Clicking into the canvas grabs the keyboard: window-level listeners forward every
-  // (non-reserved) key to the remote, and #stage.focused shows the glow + chip. Releasing
-  // (click outside, Esc) funnels through the canvas blur.
-  function setFocus(on) { focused = on; stage.classList.toggle("focused", on); }
+  // (non-reserved) key to the remote, and #stage.focused shows the glow. Releasing is an
+  // explicit action -- clicking outside, or the "Lose browser focus" button -- funnelling
+  // through the canvas blur; the browser going away drops focus on its own.
+  function setFocus(on) { focused = on; stage.classList.toggle("focused", on); renderBar(); }
   canvas.addEventListener("focus", () => setFocus(true));
   canvas.addEventListener("blur", () => setFocus(false));
+
+  // Compose the control-bar text + focus controls. Only while the human can drive AND the
+  // canvas is focused are keys actually sent, so that's when the note + "lose focus" show.
+  function renderBar() {
+    const sending = focused && barCanDrive;
+    returnQueue.textContent = barBaseText + (sending ? " Keys are being sent to the browser." : "");
+    loseFocusBtn.classList.toggle("hidden", !sending);
+  }
+  loseFocusBtn.addEventListener("click", () => canvas.blur());
+  tipsBtn.addEventListener("click", () => tipsModal.classList.add("show"));
+  tipsCloseBtn.addEventListener("click", () => tipsModal.classList.remove("show"));
+  tipsModal.addEventListener("click", (e) => { if (e.target === tipsModal) tipsModal.classList.remove("show"); });
   function windowKey(type, e) {
     if (!focused) return;
     if (e.target === canvas) return;                 // the canvas listener already handled it
