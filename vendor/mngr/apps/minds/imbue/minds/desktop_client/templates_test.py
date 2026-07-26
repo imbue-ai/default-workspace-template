@@ -11,8 +11,11 @@ from imbue.minds.desktop_client.agent_creator import AgentCreationInfo
 from imbue.minds.desktop_client.agent_creator import AgentCreationStatus
 from imbue.minds.desktop_client.templates import CATALOG
 from imbue.minds.desktop_client.templates import DEFAULT_EXPECTED_CREATION_DURATION_SECONDS
+from imbue.minds.desktop_client.templates import FALLBACK_BRANCH
 from imbue.minds.desktop_client.templates import expected_creation_duration_seconds
 from imbue.minds.desktop_client.templates import make_unique_host_name
+from imbue.minds.desktop_client.templates import render_account_plan_section
+from imbue.minds.desktop_client.templates import render_accounts_page
 from imbue.minds.desktop_client.templates import render_auth_error_page
 from imbue.minds.desktop_client.templates import render_chrome_page
 from imbue.minds.desktop_client.templates import render_create_form
@@ -27,6 +30,7 @@ from imbue.minds.desktop_client.templates import render_overlay_host_page
 from imbue.minds.desktop_client.templates import render_recovery_page
 from imbue.minds.desktop_client.templates import render_sharing_editor
 from imbue.minds.desktop_client.templates import render_sidebar_page
+from imbue.minds.desktop_client.templates import render_workspace_backup_history
 from imbue.minds.desktop_client.templates import render_workspace_settings
 from imbue.minds.desktop_client.templates import resolve_create_host_name
 from imbue.minds.desktop_client.workspace_color import DEFAULT_WORKSPACE_COLOR
@@ -89,6 +93,105 @@ def test_render_workspace_settings_data_agent_id_interpolates() -> None:
         servers=(),
     )
     assert f'data-agent-id="{_AGENT_A}"' in html
+    assert "{{" not in html
+
+
+def test_render_workspace_settings_view_all_links_to_backup_history_page() -> None:
+    # workspace_backups.js toggles the "View all N backups" link and count.
+    html = render_workspace_settings(
+        agent_id=str(_AGENT_A),
+        ws_name="ws",
+        current_account=None,
+        accounts=(),
+        servers=(),
+    )
+    assert f"/workspace/{_AGENT_A}/backups" in html
+
+
+def test_render_workspace_settings_carries_the_restore_dialog() -> None:
+    # The restore confirmation dialog ships in the page markup; the ids are
+    # load-bearing (workspace_backups.js fills the time and drives the flow).
+    html = render_workspace_settings(
+        agent_id=str(_AGENT_A),
+        ws_name="ws",
+        current_account=None,
+        accounts=(),
+        servers=(),
+    )
+    assert 'id="restore-dialog"' in html
+    assert 'id="restore-dialog-time"' in html
+    assert 'id="restore-cancel-btn"' in html
+    assert 'id="restore-confirm-btn"' in html
+    # The chained-update choice ships in the dialog, checked by default.
+    assert 'id="restore-update-after-checkbox"' in html
+    assert "checked" in html
+
+
+def test_render_workspace_settings_puts_the_operation_strip_below_the_backups_table() -> None:
+    # Every backup operation (restore, update, storage change) reports through
+    # one shared strip placed right below the Recent backups table where
+    # restores are launched, not inside the "Fix backup problems" section.
+    html = render_workspace_settings(
+        agent_id=str(_AGENT_A),
+        ws_name="ws",
+        current_account=None,
+        accounts=(),
+        servers=(),
+    )
+    for element_id in (
+        "backup-operation-strip",
+        "backup-op-spinner",
+        "backup-cancel-btn",
+        "backup-stop-chats-btn",
+        "backup-skip-safety-btn",
+        "backup-force-restore-btn",
+        "backup-op-progress",
+        "backup-op-details-toggle",
+        "backup-op-log",
+        "backup-error",
+        "backup-warning",
+        "backup-success",
+        "backup-cancelled",
+    ):
+        assert f'id="{element_id}"' in html
+    assert html.index('id="backup-history-card"') < html.index('id="backup-operation-strip"')
+    assert html.index('id="backup-operation-strip"') < html.index('id="backup-configure"')
+
+
+def test_render_workspace_backup_history_page_shell() -> None:
+    # The page is a shell filled client-side: it must carry the agent id for
+    # workspace_backup_history.js, load that script, and link back to settings.
+    # Restores run in place on this page, so it also ships the shared restore
+    # dialog and tracked-operation strip (the same RestoreDialog and
+    # BackupOperationStrip components as the settings page) plus the shared
+    # driver script that wires them.
+    html = render_workspace_backup_history(agent_id=str(_AGENT_A), ws_name="my-workspace")
+    assert f'data-agent-id="{_AGENT_A}"' in html
+    assert "workspace_backup_history.js" in html
+    assert "backup_operation_ui.js" in html
+    for element_id in (
+        "restore-dialog",
+        "restore-dialog-time",
+        "restore-cancel-btn",
+        "restore-confirm-btn",
+        "restore-update-after-checkbox",
+        "backup-operation-strip",
+        "backup-op-spinner",
+        "backup-op-progress",
+        "backup-op-details-toggle",
+        "backup-op-log",
+        "backup-error",
+        "backup-warning",
+        "backup-success",
+        "backup-cancelled",
+        "backup-cancel-btn",
+        "backup-stop-chats-btn",
+        "backup-skip-safety-btn",
+        "backup-force-restore-btn",
+    ):
+        assert f'id="{element_id}"' in html
+    assert f"/workspace/{_AGENT_A}/settings" in html
+    assert "my-workspace" in html
     assert "{{" not in html
 
 
@@ -195,8 +298,36 @@ def test_render_landing_page_discovering_shows_auto_refresh() -> None:
     html = render_landing_page(accessible_agent_ids=(), is_discovering=True)
     assert "Discovering agents" in html
     assert "reload" in html
+    # Discovery may never surface the remembered workspaces (e.g. stale
+    # last-good entries), so the discovering state must not be a dead end:
+    # it always offers the create affordance.
+    assert 'href="/create"' in html
     assert "No workspaces yet" not in html
     assert "/goto/" not in html
+
+
+def test_render_landing_page_signed_out_launcher_signs_in_back_to_home() -> None:
+    # Signed out (no account email): the bottom-left account launcher reads
+    # "Log in", and (the Landing page being a trusted local page on the chrome
+    # surface) it opens the sign-in modal via the shell bridge with
+    # ``returnTo: '/'`` so a successful sign-in lands back on the home screen
+    # (the server's return_to default is the create screen), leading with the
+    # sign-in tab to match the launcher's label.
+    html = render_landing_page(accessible_agent_ids=())
+    assert 'id="landing-minds-settings"' in html
+    assert 'id="landing-account"' in html
+    assert "Log in" in html
+    assert "window.minds.openSigninModal('/', 'signin')" in html
+
+
+def test_render_landing_page_signed_in_launcher_shows_email_and_extra_count() -> None:
+    html = render_landing_page(
+        accessible_agent_ids=(),
+        account_email="alice@example.com",
+        extra_account_count=2,
+    )
+    assert "alice@example.com" in html
+    assert "(+2)" in html
 
 
 def test_render_login_redirect_page_contains_redirect_script() -> None:
@@ -235,6 +366,28 @@ def test_render_create_form_has_default_values() -> None:
     # view); the compute provider select is present.
     assert "default-workspace-template" in html
     assert "launch_mode" in html
+
+
+def test_render_create_form_branch_default_pairs_with_default_repo() -> None:
+    # With no explicit repository the branch input shows the operator/env
+    # default (FALLBACK_BRANCH absent any env override).
+    html = render_create_form()
+    assert f'value="{FALLBACK_BRANCH}"' in html
+
+
+def test_render_create_form_explicit_repo_keeps_branch_blank() -> None:
+    # An explicitly-supplied repository (e.g. an inspiration deeplink's
+    # git_url) must NOT inherit the default template's branch: the pinned
+    # minds tag is meaningless on another repo, and a blank branch means
+    # "the repo's latest version" at submit time (resolve_template_version).
+    html = render_create_form(git_url="https://github.com/acme/inspiration")
+    assert "https://github.com/acme/inspiration" in html
+    assert FALLBACK_BRANCH not in html
+
+
+def test_render_create_form_explicit_repo_keeps_explicit_branch() -> None:
+    html = render_create_form(git_url="https://github.com/acme/inspiration", branch="feature-x")
+    assert 'value="feature-x"' in html
 
 
 def test_render_create_form_has_optional_name_field() -> None:
@@ -280,15 +433,16 @@ def test_render_create_form_explicit_page_omits_self_heal_sse() -> None:
     assert "workspaceNowExists" not in html
 
 
-def test_render_create_form_opens_signin_modal_via_overlay_relay() -> None:
+def test_render_create_form_opens_signin_modal_via_overlay_bridge() -> None:
     # Choosing Imbue Cloud while signed out opens the sign-in modal in the
     # desktop client's shared overlay layer (so it covers the title bar), not an
     # in-page dialog. The create page therefore no longer embeds the auth form
-    # or loads auth.js itself; it asks the Electron main process to open the
-    # /auth/signin-modal page via an allowlisted postMessage relay (falling back
-    # to navigating there directly in the browser).
+    # or loads auth.js itself; being a trusted local page on the chrome surface,
+    # it asks the Electron main process to open the /auth/signin-modal page via
+    # the window.minds shell bridge (falling back to navigating there directly in
+    # the browser).
     html = render_create_form(accounts=[])
-    assert "minds:open-signin-modal" in html
+    assert "window.minds.openSigninModal()" in html
     assert "/auth/signin-modal" in html
     # The auth form + its script now live in the overlay page, not here.
     assert 'id="signin-modal"' not in html
@@ -321,7 +475,14 @@ def test_render_create_form_prefills_values() -> None:
 
 def test_render_create_form_contains_all_launch_modes() -> None:
     html = render_create_form()
+    # GCP / AZURE are bring-your-own-key-account-only modes: they are reachable
+    # solely through configured cloud-account options (``BYOK:<block>``), never
+    # rendered as ambient compute options.
+    byok_only_modes = {LaunchMode.AWS, LaunchMode.GCP, LaunchMode.AZURE}
     for mode in LaunchMode:
+        if mode in byok_only_modes:
+            assert f'<option value="{mode.value}"' not in html
+            continue
         # Assert on the option's ``value=`` attribute (the exact enum value),
         # not the visible text: Modal renders a friendly label instead of the
         # lowercased value (it shows "Modal (1-day ephemeral)").
@@ -644,25 +805,69 @@ def test_render_login_page_shows_prompt() -> None:
 def test_render_chrome_page_contains_titlebar() -> None:
     html = render_chrome_page()
     assert "minds-titlebar" in html
-    assert "sidebar-toggle" in html
     assert "home-btn" in html
     assert "back-btn" in html
     assert "content-frame" in html
+    # The home button reads "(icon) Minds"; there is no hamburger menu, no
+    # forward arrow, and no centered page title.
+    assert ">Minds</span>" in html
+    assert "sidebar-toggle" not in html
+    assert "forward-btn" not in html
+    assert 'id="page-title"' not in html
 
 
-def test_render_chrome_page_titlebar_centers_title_with_1_2_1_sections() -> None:
-    # The titlebar is three flex sections sized 1 / 2 / 1 (left controls |
-    # title | right controls) so the workspace title sits in the window's exact
-    # horizontal center regardless of how wide each side's controls are. The
-    # title's section grows at flex-[2] and centers its content; it is flanked
-    # by exactly two flex-1 sections (left + right). The center must NOT be a
-    # lone flex-1 -- that centered the title within the *leftover* space, so it
-    # drifted off-center whenever the two sides differed in width.
+def test_render_chrome_page_contains_workspace_crumb_and_icon_tabs() -> None:
+    # The breadcrumb block ("/ workspace-name (chevron)") and the two
+    # workspace icon-tabs render hidden; chrome.js shows them on
+    # workspace-scoped screens. The switcher button anchors the workspace
+    # menu beneath itself.
+    html = render_chrome_page()
+    assert 'id="ws-crumb"' in html
+    assert 'id="workspace-switcher-btn"' in html
+    assert 'id="ws-tab-workspace"' in html
+    assert 'id="ws-tab-settings"' in html
+    # The Connections icon-tab was removed; pending permission requests are
+    # served by the titlebar's inbox popup instead.
+    assert 'id="ws-tab-connections"' not in html
+    assert 'id="page-crumb"' in html
+    # Visibility is driven through the native ``hidden`` attribute (the blocks
+    # carry flex display classes that would beat a ``hidden`` class).
+    assert 'id="ws-crumb" class="flex items-center min-w-0" hidden' in html
+
+
+def test_render_chrome_page_seeds_workspace_crumb_server_side() -> None:
+    # The desktop shell passes the workspace being loaded (?agent=... resolved
+    # to a name by the route) so the wrapper's first paint already shows the
+    # workspace breadcrumb with the Workspace tab active -- no bare "Minds" bar
+    # while the content view loads. Without a crumb the block renders hidden
+    # exactly as before.
+    html = render_chrome_page(crumb_workspace_name="my-mind", crumb_agent_id="agent-abc123")
+    assert 'id="ws-crumb" class="flex items-center min-w-0">' in html
+    assert 'data-agent-id="agent-abc123"' in html
+    assert ">my-mind</span>" in html
+    assert 'id="ws-tab-workspace"' in html and "bg-fill-active" in html
+    bare = render_chrome_page()
+    assert 'id="ws-crumb" class="flex items-center min-w-0" hidden' in bare
+
+
+def test_render_chrome_page_contextual_back_button_starts_hidden() -> None:
+    # The back arrow is contextual: hidden at rest, shown by chrome.js only on
+    # pages that opt in (e.g. the create form). There is no forward arrow.
+    html = render_chrome_page()
+    back_open = html.index('id="back-btn"')
+    back_tag = html[html.rindex("<button", 0, back_open) : html.index(">", back_open)]
+    assert " hidden" in back_tag
+
+
+def test_render_chrome_page_titlebar_is_left_cluster_plus_right_cluster() -> None:
+    # The titlebar is a growing left cluster (breadcrumb + icon-tabs) and a
+    # shrink-0 right cluster (bug report + non-mac window controls); there is
+    # no centered title section.
     html = render_chrome_page()
     titlebar = html[html.index('id="minds-titlebar"') : html.index('id="sidebar-backdrop"')]
-    assert "flex-[2] flex items-center justify-center" in titlebar
-    assert "flex-[2]" in titlebar[: titlebar.index('id="page-title"')]
-    assert titlebar.count("flex-1") == 2
+    assert titlebar.count("flex-1") == 1
+    assert "flex-[2]" not in titlebar
+    assert "justify-end shrink-0" in titlebar
 
 
 def test_render_chrome_page_titlebar_reserves_mac_traffic_lights_with_spacer() -> None:
@@ -679,19 +884,21 @@ def test_render_chrome_page_titlebar_reserves_mac_traffic_lights_with_spacer() -
     # The padding approach is the bug being fixed: it must not come back.
     assert "pl-[72px]" not in html_mac
     assert "pl-[72px]" not in html_other
-    # The spacer sits at the very start of the left section, ahead of the menu
-    # button (#sidebar-toggle), only on macOS.
-    left_section_mac = html_mac[: html_mac.index('id="sidebar-toggle"')]
+    # The spacer sits at the very start of the left section, ahead of the back
+    # button (#back-btn), only on macOS.
+    left_section_mac = html_mac[: html_mac.index('id="back-btn"')]
     assert 'class="w-[72px] shrink-0" aria-hidden="true"' in left_section_mac
     assert "w-[72px]" not in html_other
 
 
 def test_render_chrome_page_requests_badge_is_inline_count() -> None:
-    # The requests badge is the Badge count pill sat inline beside the messages
-    # icon (gap-[3px] row), not a dot overlapping the icon's corner: it carries
-    # the type-badge pill role and no absolute positioning (chrome.js fills the
-    # count text + toggles the native `hidden` attribute).
+    # The titlebar's inbox button (right cluster) carries the pending-request
+    # badge: the Badge count pill sat inline beside the inbox icon (gap-[3px]
+    # row), not a dot overlapping the icon's corner. It carries the type-badge
+    # pill role and no absolute positioning (chrome.js fills the count text +
+    # toggles the native `hidden` attribute from the global SSE requests count).
     html = render_chrome_page()
+    assert 'id="requests-toggle"' in html
     assert 'id="requests-badge"' in html
     assert "type-badge" in html
     assert "gap-[3px]" in html
@@ -729,24 +936,26 @@ def test_render_chrome_page_titlebar_background_follows_titlebar_bg_var() -> Non
     assert "var(--titlebar-bg" in html
 
 
-def test_render_chrome_page_page_title_uses_text_primary_token() -> None:
-    # The page title is a plain ``text-primary`` token; the ``.titlebar-surface``
-    # scope re-bases that token off --titlebar-bg, so the title flips
-    # black/white with the accent's lightness (in pure CSS).
+def test_render_chrome_page_crumbs_use_type_label_tokens() -> None:
+    # The breadcrumb text (workspace name / page name) uses plain type-label +
+    # text tokens; the ``.titlebar-surface`` scope re-bases those tokens off
+    # --titlebar-bg, so the crumbs flip black/white with the accent's
+    # lightness (in pure CSS).
     html = render_chrome_page()
-    assert 'id="page-title" class="text-primary' in html
+    assert 'id="workspace-switcher-name" class="type-label' in html
+    assert 'id="page-crumb-name" class="type-label text-primary' in html
 
 
-def test_render_chrome_page_account_button_lives_in_sidebar() -> None:
-    # The titlebar no longer carries an account button (``id="user-btn"``); the
-    # "Manage account(s)" / "Log in" entry now lives in the floating sidebar
-    # alongside the workspace list and the "New workspace" CTA. The titlebar
-    # accent color therefore doesn't have to repaint the account button -- the
-    # sidebar's own dark background is constant.
+def test_render_chrome_page_switcher_menu_has_only_new_workspace() -> None:
+    # The titlebar carries no account button (``id="user-btn"``). The floating
+    # switcher menu's bottom section was trimmed to just the "New workspace"
+    # CTA: the "Minds Settings" and "Manage account(s)" / "Log in" entries were
+    # removed (Minds Settings is still reachable from the home screen).
     html = render_chrome_page()
     assert 'id="user-btn"' not in html
-    assert 'id="sidebar-account"' in html
-    assert 'id="sidebar-account-label"' in html
+    assert 'id="sidebar-new-workspace"' in html
+    assert 'id="sidebar-settings"' not in html
+    assert 'id="sidebar-account"' not in html
 
 
 def test_render_chrome_page_content_iframe_uses_12px_rounded_corners() -> None:
@@ -792,10 +1001,13 @@ def test_edge_to_edge_surfaces_opt_out_of_scrollbar_gutter() -> None:
     css = _TOKENS_CSS_PATH.read_text()
     assert "html.no-scrollbar-gutter" in css
     opted_out = '<html lang="en" class="no-scrollbar-gutter">'
-    assert opted_out in render_chrome_page()
+    # The agent-content wrapper additionally carries the ``agent-surface`` mode
+    # class (its viewport-lock CSS is keyed off the html class so the swap
+    # engine's html-class adoption toggles it correctly across in-place swaps).
+    assert '<html lang="en" class="no-scrollbar-gutter agent-surface">' in render_chrome_page()
     assert opted_out in render_overlay_host_page()
     assert opted_out in render_sidebar_page()
-    assert opted_out in render_help_page(include_logs_setting=False, workspace_agent_id="")
+    assert opted_out in render_help_page(workspace_agent_id="")
     assert opted_out in render_inbox_page(cards=())
     # Normal scrolling content pages keep the reserved gutter so their layout
     # doesn't shift sideways when a classic scrollbar appears.
@@ -817,15 +1029,13 @@ def test_render_sidebar_page_contains_workspace_list() -> None:
     # breaks the click-outside-to-close behavior.
     assert 'id="sidebar-menu"' in html
     # SidebarBottom.jinja is rendered inside the floating menu in both
-    # Chrome.jinja (browser mode) and Sidebar.jinja (the sidebar page loaded
-    # into the shared modal WebContentsView in Electron). It carries the
-    # "New workspace" CTA, the "Settings" entry, and the "Manage account(s)" /
-    # "Log in" entry; the label is updated dynamically by sidebar.js from
-    # /auth/api/status.
+    # Chrome.jinja (browser mode) and Sidebar.jinja (the switcher page loaded
+    # into the shared modal WebContentsView in Electron). It now carries only
+    # the "New workspace" CTA; the "Minds Settings" and "Manage account(s)" /
+    # "Log in" entries were removed.
     assert 'id="sidebar-new-workspace"' in html
-    assert 'id="sidebar-settings"' in html
-    assert 'id="sidebar-account"' in html
-    assert 'id="sidebar-account-label"' in html
+    assert 'id="sidebar-settings"' not in html
+    assert 'id="sidebar-account"' not in html
 
 
 def test_render_sidebar_page_position_tracks_trigger_anchor() -> None:
@@ -853,11 +1063,12 @@ def test_render_sidebar_page_position_tracks_trigger_anchor() -> None:
     assert "top:36px" in html
 
     # Defaults (no caller args) anchor a 38px-tall element at the top-left,
-    # nudged 2px left (offset_x=-2 -> 0 + -2) and 2px below it
+    # nudged 24px left (offset_x=-24 -> 0 + -24) and 2px below it
     # (offset_y=2 -> 0 + 38 + 2) -- right shape for "open the sidebar from
-    # the first titlebar button" without any caller customization.
+    # the first titlebar button" without any caller customization. The -24
+    # lines a row's workspace-name label up under the breadcrumb's name text.
     html_default = render_sidebar_page()
-    assert "left:-2px" in html_default
+    assert "left:-24px" in html_default
     assert "top:40px" in html_default
 
 
@@ -878,10 +1089,9 @@ def test_render_recovery_page_includes_agent_id_and_return_to() -> None:
     assert "http://agent.localhost:8421/" in html
     # The versioned workspace surface the page's JS drives.
     assert "/api/v1/workspaces/" in html
-    # The two restart tiers the recovery page can dispatch (a ``scope`` body on
-    # the versioned restart route) plus the health probe it calls on load.
+    # The only restart the recovery page dispatches (a ``scope`` body on the
+    # versioned restart route) plus the health probe it calls on load.
     assert "/restart" in html
-    assert "scope: 'services'" in html
     assert "scope: 'host'" in html
     assert "/health" in html
     assert 'data-initial-status="stuck"' in html
@@ -895,6 +1105,43 @@ def test_render_recovery_page_restarting_status() -> None:
         initial_error="",
     )
     assert 'data-initial-status="restarting"' in html
+
+
+def test_render_recovery_page_restarting_copy_reflects_restart_flavor() -> None:
+    """The RESTARTING branch names a full manual bounce but stays neutral for a start-only dispatch.
+
+    A reload during an in-flight restart lands in the RESTARTING branch. A full
+    manual bounce (the right-click "Restart workspace", which POSTs the restart
+    and then navigates here fresh) is a known restart, so the page reads
+    "Restarting your workspace"; the page's own start-only entry dispatch may be
+    a no-op, so it stays on the neutral "Loading workspace" spinner. The offline
+    hint wins over both. Regression: the branch previously rendered the neutral
+    spinner for every non-offline restart, so a deliberate right-click restart
+    showed only "Loading workspace".
+    """
+    full_html = render_recovery_page(
+        agent_id=_AGENT_A,
+        return_to="",
+        initial_status="restarting",
+        initial_error="",
+        restart_is_start_only=False,
+    )
+    start_only_html = render_recovery_page(
+        agent_id=_AGENT_A,
+        return_to="",
+        initial_status="restarting",
+        initial_error="",
+        restart_is_start_only=True,
+    )
+    # The flavor rides to the client as a data attribute the branch reads.
+    assert 'data-restart-start-only="0"' in full_html
+    assert 'data-restart-start-only="1"' in start_only_html
+    # The RESTARTING branch selects the copy off the flavor, with the offline
+    # hint taking precedence over both.
+    entry = full_html[full_html.rfind("if (initialStatus === 'restarting')") :]
+    restarting_branch = entry[: entry.find("else if")]
+    assert "restartStartOnly ? renderLoading : renderRestarting" in restarting_branch
+    assert "hostOffline" in restarting_branch
 
 
 def test_render_recovery_page_carries_restart_failed_error() -> None:
@@ -978,26 +1225,121 @@ def test_render_recovery_page_script_branches_on_dispatch_tier() -> None:
     )
     assert "dispatch_tier" in html
     for tier in (
-        "'host_offline'",
-        "'interface_unresponsive'",
-        "'host_unresponsive'",
+        "'healthy'",
         "'backend_unreachable'",
         "'indeterminate'",
     ):
         assert tier in html, f"recovery page JS missing branch for {tier}"
+    # The interface_unresponsive tier (and its surgical in-place restart) is
+    # gone: the server never emits it. The concrete verdicts (host_offline,
+    # host_unresponsive, unknown tiers) share the catch-all consent-page
+    # branch -- tiers are display-only, so no per-verdict dispatch exists.
+    assert "interface_unresponsive" not in html
+    assert "scope: 'services'" not in html
     # The shared landing places for each branch.
     assert "renderUnresponsive" in html
     assert "renderBackendUnreachable" in html
     assert "renderReconnecting" in html
 
 
+def test_render_recovery_page_fresh_entry_dispatches_start_only_unconditionally() -> None:
+    """A fresh (stuck) entry dispatches the start-only restart immediately, with no probe gate.
+
+    The dispatch decision no longer consults any host-state knowledge: the
+    start-only restart is safe regardless of the host's state (``mngr start``
+    checks ground truth at commit time and no-ops on a live host), so the entry
+    fires it unconditionally and the classifier tiers stay display-only. The
+    in-flight copy claims only what is known (the offline copy off the hint,
+    else the neutral loading spinner -- never "Restarting your workspace"),
+    and applyHealth -- the display path -- must contain no dispatch at all.
+    """
+    html = render_recovery_page(
+        agent_id=_AGENT_A,
+        return_to="",
+        initial_status="stuck",
+        initial_error="",
+    )
+    # The fresh entry (the trailing else of the initialStatus dispatcher) POSTs
+    # the start-only restart directly.
+    entry = html[html.rfind("if (initialStatus === 'restarting')") :]
+    assert "postRestart(" in entry
+    assert "{ scope: 'host', start_only: true }" in entry
+    # No probe-gated dispatch remains: applyHealth renders, never restarts.
+    apply_start = html.find("function applyHealth(")
+    apply_block = html[apply_start : html.find("function ", apply_start + 1)]
+    assert "postRestart" not in apply_block
+    # postRestart renders a pending state while the dispatch is in flight;
+    # the default (renderRestarting) is reserved for the manual click, where
+    # the restart is known.
+    post_start = html.find("function postRestart(")
+    post_block = html[post_start : html.find("function ", post_start + 1)]
+    assert "(renderPending || renderRestarting)()" in post_block
+    # The entry dispatch claims only what it knows: the offline copy when the
+    # host reads offline, else the neutral loading spinner -- never
+    # "Restarting your workspace", since the start may be a no-op.
+    assert "hostOffline ? renderRestartingOffline : renderLoading" in entry
+    # A page load that lands on the RESTARTING tracker state picks its copy from
+    # the restart's flavor: a start-only dispatch stays on the neutral loading
+    # spinner, a full manual bounce names the restart. The offline hint wins over
+    # both (a cold boot reads as the offline revival copy).
+    restarting_entry = entry[: entry.find("else if")]
+    assert "restartStartOnly ? renderLoading : renderRestarting" in restarting_entry
+    assert "hostOffline" in restarting_entry
+
+
+def test_render_recovery_page_offline_copy_is_display_only() -> None:
+    """The offline restarting copy is selected by the render hint and upgraded by the poll header.
+
+    The entry dispatch picks ``renderRestartingOffline`` ("Bringing your
+    workspace back online") when the render-time ``data-host-offline`` hint
+    reads 1. When the hint was stale (a cold launch still replaying a
+    pre-stop RUNNING), the convergence poll's ``X-Workspace-Offline`` header
+    upgrades the copy one-way once discovery lands the STOPPED observation --
+    and only for the start-only entry dispatch, so a manual bounce's transient
+    STOPPED never rewrites the page as an offline revival. Display-only:
+    ``applyHealth`` stays dispatch-free regardless of the hint.
+    """
+    offline_html = render_recovery_page(
+        agent_id=_AGENT_A,
+        return_to="",
+        initial_status="stuck",
+        initial_error="",
+        initial_offline=True,
+    )
+    assert 'data-host-offline="1"' in offline_html
+    html = render_recovery_page(
+        agent_id=_AGENT_A,
+        return_to="",
+        initial_status="stuck",
+        initial_error="",
+    )
+    assert 'data-host-offline="0"' in html
+    # The offline render names the offline condition.
+    offline_start = html.find("function renderRestartingOffline")
+    offline_block = html[offline_start : html.find("function ", offline_start + 1)]
+    assert "was offline" in offline_block
+    # The entry dispatch picks the render off the hint...
+    entry = html[html.rfind("if (initialStatus === 'restarting')") :]
+    assert "hostOffline ? renderRestartingOffline : renderLoading" in entry
+    # ...and the convergence poll upgrades it off the per-tick header, gated on
+    # the dispatch having been the start-only one.
+    refresh_start = html.find("function scheduleRefresh")
+    refresh_block = html[refresh_start : html.find("function scheduleHealthyPoll")]
+    assert "maybeUpgradeToOfflineCopy(resp)" in refresh_block
+    upgrade_start = html.find("function maybeUpgradeToOfflineCopy")
+    upgrade_block = html[upgrade_start : html.find("function ", upgrade_start + 1)]
+    assert "X-Workspace-Offline" in upgrade_block
+    assert "startOnlyDispatched" in upgrade_block
+
+
 def test_render_recovery_page_indeterminate_renders_reconnecting_not_a_verdict() -> None:
     """The INDETERMINATE tier keeps checking instead of rendering a verdict.
 
-    When the probe timed out or the snapshot is stale, the page must not auto-
-    dispatch a restart or show a restart verdict -- it renders the live
-    "reconnecting" state and re-probes slowly. The branch must come before the
-    auto-dispatch tiers so no restart fires off non-evidence.
+    When the probe timed out or the snapshot is stale, the page must not show a
+    restart verdict off non-evidence -- it renders the live "reconnecting"
+    state and re-probes slowly. The branch must come before the catch-all
+    verdict branch so an indeterminate result keeps checking rather than
+    rendering the "Workspace unresponsive" verdict.
     """
     html = render_recovery_page(
         agent_id=_AGENT_A,
@@ -1009,12 +1351,8 @@ def test_render_recovery_page_indeterminate_renders_reconnecting_not_a_verdict()
     apply_block = html[apply_start : html.find("function ", apply_start + 1)]
     assert "'indeterminate'" in apply_block
     assert "renderReconnecting()" in apply_block
-    assert "scheduleIndeterminateReprobe(autoDispatch)" in apply_block
-    assert apply_block.find("'indeterminate'") < apply_block.find("postRestart")
-    # The indeterminate branch must precede the restart_failed (!autoDispatch)
-    # branch so an indeterminate result on that entry also keeps checking rather
-    # than rendering the "Workspace unresponsive" verdict off non-evidence.
-    assert apply_block.find("'indeterminate'") < apply_block.find("if (!autoDispatch)")
+    assert "scheduleIndeterminateReprobe()" in apply_block
+    assert apply_block.find("'indeterminate'") < apply_block.rfind("renderUnresponsive()")
     # renderReconnecting shows a spinner and no restart button, and arms the poll.
     recon_start = html.find("function renderReconnecting")
     recon_block = html[recon_start : html.find("function ", recon_start + 1)]
@@ -1029,9 +1367,9 @@ def test_render_recovery_page_dropped_probe_request_reconnects_not_a_verdict() -
     fetch when the machine suspends, so ``fetchHealth`` rejects. The old handler
     rendered the terminal "Workspace unresponsive" verdict and never re-probed,
     stranding the user even after the workspace came back. The rejection handler
-    must instead render the live "reconnecting" state and schedule a retry
-    (preserving autoDispatch), so the cheap liveness poll returns the user home
-    and the slow re-probe converges to a real tier.
+    must instead render the live "reconnecting" state and schedule a retry, so
+    the cheap liveness poll returns the user home and the slow re-probe
+    converges to a real tier.
     """
     html = render_recovery_page(
         agent_id=_AGENT_A,
@@ -1045,10 +1383,10 @@ def test_render_recovery_page_dropped_probe_request_reconnects_not_a_verdict() -
     probe_start = html.find("function runProbe(")
     probe_block = html[probe_start : html.find("hostBtn.addEventListener", probe_start)]
     # The success path still applies the health payload...
-    assert "applyHealth(data, autoDispatch)" in probe_block
+    assert "applyHealth(data)" in probe_block
     # ...and the rejection path reconnects + retries instead of a static verdict.
     assert "renderReconnecting()" in probe_block
-    assert "scheduleIndeterminateReprobe(autoDispatch)" in probe_block
+    assert "scheduleIndeterminateReprobe()" in probe_block
     assert "renderUnresponsive()" not in probe_block
 
 
@@ -1057,8 +1395,9 @@ def test_render_recovery_page_every_wait_state_arms_the_homeward_poll() -> None:
 
     This is the fix for the post-macOS-sleep "Workspace unresponsive" strand: a
     workspace that comes back on its own must return the user home without any
-    action. Every terminal/waiting render arms the poll, and the stuck entry arms
-    it before the slow heavy probe even runs (cheap-probe-first).
+    action. Every terminal/waiting render arms the poll, and the stuck entry
+    arms it before dispatching the start-only restart, so a workspace that
+    answers while the dispatch settles still goes straight home.
     """
     html = render_recovery_page(
         agent_id=_AGENT_A,
@@ -1070,9 +1409,9 @@ def test_render_recovery_page_every_wait_state_arms_the_homeward_poll() -> None:
         start = html.find("function " + fn)
         block = html[start : html.find("function ", start + 1)]
         assert "armHealthyPoll()" in block, f"{fn} must arm the homeward poll so it is not a dead end"
-    # Cheap-probe-first: the stuck entry arms the poll before running the heavy probe.
+    # The stuck entry arms the poll before dispatching the start-only restart.
     entry = html[html.rfind("if (initialStatus === 'restarting')") :]
-    assert entry.find("armHealthyPoll();") < entry.rfind("runProbe(true);")
+    assert 0 < entry.find("armHealthyPoll();") < entry.rfind("postRestart(")
 
 
 def test_render_recovery_page_backend_unreachable_offers_retry_not_restart() -> None:
@@ -1110,10 +1449,81 @@ def test_render_recovery_page_backend_unreachable_offers_retry_not_restart() -> 
     # The render arms the cheap liveness poll so the page auto-returns the user
     # once the backend recovers and the tracker flips HEALTHY.
     assert "armHealthyPoll()" in provider_block
-    # The backend_unreachable branch returns before any restart dispatch.
+    # The display path contains no dispatch at all (tiers are display-only).
     apply_start = html.find("function applyHealth(")
     apply_block = html[apply_start : html.find("function ", apply_start + 1)]
-    assert apply_block.find("'backend_unreachable'") < apply_block.find("postRestart")
+    assert "postRestart" not in apply_block
+    # The verdict must stay live: a transient provider error (one failed
+    # discovery cycle, e.g. during app startup) is cleared by the provider's
+    # next clean snapshot, so the branch schedules the slow re-probe to
+    # re-classify and continue the flow instead of dead-ending on the page.
+    unreachable_branch = apply_block[apply_block.find("'backend_unreachable'") : apply_block.find("'healthy'")]
+    assert "scheduleIndeterminateReprobe()" in unreachable_branch
+    # Only one reprobe timer may be pending at once: the Retry button's
+    # immediate probe re-enters applyHealth, which would otherwise spawn a
+    # parallel self-perpetuating probe chain per click.
+    reprobe_start = html.find("function scheduleIndeterminateReprobe")
+    reprobe_block = html[reprobe_start : html.find("function ", reprobe_start + 1)]
+    assert "if (reprobePending || restartDispatched) return" in reprobe_block
+
+
+def test_render_recovery_page_unresponsive_verdict_stays_live_and_resets_state() -> None:
+    """The unresponsive verdict is not a dead-end, and verdict renders reset each other's elements.
+
+    The catch-all verdict branch (host_offline / host_unresponsive / unknown
+    tiers) must keep re-probing so the failure page's verdict and diagnostics
+    stay live as evidence changes. And because the page can move between
+    verdicts (backend_unreachable -> host_unresponsive), renderUnresponsive and
+    renderDispatchError must hide the Retry button and clear the provider-error
+    paragraph that renderBackendUnreachable showed -- otherwise the page shows
+    Retry AND Restart together with a stale provider error.
+    """
+    html = render_recovery_page(
+        agent_id=_AGENT_A,
+        return_to="",
+        initial_status="stuck",
+        initial_error="",
+    )
+    apply_start = html.find("function applyHealth(")
+    apply_block = html[apply_start : html.find("function ", apply_start + 1)]
+    # The catch-all verdict branch (after the indeterminate branch) renders the
+    # consent page and schedules the slow re-probe.
+    fallthrough = apply_block[apply_block.rfind("renderUnresponsive()") :]
+    assert "scheduleIndeterminateReprobe()" in fallthrough
+    for fn in ("renderUnresponsive", "renderDispatchError"):
+        start = html.find("function " + fn)
+        block = html[start : html.find("function ", start + 1)]
+        assert "show(retryBtn, false)" in block, f"{fn} must hide the backend-unreachable Retry button"
+        assert "providerReasonEl.textContent = ''" in block, f"{fn} must clear the provider error text"
+
+
+def test_render_recovery_page_restart_dispatch_silences_reprobe_chain() -> None:
+    """A dispatched restart must silence the reprobe chain the verdict left armed.
+
+    The unresponsive verdict shows the Restart button while its slow re-probe
+    chain stays perpetually armed (a pending timer, or a heavy probe already in
+    flight), so a manual restart always races a stale probe result. Without a
+    guard that result overwrites the "Restarting your workspace" render (and
+    can re-POST a restart) seconds after the click, for the whole restart
+    duration. postRestart flips restartDispatched; applyHealth drops results
+    that arrive after it, and scheduleIndeterminateReprobe stops arming (and
+    firing) timers.
+    """
+    html = render_recovery_page(
+        agent_id=_AGENT_A,
+        return_to="",
+        initial_status="stuck",
+        initial_error="",
+    )
+    post_start = html.find("function postRestart(")
+    post_block = html[post_start : html.find("function ", post_start + 1)]
+    assert "restartDispatched = true" in post_block
+    apply_start = html.find("function applyHealth(")
+    apply_block = html[apply_start : html.find("function ", apply_start + 1)]
+    assert "if (restartDispatched) return" in apply_block
+    reprobe_start = html.find("function scheduleIndeterminateReprobe")
+    reprobe_block = html[reprobe_start : html.find("function ", reprobe_start + 1)]
+    assert "if (reprobePending || restartDispatched) return" in reprobe_block
 
 
 def test_render_recovery_page_loading_hides_diagnostic_dropdown() -> None:
@@ -1147,10 +1557,11 @@ def test_render_recovery_page_restart_failed_also_runs_probe() -> None:
         initial_status="restart_failed",
         initial_error="Stop step of host restart failed: exited 1",
     )
-    # The restart_failed branch in the dispatcher calls runProbe(false) so
-    # the diagnostics are populated without auto-dispatching another restart.
+    # The restart_failed branch in the dispatcher calls runProbe() so the
+    # diagnostics are populated (the probe path is display-only, so this can
+    # never dispatch another restart).
     assert "restart_failed" in html
-    assert "runProbe(false)" in html
+    assert "runProbe()" in html
     # The error-details DOM hook is rendered alongside the diagnostic.
     assert 'id="recovery-error"' in html
     assert 'id="recovery-debug-details"' in html
@@ -1828,16 +2239,16 @@ def test_oauth_button_github_uses_github_label_and_glyph() -> None:
 
 def test_page_narrow_container_default_padding_and_max_width() -> None:
     html = CATALOG.render("PageNarrowContainer", title="x", _content="<p>body</p>")
-    # Width/padding only: p-8 + max-w-[420px] + w-full, no surface chrome.
+    # The narrow column itself is width/padding only: p-8 + max-w-[420px] +
+    # w-full, no surface chrome (it is a plain width container, not a card).
     assert "p-8" in html
     assert "max-w-[420px]" in html
     assert "w-full" in html
     assert "<p>body</p>" in html
-    # No border/rounding/shadow -- this is a plain width container, not a card.
-    assert "rounded-lg" not in html
-    assert "shadow-raised" not in html
-    assert "border border-default" not in html
-    # The body is flex-centered around the column.
+    # PageNarrowContainer now renders via the shared ChromeShell layout, so a
+    # trusted local page reached through it (auth flow, create form) carries the
+    # app titlebar; the body is flex-centered around the column below it.
+    assert 'id="minds-titlebar"' in html
     assert "flex items-center justify-center min-h-screen" in html
 
 
@@ -2245,3 +2656,59 @@ def test_base_emits_sentry_bootstrap_when_frontend_reporting_is_on() -> None:
     assert '<script type="application/json" id="minds-sentry-config">' in html
     assert '"environment": "staging"' in html
     assert '"dsn": "https://key@o1.ingest.us.sentry.io/2"' in html
+
+
+def _plan_view_fixture(is_over_storage_quota: bool = False) -> dict[str, object]:
+    return {
+        "plan_name": "ally",
+        "plan_display_name": "Ally",
+        "available_plans": ["ally", "explorer"],
+        "usage_rows": [
+            {"label": "Remote workspaces", "used": "1", "limit": "10", "note": ""},
+            {"label": "Backup storage", "used": "2.4 GB", "limit": "500.0 GB", "note": "n"},
+        ],
+        "is_over_storage_quota": is_over_storage_quota,
+    }
+
+
+def test_render_accounts_page_renders_async_plan_placeholder() -> None:
+    # The page must never block on the connector: each account gets a loading
+    # placeholder that accounts.js fills in from GET /accounts/<uid>/plan-view.
+    acct = SimpleNamespace(user_id="u-1", email="a@b.com", workspace_ids=[])
+    html = render_accounts_page(accounts=[acct], default_account_id="u-1")
+    assert "data-plan-section" in html
+    assert 'data-user-id="u-1"' in html
+    assert "Loading plan and usage" in html
+    assert '<script src="/_static/accounts.js" defer></script>' in html
+
+
+def test_render_account_plan_section_renders_usage_and_plan_selector() -> None:
+    html = render_account_plan_section(acct_user_id="u-1", plan_view=_plan_view_fixture())
+    assert 'data-trim-running="0"' in html
+    assert "Ally" in html
+    assert "1 of 10" in html
+    assert "2.4 GB of 500.0 GB" in html
+    assert "/accounts/u-1/plan" in html
+    assert "Switch plan" in html
+
+
+def test_render_account_plan_section_shows_trim_action_only_when_over_quota_and_idle() -> None:
+    over_html = render_account_plan_section(acct_user_id="u-1", plan_view=_plan_view_fixture(True))
+    assert "/accounts/u-1/trim-backups" in over_html
+    under_html = render_account_plan_section(acct_user_id="u-1", plan_view=_plan_view_fixture(False))
+    assert "/accounts/u-1/trim-backups" not in under_html
+
+
+def test_render_account_plan_section_marks_running_trim_for_polling() -> None:
+    trim = SimpleNamespace(is_running=True, detail="Trimming backups (round 1)")
+    html = render_account_plan_section(acct_user_id="u-1", plan_view=_plan_view_fixture(True), trim_status=trim)
+    assert 'data-trim-running="1"' in html
+    assert "Trimming backups (round 1)" in html
+    # The trim form is hidden while a trim is already running.
+    assert "/accounts/u-1/trim-backups" not in html
+
+
+def test_render_account_plan_section_degrades_to_unavailable_without_plan_view() -> None:
+    html = render_account_plan_section(acct_user_id="u-1")
+    assert "Plan and usage are unavailable right now" in html
+    assert 'data-trim-running="0"' in html

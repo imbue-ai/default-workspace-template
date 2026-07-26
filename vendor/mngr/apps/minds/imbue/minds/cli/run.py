@@ -69,6 +69,7 @@ from imbue.minds.desktop_client.lima_image_prefetch import LimaImageCreateGate
 from imbue.minds.desktop_client.lima_image_prefetch import is_lima_image_cache_disabled
 from imbue.minds.desktop_client.lima_image_prefetch import make_lima_image_prefetcher
 from imbue.minds.desktop_client.lima_image_prefetch import make_lima_image_source
+from imbue.minds.desktop_client.lima_image_prefetch import resolve_release_tag_commit
 from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.request_events import LatchkeyFileSharingPermissionRequestEvent
@@ -201,11 +202,12 @@ def run(
     # Initialize Sentry for the minds backend process. ``setup_logging`` already ran
     # in the CLI group callback, so the loguru sinks Sentry layers on top of exist.
     #
-    # Sentry always initializes, but what it actually sends is gated live by per-machine user
-    # settings (stored in MindsConfig, surfaced via the first-launch consent screen and account
-    # settings): ``report_unexpected_errors`` gates automatic error sends, and ``include_error_logs``
-    # gates log/traceback attachments. Both are read live, so toggling a setting takes effect without
-    # restarting. Manual bug reports are always sent regardless of ``report_unexpected_errors``.
+    # Sentry always initializes, but what it actually sends is gated live by a single per-machine user
+    # setting (stored in MindsConfig): ``report_unexpected_errors`` gates automatic error sends and
+    # their log/traceback attachments together. It defaults on for new installs (the first-launch
+    # consent screen is informational) and can be turned off from Settings -> Error reporting. It is
+    # read live, so a change takes effect without restarting. Manual bug reports are always sent (with
+    # full diagnostics) regardless of ``report_unexpected_errors``.
     #
     # The activated minds env (from `minds env activate`) selects the Sentry DSN and, for
     # production/staging, which S3 attachment bucket: production and staging each get their own, while
@@ -232,7 +234,6 @@ def run(
         log_folder=paths.log_dir,
         anonymous_user_id=anonymous_user_id,
         is_error_reporting_enabled=minds_config.get_report_unexpected_errors,
-        is_log_inclusion_enabled=minds_config.get_include_error_logs,
         latchkey_plugin_data_dir=latchkey.plugin_data_dir,
         discovery_events_dir=get_discovery_events_dir(MngrConfig(default_host_dir=mngr_host_dir)),
     )
@@ -341,7 +342,6 @@ def run(
     write_latchkey_forward_sentry_consent(
         latchkey_forward_sentry_consent_path(data_directory),
         is_error_reporting_enabled=minds_config.get_report_unexpected_errors(),
-        is_log_inclusion_enabled=minds_config.get_include_error_logs(),
     )
 
     # Background thread: supervisor restart must complete before the
@@ -503,10 +503,9 @@ def run(
     # readiness probe can use the same preauth cookie the plugin accepts and
     # Electron pre-sets, and after ``wait_for_listening`` so it has the
     # plugin's actual bound port.
-    # Start the pre-baked Lima image prefetch as early as possible (issue 2306):
-    # a background worker keeps the current release's verified image present so a
-    # later Lima create can boot it instead of building the toolchain in-VM. Only
-    # active when this env configures an image source and the kill switch is unset.
+    # A background worker keeps the current release's verified image present so a later
+    # Lima create can boot it instead of building the toolchain in-VM. Only active when
+    # this env configures an image source and the kill switch is unset.
     lima_image_source = make_lima_image_source(client_env_config)
     lima_image_gate: LimaImageCreateGate | None = None
     if lima_image_source is not None and not is_lima_image_cache_disabled(os.environ):
@@ -524,9 +523,16 @@ def run(
             # (gated creates fall back / surface a retryable error on their own).
             is_checked=False,
         )
+        # A create may pin the release tag's commit rather than name the tag (CI does,
+        # for reproducibility). Resolve it once so those creates still take the fast path.
         lima_image_gate = LimaImageCreateGate(
             prefetcher=lima_image_prefetcher,
             current_release_tag=FALLBACK_BRANCH,
+            current_release_commit=resolve_release_tag_commit(
+                repo_url=DEFAULT_WORKSPACE_TEMPLATE_GIT_URL,
+                release_tag=FALLBACK_BRANCH,
+                concurrency_group=root_concurrency_group,
+            ),
             default_repo_url=DEFAULT_WORKSPACE_TEMPLATE_GIT_URL,
             is_dev_loop=is_local_workspace_defaults_opt_in(),
         )

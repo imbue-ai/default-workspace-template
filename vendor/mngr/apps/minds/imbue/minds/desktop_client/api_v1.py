@@ -28,7 +28,9 @@ on the caller's host".
 import json
 import queue
 import shlex
+from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from typing import Final
@@ -43,6 +45,11 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroupError
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.ids import InvalidRandomIdError
+from imbue.minds.bootstrap import BootstrapError
+from imbue.minds.bootstrap import delete_cloud_account_provider
+from imbue.minds.bootstrap import is_bring_your_own_cloud_enabled
+from imbue.minds.bootstrap import list_cloud_account_providers
+from imbue.minds.bootstrap import set_cloud_account_provider
 from imbue.minds.config.data_types import WorkspacePaths
 from imbue.minds.desktop_client import backup_status
 from imbue.minds.desktop_client import backup_update as backup_update_module
@@ -58,6 +65,8 @@ from imbue.minds.desktop_client.agent_creator import AgentCreator
 from imbue.minds.desktop_client.agent_creator import LOG_SENTINEL
 from imbue.minds.desktop_client.agent_creator import provider_instance_name_for_launch
 from imbue.minds.desktop_client.agent_creator import resolve_template_version
+from imbue.minds.desktop_client.agent_creator import run_mngr_aws_prepare
+from imbue.minds.desktop_client.agent_creator import run_mngr_provider_prepare
 from imbue.minds.desktop_client.api_auth import handle_invalid_random_id as _handle_invalid_random_id
 from imbue.minds.desktop_client.api_auth import json_error as _json_error
 from imbue.minds.desktop_client.api_auth import json_field_error as _json_field_error
@@ -67,11 +76,14 @@ from imbue.minds.desktop_client.api_models import AccountSummary
 from imbue.minds.desktop_client.api_models import AccountsResponse
 from imbue.minds.desktop_client.api_models import AgentNotificationRequest
 from imbue.minds.desktop_client.api_models import BackupOperationStatusResponse
+from imbue.minds.desktop_client.api_models import BackupRestoreRequest
 from imbue.minds.desktop_client.api_models import BackupServiceConfigureRequest
 from imbue.minds.desktop_client.api_models import BackupServiceUpdateRequest
 from imbue.minds.desktop_client.api_models import BackupSnapshotSummary
 from imbue.minds.desktop_client.api_models import BackupVerificationToggleRequest
 from imbue.minds.desktop_client.api_models import BugReportRequest
+from imbue.minds.desktop_client.api_models import CloudAccountCreateRequest
+from imbue.minds.desktop_client.api_models import CloudAccountSummary
 from imbue.minds.desktop_client.api_models import CreateOperationStatusResponse
 from imbue.minds.desktop_client.api_models import CreateWorkspaceRequest
 from imbue.minds.desktop_client.api_models import DestroyOperationStatusResponse
@@ -104,11 +116,11 @@ from imbue.minds.desktop_client.backup_export import BackupExportError
 from imbue.minds.desktop_client.backup_export import export_snapshot_zip
 from imbue.minds.desktop_client.backup_verification_store import is_backup_verification_enabled
 from imbue.minds.desktop_client.backup_verification_store import set_backup_verification_enabled
+from imbue.minds.desktop_client.chrome_event_broadcast import build_open_help_payload
 from imbue.minds.desktop_client.create_helpers import REMOTE_SIGNIN_REDIRECT_URL
 from imbue.minds.desktop_client.create_helpers import color_for_new_workspace
 from imbue.minds.desktop_client.create_helpers import existing_workspace_host_names
 from imbue.minds.desktop_client.create_helpers import taken_host_names_on_provider
-from imbue.minds.desktop_client.help_modal_requests import OpenHelpRequest
 from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.notification import NotificationRequest
 from imbue.minds.desktop_client.notification import NotificationUrgency
@@ -123,6 +135,7 @@ from imbue.minds.desktop_client.sharing_handler import get_sharing_status
 from imbue.minds.desktop_client.sharing_handler import is_probeable_share_url
 from imbue.minds.desktop_client.sharing_handler import probe_share_url_readiness
 from imbue.minds.desktop_client.state import get_state
+from imbue.minds.desktop_client.supertokens_routes import bounce_latchkey_forward_supervisor
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.desktop_client.templates import FALLBACK_BRANCH
 from imbue.minds.desktop_client.templates import normalize_host_name_slug
@@ -133,8 +146,9 @@ from imbue.minds.desktop_client.workspace_create import build_create_on_created_
 from imbue.minds.desktop_client.workspace_create import resolve_effective_region
 from imbue.minds.desktop_client.workspace_lifecycle import MindHostAction
 from imbue.minds.desktop_client.workspace_lifecycle import perform_mind_host_action
-from imbue.minds.desktop_client.workspace_operations import OPERATION_LOG_SENTINEL
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationKind
+from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationRecord
+from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationRegistryInterface
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationStatus
 from imbue.minds.desktop_client.workspace_recovery import RestartWorkerFailureHandler
 from imbue.minds.desktop_client.workspace_recovery import probe_workspace_health
@@ -143,6 +157,9 @@ from imbue.minds.envs.docker_cleanup import DockerCleanupError
 from imbue.minds.errors import BackupProvisioningError
 from imbue.minds.errors import MngrCommandError
 from imbue.minds.primitives import BackupProvider
+from imbue.minds.primitives import CONFIGURED_AWS_INSTANCE_TYPES
+from imbue.minds.primitives import CONFIGURED_AZURE_VM_SIZES
+from imbue.minds.primitives import CONFIGURED_GCP_MACHINE_TYPES
 from imbue.minds.primitives import CreationId
 from imbue.minds.primitives import DockerRuntime
 from imbue.minds.primitives import LaunchMode
@@ -154,9 +171,11 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import InvalidName
 
-# A blocking lifecycle (start/stop) call shells out to ``mngr`` and waits for
-# the host transition to resolve before returning the final state.
-_LIFECYCLE_TIMEOUT_SECONDS: float = 300.0
+# Cap for a short blocking ``mngr`` command run via ``_run_mngr_blocking``
+# (restart-services, git label read/write) -- quick operations, unlike the host
+# stop/start transition (that path uses ``perform_mind_host_action``'s much
+# larger ``_HOST_STOP_TIMEOUT_SECONDS``, sized for the slow first cloud stop).
+_MNGR_BLOCKING_COMMAND_TIMEOUT_SECONDS: float = 300.0
 
 # SSE event-stream headers (disable proxy/browser buffering so events flush live).
 _SSE_HEADERS: dict[str, str] = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
@@ -201,6 +220,15 @@ def _handle_notification(agent_id: str) -> OkResponse | Response:
 
     dispatcher.dispatch(notification_request, agent_display_name)
     return OkResponse(ok=True)
+
+
+# Machine-size allowlists per compute mode (the create form's picker values).
+# Modes absent here have no size knob; a submitted instance_type is dropped.
+_INSTANCE_TYPES_BY_LAUNCH_MODE = {
+    LaunchMode.AWS: {value for value, _ in CONFIGURED_AWS_INSTANCE_TYPES},
+    LaunchMode.GCP: {value for value, _ in CONFIGURED_GCP_MACHINE_TYPES},
+    LaunchMode.AZURE: {value for value, _ in CONFIGURED_AZURE_VM_SIZES},
+}
 
 
 # -- Cross-workspace management routes --
@@ -344,32 +372,45 @@ _BACKUP_DETAIL_EXIT_TIMEOUT_SECONDS: Final[float] = backup_verification.CHECK_EX
 class _WorkspaceSnapshotListing(FrozenModel):
     """The snapshot half of the per-workspace backups response."""
 
-    snapshots: tuple[BackupSnapshotSummary, ...] = Field(description="All snapshots, newest-first")
+    snapshots: tuple[BackupSnapshotSummary, ...] = Field(description="The requested window, newest-first")
+    total: int = Field(description="Total snapshots available, ignoring limit/offset")
     is_backing_up: bool = Field(description="Whether a (non-stale) restic backup is currently running")
     error: str | None = Field(default=None, description="Why the listing failed, when it did")
 
 
-def _list_workspace_snapshots_safely(paths: WorkspacePaths, parsed_id: AgentId) -> _WorkspaceSnapshotListing:
+def _list_workspace_snapshots_safely(
+    paths: WorkspacePaths, parsed_id: AgentId, *, limit: int | None, offset: int
+) -> _WorkspaceSnapshotListing:
     """List a workspace's snapshots + in-progress flag, degrading errors into the payload.
 
     An unconfigured workspace (no canonical env) is an ordinary empty listing,
     not an error -- NOT_CONFIGURED surfaces through the verification half.
+
+    ``restic snapshots`` always reads the full repository index, so ``limit`` /
+    ``offset`` do not save that work; they trim the newest-first window that is
+    serialized into the response (``total`` still reports the full count so the
+    UI can page). ``limit=None`` returns every snapshot from ``offset`` onward.
     """
     if not has_canonical_env(paths, parsed_id):
-        return _WorkspaceSnapshotListing(snapshots=(), is_backing_up=False)
+        return _WorkspaceSnapshotListing(snapshots=(), total=0, is_backing_up=False)
     try:
         snapshots = backup_status.list_workspace_snapshots(
             paths, parsed_id, parent_cg=get_state().root_concurrency_group
         )
     except BackupProvisioningError as e:
         logger.warning("Backup snapshot listing failed for {}: {}", parsed_id, e)
-        return _WorkspaceSnapshotListing(snapshots=(), is_backing_up=False, error=str(e))
+        return _WorkspaceSnapshotListing(snapshots=(), total=0, is_backing_up=False, error=str(e))
     # Whether a backup is running *right now* (non-stale restic lock). The
     # snapshot list alone can't express this, so the landing page reads this
     # flag to show the live "Backing up..." badge.
     is_backing_up = backup_status.is_workspace_backing_up(
         paths, parsed_id, now=datetime.now(timezone.utc), parent_cg=get_state().root_concurrency_group
     )
+    # restic returns oldest-first; the API documents newest-first so callers
+    # (settings recent table, full-history page) do not re-sort.
+    ordered = sorted(snapshots, key=lambda snapshot: snapshot.time, reverse=True)
+    end = None if limit is None else offset + limit
+    window = ordered[offset:end]
     return _WorkspaceSnapshotListing(
         snapshots=tuple(
             BackupSnapshotSummary(
@@ -381,8 +422,9 @@ def _list_workspace_snapshots_safely(paths: WorkspacePaths, parsed_id: AgentId) 
                 tags=tuple(snapshot.tags),
                 total_size_bytes=snapshot.total_size_bytes,
             )
-            for snapshot in snapshots
+            for snapshot in window
         ),
+        total=len(ordered),
         is_backing_up=is_backing_up,
     )
 
@@ -424,6 +466,26 @@ def _materialize_env_from_record_if_missing(paths: WorkspacePaths, parsed_id: Ag
     session_store.record_store.materialize_env_from_record(str(parsed_id))
 
 
+def _parse_snapshot_limit_offset() -> "tuple[int | None, int] | Response":
+    """Parse the optional non-negative ``limit``/``offset`` snapshot-window params.
+
+    ``limit`` absent means "all snapshots" (backward compatible); ``limit=0``
+    means "none". Parsed from the raw strings (not Flask's ``type=int``, which
+    silently swallows garbage as the default) so a malformed value is a loud
+    400 rather than silently meaning "all"/"0".
+    """
+    raw_limit = request.args.get("limit", default=None)
+    raw_offset = request.args.get("offset", default=None)
+    try:
+        limit = int(raw_limit) if raw_limit is not None else None
+        offset = int(raw_offset) if raw_offset is not None else 0
+    except ValueError:
+        return _json_error("'limit' and 'offset' must be non-negative integers", 400)
+    if (limit is not None and limit < 0) or offset < 0:
+        return _json_error("'limit' and 'offset' must be non-negative integers", 400)
+    return limit, offset
+
+
 @require_api_or_cookie_auth
 @API_SPEC.validate(resp=json_response_model(WorkspaceBackupsResponse))
 def _handle_workspace_backups(agent_id: str) -> WorkspaceBackupsResponse | Response:
@@ -436,6 +498,10 @@ def _handle_workspace_backups(agent_id: str) -> WorkspaceBackupsResponse | Respo
     the frontend's job: it fans out one request per workspace.
     """
     parsed_id = AgentId(agent_id)
+    limit_offset = _parse_snapshot_limit_offset()
+    if isinstance(limit_offset, Response):
+        return limit_offset
+    limit, offset = limit_offset
     state = get_state()
     paths: WorkspacePaths | None = state.api_v1_paths
     if paths is None:
@@ -457,7 +523,7 @@ def _handle_workspace_backups(agent_id: str) -> WorkspaceBackupsResponse | Respo
     )
     with cg:
         cg.start_new_thread(target=_run_check_into_results, name=f"backup-check-{parsed_id}")
-        listing = _list_workspace_snapshots_safely(paths, parsed_id)
+        listing = _list_workspace_snapshots_safely(paths, parsed_id, limit=limit, offset=offset)
     check = (
         check_results[0]
         if check_results
@@ -469,6 +535,7 @@ def _handle_workspace_backups(agent_id: str) -> WorkspaceBackupsResponse | Respo
         is_configured=has_canonical_env(paths, parsed_id),
         is_backing_up=listing.is_backing_up,
         snapshots=listing.snapshots,
+        snapshots_total=listing.total,
         snapshots_error=listing.error,
         check_state=check.state.value,
         problems=tuple(problem.value for problem in check.problems),
@@ -580,6 +647,36 @@ def _handle_create_workspace() -> tuple[OperationHandleResponse, int] | Response
     backup_api_key_env = str(body.get("backup_api_key_env", ""))
     account_id = str(body.get("account_id", "")).strip()
     submitted_region = str(body.get("region", "")).strip()
+    instance_type = str(body.get("instance_type", "")).strip()
+    if instance_type:
+        allowed_instance_types = _INSTANCE_TYPES_BY_LAUNCH_MODE.get(launch_mode)
+        if allowed_instance_types is None:
+            # This mode has no machine-size knob; drop a stray submitted value.
+            instance_type = ""
+        elif instance_type not in allowed_instance_types:
+            return _json_field_error(f"Unsupported instance type {instance_type!r}.", "instance_type")
+        else:
+            # A known size for a sized mode: passes through to the create command.
+            pass
+    cloud_account = str(body.get("cloud_account", "")).strip()
+    if launch_mode in (LaunchMode.AWS, LaunchMode.GCP, LaunchMode.AZURE) and not cloud_account:
+        # BYOK-only modes (all three clouds): without an account the create
+        # would fail minutes later in the background thread with an opaque
+        # provider error. Ambient machine-credential AWS was removed from minds.
+        return _json_field_error(f"{launch_mode.value} requires a configured cloud account.", "cloud_account")
+    matching = None
+    if cloud_account:
+        # A bring-your-own-key account must exist and match the submitted launch
+        # mode's backend, else the create would target a nonexistent provider.
+        matching = next((a for a in list_cloud_account_providers() if a["name"] == cloud_account), None)
+        if matching is None:
+            return _json_field_error(f"Unknown cloud account {cloud_account!r}.", "cloud_account")
+        if matching["backend"] != launch_mode.value.lower():
+            return _json_field_error(
+                f"Cloud account {matching['alias']!r} is a {matching['backend']} account; "
+                f"it cannot be used with launch_mode {launch_mode.value}.",
+                "cloud_account",
+            )
 
     # The workspace name is chosen automatically unless one was submitted (the
     # advanced view's optional "Name" field): a submitted value, else the next
@@ -644,7 +741,15 @@ def _handle_create_workspace() -> tuple[OperationHandleResponse, int] | Response
     # callback that injects the Cloudflare tunnel token + associates the account
     # and persists the chosen region -- exactly as the create form does.
     minds_config = get_state().minds_config
-    region = resolve_effective_region(launch_mode, submitted_region, minds_config, get_state().geo_location_cache)
+    if matching is not None:
+        # A BYOK account's placement (region, or GCE zone) is pinned per entry --
+        # AWS/GCP discovery clients are region/zone-bound and Azure's scaffolding
+        # is region-locked, so honoring a different submitted value would orphan
+        # the entry's existing workspaces. The pin always rules; the form shows
+        # it as a static note. A different placement = another account entry.
+        region = matching["region"]
+    else:
+        region = resolve_effective_region(launch_mode, submitted_region, minds_config, get_state().geo_location_cache)
     on_created = build_create_on_created_callback(
         account_id, minds_config, launch_mode, region, display_name=host_name or resolved_host_name, color=color
     )
@@ -661,6 +766,8 @@ def _handle_create_workspace() -> tuple[OperationHandleResponse, int] | Response
         account_email=account_email,
         branch_or_tag=branch_or_tag,
         region=region,
+        cloud_account=cloud_account,
+        instance_type=instance_type,
         on_created=on_created,
         backup_request=backup_request,
         color=color,
@@ -699,7 +806,9 @@ def _run_mngr_blocking(argv: list[str], parent_cg: ConcurrencyGroup) -> tuple[in
     """Run an ``mngr`` command to completion; return ``(returncode, stdout, stderr)``."""
     cg = parent_cg.make_concurrency_group(name="workspace-lifecycle")
     with cg:
-        finished = cg.run_process_to_completion(argv, timeout=_LIFECYCLE_TIMEOUT_SECONDS, is_checked_after=False)
+        finished = cg.run_process_to_completion(
+            argv, timeout=_MNGR_BLOCKING_COMMAND_TIMEOUT_SECONDS, is_checked_after=False
+        )
     returncode = finished.returncode if finished.returncode is not None else 1
     return returncode, finished.stdout, finished.stderr
 
@@ -725,6 +834,7 @@ def _perform_workspace_lifecycle(agent_id: str, action: str) -> WorkspaceLifecyc
         get_state().mngr_binary,
         get_state().mngr_host_dir,
         parent_cg,
+        chrome_event_broadcaster=get_state().chrome_event_broadcaster,
     )
     if not succeeded:
         return _json_error(f"Could not {action} the workspace host", 502)
@@ -861,19 +971,31 @@ def _handle_workspace_health(agent_id: str) -> Response:
         concurrency_group=parent_cg,
         envelope_stream_consumer=state.envelope_stream_consumer,
     )
-    logger.info("Workspace health probe for {}: dispatch_tier={}", parsed_id, response.dispatch_tier.value)
+    # The reason is only populated on BACKEND_UNREACHABLE; logging it makes a
+    # transient provider error diagnosable after the fact (the tier alone says
+    # nothing about WHICH provider failure produced the verdict).
+    if response.unreachable_reason:
+        logger.info(
+            "Workspace health probe for {}: dispatch_tier={} (reason: {})",
+            parsed_id,
+            response.dispatch_tier.value,
+            response.unreachable_reason,
+        )
+    else:
+        logger.info("Workspace health probe for {}: dispatch_tier={}", parsed_id, response.dispatch_tier.value)
     return make_response(content=response.model_dump_json(), media_type="application/json")
 
 
 @require_api_or_cookie_auth
 @API_SPEC.validate(json=RestartWorkspaceRequest, resp=json_response_model(OperationHandleResponse, status_code=202))
 def _handle_workspace_restart(agent_id: str) -> tuple[OperationHandleResponse, int] | Response:
-    """Dispatch a workspace restart; return an operation handle to poll.
+    """Dispatch a workspace host restart; return an operation handle to poll.
 
-    Body: ``{"scope": "services" | "host", "host_already_stopped"?: bool}``. The
-    ``services`` scope restarts the system-services agent in place; ``host``
-    bounces the whole host (``host_already_stopped`` is honored only for the host
-    scope, letting a known-stopped host skip the redundant stop step). Returns
+    Body: ``{"scope": "host", "start_only"?: bool}``. The restart
+    bounces the whole host; ``start_only`` skips the stop step and runs only
+    the idempotent ``mngr start`` (the recovery page's unconditional entry
+    dispatch). The former ``services`` scope (an in-place
+    system-services restart) was removed and is rejected with a 400. Returns
     ``202`` with ``{operation_id, kind: "restart"}`` (the op id is the workspace
     agent id), followed via ``/api/v1/workspaces/operations/restart/<id>``
     (+``/logs``) exactly like create / destroy. A restart already in flight is
@@ -883,13 +1005,12 @@ def _handle_workspace_restart(agent_id: str) -> tuple[OperationHandleResponse, i
     host under an in-flight backup mutation.
     """
     parsed_id = AgentId(agent_id)
-    # The spectree model enforces ``scope`` is a required string; its value (one
-    # of services/host) is a value-semantic check kept here.
+    # The spectree model enforces ``scope`` is a required string; its value
+    # ('host') is a value-semantic check kept here.
     body = request.get_json(silent=True, force=True) or {}
     scope = body.get("scope")
-    if scope not in ("services", "host"):
-        return _json_error("'scope' must be one of: services, host", 400)
-    is_host_restart = scope == "host"
+    if scope != "host":
+        return _json_error("'scope' must be 'host'", 400)
 
     state = get_state()
     backend_resolver = state.backend_resolver
@@ -901,20 +1022,16 @@ def _handle_workspace_restart(agent_id: str) -> tuple[OperationHandleResponse, i
         return _json_error("Workspace restart is unavailable in this configuration", 503)
 
     handle = OperationHandleResponse(operation_id=str(parsed_id), kind="restart")
-    # A recovery-page auto-dispatch can race the workspace's own self-recovery
-    # (the host-health probe that picks the restart tier is slow), but no guard
-    # is needed here: the auto-dispatched host tier runs only ``mngr start``
-    # (``host_already_stopped`` skips the stop step), and ``mngr start`` targets
-    # only STOPPED agents and starts the host idempotently -- against a
-    # self-recovered workspace the whole restart degrades to a no-op. A veto
-    # keyed on tracker health would misfire here: the tracker reports
-    # default-HEALTHY for never-probed workspaces (e.g. a host offline since
-    # before this process started), so it would silently drop the cold-boot
-    # those workspaces need.
-    # The services tier (an in-place stop+start of the system-services agent)
-    # is NOT a no-op against a self-recovered interface; its narrow race window
-    # (evidence gathered seconds earlier, cost bounded to a brief interface
-    # blip) is deliberately left unguarded: that tier is slated for removal.
+    # The recovery page dispatches its restart unconditionally on entry, with
+    # no knowledge of the host's state, and it can race the workspace's own
+    # self-recovery -- but no guard is needed here: that dispatch runs only
+    # ``mngr start`` (``start_only`` skips the stop step), which checks ground
+    # truth at commit time, targets only STOPPED agents, and starts the host
+    # idempotently -- against a live or self-recovered workspace the whole
+    # restart degrades to a no-op. A veto keyed on tracker health would
+    # misfire here: the tracker reports default-HEALTHY for never-probed
+    # workspaces (e.g. a host offline since before this process started), so
+    # it would silently drop the cold-boot those workspaces need.
     # Serialize with the backup operations: ``registry.start`` below replaces
     # the workspace's record, so a RUNNING backup update/configure must be
     # rejected here (its worker's terminal complete/fail would corrupt the
@@ -928,22 +1045,22 @@ def _handle_workspace_restart(agent_id: str) -> tuple[OperationHandleResponse, i
         and existing_operation.status == WorkspaceOperationStatus.RUNNING
         and existing_operation.kind != WorkspaceOperationKind.RESTART
     ):
-        return _json_error(
-            f"Another operation ({existing_operation.kind.value}) is already running for {agent_id}", 409
-        )
+        return _operation_conflict_error(existing_operation)
+    # start_only makes the restart a pure ``mngr start`` (the recovery page's
+    # unconditional entry dispatch, which must never bounce a live container);
+    # a manual restart keeps the stop step, since it may target a running but
+    # wedged container that only a bounce fixes. Resolved before the claim so
+    # the tracker can record the restart's flavor for the recovery page's copy.
+    skip_stop = bool(body.get("start_only", False))
+
     # A restart already in flight for this workspace -- don't stack a second
     # worker racing the first's stop/start commands. mark_restarting decides the
     # RESTARTING transition under its own lock and reports whether this caller won
     # it, so this is an atomic check-and-claim against concurrent requests.
-    if not tracker.mark_restarting(parsed_id):
+    if not tracker.mark_restarting(parsed_id, start_only=skip_stop):
         return handle, 202
 
     registry.start(parsed_id, WorkspaceOperationKind.RESTART, datetime.now(timezone.utc))
-
-    # host_already_stopped lets an auto-dispatched host restart skip the redundant
-    # stop step; honored only for host restarts (a manual restart may target a
-    # still-running container, which must be stopped first).
-    skip_stop = is_host_restart and bool(body.get("host_already_stopped", False))
 
     # is_checked=False + on_failure: a crash of the one-shot worker transitions
     # the tracker to RESTART_FAILED and the registry to FAILED (so neither the
@@ -955,7 +1072,6 @@ def _handle_workspace_restart(agent_id: str) -> tuple[OperationHandleResponse, i
             target=run_restart_sequence,
             kwargs={
                 "workspace_agent_id": parsed_id,
-                "is_host_restart": is_host_restart,
                 "tracker": tracker,
                 "backend_resolver": backend_resolver,
                 "mngr_binary": state.mngr_binary,
@@ -972,7 +1088,9 @@ def _handle_workspace_restart(agent_id: str) -> tuple[OperationHandleResponse, i
             on_failure=RestartWorkerFailureHandler(tracker=tracker, workspace_agent_id=parsed_id, registry=registry),
         )
     except (OSError, RuntimeError, ConcurrencyGroupError) as exc:
-        logger.warning("Failed to spawn restart worker for {}: {}", parsed_id, exc)
+        # Error level so the failure reaches Sentry (Principle 3: the recovery
+        # surface is quiet, so a restart that never even spawned must report).
+        logger.error("Failed to spawn restart worker for {}: {}", parsed_id, exc)
         message = f"Could not start the restart worker: {exc}"
         tracker.mark_restart_failed(parsed_id, message)
         registry.fail(parsed_id, message)
@@ -1069,6 +1187,28 @@ def _handle_restart_operation_status(operation_id: str) -> RestartOperationStatu
 # -- Backup service verification + management routes --
 
 
+# Plain-language names for the running operation in conflict (409) messages.
+_OPERATION_CONFLICT_PHRASES: Final[dict[WorkspaceOperationKind, str]] = {
+    WorkspaceOperationKind.RESTART: "A restart",
+    WorkspaceOperationKind.BACKUP_UPDATE: "A backup software update",
+    WorkspaceOperationKind.BACKUP_CONFIGURE: "A backup settings change",
+    WorkspaceOperationKind.BACKUP_RESTORE: "A restore",
+}
+
+
+def _operation_conflict_error(existing: WorkspaceOperationRecord | None) -> Response:
+    """409 for a dispatch that lost to an already-running operation on the same workspace."""
+    phrase = (
+        _OPERATION_CONFLICT_PHRASES.get(existing.kind, "Another operation")
+        if existing is not None
+        else "Another operation"
+    )
+    return _json_error(
+        f"{phrase} is already in progress for this workspace. Wait for it to finish before starting another operation.",
+        409,
+    )
+
+
 def _resolve_backup_route_context(agent_id: str) -> "tuple[AgentId, WorkspacePaths, ConcurrencyGroup] | Response":
     """Shared 404/503 gating for the backup-service mutation routes."""
     parsed_id = AgentId(agent_id)
@@ -1080,6 +1220,61 @@ def _resolve_backup_route_context(agent_id: str) -> "tuple[AgentId, WorkspacePat
     if paths is None or parent_cg is None:
         return _json_error("Backup management is unavailable in this configuration", 503)
     return parsed_id, paths, parent_cg
+
+
+def _dispatch_backup_worker(
+    *,
+    parsed_id: AgentId,
+    parent_cg: ConcurrencyGroup,
+    registry: WorkspaceOperationRegistryInterface,
+    kind: WorkspaceOperationKind,
+    target: Callable[..., None],
+    worker_kwargs: Mapping[str, object],
+    operation_target: str | None,
+) -> tuple[OperationHandleResponse, int] | Response:
+    """Claim the workspace's single operation slot and spawn the worker that ends it.
+
+    Shared by the update and restore routes, whose dispatch differs only in the
+    worker and its extra kwargs. The claim is atomic (``start_if_idle``, like
+    restart's ``mark_restarting``): two concurrent requests must not both spawn
+    workers mutating the same workspace, and a request that loses to a running
+    operation of any kind is rejected rather than stacked.
+
+    The kind's name is the single source of the wire kind, the thread name and
+    the operator-facing label, so they cannot drift apart.
+    """
+    kind_slug = kind.value.lower()
+    label = kind_slug.replace("_", " ")
+    if not registry.start_if_idle(parsed_id, kind, datetime.now(timezone.utc), operation_target):
+        return _operation_conflict_error(registry.get(parsed_id))
+    try:
+        parent_cg.start_new_thread(
+            target=target,
+            kwargs={
+                "agent_id": parsed_id,
+                "registry": registry,
+                "parent_cg": parent_cg,
+                **worker_kwargs,
+            },
+            name=f"{kind_slug.replace('_', '-')}-{parsed_id}",
+            daemon=True,
+            is_checked=False,
+            on_failure=backup_update_module.BackupWorkerFailureHandler(
+                workspace_agent_id=parsed_id, registry=registry
+            ),
+        )
+    except (OSError, RuntimeError, ConcurrencyGroupError) as exc:
+        logger.warning("Failed to spawn {} worker for {}: {}", label, parsed_id, exc)
+        message = f"Could not start the {label} worker: {exc}"
+        registry.fail(parsed_id, message)
+        return _json_error(message, 503)
+    return OperationHandleResponse(operation_id=str(parsed_id), kind=kind_slug), 202
+
+
+def _is_stop_chats_requested() -> bool:
+    """Read the update route's ``{"stop_chats"?: bool}`` body (restore parses its richer body inline)."""
+    body = request.get_json(silent=True, force=True) or {}
+    return bool(body.get("stop_chats", False))
 
 
 @require_api_or_cookie_auth
@@ -1098,53 +1293,88 @@ def _handle_backup_service_update(agent_id: str) -> tuple[OperationHandleRespons
         return context
     parsed_id, paths, parent_cg = context
     state = get_state()
-    registry = state.workspace_operation_registry
-
-    body = request.get_json(silent=True, force=True) or {}
-    is_stop_chats = bool(body.get("stop_chats", False))
-    # Atomic check-and-claim (like restart's mark_restarting): two concurrent
-    # requests must not both spawn workers mutating the same workspace.
-    if not registry.start_if_idle(parsed_id, WorkspaceOperationKind.BACKUP_UPDATE, datetime.now(timezone.utc)):
-        existing = registry.get(parsed_id)
-        kind_note = f" ({existing.kind.value})" if existing is not None else ""
-        return _json_error(f"Another operation{kind_note} is already running for {agent_id}", 409)
-    try:
-        parent_cg.start_new_thread(
-            target=backup_update_module.run_backup_update_sequence,
-            kwargs={
-                "agent_id": parsed_id,
-                "paths": paths,
-                "resolver": state.backend_resolver,
-                "registry": registry,
-                "parent_cg": parent_cg,
-                "is_stop_chats": is_stop_chats,
-            },
-            name=f"backup-update-{parsed_id}",
-            daemon=True,
-            is_checked=False,
-            on_failure=backup_update_module.BackupWorkerFailureHandler(
-                workspace_agent_id=parsed_id, registry=registry
-            ),
-        )
-    except (OSError, RuntimeError, ConcurrencyGroupError) as exc:
-        logger.warning("Failed to spawn backup update worker for {}: {}", parsed_id, exc)
-        message = f"Could not start the backup update worker: {exc}"
-        registry.fail(parsed_id, message)
-        return _json_error(message, 503)
-    return OperationHandleResponse(operation_id=str(parsed_id), kind="backup_update"), 202
+    return _dispatch_backup_worker(
+        parsed_id=parsed_id,
+        parent_cg=parent_cg,
+        registry=state.workspace_operation_registry,
+        kind=WorkspaceOperationKind.BACKUP_UPDATE,
+        target=backup_update_module.run_backup_update_sequence,
+        worker_kwargs={
+            "paths": paths,
+            "resolver": state.backend_resolver,
+            "is_stop_chats": _is_stop_chats_requested(),
+        },
+        operation_target=None,
+    )
 
 
 @require_api_or_cookie_auth
 @API_SPEC.validate(resp=json_response_model(EmptyResponse))
 def _handle_backup_service_update_cancel(agent_id: str) -> EmptyResponse | Response:
-    """Cancel a waiting backup update (only effective before it starts mutating)."""
+    """Cancel a waiting backup update or restore (only effective before it starts mutating)."""
     parsed_id = AgentId(agent_id)
     registry = get_state().workspace_operation_registry
     record = registry.get(parsed_id)
-    if record is None or record.kind != WorkspaceOperationKind.BACKUP_UPDATE:
-        return _json_error(f"No backup update operation for {agent_id}", 404)
-    registry.request_cancel(parsed_id)
+    if record is None or record.kind not in (
+        WorkspaceOperationKind.BACKUP_UPDATE,
+        WorkspaceOperationKind.BACKUP_RESTORE,
+    ):
+        return _json_error(f"No cancellable backup operation for {agent_id}", 404)
+    # A cancel after the point of no return must fail loudly rather than
+    # pretend it took effect -- the operation will run to completion.
+    if record.status == WorkspaceOperationStatus.RUNNING and record.is_mutating:
+        return _json_error(
+            "The operation has started making changes and can no longer be cancelled.",
+            409,
+        )
+    # request_cancel re-checks under the registry lock: a worker that claimed
+    # begin_mutation (or an operation that finished) between the read above
+    # and this call refuses the cancel, and that refusal must not read as
+    # success.
+    if not registry.request_cancel(parsed_id):
+        return _json_error("The operation can no longer be cancelled.", 409)
     return EmptyResponse()
+
+
+@require_api_or_cookie_auth
+@API_SPEC.validate(json=BackupRestoreRequest, resp=json_response_model(OperationHandleResponse, status_code=202))
+def _handle_workspace_backup_restore(
+    agent_id: str, snapshot_id: str
+) -> tuple[OperationHandleResponse, int] | Response:
+    """Dispatch an in-place restore of the workspace to one snapshot; return a handle to poll.
+
+    Body: ``{"stop_chats"?, "update_after"?, "skip_safety_snapshot"?,
+    "skip_chat_gate"?}`` (see :class:`BackupRestoreRequest`; the skip flags
+    are only ever set by the explicit retry affordances the failure notice
+    offers). One tracked operation runs per workspace at a time;
+    ``start_if_idle`` rejects a second dispatch (of any kind) with a 409
+    rather than stacking.
+    """
+    context = _resolve_backup_route_context(agent_id)
+    if isinstance(context, Response):
+        return context
+    parsed_id, paths, parent_cg = context
+    if not has_canonical_env(paths, parsed_id):
+        return _json_error(f"Backups are not configured for {agent_id}", 409)
+    state = get_state()
+    body = request.get_json(silent=True, force=True) or {}
+    return _dispatch_backup_worker(
+        parsed_id=parsed_id,
+        parent_cg=parent_cg,
+        registry=state.workspace_operation_registry,
+        kind=WorkspaceOperationKind.BACKUP_RESTORE,
+        target=backup_update_module.run_backup_restore_sequence,
+        worker_kwargs={
+            "paths": paths,
+            "resolver": state.backend_resolver,
+            "snapshot_id": snapshot_id,
+            "is_stop_chats": bool(body.get("stop_chats", False)),
+            "is_update_after": bool(body.get("update_after", True)),
+            "is_skip_safety_snapshot": bool(body.get("skip_safety_snapshot", False)),
+            "is_skip_chat_gate": bool(body.get("skip_chat_gate", False)),
+        },
+        operation_target=snapshot_id,
+    )
 
 
 @require_api_or_cookie_auth
@@ -1170,7 +1400,7 @@ def _handle_backup_service_configure(agent_id: str) -> tuple[OperationHandleResp
     # race-free claim is the start_if_idle below.
     existing = registry.get(parsed_id)
     if existing is not None and existing.status == WorkspaceOperationStatus.RUNNING:
-        return _json_error(f"Another operation ({existing.kind.value}) is already running for {agent_id}", 409)
+        return _operation_conflict_error(existing)
 
     body = request.get_json(silent=True, force=True) or {}
     try:
@@ -1195,10 +1425,10 @@ def _handle_backup_service_configure(agent_id: str) -> tuple[OperationHandleResp
         return _json_error(error_message or "Invalid backup configuration", 400)
 
     is_destination_change = has_canonical_env(paths, parsed_id)
-    if not registry.start_if_idle(parsed_id, WorkspaceOperationKind.BACKUP_CONFIGURE, datetime.now(timezone.utc)):
-        claimed = registry.get(parsed_id)
-        kind_note = f" ({claimed.kind.value})" if claimed is not None else ""
-        return _json_error(f"Another operation{kind_note} is already running for {agent_id}", 409)
+    if not registry.start_if_idle(
+        parsed_id, WorkspaceOperationKind.BACKUP_CONFIGURE, datetime.now(timezone.utc), None
+    ):
+        return _operation_conflict_error(registry.get(parsed_id))
     registry.append_log(
         parsed_id, "Changing the backup destination..." if is_destination_change else "Enabling backups..."
     )
@@ -1248,10 +1478,10 @@ def _handle_backup_service_disable(agent_id: str) -> tuple[OperationHandleRespon
     parsed_id, paths, parent_cg = context
     state = get_state()
     registry = state.workspace_operation_registry
-    if not registry.start_if_idle(parsed_id, WorkspaceOperationKind.BACKUP_CONFIGURE, datetime.now(timezone.utc)):
-        existing = registry.get(parsed_id)
-        kind_note = f" ({existing.kind.value})" if existing is not None else ""
-        return _json_error(f"Another operation{kind_note} is already running for {agent_id}", 409)
+    if not registry.start_if_idle(
+        parsed_id, WorkspaceOperationKind.BACKUP_CONFIGURE, datetime.now(timezone.utc), None
+    ):
+        return _operation_conflict_error(registry.get(parsed_id))
     registry.append_log(parsed_id, "Disabling backups...")
     try:
         parent_cg.start_new_thread(
@@ -1298,38 +1528,49 @@ def _handle_backup_verification_toggle(agent_id: str) -> EmptyResponse | Respons
 @require_api_or_cookie_auth
 @API_SPEC.validate(resp=json_response_model(BackupOperationStatusResponse))
 def _handle_backup_operation_status(operation_id: str) -> BackupOperationStatusResponse | Response:
-    """Report the status of a backup update/configure operation (the id is the workspace agent id)."""
+    """Report the status of a backup update/configure/restore operation (the id is the workspace agent id)."""
     parsed_id = AgentId(operation_id)
     record = get_state().workspace_operation_registry.get(parsed_id)
     if record is None or record.kind not in (
         WorkspaceOperationKind.BACKUP_UPDATE,
         WorkspaceOperationKind.BACKUP_CONFIGURE,
+        WorkspaceOperationKind.BACKUP_RESTORE,
     ):
         return _json_error(f"Unknown operation {operation_id}", 404)
     blocked_chats: tuple[str, ...] = ()
     if record.error is not None and record.error.startswith(backup_update_module.BLOCKED_BY_RUNNING_CHATS_PREFIX):
         names = record.error[len(backup_update_module.BLOCKED_BY_RUNNING_CHATS_PREFIX) :]
         blocked_chats = tuple(name for name in names.split(",") if name)
+    # Cancellation is only honest while a chat-gated operation is still
+    # waiting; once its worker claims the point of no return (begin_mutation)
+    # the UI must stop offering Cancel.
+    is_cancellable = (
+        record.status == WorkspaceOperationStatus.RUNNING
+        and not record.is_mutating
+        and record.kind in (WorkspaceOperationKind.BACKUP_UPDATE, WorkspaceOperationKind.BACKUP_RESTORE)
+    )
     return BackupOperationStatusResponse(
         operation_id=operation_id,
         kind=record.kind.value.lower(),
         status=str(record.status),
         is_done=record.status == WorkspaceOperationStatus.DONE,
         error=record.error,
+        warning=record.warning,
         blocked_chats=blocked_chats,
+        is_cancellable=is_cancellable,
+        snapshot_id=record.target,
     )
 
 
 @require_api_or_cookie_auth
 def _handle_backup_operation_logs(operation_id: str) -> Response:
-    """Drain a backup operation's in-memory registry log queue as server-sent events."""
+    """Stream a backup operation's stored registry log (full history + live tail) as server-sent events."""
     parsed_id = AgentId(operation_id)
     registry = get_state().workspace_operation_registry
-    log_queue = registry.get_log_queue(parsed_id) if registry.get(parsed_id) is not None else None
-    if log_queue is None:
+    if registry.get(parsed_id) is None:
         return _json_error(f"Unknown operation {operation_id}", 404)
     return make_streaming_response(
-        _stream_workspace_operation_logs(log_queue), media_type="text/event-stream", headers=_SSE_HEADERS
+        _stream_workspace_operation_logs(registry, parsed_id), media_type="text/event-stream", headers=_SSE_HEADERS
     )
 
 
@@ -1358,25 +1599,33 @@ def _stream_create_operation_logs(log_queue: "queue.Queue[str]") -> Iterator[str
         yield _sse({"log": line})
 
 
-def _stream_workspace_operation_logs(log_queue: "queue.Queue[str]") -> Iterator[str]:
-    """Yield SSE frames draining a workspace operation's in-memory log queue.
+def _stream_workspace_operation_logs(
+    registry: WorkspaceOperationRegistryInterface, parsed_id: AgentId
+) -> Iterator[str]:
+    """Yield SSE frames tailing a workspace operation's stored registry log.
 
-    Serves the restart and backup update/configure log routes alike (any
-    operation tracked by the workspace-operation registry). Mirrors
-    :func:`_stream_create_operation_logs` but keys on the registry's
-    ``OPERATION_LOG_SENTINEL`` end-of-stream marker.
+    Serves the restart and backup update/configure/restore log routes alike
+    (any operation tracked by the workspace-operation registry). The log is
+    stored on the operation rather than in a consume-once queue, so every
+    stream replays the full history from index 0 before tailing live lines --
+    a page attaching mid-operation (or a second window) sees the same
+    complete output.
     """
     shutdown_event = get_state().shutdown_event
+    from_index = 0
     while not shutdown_event.is_set():
-        try:
-            line = log_queue.get(block=True, timeout=1.0)
-        except queue.Empty:
-            yield ": keepalive\n\n"
-            continue
-        if line == OPERATION_LOG_SENTINEL:
+        chunk = registry.read_log_chunk(parsed_id, from_index, timeout_seconds=1.0)
+        if chunk is None:
             yield _sse({"done": True})
             return
-        yield _sse({"log": line})
+        for line in chunk.lines:
+            yield _sse({"log": line})
+        from_index = chunk.next_index
+        if chunk.is_terminal and not chunk.lines:
+            yield _sse({"done": True})
+            return
+        if not chunk.lines:
+            yield ": keepalive\n\n"
 
 
 def _stream_destroy_operation_logs(agent_id: AgentId, paths: WorkspacePaths) -> Iterator[str]:
@@ -1443,14 +1692,13 @@ def _handle_destroy_operation_logs(operation_id: str) -> Response:
 
 @require_api_or_cookie_auth
 def _handle_restart_operation_logs(operation_id: str) -> Response:
-    """Drain a restart operation's in-memory registry log queue as server-sent events."""
+    """Stream a restart operation's stored registry log (full history + live tail) as server-sent events."""
     parsed_id = AgentId(operation_id)
     registry = get_state().workspace_operation_registry
-    log_queue = registry.get_log_queue(parsed_id) if registry.get(parsed_id) is not None else None
-    if log_queue is None:
+    if registry.get(parsed_id) is None:
         return _json_error(f"Unknown operation {operation_id}", 404)
     return make_streaming_response(
-        _stream_workspace_operation_logs(log_queue), media_type="text/event-stream", headers=_SSE_HEADERS
+        _stream_workspace_operation_logs(registry, parsed_id), media_type="text/event-stream", headers=_SSE_HEADERS
     )
 
 
@@ -1634,8 +1882,8 @@ def _handle_bug_report(agent_id: str) -> OkResponse | Response:
     if not description:
         return _json_error("'description' field is required and must be a non-empty string", 400)
 
-    get_state().help_modal_request_broker.request_open(
-        OpenHelpRequest(description=description, workspace_agent_id=agent_id)
+    get_state().chrome_event_broadcaster.broadcast(
+        build_open_help_payload(description=description, workspace_agent_id=agent_id)
     )
     # The agent never submits to Sentry itself, so no report event is written here (the
     # response carries no ``event_id``); the human-reviewed send flows through ``/help/report``.
@@ -1756,7 +2004,7 @@ def _handle_sharing_enable(agent_id: str, service_name: str) -> SharingToggleRes
     body = request.get_json(silent=True, force=True) or {}
     emails = [str(email) for email in body.get("emails", [])]
     try:
-        enable_sharing_via_cloudflare(
+        _tunnel, share_url = enable_sharing_via_cloudflare(
             agent_id=parsed_id,
             service_name=ServiceName(service_name),
             emails=emails,
@@ -1764,7 +2012,7 @@ def _handle_sharing_enable(agent_id: str, service_name: str) -> SharingToggleRes
         )
     except SharingError as exc:
         return _json_error(str(exc), 502)
-    return SharingToggleResponse(agent_id=str(parsed_id), service_name=service_name, enabled=True)
+    return SharingToggleResponse(agent_id=str(parsed_id), service_name=service_name, enabled=True, url=share_url)
 
 
 @require_api_or_cookie_auth
@@ -1808,10 +2056,145 @@ def _handle_patch_provider(provider_name: str) -> ProviderToggleResponse | Respo
     return ProviderToggleResponse(provider_name=provider_name, enabled=enabled, changed=changed)
 
 
+def _cloud_account_summary(account: dict[str, str]) -> CloudAccountSummary:
+    """Build the wire model for one bootstrap-layer cloud account dict."""
+    return CloudAccountSummary(
+        name=account["name"],
+        alias=account["alias"],
+        backend=account["backend"],
+        region=account["region"],
+        identifier=account["identifier"],
+    )
+
+
+@require_api_or_cookie_auth
+@API_SPEC.validate(json=CloudAccountCreateRequest, resp=json_response_model(CloudAccountSummary))
+def _handle_create_cloud_account() -> CloudAccountSummary | Response:
+    """Register a bring-your-own-key cloud account and run `mngr <backend> prepare` on it.
+
+    Prepare doubles as credential validation: it is the first privileged call
+    against the pasted keys (security group + state bucket). On prepare failure
+    the just-written provider block is rolled back so a bad key never leaves a
+    half-registered account behind; the error body carries the prepare output
+    so the UI can show the cloud's own message.
+    """
+    if not is_bring_your_own_cloud_enabled():
+        return _json_error("Bring-your-own cloud accounts are not enabled.", 403)
+    body = request.get_json(silent=True, force=True) or {}
+    alias = str(body.get("alias", "")).strip()
+    backend = str(body.get("backend", "")).strip().lower()
+    region = str(body.get("region", "")).strip()
+    if backend == "aws":
+        access_key_id = str(body.get("aws_access_key_id", "")).strip()
+        secret_access_key = str(body.get("aws_secret_access_key", "")).strip()
+        if not access_key_id or not secret_access_key:
+            return _json_field_error("An AWS access key id and secret access key are required.", "aws_access_key_id")
+        credentials = {
+            "aws_access_key_id": access_key_id,
+            "aws_secret_access_key": secret_access_key,
+        }
+    elif backend == "gcp":
+        key_json = str(body.get("gcp_service_account_key_json", "")).strip()
+        if not key_json:
+            return _json_field_error("The service-account key JSON is required.", "gcp_service_account_key_json")
+        # Cheap structural check so an obviously-wrong paste (an API key, an
+        # OAuth client blob) fails here rather than mid-prepare.
+        try:
+            key_info = json.loads(key_json)
+        except json.JSONDecodeError as e:
+            logger.warning("Rejected pasted GCP key: not valid JSON: {}", e)
+            return _json_field_error(
+                "That is not valid JSON. Paste the full contents of the downloaded key file.",
+                "gcp_service_account_key_json",
+            )
+        if not isinstance(key_info, dict) or key_info.get("type") != "service_account":
+            return _json_field_error(
+                "That JSON is not a service-account key (expected 'type': 'service_account').",
+                "gcp_service_account_key_json",
+            )
+        credentials = {"service_account_key_json": key_json}
+    elif backend == "azure":
+        subscription_id = str(body.get("azure_subscription_id", "")).strip()
+        tenant_id = str(body.get("azure_tenant_id", "")).strip()
+        client_id = str(body.get("azure_client_id", "")).strip()
+        client_secret = str(body.get("azure_client_secret", "")).strip()
+        if not (subscription_id and tenant_id and client_id and client_secret):
+            return _json_field_error(
+                "Subscription id, tenant id, client id, and client secret are all required.",
+                "azure_subscription_id",
+            )
+        credentials = {
+            "subscription_id": subscription_id,
+            "tenant_id": tenant_id,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+    else:
+        return _json_field_error(f"Backend {backend!r} is not supported (aws, gcp, azure).", "backend")
+
+    try:
+        provider_name = set_cloud_account_provider(alias, backend, credentials, region)
+    except BootstrapError as exc:
+        return _json_field_error(str(exc), "alias")
+
+    agent_creator: AgentCreator | None = get_state().agent_creator
+    parent_cg = agent_creator.root_concurrency_group if agent_creator is not None else None
+    try:
+        if backend == "aws":
+            run_mngr_aws_prepare(region, provider_name=provider_name, parent_cg=parent_cg)
+        else:
+            # gcp/azure prepare read placement + credentials from the account
+            # block itself, so only --provider is passed.
+            run_mngr_provider_prepare(backend, provider_name, parent_cg=parent_cg)
+    except MngrCommandError as exc:
+        # Roll back: a failed prepare means unusable credentials/permissions;
+        # keeping the block would make every `mngr list` fan out to it.
+        # The exception text already carries the prepare output tail.
+        delete_cloud_account_provider(provider_name)
+        return _json_error(f"Account setup failed: {exc}", 502)
+
+    matching = next((a for a in list_cloud_account_providers() if a["name"] == provider_name), None)
+    if matching is None:
+        return _json_error("Account was prepared but could not be read back.", 500)
+    # The discovery daemon (`mngr observe`) read the settings file at launch, so
+    # it cannot see the just-written provider block until restarted -- without
+    # this bounce the new account's workspaces never enter the per-provider
+    # snapshots (no liveness, no Stop/Start controls). Mirrors
+    # desktop_control.set_provider_enabled's bounce-on-change.
+    bounce_latchkey_forward_supervisor(get_state().latchkey_forward_supervisor)
+    return _cloud_account_summary(matching)
+
+
+@require_api_or_cookie_auth
+@API_SPEC.validate(resp=json_response_model(OkResponse))
+def _handle_delete_cloud_account(account_name: str) -> OkResponse | Response:
+    """Remove a cloud account from minds (keys forgotten; cloud resources kept).
+
+    Refuses (409) while the account still has active workspaces -- deleting the
+    provider block would drop them off discovery with no way to manage them.
+    """
+    if not is_bring_your_own_cloud_enabled():
+        return _json_error("Bring-your-own cloud accounts are not enabled.", 403)
+    active = desktop_control.list_active_workspaces_for_provider(get_state().backend_resolver, account_name)
+    if active:
+        return _json_error(
+            f"Cloud account {account_name!r} still has {len(active)} active workspace(s); "
+            "destroy them before removing the account.",
+            409,
+        )
+    if not delete_cloud_account_provider(account_name):
+        return _json_error(f"Unknown cloud account {account_name!r}.", 404)
+    # Restart discovery so it stops fanning out to the removed provider.
+    bounce_latchkey_forward_supervisor(get_state().latchkey_forward_supervisor)
+    return OkResponse(ok=True)
+
+
 @require_api_or_cookie_auth
 def _handle_running_workspaces() -> Response:
     """Return the shutdown-capable workspaces whose containers are currently running."""
-    return _json_response({"running": desktop_control.running_workspace_entries(get_state().backend_resolver)})
+    running = desktop_control.running_workspace_entries(get_state().backend_resolver)
+    logger.info("running-workspaces query (quit-time shutdown prompt): {}", running)
+    return _json_response({"running": running})
 
 
 @require_api_or_cookie_auth
@@ -1844,6 +2227,7 @@ def _handle_host_name_available() -> Response:
         launch_mode = LaunchMode.DOCKER
     account_id = request.args.get("account_id", "").strip()
     region = request.args.get("region", "").strip()
+    cloud_account = request.args.get("cloud_account", "").strip()
 
     # Imbue Cloud is per-account, so its provider instance (``imbue_cloud_<slug>``)
     # is named from the account email; the session store maps user_id -> email.
@@ -1855,7 +2239,10 @@ def _handle_host_name_available() -> Response:
 
     try:
         provider_instance_name = provider_instance_name_for_launch(
-            launch_mode, imbue_cloud_account=account_email or None, region=region or None
+            launch_mode,
+            imbue_cloud_account=account_email or None,
+            region=region or None,
+            cloud_account=cloud_account or None,
         )
     except MngrCommandError:
         # Not enough context to scope (imbue_cloud without an account, or AWS
@@ -1926,6 +2313,11 @@ def create_api_v1_blueprint() -> Blueprint:
     blueprint.add_url_rule(
         "/workspaces/<agent_id>/backups/<snapshot_id>/export",
         view_func=_handle_workspace_backup_export,
+        methods=["POST"],
+    )
+    blueprint.add_url_rule(
+        "/workspaces/<agent_id>/backups/<snapshot_id>/restore",
+        view_func=_handle_workspace_backup_restore,
         methods=["POST"],
     )
 
@@ -2078,6 +2470,14 @@ def create_api_v1_blueprint() -> Blueprint:
 
     # Desktop namespace (cookie-or-bearer; no agent verb, so deny-all at the gateway).
     blueprint.add_url_rule("/desktop/providers/<provider_name>", view_func=_handle_patch_provider, methods=["PATCH"])
+    # Bring-your-own-key cloud accounts (pasted credentials + prepare).
+    blueprint.add_url_rule("/desktop/cloud-accounts", view_func=_handle_create_cloud_account, methods=["POST"])
+    blueprint.add_url_rule(
+        "/desktop/cloud-accounts/<account_name>",
+        view_func=_handle_delete_cloud_account,
+        endpoint="delete_cloud_account",
+        methods=["DELETE"],
+    )
     blueprint.add_url_rule("/desktop/running-workspaces", view_func=_handle_running_workspaces, methods=["GET"])
     blueprint.add_url_rule("/desktop/host-name-available", view_func=_handle_host_name_available, methods=["GET"])
     blueprint.add_url_rule("/desktop/stop-hosts", view_func=_handle_stop_hosts, methods=["POST"])

@@ -156,7 +156,7 @@ def main() -> None:
         check=True,
     )
     print("Workflow triggered. Watch it at:")
-    print("  https://github.com/imbue-ai/mngr/actions/workflows/publish-tombstones.yml")
+    print("  https://github.com/imbue-ai/mngr-internal/actions/workflows/publish-tombstones.yml")
 
 
 if __name__ == "__main__":

@@ -67,6 +67,13 @@ _RESTORE_TIMEOUT_SECONDS: Final[float] = 600.0
 _AUTH_PROPAGATION_RETRY_SECONDS: Final[float] = 60.0
 _AUTH_PROPAGATION_WAIT_SECONDS: Final[float] = 3.0
 _TRANSIENT_AUTH_SIGNALS: Final[tuple[str, ...]] = ("unauthorized", "invalidaccesskeyid", "signaturedoesnotmatch")
+# restic's message when it cannot write its lock file to the repository --
+# the failure mode of a read-only (storage-quota-downgraded) key. Read-only
+# operations retry once with --no-lock when they see it.
+_LOCK_WRITE_FAILURE_SIGNAL: Final[str] = "unable to create lock"
+# Space reclaim (forget --prune) repacks data and can take a while on a
+# large repository.
+_PRUNE_TIMEOUT_SECONDS: Final[float] = 1800.0
 
 
 class ResticNotInstalledError(BackupProvisioningError):
@@ -222,6 +229,11 @@ def init_repo(
     )
 
 
+def _looks_like_lock_write_failure(stderr: str) -> bool:
+    """Return whether a restic failure means the repository lock could not be written."""
+    return _LOCK_WRITE_FAILURE_SIGNAL in stderr.lower()
+
+
 def restore_snapshot(
     *,
     repository: str,
@@ -236,6 +248,12 @@ def restore_snapshot(
 
     ``restic restore`` downloads blobs in parallel, so it is dramatically faster
     than ``restic dump`` (which fetches sequentially) for a many-file snapshot.
+
+    Restore normally takes a (non-exclusive) repository lock, which is a
+    *write* -- so it fails against a read-only key even though the restore
+    itself only reads. When the failure is specifically the lock write, the
+    restore is retried once with ``--no-lock`` so storage-quota-downgraded
+    accounts can still restore their data.
     """
     env, flags = _env_and_flags(repository, backend_env, password)
     result = _run_restic(
@@ -244,8 +262,48 @@ def restore_snapshot(
         parent_cg=parent_cg,
         timeout_seconds=timeout_seconds,
     )
-    if result.returncode != 0:
+    if result.returncode == 0:
+        return
+    if not _looks_like_lock_write_failure(result.stderr):
         raise BackupProvisioningError(f"restic restore failed (exit {result.returncode}): {result.stderr.strip()}")
+    logger.debug("restic restore could not write its repository lock (read-only key?); retrying with --no-lock")
+    retried = _run_restic(
+        [*flags, "--no-lock", "restore", snapshot, "--target", str(target_dir)],
+        env_overrides=env,
+        parent_cg=parent_cg,
+        timeout_seconds=timeout_seconds,
+    )
+    if retried.returncode != 0:
+        raise BackupProvisioningError(f"restic restore failed (exit {retried.returncode}): {retried.stderr.strip()}")
+
+
+def forget_snapshots(
+    *,
+    repository: str,
+    backend_env: Mapping[str, str],
+    password: str | None,
+    snapshot_ids: Sequence[str],
+    # When set, restic reclaims the space in the same invocation (forget
+    # alone only unreferences data; prune is what actually deletes it).
+    is_pruning: bool,
+    parent_cg: ConcurrencyGroup | None = None,
+    timeout_seconds: float = _PRUNE_TIMEOUT_SECONDS,
+) -> None:
+    """Forget the given snapshots (optionally pruning) via ``restic forget``.
+
+    Requires a writable key: forget deletes snapshot files and prune repacks
+    data, so this cannot run against a storage-quota-downgraded (read-only)
+    credential -- request a cleanup grant first.
+    """
+    if not snapshot_ids:
+        return
+    env, flags = _env_and_flags(repository, backend_env, password)
+    args = [*flags, "forget", *snapshot_ids]
+    if is_pruning:
+        args.append("--prune")
+    result = _run_restic(args, env_overrides=env, parent_cg=parent_cg, timeout_seconds=timeout_seconds)
+    if result.returncode != 0:
+        raise BackupProvisioningError(f"restic forget failed (exit {result.returncode}): {result.stderr.strip()}")
 
 
 def parse_restic_timestamp(raw: str) -> datetime | None:
@@ -357,6 +415,54 @@ def list_snapshots(
     if result.returncode != 0:
         raise BackupProvisioningError(f"restic snapshots failed (exit {result.returncode}): {result.stderr.strip()}")
     return parse_restic_snapshots(result.stdout or "[]")
+
+
+def list_snapshot_directory(
+    *,
+    repository: str,
+    backend_env: Mapping[str, str],
+    password: str | None,
+    snapshot_id: str,
+    directory: str,
+    parent_cg: ConcurrencyGroup | None = None,
+    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+) -> tuple[str, ...]:
+    """List the absolute paths directly under ``directory`` in ``snapshot_id`` (non-recursive).
+
+    ``restic ls`` filtered by a directory lists only that directory's own
+    entries, so this stays cheap even for huge snapshots. Used to locate the
+    host-dir subtree inside a snapshot before dispatching a restore.
+    """
+    env, flags = _env_and_flags(repository, backend_env, password)
+    result = _run_restic(
+        [*flags, "--no-lock", "ls", snapshot_id, directory, "--json"],
+        env_overrides=env,
+        parent_cg=parent_cg,
+        timeout_seconds=timeout_seconds,
+    )
+    if result.returncode != 0:
+        raise BackupProvisioningError(f"restic ls failed (exit {result.returncode}): {result.stderr.strip()}")
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except ValueError:
+            logger.warning("Skipping non-JSON restic ls line: {!r}", stripped[:200])
+            continue
+        if not isinstance(payload, dict):
+            continue
+        # restic >= 0.17 labels node lines with message_type; older builds
+        # used struct_type. The snapshot-descriptor first line has neither
+        # a "node" label nor a path we care about.
+        if payload.get("message_type") != "node" and payload.get("struct_type") != "node":
+            continue
+        node_path = payload.get("path")
+        if isinstance(node_path, str):
+            paths.append(node_path)
+    return tuple(paths)
 
 
 def is_backup_in_progress(

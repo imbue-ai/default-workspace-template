@@ -1,5 +1,7 @@
 import json
 from collections.abc import Mapping
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,7 @@ from imbue.minds.desktop_client.conftest import make_resolver_with_data
 from imbue.minds.desktop_client.conftest import make_service_log
 from imbue.minds.desktop_client.workspace_color import DEFAULT_WORKSPACE_COLOR
 from imbue.minds.primitives import ServiceName
+from imbue.mngr.api.discovery_events import DiscoveryError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import DiscoveredAgent
@@ -585,6 +588,22 @@ def test_host_state_override_does_not_affect_active_workspace_filtering() -> Non
     assert resolver.list_active_workspace_ids() == (agent,)
 
 
+def test_host_state_override_is_not_persisted_across_sessions(tmp_path: Path) -> None:
+    """Overrides are in-memory only: a fresh resolver on the same topology path knows nothing of them.
+
+    Host lifecycle state is deliberately not persisted across a quit -- the
+    recovery flow dispatches its start-only restart unconditionally on entry,
+    so the next launch needs no memory of which hosts were stopped (a persisted
+    lifecycle mirror proved unreconcilable against stale in-flight and replayed
+    discovery snapshots).
+    """
+    topology_path = tmp_path / "last_good_agent_topology.json"
+    host = HostId.generate()
+    MngrCliBackendResolver(last_good_agents_path=topology_path).set_host_state_override(host, HostState.STOPPED)
+
+    assert MngrCliBackendResolver(last_good_agents_path=topology_path).get_host_state(host) is None
+
+
 def test_parse_agents_from_json_extracts_host_state() -> None:
     """mngr list --format json carries host.state, which parsing surfaces per host id."""
     json_output = json.dumps(
@@ -723,6 +742,60 @@ def test_list_restorable_workspace_ids_unions_live_and_last_good(tmp_path: Path)
     assert set(resolver.list_restorable_workspace_ids()) == {remembered_agent, fresh_agent}
 
 
+def test_lifecycle_transition_retains_active_row_through_discovery_gap() -> None:
+    """A host mid UI stop/start keeps its active row + display info while it drops out of discovery."""
+    host, agent = HostId.generate(), AgentId.generate()
+    resolver = MngrCliBackendResolver()
+    primary = _primary_system_services_agent(host, agent)
+    resolver.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(agent,),
+            discovered_agents=(primary,),
+            host_state_by_host_id={str(host): HostState.RUNNING},
+        )
+    )
+    assert resolver.list_active_workspace_ids() == (agent,)
+
+    # User stops the host: mark the transition, then the VM drops out of discovery.
+    resolver.mark_host_lifecycle_transition_started(host)
+    resolver.update_agents(ParsedAgentsResult())
+    # Without the marker this would be () (see the last-good test above); the
+    # retention keeps the row AND its display info renderable.
+    assert resolver.list_active_workspace_ids() == (agent,)
+    info = resolver.get_agent_display_info(agent)
+    assert info is not None and info.host_id == str(host)
+
+    # Discovery re-lists the host (offline bucket now reports STOPPED): the
+    # retention is swept, and a genuine later loss really drops the row.
+    resolver.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(agent,),
+            discovered_agents=(primary,),
+            host_state_by_host_id={str(host): HostState.STOPPED},
+        )
+    )
+    assert resolver.list_active_workspace_ids() == (agent,)
+    resolver.update_agents(ParsedAgentsResult())
+    assert resolver.list_active_workspace_ids() == ()
+
+
+def test_lifecycle_transition_cleared_on_failure_does_not_retain() -> None:
+    """A cleared transition (failed action) must not keep a ghost row when the host drops."""
+    host, agent = HostId.generate(), AgentId.generate()
+    resolver = MngrCliBackendResolver()
+    resolver.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(agent,),
+            discovered_agents=(_primary_system_services_agent(host, agent),),
+            host_state_by_host_id={str(host): HostState.RUNNING},
+        )
+    )
+    resolver.mark_host_lifecycle_transition_started(host)
+    resolver.clear_host_lifecycle_transition(host)
+    resolver.update_agents(ParsedAgentsResult())
+    assert resolver.list_active_workspace_ids() == ()
+
+
 def test_last_good_topology_prunes_host_on_observed_destroyed(tmp_path: Path) -> None:
     """A host observed DESTROYED is pruned from last-good, and the prune is persisted to disk.
 
@@ -766,6 +839,123 @@ def test_last_good_topology_prunes_host_on_observed_destroyed(tmp_path: Path) ->
     # A fresh resolver reloading from disk agrees: the prune survived the restart.
     reloaded = MngrCliBackendResolver(last_good_agents_path=topology_path)
     assert reloaded.get_system_services_agent_id(workspace_agent) is None
+
+
+def _services_agent_for_provider(host_id: HostId, agent_id: AgentId, provider: str) -> DiscoveredAgent:
+    """A system-services agent record attributed to ``provider``."""
+    return DiscoveredAgent(
+        host_id=host_id,
+        agent_id=agent_id,
+        agent_name=AgentName("system-services"),
+        provider_name=ProviderInstanceName(provider),
+    )
+
+
+def test_last_good_topology_prunes_provider_host_absent_from_clean_snapshot(tmp_path: Path) -> None:
+    """A clean provider snapshot is authoritative: its vanished hosts are pruned from last-good.
+
+    Reproduces the ghost-workspace pathology: a cloud host is reaped server-side
+    while this client is not watching, so no DESTROYED observation ever arrives
+    and the DESTROYED-only prune keeps it "restorable" forever (stranding the
+    landing page on the discovering state). A clean (error-free) snapshot for
+    that provider that no longer lists the host is positive absence evidence and
+    must prune it -- in memory and on disk -- while hosts the snapshot still
+    reports and hosts of other providers are untouched.
+    """
+    topology_path = tmp_path / "last_good_agent_topology.json"
+    cloud_host, cloud_agent = HostId.generate(), AgentId.generate()
+    docker_host, docker_agent = HostId.generate(), AgentId.generate()
+    resolver = MngrCliBackendResolver(last_good_agents_path=topology_path)
+    resolver.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(cloud_agent, docker_agent),
+            discovered_agents=(
+                _services_agent_for_provider(cloud_host, cloud_agent, "imbue_cloud_user"),
+                _services_agent_for_provider(docker_host, docker_agent, "docker"),
+            ),
+        )
+    )
+    assert str(cloud_host) in _read_last_good_agent_topology(topology_path).agents_by_host
+
+    # The cloud provider polls cleanly and no longer lists its host; docker's
+    # clean poll still reports its own host.
+    resolver.update_providers(
+        provider_name=ProviderInstanceName("imbue_cloud_user"),
+        provider=None,
+        error=None,
+        last_snapshot_at=datetime.now(timezone.utc),
+        clean_snapshot_host_ids=(),
+    )
+    resolver.update_providers(
+        provider_name=ProviderInstanceName("docker"),
+        provider=None,
+        error=None,
+        last_snapshot_at=datetime.now(timezone.utc),
+        clean_snapshot_host_ids=(str(docker_host),),
+    )
+
+    remembered = _read_last_good_agent_topology(topology_path).agents_by_host
+    assert str(cloud_host) not in remembered
+    assert str(docker_host) in remembered
+    assert set(resolver.list_restorable_workspace_ids()) == {docker_agent}
+
+
+def test_last_good_topology_retains_provider_hosts_on_errored_snapshot(tmp_path: Path) -> None:
+    """An errored provider poll proves nothing: its remembered hosts are retained.
+
+    The provider's hosts are unreachable, not absent, so the caller passes no
+    host set and nothing may be pruned -- the entire point of the last-good
+    fallback is surviving exactly this kind of discovery loss.
+    """
+    topology_path = tmp_path / "last_good_agent_topology.json"
+    cloud_host, cloud_agent = HostId.generate(), AgentId.generate()
+    provider = ProviderInstanceName("imbue_cloud_user")
+    resolver = MngrCliBackendResolver(last_good_agents_path=topology_path)
+    resolver.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(cloud_agent,),
+            discovered_agents=(_services_agent_for_provider(cloud_host, cloud_agent, str(provider)),),
+        )
+    )
+
+    resolver.update_providers(
+        provider_name=provider,
+        provider=None,
+        error=DiscoveryError(type_name="ProviderUnavailableError", message="cloud down", provider_name=provider),
+        last_snapshot_at=datetime.now(timezone.utc),
+        clean_snapshot_host_ids=None,
+    )
+
+    assert str(cloud_host) in _read_last_good_agent_topology(topology_path).agents_by_host
+    assert set(resolver.list_restorable_workspace_ids()) == {cloud_agent}
+
+
+def test_last_good_topology_resets_legacy_file_without_provider_names(tmp_path: Path) -> None:
+    """A pre-provider-attribution topology file fails validation and loads as empty.
+
+    Deliberate migration: unattributed records can never be pruned by a clean
+    provider snapshot, so accumulated ghosts (hosts long gone without a
+    DESTROYED observation) would strand the landing page on the discovering
+    state forever. Live workspaces re-enter the topology on their next
+    discovery snapshot; only the stale memories are lost.
+    """
+    topology_path = tmp_path / "last_good_agent_topology.json"
+    host, agent = HostId.generate(), AgentId.generate()
+    topology_path.write_text(
+        json.dumps(
+            {
+                "agents_by_host": {
+                    str(host): [{"agent_id": str(agent), "host_id": str(host), "agent_name": "system-services"}]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolver = MngrCliBackendResolver(last_good_agents_path=topology_path)
+
+    assert resolver.list_restorable_workspace_ids() == ()
+    assert resolver.get_system_services_agent_id(agent) is None
 
 
 def test_last_good_topology_keeps_absent_host_but_prunes_destroyed_one() -> None:
@@ -943,6 +1133,33 @@ def test_last_good_topology_ignores_malformed_persisted_file(tmp_path: Path) -> 
 
     resolver = MngrCliBackendResolver(last_good_agents_path=topology_path)
     assert resolver.get_system_services_agent_id(AgentId.generate()) is None
+
+
+def test_last_good_topology_tolerates_unknown_fields_from_other_versions(tmp_path: Path) -> None:
+    """A topology file carrying fields this version does not know still loads its agents.
+
+    The file is a persisted cache read back across app versions (e.g. a build
+    that persisted offline host states alongside the topology). Rejecting the
+    unknown field would void the whole topology and lose the system-services
+    fallback exactly on the first launch after an upgrade.
+    """
+    topology_path = tmp_path / "last_good_agent_topology.json"
+    host = HostId.generate()
+    workspace_agent = AgentId.generate()
+    services_agent = AgentId.generate()
+    seed = MngrCliBackendResolver(last_good_agents_path=topology_path)
+    seed.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(workspace_agent, services_agent),
+            discovered_agents=_pair_snapshot(host, workspace_agent, services_agent),
+        )
+    )
+    raw = json.loads(topology_path.read_text(encoding="utf-8"))
+    raw["offline_host_state_by_host_id"] = {str(host): "STOPPED"}
+    topology_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    reloaded = MngrCliBackendResolver(last_good_agents_path=topology_path)
+    assert reloaded.get_system_services_agent_id(workspace_agent) == services_agent
 
 
 def test_last_good_topology_prefers_live_discovery_when_host_present(tmp_path: Path) -> None:

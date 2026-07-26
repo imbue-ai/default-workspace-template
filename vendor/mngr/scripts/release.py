@@ -26,9 +26,13 @@ preview still works.
 """
 
 import argparse
+import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections import deque
 from datetime import date
 from datetime import datetime
@@ -67,7 +71,7 @@ DEPENDENCY_COOLDOWN: Final[timedelta] = timedelta(weeks=2)
 
 PUBLISH_WORKFLOW: Final[str] = "publish.yml"
 RELEASE_TESTS_WORKFLOW: Final[str] = "release-tests.yml"
-ACTIONS_URL: Final[str] = "https://github.com/imbue-ai/mngr/actions/workflows/publish.yml"
+ACTIONS_URL: Final[str] = "https://github.com/imbue-ai/mngr-internal/actions/workflows/publish.yml"
 POLL_INTERVAL_SECONDS: Final[int] = 10
 MAX_WAIT_FOR_RUN_SECONDS: Final[int] = 300
 SLOW_START_WARNING_SECONDS: Final[int] = 60
@@ -437,6 +441,111 @@ def update_exclude_newer(pyproject_path: Path, release_date: date) -> str | None
     return new_value
 
 
+COPYBARA_JAR_URL: Final = "https://github.com/google/copybara/releases/download/v20260720/copybara_deploy.jar"
+COPYBARA_JAR_SHA256: Final = "e94448c702addc17cfc45d4bbfc8509d458b9a25f4715e3e77207ad570e1075d"
+OVERLAY_DIR: Final = REPO_ROOT / "mirror" / "overlay"
+
+
+def _copybara_jar() -> Path:
+    """Return the pinned copybara jar, downloading and checksum-verifying it on first use."""
+    override = os.environ.get("COPYBARA_JAR")
+    jar = Path(override) if override else Path.home() / ".cache" / "imbue-mngr" / "copybara_deploy_v20260720.jar"
+    if not jar.exists():
+        if override:
+            print(f"ERROR: COPYBARA_JAR points at a missing file: {jar}", file=sys.stderr)
+            sys.exit(1)
+        jar.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Downloading copybara to {jar}...")
+        response = httpx.get(COPYBARA_JAR_URL, follow_redirects=True)
+        response.raise_for_status()
+        jar.write_bytes(response.content)
+    digest = hashlib.sha256(jar.read_bytes()).hexdigest()
+    if digest != COPYBARA_JAR_SHA256:
+        print(f"ERROR: copybara jar checksum mismatch at {jar}: {digest}", file=sys.stderr)
+        sys.exit(1)
+    return jar
+
+
+def _java_binary() -> str:
+    """Locate a JDK for copybara: the JAVA env var, PATH, or the Homebrew keg."""
+    override = os.environ.get("JAVA")
+    if override:
+        return override
+    found = shutil.which("java")
+    if found:
+        return found
+    brew_java = Path("/opt/homebrew/opt/openjdk/bin/java")
+    if brew_java.exists():
+        return str(brew_java)
+    print("ERROR: no JDK found for copybara; `brew install openjdk` or set JAVA.", file=sys.stderr)
+    sys.exit(1)
+
+
+def temp_ref_of_working_tree(repo_root: Path, ref_name: str) -> str:
+    """Write the working tree's tracked files (including unstaged edits) to ref_name.
+
+    Uses a throwaway index, so HEAD, the branch, and the real index are untouched.
+    Returns the commit sha.
+    """
+    with tempfile.NamedTemporaryFile() as index:
+        env = {**os.environ, "GIT_INDEX_FILE": index.name}
+        subprocess.run(["git", "read-tree", "HEAD"], cwd=repo_root, env=env, check=True)
+        subprocess.run(["git", "add", "-u"], cwd=repo_root, env=env, check=True)
+        tree = subprocess.run(
+            ["git", "write-tree"], cwd=repo_root, env=env, check=True, capture_output=True, text=True
+        ).stdout.strip()
+    # The snapshot commit is never pushed and the ref is deleted after use, so
+    # a fixed identity keeps this working where no git config exists.
+    sha = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=release",
+            "-c",
+            "user.email=dev@imbue.com",
+            "commit-tree",
+            tree,
+            "-p",
+            "HEAD",
+            "-m",
+            "temporary working-tree snapshot",
+        ],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(["git", "update-ref", ref_name, sha], cwd=repo_root, check=True)
+    return sha
+
+
+def _regenerate_overlay_artifacts(release_date: date) -> list[str]:
+    """Refresh the public-mirror overlay (exclude-newer cutoff and uv.lock) from the working tree.
+
+    The overlay lock must reflect the bumped-but-not-yet-committed lib versions, so the
+    working tree is snapshotted to a temporary ref and materialized from there. Returns
+    the repo-relative overlay paths to include in the release commit.
+    """
+    overlay_cutoff = update_exclude_newer(OVERLAY_DIR / "pyproject.toml", release_date)
+    if overlay_cutoff is not None:
+        print(f"Advanced overlay exclude-newer cooldown cutoff to {overlay_cutoff}")
+    jar = _copybara_jar()
+    java = _java_binary()
+    temp_ref = "refs/mirror-tmp/release"
+    temp_ref_of_working_tree(REPO_ROOT, temp_ref)
+    try:
+        with tempfile.TemporaryDirectory() as tree_dir:
+            subprocess.run(
+                [str(REPO_ROOT / "mirror" / "materialize_public_tree.sh"), str(jar), f"{tree_dir}/tree", "--lock"],
+                cwd=REPO_ROOT,
+                env={**os.environ, "MATERIALIZE_REF": temp_ref, "JAVA": java},
+                check=True,
+            )
+    finally:
+        subprocess.run(["git", "update-ref", "-d", temp_ref], cwd=REPO_ROOT, check=True)
+    return ["mirror/overlay/pyproject.toml", "mirror/overlay/uv.lock"]
+
+
 def gh_is_available() -> bool:
     """Check whether the gh CLI is installed and authenticated."""
     try:
@@ -510,7 +619,7 @@ def wait_for_run_completion(run_id: str, after_workflow_attempt: int) -> str:
     if conclusion is not None:
         return conclusion
     print("ERROR: Workflow did not complete within 30 minutes.", file=sys.stderr)
-    print(f"Check manually: https://github.com/imbue-ai/mngr/actions/runs/{run_id}", file=sys.stderr)
+    print(f"Check manually: https://github.com/imbue-ai/mngr-internal/actions/runs/{run_id}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -522,7 +631,7 @@ def print_run_failure(run_id: str) -> None:
         print(logs)
     except subprocess.CalledProcessError:
         print("(Could not retrieve failure logs)")
-    print(f"\nFull details: https://github.com/imbue-ai/mngr/actions/runs/{run_id}")
+    print(f"\nFull details: https://github.com/imbue-ai/mngr-internal/actions/runs/{run_id}")
 
 
 def _get_workflow_attempt_number(run_id: str) -> int:
@@ -923,6 +1032,11 @@ def main() -> None:
     print("Regenerating uv.lock...")
     run("uv", "lock")
 
+    overlay_files: list[str] = []
+    if OVERLAY_DIR.exists():
+        print("Refreshing the public-mirror overlay artifacts...")
+        overlay_files = _regenerate_overlay_artifacts(datetime.now(timezone.utc).date())
+
     # Finalize each released package's per-project CHANGELOG.md: rename its
     # [Unreleased] section to [v<package-version>] - <date> and insert a
     # fresh empty [Unreleased] above it. Covers both bumped packages (use
@@ -957,7 +1071,9 @@ def main() -> None:
 
     # Commit, tag, push
     all_released_names = sorted(set(new_versions.keys()) | confirmed_new)
-    commit_msg = f"Release {tag} ({', '.join(all_released_names)})"
+    # The RELEASE_TAG trailer makes the public-mirror sync create the matching
+    # tag on the destination (mirror/copy.bara.sky tag_name).
+    commit_msg = f"Release {tag} ({', '.join(all_released_names)})\n\nRELEASE_TAG={tag}"
 
     files_to_add = [
         # Root pyproject.toml carries the `[tool.uv] exclude-newer` cutoff that
@@ -967,6 +1083,7 @@ def main() -> None:
         # Pin alignment may also touch non-publishable libs and apps/ pyprojects.
         *pin_modified,
         "uv.lock",
+        *overlay_files,
         *[str(p.relative_to(REPO_ROOT)) for p in finalized_paths],
     ]
     run("git", "add", *files_to_add)

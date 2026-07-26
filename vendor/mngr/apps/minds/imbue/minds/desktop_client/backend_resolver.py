@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Final
 
 from loguru import logger
+from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import PrivateAttr
 
@@ -147,6 +148,22 @@ class BackendResolverInterface(MutableModel, ABC):
 
     def clear_host_state_override(self, host_id: HostId) -> None:
         """Drop any optimistic override for ``host_id`` (e.g. after a failed action).
+
+        Default implementation is a no-op.
+        """
+
+    def mark_host_lifecycle_transition_started(self, host_id: HostId) -> None:
+        """Retain ``host_id``'s workspace row across a UI-initiated stop/start.
+
+        A cloud VM transiently leaves discovery mid-transition; capturing its
+        current agents keeps the row (and its display info) on every active
+        surface until discovery re-lists the host, so it survives a page reload.
+        Default implementation is a no-op (resolvers without discovery have
+        nothing to retain).
+        """
+
+    def clear_host_lifecycle_transition(self, host_id: HostId) -> None:
+        """Drop any lifecycle-transition retention for ``host_id`` (e.g. after a failed action).
 
         Default implementation is a no-op.
         """
@@ -455,14 +472,23 @@ def parse_service_log_records(text: str) -> list[ServiceLogRecord | ServiceDereg
 class _AgentRecord(FrozenModel):
     """The minimal agent-topology fields needed to resolve the system-services agent.
 
-    A trimmed projection of ``DiscoveredAgent`` (id, host, name) -- the only
-    fields ``get_system_services_agent_id`` consults. Kept small so the
-    persisted last-good snapshot carries no more than the fallback needs.
+    A trimmed projection of ``DiscoveredAgent`` (id, host, name, provider) --
+    the fields ``get_system_services_agent_id`` consults plus the provider
+    attribution that lets a clean provider snapshot authoritatively prune
+    remembered hosts it no longer reports. Kept small so the persisted
+    last-good snapshot carries no more than the fallback needs.
+
+    ``provider_name`` is required: a persisted file from before it existed
+    fails validation on load and the topology resets empty (see
+    ``_read_last_good_agent_topology``), which is the intended migration --
+    unattributed records could never be pruned by a clean snapshot, and any
+    real workspace re-enters the topology on its next discovery.
     """
 
     agent_id: AgentId = Field(description="The agent's id")
     host_id: HostId = Field(description="The id of the host the agent runs on")
     agent_name: AgentName = Field(description="The agent's name (the system-services agent is constant-named)")
+    provider_name: ProviderInstanceName = Field(description="The provider instance managing the agent's host")
 
 
 class _LastGoodAgentTopology(FrozenModel):
@@ -474,7 +500,15 @@ class _LastGoodAgentTopology(FrozenModel):
     out of discovery entirely (the SSH-dead failure mode) -- retain their
     last complete record rather than being clobbered by a partial view. This
     is what lets the system-services fallback survive a discovery loss.
+
+    Unknown fields are ignored rather than rejected: this is a persisted cache
+    read back across app versions, and a file written by a build with an extra
+    field must not void the whole topology (losing the system-services
+    fallback exactly on the first launch after an upgrade).
     """
+
+    # Pydantic merges this with FrozenModel's config, so frozen=True is kept.
+    model_config = ConfigDict(extra="ignore")
 
     agents_by_host: Mapping[str, tuple[_AgentRecord, ...]] = Field(
         default_factory=dict, description="Host id -> the agents last seen on that host with a complete enumeration"
@@ -483,7 +517,22 @@ class _LastGoodAgentTopology(FrozenModel):
 
 def _to_agent_record(agent: DiscoveredAgent) -> _AgentRecord:
     """Trim a ``DiscoveredAgent`` down to the topology fields the fallback needs."""
-    return _AgentRecord(agent_id=agent.agent_id, host_id=agent.host_id, agent_name=agent.agent_name)
+    return _AgentRecord(
+        agent_id=agent.agent_id,
+        host_id=agent.host_id,
+        agent_name=agent.agent_name,
+        provider_name=agent.provider_name,
+    )
+
+
+def _display_info_from_agent(agent: DiscoveredAgent) -> AgentDisplayInfo:
+    """Project a ``DiscoveredAgent`` into the display fields the UI reads."""
+    return AgentDisplayInfo(
+        agent_name=str(agent.agent_name),
+        host_id=str(agent.host_id),
+        create_time=agent.create_time,
+        provider_name=str(agent.provider_name),
+    )
 
 
 def _find_system_services_agent(records: Iterable[_AgentRecord], workspace_agent_id: AgentId) -> AgentId | None:
@@ -577,6 +626,30 @@ class _WorkspaceNameOverride(FrozenModel):
     set_at_monotonic: float = Field(description="time.monotonic() when the override was set, for TTL expiry")
 
 
+# Sized for the slowest legitimate stop/start round-trip (a cloud VM's first stop
+# can run ~20 min; see workspace_lifecycle._HOST_STOP_TIMEOUT_SECONDS) plus
+# discovery reconcile headroom. Purely a backstop: a retention is normally dropped
+# the moment discovery re-lists the host, long before this.
+_HOST_TRANSITION_RETENTION_CAP_SECONDS: Final[float] = 1500.0
+
+
+class _HostTransitionRetention(FrozenModel):
+    """A host's agents captured when a UI-initiated stop/start began.
+
+    A cloud VM briefly leaves the discovery snapshot mid stop/start (deallocating,
+    not yet in the provider's offline bucket). During that window its workspace
+    would vanish from every ``list_active_workspace_ids`` surface -- and, unlike a
+    frontend grace timer, that loss survives a page reload. Retaining the
+    pre-transition agents keeps the row (and its display info) present until
+    discovery re-lists the host or the cap elapses.
+    """
+
+    agents: tuple[DiscoveredAgent, ...] = Field(
+        description="The host's discovered agents at the moment the action began"
+    )
+    set_at_monotonic: float = Field(description="time.monotonic() when captured, for the safety cap")
+
+
 class MngrCliBackendResolver(BackendResolverInterface):
     """Resolves backend URLs from continuously-updated state.
 
@@ -617,16 +690,20 @@ class MngrCliBackendResolver(BackendResolverInterface):
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _on_change_callbacks: list[Callable[[], None]] = PrivateAttr(default_factory=list)
     _on_request_callbacks: list[Callable[[str, str], None]] = PrivateAttr(default_factory=list)
-    # host_id_str -> a short-lived optimistic state set by a UI lifecycle action,
-    # masking discovery in ``get_host_state`` until discovery agrees or the TTL
-    # elapses. Guarded by _lock. Only ever holds a real RUNNING/STOPPED-style
-    # transition the user just triggered -- never DESTROYED -- so it cannot affect
-    # the DESTROYED-only filtering in ``list_active_workspace_ids``.
+    # host_id_str -> a short-lived optimistic state set by a UI lifecycle action, masking discovery
+    # in ``get_host_state`` until discovery agrees or the TTL elapses. Guarded by _lock. Only ever
+    # holds a real RUNNING/STOPPED-style transition -- never DESTROYED -- so it cannot affect the
+    # DESTROYED-only filtering in ``list_active_workspace_ids``.
     _host_state_override_by_host_id: dict[str, _HostStateOverride] = PrivateAttr(default_factory=dict)
     # agent_id_str -> a short-lived optimistic workspace name set by a UI-initiated
     # rename, masking discovery in ``get_workspace_name`` / ``get_host_name`` until
     # discovery re-reads the renamed labels (or the TTL elapses). Guarded by _lock.
     _workspace_name_override_by_agent_id: dict[str, _WorkspaceNameOverride] = PrivateAttr(default_factory=dict)
+    # host_id_str -> the host's agents captured when a UI-initiated stop/start
+    # began, so the workspace row survives the brief discovery gap while the VM
+    # transitions (see _HostTransitionRetention). Guarded by _lock; swept once
+    # discovery re-lists the host or the safety cap elapses.
+    _transition_retention_by_host_id: dict[str, _HostTransitionRetention] = PrivateAttr(default_factory=dict)
     # host_id_str -> the agents last completely enumerated on that host (the
     # in-memory image of the persisted last-good topology). Updated under
     # _lock by update_agents; read by get_system_services_agent_id as the
@@ -702,10 +779,10 @@ class MngrCliBackendResolver(BackendResolverInterface):
         the on-disk topology (if configured). Hosts with an incomplete view --
         or absent from the snapshot entirely (transient discovery loss) --
         keep their last complete record; that is the entire point of the
-        topology. A host observed in a terminal ``DESTROYED`` state is the sole
-        exception: it is pruned from the topology (and never re-added), so a
-        workspace the user destroyed stops counting as restorable -- but only
-        on that explicit DESTROYED observation, never on mere absence.
+        topology. A host observed in a terminal ``DESTROYED`` state is pruned
+        from the topology (and never re-added), so a workspace the user
+        destroyed stops counting as restorable. (Absence from a *clean
+        per-provider snapshot* also prunes, via :meth:`update_providers`.)
         """
         path = self.last_good_agents_path
         topology_to_write: _LastGoodAgentTopology | None = None
@@ -713,6 +790,7 @@ class MngrCliBackendResolver(BackendResolverInterface):
             self._agents_result = result
             self._initial_discovery_done = True
             self._sweep_host_state_overrides_locked(result.host_state_by_host_id)
+            self._sweep_transition_retentions_locked(result)
             self._sweep_workspace_name_overrides_locked()
             if (
                 self._merge_last_good_topology_locked(result.discovered_agents, result.host_state_by_host_id)
@@ -735,11 +813,38 @@ class MngrCliBackendResolver(BackendResolverInterface):
         for host_id_str in tuple(self._host_state_override_by_host_id):
             override = self._host_state_override_by_host_id[host_id_str]
             discovery_state = discovery_state_by_host_id.get(host_id_str)
-            if (
-                discovery_state == override.state
-                or (now - override.set_at_monotonic) > _HOST_STATE_OVERRIDE_TTL_SECONDS
-            ):
+            agreed = discovery_state == override.state
+            expired = (now - override.set_at_monotonic) > _HOST_STATE_OVERRIDE_TTL_SECONDS
+            if agreed or expired:
                 del self._host_state_override_by_host_id[host_id_str]
+                logger.info(
+                    "host-state override for {} dropped by sweep ({}): override={} discovery={} age={:.1f}s",
+                    host_id_str,
+                    "discovery-agreed" if agreed else "ttl-expired",
+                    override.state.value,
+                    discovery_state.value if discovery_state is not None else None,
+                    now - override.set_at_monotonic,
+                )
+
+    def _sweep_transition_retentions_locked(self, result: ParsedAgentsResult) -> None:
+        """Drop retentions whose host discovery has re-listed, or that hit the safety cap.
+
+        Once the fresh snapshot again includes the host -- as a live agent or a
+        known host state (e.g. the provider's offline bucket now reporting it
+        STOPPED) -- the real row is back and the retention is unnecessary. The cap
+        bounds a retention whose host never returns so it cannot linger forever.
+        Must hold ``self._lock``.
+        """
+        present_host_ids = {str(agent.host_id) for agent in result.discovered_agents}
+        present_host_ids.update(result.host_state_by_host_id)
+        now = time.monotonic()
+        for host_id_str in tuple(self._transition_retention_by_host_id):
+            retention = self._transition_retention_by_host_id[host_id_str]
+            if (
+                host_id_str in present_host_ids
+                or (now - retention.set_at_monotonic) > _HOST_TRANSITION_RETENTION_CAP_SECONDS
+            ):
+                del self._transition_retention_by_host_id[host_id_str]
 
     def _sweep_workspace_name_overrides_locked(self) -> None:
         """Drop name overrides that the current snapshot has confirmed or that have expired.
@@ -776,11 +881,12 @@ class MngrCliBackendResolver(BackendResolverInterface):
         A host observed in a terminal ``HostState.DESTROYED`` state is instead
         dropped from the topology (and skipped by the add path, so a lingering
         destroyed host that is still enumerated during the provider's
-        destroyed-host persistence window does not thrash it back in). This is
-        the ONLY removal path: a host that is merely absent from the snapshot is
-        deliberately retained, because declining to drop on absence -- and
-        removing only on a positive DESTROYED observation -- is the entire point
-        of the last-good fallback (a transient discovery loss must not erase it).
+        destroyed-host persistence window does not thrash it back in). A host
+        that is merely absent from this (aggregated) snapshot is deliberately
+        retained -- a transient discovery loss must not erase it; the other
+        removal path is ``_prune_last_good_for_clean_snapshot_locked``, where a
+        clean per-provider snapshot authoritatively drops its provider's
+        vanished hosts.
 
         Returns True if any host record changed (so the caller persists).
         """
@@ -812,6 +918,7 @@ class MngrCliBackendResolver(BackendResolverInterface):
         provider: DiscoveredProvider | None,
         error: DiscoveryError | None,
         last_snapshot_at: datetime,
+        clean_snapshot_host_ids: tuple[str, ...] | None = None,
     ) -> None:
         """Merge one provider's discovery snapshot into provider state. Thread-safe.
 
@@ -826,7 +933,17 @@ class MngrCliBackendResolver(BackendResolverInterface):
         ``_last_event_at`` is bumped to the latest snapshot time since a snapshot is
         also a discovery event. Incremental events update ``_last_event_at`` only,
         via :meth:`record_discovery_event_received`.
+
+        ``clean_snapshot_host_ids`` is the full host-id set an error-free
+        snapshot reported for this provider (unknown-state hosts included by
+        the caller). A clean snapshot is authoritative for its provider, so any
+        remembered last-good host attributed to this provider and absent from
+        the set is positively gone and pruned (and the pruned topology
+        persisted). Callers MUST pass None for an errored snapshot -- the
+        provider's hosts are unreachable, not absent.
         """
+        path = self.last_good_agents_path
+        topology_to_write: _LastGoodAgentTopology | None = None
         with self._lock:
             if provider is not None:
                 self._provider_by_name[provider_name] = provider
@@ -837,7 +954,47 @@ class MngrCliBackendResolver(BackendResolverInterface):
             self._last_snapshot_at_by_provider[provider_name] = last_snapshot_at
             if self._last_event_at is None or last_snapshot_at > self._last_event_at:
                 self._last_event_at = last_snapshot_at
+            if (
+                error is None
+                and clean_snapshot_host_ids is not None
+                and self._prune_last_good_for_clean_snapshot_locked(provider_name, clean_snapshot_host_ids)
+                and path is not None
+            ):
+                topology_to_write = _LastGoodAgentTopology(agents_by_host=dict(self._last_good_agents_by_host))
+        if path is not None and topology_to_write is not None:
+            _write_last_good_agent_topology(path, topology_to_write)
         self._fire_on_change()
+
+    def _prune_last_good_for_clean_snapshot_locked(
+        self, provider_name: ProviderInstanceName, snapshot_host_ids: tuple[str, ...]
+    ) -> bool:
+        """Drop remembered last-good hosts a clean provider snapshot no longer reports.
+
+        An error-free snapshot enumerates everything its provider manages, so a
+        remembered host attributed to that provider and absent from it is
+        positively gone (destroyed or reaped while this client was not
+        watching), not merely un-enumerated -- unlike absence from an errored
+        or partial view, which never reaches this path. This complements the
+        DESTROYED-observation prune in ``_merge_last_good_topology_locked``,
+        covering hosts that vanish without this client ever seeing a DESTROYED
+        state. Hosts of other providers are untouched. Must hold ``self._lock``.
+
+        Returns True if any host record was removed (so the caller persists).
+        """
+        present = set(snapshot_host_ids)
+        changed = False
+        for host_id_str in tuple(self._last_good_agents_by_host):
+            if host_id_str in present:
+                continue
+            records = self._last_good_agents_by_host[host_id_str]
+            if not any(record.provider_name == provider_name for record in records):
+                continue
+            del self._last_good_agents_by_host[host_id_str]
+            changed = True
+            logger.info(
+                "Pruned last-good host {}: absent from a clean {} discovery snapshot", host_id_str, provider_name
+            )
+        return changed
 
     def record_discovery_event_received(self, event_at: datetime) -> None:
         """Bump ``_last_event_at`` for an incremental (non-snapshot) discovery event."""
@@ -928,12 +1085,26 @@ class MngrCliBackendResolver(BackendResolverInterface):
         """
         with self._lock:
             host_state_by_host_id = self._agents_result.host_state_by_host_id
-            return tuple(
+            live_ids = tuple(
                 agent.agent_id
                 for agent in self._agents_result.discovered_agents
                 if "is_primary" in agent.labels
                 and host_state_by_host_id.get(str(agent.host_id)) is not HostState.DESTROYED
             )
+            # Rows for hosts mid UI-initiated stop/start that have transiently
+            # left the live snapshot are kept from the captured pre-transition
+            # agents, so the row survives a page reload until discovery re-lists
+            # the host (then the retention is swept). Only hosts absent from the
+            # live snapshot need this; a still-listed host is already in live_ids.
+            live_host_ids = {str(agent.host_id) for agent in self._agents_result.discovered_agents}
+            retained_ids = tuple(
+                agent.agent_id
+                for host_id_str, retention in self._transition_retention_by_host_id.items()
+                if host_id_str not in live_host_ids
+                for agent in retention.agents
+                if "is_primary" in agent.labels
+            )
+            return live_ids + retained_ids
 
     def list_restorable_workspace_ids(self) -> tuple[AgentId, ...]:
         """Union of live primary-workspace agents and last-good workspace agents.
@@ -980,11 +1151,17 @@ class MngrCliBackendResolver(BackendResolverInterface):
             override = self._host_state_override_by_host_id.get(host_id_str)
             if override is None:
                 return discovery_state
-            if (
-                discovery_state == override.state
-                or (time.monotonic() - override.set_at_monotonic) > _HOST_STATE_OVERRIDE_TTL_SECONDS
-            ):
+            agreed = discovery_state == override.state
+            expired = (time.monotonic() - override.set_at_monotonic) > _HOST_STATE_OVERRIDE_TTL_SECONDS
+            if agreed or expired:
                 del self._host_state_override_by_host_id[host_id_str]
+                logger.info(
+                    "host-state override for {} dropped in get_host_state ({}): override={} discovery={}",
+                    host_id_str,
+                    "discovery-agreed" if agreed else "ttl-expired",
+                    override.state.value,
+                    discovery_state.value if discovery_state is not None else None,
+                )
                 return discovery_state
             return override.state
 
@@ -994,6 +1171,7 @@ class MngrCliBackendResolver(BackendResolverInterface):
             self._host_state_override_by_host_id[str(host_id)] = _HostStateOverride(
                 state=state, set_at_monotonic=time.monotonic()
             )
+        logger.info("set_host_state_override({}, {})", host_id, state.value)
         self._fire_on_change()
 
     def clear_host_state_override(self, host_id: HostId) -> None:
@@ -1173,17 +1351,40 @@ class MngrCliBackendResolver(BackendResolverInterface):
             return _find_system_services_agent(last_good, workspace_agent_id)
 
     def get_agent_display_info(self, agent_id: AgentId) -> AgentDisplayInfo | None:
-        """Return display info from discovered agent data."""
+        """Return display info from discovered agent data.
+
+        Falls back to a lifecycle-transition retention when the agent has
+        transiently left the live snapshot (its host is mid stop/start), so the
+        retained row still renders name/provider/host until discovery returns.
+        """
         with self._lock:
             for agent in self._agents_result.discovered_agents:
                 if agent.agent_id == agent_id:
-                    return AgentDisplayInfo(
-                        agent_name=str(agent.agent_name),
-                        host_id=str(agent.host_id),
-                        create_time=agent.create_time,
-                        provider_name=str(agent.provider_name),
-                    )
+                    return _display_info_from_agent(agent)
+            for retention in self._transition_retention_by_host_id.values():
+                for agent in retention.agents:
+                    if agent.agent_id == agent_id:
+                        return _display_info_from_agent(agent)
             return None
+
+    def mark_host_lifecycle_transition_started(self, host_id: HostId) -> None:
+        """Capture ``host_id``'s current agents so its row survives the transition; fires on-change."""
+        host_id_str = str(host_id)
+        with self._lock:
+            captured = tuple(
+                agent for agent in self._agents_result.discovered_agents if str(agent.host_id) == host_id_str
+            )
+            self._transition_retention_by_host_id[host_id_str] = _HostTransitionRetention(
+                agents=captured, set_at_monotonic=time.monotonic()
+            )
+        self._fire_on_change()
+
+    def clear_host_lifecycle_transition(self, host_id: HostId) -> None:
+        """Drop any transition retention for ``host_id``; fires on-change only if one was present."""
+        with self._lock:
+            existed = self._transition_retention_by_host_id.pop(str(host_id), None) is not None
+        if existed:
+            self._fire_on_change()
 
     def has_completed_initial_discovery(self) -> bool:
         with self._lock:

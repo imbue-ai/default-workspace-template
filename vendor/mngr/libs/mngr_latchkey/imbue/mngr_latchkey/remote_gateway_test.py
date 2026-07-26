@@ -11,13 +11,17 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.interfaces.data_types import CommandResult
 from imbue.mngr.interfaces.host import OuterHostInterface
 from imbue.mngr.primitives import HostId
+from imbue.mngr_latchkey.core import CONFIG_FILENAME
 from imbue.mngr_latchkey.core import GATEWAY_MAX_BODY_SIZE_BYTES
 from imbue.mngr_latchkey.core import Latchkey
 from imbue.mngr_latchkey.encryption_key import encryption_key_path
+from imbue.mngr_latchkey.remote_gateway import DATALIB_CURL_VERSION
 from imbue.mngr_latchkey.remote_gateway import INNER_PORT
 from imbue.mngr_latchkey.remote_gateway import LATCHKEY_VERSION
 from imbue.mngr_latchkey.remote_gateway import OUTER_PORT
 from imbue.mngr_latchkey.remote_gateway import RemoteGatewayError
+from imbue.mngr_latchkey.remote_gateway import _CURL_DISPATCH_PATH
+from imbue.mngr_latchkey.remote_gateway import _CURL_IMPERSONATE_PATH
 from imbue.mngr_latchkey.remote_gateway import _GATEWAY_PROGRAM_NAME
 from imbue.mngr_latchkey.remote_gateway import _MINIMUM_NODE_MAJOR_VERSION
 from imbue.mngr_latchkey.remote_gateway import _TUNNEL_PROGRAM_NAME
@@ -64,6 +68,9 @@ class _StubOuter(MutableModel):
         description="Canned result returned for every command",
     )
     home: str = Field(default="/root", description="Value returned for the $HOME resolution command")
+    config_json: str | None = Field(
+        default=None, description="Pre-existing ~/.latchkey/config.json content on the VPS (None means absent)"
+    )
     container_name: str = Field(default="mngr-ws", description="Container name returned for the 'docker ps' lookup")
     is_local: bool = Field(default=False, description="Whether this outer host is the local machine")
     recorded: list[_Recorded] = Field(default_factory=list, description="Each command recorded in order")
@@ -89,6 +96,14 @@ class _StubOuter(MutableModel):
         if command.startswith("docker ps"):
             return CommandResult(stdout=f"{self.container_name}\n", stderr="", success=True)
         return self.result
+
+    def path_exists(self, path: Path) -> bool:
+        return path.name == CONFIG_FILENAME and self.config_json is not None
+
+    def read_text_file(self, path: Path, encoding: str = "utf-8") -> str:
+        if path.name == CONFIG_FILENAME and self.config_json is not None:
+            return self.config_json
+        raise FileNotFoundError(str(path))
 
     def write_file(self, path: Path, content: bytes, mode: str | None = None, is_atomic: bool = False) -> None:
         self.written.append(_WrittenFile(path=str(path), content=content, mode=mode, is_atomic=is_atomic))
@@ -160,6 +175,28 @@ def test_ensure_latchkey_installed_gates_each_component_behind_a_presence_check(
     assert command.startswith("set -e")
 
 
+def test_ensure_latchkey_installed_installs_impersonating_curl() -> None:
+    outer = _outer(CommandResult(stdout="", stderr="", success=True))
+    _ensure_latchkey_installed(outer)
+    command = _stub(outer).recorded[0].command
+    # Fetches the datalib curl tarball for the VPS arch from the pinned
+    # release, verifies it against the published .sha256, and installs both
+    # the dispatch curl and the impersonator it fronts.
+    assert f"releases/download/{DATALIB_CURL_VERSION}/" in command
+    assert "curl-${_ci_triple}.tar.gz" in command
+    assert "sha256sum -c" in command
+    assert "tar -xzf" in command and "--strip-components=1" in command
+    assert f'install -m 0755 "${{_ci_tmp}}/{_CURL_DISPATCH_PATH.rsplit("/", 1)[1]}" "{_CURL_DISPATCH_PATH}"' in command
+    assert (
+        f'install -m 0755 "${{_ci_tmp}}/{_CURL_IMPERSONATE_PATH.rsplit("/", 1)[1]}" "{_CURL_IMPERSONATE_PATH}"'
+        in command
+    )
+    # Installed only when missing (idempotent) and fail-loud like the other
+    # components -- no best-effort warning fallback that swallows failures.
+    assert f"if [ ! -x {_CURL_DISPATCH_PATH} ]; then" in command
+    assert "latchkey will use system curl" not in command
+
+
 def test_ensure_latchkey_installed_uses_generous_install_timeout() -> None:
     outer = _outer(CommandResult(stdout="", stderr="", success=True))
     _ensure_latchkey_installed(outer)
@@ -196,8 +233,10 @@ def _make_reencrypt_latchkey_binary(tmp_path: Path) -> Path:
         'if sys.argv[1:3] == ["services", "info"]:\n'
         "    service = sys.argv[3]\n"
         "    missing = os.environ.get('FAKE_MISSING_SERVICES', '').split(',')\n"
-        "    status = 'missing' if service in missing else 'valid'\n"
-        "    print(json.dumps({'credentialStatus': status}))\n"
+        # latchkey 3.0.0: a missing service has an empty ``credentials`` object;
+        # a present service reports one account keyed by the empty string.
+        "    credentials = {} if service in missing else {'': {'credentialType': 'rawCurl', 'credentialStatus': 'valid'}}\n"
+        "    print(json.dumps({'credentials': credentials}))\n"
         "    sys.exit(0)\n"
         'assert sys.argv[1:3] == ["auth", "re-encrypt"], sys.argv\n'
         "rest = sys.argv[4:]\n"
@@ -303,7 +342,7 @@ def test_sync_credentials_raises_when_reencrypt_fails(tmp_path: Path) -> None:
         "#!/usr/bin/env python3\n"
         "import json, sys\n"
         'if sys.argv[1:3] == ["services", "info"]:\n'
-        "    print(json.dumps({'credentialStatus': 'valid'}))\n"
+        "    print(json.dumps({'credentials': {'': {'credentialType': 'rawCurl', 'credentialStatus': 'valid'}}}))\n"
         "    sys.exit(0)\n"
         "sys.exit(1)\n"
     )
@@ -436,6 +475,14 @@ def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_
     assert 'LATCHKEY_GATEWAY_LISTEN_PASSWORD="$(cat ' in run_script
     assert "export LATCHKEY_ENCRYPTION_KEY LATCHKEY_GATEWAY_LISTEN_PASSWORD" in run_script
     assert "shared-password" not in run_script
+    # Routes latchkey through the bundled dispatch curl -- but only when both
+    # binaries are present, so a host without the impersonating curl installed
+    # (fetch failed / older release) falls back to system curl unchanged.
+    # Unconditional export -- provisioning guarantees the dispatch curl is
+    # installed. The dispatch curl finds the impersonator as a sibling, so no
+    # second env var is exported.
+    assert f"export LATCHKEY_CURL={_CURL_DISPATCH_PATH}" in run_script
+    assert "FRANKWEILER_IMPERSONATE_CURL" not in run_script
     # The wrapper refuses to launch a keyless gateway when its tmpfs secrets are
     # gone (e.g. wiped by a reboot).
     assert "exit 1" in run_script
@@ -516,6 +563,37 @@ def test_ensure_latchkey_gateway_running_raises_when_secrets_dir_not_ram_backed(
         _ensure_latchkey_gateway_running(outer, tmp_path, "shared-password")
     # Crucially, no secret file was written when the guard failed.
     assert _stub(outer).written == []
+
+
+def _remote_config_text(outer: OuterHostInterface) -> str:
+    """Return the raw ~/.latchkey/config.json text written to the VPS."""
+    return _written_by_path(outer, "/root/.latchkey/config.json").content.decode("utf-8")
+
+
+def test_ensure_latchkey_gateway_running_hides_builtin_services_in_config(tmp_path: Path) -> None:
+    outer = _outer(CommandResult(stdout="", stderr="", success=True))
+    _ensure_latchkey_gateway_running(outer, tmp_path, "shared-password")
+    # The VPS gateway's config.json hides the same confusing built-in services
+    # as the desktop gateway, so an agent sees the same set either way.
+    config = json.loads(_remote_config_text(outer))
+    assert "notion" in config["settings"]["hideBuiltinServices"]
+
+
+def test_ensure_latchkey_gateway_running_preserves_existing_remote_config(tmp_path: Path) -> None:
+    existing = json.dumps({"settings": {"theme": "dark"}, "accounts": {"slack": {}}})
+    outer = cast(OuterHostInterface, _StubOuter(config_json=existing))
+    _ensure_latchkey_gateway_running(outer, tmp_path, "shared-password")
+    config = json.loads(_remote_config_text(outer))
+    # Pre-existing remote config content survives the read-merge-write.
+    assert config["settings"]["theme"] == "dark"
+    assert config["accounts"] == {"slack": {}}
+    assert "notion" in config["settings"]["hideBuiltinServices"]
+
+
+def test_ensure_latchkey_gateway_running_raises_on_invalid_remote_config(tmp_path: Path) -> None:
+    outer = cast(OuterHostInterface, _StubOuter(config_json="{not json"))
+    with pytest.raises(RemoteGatewayError, match=CONFIG_FILENAME):
+        _ensure_latchkey_gateway_running(outer, tmp_path, "shared-password")
 
 
 def _tunnel_conf(outer: OuterHostInterface) -> str:
@@ -644,6 +722,8 @@ def test_provision_remote_gateway_runs_full_sequence_on_the_outer_host(tmp_path:
     assert f"[program:{_GATEWAY_PROGRAM_NAME}]" in written
     assert f"[program:{_TUNNEL_PROGRAM_NAME}]" in written
     assert "exec latchkey gateway" in written
+    # The VPS gateway's config.json hides the confusing built-in services.
+    assert "hideBuiltinServices" in written and "notion" in written
     assert "-R 127.0.0.1:" in written
     # The gateway listen password is written to a file, never a command.
     assert "shared-password" not in commands

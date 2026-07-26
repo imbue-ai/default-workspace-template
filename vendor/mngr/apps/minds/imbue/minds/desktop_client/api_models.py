@@ -13,8 +13,12 @@ same models into the handlers as spectree request/response validators so the
 documented contract and the enforced contract can never drift.
 """
 
+from typing import Annotated
+from typing import Literal
+
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import RootModel
 from pydantic import StrictBool
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -107,16 +111,37 @@ class RestartOperationStatusResponse(FrozenModel):
 
 
 class BackupOperationStatusResponse(FrozenModel):
-    """Status of a backup update/configure operation (polled at /operations/backup/<id>)."""
+    """Status of a backup update/configure/restore operation (polled at /operations/backup/<id>)."""
 
     operation_id: str = Field(description="The workspace agent id the operation acts on")
-    kind: str = Field(description="'backup_update' or 'backup_configure'")
-    status: str = Field(description="Raw operation status (RUNNING/DONE/FAILED)")
+    kind: str = Field(description="'backup_update', 'backup_configure', or 'backup_restore'")
+    status: str = Field(description="Raw operation status (RUNNING/DONE/FAILED/CANCELLED)")
     is_done: bool = Field(description="Whether the operation has finished successfully")
     error: str | None = Field(default=None, description="Failure message, when the operation failed")
+    warning: str | None = Field(
+        default=None,
+        description=(
+            "Non-fatal caveat on a DONE operation (e.g. the restore succeeded but its chained backup-service "
+            "update failed), when there is one"
+        ),
+    )
     blocked_chats: tuple[str, ...] = Field(
         default=(),
         description="Chat agents whose RUNNING state blocked the update (offer 'Stop all chats and retry')",
+    )
+    is_cancellable: bool = Field(
+        default=False,
+        description=(
+            "Whether a cancel request can still take effect: only while an update/restore is waiting, "
+            "before it starts mutating the workspace (the UI hides Cancel once this goes false)"
+        ),
+    )
+    snapshot_id: str | None = Field(
+        default=None,
+        description=(
+            "The snapshot a restore is restoring to, so a page loaded mid-restore can mark the right "
+            "table row. None for operations that act on the whole workspace"
+        ),
     )
 
 
@@ -126,6 +151,36 @@ class BackupServiceUpdateRequest(ApiRequestModel):
     stop_chats: bool = Field(
         default=False,
         description="Stop actively-RUNNING chat agents first (the 'Stop all chats and retry' flow)",
+    )
+
+
+class BackupRestoreRequest(ApiRequestModel):
+    """Body for the in-place restore of one workspace to one snapshot."""
+
+    stop_chats: bool = Field(
+        default=False,
+        description="Stop actively-RUNNING chat agents first (the 'Stop chats and try again' flow)",
+    )
+    update_after: bool = Field(
+        default=True,
+        description=(
+            "Converge the backup-service code after a successful restore (the restored snapshot may carry "
+            "arbitrarily old code). On by default; an update failure downgrades to a completion warning."
+        ),
+    )
+    skip_safety_snapshot: bool = Field(
+        default=False,
+        description=(
+            "Skip the pre-restore safety snapshot ('Restore without backing up first') -- only set by the "
+            "explicit retry offered after the safety snapshot failed"
+        ),
+    )
+    skip_chat_gate: bool = Field(
+        default=False,
+        description=(
+            "Skip the in-workspace running-chats check ('Force restore') -- only set by the explicit retry "
+            "offered when the workspace can no longer answer the chat gate"
+        ),
     )
 
 
@@ -188,6 +243,18 @@ class CreateWorkspaceRequest(ApiRequestModel):
     )
     account_id: str | None = Field(default=None, description="imbue_cloud account id (required for imbue_cloud modes)")
     region: str | None = Field(default=None, description="Provider region")
+    instance_type: str | None = Field(
+        default=None,
+        description="Machine size for the cloud-VM modes (AWS/GCP/Azure); must be one of the form's offered types",
+    )
+    cloud_account: str | None = Field(
+        default=None,
+        description=(
+            "Bring-your-own-key cloud account to create on: the ``byok-<backend>-<slug>`` provider "
+            "block name from /desktop/cloud-accounts. When set, launch_mode must match the "
+            "account's backend and the create targets that provider instance."
+        ),
+    )
     backup_provider: BackupProvider | None = Field(
         default=None, description="Restic backup provider (default CONFIGURE_LATER)"
     )
@@ -208,14 +275,20 @@ class PatchWorkspaceRequest(ApiRequestModel):
 
 
 class RestartWorkspaceRequest(ApiRequestModel):
-    """Body for restarting a workspace's services or whole host."""
+    """Body for restarting a workspace's host."""
 
     # ``scope`` is structurally a required string; the route validates that its
-    # value is one of services/host (a value-semantic check kept in the handler,
-    # since the lowercase wire values can't be a standard UpperCaseStrEnum).
-    scope: str = Field(description="'services' (restart system-services in place) or 'host' (bounce the host)")
-    host_already_stopped: bool | None = Field(
-        default=None, description="Skip the redundant stop step (host scope only) when the host is known stopped"
+    # value is 'host' (a value-semantic check kept in the handler, since the
+    # lowercase wire value can't be a standard UpperCaseStrEnum). The former
+    # 'services' scope (in-place system-services restart) was removed; it is
+    # rejected with a 400.
+    scope: str = Field(description="Must be 'host' (bounce the whole host); no other scope is supported")
+    start_only: bool | None = Field(
+        default=None,
+        description=(
+            "Skip the stop step and run only the idempotent ``mngr start`` -- safe to dispatch "
+            "with no knowledge of the host's state (a live host makes it a no-op)"
+        ),
     )
 
 
@@ -240,6 +313,72 @@ class BugReportRequest(ApiRequestModel):
     """
 
     description: str = Field(min_length=1, description="What went wrong (required, non-empty)")
+
+
+class _CloudAccountCreateBase(ApiRequestModel):
+    """Fields shared by every backend's bring-your-own-key account registration."""
+
+    alias: str = Field(min_length=1, description="Display name for the account (also seeds the block-name slug)")
+    region: str = Field(
+        min_length=1,
+        description="Default placement for machines created on this account (an AWS/Azure region, or a GCE zone)",
+    )
+
+
+class AwsCloudAccountCreateRequest(_CloudAccountCreateBase):
+    """Register an AWS account from a pasted access-key pair."""
+
+    backend: Literal["aws"] = Field(description="Cloud backend discriminator")
+    aws_access_key_id: str | None = Field(default=None, description="AWS access key id")
+    aws_secret_access_key: str | None = Field(default=None, description="AWS secret access key")
+
+
+class GcpCloudAccountCreateRequest(_CloudAccountCreateBase):
+    """Register a GCP account from a pasted service-account key."""
+
+    backend: Literal["gcp"] = Field(description="Cloud backend discriminator")
+    gcp_service_account_key_json: str | None = Field(
+        default=None, description="Full JSON contents of a GCP service-account key"
+    )
+
+
+class AzureCloudAccountCreateRequest(_CloudAccountCreateBase):
+    """Register an Azure account from a service-principal."""
+
+    backend: Literal["azure"] = Field(description="Cloud backend discriminator")
+    azure_subscription_id: str | None = Field(default=None, description="Azure subscription id")
+    azure_tenant_id: str | None = Field(default=None, description="Entra tenant id")
+    azure_client_id: str | None = Field(default=None, description="Service-principal client id")
+    azure_client_secret: str | None = Field(default=None, description="Service-principal client secret")
+
+
+class CloudAccountCreateRequest(
+    RootModel[
+        Annotated[
+            AwsCloudAccountCreateRequest | GcpCloudAccountCreateRequest | AzureCloudAccountCreateRequest,
+            Field(discriminator="backend"),
+        ]
+    ]
+):
+    """Body for registering a bring-your-own-key cloud account (pasted credentials).
+
+    A discriminated union on ``backend``: each cloud's credential fields live on
+    its own variant instead of being splatted flat across one model. The wire
+    shape stays flat (a variant's fields sit at the top level of the body).
+    Which fields are actually *required* per backend, and the GCP key's
+    structure, are semantic checks that stay in the handler, per
+    :class:`ApiRequestModel`.
+    """
+
+
+class CloudAccountSummary(FrozenModel):
+    """One registered bring-your-own-key cloud account."""
+
+    name: str = Field(description="Provider block name (byok-<backend>-<slug>) -- the stable id")
+    alias: str = Field(description="Display alias")
+    backend: str = Field(description="Cloud backend (e.g. 'aws')")
+    region: str = Field(description="The account's current default region")
+    identifier: str = Field(description="Masked credential hint (e.g. 'AKIA…F5X2'); never the secret")
 
 
 class SetProviderEnabledRequest(ApiRequestModel):
@@ -353,7 +492,13 @@ class WorkspaceBackupsResponse(FrozenModel):
     agent_id: str = Field(description="The workspace agent id")
     is_configured: bool = Field(description="Whether minds holds a canonical restic.env for this workspace")
     is_backing_up: bool = Field(description="Whether a (non-stale) restic backup is currently running")
-    snapshots: tuple[BackupSnapshotSummary, ...] = Field(default=(), description="All snapshots, newest-first")
+    snapshots: tuple[BackupSnapshotSummary, ...] = Field(
+        default=(),
+        description="The requested window of snapshots, newest-first (all of them when no limit is given)",
+    )
+    snapshots_total: int = Field(
+        default=0, description="Total snapshots available, ignoring limit/offset (for paging the full history)"
+    )
     snapshots_error: str | None = Field(
         default=None, description="Why the snapshot listing failed (e.g. restic error), when it did"
     )
@@ -382,6 +527,10 @@ class SharingToggleResponse(FrozenModel):
     agent_id: str = Field(description="The workspace agent id")
     service_name: str = Field(description="The service whose sharing was changed")
     enabled: bool = Field(description="Whether sharing is now enabled")
+    url: str | None = Field(
+        default=None,
+        description="The service's public share URL (enable only); lets the editor skip a follow-up status read",
+    )
 
 
 class ProviderToggleResponse(FrozenModel):

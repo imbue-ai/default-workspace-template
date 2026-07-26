@@ -1,4 +1,4 @@
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
@@ -22,6 +22,29 @@ for (const stream of [process.stdout, process.stderr]) {
 }
 
 let backendProcess = null;
+
+/**
+ * Env var that points the latchkey gateway at the bundled "dispatch curl".
+ * Set on the minds backend process so it flows -- via ``dict(os.environ)``
+ * inheritance -- to the minds process's own latchkey calls, the detached
+ * ``mngr latchkey forward`` supervisor, and the gateway subprocess it
+ * spawns.
+ *
+ * ``LATCHKEY_CURL`` is read by the upstream latchkey CLI. The dispatch
+ * curl finds the impersonator binary as a sibling in the same
+ * ``resources/curl/`` dir (download-binaries.js installs both or neither),
+ * so no extra env var is needed. Returns ``{}`` when the dispatch curl
+ * isn't bundled (a platform datalib doesn't build) so latchkey falls back
+ * to the system curl -- never point ``LATCHKEY_CURL`` at a nonexistent
+ * file, which would break every credential check.
+ */
+function latchkeyCurlEnv() {
+  const dispatch = paths.getLatchkeyCurlDispatchPath();
+  if (!fs.existsSync(dispatch)) {
+    return {};
+  }
+  return { LATCHKEY_CURL: dispatch };
+}
 
 // Backend stdout JSONL event fields that carry secrets and must be masked
 // before the raw line is written to minds.log (which is uploaded with bug
@@ -170,6 +193,20 @@ function waitForPortFree(port, timeoutMs = 6000, intervalMs = 200) {
 }
 
 /**
+ * Log the bundled git version once at backend start, for supportability.
+ * Failures are downgraded to a warning and never block startup.
+ */
+function logBundledGitVersion(gitRoot) {
+  execFile(paths.getGitPath(), ['--version'], (err, stdout) => {
+    if (err) {
+      console.warn(`[backend] could not run bundled git: ${err.message}`);
+      return;
+    }
+    console.log(`[backend] bundled git: ${stdout.trim()} (${gitRoot})`);
+  });
+}
+
+/**
  * Spawn the Python backend and wait for the login URL.
  *
  * The backend emits structured JSONL events to stdout (via --format jsonl)
@@ -225,6 +262,33 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
       const bundledClientConfig = paths.getBundledClientConfigPath();
       const configFileArgs = bundledClientConfig ? ['--config-file', bundledClientConfig] : [];
 
+      // The bundled dugite-native git is built with an empty prefix, so
+      // prepending its bin dir to PATH is not enough: git --exec-path would
+      // resolve to //libexec/git-core and `git clone https://...` would fail
+      // with "'remote-https' is not a git command". Export the payload's real
+      // locations so helper dispatch, templates, and TLS work in both dev and
+      // packaged modes. See specs/minds-managed-git/concise.md.
+      const gitRoot = paths.getGitRootDir();
+      const gitEnv = {
+        GIT_EXEC_PATH: path.join(gitRoot, 'libexec', 'git-core'),
+        GIT_TEMPLATE_DIR: path.join(gitRoot, 'share', 'git-core', 'templates'),
+        GIT_CONFIG_SYSTEM: path.join(gitRoot, 'etc', 'gitconfig'),
+      };
+      // The Linux payload does not use the system trust store; macOS links the
+      // system libcurl and must NOT get this override.
+      if (process.platform === 'linux') {
+        gitEnv.GIT_SSL_CAINFO = path.join(gitRoot, 'ssl', 'cacert.pem');
+      }
+      logBundledGitVersion(gitRoot);
+
+      // desync is not staged on win32, and naming a missing file here would make the
+      // backend exec that instead of falling back to a PATH lookup.
+      const desyncPath = paths.getDesyncPath();
+      const hasBundledDesync = fs.existsSync(desyncPath);
+      const limaImageToolEnv = {
+        ...(hasBundledDesync ? { MINDS_DESYNC_BINARY: desyncPath } : {}),
+      };
+
       if (paths.isDev()) {
         // Dev mode: use system uv with the monorepo workspace venv
         uvBin = 'uv';
@@ -241,12 +305,21 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
         cwd = paths.getMonorepoRoot();
         env = {
           ...process.env,
+          ...gitEnv,
+          // Pair the bundled git binary with gitEnv in dev too: a system git
+          // running against the payload's exec-path would be version-skewed.
+          PATH: `${paths.getGitBinDir()}:${process.env.PATH || ''}`,
           MINDS_ELECTRON: '1',
           MINDS_ROOT_NAME: mindsRootName,
           MNGR_HOST_DIR: mngrHostDir,
           MNGR_PREFIX: mngrPrefix,
           MINDS_LATCHKEY_BINARY: paths.getLatchkeyPath(),
           MINDS_LATCHKEY_DIRECTORY: paths.getLatchkeyDirectory(),
+          // The prestart hook (ensure-binaries.js) stages resources/desync/ before the
+          // dev app launches. Dev mode inherits the developer's PATH untouched, so the
+          // bundled binary is only reachable by absolute path -- without this the
+          // fast-create path would need a system-wide desync.
+          ...limaImageToolEnv,
           // The prestart hook (ensure-binaries.js) downloads the pinned
           // restic into resources/restic/; without this the backend falls
           // back to `restic` on PATH, which only works on machines that
@@ -254,6 +327,7 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
           MINDS_RESTIC_BINARY: paths.getResticPath(),
           MINDS_RELEASE_ID: releaseId,
           MINDS_GIT_SHA: gitSha,
+          ...latchkeyCurlEnv(),
         };
       } else {
         // Packaged mode: use bundled uv with standalone pyproject
@@ -262,6 +336,7 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
         const gitBinDir = paths.getGitBinDir();
         const limaBinDir = paths.getLimaBinDir();
         const desyncBinDir = paths.getDesyncBinDir();
+        const bundledBinDirs = [uvBinDir, gitBinDir, limaBinDir, desyncBinDir];
         const uvCacheDir = paths.getUvCacheDir();
         const uvPythonDir = paths.getUvPythonDir();
         const pyprojectDir = paths.getPyprojectDir();
@@ -302,7 +377,8 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
           : systemPath;
         env = {
           ...process.env,
-          PATH: `${uvBinDir}:${gitBinDir}:${limaBinDir}:${desyncBinDir}:${augmentedSystemPath}`,
+          ...gitEnv,
+          PATH: `${bundledBinDirs.join(':')}:${augmentedSystemPath}`,
           UV_CACHE_DIR: uvCacheDir,
           UV_PYTHON_INSTALL_DIR: uvPythonDir,
           MINDS_ELECTRON: '1',
@@ -312,6 +388,7 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
           MINDS_LATCHKEY_BINARY: paths.getLatchkeyPath(),
           MINDS_LATCHKEY_DIRECTORY: paths.getLatchkeyDirectory(),
           MINDS_RESTIC_BINARY: paths.getResticPath(),
+          ...limaImageToolEnv,
           // Tell the packaged latchkey shim which Electron binary to use as Node.
           MINDS_ELECTRON_EXEC_PATH: process.execPath,
           // Set VIRTUAL_ENV to the per-user venv so `uv run --active` uses
@@ -320,6 +397,7 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
           VIRTUAL_ENV: paths.getVenvDir(),
           MINDS_RELEASE_ID: releaseId,
           MINDS_GIT_SHA: gitSha,
+          ...latchkeyCurlEnv(),
         };
       }
 

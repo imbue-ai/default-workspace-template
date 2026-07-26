@@ -37,10 +37,12 @@ from imbue.imbue_common.logging import log_span
 from imbue.mngr.interfaces.host import OuterHostInterface
 from imbue.mngr.primitives import HostId
 from imbue.mngr_latchkey.core import AGENT_SIDE_LATCHKEY_PORT
+from imbue.mngr_latchkey.core import CONFIG_FILENAME
 from imbue.mngr_latchkey.core import CredentialStatus
 from imbue.mngr_latchkey.core import GATEWAY_MAX_BODY_SIZE_BYTES
 from imbue.mngr_latchkey.core import Latchkey
 from imbue.mngr_latchkey.core import LatchkeyError
+from imbue.mngr_latchkey.core import merge_hidden_builtin_services
 from imbue.mngr_latchkey.encryption_key import LatchkeyEncryptionKeyPermissionError
 from imbue.mngr_latchkey.encryption_key import load_or_create_encryption_key
 from imbue.mngr_latchkey.services_catalog import ServiceCatalogError
@@ -52,7 +54,25 @@ from imbue.mngr_latchkey.store import permissions_path_for_host
 from imbue.mngr_latchkey.store import plugin_data_dir
 
 # Version of the upstream ``latchkey`` CLI to install on the VPS.
-LATCHKEY_VERSION: Final[str] = "2.21.0"
+LATCHKEY_VERSION: Final[str] = "3.1.0"
+
+# datalib release the VPS fetches the "dispatch curl" + Chrome-impersonating
+# curl from (``curl-<triple>.tar.gz``). The gateway runs the dispatch curl as
+# its ``LATCHKEY_CURL`` so a caller that sends the ``X-Imbue-Impersonate``
+# marker header gets Chrome TLS impersonation, while every other request
+# passes through to the system curl. The fetch is best-effort: a failure
+# (network, or a host arch datalib doesn't build) must not break
+# provisioning -- the gateway run script guards on the binaries' presence and
+# falls back to system curl when they're absent.
+_DATALIB_REPO: Final[str] = "imbue-ai/datalib"
+DATALIB_CURL_VERSION: Final[str] = "v0.22.0"
+# Where the two binaries land on the VPS. ``/usr/local/bin`` is already on the
+# gateway run script's PATH, and the dispatch curl finds the impersonator as a sibling.
+_CURL_IMPERSONATE_INSTALL_DIR: Final[str] = "/usr/local/bin"
+_CURL_DISPATCH_BIN: Final[str] = "latchkey-curl-dispatch"
+_CURL_IMPERSONATE_BIN: Final[str] = "latchkey-curl-impersonate"
+_CURL_DISPATCH_PATH: Final[str] = f"{_CURL_IMPERSONATE_INSTALL_DIR}/{_CURL_DISPATCH_BIN}"
+_CURL_IMPERSONATE_PATH: Final[str] = f"{_CURL_IMPERSONATE_INSTALL_DIR}/{_CURL_IMPERSONATE_BIN}"
 
 # Port inside the container on which the VPS-resident gateway is reachable (the
 # VPS->container reverse tunnel binds it). Deliberately distinct from
@@ -228,6 +248,9 @@ def _build_ensure_installed_script(
 ) -> str:
     """Build an idempotent POSIX-sh script that installs curl, Node.js, supervisor, and latchkey.
 
+    It also installs the datalib "dispatch" curl + the Chrome-impersonating
+    curl it fronts (see :data:`DATALIB_CURL_VERSION`).
+
     Each component is gated behind a presence check -- except Node.js, which is
     gated behind a *version* check: a preinstalled distro node (e.g. Debian
     bookworm's 18.x) exists but cannot run the pinned latchkey/npm, so mere
@@ -255,6 +278,29 @@ def _build_ensure_installed_script(
             "if ! command -v curl >/dev/null 2>&1; then",
             "  apt-get update",
             "  apt-get install -y curl",
+            "fi",
+            # Install the Chrome-impersonating "dispatch" curl + the
+            # impersonator it fronts from the datalib release, so marked
+            # latchkey requests (X-Imbue-Impersonate header) clear Cloudflare.
+            # Installed only when missing (idempotent), fail-loud under
+            # ``set -e`` like every other component here.
+            f"if [ ! -x {_CURL_DISPATCH_PATH} ]; then",
+            '  _ci_arch="$(uname -m)"',
+            '  case "$_ci_arch" in',
+            "    x86_64) _ci_triple=x86_64-unknown-linux-gnu ;;",
+            "    aarch64|arm64) _ci_triple=aarch64-unknown-linux-gnu ;;",
+            '    *) echo "no impersonating curl build for arch $_ci_arch" >&2; exit 1 ;;',
+            "  esac",
+            '  _ci_tb="curl-${_ci_triple}.tar.gz"',
+            f'  _ci_url="https://github.com/{_DATALIB_REPO}/releases/download/{DATALIB_CURL_VERSION}/${{_ci_tb}}"',
+            '  _ci_tmp="$(mktemp -d)"',
+            '  curl -fsSL --retry 3 --retry-delay 2 -o "${_ci_tmp}/${_ci_tb}" "$_ci_url"',
+            '  curl -fsSL --retry 2 -o "${_ci_tmp}/${_ci_tb}.sha256" "${_ci_url}.sha256"',
+            '  (cd "${_ci_tmp}" && sha256sum -c "${_ci_tb}.sha256" >/dev/null)',
+            '  tar -xzf "${_ci_tmp}/${_ci_tb}" -C "${_ci_tmp}" --strip-components=1',
+            f'  install -m 0755 "${{_ci_tmp}}/{_CURL_DISPATCH_BIN}" "{_CURL_DISPATCH_PATH}"',
+            f'  install -m 0755 "${{_ci_tmp}}/{_CURL_IMPERSONATE_BIN}" "{_CURL_IMPERSONATE_PATH}"',
+            '  rm -rf "${_ci_tmp}"',
             "fi",
             # Node.js + npm via NodeSource. Version-gated (not presence-gated):
             # a too-old preinstalled node must be replaced, or the npm install
@@ -615,6 +661,30 @@ def _ensure_ram_backed_secrets_dir(host: OuterHostInterface, host_name: str) -> 
         )
 
 
+def _ensure_remote_hidden_builtin_services(host: OuterHostInterface, remote_dir: Path) -> None:
+    """Hide the confusing built-in latchkey services in the VPS gateway's ``config.json``.
+
+    Read-merges :data:`~imbue.mngr_latchkey.core.HIDDEN_BUILTIN_SERVICES` into
+    ``~/.latchkey/config.json``'s ``settings.hideBuiltinServices`` on the VPS
+    (mirroring the desktop-side ``_ensure_hidden_builtin_services``) so an agent
+    talking to the VPS-resident gateway sees the same hidden set as one talking
+    to the desktop gateway. Any other config latchkey wrote on the VPS is
+    preserved. Idempotent. Raises :class:`RemoteGatewayError` if the existing
+    remote config is not a valid JSON object.
+    """
+    config_path = remote_dir / CONFIG_FILENAME
+    existing = host.read_text_file(config_path) if host.path_exists(config_path) else None
+    try:
+        content = merge_hidden_builtin_services(existing)
+    except LatchkeyError as e:
+        raise RemoteGatewayError(
+            f"Failed to update latchkey config at {config_path} on VPS {host.get_name()}: {e}"
+        ) from e
+    # ``is_atomic`` writes to a sibling ``.tmp`` then ``mv``s it into place, so
+    # the gateway never reads a half-written config mid-sync.
+    host.write_file(config_path, content.encode("utf-8"), mode=_REMOTE_FILE_MODE, is_atomic=True)
+
+
 def _build_gateway_run_script(outer_port: int, key_file_path: Path, password_file_path: Path) -> str:
     """Build the wrapper script supervisord runs to launch ``latchkey gateway``.
 
@@ -673,6 +743,11 @@ def _build_gateway_run_script(outer_port: int, key_file_path: Path, password_fil
             "export LATCHKEY_GATEWAY_LISTEN_HOST=127.0.0.1",
             "export LATCHKEY_DISABLE_COUNTING=1",
             "export LATCHKEY_DISABLE_CREDENTIALS_REFRESH=1",
+            # Route latchkey through the bundled dispatch curl (installed by
+            # _build_ensure_installed_script): requests carrying the
+            # X-Imbue-Impersonate marker header get Chrome TLS impersonation
+            # via the sibling impersonator, everything else uses system curl.
+            f"export LATCHKEY_CURL={_CURL_DISPATCH_PATH}",
             f"exec latchkey gateway --max-body-size {GATEWAY_MAX_BODY_SIZE_BYTES}",
             "",
         )
@@ -720,6 +795,10 @@ def _ensure_latchkey_gateway_running(
     # Create + verify the RAM-backed secrets dir before writing the key, so we
     # never persist it to a disk filesystem if tmpfs is unexpectedly absent.
     _ensure_ram_backed_secrets_dir(host, host_name)
+
+    # Hide the confusing built-in services (e.g. ``notion``) in the VPS
+    # gateway's config.json so agents see the same set as on the desktop.
+    _ensure_remote_hidden_builtin_services(host, remote_dir)
 
     # Write the two secrets (0600) into tmpfs and the wrapper that reads them.
     host.write_file(key_file_path, encryption_key.encode("utf-8"), mode=_REMOTE_FILE_MODE)

@@ -30,7 +30,7 @@ type = "coder"
 [create_templates.modal]
 provider = "modal"
 build_arg = ["file=libs/mngr/imbue/mngr/resources/Dockerfile", "context-dir=.mngr/dev/build/", "volume=code-review-json:/code_reviews"]
-extra_window = ["github_setup='ssh-keyscan github.com >> ~/.ssh/known_hosts && git remote set-url origin https://github.com/imbue-ai/mngr.git && gh auth setup-git'"]
+extra_window = ["github_setup='ssh-keyscan github.com >> ~/.ssh/known_hosts && git remote set-url origin https://github.com/imbue-ai/mngr-internal.git && gh auth setup-git'"]
 agent_args = ["--dangerously-skip-permissions"]
 pass_env__extend = ["GH_TOKEN"]
 pass_host_env = ["EDITOR"]
@@ -47,7 +47,7 @@ target_path = "/code/mngr"
 [create_templates.aws]
 provider = "aws"
 build_arg = ["--file=libs/mngr/imbue/mngr/resources/Dockerfile", "."]
-extra_window = ["github_setup='ssh-keyscan github.com >> ~/.ssh/known_hosts && git remote set-url origin https://github.com/imbue-ai/mngr.git && gh auth setup-git'"]
+extra_window = ["github_setup='ssh-keyscan github.com >> ~/.ssh/known_hosts && git remote set-url origin https://github.com/imbue-ai/mngr-internal.git && gh auth setup-git'"]
 agent_args = ["--dangerously-skip-permissions"]
 pass_env__extend = ["GH_TOKEN"]
 pass_host_env = ["EDITOR"]
@@ -69,7 +69,7 @@ target_path = "/code/mngr"
 [create_templates.azure]
 provider = "azure"
 build_arg = ["--azure-vm-size=Standard_D2s_v3", "--file=libs/mngr/imbue/mngr/resources/Dockerfile", "."]
-extra_window = ["github_setup='ssh-keyscan github.com >> ~/.ssh/known_hosts && git remote set-url origin https://github.com/imbue-ai/mngr.git && gh auth setup-git'"]
+extra_window = ["github_setup='ssh-keyscan github.com >> ~/.ssh/known_hosts && git remote set-url origin https://github.com/imbue-ai/mngr-internal.git && gh auth setup-git'"]
 agent_args = ["--dangerously-skip-permissions"]
 pass_env__extend = ["GH_TOKEN"]
 pass_host_env = ["EDITOR"]
@@ -91,7 +91,7 @@ target_path = "/code/mngr"
 [create_templates.gcp]
 provider = "gcp"
 build_arg = ["--file=libs/mngr/imbue/mngr/resources/Dockerfile", "."]
-extra_window = ["github_setup='ssh-keyscan github.com >> ~/.ssh/known_hosts && git remote set-url origin https://github.com/imbue-ai/mngr.git && gh auth setup-git'"]
+extra_window = ["github_setup='ssh-keyscan github.com >> ~/.ssh/known_hosts && git remote set-url origin https://github.com/imbue-ai/mngr-internal.git && gh auth setup-git'"]
 agent_args = ["--dangerously-skip-permissions"]
 pass_env__extend = ["GH_TOKEN"]
 pass_host_env = ["EDITOR"]

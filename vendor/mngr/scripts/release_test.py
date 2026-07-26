@@ -1,3 +1,4 @@
+import subprocess
 import sys
 import tomllib
 from datetime import date
@@ -16,6 +17,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 from scripts.release import _gate_release_on_pending_changelog_entries  # noqa: E402
 from scripts.release import _pluralize_entry  # noqa: E402
 from scripts.release import _realign_dep_string  # noqa: E402
+from scripts.release import temp_ref_of_working_tree  # noqa: E402
 from scripts.release import update_exclude_newer  # noqa: E402
 
 
@@ -156,3 +158,34 @@ def test_update_exclude_newer_noop_at_window_boundary(tmp_path: Path) -> None:
     path = _write_root_pyproject(tmp_path, "2026-05-13T00:00:00Z")
     result = update_exclude_newer(path, date(2026, 5, 27))
     assert result is None
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def test_temp_ref_of_working_tree_snapshots_unstaged_edits_without_touching_state(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "a.txt").write_text("committed\n")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "-q", "-m", "init")
+    head_before = _git(repo, "rev-parse", "HEAD")
+
+    (repo / "a.txt").write_text("unstaged edit\n")
+    sha = temp_ref_of_working_tree(repo, "refs/mirror-tmp/test")
+
+    assert _git(repo, "show", f"{sha}:a.txt") == "unstaged edit"
+    assert _git(repo, "rev-parse", "refs/mirror-tmp/test") == sha
+    assert _git(repo, "rev-parse", f"{sha}^") == head_before
+    # HEAD, the index, and the working tree are untouched.
+    assert _git(repo, "rev-parse", "HEAD") == head_before
+    assert _git(repo, "status", "--porcelain") == "M a.txt"
+    assert (repo / "a.txt").read_text() == "unstaged edit\n"

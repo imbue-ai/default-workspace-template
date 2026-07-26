@@ -18,6 +18,10 @@ on:
         description: "Run all remote-ci-env minds tests (minds_services + minds_deployment: deploy/rollback/round-trip)"
         type: boolean
         default: false
+      minds_snapshot_test_filter:
+        description: "Run only snapshot-resume tests matching this offload --filter expression (e.g. test_sync_e2e); empty runs them all"
+        type: string
+        default: ""
 
 jobs:
   # Changelog gate. Runs on the orchestrator (not in an offload
@@ -460,6 +464,34 @@ jobs:
         # Electron/Playwright/Xvfb toolchain instead of a dedicated cold job.
         run: PYTEST_MAX_DURATION_SECONDS=600 uv run pytest -n 0 --timeout 300 --no-cov --cov-fail-under=0 -v --tb=short -m '(docker or docker_sdk) and not release and not minds_snapshot_resume'
 
+  # Bundled-git acceptance test on a GitHub-hosted macOS runner: offload
+  # proves the linux-x64 payload from a networkless sandbox; this job proves
+  # the darwin-arm64 payload the mac app ships, downloading the asset live.
+  test-minds-bundled-git-macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Install Python dependencies
+        run: uv sync --all-packages
+
+      # Node is preinstalled on GitHub's macOS runners (the test shells out to it).
+      - name: Run bundled-git acceptance test
+        run: PYTEST_MAX_DURATION_SECONDS=600 uv run pytest -n 0 --timeout 570 --no-cov --cov-fail-under=0 -v --tb=short apps/minds/test_bundled_git.py
+
   # Build a fresh minds-workspace Modal snapshot image, then run the
   # `minds_snapshot_resume` suite against it. Two jobs so the expensive
   # vm_runtime image build (Docker-in-Docker + Electron workspace
@@ -882,8 +914,18 @@ jobs:
             echo "MINDS_SYNC_E2E_SUPERTOKENS_API_KEY=${SUPERTOKENS_API_KEY}"
           } >> "$GITHUB_ENV"
 
+      # A dispatch may scope the snapshot-resume run to a single test via the
+      # minds_snapshot_test_filter input (forwarded as offload's --filter),
+      # e.g. to exercise just the sync e2e against a branch.
       - name: Run minds snapshot-resume tests via offload
         id: tests
+        # The input reaches offload through env only: never ${{ }} inside
+        # run:, and never through just's `{{args}}` (which is interpolated
+        # back into a shell script). The justfile recipe reads
+        # MINDS_SNAPSHOT_TEST_FILTER itself and passes it to offload as one
+        # quoted argument, so a crafted dispatch value stays data throughout.
+        env:
+          MINDS_SNAPSHOT_TEST_FILTER: ${{ inputs.minds_snapshot_test_filter }}
         run: just test-offload-minds-snapshot "${{ needs.build-minds-snapshot.outputs.image_id }}"
 
       # The minds_services tests run directly on the runner (not in the offload

@@ -479,11 +479,17 @@ def _handle_resend_verification_api() -> Response:
 def _handle_signin_modal_page() -> Response:
     """Render the sign-in modal page (``GET /auth/signin-modal``).
 
-    Served into the desktop client's shared modal WebContentsView (the overlay
-    layer that also hosts the inbox) so the create screen's sign-in prompt
-    covers the whole window, including the title bar.
+    Served into the desktop client's shared modal WebContentsView so the
+    sign-in prompt covers the whole window, including the title bar. The
+    optional ``?return_to=`` (validated as a safe local path) is where a
+    successful sign-in lands the content view; it defaults to the create
+    screen, the modal's original caller. The optional ``?mode=signin`` leads
+    with the sign-in tab (for callers labeled "Log In"); anything else keeps
+    the sign-up default.
     """
-    return make_html_response(render_signin_modal_page())
+    return_to = safe_local_redirect_path(request.args.get("return_to")) or "/create"
+    default_to_signup = request.args.get("mode") != "signin"
+    return make_html_response(render_signin_modal_page(return_to=return_to, default_to_signup=default_to_signup))
 
 
 def _handle_check_email_page() -> Response:
@@ -501,6 +507,11 @@ def _handle_check_email_page() -> Response:
 # polls so it can show a "waiting for browser" state without blocking on the
 # subprocess.
 _OAUTH_FLOW_TTL_SECONDS = 10 * 60
+
+# Passed to the plugin's oauth subcommand so its browser success page bounces
+# straight back to the desktop app: a bare minds:// deeplink focuses the app
+# without navigating (see the Electron main process's handleDeeplink).
+_MINDS_FOCUS_DEEPLINK = "minds://"
 
 
 class _OAuthFlowStatus(FrozenModel):
@@ -570,7 +581,9 @@ def _run_oauth_subprocess(
     non-OAuth signins.
     """
     try:
-        result = imbue_cloud_cli.auth_oauth(account="", provider_id=provider_id)
+        result = imbue_cloud_cli.auth_oauth(
+            account="", provider_id=provider_id, success_redirect_url=_MINDS_FOCUS_DEEPLINK
+        )
     except ImbueCloudCliError as exc:
         logger.warning("Plugin OAuth subprocess failed for {}: {}", provider_id, exc)
         _record_oauth_status(

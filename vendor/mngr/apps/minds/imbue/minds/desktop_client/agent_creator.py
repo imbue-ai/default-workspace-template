@@ -33,6 +33,7 @@ from pydantic import PrivateAttr
 from tenacity import RetryCallState
 from tenacity import Retrying
 from tenacity import retry_if_exception_type
+from tenacity import retry_if_not_exception_type
 from tenacity import stop_after_delay
 from tenacity import wait_fixed
 
@@ -48,6 +49,7 @@ from imbue.minds.desktop_client.backup_provisioning import BackupSetupRequest
 from imbue.minds.desktop_client.backup_provisioning import configure_backups_for_host
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudQuotaExceededCliError
 from imbue.minds.desktop_client.lima_image_prefetch import LimaImageCreateGate
 from imbue.minds.desktop_client.lima_image_prefetch import prebaked_image_mngr_setting_args
 from imbue.minds.desktop_client.notification import NotificationDispatcher
@@ -689,18 +691,53 @@ _FAST_MODE_PREVENT: Final[str] = "prevent"
 # ``imbue.mngr_imbue_cloud.errors.FastPathUnavailableError``.
 _FAST_PATH_UNAVAILABLE_ERROR_CLASS: Final[str] = "FastPathUnavailableError"
 
-# How long a gated Lima create blocks waiting for the prefetched image to become
-# ready before surfacing a retryable error. Generous because a cold first-run
-# download of a multi-GB image can take a while; the background prefetch usually
-# wins this race long before a user clicks create.
-_PREBAKED_IMAGE_WAIT_TIMEOUT_SECONDS: Final[float] = 1800.0
+# How long a gated Lima create blocks waiting for the prefetched image before giving up
+# on it and building the workspace in-VM instead. A cold download of the real image
+# measures ~6 minutes, so this leaves generous headroom for a slower link while bounding
+# the case where the download is not slow but stuck: past this, building in-VM (~5 min)
+# gets the user a workspace sooner than continuing to wait. The download keeps running,
+# so the next create still gets the fast path.
+_PREBAKED_IMAGE_WAIT_TIMEOUT_SECONDS: Final[float] = 600.0
 _PREBAKED_IMAGE_POLL_INTERVAL_SECONDS: Final[float] = 1.0
+
+# Only log the download's progress once it has moved this much, so a 1s poll does not
+# flood the create log with near-identical lines.
+_PREBAKED_IMAGE_PROGRESS_LOG_STEP_BYTES: Final[int] = 500 * 1000 * 1000
+
+
+class _PrebakedImageProgressReporter(MutableModel):
+    """Reports how much of the pre-baked image has downloaded into the create log.
+
+    A create blocked on the image would otherwise show nothing at all: desync draws its
+    progress bar only on a tty, so a packaged app sees no output from the download.
+    """
+
+    log_line: Callable[[str], None] = Field(frozen=True, description="Sink for one create-log line")
+    last_logged_bytes: int = Field(
+        default=0, description="Bytes reported by the last line, so a per-second poll does not flood the log"
+    )
+
+    def __call__(self, fetched_bytes: int) -> None:
+        if fetched_bytes - self.last_logged_bytes < _PREBAKED_IMAGE_PROGRESS_LOG_STEP_BYTES:
+            return
+        self.last_logged_bytes = fetched_bytes
+        self.log_line(f"[minds] Downloading pre-baked Lima image... {fetched_bytes / 1e9:.1f} GB")
+
+
+class _PrebakedImageFallbackReporter(MutableModel):
+    """Tells the create log why the workspace is being built in-VM rather than from the image."""
+
+    log_line: Callable[[str], None] = Field(frozen=True, description="Sink for one create-log line")
+
+    def __call__(self, reason: str) -> None:
+        self.log_line(f"[minds] Building the workspace in the VM (slower): {reason}.")
 
 
 def provider_instance_name_for_launch(
     launch_mode: LaunchMode,
     imbue_cloud_account: str | None = None,
     region: str | None = None,
+    cloud_account: str | None = None,
 ) -> str:
     """Return the mngr provider-instance name a ``mngr create`` on ``launch_mode`` targets.
 
@@ -714,7 +751,14 @@ def provider_instance_name_for_launch(
     the create form's availability check (which must agree on what "taken" means)
     never drift apart. ``imbue_cloud_account`` is the account *email* (slugified to
     match the provider block minds registers); ``region`` is required for AWS.
+
+    ``cloud_account`` is a bring-your-own-key account's provider block name
+    (``byok-<backend>-<slug>``, written by ``bootstrap.set_cloud_account_provider``).
+    When set it IS the provider instance name, so it short-circuits the
+    per-mode mapping (the block already pins backend + credentials + region).
     """
+    if cloud_account:
+        return cloud_account
     match launch_mode:
         case LaunchMode.DOCKER:
             return "docker"
@@ -723,12 +767,10 @@ def provider_instance_name_for_launch(
         case LaunchMode.VULTR:
             return "vultr"
         case LaunchMode.AWS:
-            # AWS is region-locked per provider instance (EC2's API is per-region),
-            # so minds writes one ``[providers.aws-<region>]`` block per configured
-            # region at startup. The region is required.
-            if not region:
-                raise MngrCommandError("AWS mode requires a region")
-            return f"aws-{region}"
+            # BYOK-only (like GCP/AZURE): the ambient per-region ``aws-<region>``
+            # path was removed from minds; the ``cloud_account`` short-circuit
+            # above is the only way to resolve an AWS provider instance.
+            raise MngrCommandError("AWS mode requires a cloud account")
         case LaunchMode.IMBUE_CLOUD:
             if not imbue_cloud_account:
                 raise MngrCommandError("IMBUE_CLOUD mode requires imbue_cloud_account")
@@ -737,6 +779,11 @@ def provider_instance_name_for_launch(
             # Single instance: the ``modal`` provider talks to Modal with the local
             # token (``modal token new``).
             return "modal"
+        case LaunchMode.GCP | LaunchMode.AZURE:
+            # GCP / Azure have no ambient provider instances in minds -- they are
+            # reachable only through a bring-your-own-key account block, which the
+            # ``cloud_account`` short-circuit above already returned.
+            raise MngrCommandError(f"{launch_mode.value} mode requires a cloud account")
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -750,12 +797,14 @@ def _build_mngr_create_command(
     imbue_cloud_branch_or_tag: str | None = None,
     imbue_cloud_fast_mode: str | None = None,
     region: str | None = None,
+    cloud_account: str | None = None,
+    instance_type: str | None = None,
     latchkey_env: Mapping[str, str] | None = None,
     color: str | None = None,
     docker_runtime: DockerRuntime = DockerRuntime.RUNC,
     original_minds_version: str | None = None,
     original_branch: str | None = None,
-    prebaked_lima_image_qcow2_path: Path | None = None,
+    prebaked_lima_image_raw_path: Path | None = None,
 ) -> list[str]:
     """Build the ``mngr create`` command for a freshly-provisioned workspace.
 
@@ -810,7 +859,7 @@ def _build_mngr_create_command(
     # uniqueness check runs in) is derived once here so the create address and the
     # form's availability check share a single mapping.
     provider_instance = provider_instance_name_for_launch(
-        launch_mode, imbue_cloud_account=imbue_cloud_account, region=region
+        launch_mode, imbue_cloud_account=imbue_cloud_account, region=region, cloud_account=cloud_account
     )
     address = f"{_DEFAULT_AGENT_NAME}@{host_name}.{provider_instance}"
 
@@ -927,13 +976,11 @@ def _build_mngr_create_command(
         case LaunchMode.LIMA:
             mngr_command.extend(["--new-host", "--template", "main", "--template", "lima"])
             mngr_command.extend(_remote_host_env_flags())
-            # When the caller resolved a ready pre-baked image (issue 2306),
-            # point Lima at the local qcow2 via the provider's existing per-arch
-            # image-url override, so the VM boots the baked toolchain instead of
-            # building it. No provider code change is needed to consume it.
-            if prebaked_lima_image_qcow2_path is not None:
+            # Point Lima at the baked raw image via the provider's existing per-arch
+            # image-url override, so the VM boots the baked toolchain instead of building it.
+            if prebaked_lima_image_raw_path is not None:
                 mngr_command.extend(
-                    prebaked_image_mngr_setting_args(get_current_image_arch(), prebaked_lima_image_qcow2_path)
+                    prebaked_image_mngr_setting_args(get_current_image_arch(), prebaked_lima_image_raw_path)
                 )
         case LaunchMode.VULTR:
             mngr_command.extend(["--new-host", "--template", "main", "--template", "vultr"])
@@ -952,6 +999,10 @@ def _build_mngr_create_command(
             # provider's cross-region guard confirms the placement.
             if region:
                 mngr_command.extend(["-b", f"--aws-region={region}"])
+            # Per-create machine size (the form's picker); overrides the
+            # provider block's default_instance_type when set.
+            if instance_type:
+                mngr_command.extend(["-b", f"--aws-instance-type={instance_type}"])
         case LaunchMode.IMBUE_CLOUD:
             # imbue_cloud follows the same shape as the other modes: the
             # ``main`` + ``imbue_cloud`` templates set ``idle_mode = disabled``
@@ -982,6 +1033,25 @@ def _build_mngr_create_command(
             # run the provisioning chain over SSH on the freshly-created sandbox.
             mngr_command.extend(["--new-host", "--template", "main", "--template", "modal"])
             mngr_command.extend(_remote_host_env_flags())
+        case LaunchMode.GCP:
+            # Same shape as aws; the address already selects the ``byok-gcp-<slug>``
+            # account block. GCE is zonal, so the placement flag is ``--gcp-zone``
+            # (the form's "region" value for GCP is a zone).
+            mngr_command.extend(["--new-host", "--template", "main", "--template", "gcp"])
+            mngr_command.extend(_remote_host_env_flags())
+            if region:
+                mngr_command.extend(["-b", f"--gcp-zone={region}"])
+            if instance_type:
+                mngr_command.extend(["-b", f"--gcp-machine-type={instance_type}"])
+        case LaunchMode.AZURE:
+            # Same shape as aws; the address already selects the
+            # ``byok-azure-<slug>`` account block.
+            mngr_command.extend(["--new-host", "--template", "main", "--template", "azure"])
+            mngr_command.extend(_remote_host_env_flags())
+            if region:
+                mngr_command.extend(["-b", f"--azure-region={region}"])
+            if instance_type:
+                mngr_command.extend(["-b", f"--azure-vm-size={instance_type}"])
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -1147,12 +1217,14 @@ def run_mngr_create(
     imbue_cloud_branch_or_tag: str | None = None,
     imbue_cloud_fast_mode: str | None = None,
     region: str | None = None,
+    cloud_account: str | None = None,
+    instance_type: str | None = None,
     latchkey_env: Mapping[str, str] | None = None,
     color: str | None = None,
     docker_runtime: DockerRuntime = DockerRuntime.RUNC,
     original_minds_version: str | None = None,
     original_branch: str | None = None,
-    prebaked_lima_image_qcow2_path: Path | None = None,
+    prebaked_lima_image_raw_path: Path | None = None,
     *,
     parent_cg: ConcurrencyGroup | None = None,
 ) -> tuple[AgentId, HostId]:
@@ -1187,12 +1259,14 @@ def run_mngr_create(
         imbue_cloud_branch_or_tag=imbue_cloud_branch_or_tag,
         imbue_cloud_fast_mode=imbue_cloud_fast_mode,
         region=region,
+        cloud_account=cloud_account,
+        instance_type=instance_type,
         latchkey_env=latchkey_env,
         color=color,
         docker_runtime=docker_runtime,
         original_minds_version=original_minds_version,
         original_branch=original_branch,
-        prebaked_lima_image_qcow2_path=prebaked_lima_image_qcow2_path,
+        prebaked_lima_image_raw_path=prebaked_lima_image_raw_path,
     )
 
     # The command carries the latchkey gateway password + permissions-override
@@ -1249,6 +1323,7 @@ def run_mngr_aws_prepare(
     region: str,
     on_output: OutputCallback | None = None,
     *,
+    provider_name: str | None = None,
     parent_cg: ConcurrencyGroup | None = None,
 ) -> None:
     """Ensure the AWS security group for ``region`` exists before an AWS create.
@@ -1272,10 +1347,51 @@ def run_mngr_aws_prepare(
     # consistently regardless of which step trips first.
     if not region:
         raise MngrCommandError("AWS mode requires a region")
-    provider_name = f"aws-{region}"
-    command = [MNGR_BINARY, "aws", "prepare", "--provider", provider_name, "--region", region]
+    # ``provider_name`` overrides the ambient per-region block for
+    # bring-your-own-key accounts (``byok-aws-<slug>``), whose block carries the
+    # pasted credentials prepare should authenticate with.
+    if provider_name is None:
+        provider_name = f"aws-{region}"
+    _run_mngr_prepare_command(
+        [MNGR_BINARY, "aws", "prepare", "--provider", provider_name, "--region", region],
+        f"aws prepare for region {region}",
+        on_output,
+        parent_cg,
+    )
+
+
+def run_mngr_provider_prepare(
+    backend: str,
+    provider_name: str,
+    on_output: OutputCallback | None = None,
+    *,
+    parent_cg: ConcurrencyGroup | None = None,
+) -> None:
+    """Run ``mngr <backend> prepare --provider <provider_name>`` (gcp / azure).
+
+    Unlike the AWS path there is no ``--region`` flag: the bring-your-own-key
+    account block named by ``provider_name`` already pins the placement
+    (``default_zone`` / ``default_region``), the credentials, and the project /
+    subscription, and prepare reads all of them from the resolved provider
+    config. Idempotent like the AWS prepare; failures raise ``MngrCommandError``.
+    """
+    _run_mngr_prepare_command(
+        [MNGR_BINARY, backend, "prepare", "--provider", provider_name],
+        f"{backend} prepare for provider {provider_name}",
+        on_output,
+        parent_cg,
+    )
+
+
+def _run_mngr_prepare_command(
+    command: list[str],
+    description: str,
+    on_output: OutputCallback | None,
+    parent_cg: ConcurrencyGroup | None,
+) -> None:
+    """Shared runner for the per-provider ``mngr <backend> prepare`` subprocess."""
     logger.info("Running: {}", " ".join(command))
-    cg = _make_child_cg("mngr-aws-prepare", parent_cg)
+    cg = _make_child_cg("mngr-provider-prepare", parent_cg)
     with cg:
         result = cg.run_process_to_completion(
             command=command,
@@ -1284,8 +1400,8 @@ def run_mngr_aws_prepare(
         )
     if result.returncode != 0:
         raise MngrCommandError(
-            "mngr aws prepare failed for region {} (exit code {}):\n{}".format(
-                region,
+            "mngr {} failed (exit code {}):\n{}".format(
+                description,
                 result.returncode,
                 result.stderr.strip() if result.stderr.strip() else result.stdout.strip(),
             )
@@ -1310,13 +1426,18 @@ class _MngrCreateAttemptParams(FrozenModel):
     repo_source: str | None
     branch_or_tag: str | None
     region: str | None
+    # Bring-your-own-key account provider block name (``byok-<backend>-<slug>``), or
+    # None for the ambient per-mode providers.
+    cloud_account: str | None
+    # Per-create EC2 machine size (AWS modes only), or None for the block default.
+    instance_type: str | None
     parent_cg: ConcurrencyGroup | None
     color: str | None
     docker_runtime: DockerRuntime
     original_minds_version: str | None
     original_branch: str | None
-    # Resolved ready pre-baked Lima qcow2 path (issue 2306), or None to build in-VM.
-    prebaked_lima_image_qcow2_path: Path | None = None
+    # Resolved ready pre-baked Lima raw image path, or None to build in-VM.
+    prebaked_lima_image_raw_path: Path | None = None
 
 
 def _attempt_mngr_create(fast_mode: str | None, params: _MngrCreateAttemptParams) -> tuple[AgentId, HostId]:
@@ -1348,11 +1469,13 @@ def _attempt_mngr_create(fast_mode: str | None, params: _MngrCreateAttemptParams
         # (-b --vultr-region=), and AWS (-b --aws-region=); the command builder
         # ignores it for DOCKER/LIMA.
         region=(params.region or None),
+        cloud_account=params.cloud_account,
+        instance_type=params.instance_type,
         color=params.color,
         docker_runtime=params.docker_runtime,
         original_minds_version=params.original_minds_version,
         original_branch=params.original_branch,
-        prebaked_lima_image_qcow2_path=params.prebaked_lima_image_qcow2_path,
+        prebaked_lima_image_raw_path=params.prebaked_lima_image_raw_path,
         parent_cg=params.parent_cg,
     )
 
@@ -1442,9 +1565,9 @@ class AgentCreator(MutableModel):
         default=None,
         frozen=True,
         description=(
-            "Pre-baked Lima image create gate (issue 2306). When set and the create matches the "
-            "default workspace (Lima + default workspace template repo + current release tag), the create gates on "
-            "the verified image and points Lima at it; None disables the path."
+            "Pre-baked Lima image create gate. When set and the create matches the default "
+            "workspace (Lima + default workspace template repo + current release tag), the create "
+            "gates on the verified image and points Lima at it; None disables the path."
         ),
     )
     mngr_forward_port: int = Field(
@@ -1542,6 +1665,8 @@ class AgentCreator(MutableModel):
         account_email: str = "",
         branch_or_tag: str = "",
         region: str = "",
+        cloud_account: str = "",
+        instance_type: str = "",
         on_created: Callable[[AgentId, HostId], None] | None = None,
         backup_request: BackupSetupRequest | None = None,
         color: str | None = None,
@@ -1619,6 +1744,8 @@ class AgentCreator(MutableModel):
                 account_email,
                 branch_or_tag,
                 region,
+                cloud_account,
+                instance_type,
                 on_created,
                 backup_request,
                 color,
@@ -1682,6 +1809,8 @@ class AgentCreator(MutableModel):
         account_email: str = "",
         branch_or_tag: str = "",
         region: str = "",
+        cloud_account: str = "",
+        instance_type: str = "",
         on_created: Callable[[AgentId, HostId], None] | None = None,
         backup_request: BackupSetupRequest | None = None,
         color: str | None = None,
@@ -1859,35 +1988,40 @@ class AgentCreator(MutableModel):
                 # re-creating the agent.
                 latchkey_setup = self._prepare_latchkey_or_warn(log_queue)
 
-                # AWS hosts need the region's security group to exist before
-                # ``mngr create`` (the provider looks it up read-only and
-                # refuses to launch without it). prepare is read-only-first, so
-                # this is a no-op describe when the region is already prepared.
-                if launch_mode is LaunchMode.AWS:
-                    log_queue.put(f"[minds] Ensuring AWS security group is ready in {region}...")
-                    run_mngr_aws_prepare(region, on_output=emit_log, parent_cg=self.root_concurrency_group)
+                # No prepare step here: a bring-your-own-key account's cloud
+                # scaffolding (AWS security group + state bucket, GCP/Azure
+                # equivalents) is created once when the account is *added*
+                # (``_handle_create_cloud_account``), against the account's pinned
+                # placement -- the same region every workspace on it uses. The
+                # other modes (docker / lima / vultr / imbue_cloud / modal) need
+                # no pre-created scaffolding at all.
 
                 parsed_host = HostName(host_name)
                 log_queue.put("[minds] Creating workspace '{}' (mode: {})...".format(host_name, launch_mode.value))
 
-                # Pre-baked Lima image gate (issue 2306): for the default
-                # workspace (Lima + default workspace template repo + current release tag) wait on
-                # the prefetched, verified image and point Lima at it. Returns None
-                # (build in-VM) for any non-default create or unpublished version;
-                # raises a retryable error if a published image can't be readied.
-                prebaked_lima_image_qcow2_path: Path | None = None
+                # Returns None (build in-VM) for any non-default create, an unpublished
+                # version, or a download that stalled or ran out the wait; raises a retryable
+                # error only when a published image failed to fetch or verify.
+                prebaked_lima_image_raw_path: Path | None = None
                 if self.lima_image_gate is not None:
-                    if launch_mode is LaunchMode.LIMA:
+                    is_lima = launch_mode is LaunchMode.LIMA
+                    if is_lima:
                         log_queue.put("[minds] Checking for a pre-baked Lima image...")
-                    prebaked_lima_image_qcow2_path = self.lima_image_gate.resolve_qcow2_for_create(
-                        is_lima_launch_mode=launch_mode is LaunchMode.LIMA,
+                    prebaked_lima_image_raw_path = self.lima_image_gate.resolve_image_for_create(
+                        is_lima_launch_mode=is_lima,
                         repo_url=repo_source or "",
                         branch_or_tag=branch_or_tag,
                         environ=os.environ,
                         wait_timeout_seconds=_PREBAKED_IMAGE_WAIT_TIMEOUT_SECONDS,
                         poll_interval_seconds=_PREBAKED_IMAGE_POLL_INTERVAL_SECONDS,
+                        on_download_progress=_PrebakedImageProgressReporter(log_line=log_queue.put),
+                        # Only a Lima create was ever going to use the image, so only it is owed
+                        # an explanation for building the workspace the slow way instead.
+                        on_fallback_to_in_vm=_PrebakedImageFallbackReporter(log_line=log_queue.put)
+                        if is_lima
+                        else None,
                     )
-                    if prebaked_lima_image_qcow2_path is not None:
+                    if prebaked_lima_image_raw_path is not None:
                         log_queue.put("[minds] Using pre-baked Lima image (fast create).")
 
                 # ``fast_mode`` is the only knob that varies between the fast-
@@ -1904,12 +2038,14 @@ class AgentCreator(MutableModel):
                     repo_source=repo_source,
                     branch_or_tag=branch_or_tag,
                     region=region,
+                    cloud_account=cloud_account or None,
+                    instance_type=instance_type or None,
                     parent_cg=self.root_concurrency_group,
                     color=color,
                     docker_runtime=docker_runtime,
                     original_minds_version=original_minds_version or None,
                     original_branch=branch or None,
-                    prebaked_lima_image_qcow2_path=prebaked_lima_image_qcow2_path,
+                    prebaked_lima_image_raw_path=prebaked_lima_image_raw_path,
                 )
 
                 if launch_mode is LaunchMode.IMBUE_CLOUD:
@@ -2098,8 +2234,12 @@ class AgentCreator(MutableModel):
         """
 
         try:
+            # A structured quota refusal is deterministic (retrying cannot
+            # succeed), so it is excluded from the retry predicate and falls
+            # straight through to the notification below.
             for attempt in Retrying(
-                retry=retry_if_exception_type((BackupProvisioningError, ImbueCloudCliError)),
+                retry=retry_if_exception_type((BackupProvisioningError, ImbueCloudCliError))
+                & retry_if_not_exception_type(ImbueCloudQuotaExceededCliError),
                 stop=stop_after_delay(self.backup_setup_retry_budget_seconds),
                 wait=wait_fixed(self.backup_setup_retry_wait_seconds),
                 reraise=True,

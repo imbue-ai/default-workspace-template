@@ -374,7 +374,7 @@ def ensure_agent_started(agent: AgentInterface, host: OnlineHostInterface, is_st
         if is_start_desired:
             logger.info("Agent {} is stopped, starting it", agent.name)
             agent.wait_for_ready_signal(
-                is_creating=False,
+                is_readiness_awaited=False,
                 start_action=lambda: host.start_agents([agent.id]),
                 timeout=agent.get_ready_timeout_seconds(),
             )
@@ -429,7 +429,7 @@ def revive_done_agent(agent: AgentInterface, host: OnlineHostInterface) -> None:
     """
     logger.info("Agent {} is DONE with a lingering tmux session; restarting it", agent.name)
     agent.wait_for_ready_signal(
-        is_creating=False,
+        is_readiness_awaited=False,
         start_action=lambda: start_agents_locked(host, [agent.id], is_restart=True),
         timeout=agent.get_ready_timeout_seconds(),
     )
@@ -508,6 +508,20 @@ def _find_agents_by_identifiers_or_state(
         unmatched_identifiers = set(agent_identifiers) - matched_identifiers
         if unmatched_identifiers:
             unmatched_list = ", ".join(sorted(str(i) for i in unmatched_identifiers))
+            # Name what discovery DID return before failing: "not found" can be
+            # a discovery gap (a provider whose record reads failed reports its
+            # hosts/agents as absent) rather than a truly-absent agent, and this
+            # summary is what tells the two apart after the fact.
+            discovered_summary = (
+                "; ".join(
+                    f"{host_ref.provider_name}/{host_ref.host_name} ({host_ref.host_id}, "
+                    f"state={host_ref.host_state.value if host_ref.host_state is not None else 'unknown'}): "
+                    f"{len(agent_refs)} agent(s)"
+                    for host_ref, agent_refs in sorted(agents_by_host.items(), key=lambda kv: str(kv[0].host_id))
+                )
+                or "no hosts"
+            )
+            logger.warning("Agent lookup failed for {}; discovery returned: {}", unmatched_list, discovered_summary)
             raise AgentNotFoundError(f"No agent(s) found matching: {unmatched_list}")
 
     if not filter_all or target_state is None:

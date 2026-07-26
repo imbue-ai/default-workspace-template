@@ -23,6 +23,10 @@ from scripts.changelog_projects import pyproject_projects
 
 _REPO_ROOT = Path(__file__).parent
 
+# The public mirror carries only the open-source subset; ratchets over private
+# ops assets apply only in the source-of-truth repo (identified by mirror/).
+_IS_SOURCE_OF_TRUTH = (_REPO_ROOT / "mirror").exists()
+
 # Projects that are excluded from ratchet requirements (scheduled for deletion).
 # Keep in sync with EXCLUDED_RATCHET_PROJECTS in scripts/sync_common_ratchets.py
 # (verified by test_excluded_projects_in_sync in scripts/sync_common_ratchets_test.py).
@@ -597,6 +601,7 @@ def test_every_project_with_tests_has_coverage_config() -> None:
 # --- Meta: ensure every project has the changelog layout files ---
 
 
+@pytest.mark.skipif(not _IS_SOURCE_OF_TRUTH, reason="the synthetic dev project is absent on the public mirror")
 def test_every_project_has_changelog_layout() -> None:
     """Ensure every project (libs/<name>, apps/<name>, and the synthetic dev)
     has the full changelog layout: ``CHANGELOG.md``, ``UNABRIDGED_CHANGELOG.md``,
@@ -736,3 +741,44 @@ def test_top_level_coverage_omit_covers_subproject_omits() -> None:
     assert len(errors) == 0, (
         "Top-level [tool.coverage.run].omit is missing entries for files that subprojects omit:\n" + "\n".join(errors)
     )
+
+
+# --- Meta: offload CI config performance invariants ---
+
+
+@pytest.mark.skipif(not _IS_SOURCE_OF_TRUTH, reason="offload configs are absent on the public mirror")
+def test_offload_configs_suppress_per_batch_coverage_reports() -> None:
+    """Guard the offload CI coverage-report invariant established in MIND-142.
+
+    Per-run coverage reports walk every measured file and are never consumed
+    from sandboxes (CI combines the raw .coverage data files on the runner and
+    enforces the gates there), so offload batches suppress them:
+
+    - Root addopts must not contain ``--cov-report*`` or ``--coverage-to-file``.
+      Keeping them out of addopts is also what allows ``--cov-report=`` to
+      clear reports entirely -- pytest-cov only treats the empty value as
+      "no reports" when it is the sole ``--cov-report`` given.
+    - offload-modal.toml must pass ``--cov-report=`` so its batches generate
+      no reports but still write the .coverage data file the gates combine.
+
+    Discovery-side speedups (--no-cov during collect-only) and invoking
+    .venv/bin/pytest directly instead of `uv run pytest` were prototyped in
+    this PR but moved upstream to offload (see the OFFLOAD tickets linked
+    from MIND-142's follow-up); do not re-add them as config here.
+    """
+    errors: list[str] = []
+
+    root_addopts = _get_addopts(tomlkit.parse((_REPO_ROOT / "pyproject.toml").read_text()))
+    if isinstance(root_addopts, list):
+        for opt in root_addopts:
+            if str(opt).startswith("--cov-report") or str(opt) == "--coverage-to-file":
+                errors.append(f"root pyproject.toml addopts must not contain {opt} (see MIND-142 note in addopts)")
+
+    modal_config = tomlkit.parse((_REPO_ROOT / "offload-modal.toml").read_text())
+    run_args = str(modal_config.get("framework", {}).get("run_args", ""))
+    if "--cov-report=" not in run_args.split():
+        errors.append(
+            "offload-modal.toml: framework.run_args must contain `--cov-report=` to suppress per-batch reports"
+        )
+
+    assert len(errors) == 0, "offload CI coverage-report invariant violated:\n" + "\n".join(f"  - {e}" for e in errors)

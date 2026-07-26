@@ -250,6 +250,39 @@ def _terminate_pid(pid: int) -> None:
     _terminate_process(process)
 
 
+def _terminate_pid_and_descendants(pid: int) -> None:
+    """Terminate a forward supervisor and every descendant it owns.
+
+    The descendants (the ``mngr observe`` discovery child, the detached
+    ``latchkey gateway``, reverse ``ssh`` tunnels) are meant to die in the
+    supervisor's own SIGTERM teardown -- but a wedged supervisor that has to be
+    SIGKILLed after the grace period never runs it, and the gateway (spawned
+    with ``start_new_session=True``) then outlives every session. Capture the
+    descendant handles before signalling and terminate them after, the same
+    arrangement :meth:`LatchkeyForwardSupervisor._reap_duplicate_forwards`
+    uses; the PID-reuse guard in :func:`_terminate_process` keeps a descendant
+    the supervisor already tore down from being confused with a recycled PID.
+
+    Descendants are only captured when ``pid``'s cmdline still looks like our
+    forward. The :meth:`LatchkeyForwardSupervisor.stop` cached-pid path passes
+    a PID it deliberately does not cmdline-verify (the freshly-forked child may
+    not have exec'd its argv yet), and without this gate a PID recycled onto an
+    unrelated process would have its whole live subprocess tree reaped rather
+    than receiving just the single tolerated spurious signal. The gate loses
+    nothing: a not-yet-exec'd child has no descendants, and a real forward --
+    healthy or wedged -- keeps its matching argv.
+    """
+    looks_like_forward = False
+    try:
+        looks_like_forward = _cmdline_looks_like_mngr_latchkey_forward(psutil.Process(pid).cmdline())
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+        logger.debug("Could not read cmdline of pid {} before descendant capture: {}", pid, e)
+    descendant_processes = _descendant_processes(pid) if looks_like_forward else []
+    _terminate_pid(pid)
+    for descendant_process in descendant_processes:
+        _terminate_process(descendant_process)
+
+
 class LatchkeyForwardSupervisor(MutableModel):
     """Ensure exactly one detached ``mngr latchkey forward`` is running.
 
@@ -477,7 +510,7 @@ class LatchkeyForwardSupervisor(MutableModel):
             delete_forward_info(plugin_dir)
         if cached_pid is not None:
             logger.info("Stopping detached mngr latchkey forward supervisor (pid={})", cached_pid)
-            _terminate_pid(cached_pid)
+            _terminate_pid_and_descendants(cached_pid)
             return
         if info is None:
             return
@@ -488,17 +521,20 @@ class LatchkeyForwardSupervisor(MutableModel):
             )
             return
         logger.info("Stopping detached mngr latchkey forward supervisor (pid={})", info.pid)
-        _terminate_pid(info.pid)
+        _terminate_pid_and_descendants(info.pid)
 
     def bounce(self) -> None:
         """Refresh the supervisor's provider set without dropping the gateway.
 
-        If a live ``mngr latchkey forward`` is running, send it SIGHUP so it
-        bounces only its ``mngr observe`` child (the shared gateway and every
-        reverse tunnel stay up) and reloads the current provider set. If no
-        live supervisor is found -- no record, a dead PID, or a stale record
-        pointing at a stranger -- fall back to :meth:`ensure_running` so the
-        bounce also brings the supervisor up (start-if-down).
+        If a live, fully-started ``mngr latchkey forward`` is running, send it
+        SIGHUP so it bounces only its ``mngr observe`` child (the shared gateway
+        and every reverse tunnel stay up) and reloads the current provider set.
+        If no live supervisor is found -- no record, a dead PID, or a stale
+        record pointing at a stranger -- fall back to :meth:`ensure_running` so
+        the bounce also brings the supervisor up (start-if-down). A live
+        supervisor that is still starting (its record has no gateway port yet)
+        is left alone entirely: its observe child does not exist to be bounced,
+        and startup reads the current provider state anyway.
 
         Used by the minds desktop client on every mid-session change to its
         provider set (provider enable/disable, imbue_cloud account add/remove),
@@ -507,18 +543,29 @@ class LatchkeyForwardSupervisor(MutableModel):
         plugin_dir = self.plugin_data_dir
         with self._lock:
             info = load_forward_info(plugin_dir)
-            live_pid = info.pid if (info is not None and is_forward_info_alive(info)) else None
-        if live_pid is None:
+            live_info = info if (info is not None and is_forward_info_alive(info)) else None
+        if live_info is None:
             logger.info("No live mngr latchkey forward to bounce; ensuring one is running")
             self.ensure_running()
             return
-        logger.info("Bouncing mngr latchkey forward observe via SIGHUP (pid={})", live_pid)
+        if live_info.gateway_port is None:
+            # The record's gateway port is stamped only once startup completes,
+            # and until then a SIGHUP can land before the forward has installed
+            # its bounce handler -- the default disposition would kill it.
+            logger.info(
+                "mngr latchkey forward (pid={}) is still starting; skipping the observe bounce",
+                live_info.pid,
+            )
+            return
+        logger.info("Bouncing mngr latchkey forward observe via SIGHUP (pid={})", live_info.pid)
         try:
-            os.kill(live_pid, signal.SIGHUP)
+            os.kill(live_info.pid, signal.SIGHUP)
         except OSError as e:
             # The supervisor died between the liveness check and the signal.
             # Bring a fresh one up rather than leaving the provider set stale.
-            logger.warning("Failed to SIGHUP mngr latchkey forward pid {}: {}; ensuring one is running", live_pid, e)
+            logger.warning(
+                "Failed to SIGHUP mngr latchkey forward pid {}: {}; ensuring one is running", live_info.pid, e
+            )
             self.ensure_running()
 
     def restart(self) -> LatchkeyForwardInfo:

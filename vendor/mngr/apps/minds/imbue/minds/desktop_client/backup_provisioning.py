@@ -32,6 +32,7 @@ import base64
 import os
 import secrets
 import shlex
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timezone
 from typing import Final
@@ -137,25 +138,52 @@ def build_canonical_env_content(
 # ---------------------------------------------------------------------------
 
 
+def build_backup_exec_argv(agent_id: AgentId, command_str: str) -> list[str]:
+    """The ``mngr exec`` argv for a backup-stack command on the agent's host.
+
+    --no-start: ``mngr exec`` auto-starts a stopped host by default, and none of
+    the backup-stack execs may cold-boot a container as a side effect -- the
+    periodic verification check in particular gates on an ``is_workspace_online``
+    reading that can be stale (a replayed pre-start RUNNING at app startup was
+    observed booting a stopped container through this path).
+    """
+    return [MNGR_BINARY, "exec", str(agent_id), command_str, "--no-start"]
+
+
 def run_mngr_exec_on_agent(
     agent_id: AgentId,
     command_str: str,
     *,
     parent_cg: ConcurrencyGroup | None,
     timeout_seconds: float = _MNGR_EXEC_TIMEOUT_SECONDS,
+    # Invoked with (line, is_stdout) for each output line as it arrives, so a
+    # long-running command (a restore) can stream live progress into an
+    # operation log.
+    on_output: Callable[[str, bool], None] | None = None,
 ) -> FinishedProcess:
     """Run a single shell command on the agent's host via ``mngr exec``.
 
     Shared by env injection, the backup-service verification check, and the
     backup-service update scripts; the caller inspects the returned process.
+    Never starts a stopped host (see :func:`build_backup_exec_argv`).
     """
     name = "backup-exec"
     cg = parent_cg.make_concurrency_group(name=name) if parent_cg is not None else ConcurrencyGroup(name=name)
+    # When the caller wants live output, append ``--stream`` so ``mngr exec`` emits
+    # each remote line as it arrives rather than buffering the whole command's
+    # output and printing it only at the end (which made a long restore's
+    # progress appear all at once). ``run_process_to_completion``'s own reader
+    # then fires ``on_output`` per line; callers with no ``on_output`` (env
+    # injection, gate probe, verification) stay on the non-streaming path.
+    argv = build_backup_exec_argv(agent_id, command_str)
+    if on_output is not None:
+        argv = [*argv, "--stream"]
     with cg:
         return cg.run_process_to_completion(
-            command=[MNGR_BINARY, "exec", str(agent_id), command_str],
+            command=argv,
             timeout=timeout_seconds,
             is_checked_after=False,
+            on_output=on_output,
         )
 
 
@@ -243,11 +271,12 @@ def _create_or_reuse_bucket(
     account_email: str,
     bucket_short_name: str,
 ) -> tuple[str, str, R2BucketKeyMaterial]:
-    """Create the per-workspace bucket, or reuse it (minting a fresh key) if it exists.
+    """Create the per-workspace bucket, or reuse it (rolling its single key) if it exists.
 
     Returns ``(bucket_name, s3_endpoint, key_material)``. Idempotent so the
     same provisioning can be re-applied to a host whose bucket was already
-    created on an earlier run.
+    created on an earlier run: each bucket has exactly one key, and rolling
+    it yields fresh credentials with the same Access Key ID.
     """
     try:
         result = imbue_cloud_cli.create_bucket(account=account_email, name=bucket_short_name, access="readwrite")
@@ -255,9 +284,9 @@ def _create_or_reuse_bucket(
     except ImbueCloudCliError as e:
         if not _is_bucket_already_exists_error(e):
             raise
-        logger.debug("Bucket {} already exists; reusing it with a fresh key", bucket_short_name)
+        logger.debug("Bucket {} already exists; reusing it by rolling its key", bucket_short_name)
         info = imbue_cloud_cli.get_bucket_info(account_email, bucket_short_name)
-        key = imbue_cloud_cli.create_bucket_key(account=account_email, name=bucket_short_name, access="readwrite")
+        key = imbue_cloud_cli.roll_bucket_key(account=account_email, name=bucket_short_name)
         return info.bucket_name, str(info.s3_endpoint), key
 
 

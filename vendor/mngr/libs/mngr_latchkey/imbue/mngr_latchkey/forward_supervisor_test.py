@@ -101,7 +101,7 @@ def _make_fake_mngr_binary(tmp_path: Path) -> Path:
     script = tmp_path / "mngr"
     script.write_text(
         "#!/usr/bin/env python3\n"
-        "import json, os, signal, sys\n"
+        "import json, os, signal, sys, threading\n"
         "from datetime import datetime, timezone\n"
         "from pathlib import Path\n"
         'if sys.argv[1:3] != ["latchkey", "forward"]:\n'
@@ -136,7 +136,16 @@ def _make_fake_mngr_binary(tmp_path: Path) -> Path:
         "        pass\n"
         "    sys.exit(0)\n"
         "signal.signal(signal.SIGTERM, _on_term)\n"
-        "signal.pause()\n"
+        # Mirror the real forward's SIGHUP observe-bounce handler with a
+        # delivery sentinel, so bounce tests can assert whether the signal was
+        # actually delivered (inherited dispositions make death-on-SIGHUP an
+        # unreliable delivery signal across test environments).
+        "def _on_hup(*_):\n"
+        '    (record_path.parent / f"sighup_received_{os.getpid()}.txt").write_text("1")\n'
+        "signal.signal(signal.SIGHUP, _on_hup)\n"
+        # Block forever (handlers still run) rather than ``signal.pause()``,
+        # which would fall through and exit after the first handled SIGHUP.
+        "threading.Event().wait()\n"
     )
     script.chmod(0o755)
     return script
@@ -722,6 +731,14 @@ def test_descendant_processes_returns_all_children_not_just_observe(tmp_path: Pa
         child.wait(timeout=5.0)
 
 
+def _terminate_pid_if_alive(pid: int) -> None:
+    """Test-teardown kill that tolerates an already-dead process."""
+    try:
+        psutil.Process(pid).kill()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+
+
 def _make_fake_forward_spawning_child_binary(tmp_path: Path) -> Path:
     """A fake ``mngr`` whose ``latchkey forward`` spawns a long-lived child and records its PID.
 
@@ -800,10 +817,82 @@ def test_ensure_running_reaps_orphan_forwards_children_too(tmp_path: Path) -> No
             _wait_for_process_exit(info.pid)
         _terminate_orphan(orphan)
         if child_pid is not None:
-            try:
-                psutil.Process(child_pid).kill()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+            _terminate_pid_if_alive(child_pid)
+
+
+def test_stop_terminates_descendants_of_wedged_supervisor(tmp_path: Path) -> None:
+    """``stop()`` also terminates the supervisor's descendant subprocesses.
+
+    A healthy supervisor tears its own descendants (``mngr observe``, the
+    ``latchkey gateway``, reverse tunnels) down in its SIGTERM handler -- but a
+    wedged one that has to be SIGKILLed (or, as here, one that exits without
+    running its teardown) never does, and the detached gateway then outlives
+    every session. ``stop()`` must capture the descendants before signalling
+    and terminate them after, the same way ``_reap_duplicate_forwards`` does.
+    """
+    fake_binary = _make_fake_forward_spawning_child_binary(tmp_path)
+    latchkey_directory = tmp_path / f"latchkey-{uuid4().hex}"
+    supervisor = LatchkeyForwardSupervisor(
+        mngr_binary=str(fake_binary),
+        latchkey_binary="/usr/bin/latchkey-unused",
+        latchkey_directory=latchkey_directory,
+    )
+    child_pid: int | None = None
+    info: LatchkeyForwardInfo | None = None
+    try:
+        info = supervisor.ensure_running()
+        data_dir = plugin_data_dir(latchkey_directory)
+        _wait_for_forward_record(data_dir)
+        child_pid = int((data_dir / "child_pid.txt").read_text())
+        assert psutil.pid_exists(child_pid)
+
+        supervisor.stop()
+        assert _wait_for_process_exit(info.pid)
+        assert _wait_for_process_exit(child_pid), "the supervisor's child was not reaped by stop()"
+    finally:
+        if info is not None:
+            _terminate_pid_if_alive(info.pid)
+        if child_pid is not None:
+            _terminate_pid_if_alive(child_pid)
+
+
+def test_stop_terminates_descendants_via_on_disk_record(tmp_path: Path) -> None:
+    """``stop()`` reaps descendants for the on-disk-record path too (fresh supervisor object).
+
+    A new minds session stops the previous session's supervisor through the
+    persisted record (no cached ``_last_known_pid``); an orphaned gateway must
+    not survive that path either.
+    """
+    fake_binary = _make_fake_forward_spawning_child_binary(tmp_path)
+    latchkey_directory = tmp_path / f"latchkey-{uuid4().hex}"
+    old_supervisor = LatchkeyForwardSupervisor(
+        mngr_binary=str(fake_binary),
+        latchkey_binary="/usr/bin/latchkey-unused",
+        latchkey_directory=latchkey_directory,
+    )
+    child_pid: int | None = None
+    info: LatchkeyForwardInfo | None = None
+    try:
+        info = old_supervisor.ensure_running()
+        data_dir = plugin_data_dir(latchkey_directory)
+        _wait_for_forward_record(data_dir)
+        child_pid = int((data_dir / "child_pid.txt").read_text())
+        assert psutil.pid_exists(child_pid)
+
+        # A fresh supervisor object (a new minds session) only has the record.
+        fresh_supervisor = LatchkeyForwardSupervisor(
+            mngr_binary=str(fake_binary),
+            latchkey_binary="/usr/bin/latchkey-unused",
+            latchkey_directory=latchkey_directory,
+        )
+        fresh_supervisor.stop()
+        assert _wait_for_process_exit(info.pid)
+        assert _wait_for_process_exit(child_pid), "the supervisor's child was not reaped by stop()"
+    finally:
+        if info is not None:
+            _terminate_pid_if_alive(info.pid)
+        if child_pid is not None:
+            _terminate_pid_if_alive(child_pid)
 
 
 def test_is_forward_pid_for_directory_matches_only_its_own_directory(tmp_path: Path) -> None:
@@ -922,3 +1011,83 @@ def test_ensure_running_does_not_reap_forward_for_a_different_directory(tmp_path
             supervisor.stop()
             _wait_for_process_exit(info.pid)
         _terminate_orphan(other)
+
+
+def _wait_for_sighup_sentinel(plugin_dir: Path, pid: int, timeout: float = 5.0) -> bool:
+    """Poll until the fake forward's SIGHUP-delivery sentinel for ``pid`` appears."""
+    sentinel = plugin_dir / f"sighup_received_{pid}.txt"
+    poll_event = threading.Event()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if sentinel.exists():
+            return True
+        poll_event.wait(timeout=_POLL_INTERVAL_SECONDS)
+    return False
+
+
+def test_bounce_skips_sighup_while_forward_is_still_starting(tmp_path: Path) -> None:
+    """A live forward whose record carries no gateway port yet is never signalled.
+
+    The port is stamped only once startup completes; before that a SIGHUP can
+    land ahead of the real forward's handler installation, where the default
+    disposition kills it. The fake forward's SIGHUP handler writes a delivery
+    sentinel, so an absent sentinel after the settle window proves the signal
+    was skipped.
+    """
+    fake_binary = _make_fake_mngr_binary(tmp_path)
+    latchkey_directory = tmp_path / f"latchkey-{uuid4().hex}"
+    data_dir = plugin_data_dir(latchkey_directory)
+    fake = _spawn_orphan_fake_forward(fake_binary, latchkey_directory)
+    try:
+        _wait_for_forward_ready(data_dir, fake.pid)
+        assert _wait_for_process_alive(fake.pid)
+        supervisor = LatchkeyForwardSupervisor(
+            mngr_binary=str(fake_binary),
+            latchkey_binary="/usr/bin/latchkey-unused",
+            latchkey_directory=latchkey_directory,
+        )
+
+        # The fake's own record has ``gateway_port: None`` (still starting).
+        supervisor.bounce()
+
+        assert not _wait_for_sighup_sentinel(data_dir, fake.pid, timeout=1.0), (
+            "a still-starting forward must not be signalled"
+        )
+        assert psutil.pid_exists(fake.pid), "a still-starting forward must stay alive"
+        persisted = load_forward_info(data_dir)
+        assert persisted is not None
+        assert persisted.pid == fake.pid, "bounce must not replace a still-starting forward"
+    finally:
+        _terminate_orphan(fake)
+
+
+def test_bounce_sighups_forward_once_gateway_port_is_stamped(tmp_path: Path) -> None:
+    """Once the record carries a gateway port, ``bounce()`` delivers the SIGHUP.
+
+    The fake forward's SIGHUP handler writes a delivery sentinel -- the
+    counterpart to the still-starting skip above, proving the readiness guard
+    does not suppress bounces for fully-started supervisors.
+    """
+    fake_binary = _make_fake_mngr_binary(tmp_path)
+    latchkey_directory = tmp_path / f"latchkey-{uuid4().hex}"
+    data_dir = plugin_data_dir(latchkey_directory)
+    fake = _spawn_orphan_fake_forward(fake_binary, latchkey_directory)
+    try:
+        _wait_for_forward_ready(data_dir, fake.pid)
+        assert _wait_for_process_alive(fake.pid)
+        save_forward_info(
+            data_dir,
+            LatchkeyForwardInfo(pid=fake.pid, started_at=datetime.now(timezone.utc), gateway_port=45999),
+        )
+        supervisor = LatchkeyForwardSupervisor(
+            mngr_binary=str(fake_binary),
+            latchkey_binary="/usr/bin/latchkey-unused",
+            latchkey_directory=latchkey_directory,
+        )
+
+        supervisor.bounce()
+
+        assert _wait_for_sighup_sentinel(data_dir, fake.pid), "a ready forward must receive the SIGHUP bounce"
+        assert psutil.pid_exists(fake.pid), "the bounce must not kill a forward with a SIGHUP handler installed"
+    finally:
+        _terminate_orphan(fake)
