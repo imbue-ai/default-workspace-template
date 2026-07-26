@@ -92,7 +92,11 @@ _CODE_TO_KEYSYM_NAME: dict[str, str] = {
     "Slash": "slash",
     "NumpadAdd": "KP_Add", "NumpadSubtract": "KP_Subtract", "NumpadMultiply": "KP_Multiply",
     "NumpadDivide": "KP_Divide", "NumpadDecimal": "KP_Decimal",
+    "NumLock": "Num_Lock", "ContextMenu": "Menu", "PrintScreen": "Print",
+    "ScrollLock": "Scroll_Lock", "Pause": "Pause",
 }
+for _i in range(13, 25):
+    _CODE_TO_KEYSYM_NAME[f"F{_i}"] = f"F{_i}"
 for _i in range(26):
     _CODE_TO_KEYSYM_NAME[f"Key{chr(ord('A') + _i)}"] = chr(ord("a") + _i)
 for _i in range(10):
@@ -127,6 +131,7 @@ class Display:
         self._proc: asyncio.subprocess.Process | None = None
         self._x: xdisplay.Display | None = None
         self._root: object | None = None
+        self._closed = False  # close() is idempotent (frees the display number once)
         # Capture crop: input arrives in frame coords (the cropped capture region);
         # add this offset to reach true display coords. Set by session on measure.
         self.crop_x = 0
@@ -135,23 +140,45 @@ class Display:
         # base keymap lacks can still be typed and its keyup matches its keydown.
         self._scratch: dict[int, int] = {}
         self._spare_keycode: int | None = None
+        # Currently-held injected keys (keycodes) and mouse buttons. XTest state is
+        # sticky -- a key never released AUTOREPEATS on the server forever, and a
+        # button never released leaves a permanent drag -- so anything that cuts the
+        # input stream mid-hold (viewer blur, agent takeover, disconnect) must call
+        # release_all() to synthesize the missing releases.
+        self._down_keycodes: set[int] = set()
+        self._down_buttons: set[int] = set()
 
     async def start(self) -> None:
-        """Spawn Xvfb and open the XTest connection. Async so a ~1s server start
-        never blocks the shared loop; readiness is polled off the X socket."""
+        """Spawn Xvfb and open the XTest connection. Async so a ~1s server start never
+        blocks the shared loop; readiness is polled off the X socket. ATOMIC: any failure
+        after the Xvfb spawn (readiness timeout, xlib connect error, missing XTest) tears
+        the Xvfb back down and frees the display number, then raises DisplayError -- so a
+        flaked launch never leaks a process or a reserved display number."""
         self._proc = await asyncio.create_subprocess_exec(
             "Xvfb", self.name,
             "-screen", "0", f"{SCREEN_W}x{SCREEN_H}x24",
             "-nolisten", "tcp", "+extension", "RANDR",
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
         )
-        await self._await_ready()
-        # python-xlib connect is sync but fast (local socket, one round-trip).
-        self._x = xdisplay.Display(self.name)
-        if self._x.query_extension("XTEST") is None:
-            raise DisplayError(f"XTest extension missing on {self.name}")
-        self._root = self._x.screen().root
-        self._spare_keycode = self._x.display.info.max_keycode  # top of range: unused
+        try:
+            await self._await_ready()
+            # python-xlib connect is sync but fast (local socket, one round-trip).
+            self._x = xdisplay.Display(self.name)
+            if self._x.query_extension("XTEST") is None:
+                raise DisplayError(f"XTest extension missing on {self.name}")
+            self._root = self._x.screen().root
+            self._spare_keycode = self._x.display.info.max_keycode  # top of range: unused
+            # Turn NumLock ON: Xvfb boots with it off, which makes the numpad digit keysyms
+            # (KP_1..) resolve to their level-0 navigation meanings (End/Down/...) instead of
+            # digits. One synthetic tap fixes every future numpad press.
+            numlock = self._x.keysym_to_keycode(XK.string_to_keysym("Num_Lock"))
+            if numlock:
+                xtest.fake_input(self._x, X.KeyPress, numlock)
+                xtest.fake_input(self._x, X.KeyRelease, numlock)
+                self._sync()
+        except (DisplayError, xerror.XError, OSError, ConnectionError) as e:
+            await self.close()  # kill Xvfb + free the display number
+            raise DisplayError(f"could not bring up display {self.name}: {e}") from e
 
     async def _await_ready(self) -> None:
         assert self._proc is not None
@@ -199,6 +226,7 @@ class Display:
                 xtest.fake_input(self._x, X.MotionNotify, x=x + self.crop_x, y=y + self.crop_y)
             xtest.fake_input(self._x, X.ButtonPress if pressed else X.ButtonRelease, button)
             self._sync()
+            (self._down_buttons.add if pressed else self._down_buttons.discard)(button)
         except (xerror.ConnectionClosedError, OSError) as e:
             logger.debug("xtest button ignored ({})", e)
 
@@ -230,8 +258,27 @@ class Display:
             if keycode:
                 xtest.fake_input(self._x, X.KeyPress if pressed else X.KeyRelease, keycode)
                 self._sync()
+                (self._down_keycodes.add if pressed else self._down_keycodes.discard)(keycode)
         except (xerror.ConnectionClosedError, OSError) as e:
             logger.debug("xtest key ignored ({})", e)
+
+    def release_all(self) -> None:
+        """Release every injected key/button still held. XTest holds are sticky server-
+        side (a never-released key AUTOREPEATS forever; a never-released button is a
+        permanent drag), so this runs whenever the input stream is cut mid-hold: viewer
+        blur/disconnect, agent takeover, teardown."""
+        if self._x is None:
+            return
+        try:
+            for keycode in list(self._down_keycodes):
+                xtest.fake_input(self._x, X.KeyRelease, keycode)
+            for button in list(self._down_buttons):
+                xtest.fake_input(self._x, X.ButtonRelease, button)
+            self._sync()
+        except (xerror.ConnectionClosedError, OSError) as e:
+            logger.debug("xtest release-all ignored ({})", e)
+        self._down_keycodes.clear()
+        self._down_buttons.clear()
 
     def _keycode_for(self, keysym: int) -> int:
         """Keycode for a keysym, binding it to a spare keycode if the base keymap
@@ -244,13 +291,23 @@ class Display:
             return keycode
         if self._spare_keycode is None:
             return 0
-        # Bind keysym onto the spare keycode (both shift levels), then use it.
+        # Bind keysym onto the spare keycode (both shift levels), then use it. ONE
+        # spare keycode: rebinding evicts the previous tenant, so clear the cache --
+        # a stale entry would map the old keysym to a keycode that now generates the
+        # NEW character (verified: type "é", then "ñ", then "é" again typed "ñ").
+        self._scratch.clear()
         self._x.change_keyboard_mapping(self._spare_keycode, [[keysym, keysym]])
         self._x.sync()
         self._scratch[keysym] = self._spare_keycode
         return self._spare_keycode
 
     async def close(self) -> None:
+        # Idempotent: close() runs on both the launch-failure path AND a later teardown,
+        # and freeing the display number twice could discard a number a DIFFERENT browser
+        # has since reused. Guard so the number is freed exactly once.
+        if self._closed:
+            return
+        self._closed = True
         if self._x is not None:
             try:
                 self._x.close()

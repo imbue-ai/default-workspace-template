@@ -11,7 +11,7 @@ from browser import manifest
 from browser import session as bsession
 
 
-async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
+async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None, baseline: tuple[int, int] = (0, 0)) -> None:
     """Stand-in for ``_wake_agent`` in tests: skip the real ``mngr message`` subprocess."""
 
 
@@ -124,9 +124,13 @@ class _FakeDisplay:
         self.crop_x = 0
         self.crop_y = 0
         self.moves: list[tuple[int, int]] = []
+        self.releases = 0
 
     def move(self, x: int, y: int) -> None:
         self.moves.append((x, y))
+
+    def release_all(self) -> None:
+        self.releases += 1
 
 
 def test_input_gating_follows_controller() -> None:
@@ -141,9 +145,11 @@ def test_input_gating_follows_controller() -> None:
         await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved", "x": 3, "y": 4}})
         assert display.moves == [(3, 4)]
         display.moves.clear()
-        # Agent in control: human input is dropped (the input/control TOCTOU guard).
+        # Agent in control: human input is dropped (the input/control TOCTOU guard),
+        # and the human's held keys/buttons are released so nothing stays stuck down.
         await browser.acquire("A")
         assert not browser._input_enabled.is_set()
+        assert display.releases >= 1
         await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved", "x": 5, "y": 6}})
         await browser.handle_cast_message({"type": "tab", "action": "new"})
         assert display.moves == []
@@ -207,7 +213,7 @@ def test_enqueue_on_busy_queues_for_resume_and_wakes_on_handback(monkeypatch: py
     # back, the queued agent is granted control and messaged to resume.
     woken: list[str | None] = []
 
-    async def fake_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
+    async def fake_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None, baseline: tuple[int, int] = (0, 0)) -> None:
         woken.append(agent_name)
 
     monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", fake_wake)
@@ -236,7 +242,7 @@ def test_agent_in_both_queues_is_not_re_granted_after_it_finishes(monkeypatch: p
     # later would spuriously re-grant the freed browser to the (now-done) agent.
     woken: list[str | None] = []
 
-    async def fake_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
+    async def fake_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None, baseline: tuple[int, int] = (0, 0)) -> None:
         woken.append(agent_name)
 
     monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", fake_wake)
@@ -548,7 +554,7 @@ def test_take_control_queues_the_displaced_owner_to_resume_first(monkeypatch: py
     # preempted agent that was told "you're queued" while actually in no queue.
     woken: list[str] = []
 
-    async def fake_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
+    async def fake_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None, baseline: tuple[int, int] = (0, 0)) -> None:
         woken.append(agent_id)
 
     monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", fake_wake)

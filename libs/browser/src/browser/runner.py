@@ -99,6 +99,9 @@ _DIRECT_ACTION_TIMEOUT: float | None = _DIRECT_ACTION_TIMEOUT_RAW if _DIRECT_ACT
 _NDJSON_POLL_SECONDS = 0.5
 _CAST_OUTBOUND_POLL_SECONDS = 1.0
 _CAST_INBOUND_POLL_SECONDS = 0.05
+# A /stream client sends its codec-capability handshake immediately on open; bound the
+# wait tightly so a mute/half-open client can't hold a subscriber slot doing nothing.
+_STREAM_HANDSHAKE_TIMEOUT = float(os.environ.get("BROWSER_STREAM_HANDSHAKE_TIMEOUT", "15"))
 
 # The ONE sync<->async boundary: every route reaches the async world through this
 # bridge's single background loop (see browser.loop_bridge). The manager and all
@@ -893,10 +896,12 @@ def stream_socket(ws: Any, browser_id: str) -> None:
         ws.close(1013 if is_valid_browser_name(browser_id) else 1008)
         return
     # First inbound frame is the codec-capability handshake; default to JPEG if it's
-    # missing/garbled (safe: pixelflux JPEG decodes anywhere).
+    # missing/garbled (safe: pixelflux JPEG decodes anywhere). A real client sends it
+    # immediately on open, so bound the wait tightly (not the 120s route timeout) -- a
+    # mute/half-open client must not hold a slot doing nothing.
     want_h264 = False
     try:
-        first = ws.receive(timeout=_ROUTE_TIMEOUT)
+        first = ws.receive(timeout=_STREAM_HANDSHAKE_TIMEOUT)
         if first:
             want_h264 = bool(json.loads(first).get("h264"))
     except (ConnectionClosed, ValueError, TypeError):

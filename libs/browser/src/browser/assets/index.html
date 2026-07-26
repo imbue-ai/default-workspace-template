@@ -181,11 +181,15 @@
   // owner == "human" && human_pinned:      no overlay, persistent "Return to agents" bar.
   // owner == "human" && !human_pinned:     resting state, fully interactive.
   function setControl(state) {
+    const wasAgent = controlOwner === "agent";
     lastControlState = state;
     controlOwner = state.owner;
     const agentDriving = state.owner === "agent";
     const humanPinned = state.owner === "human" && !!state.human_pinned;
     if (agentDriving) { handoffReason = null; handoffAgent = null; }  // resumed -> clear the ask
+    // Control just came back to the human: re-report our pane size. Resizes are dropped
+    // server-side while an agent drives, so the window may be stale; this re-applies it.
+    if (wasAgent && !agentDriving) reportSize();
 
     if (agentDriving) {
       const who = state.owner_name || state.owner_agent_id || "an agent";
@@ -315,8 +319,17 @@
       output: (frame) => pushFrame(frame, y),
       error: () => { try { s.dec.close(); } catch (_) {} decoders.delete(y); },
     });
-    s.dec.configure({ codec: "avc1.42E01E", codedWidth: w, codedHeight: h, optimizeForLatency: true });
+    // Register BEFORE configure(): if configure throws (codec truly unsupported despite
+    // the handshake), the catch closes the decoder and returns null instead of leaking a
+    // fresh unconfigured VideoDecoder on every stripe.
     decoders.set(y, s);
+    try {
+      s.dec.configure({ codec: "avc1.42E01E", codedWidth: w, codedHeight: h, optimizeForLatency: true });
+    } catch (_) {
+      try { s.dec.close(); } catch (_) {}
+      decoders.delete(y);
+      return null;
+    }
     return s;
   }
 
@@ -332,6 +345,7 @@
       const w = dv.getUint16(6);
       const h = dv.getUint16(8);
       const s = decoderFor(y, w, h);
+      if (!s) return;  // codec unsupported; decoder couldn't configure
       if (!s.sawKey) { if (!frametype) return; s.sawKey = true; }  // drop deltas until the first key
       try {
         s.dec.decode(new EncodedVideoChunk({
@@ -399,14 +413,16 @@
 
   function sendCast(obj) { if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify(obj)); }
 
-  // Report our pane size so the server grows the browser to fill it (it clamps to
-  // [1280x800 .. 1920x1080] and ignores this while an agent drives). Debounced -- a
-  // drag fires a burst and each server resize re-attaches the screencast.
+  // Report our pane size so the server resizes the browser window to fill it (clamped
+  // to [640x480 .. 1920x1080], ignored while an agent drives). Debounced -- a drag fires
+  // a burst. Skip 0-sized reports: a hidden dockview pane has clientWidth/Height 0, and
+  // a `resize 0x0` would otherwise shove the real window down to the 640x480 floor.
   let resizeTimer = null;
   function reportSize() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
-      sendCast({ type: "resize", width: Math.round(stage.clientWidth), height: Math.round(stage.clientHeight) });
+      const w = Math.round(stage.clientWidth), h = Math.round(stage.clientHeight);
+      if (w > 0 && h > 0) sendCast({ type: "resize", width: w, height: h });
     }, 150);
   }
   new ResizeObserver(reportSize).observe(stage);
@@ -425,6 +441,9 @@
 
   function mouse(type, e) {
     if (controlOwner === "agent" || !hasFrame) return;
+    // Ignore the X1/X2 side (back/forward) buttons on press/release -- BUTTONS only
+    // covers left/middle/right, so they'd otherwise map to a phantom left click.
+    if ((type === "mousePressed" || type === "mouseReleased") && e.button > 2) return;
     if (type === "mouseMoved") {
       const now = performance.now();
       if (now - lastMove < 12) return;  // throttle moves; XTest injection is cheap so we can send more
@@ -439,9 +458,20 @@
       modifiers: modifiers(e),
     }});
   }
-  canvas.addEventListener("mousedown", (e) => { canvas.focus(); mouse("mousePressed", e); });
-  canvas.addEventListener("mouseup", (e) => mouse("mouseReleased", e));
-  canvas.addEventListener("mousemove", (e) => mouse("mouseMoved", e));
+  // Pointer events + pointer capture: a drag that leaves the pane (select text past the
+  // edge) still delivers move/up to the canvas, so the remote button is always released
+  // and edge-drag-select keeps streaming -- a plain mouseup listener would miss a release
+  // outside the pane and leave the remote button stuck down.
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.focus();
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    mouse("mousePressed", e);
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    mouse("mouseReleased", e);
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  });
+  canvas.addEventListener("pointermove", (e) => mouse("mouseMoved", e));
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas.addEventListener("wheel", (e) => {
     if (controlOwner === "agent" || !hasFrame) return;
@@ -522,7 +552,13 @@
     // would paste/cut a second time. Covers Ctrl/Cmd+C/V/X plus the legacy
     // Ctrl/Shift+Insert and Shift+Delete bindings; every other key passes through.
     const kl = e.key.toLowerCase();
-    if (((e.ctrlKey || e.metaKey) && !e.altKey && ["c", "v", "x"].includes(kl))
+    // Only PLAIN Ctrl/Cmd+C/X (no Shift) fire copy/cut events -- Ctrl+Shift+C is DevTools,
+    // not a copy, so it must NOT be swallowed here (else it neither forwards nor gets
+    // preventDefault'd, and the host's DevTools opens). Ctrl+Shift+V still fires a paste
+    // event, so keep it skipped.
+    const clipCombo = (e.ctrlKey || e.metaKey) && !e.altKey
+        && (kl === "v" || (!e.shiftKey && (kl === "c" || kl === "x")));
+    if (clipCombo
         || (e.key === "Insert" && (e.ctrlKey || e.shiftKey))
         || (e.key === "Delete" && e.shiftKey)) {
       return;
@@ -542,8 +578,11 @@
       windowsVirtualKeyCode: e.keyCode, text: isChar ? e.key : undefined,
       autoRepeat: e.repeat, modifiers: modifiers(e),
     }});
-    // A bare Escape releases keyboard capture (still forwarded above, so the page sees it).
-    if (type === "keyDown" && e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+    // A bare Escape releases focus -- but on keyUP, AFTER the keyup above is forwarded,
+    // so the remote sees a complete down+up. Blurring on keyDown dropped the keyup
+    // (target became body once unfocused), leaving Esc HELD and autorepeating on the
+    // remote forever (XTest holds are sticky).
+    if (type === "keyUp" && e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       canvas.blur();
     }
   }
@@ -570,8 +609,12 @@
   // --- immersive tier: fullscreen + (Chromium) keyboard lock for reserved combos ---
   fsbtn.onclick = async () => {
     try { await stage.requestFullscreen(); } catch (_) { return; }
+    canvas.focus();  // fullscreen moves focus to the button; without this, keys (incl. the
+                     // now-locked Ctrl+T/W) target body and never forward to the remote.
     if (navigator.keyboard && navigator.keyboard.lock) {
-      try { await navigator.keyboard.lock(["Tab", "KeyT", "KeyW", "KeyN"]); keyboardLocked = true; } catch (_) {}
+      // Include Escape: locked, a single Esc reaches the remote (and Chromium's built-in
+      // hold-Esc still exits fullscreen); unlocked, one Esc tap would instantly drop out.
+      try { await navigator.keyboard.lock(["Escape", "Tab", "KeyT", "KeyW", "KeyN"]); keyboardLocked = true; } catch (_) {}
     }
   };
   document.addEventListener("fullscreenchange", () => {

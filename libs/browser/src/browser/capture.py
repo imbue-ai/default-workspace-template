@@ -19,6 +19,7 @@ the loop is single-threaded).
 import os
 import queue
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -56,6 +57,9 @@ _STREAM_QUEUE_MAX = int(os.environ.get("BROWSER_STREAM_QUEUE_MAX", "512"))
 
 _TARGET_FPS = float(os.environ.get("BROWSER_STREAM_FPS", "30"))
 _VIDEO_CRF = int(os.environ.get("BROWSER_STREAM_CRF", "25"))
+# Minimum seconds between keyframe requests triggered by a full-queue drop (so a
+# persistently-slow client can't make us re-encode a keyframe on every stripe).
+_IDR_ON_DROP_INTERVAL = 0.5
 
 _MODE_H264 = 1
 _MODE_JPEG = 0
@@ -76,18 +80,22 @@ class Capture:
         self._subscribers: list["queue.Queue[bytes | None]"] = []
         self._lock = threading.Lock()  # guards _subscribers + _cap against the pixelflux thread
         self._mode = _MODE_H264
+        self._last_idr_at = 0.0  # throttle for keyframe-on-drop (see _on_stripe)
 
-    def add_subscriber(self, want_h264: bool) -> "queue.Queue[bytes | None]":
-        """Register a stream socket. Starts the encoder on the first subscriber (in
-        that subscriber's codec mode); otherwise forces a keyframe so the newcomer can
-        begin decoding at once. Returns its outbound queue."""
+    def add_subscriber(self, want_h264: bool) -> "queue.Queue[bytes | None] | None":
+        """Register a stream socket. Starts the encoder on the first subscriber (in that
+        subscriber's codec mode); otherwise forces a keyframe so the newcomer can begin
+        decoding at once. Returns its outbound queue, or None if the encoder can't start
+        (pixelflux's native libs not present yet) so the caller retries."""
         client_queue: "queue.Queue[bytes | None]" = queue.Queue(maxsize=_STREAM_QUEUE_MAX)
         with self._lock:
-            first = not self._subscribers
-            self._subscribers.append(client_queue)
-            if first:
+            if not self._subscribers:
+                # First subscriber: start the encoder. If pixelflux's native libs aren't
+                # present yet, DON'T register -- return None so the handler closes the
+                # socket and the viewer's backoff retries (self-heals once the libs land).
                 self._mode = _MODE_H264 if want_h264 else _MODE_JPEG
-                self._start_locked()
+                if not self._start_locked():
+                    return None
             elif self._cap is not None:
                 if want_h264 != (self._mode == _MODE_H264):
                     logger.warning(
@@ -97,15 +105,22 @@ class Capture:
                         "h264" if self._mode == _MODE_H264 else "jpeg",
                     )
                 self._cap.request_idr_frame()  # keyframe so the newcomer starts clean
+            self._subscribers.append(client_queue)
         return client_queue
 
     def remove_subscriber(self, client_queue: "queue.Queue[bytes | None]") -> None:
-        """Deregister a stream socket; stops the encoder when the last one leaves."""
+        """Deregister a stream socket; stops the encoder when the last one leaves. The
+        actual ``stop_capture`` runs OUTSIDE ``_lock`` -- it joins pixelflux's callback
+        thread, which may itself be blocked taking ``_lock`` in ``_on_stripe``; stopping
+        under the lock would deadlock the whole (single-threaded) daemon."""
+        cap_to_stop = None
         with self._lock:
             if client_queue in self._subscribers:
                 self._subscribers.remove(client_queue)
-            if not self._subscribers:
-                self._stop_locked()
+            if not self._subscribers and self._cap is not None:
+                cap_to_stop, self._cap = self._cap, None
+        if cap_to_stop is not None:
+            self._stop_capture(cap_to_stop)
 
     def has_subscribers(self) -> bool:
         with self._lock:
@@ -129,7 +144,9 @@ class Capture:
             except _PIXELFLUX_ERRORS as e:
                 logger.debug("capture region update ignored ({})", e)
 
-    def _start_locked(self) -> None:
+    def _start_locked(self) -> bool:
+        """Start the pixelflux encoder. Returns True on success, False if pixelflux's
+        native libs aren't present (no video, but never a crash)."""
         loaded = _load_pixelflux()
         if loaded is None:
             logger.error(
@@ -138,7 +155,7 @@ class Capture:
                 "the headful path -- confirm it completed.",
                 self._display_name,
             )
-            return
+            return False
         capture_settings_cls, screen_capture_cls = loaded
         x, y, w, h = self._region()
         settings = capture_settings_cls()
@@ -150,13 +167,13 @@ class Capture:
         settings.encode_node_index = -1  # force software x264 (no GPU in the sandbox)
         settings.video_crf = _VIDEO_CRF
         cap = screen_capture_cls()
-        try:
-            cap.set_cursor_rendering(True)  # composite the pointer into the video (R1)
-        except _PIXELFLUX_ERRORS as e:  # optional; older builds may lack the method
-            logger.debug("cursor rendering unavailable ({})", e)
-        # pixelflux connects via x11rb using $DISPLAY at start. Point it at this
-        # browser's display for the (synchronous, no-await) start, then restore --
-        # so a concurrent browser launch's own DISPLAY is untouched.
+        # NOTE: we deliberately do NOT enable pixelflux's server-side cursor compositing.
+        # Its cursor monitor spawns a thread that reads $DISPLAY LATER (after we restore
+        # it below), so it fails / could attach to another browser's display. The user's
+        # own local cursor is already visible over the canvas, so this is no visible loss.
+        # pixelflux connects via x11rb using $DISPLAY at start. Point it at this browser's
+        # display for the (synchronous, no-await) start, then restore -- so a concurrent
+        # browser launch's own DISPLAY is untouched.
         prior = os.environ.get("DISPLAY")
         os.environ["DISPLAY"] = self._display_name
         try:
@@ -169,16 +186,16 @@ class Capture:
         self._cap = cap
         logger.info("browser stream {}: encoder started ({}, {}x{}@{:.0f})",
                     self._display_name, "h264" if self._mode == _MODE_H264 else "jpeg", w, h, _TARGET_FPS)
+        return True
 
-    def _stop_locked(self) -> None:
-        if self._cap is None:
-            return
+    def _stop_capture(self, cap: Any) -> None:
+        """Stop a capture. Must be called with ``_lock`` NOT held (stop_capture joins the
+        pixelflux callback thread, which takes ``_lock`` in ``_on_stripe``)."""
         try:
-            self._cap.stop_capture()
+            cap.stop_capture()
         except _PIXELFLUX_ERRORS as e:
             logger.debug("capture stop ignored ({})", e)
-        self._cap = None
-        logger.info("browser stream {}: encoder stopped (no subscribers)", self._display_name)
+        logger.info("browser stream {}: encoder stopped", self._display_name)
 
     def _on_stripe(self, frame: object) -> None:
         """pixelflux native-thread callback: copy the stripe bytes out (the frame
@@ -186,18 +203,33 @@ class Capture:
         data = bytes(memoryview(frame))  # type: ignore[arg-type]
         with self._lock:
             subscribers = list(self._subscribers)
+            cap = self._cap
+        dropped = False
         for client_queue in subscribers:
             try:
                 client_queue.put_nowait(data)
             except queue.Full:
                 try:
-                    client_queue.get_nowait()  # drop oldest; paint-over recovers it
+                    client_queue.get_nowait()  # drop oldest
                     client_queue.put_nowait(data)
+                    dropped = True
                 except (queue.Empty, queue.Full):
+                    pass
+        # A dropped H.264 delta corrupts that stripe until it next repaints (damage-
+        # driven), which a static region may never do. Ask for a keyframe so the client
+        # recovers -- throttled so a persistently-slow client doesn't spam keyframes.
+        if dropped and cap is not None:
+            now = time.monotonic()
+            if now - self._last_idr_at > _IDR_ON_DROP_INTERVAL:
+                self._last_idr_at = now
+                try:
+                    cap.request_idr_frame()
+                except _PIXELFLUX_ERRORS:
                     pass
 
     def close(self) -> None:
         """Force-stop and drop all subscribers (browser teardown)."""
+        cap_to_stop = None
         with self._lock:
             for client_queue in self._subscribers:
                 try:
@@ -205,4 +237,6 @@ class Capture:
                 except queue.Full:
                     pass
             self._subscribers.clear()
-            self._stop_locked()
+            cap_to_stop, self._cap = self._cap, None
+        if cap_to_stop is not None:
+            self._stop_capture(cap_to_stop)  # OUTSIDE the lock (joins the callback thread)
