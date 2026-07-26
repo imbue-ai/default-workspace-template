@@ -115,7 +115,7 @@
     </div>
     <div id="initoverlay">
       <div class="spinner"></div>
-      <div class="msg">Starting browser…</div>
+      <div class="msg" id="initmsg">Starting browser…</div>
     </div>
   </div>
   <div id="tipsmodal">
@@ -144,6 +144,7 @@
   const overlay = document.getElementById("overlay");
   const crashOverlay = document.getElementById("crashoverlay");
   const initOverlay = document.getElementById("initoverlay");
+  const initMsg = document.getElementById("initmsg");
   const overlayMsg = document.getElementById("overlaymsg");
   const overlaySub = document.getElementById("overlaysub");
   const takeControlBtn = document.getElementById("takecontrol");
@@ -286,48 +287,24 @@
     placeholder.style.display = "block";
   }
 
-  // Render DETERMINISTICALLY from the explicit lifecycle on each control message.
-  // This is the single source of truth for the init/running overlays:
-  //   init    -> full "Starting browser…" overlay covering the pane;
-  //              canvas/frames suppressed (don't show a half-built browser).
-  //   running -> overlays down; the live canvas + frames are visible.
-  //   crashed -> handed off to showCrashed() (the terminal dead state).
-  // Driven off the lifecycle field, NOT off "did a frame arrive", so init->running is
-  // exact: the moment the daemon broadcasts running, the starting overlay comes down.
+  // The loading overlay is gated on ONE thing: has a real video frame actually been painted?
+  // The pane is NOT "done loading" just because the daemon says the lifecycle is "running" --
+  // that only means Chromium is up; the encoder + first keyframe + decode still have to land.
+  // So the full "Starting browser…" spinner stays UP until drainFrames() paints the first
+  // frame, then comes down for good. No "Loading page…" / "taking longer" middle states.
+  // (Terminal states own the pane themselves: crash -> crashOverlay, closed/failed -> a
+  // placeholder message; updateOverlays defers to them.)
+  function updateOverlays() {
+    if (crashed || closedForGood) return;
+    initMsg.textContent = (lifecycle === "running") ? "Loading live view…" : "Starting browser…";
+    initOverlay.classList.toggle("show", !hasFrame);
+    if (hasFrame) placeholder.style.display = "none";
+  }
   function setLifecycle(next) {
     if (!next || next === lifecycle) return;
     lifecycle = next;
     if (next === "crashed") { showCrashed(); return; }
-    if (next === "init") {
-      initOverlay.classList.add("show");
-      placeholder.style.display = "none";  // the full overlay covers the pane instead
-    } else if (next === "running") {
-      initOverlay.classList.remove("show");
-      // Running means Chromium is up, but the first video frame may not have decoded yet
-      // (encoder spin-up / first keyframe). Keep a light "Loading page…" note instead of a
-      // bare black canvas; drainFrames() clears it the instant the first frame paints.
-      if (hasFrame) { placeholder.style.display = "none"; clearFrameWait(); }
-      else { placeholder.textContent = "Loading page…"; placeholder.style.display = "block"; armFrameWait(); }
-    }
-  }
-
-  // Running but no frame yet is normal for a beat (encoder spin-up). If it drags on, the
-  // video encoder probably isn't up -- e.g. the workspace is still installing its native
-  // libs -- and the stream socket is silently retrying. Say so instead of an eternal
-  // "Loading page…". Cleared the instant a frame paints (drainFrames) or the browser dies.
-  let frameWaitTimer = null;
-  function armFrameWait() {
-    if (frameWaitTimer || hasFrame) return;
-    frameWaitTimer = setTimeout(() => {
-      frameWaitTimer = null;
-      if (!hasFrame && lifecycle === "running") {
-        placeholder.textContent = "Live view is taking longer than usual — the workspace may still be setting up video. Still trying…";
-        placeholder.style.display = "block";
-      }
-    }, 8000);
-  }
-  function clearFrameWait() {
-    if (frameWaitTimer) { clearTimeout(frameWaitTimer); frameWaitTimer = null; }
+    updateOverlays();
   }
 
   // The browser's Chromium died (OS/OOM kill, crash). Show a clear, terminal dead
@@ -337,7 +314,6 @@
     crashed = true;
     lifecycle = "crashed";  // keep the explicit lifecycle consistent with the overlay
     hasFrame = false;
-    clearFrameWait();
     closeStream();  // stop pulling video and drop every decoder; this browser is gone
     closeAudio();   // and stop the sound
     stopIdleTimer();
@@ -387,7 +363,7 @@
       try { ctx.drawImage(f.img, 0, f.y); drew = true; } catch (_) {}
       try { f.img.close(); } catch (_) {}
     }
-    if (drew && !hasFrame) { hasFrame = true; placeholder.style.display = "none"; clearFrameWait(); clearH264Watchdog(); }
+    if (drew && !hasFrame) { hasFrame = true; clearH264Watchdog(); updateOverlays(); }
   }
 
   // Lazily build + configure the decoder for a stripe row. configure() is synchronous per
@@ -516,9 +492,9 @@
   // Played through a Web Audio worklet ring buffer: incoming chunks queue up and the
   // worklet drains them at the audio clock, underrunning to silence in the gaps (the
   // server drops silent chunks). Same on-demand gating as video (openAudio/closeAudio ride
-  // syncStream), so a hidden pane costs no capture. Autoplay policy: the AudioContext
+  // reconcileStream), so a hidden pane costs no capture. Autoplay policy: the AudioContext
   // starts suspended and is resumed on the first user gesture (see resumeAudio()).
-  let audioCtx = null, audioNode = null, audioWs = null, audioWanted = false, audioReconnect = null;
+  let audioCtx = null, audioNode = null, audioWs = null, audioWanted = false, audioReconnect = null, audioBackoff = 1000;
   const AUDIO_WORKLET = `
     class PCMPlayer extends AudioWorkletProcessor {
       constructor() { super(); this.q = []; this.cur = null; this.pos = 0;
@@ -551,13 +527,22 @@
   }
   async function openAudio() {
     audioWanted = true;
-    if (!(await ensureAudioGraph()) || audioWs || browserId === null || crashed) return;
+    // Guard against the 1s poll AND a pending reconnect both opening a socket.
+    if (audioWs || audioReconnect || browserId === null || crashed) return;
+    if (!(await ensureAudioGraph())) return;
     resumeAudio();
     const ws = new WebSocket(wsUrl("browsers/" + browserId + "/audio"));
+    const openedAt = performance.now();
     audioWs = ws; ws.binaryType = "arraybuffer";
-    ws.onmessage = (ev) => { if (audioNode && ev.data.byteLength) audioNode.port.postMessage(new Int16Array(ev.data), [ev.data]); };
-    ws.onclose = () => { if (audioWs === ws) audioWs = null;
-      if (audioWanted && !crashed) { audioReconnect = setTimeout(() => { audioReconnect = null; openAudio(); }, 1000); } };
+    ws.onmessage = (ev) => { audioBackoff = 1000; if (audioNode && ev.data.byteLength) audioNode.port.postMessage(new Int16Array(ev.data), [ev.data]); };
+    ws.onclose = () => {
+      if (audioWs === ws) audioWs = null;
+      // A socket that closes almost immediately means there's no audio sink (no PulseAudio
+      // yet, or this browser has no sound). Back off exponentially so we don't spam retries;
+      // reset to fast once audio actually flows. Audio is best-effort -- video doesn't care.
+      audioBackoff = (performance.now() - openedAt < 1500) ? Math.min(audioBackoff * 2, 30000) : 1000;
+      if (audioWanted && !crashed) audioReconnect = setTimeout(() => { audioReconnect = null; openAudio(); }, audioBackoff);
+    };
     ws.onerror = () => { try { ws.close(); } catch (_) {} };
   }
   function closeAudio() {
@@ -594,10 +579,10 @@
       if (w > 0 && h > 0) sendCast({ type: "resize", width: w, height: h });
     }, 150);
   }
-  // Reports size AND drives visibility off the real rendered size: the stage collapsing to
-  // zero (tab hidden) pauses the stream, and it getting real size (tab shown / first load)
-  // resumes it -- so activation works even if a panel-visibility message is missed/mistimed.
-  new ResizeObserver(() => { reportSize(); setPaneVisible(staged()); }).observe(stage);
+  // Reports size AND reconciles streaming off the real rendered size: the stage collapsing
+  // to zero (tab hidden) pauses, it getting real size (tab shown / first load) resumes --
+  // so streaming tracks actual visibility even if a panel-visibility message never comes.
+  new ResizeObserver(() => { reportSize(); reconcileStream(); }).observe(stage);
 
   // --- coordinate scaling: canvas CSS px -> frame device px ---
   function scaled(e) {
@@ -870,30 +855,27 @@
   document.addEventListener("pointerdown", () => { flushPendingClipboard(); resumeAudio(); });
   document.addEventListener("keydown", () => { flushPendingClipboard(); resumeAudio(); });
 
-  // --- visibility: pause encode while not actually watched --------------------
-  // Two independent signals: the dockview pane being hidden (host->iframe postMessage)
-  // and the whole host TAB being backgrounded (document.hidden -- rAF stops there, so
-  // without this the frame queue would grow with unclosed VideoFrames and leak while the
-  // server keeps encoding). Stream only when BOTH say visible.
-  let paneVisible = true, pageVisible = !document.hidden;
-  function syncStream() {
-    if (paneVisible && pageVisible) { openStream(); openAudio(); }
+  // --- streaming reconciliation: stream iff the pane is actually being watched -----
+  // Ground truth, read FRESH every time -- no cached visibility flag that can get stuck:
+  //   * the pane is shown  <=> its stage has real (non-zero) size. dockview collapses a
+  //     hidden tab to zero, so this alone tells shown-vs-hidden, with no panel-visibility
+  //     message needed (that message was the thing that raced and stranded the stream).
+  //   * the host tab is foregrounded <=> !document.hidden (rAF stops in a background tab,
+  //     so we'd otherwise queue/leak VideoFrames while the server keeps encoding).
+  function staged() { return stage.clientWidth > 0 && stage.clientHeight > 0; }
+  function shouldStream() {
+    return browserId !== null && !crashed && !closedForGood && !document.hidden && staged();
+  }
+  function reconcileStream() {
+    if (shouldStream()) { openStream(); openAudio(); }
     else { closeStream(); closeAudio(); }
   }
-  // Whether our pane is actually shown, as ground truth: dockview collapses a hidden tab to
-  // ZERO size, so a rendered (non-zero) stage means the pane IS visible regardless of what a
-  // panel-visibility message said. This makes the stream immune to a mistimed/spurious
-  // `visible:false` posted while the pane is loading (the "black until I reopen the tab" bug).
-  function staged() { return stage.clientWidth > 0 && stage.clientHeight > 0; }
-  function setPaneVisible(v) { if (v !== paneVisible) { paneVisible = v; syncStream(); } }
-  window.addEventListener("message", (e) => {
-    const d = e.data;
-    if (!d || d.type !== "minds:panel-visibility") return;
-    // Honor a hide only if the stage is really collapsed; ignore a false while we still have
-    // real size (a transient load-time signal on a pane that's actually shown).
-    setPaneVisible(d.visible !== false || staged());
-  });
-  document.addEventListener("visibilitychange", () => { pageVisible = !document.hidden; syncStream(); });
+  // POLL. This is the whole point: reconcile on a 1s heartbeat so a missed, mistimed, or
+  // never-sent visibility signal can NEVER leave the stream stranded (the "black / taking
+  // longer" bug) -- and a dead socket self-heals here too. Events below just make it snappy.
+  setInterval(reconcileStream, 1000);
+  window.addEventListener("message", (e) => { if (e.data && e.data.type === "minds:panel-visibility") reconcileStream(); });
+  document.addEventListener("visibilitychange", reconcileStream);
 
   // --- controls ---
   // Take control: optimistically hide the overlay so a laggy round-trip can't
@@ -908,8 +890,7 @@
   // --- connect ---
   function connect(id) {
     browserId = id;
-    connectStream();  // separate binary video socket; opening it is the "encode on demand" signal
-    openAudio();      // separate audio socket; plays once the user's first gesture resumes it
+    reconcileStream();  // start video + audio now if the pane is shown; the poll maintains it
     castWs = new WebSocket(wsUrl("browsers/" + id + "/cast"));
     castWs.onopen = () => reportSize();  // send our pane size once the socket is live
     castWs.onmessage = (ev) => {
@@ -956,7 +937,9 @@
       // m.type === "tabs" -> ignore; the native tab strip is in the streamed video now.
     };
     castWs.onclose = (ev) => {
-      hasFrame = false;
+      // NB: don't reset hasFrame here -- the cast (control) socket dropping doesn't mean the
+      // VIDEO is gone; the canvas keeps its last frame, so a brief control-socket blip shows
+      // "Reconnecting…" over the live picture instead of flashing the full spinner back up.
       // 1008: the browser/session no longer exists (daemon restarted or closed, or the
       // name is invalid). Terminal -- show a clear message and stop reconnecting.
       if (ev.code === 1008) {
