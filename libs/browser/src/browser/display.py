@@ -271,10 +271,6 @@ class Display:
             xtest.fake_input(self._x, X.ButtonPress if pressed else X.ButtonRelease, button)
             self._sync()
             (self._down_buttons.add if pressed else self._down_buttons.discard)(button)
-            # A click implies focus: assert explicit X input focus so the page's
-            # document.hasFocus() is true and the JS Clipboard API works (see focus_window).
-            if pressed:
-                self.focus_window()
         except (xerror.ConnectionClosedError, OSError) as e:
             logger.debug("xtest button ignored ({})", e)
 

@@ -769,6 +769,14 @@ class LiveBrowser(MutableModel):
             await self._resize_window()
             self._clip_watch_task = asyncio.create_task(self._clipboard_out_loop())
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        # _setup_display_capture / _resize_window above await real CDP round trips, during
+        # which Chromium can be OOM-killed (it's most vulnerable early, before its oom_score
+        # is re-banded) or close() can land -- either fires _on_disconnected -> _crashed, or
+        # sets _closed. Re-check BEFORE flipping to running, or we'd clobber that terminal
+        # state back to "running" and report a dead browser as healthy (its own crash cleanup
+        # already ran; we just must not overwrite it).
+        if self._crashed or self._closed:
+            return
         # Flip init -> running NOW -- Chromium + the encoder are ready -- so the viewer
         # starts streaming AT ONCE and watches the home page load in the live view, rather
         # than waiting behind the "Starting browser…" overlay through a slow first nav.
@@ -801,6 +809,11 @@ class LiveBrowser(MutableModel):
             })
         except _BROWSER_ERRORS as e:
             logger.warning("browser {} display-capture setup degraded ({})", self.browser_id, e)
+        # Give the Chromium window explicit X input focus ONCE, now it's mapped. On a bare
+        # Xvfb (no window manager) focus stays PointerRoot, so document.hasFocus() is false and
+        # the JS Clipboard API rejects (website "Copy" buttons fail). Focus persists with no WM
+        # to steal it, so this one call suffices -- no need to re-assert on every click.
+        self._display.focus_window()
         self._capture = Capture(self._display.name, self._capture_region)
 
     def _capture_region(self) -> tuple[int, int, int, int]:
@@ -1607,6 +1620,22 @@ class LiveBrowser(MutableModel):
             self._capture.close()
         if self._audio is not None:
             self._audio.close()
+        # Free the crash-orphaned HEAVY resources too: the Xvfb display + XTest connection,
+        # this browser's PulseAudio sink, and the background tasks. The shell stays registered
+        # (name + lifecycle="crashed") so the user can see it and close it, but nothing needs
+        # the display/audio/tasks once Chromium is gone -- and a crashed shell does NOT count
+        # toward the fleet cap, so without this a user could accumulate leaked Xvfb processes
+        # and sinks, compounding the very memory pressure that usually caused the crash. close()
+        # (if the user later closes the shell) is idempotent against this partial teardown.
+        for task in (self._keepalive_task, self._clip_watch_task):
+            if task is not None:
+                task.cancel()
+        if self._audio_sink_module is not None:
+            remove_null_sink(self._audio_sink_module)
+            self._audio_sink_module = None
+        if self._display is not None:
+            await self._display.close()
+            self._display = None
         self._broadcast({"type": "crashed", "browser_id": self.browser_id})
         # Release anyone queued for this browser: it will never free, so wait-queue waiters
         # must not hang and resume-queue agents must be told rather than wait for a wake
@@ -1837,6 +1866,13 @@ class LiveBrowser(MutableModel):
         # are reported here so task/hold/acquire don't park a waiter on (or try to drive)
         # a browser that can't be driven. run_action gates on lifecycle before it calls
         # acquire, so this is the guard for the task/hold/explicit-acquire paths.
+        # _closed FIRST and separately from _is_running: a request can resolve this browser
+        # object just before a concurrent close() tears it down and cancels the keepalive
+        # loop (which is the only thing that would ever re-settle the queue). Without this
+        # guard such a request appends a waiter that nothing will ever wake -- hanging the
+        # Flask worker forever on a corpse. A closed browser is gone: never queue on it.
+        if self._closed:
+            return "closed"
         if self._crashed:
             return "crashed"
         if not self._is_running:
@@ -2106,6 +2142,11 @@ class LiveBrowser(MutableModel):
         ``_control_lock`` -- so a human take-control stays instant (at worst one
         in-flight action lands before the next command sees it).
         """
+        # Closed out from under us (a concurrent DELETE resolved after this request grabbed
+        # the browser object): don't acquire/drive/queue on a torn-down browser -- its
+        # keepalive loop is cancelled, so a queued waiter would hang forever.
+        if self._closed:
+            return {"ok": False, "status": "closed", **self._control_state()}
         # The browser died (OS/OOM kill, crash): don't try to acquire or drive a
         # corpse -- tell the agent it's gone so it starts a fresh one.
         if self._crashed:
