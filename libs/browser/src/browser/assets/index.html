@@ -713,14 +713,18 @@
       const r = await fetch(clipUrl() + (cut ? "?cut=1" : ""));
       const j = await r.json();
       if (j.ok && j.mime) {
-        if (j.mime.indexOf("text/") === 0) { if (j.text) await navigator.clipboard.writeText(j.text); }
-        else if (j.data) await navigator.clipboard.write([new ClipboardItem({ [j.mime]: b64ToBlob(j.data, j.mime) })]);
+        const data = j.mime.indexOf("text/") === 0 ? j.text : j.data;
+        // Route through writeClipboard so a write that the browser rejects right now (e.g.
+        // the document momentarily unfocused) is stashed and flushed on the next gesture,
+        // instead of silently vanishing -- which is what made copy flaky.
+        if (data != null && !(await writeClipboard(j.mime, data))) pendingClipboard = { mime: j.mime, data: data };
       }
     } catch (_) { /* denied / nothing selected: ignore */ }
     finally { done(); }
   }
-  document.addEventListener("copy", (e) => { if (clipActive()) { e.preventDefault(); copyFromRemote(false); } });
-  document.addEventListener("cut", (e) => { if (clipActive()) { e.preventDefault(); copyFromRemote(true); } });
+  // NB: no 'copy'/'cut' event listeners -- copy/cut are driven off the Ctrl/Cmd+C/X gesture
+  // in the key handler below (the copy event is unreliable with no local selection). The
+  // 'paste' event listener stays: it's the no-prompt path for pasted TEXT.
 
   function key(type, e) {
     if (controlOwner === "agent" || !hasFrame) return;
@@ -730,18 +734,23 @@
     // would paste/cut a second time. Covers Ctrl/Cmd+C/V/X plus the legacy
     // Ctrl/Shift+Insert and Shift+Delete bindings; every other key passes through.
     const kl = e.key.toLowerCase();
-    // Only PLAIN Ctrl/Cmd+C/X (no Shift) fire copy/cut events -- Ctrl+Shift+C is DevTools,
-    // not a copy, so it must NOT be swallowed here (else it neither forwards nor gets
-    // preventDefault'd, and the host's DevTools opens). Ctrl+Shift+V still fires a paste
-    // event, so keep it skipped.
-    const clipCombo = (e.ctrlKey || e.metaKey) && !e.altKey
-        && (kl === "v" || (!e.shiftKey && (kl === "c" || kl === "x")));
-    if (clipCombo
-        || (e.key === "Insert" && (e.ctrlKey || e.shiftKey))
-        || (e.key === "Delete" && e.shiftKey)) {
-      // Ctrl/Cmd+V: also read the clipboard for an image on the gesture itself -- the paste
-      // event usually drops images when our non-editable canvas is focused (deduped).
-      if (type === "keyDown" && kl === "v" && clipActive()) pasteImageFromClipboard();
+    // Clipboard shortcuts. COPY/CUT are driven off THIS gesture (copyFromRemote), NOT the
+    // browser's 'copy' event -- that event fires unreliably when our canvas (which has no
+    // local selection) is focused, which is what made copy "only work the first time".
+    // preventDefault suppresses that flaky event + the default. PASTE keeps using the paste
+    // event for text (its clipboardData has no permission prompt) plus the gesture for images
+    // (the paste event drops those on a non-editable canvas), so it is NOT preventDefault'd.
+    // Ctrl+Shift+C is DevTools (not a copy) -- excluded. Covers the legacy Insert/Delete
+    // bindings too. Don't forward any of these to the remote.
+    const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+    const isCopy = (mod && !e.shiftKey && kl === "c") || (e.key === "Insert" && e.ctrlKey && !e.shiftKey);
+    const isCut = (mod && !e.shiftKey && kl === "x") || (e.key === "Delete" && e.shiftKey);
+    const isPaste = (mod && kl === "v") || (e.key === "Insert" && e.shiftKey);
+    if (isCopy || isCut || isPaste) {
+      if (type === "keyDown" && clipActive()) {
+        if (isPaste) pasteImageFromClipboard();               // text via the paste event; image here
+        else { e.preventDefault(); copyFromRemote(isCut); }   // gesture-driven copy/cut
+      }
       return;
     }
     // Browser-reserved combos (Ctrl/Cmd+T/W/N, Ctrl/Cmd+Tab, Cmd+Q) can't be intercepted

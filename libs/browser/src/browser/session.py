@@ -791,6 +791,14 @@ class LiveBrowser(MutableModel):
         try:
             self._browser_cdp = await observer.new_browser_cdp_session()
             await self._measure_window()
+            # Grant the JS Clipboard API to every page. Without this the browser denies
+            # navigator.clipboard.writeText/read with "permission denied", so a website's
+            # own "Copy" button silently fails (its result never reaches the X clipboard the
+            # human's live-view copy-out reads). The human drives this browser, so it's the
+            # same trust as their own browser granting clipboard access on a gesture.
+            await self._browser_cdp.send("Browser.grantPermissions", {
+                "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"],
+            })
         except _BROWSER_ERRORS as e:
             logger.warning("browser {} display-capture setup degraded ({})", self.browser_id, e)
         self._capture = Capture(self._display.name, self._capture_region)
