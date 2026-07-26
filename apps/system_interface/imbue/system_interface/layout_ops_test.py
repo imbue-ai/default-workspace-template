@@ -482,7 +482,7 @@ def test_list_chat_terminal_marks_open_when_url_is_mounted(tmp_path: Path) -> No
 
 
 def test_parse_tmux_sessions_output_parses_name_id_and_path() -> None:
-    output = "terminal-1\t$3\t/mngr/code\nmngr-alice\t$1\t/home/user\n"
+    output = "terminal-1\t$3\t/home/user/workspace\nmngr-alice\t$1\t/home/user\n"
     sessions = parse_tmux_sessions_output(output)
     assert len(sessions) == 2
     assert sessions[0].session_name == "terminal-1"
@@ -492,7 +492,7 @@ def test_parse_tmux_sessions_output_parses_name_id_and_path() -> None:
 
 
 def test_parse_tmux_sessions_output_skips_blank_and_malformed_lines() -> None:
-    output = "\nterminal-1\t$3\t/mngr/code\nbroken-line-no-tabs\n\t\t\n"
+    output = "\nterminal-1\t$3\t/home/user/workspace\nbroken-line-no-tabs\n\t\t\n"
     sessions = parse_tmux_sessions_output(output)
     # The all-empty tab line still has three fields, so only the truly
     # malformed (no-tab) and blank lines are dropped.
