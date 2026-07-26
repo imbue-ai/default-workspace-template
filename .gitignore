@@ -8,7 +8,7 @@
 # makes both formats agree.
 
 # Default Workspace Template runtime state.
-# memory/ now lives at runtime/memory/ (configured via .claude/settings.json's
+# memory/ now lives at data/memories/ (configured via .claude/settings.json's
 # autoMemoryDirectory) so the opt-in github-sync service (see the github-sync
 # skill) covers it alongside the rest of runtime/.
 **/runtime/
@@ -20,12 +20,12 @@
 **/.sculptor/
 
 # Login-modal reshape mocks (design exploration, not shipped).
-specs/login-modal-reshape/
+docs/system/specs/login-modal-reshape/
 
 # Playwright MCP session artifacts.
 **/.playwright-mcp/
 
-# tk tickets (tracker is vendored at vendor/tk; the tickets themselves are local state)
+# tk tickets (tracker is vendored at system/vendor/tk; the tickets themselves are local state)
 **/.tickets/
 
 # External repos we're actively working on (e.g. mngr) live here as standalone
@@ -260,10 +260,10 @@ marimo/_lsp/
 **/frontend-dist/
 
 # system_interface frontend build artifacts and binary assets
-# (built fresh on mind creation via `cd apps/system_interface/frontend && npm ci && npm run build`)
-apps/system_interface/imbue/system_interface/static/
-apps/system_interface/frontend/media/*.ico
-apps/system_interface/frontend/src/assets/*.png
+# (built fresh on mind creation via `cd system/libs/system_interface/frontend && npm ci && npm run build`)
+system/libs/system_interface/imbue/system_interface/static/
+system/libs/system_interface/frontend/media/*.ico
+system/libs/system_interface/frontend/src/assets/*.png
 
 # Claude Code local settings (session-specific permissions)
 .claude/settings.local.json
@@ -285,7 +285,7 @@ apps/system_interface/frontend/src/assets/*.png
 .mngr/settings.local.toml
 
 # so the user can make their own notification script
-scripts/notify_user.local.sh
+system/scripts/notify_user.local.sh
 
 # Test output files (slow tests, coverage summaries)
 **/.test_output/
@@ -340,5 +340,5 @@ scripts/notify_user.local.sh
 
 # Dev-only visual mockup for the permission-request progress view (not part of
 # the app or its tests)
-apps/system_interface/frontend/permission-demo.html
-apps/system_interface/frontend/src/permission-demo.ts
+system/libs/system_interface/frontend/permission-demo.html
+system/libs/system_interface/frontend/src/permission-demo.ts

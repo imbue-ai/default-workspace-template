@@ -57,7 +57,7 @@ LOG_FILE = Path("/tmp/host-backup.log")
 CONSECUTIVE_FAILURE_ALARM_THRESHOLD: Final[int] = 3
 
 # Where `uv run env-converge capture` resolves its venv from; matches the
-# host-backup program's `directory=` in supervisord.conf, made explicit so the
+# host-backup program's `directory=` in system/supervisord.conf, made explicit so the
 # capture also works when the runner is launched from another cwd.
 WORKSPACE_DIR: Final[Path] = Path("/home/user/workspace")
 

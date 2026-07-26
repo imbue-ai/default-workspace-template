@@ -1,7 +1,7 @@
 """Acceptance test for the agent-driven layout pipeline.
 
 Exercises the full backend path the agent-facing helper depends on:
-``scripts/layout.py`` (subprocess) -> ``POST /api/layout/broadcast``
+``system/scripts/layout.py`` (subprocess) -> ``POST /api/layout/broadcast``
 (loopback Flask route) -> ``WebSocketBroadcaster.broadcast_layout_op``.
 The WS-to-DOM step is left to manual verification (no headless browser
 harness exists for the dockview layout).
@@ -119,10 +119,10 @@ def _run_layout_script(
     base_url: str,
     cwd: Path,
 ) -> subprocess.CompletedProcess[str]:
-    """Invoke ``scripts/layout.py`` as a subprocess against the test server.
+    """Invoke ``system/scripts/layout.py`` as a subprocess against the test server.
 
     ``cwd`` is set to a sandbox tmp path so the script's relative
-    ``runtime/applications.toml`` lookup does not pick up the real one
+    ``data/.state/applications.toml`` lookup does not pick up the real one
     from the repo. ``MINDS_WORKSPACE_SERVER_URL`` points at the test
     server.
     """
@@ -140,7 +140,7 @@ def _run_layout_script(
             # changes are observable via inspect; this test exercises
             # the broadcast pipeline without a live frontend to apply
             # the op, so we tell the script not to wait. Documented in
-            # ``scripts/layout.py`` under ``ENV_NO_WAIT_STABLE``.
+            # ``system/scripts/layout.py`` under ``ENV_NO_WAIT_STABLE``.
             "MINDS_LAYOUT_NO_WAIT_STABLE": "1",
         },
         timeout=15,
@@ -176,7 +176,7 @@ def test_inspect_round_trips_through_script_and_endpoint(
     layout_server: tuple[str, WebSocketBroadcaster],
     tmp_path: Path,
 ) -> None:
-    """``scripts/layout.py inspect --json`` returns parseable JSON for an empty layout."""
+    """``system/scripts/layout.py inspect --json`` returns parseable JSON for an empty layout."""
     base_url, _ = layout_server
     sandbox = tmp_path / "cwd"
     sandbox.mkdir()
@@ -192,7 +192,7 @@ def test_context_round_trips_through_script_and_endpoint(
     layout_server: tuple[str, WebSocketBroadcaster],
     tmp_path: Path,
 ) -> None:
-    """``scripts/layout.py context --json`` returns a (possibly empty) client list."""
+    """``system/scripts/layout.py context --json`` returns a (possibly empty) client list."""
     base_url, _ = layout_server
     sandbox = tmp_path / "cwd"
     sandbox.mkdir()
@@ -224,7 +224,7 @@ def test_list_round_trips_and_includes_seeded_agent(
     layout_server: tuple[str, WebSocketBroadcaster],
     tmp_path: Path,
 ) -> None:
-    """``scripts/layout.py list --json`` returns the seeded agent as a ``chat:`` entry."""
+    """``system/scripts/layout.py list --json`` returns the seeded agent as a ``chat:`` entry."""
     base_url, _ = layout_server
     sandbox = tmp_path / "cwd"
     sandbox.mkdir()
@@ -243,7 +243,7 @@ def test_open_terminal_returns_ref_via_stdout_and_broadcasts_panel_id(
 ) -> None:
     """Full pipeline check for the synchronous-ref-return path.
 
-    ``scripts/layout.py open terminal`` must (a) print the
+    ``system/scripts/layout.py open terminal`` must (a) print the
     ``terminal:<hash>`` ref the server allocated to stdout so the
     calling agent can capture it, and (b) cause the broadcast to carry
     the matching ``panel_id`` so the frontend uses the same id the ref
@@ -252,7 +252,7 @@ def test_open_terminal_returns_ref_via_stdout_and_broadcasts_panel_id(
     base_url, broadcaster = layout_server
     sandbox = tmp_path / "cwd"
     sandbox.mkdir()
-    # The script polls runtime/applications.toml for the named service;
+    # The script polls data/.state/applications.toml for the named service;
     # seed ``terminal`` so registration succeeds without the real
     # forward_port pipeline.
     applications_dir = sandbox / "runtime"

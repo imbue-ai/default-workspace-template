@@ -6,7 +6,7 @@ description: "Use immediately whenever the user asks you to update, change, fix,
 # Changing an existing service
 
 A "service" here is a `[program:<name>]` under supervisord (see
-`supervisord.conf`). Two kinds, differing only in whether there's a tab to
+`system/supervisord.conf`). Two kinds, differing only in whether there's a tab to
 refresh:
 
 - **User-facing web service** -- the user opens it as a tab rendering at
@@ -22,7 +22,7 @@ refreshed. The live change loop below handles both.
 If you're doing something *other* than editing an existing service:
 
 - **Creating a new web view** -> `build-web-service`.
-- **Changing the workspace UI itself** (`apps/system_interface` -- the
+- **Changing the workspace UI itself** (`system/libs/system_interface` -- the
   dockview shell, chat panels, progress view) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
   reveals only when known-good).
@@ -143,7 +143,7 @@ process restarts:
   markup. Skip straight to the refresh.
 
 - **Change to the service *definition*** (its port, its `command`, its log
-  config, or adding/removing a program): edit `supervisord.conf`, then
+  config, or adding/removing a program): edit `system/supervisord.conf`, then
   `supervisorctl reread && supervisorctl update`. The full program schema,
   the add/remove/inspect mechanics, and the `forward_port.py` wiring live
   in [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
@@ -162,12 +162,12 @@ pre-change page. Refresh it so the user sees the update without being told
 to click Refresh:
 
 ```bash
-python3 scripts/layout.py refresh <name>
+python3 system/scripts/layout.py refresh <name>
 ```
 
 `refresh` reloads every iframe for the service. If no tab is open yet and
 the change is ready to show, surface it instead with
-`python3 scripts/layout.py open <name>`. For any other tab manipulation,
+`python3 system/scripts/layout.py open <name>`. For any other tab manipulation,
 see `manage-layout`. Background daemons have no tab -- skip this step.
 
 ### 4. Verify
@@ -229,7 +229,7 @@ where the data dies. Encode these, cheapest first:
   instance -- a redesign, or a risky change where a hand mock won't convince --
   add `--service-name <name>-preview-app --preview-service-name <name>-preview
   --preview-title "<change>"` to the `up` call to surface it as a labeled
-  "preview" tab (open it with `python3 scripts/layout.py open <name>-preview`);
+  "preview" tab (open it with `python3 system/scripts/layout.py open <name>-preview`);
   that is the same machinery the system-interface flow uses. Use judgment on
   when that is worth it.
 
@@ -266,7 +266,7 @@ where the data dies. Encode these, cheapest first:
 
 Dropping a service is the definition-level case of step 2: remove its
 `[program:<name>]` block, `supervisorctl reread && supervisorctl update`,
-and (for a web service) `python3 scripts/forward_port.py --name <name>
+and (for a web service) `python3 system/scripts/forward_port.py --name <name>
 --remove` plus reverting the scaffolded lib. The mechanics are in
 [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md); for a
 scaffolded web lib, `build-web-service`'s `cleanup.md` reference has the
@@ -301,7 +301,7 @@ exactly as `build-web-service`'s Step 5 gates on the working site.)
   gates, merges, and refreshes the tab on go-live.
 - **The service errored or produced a wrong result and you worked around
   it** -> invoke `heal-artifact` (artifact = service) at turn-end instead.
-- **The workspace UI (`apps/system_interface`)** -> `update-system-interface`
+- **The workspace UI (`system/libs/system_interface`)** -> `update-system-interface`
   owns its own preview-before-merge and safe-reveal go-live; use it rather
   than this flow.
 

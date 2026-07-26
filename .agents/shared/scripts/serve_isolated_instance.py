@@ -73,7 +73,7 @@ from typing import Callable, Sequence
 # ``runtime/`` so it is gitignored and survives between the separate ``up`` and
 # ``down`` invocations. One instance per ``--name``; ``up`` tears down any stale
 # instance for the name first.
-STATE_ROOT = "runtime/isolated-instances"
+STATE_ROOT = "data/.state/isolated-instances"
 STATE_FILENAME = "instance.json"
 INNER_LOG_FILENAME = "instance.log"
 WRAPPER_LOG_FILENAME = "wrapper.log"
@@ -81,7 +81,7 @@ WRAPPER_LOG_FILENAME = "wrapper.log"
 # forward_port.py imports tomlkit (a venv dependency), but this script is run via
 # bare python3 with no venv assumed. Invoke it through ``uv run`` (like
 # ``reveal_system_interface.py`` does) so the dependency is always resolved.
-FORWARD_PORT_CMD = ("uv", "run", "python3", "scripts/forward_port.py")
+FORWARD_PORT_CMD = ("uv", "run", "python3", "system/scripts/forward_port.py")
 
 # The wrapper server ships beside this script and is stdlib-only, so it runs under
 # the same bare ``python3`` that runs this script -- no venv resolution.

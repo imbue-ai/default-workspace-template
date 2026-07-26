@@ -110,7 +110,7 @@ git worktree add -q "$WT" HEAD
   land a half-merged tree -- remove the worktree (`git worktree remove --force
   "$WT"`), tell the user what conflicts (step 4, plain language), and only then
   redo the merge in `/home/user/workspace` and resolve it interactively with them.
-- **Boot smoke-check** the merged worktree -- validate `supervisord.conf` WITHOUT
+- **Boot smoke-check** the merged worktree -- validate `system/supervisord.conf` WITHOUT
   launching the daemon (never `supervisord -t`, which launches it):
 
   ```bash
@@ -120,7 +120,7 @@ git worktree add -q "$WT" HEAD
       from supervisor.options import ServerOptions
   except Exception:
       sys.exit(0)  # supervisor lib unavailable -- skip the check
-  o = ServerOptions(); o.configfile = "supervisord.conf"
+  o = ServerOptions(); o.configfile = "system/supervisord.conf"
   o.realize(args=[]); o.process_config(do_usage=False)
   PYEOF
   )
@@ -143,7 +143,7 @@ This preserves both trees at the root. The inspiration's `inspiration-<slug>.md`
 manifest(s) and their `.svg` thumbnails land at the repo root alongside anything
 this mind already had.
 
-This merge path does not touch `parent.toml` — provenance is read-only reference
+This merge path does not touch `system/config/parent.toml` — provenance is read-only reference
 (the inspiration records only a link to the default-workspace-template base it was
 built from; there is no upstream fetch or pull here).
 

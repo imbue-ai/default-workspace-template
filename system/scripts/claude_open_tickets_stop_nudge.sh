@@ -8,7 +8,7 @@ set -euo pipefail
 
 repo_root="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
 # Honor any externally-set TICKETS_DIR (the agent's env normally pins it
-# via .mngr/settings.toml -- e.g. /home/user/workspace/runtime/tickets -- so the tk
+# via .mngr/settings.toml -- e.g. /home/user/workspace/data/.tickets -- so the tk
 # tickets live under runtime/ with the rest of the synced state). Fall back to tk's
 # unset-default of <repo>/.tickets when nothing is set.
 tickets_dir="${TICKETS_DIR:-${repo_root}/.tickets}"
@@ -18,7 +18,7 @@ cat > /dev/null
 
 [[ -d "$tickets_dir" ]] || exit 0
 
-tk_script="${repo_root}/vendor/tk/ticket"
+tk_script="${repo_root}/system/vendor/tk/ticket"
 [[ -x "$tk_script" ]] || exit 0
 
 # Re-export so tk picks up the resolved value even when this hook runs

@@ -1,6 +1,6 @@
 """Server-side support for the agent-driven layout-mutation surface.
 
-The agent-facing helper (``scripts/layout.py``) talks to a single loopback
+The agent-facing helper (``system/scripts/layout.py``) talks to a single loopback
 endpoint, ``POST /api/layout/broadcast``, which dispatches to handlers in
 this module:
 

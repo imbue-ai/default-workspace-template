@@ -2695,7 +2695,7 @@ function initializeDockview(parentElement: HTMLElement): void {
   addAgentsUpdatedListener(agentsUpdatedListener);
 
   // Agent-driven layout ops arrive as {type: "layout_op", op, args} on
-  // the system-interface WebSocket. ``scripts/layout.py`` is the source
+  // the system-interface WebSocket. ``system/scripts/layout.py`` is the source
   // of those messages; per-op handlers below dispatch on ``event.op``.
   _layoutOpListener = (event: LayoutOpEvent) => {
     void handleLayoutOp(event);

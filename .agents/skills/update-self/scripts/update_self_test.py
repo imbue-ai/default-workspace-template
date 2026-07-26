@@ -84,30 +84,30 @@ def test_resolve_target_raises_when_no_stable_tag_and_no_override() -> None:
 
 def test_classify_path_reveal_classes() -> None:
     cases = {
-        "apps/system_interface/src/App.tsx": update_self.CLASS_SYSTEM_INTERFACE,
-        "supervisord.conf": update_self.CLASS_SERVICE,
-        "libs/bootstrap/src/bootstrap/main.py": update_self.CLASS_SERVICE,
-        "vendor/mngr/libs/mngr/foo.py": update_self.CLASS_EDITABLE_TOOL,
-        "scripts/forward_port.py": update_self.CLASS_SHARED_RUNTIME,
+        "system/libs/system_interface/src/App.tsx": update_self.CLASS_SYSTEM_INTERFACE,
+        "system/supervisord.conf": update_self.CLASS_SERVICE,
+        "system/libs/bootstrap/src/bootstrap/main.py": update_self.CLASS_SERVICE,
+        "system/vendor/mngr/libs/mngr/foo.py": update_self.CLASS_EDITABLE_TOOL,
+        "system/scripts/forward_port.py": update_self.CLASS_SHARED_RUNTIME,
         ".agents/skills/update-self/SKILL.md": update_self.CLASS_SHARED_RUNTIME,
-        "libs/oom_priority/src/oom_priority/ledger.py": update_self.CLASS_SHARED_RUNTIME,
+        "system/libs/oom_priority/src/oom_priority/ledger.py": update_self.CLASS_SHARED_RUNTIME,
         # Provisioning files: pinned-toolchain scripts (would otherwise read as
-        # shared_runtime under scripts/) and the .mngr/ create config (would
+        # shared_runtime under system/scripts/) and the .mngr/ create config (would
         # otherwise fall through to other) -- both need the provisioner reveal.
-        "scripts/setup_system.sh": update_self.CLASS_PROVISIONER,
-        "scripts/install_secret_scanners.sh": update_self.CLASS_PROVISIONER,
-        "scripts/_provision_guard.sh": update_self.CLASS_PROVISIONER,
+        "system/scripts/setup_system.sh": update_self.CLASS_PROVISIONER,
+        "system/scripts/install_secret_scanners.sh": update_self.CLASS_PROVISIONER,
+        "system/scripts/_provision_guard.sh": update_self.CLASS_PROVISIONER,
         ".mngr/settings.toml": update_self.CLASS_PROVISIONER,
         "Dockerfile": update_self.CLASS_DOCKERFILE,
         "CLAUDE.md": update_self.CLASS_DOCS,
         "changelog/some-entry.md": update_self.CLASS_DOCS,
-        "parent.toml": update_self.CLASS_OTHER,
+        "system/config/parent.toml": update_self.CLASS_OTHER,
         # A README is docs even under a prefix with its own reveal class --
         # it must never trigger that class's reveal action (e.g. a service
-        # restart for libs/bootstrap/README.md).
-        "libs/bootstrap/README.md": update_self.CLASS_DOCS,
-        "apps/system_interface/README.md": update_self.CLASS_DOCS,
-        "vendor/mngr/README.md": update_self.CLASS_DOCS,
+        # restart for system/libs/bootstrap/README.md).
+        "system/libs/bootstrap/README.md": update_self.CLASS_DOCS,
+        "system/libs/system_interface/README.md": update_self.CLASS_DOCS,
+        "system/vendor/mngr/README.md": update_self.CLASS_DOCS,
     }
     for path, expected in cases.items():
         assert update_self.classify_path(path).reveal_class == expected, path
@@ -115,17 +115,17 @@ def test_classify_path_reveal_classes() -> None:
 
 def test_classify_path_project_mapping() -> None:
     assert (
-        update_self.classify_path("apps/system_interface/foo.py").project
-        == "apps/system_interface"
+        update_self.classify_path("system/libs/system_interface/foo.py").project
+        == "system/libs/system_interface"
     )
-    assert update_self.classify_path("vendor/mngr/x.py").project == "vendor/mngr"
-    assert update_self.classify_path("scripts/forward_port.py").project == "."
+    assert update_self.classify_path("system/vendor/mngr/x.py").project == "system/vendor/mngr"
+    assert update_self.classify_path("system/scripts/forward_port.py").project == "."
 
 
 def test_classify_path_manifest_flag() -> None:
-    assert update_self.classify_path("apps/system_interface/pyproject.toml").is_manifest
-    assert update_self.classify_path("vendor/mngr/libs/mngr/pyproject.toml").is_manifest
-    assert not update_self.classify_path("scripts/forward_port.py").is_manifest
+    assert update_self.classify_path("system/libs/system_interface/pyproject.toml").is_manifest
+    assert update_self.classify_path("system/vendor/mngr/libs/mngr/pyproject.toml").is_manifest
+    assert not update_self.classify_path("system/scripts/forward_port.py").is_manifest
 
 
 # --- classify_merge --------------------------------------------------------
@@ -133,33 +133,33 @@ def test_classify_path_manifest_flag() -> None:
 
 def test_classify_merge_splits_merged_and_pulled_in() -> None:
     upstream_changed = [
-        "apps/system_interface/src/App.tsx",  # also local -> merged
-        "scripts/forward_port.py",  # upstream only -> pulled in
-        "supervisord.conf",  # upstream only -> pulled in
+        "system/libs/system_interface/src/App.tsx",  # also local -> merged
+        "system/scripts/forward_port.py",  # upstream only -> pulled in
+        "system/supervisord.conf",  # upstream only -> pulled in
     ]
     local_changed = [
-        "apps/system_interface/src/App.tsx",
+        "system/libs/system_interface/src/App.tsx",
         "PURPOSE.md",  # local only, not an upstream update -> ignored
     ]
     result = update_self.classify_merge(upstream_changed, local_changed)
 
     merged_paths = [entry["path"] for entry in result.merged]
     pulled_paths = [entry["path"] for entry in result.pulled_in]
-    assert merged_paths == ["apps/system_interface/src/App.tsx"]
-    assert pulled_paths == ["scripts/forward_port.py", "supervisord.conf"]
+    assert merged_paths == ["system/libs/system_interface/src/App.tsx"]
+    assert pulled_paths == ["system/scripts/forward_port.py", "system/supervisord.conf"]
     # A file only local changed is not surfaced as an upstream update at all.
     assert "PURPOSE.md" not in merged_paths + pulled_paths
 
 
 def test_classify_merge_summary_fields() -> None:
     upstream_changed = [
-        "apps/system_interface/src/App.tsx",  # merged
-        "vendor/mngr/libs/mngr/foo.py",  # merged
-        "scripts/forward_port.py",  # pulled in
+        "system/libs/system_interface/src/App.tsx",  # merged
+        "system/vendor/mngr/libs/mngr/foo.py",  # merged
+        "system/scripts/forward_port.py",  # pulled in
     ]
     local_changed = [
-        "apps/system_interface/src/App.tsx",
-        "vendor/mngr/libs/mngr/foo.py",
+        "system/libs/system_interface/src/App.tsx",
+        "system/vendor/mngr/libs/mngr/foo.py",
     ]
     result = update_self.classify_merge(upstream_changed, local_changed)
     assert result.reveal_classes_merged == [
@@ -167,17 +167,17 @@ def test_classify_merge_summary_fields() -> None:
         update_self.CLASS_SYSTEM_INTERFACE,
     ]
     assert result.reveal_classes_pulled_in == [update_self.CLASS_SHARED_RUNTIME]
-    assert result.projects_to_validate == ["apps/system_interface", "vendor/mngr"]
+    assert result.projects_to_validate == ["system/libs/system_interface", "system/vendor/mngr"]
 
 
 def test_classify_merge_surfaces_provisioner_bump() -> None:
     # The motivating case: upstream bumps the pinned latchkey version in
-    # scripts/setup_system.sh and touches .mngr/settings.toml, local left both
+    # system/scripts/setup_system.sh and touches .mngr/settings.toml, local left both
     # untouched. They come in as a clean pull, but must still surface under the
     # provisioner reveal class (not shared_runtime/other) so the flow re-runs the
     # provisioner or flags a rebuild rather than silently dropping the new pin.
     result = update_self.classify_merge(
-        ["scripts/setup_system.sh", ".mngr/settings.toml"], []
+        ["system/scripts/setup_system.sh", ".mngr/settings.toml"], []
     )
     assert result.reveal_classes_pulled_in == [update_self.CLASS_PROVISIONER]
     assert [entry["reveal_class"] for entry in result.pulled_in] == [
@@ -252,7 +252,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # Base commit: one pre-existing top-level entry (must NOT be reported as
     # newly added), plus a source file the target will leave untouched.
     _write("changelog/old-entry.md")
-    _write("libs/browser/src/browser/session.py", "print('hi')\n")
+    _write("system/libs/browser/src/browser/session.py", "print('hi')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "base")
     _git("tag", "base")
@@ -260,12 +260,12 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # Target commit: newly-added entries across every bucket, a vendored-subtree
     # entry (excluded), and a non-changelog source change (ignored).
     _write(".agents/changelog/my-branch.md")
-    _write("dev/changelog/my-branch.md")
-    _write("libs/browser/changelog/my-branch.md")
-    _write("apps/system_interface/changelog/my-branch.md")
+    _write("system/changelog/my-branch.md")
+    _write("system/libs/browser/changelog/my-branch.md")
+    _write("system/libs/system_interface/changelog/my-branch.md")
     _write("changelog/my-branch.md")
-    _write("vendor/mngr/libs/mngr/changelog/upstream-entry.md")
-    _write("libs/browser/src/browser/session.py", "print('bye')\n")
+    _write("system/vendor/mngr/libs/mngr/changelog/upstream-entry.md")
+    _write("system/libs/browser/src/browser/session.py", "print('bye')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "target")
     _git("tag", "target")
@@ -287,10 +287,10 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     added = json.loads(capsys.readouterr().out)["added"]
     assert sorted(added) == [
         ".agents/changelog/my-branch.md",
-        "apps/system_interface/changelog/my-branch.md",
+        "system/libs/system_interface/changelog/my-branch.md",
         "changelog/my-branch.md",
-        "dev/changelog/my-branch.md",
-        "libs/browser/changelog/my-branch.md",
+        "system/changelog/my-branch.md",
+        "system/libs/browser/changelog/my-branch.md",
     ]
 
 
@@ -382,7 +382,7 @@ def test_bootstrap_skill_reports_no_difference_when_local_matches_tag(
 
 
 def test_bootstrap_skill_ignores_untracked_build_artifacts(tmp_path, capsys) -> None:
-    # Importing the script drops __pycache__/*.pyc into scripts/. Those are
+    # Importing the script drops __pycache__/*.pyc into system/scripts/. Those are
     # untracked, so `git diff` ignores them and they must not register as a
     # spurious difference -- otherwise the "identical -> stay on the local flow"
     # branch would be dead in every real checkout (where the module has been

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Register or remove an application port in runtime/applications.toml.
+"""Register or remove an application port in data/.state/applications.toml.
 
 Uses file locking to safely upsert or remove entries. Called by services
 on startup to declare the ports they expose.
 
 Usage:
-    python3 scripts/forward_port.py --name terminal --url http://localhost:7681
-    python3 scripts/forward_port.py --remove --name terminal
+    python3 system/scripts/forward_port.py --name terminal --url http://localhost:7681
+    python3 system/scripts/forward_port.py --remove --name terminal
 """
 
 import argparse
@@ -17,17 +17,17 @@ from pathlib import Path
 
 import tomlkit
 
-DEFAULT_APPLICATIONS_FILE = "runtime/applications.toml"
+DEFAULT_APPLICATIONS_FILE = "data/.state/applications.toml"
 ENV_APPLICATIONS_FILE = "MINDS_APPLICATIONS_FILE"
 
 
 def _applications_file() -> Path:
     """Path to the agent's applications.toml registry.
 
-    Defaults to ``runtime/applications.toml`` relative to cwd. Override
+    Defaults to ``data/.state/applications.toml`` relative to cwd. Override
     via ``MINDS_APPLICATIONS_FILE`` -- used by tests and by callers that
     need to point at a non-default registry (e.g. when running outside
-    the agent's repo root). Mirrors ``scripts/layout.py``.
+    the agent's repo root). Mirrors ``system/scripts/layout.py``.
     """
     return Path(os.environ.get(ENV_APPLICATIONS_FILE, DEFAULT_APPLICATIONS_FILE))
 

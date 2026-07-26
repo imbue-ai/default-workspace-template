@@ -1,10 +1,10 @@
 # Chat Scroll and Text-Selection Fixes
 
 > Implementation plan derived from the verified diagnosis in
-> `specs/chat-scroll-and-selection-bugs.md` (adversarially verified root causes,
+> `docs/system/specs/chat-scroll-and-selection-bugs.md` (adversarially verified root causes,
 > file:line evidence, and the detailed rationale behind every choice below).
 > This plan is the actionable summary; the spec is the reference. All paths are
-> relative to `apps/system_interface/frontend/src/`.
+> relative to `system/libs/system_interface/frontend/src/`.
 
 ## Overview
 
@@ -54,13 +54,13 @@
 
 ## Testing strategy
 
-- Unit tests (vitest, `pnpm test` in `apps/system_interface/frontend/`):
+- Unit tests (vitest, `pnpm test` in `system/libs/system_interface/frontend/`):
   - `scrollFollow.test.ts`: clamp preserves prior state; wheel-up still disengages; re-arm only at true tail; selection predicate truth table.
   - `virtualWindow.test.ts`: pinned-below / pinned-above / pinned-inside / pinned + past-the-end / out-of-range clamping; backward-fill coverage and pad invariants (pads + rendered == total).
   - A `MarkdownContent` component test asserting `onupdate` does not touch the DOM when content is unchanged (mount, snapshot a text node reference, redraw, assert same node).
 - Lint/format gates: `pnpm lint` and the existing `lint-and-format.test.ts`.
 - Empirical pre-check for phase 2: confirm with two `console.log`s that the scroll container's `onupdate` runs before freshly-prepended descendants' `oncreate` (the spec's hook-ordering claim) before relying on live `offsetTop` reads.
-- Manual verification: run the full checklist in `specs/chat-scroll-and-selection-bugs.md` section 4 against a >2000-event transcript with step turns and a permission card, plus a live streaming agent. Browser-interaction checks stay manual (not crystallized into flaky DOM tests); the behaviors that can be expressed as pure functions are crystallized in the unit tests above.
+- Manual verification: run the full checklist in `docs/system/specs/chat-scroll-and-selection-bugs.md` section 4 against a >2000-event transcript with step turns and a permission card, plus a live streaming agent. Browser-interaction checks stay manual (not crystallized into flaky DOM tests); the behaviors that can be expressed as pure functions are crystallized in the unit tests above.
 - Regression sweep: normal follow engage/disengage, backfill paging, offset jumps, subagent view parity.
 
 ## Open questions

@@ -32,7 +32,7 @@
 - Quick existing-skill scan; bail only if a single skill covers the whole ask. Partial matches → continue with this skill but reuse the existing skill for whatever subset it handles.
 - *Small* research pass: `latchkey services list --viable`, `latchkey services info <svc>` for any obviously-involved service, brief web/docs scan if needed. Capped at ~2-3 minutes / a handful of tool calls. Goal: don't bullshit about feasibility, but don't take long.
 - Core-capability validation runs *first* before any other work. For multi-service asks, each underlying service is validated independently, then the combined operation. Fail-fast on whichever fails first.
-- Ad-hoc scripts written during the flow live under `runtime/do-something-new/<slug>/` (gitignored). Code is kept simple — fast > polished. Inline bash or `uv run python -c` is fine when it works; substantive scripts get files.
+- Ad-hoc scripts written during the flow live under `data/.tasks/do-something-new/<slug>/` (gitignored). Code is kept simple — fast > polished. Inline bash or `uv run python -c` is fine when it works; substantive scripts get files.
 - On data-sample approval, the agent launches `crystallize-task` in the background, with the calling skill's runtime dir handed off as input artifacts (see Changes).
 - Background crystallize gates:
   - Gate 1 (outline-approval): the lead filters — only escalates a *genuine process question* to the user, suppressing technical-detail questions it can decide itself.
@@ -50,16 +50,16 @@
   - **Step 2 — small research pass.** Concrete commands: `latchkey services list --viable`; `latchkey services info <svc>` for any obviously-involved service; optional 1-2 web searches / docs reads if a service isn't covered. Cap: ~2-3 minutes / handful of tool calls.
   - **Step 3 — propose plan.** Two-section format ("Auth: …" line + numbered process steps), with a one-line "what you'll see at the end". Browser auth → include the heads-up wording. `auth set` → include the exact command for the user to run.
   - **Step 4 — validate the core capability first.** For multi-service asks, validate each service independently before the combined operation. Latchkey setup is part of the normal flow. On failure, surface specific cause + 1-2 concrete alternatives before the user chooses.
-  - **Step 5 — generate the data sample.** Default to brief natural-language summary; save raw JSON to `runtime/do-something-new/<slug>/sample.json`. Agent may pick another format if context warrants.
-  - **Step 6 — launch background crystallize and end with interface handoff.** Kick off `crystallize-task` (with `source_artifacts_dir: runtime/do-something-new/<slug>/` in the task frontmatter so artifacts get pushed to the worker — see crystallize-task changes below). Then end the skill with one of the two interface-reminder phrasings, depending on whether the user named an interface in the original prompt.
+  - **Step 5 — generate the data sample.** Default to brief natural-language summary; save raw JSON to `data/.tasks/do-something-new/<slug>/sample.json`. Agent may pick another format if context warrants.
+  - **Step 6 — launch background crystallize and end with interface handoff.** Kick off `crystallize-task` (with `source_artifacts_dir: data/.tasks/do-something-new/<slug>/` in the task frontmatter so artifacts get pushed to the worker — see crystallize-task changes below). Then end the skill with one of the two interface-reminder phrasings, depending on whether the user named an interface in the original prompt.
   - **Re-fetch handling.** Documented as the manual-flow fallback. Agent decides per-occasion whether to `mngr message` the crystallize worker; only does so when the worker would actually need the new info.
   - **Rejection handling.** If the user rejects the data sample, re-propose plan (Step 3); re-research (Step 2) only if the new ask requires it.
-- No `scripts/` directory — the skill's work is conversational + ad-hoc. Ad-hoc scripts live in `runtime/`, not in the skill.
+- No `system/scripts/` directory — the skill's work is conversational + ad-hoc. Ad-hoc scripts live in `runtime/`, not in the skill.
 
 ### Edit: `.agents/skills/crystallize-task/SKILL.md`
 
 - Append to the worker task body (Step 3 in the existing skill): "When fetching data from external APIs, capture *all reasonable fields per record* in the calls you're already making, not just the fields the user displayed. Pagination is a normal part of the workflow if the ask requires it. Do NOT make extra un-asked-for API calls just to gather more data." Applies regardless of how crystallize-task was triggered.
-- Add an optional task-file frontmatter field `source_artifacts_dir`. When present, the lead pushes that directory to the worker (`mngr push <worker>:<dir>/ --source <dir>/ --uncommitted-changes=merge`) alongside its own `runtime/crystallize/<name>/` push. Without the field, existing invocations work unchanged.
+- Add an optional task-file frontmatter field `source_artifacts_dir`. When present, the lead pushes that directory to the worker (`mngr push <worker>:<dir>/ --source <dir>/ --uncommitted-changes=merge`) alongside its own `data/.tasks/crystallize/<name>/` push. Without the field, existing invocations work unchanged.
 - Update `crystallize-task/SKILL.md` Step 4 to include the extra `mngr push` call, gated on the frontmatter field. Document that callers (like `/do-something-new`) populate this field to hand off pre-existing scripts and sample data.
 
 ### Edit: `CLAUDE.md`

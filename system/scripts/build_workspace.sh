@@ -41,17 +41,17 @@ cd "$REPO_ROOT"
 git config --global --add safe.directory "$REPO_ROOT"
 
 # Build the system_interface frontend (deps installed by install_dependencies.sh).
-( cd "$REPO_ROOT/apps/system_interface/frontend" && npm run build )
+( cd "$REPO_ROOT/system/libs/system_interface/frontend" && npm run build )
 
 # Install mngr and system-interface as tools (both need the plugin packages so
 # they can parse plugin-specific config). mngr_modal is intentionally not
 # registered (providers.modal.is_enabled=false).
-uv tool install -e "$REPO_ROOT/vendor/mngr/libs/mngr"
-uv tool install -e "$REPO_ROOT/apps/system_interface" \
-    --with-editable "$REPO_ROOT/vendor/mngr/libs/mngr_claude"
+uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr"
+uv tool install -e "$REPO_ROOT/system/libs/system_interface" \
+    --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_claude"
 mngr plugin add \
-    --path vendor/mngr/libs/mngr_claude \
-    --path vendor/mngr/libs/mngr_wait
+    --path system/vendor/mngr/libs/mngr_claude \
+    --path system/vendor/mngr/libs/mngr_wait
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
 # asserts the lockfile is canonical so the pre-warmed cache is not bypassed.
@@ -59,5 +59,5 @@ uv sync --all-packages --frozen
 
 # Expose the vendored tk ticket tracker on PATH. The target resolves once
 # /home/user/workspace is in place (on docker, after the first-boot seed).
-ln -sf "$REPO_ROOT/vendor/tk/ticket" /usr/local/bin/tk
-ln -sf "$REPO_ROOT/vendor/tk/ticket" /usr/local/bin/ticket
+ln -sf "$REPO_ROOT/system/vendor/tk/ticket" /usr/local/bin/tk
+ln -sf "$REPO_ROOT/system/vendor/tk/ticket" /usr/local/bin/ticket

@@ -158,7 +158,7 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
  * bare user bubble. The fleet is the only sender; mngr itself is untouched (it is
  * an independent product and has no business knowing about this display concern).
  *
- * The wrapping side is `libs/browser/src/browser/session.py`
+ * The wrapping side is `system/libs/browser/src/browser/session.py`
  * (`_SYSTEM_MESSAGE_TAG` in `_message_agent`). Keep the tag string in sync.
  * The tag adds no newlines, so a wrapped message types into the agent's pane
  * identically to the same text sent unwrapped.

@@ -108,7 +108,7 @@ git worktree add -q "$WT" HEAD
   what conflicts in plain language (§3), and only then redo the merge in `/home/user/workspace`
   and resolve it interactively WITH the user, keeping their adaptations wherever
   they and the update collide.
-- **Boot smoke-check** the merged worktree -- validate `supervisord.conf` WITHOUT
+- **Boot smoke-check** the merged worktree -- validate `system/supervisord.conf` WITHOUT
   launching the daemon (never `supervisord -t`, which launches it):
 
   ```bash
@@ -118,7 +118,7 @@ git worktree add -q "$WT" HEAD
       from supervisor.options import ServerOptions
   except Exception:
       sys.exit(0)  # supervisor lib unavailable -- skip the check
-  o = ServerOptions(); o.configfile = "supervisord.conf"
+  o = ServerOptions(); o.configfile = "system/supervisord.conf"
   o.realize(args=[]); o.process_config(do_usage=False)
   PYEOF
   )
@@ -139,7 +139,7 @@ git worktree remove --force "$WT"
 
 This preserves both trees at the root: the newer version's changes come in, and
 this mind's adaptations are carried through the merge you resolved. This path does
-not touch `parent.toml` -- provenance is read-only reference; there is no upstream
+not touch `system/config/parent.toml` -- provenance is read-only reference; there is no upstream
 fetch or pull here.
 
 ## 3. Fill any holes interactively
@@ -164,17 +164,17 @@ against this mind's adaptations>
 
 Earlier history entries are left exactly as they are.
 
-## 5. Record the new adopted version in `VERSION_HISTORY.md`
+## 5. Record the new adopted version in `docs/VERSION_HISTORY.md`
 
 Record which version of the inspiration this mind is now on. Write the entry
-directly into `VERSION_HISTORY.md`'s `## Adopted inspirations` section
+directly into `docs/VERSION_HISTORY.md`'s `## Adopted inspirations` section
 (cwd `/home/user/workspace`). There is no helper skill: this block is the whole recording
 contract for the adopter side. Append-only (existing lines copied through
 verbatim, never re-flowed); a retried update is a no-op, never a duplicate.
 Inputs: `SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo>"`, and the target
 version `<n>` you pulled in §1.
 
-- **If `VERSION_HISTORY.md` is missing** (deleted since creation), recreate
+- **If `docs/VERSION_HISTORY.md` is missing** (deleted since creation), recreate
   the shipped three-section starter first -- the `# Version history` heading, its
   explanatory paragraph, and the sections `## Workspace`, `## Inspirations`,
   `## Adopted inspirations` in that order (byte-identical to the shipped root
@@ -205,7 +205,7 @@ Commit the update per the repo's git conventions (a plain local commit; when the
 user has enabled GitHub sync, the post-commit hook handles any push). This is one
 commit for the adaptation work -- the merged-in tree, the resolved holes, the
 updated manifest with its new "Adaptation history" entry, and
-`VERSION_HISTORY.md`.
+`docs/VERSION_HISTORY.md`.
 
 The version-history entry itself, if committed on its own, is exactly one file
 staged **by name** -- NEVER `git add -A` as part of recording, and never a merge,

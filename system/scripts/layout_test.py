@@ -42,7 +42,7 @@ def _skip_wait_stable(monkeypatch: pytest.MonkeyPatch) -> None:
     observable via ``inspect``; the tests in this file mock ``_post_layout``
     and assert on exact broadcast args, which the extra ``inspect`` calls
     from wait-stable would distort. The CLI's contract for this env var is
-    documented in ``scripts/layout.py``. Tests that *want* to exercise the
+    documented in ``system/scripts/layout.py``. Tests that *want* to exercise the
     wait-stable behavior explicitly remove this env var via monkeypatch.
     """
     monkeypatch.setenv(layout.ENV_NO_WAIT_STABLE, "1")

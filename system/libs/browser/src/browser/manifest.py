@@ -21,7 +21,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 # Relative to the daemon's cwd (= repo root). Override for tests / alternate layouts.
-_MANIFEST_PATH = Path(os.environ.get("BROWSER_MANIFEST_PATH", "runtime/browser-fleet.json"))
+_MANIFEST_PATH = Path(os.environ.get("BROWSER_MANIFEST_PATH", "data/.state/browser-fleet.json"))
 # v2: browser ids are now random NAME strings (not sequential ints), and the
 # ``next_id`` high-water mark is gone. ``read_manifest`` rejects any other version
 # (see below), so an older v1 (int-id) manifest is treated as missing rather than

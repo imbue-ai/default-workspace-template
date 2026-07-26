@@ -26,7 +26,7 @@ set -eu
 
 SERVICE_PATH=/etc/systemd/system/minds-autostart.service
 PATH_UNIT=/etc/systemd/system/minds-autostart.path
-START_SCRIPT=/home/user/workspace/scripts/minds_start_services_agent.sh
+START_SCRIPT=/home/user/workspace/system/scripts/minds_start_services_agent.sh
 
 # The service: start the agent in its full env via the shared start script. No
 # readiness wait needed -- the .path unit only triggers this once the script

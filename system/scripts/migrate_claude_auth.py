@@ -31,7 +31,7 @@ down, the detached process finishes the stop/start/message sequence, and
 the invoking agent comes back with the standard "please continue" message.
 Detached-phase logs land in ``/tmp/migrate_claude_auth_restart.log``.
 
-Run from the repo root: ``uv run python scripts/migrate_claude_auth.py``.
+Run from the repo root: ``uv run python system/scripts/migrate_claude_auth.py``.
 """
 
 from __future__ import annotations

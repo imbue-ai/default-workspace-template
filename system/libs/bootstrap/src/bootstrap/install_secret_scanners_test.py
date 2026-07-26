@@ -1,4 +1,4 @@
-"""Unit tests for scripts/install_secret_scanners.sh.
+"""Unit tests for system/scripts/install_secret_scanners.sh.
 
 The script is the single source of truth for the secret-scanner version pins
 and per-arch sha256s. It is bash, so each test sources it in a fresh bash

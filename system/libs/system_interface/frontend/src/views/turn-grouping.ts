@@ -131,7 +131,7 @@ export interface SectionView {
 const TK_LIFECYCLE_RE = /"command"\s*:\s*"\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
 
 /** A status transition line printed by tk on every state change:
- *  `Updated <id> -> <status>` (see vendor/tk/ticket). Global so a batched
+ *  `Updated <id> -> <status>` (see system/vendor/tk/ticket). Global so a batched
  *  command that flips several tickets is read in order. */
 const TK_UPDATED_RE = /Updated\s+(\S+)\s+->\s+(open|in_progress|closed)/g;
 
@@ -143,7 +143,7 @@ const TK_UPDATED_RE = /Updated\s+(\S+)\s+->\s+(open|in_progress|closed)/g;
 const STEP_ID_RE = /-step-[a-z0-9]+$/;
 
 /** Decoration output lines tk prints on stdout. The format is defined in
- *  `vendor/tk/ticket` (cmd_create/start/close) and is also protected from
+ *  `system/vendor/tk/ticket` (cmd_create/start/close) and is also protected from
  *  truncation by the backend parser (`session_parser.py`); keep all three in
  *  sync. The id is required to carry the `-step-` segment so a stray
  *  "Created ..." line in other tool output (e.g. a scaffolder's "Created lib

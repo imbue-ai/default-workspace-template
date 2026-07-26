@@ -105,12 +105,12 @@ _SCREENCAST_MAX_HEIGHT = 800
 # tab feels snappier. Slightly more bandwidth than skipping frames.
 _SCREENCAST_EVERY_NTH_FRAME = 1
 
-# Deferred-install marker (see scripts/deferred_install.sh). Fortress installs
+# Deferred-install marker (see system/scripts/deferred_install.sh). Fortress installs
 # asynchronously on first container boot; launching a browser before it exists
 # fails, so callers gate on this. No Xvfb: CDP streaming/input are headless.
 _FORTRESS_MARKER = Path("/var/lib/minds/deferred-install/done.fortress")
 
-# Fortress's fixed install path (see scripts/deferred_install.sh's
+# Fortress's fixed install path (see system/scripts/deferred_install.sh's
 # _install_fortress). A stealth, C++-patched Chromium fork -- replaces
 # vanilla Chromium as the engine for every browser the fleet launches.
 _FORTRESS_EXECUTABLE = "/opt/fortress/tilion-fortress/tilion"
@@ -198,7 +198,7 @@ def _should_disable_sandbox() -> bool:
 
 
 def _repo_root() -> Path:
-    """The workspace root (where ``scripts/`` lives), anchored on this file's location
+    """The workspace root (where ``system/scripts/`` lives), anchored on this file's location
     rather than cwd -- used as the wake subprocess's cwd so the ``mngr`` dev shim
     resolves this checkout regardless of where the daemon was started."""
     for candidate in Path(__file__).resolve().parents:
@@ -209,7 +209,7 @@ def _repo_root() -> Path:
 
 # Where `screenshot` writes PNGs (relative to the daemon's cwd = repo root). The
 # CLI prints the path and the agent reads the file; agent + daemon share the FS.
-_SCREENSHOT_DIR = Path(os.environ.get("BROWSER_SCREENSHOT_DIR", "runtime/browser-screenshots"))
+_SCREENSHOT_DIR = Path(os.environ.get("BROWSER_SCREENSHOT_DIR", "data/.state/browser-screenshots"))
 
 # Sentinel the fleet wraps its agent-facing nudges in before sending them via
 # `mngr message` (see `_message_agent`). These nudges land in the agent's
@@ -219,7 +219,7 @@ _SCREENSHOT_DIR = Path(os.environ.get("BROWSER_SCREENSHOT_DIR", "runtime/browser
 # system chip instead (like Stop-hook feedback).
 #
 # CROSS-LAYER CONTRACT: the reading side is the frontend's `BROWSER_FLEET_TAG` in
-# apps/system_interface/frontend/src/views/message-kinds.ts -- keep the tag in
+# system/libs/system_interface/frontend/src/views/message-kinds.ts -- keep the tag in
 # sync. We wrap here in the fleet's OWN service (not in mngr, which is an
 # independent product with no stake in this display concern). The wrapper adds no
 # newlines, so a wrapped message types into the agent's pane identically to the
@@ -435,7 +435,7 @@ class LiveBrowser(MutableModel):
     # for the one-producer (loop) / one-consumer (Flask) handoff. The LIST itself is
     # mutated ONLY on the loop thread (register/unregister are awaited via the
     # bridge), so _broadcast can iterate it without a lock -- the single-loop
-    # serialization is the guard. Mirrors apps/system_interface's WebSocketBroadcaster.
+    # serialization is the guard. Mirrors system/libs/system_interface's WebSocketBroadcaster.
     _cast_queues: list["queue.Queue[str | None]"] = PrivateAttr(default_factory=list)
     _latest_frame: str | None = PrivateAttr(default=None)
     _send_in_flight: bool = PrivateAttr(default=False)

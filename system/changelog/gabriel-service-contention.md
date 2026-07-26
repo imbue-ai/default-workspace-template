@@ -37,7 +37,7 @@
   lease guards the merge + reveal motion instead of the editing: Step 4 takes
   the `editing service system_interface` lease before capturing the rollback
   revision and releases it after the Step 5 teardown, and runs the same
-  freshness check over `apps/system_interface/` (stale -> re-brief the worker
+  freshness check over `system/libs/system_interface/` (stale -> re-brief the worker
   to rebase and re-verify, never hand-merge). Dispatch warns when another
   system-interface pass is already in flight (passes are named per-slug, so
   they don't collide on names -- but the second merge is guaranteed stale).

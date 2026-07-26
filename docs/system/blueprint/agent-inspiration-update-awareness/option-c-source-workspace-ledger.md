@@ -6,7 +6,7 @@ update is never a diff between the two repos: you **re-run the recipe against th
 current workspace** and push the result as a new version, carrying the published
 repo's manifest / thumbnail / adaptation-history forward unchanged.
 
-Alongside that, keep ONE human-readable `VERSION_HISTORY.md` -- plain dated lines,
+Alongside that, keep ONE human-readable `docs/VERSION_HISTORY.md` -- plain dated lines,
 each ending in the workspace commit that version was cut from. That sha is
 **provenance** (and lets an agent optionally show "what changed since v1" =
 `git diff <v1-sha>..HEAD -- <paths>`, within the workspace repo, for the status

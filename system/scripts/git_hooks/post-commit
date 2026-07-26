@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Auto-push the active branch after every commit, part of the opt-in GitHub
-# sync (see libs/github_sync/README.md and the github-sync skill).
+# sync (see system/libs/github_sync/README.md and the github-sync skill).
 #
 # This hook is inert by default: it only takes effect once the github-sync
 # skill points `git config --global core.hooksPath` at this directory (done

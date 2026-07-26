@@ -283,7 +283,7 @@ def test_build_create_chat_command_omits_project_label_when_missing() -> None:
 
 def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
     """Confront the emitted argv with the live ``imbue.mngr.main.cli`` tree, so
-    a vendor/mngr rename of ``create``/its flags fails here at merge time rather
+    a system/vendor/mngr rename of ``create``/its flags fails here at merge time rather
     than only at host boot. A ``workspace`` label is supplied so the builder's
     label resolution short-circuits without reading host files."""
     argv = _build_create_chat_command("host-1", {"workspace": "ws", "project": "proj"})
@@ -313,7 +313,7 @@ def test_parse_created_agent_id_returns_none_when_absent() -> None:
 
 def test_parse_created_agent_id_reads_live_mngr_json_output() -> None:
     """Confront the parser with mngr's real `--format json` serializer, so a
-    vendor/mngr switch to pretty-printed or JSONL create output fails here at
+    system/vendor/mngr switch to pretty-printed or JSONL create output fails here at
     merge time rather than only at host boot. `write_json_line` is exactly what
     `mngr create`'s JSON branch calls (one compact object on stdout)."""
     result_data = {

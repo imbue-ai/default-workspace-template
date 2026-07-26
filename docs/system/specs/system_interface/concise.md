@@ -1,6 +1,6 @@
 # System Interface
 
-> Note: this spec was authored when the workspace server lived in mngr at `apps/minds_workspace_server/`. It has since been migrated into this template at `apps/system_interface/`. Path references to `apps/minds_workspace_server/` describe state at the time this spec was written.
+> Note: this spec was authored when the workspace server lived in mngr at `apps/minds_workspace_server/`. It has since been migrated into this template at `system/libs/system_interface/`. Path references to `apps/minds_workspace_server/` describe state at the time this spec was written.
 
 Migrate ~/project/llm-webchat into apps/minds_workspace_server, replacing the LLM backend with live views of mngr-managed Claude agent sessions.
 

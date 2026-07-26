@@ -29,10 +29,10 @@ Commands::
     agentic-browser-fleet unlock <name>                             # alias: release
     agentic-browser-fleet release <name>
 
-The daemon address is discovered from ``runtime/applications.toml`` (the same
+The daemon address is discovered from ``data/.state/applications.toml`` (the same
 registry ``layout.py`` reads), overridable via ``MINDS_BROWSER_SERVICE_URL``,
 falling back to ``http://127.0.0.1:8081``. Browser panes are pulled into the
-agent's view via ``scripts/layout.py`` (anchored at ``$BROWSER_FLEET_ANCHOR`` if
+agent's view via ``system/scripts/layout.py`` (anchored at ``$BROWSER_FLEET_ANCHOR`` if
 set -- a parent passes its chat ref to sub-agents -- else the caller's own chat).
 """
 
@@ -52,7 +52,7 @@ from imbue.mngr.cli.output_helpers import write_human_line, write_stderr_line
 _DEFAULT_URL = "http://127.0.0.1:8081"
 _ENV_URL = "MINDS_BROWSER_SERVICE_URL"
 _ENV_ANCHOR = "BROWSER_FLEET_ANCHOR"
-_APPLICATIONS_FILE = "runtime/applications.toml"
+_APPLICATIONS_FILE = "data/.state/applications.toml"
 
 # Exit codes the orchestrating agent can branch on.
 _EXIT_OK = 0
@@ -73,7 +73,7 @@ def _err(message: str) -> None:
 
 
 def _repo_root() -> Path:
-    """Walk up from cwd to the workspace root (where ``scripts/layout.py`` lives)."""
+    """Walk up from cwd to the workspace root (where ``system/scripts/layout.py`` lives)."""
     here = Path.cwd()
     for candidate in (here, *here.parents):
         if (candidate / "scripts" / "layout.py").exists():
@@ -157,11 +157,11 @@ def _stream(path: str, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
                 yield json.loads(line)
 
 
-# --- pane pull-in (reuse scripts/layout.py) ----------------------------------
+# --- pane pull-in (reuse system/scripts/layout.py) ----------------------------------
 
 
 def _layout(*args: str, quiet: bool = False) -> bool:
-    """Run ``scripts/layout.py`` with the given args from the repo root. True on success.
+    """Run ``system/scripts/layout.py`` with the given args from the repo root. True on success.
     ``quiet`` suppresses layout.py's raw stderr so the caller can substitute its own
     message (used by the pane-pull, which has a friendlier failure note)."""
     root = _repo_root()

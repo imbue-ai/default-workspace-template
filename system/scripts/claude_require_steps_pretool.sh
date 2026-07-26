@@ -57,7 +57,7 @@ fi
 # using tk at all (possibly a brand-new session).
 [[ -d "$tickets_dir" ]] || exit 0
 
-tk_script="${repo_root}/vendor/tk/ticket"
+tk_script="${repo_root}/system/vendor/tk/ticket"
 [[ -x "$tk_script" ]] || exit 0
 
 export TICKETS_DIR="$tickets_dir"

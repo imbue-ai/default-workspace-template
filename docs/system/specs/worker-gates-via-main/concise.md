@@ -21,7 +21,7 @@
 - For `## STATUS: stuck` or a worker that finished without a recognized marker, main follows `launch-task/references/worker-failure.md`: capture, tell the user, leave the branch intact.
 - If the user gives main a new task while a worker is mid-gate, main does NOT drop that task to handle the worker. Main finishes the user's current request first, then checks for any still-outstanding `mngr wait` background notifications it hasn't handled.
 - Workers run with their existing skills and their existing mental model. Only the instructions about how to format gate/status messages change; workers still think they're addressing the user.
-- The Stop-hook crystallization nudge (`scripts/detect_crystallization_candidate.py`) is unchanged — no new hook is added.
+- The Stop-hook crystallization nudge (`system/scripts/detect_crystallization_candidate.py`) is unchanged — no new hook is added.
 
 ## Changes
 
@@ -54,7 +54,7 @@
   - Add a short subsection under "Work delegation" (or adjacent to it) stating: the user can view worker chats but is not required to; when main launches workers via crystallize / heal / update, main is responsible for answering gate questions itself when feasible and escalating to the user only for genuinely ambiguous ones; main must not interrupt more recent user work to handle a worker event.
 
 - No changes to:
-  - `scripts/detect_crystallization_candidate.py` (Stop hook stays as-is).
+  - `system/scripts/detect_crystallization_candidate.py` (Stop hook stays as-is).
   - `.claude/settings.json` hooks block.
   - Any `mngr` code — `mngr wait` / `mngr message` / `mngr transcript` already do what we need.
   - The `send-user-message` skill (still used by main → user communication; only workers stop calling it for gates).

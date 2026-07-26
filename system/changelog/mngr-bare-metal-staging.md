@@ -1,4 +1,4 @@
-- Hardened `scripts/deferred_install.sh`'s `_recover_interrupted_dpkg` to repair
+- Hardened `system/scripts/deferred_install.sh`'s `_recover_interrupted_dpkg` to repair
   packages left in dpkg's reinst-required ("R") state by an interrupted *unpack*
   (e.g. a pool bake's `mngr stop` killing apt mid-install), not just the
   unpacked-but-unconfigured case. After `dpkg --configure -a` it now reinstalls

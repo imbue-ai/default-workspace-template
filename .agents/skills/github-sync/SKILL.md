@@ -7,7 +7,7 @@ compatibility: Requires latchkey (see the latchkey skill) and the user approving
 # GitHub sync
 
 GitHub sync is opt-in. Nothing syncs until this skill enables it. Once
-enabled, three pieces work together (see `libs/github_sync/README.md`):
+enabled, three pieces work together (see `system/libs/github_sync/README.md`):
 
 1. `origin` points at a dedicated **private** GitHub repo for this workspace.
 2. Global git wiring routes all `https://github.com/...` traffic through the
@@ -27,7 +27,7 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
 - **Everything flows through latchkey.** Never ask the user for a GitHub
   token and never embed credentials in URLs or git config.
 - `origin` is reserved for the sync repo. Upstream-template operations keep
-  using `parent.toml` (see the update-self skill) and are unaffected.
+  using `system/config/parent.toml` (see the update-self skill) and are unaffected.
 
 ## Enable
 
@@ -147,19 +147,19 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
    for b in $(git for-each-ref --format='%(refname:short)' refs/heads/ | grep -v -x -e "$(git branch --show-current)" -e runtime-sync); do git push origin "$b"; done
    ```
 
-10. **Add the service** by appending this block to `supervisord.conf`, then
+10. **Add the service** by appending this block to `system/supervisord.conf`, then
     `supervisorctl reread && supervisorctl update` (see the edit-services
     skill):
 
     ```ini
     # Opt-in GitHub sync (added by the github-sync skill): commits + pushes
     # runtime/ to the runtime-sync branch of the private sync repo and
-    # re-verifies the repo stays private. See libs/github_sync/README.md.
+    # re-verifies the repo stays private. See system/libs/github_sync/README.md.
     # The oom_tag_service.py prefix sets its OOM shed-priority band (see
-    # libs/oom_priority): a runtime-state backup is shed after the UI/tunnel/
+    # system/libs/oom_priority): a runtime-state backup is shed after the UI/tunnel/
     # terminal but before host-backup, matching what runtime-backup used to get.
     [program:github-sync]
-    command=python3 scripts/oom_tag_service.py github-sync uv run github-sync run
+    command=python3 system/scripts/oom_tag_service.py github-sync uv run github-sync run
     directory=/home/user/workspace
     autostart=true
     autorestart=true
@@ -174,7 +174,7 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
     stderr_logfile_backups=3
     ```
 
-11. **Commit the enablement** (`github_sync.toml` + `supervisord.conf`). The
+11. **Commit the enablement** (`github_sync.toml` + `system/supervisord.conf`). The
     now-active hook pushes the commit; this also makes sync sticky if the
     repo is later used to recreate the workspace.
 
@@ -209,7 +209,7 @@ Confirm with the user first, and ask separately whether to keep the remote
 repo (recommend keeping it -- it costs nothing and preserves history).
 
 1. `supervisorctl stop github-sync`, remove the `[program:github-sync]` block
-   from `supervisord.conf`, then `supervisorctl reread && supervisorctl update`.
+   from `system/supervisord.conf`, then `supervisorctl reread && supervisorctl update`.
 2. `uv run github-sync unwire-git` (removes the gateway git config and the
    hooks path -- auto-push stops).
 3. Delete `github_sync.toml`.

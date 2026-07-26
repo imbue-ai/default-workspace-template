@@ -36,5 +36,5 @@ in -- and right after a restart a state-changing command may briefly return "sti
 starting up (restoring your saved browsers)", which the agent just waits out and
 retries (`ls`/`state` work during that window).
 
-The `scripts/layout.py` agent helper can now address a specific browser session
+The `system/scripts/layout.py` agent helper can now address a specific browser session
 as a pane ref (`service:browser?session=<id>`).

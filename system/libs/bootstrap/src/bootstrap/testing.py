@@ -1,7 +1,7 @@
 """Shared helpers for the bash installer-script unit tests.
 
-The scripts under test (scripts/install_secret_scanners.sh and
-scripts/deferred_install.sh) are bash, so each test sources one in a fresh
+The scripts under test (system/scripts/install_secret_scanners.sh and
+system/scripts/deferred_install.sh) are bash, so each test sources one in a fresh
 bash process (the scripts only run `main` when executed directly) and
 exercises individual functions with test-controlled overrides:
 

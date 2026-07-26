@@ -134,7 +134,7 @@ fi
 # and serve it via `ttyd -I`, falling back to the stock client if the asset is
 # missing (so ttyd still starts).
 TTYD_INDEX_FLAGS=()
-TTYD_CLIENT_GZ="$REPO_ROOT/vendor/mngr/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
+TTYD_CLIENT_GZ="$REPO_ROOT/system/vendor/mngr/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
 if [ -n "${MNGR_AGENT_STATE_DIR:-}" ] && [ -f "$TTYD_CLIENT_GZ" ]; then
     TTYD_INDEX_PATH="$MNGR_AGENT_STATE_DIR/commands/ttyd/index.html"
     if gzip -dc "$TTYD_CLIENT_GZ" > "$TTYD_INDEX_PATH"; then

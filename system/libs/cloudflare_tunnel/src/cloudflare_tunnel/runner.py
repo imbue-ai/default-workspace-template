@@ -1,13 +1,13 @@
 """Cloudflare tunnel runner service.
 
-Watches ``runtime/secrets/cloudflare_tunnel.env`` for CLOUDFLARE_TUNNEL_TOKEN.
+Watches ``data/.secrets/cloudflare_tunnel.env`` for CLOUDFLARE_TUNNEL_TOKEN.
 When a token appears or changes, starts (or restarts) ``cloudflared tunnel run
 --token <token>``; when the file is removed, stops cloudflared.
 
-``runtime/secrets/`` is a directory of per-secret ``*.env`` files (this token,
+``data/.secrets/`` is a directory of per-secret ``*.env`` files (this token,
 ``restic.env`` for backups, ...). Each writer
 owns its own file so they never clobber one another -- the historical
-single-file ``runtime/secrets`` is gone.
+single-file ``data/.secrets`` is gone.
 
 Uses both inotify (when available) and mtime polling (10-second fallback)
 to detect changes robustly. All cloudflared output is forwarded immediately
@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 # Directory of per-secret env files; we own only cloudflare_tunnel.env in it.
-SECRETS_DIR = Path("runtime/secrets")
+SECRETS_DIR = Path("data/.secrets")
 TOKEN_FILE = SECRETS_DIR / "cloudflare_tunnel.env"
 POLL_INTERVAL_SECONDS = 10
 TOKEN_PATTERN = re.compile(

@@ -14,7 +14,7 @@ rootfs back to that record at the pinned apt snapshot timestamp.
   record reproduces the environment.
 - **Captured state IS the manifest.** For anything with a real package
   database there is no intent file: an apt `DPkg::Post-Invoke` hook (installed
-  by `scripts/setup_system.sh`) re-captures from dpkg after every apt
+  by `system/scripts/setup_system.sh`) re-captures from dpkg after every apt
   operation, and boot-time probes capture `npm ls -g`, `uv tool list`, and
   `cargo install --list` + `rustup toolchain list` (rust is agent-installed,
   not in the base image, so an absent cargo captures as an empty state).
@@ -29,11 +29,11 @@ rootfs back to that record at the pinned apt snapshot timestamp.
   `package_unavailable` rather than bootstrapping rustup.
 - **Versions are a function of the snapshot timestamp.** All apt sources are
   pinned to the committed `.mngr/apt-snapshot-timestamp` (see
-  `scripts/write_apt_sources.sh`), so replaying the recorded *names* yields
+  `system/scripts/write_apt_sources.sh`), so replaying the recorded *names* yields
   the recorded *versions*. Versions change only at the explicit
   `env-converge upgrade` (run by the update-self flow), never on restore,
   restart, or re-converge.
-- **Declared units are code.** `scripts/env.d/<NNNN>-<name>.sh` are plain,
+- **Declared units are code.** `system/scripts/env.d/<NNNN>-<name>.sh` are plain,
   dumb bash scripts run in lexical order by the slow phase: each must be
   idempotent with a fast satisfied-check (exit 0 in milliseconds when nothing
   to do). There are NO marker files -- skip-speed comes from the check, and
@@ -42,7 +42,7 @@ rootfs back to that record at the pinned apt snapshot timestamp.
   pinned apt sources already in place. A failing unit is isolated (logged +
   evented, never blocks the others or boot).
 - **The overlay convention** persists rootfs paths that services need durable:
-  each absolute path listed in `scripts/env.d/overlay-paths.json` is symlinked
+  each absolute path listed in `system/scripts/env.d/overlay-paths.json` is symlinked
   to `/home/user/overlay/<abs_path>` by the fast phase (run synchronously by
   bootstrap BEFORE supervisord, so services never write to a doomed rootfs
   path). First application adopts pre-existing rootfs content into the

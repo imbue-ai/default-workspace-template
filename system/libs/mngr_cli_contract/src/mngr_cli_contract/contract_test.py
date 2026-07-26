@@ -2,7 +2,7 @@
 
 These pin the validator's own behaviour against the live mngr CLI: it must
 accept the real invocations the repo emits and reject the kinds of drift a
-vendor/mngr CLI change introduces -- a removed subcommand, a removed or renamed
+system/vendor/mngr CLI change introduces -- a removed subcommand, a removed or renamed
 flag, or a bogus flag.
 """
 

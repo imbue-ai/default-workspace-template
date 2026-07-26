@@ -4,7 +4,7 @@ earlyoom's after-kill hook is handed only the killed pid, uid, and process name
 (comm) -- and by then the process is gone, so it can't inspect ``/proc`` to learn
 which agent it was. An agent's main process is a ``claude`` process whose comm
 ("claude"/"node") does not reveal the agent name. So each agent records its own
-main-process pid here at launch (the launch wrapper, ``scripts/claude_oom_launch.py``,
+main-process pid here at launch (the launch wrapper, ``system/scripts/claude_oom_launch.py``,
 calls ``record_agent_pid`` for its own pid just before it execs claude); the kill
 hook looks the killed pid up to decide whether an *agent* was shed (which drives
 revival) versus a mere subprocess.

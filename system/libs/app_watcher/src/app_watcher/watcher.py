@@ -1,6 +1,6 @@
 """Application watcher service.
 
-Watches runtime/applications.toml for changes. On startup and on every change,
+Watches data/.state/applications.toml for changes. On startup and on every change,
 writes service_registered / service_deregistered events to
 events/services/events.jsonl so the desktop client can discover available services.
 
@@ -28,7 +28,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
 
-APPLICATIONS_FILE = Path("runtime/applications.toml")
+APPLICATIONS_FILE = Path("data/.state/applications.toml")
 # mtime-polling fallback interval. Kept low (5s) because under the gVisor (runsc)
 # runtime, and on the lima/vps providers, file changes made outside the sandbox
 # do not raise in-sandbox inotify events -- polling is then the only signal, so a

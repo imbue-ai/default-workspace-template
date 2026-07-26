@@ -11,7 +11,7 @@ an encrypted restic repo on cheaper object storage.
 ## Behavior
 
 - Single long-running tick loop run as the `host-backup` supervisord program
-  (defined in `supervisord.conf`, started by supervisord after `bootstrap`).
+  (defined in `system/supervisord.conf`, started by supervisord after `bootstrap`).
   Restart policy: `autorestart=true`.
 - The repository is created (and keyed) by the minds app, not by
   host_backup: minds runs `restic init` from outside the workspace -- the
@@ -19,13 +19,13 @@ an encrypted restic repo on cheaper object storage.
   injects the resulting `restic.env`. host_backup just backs up to the
   existing repository -- it does not probe-then-init.
 - Each tick reads two optional on-disk inputs:
-  - `runtime/backup.toml`: purely *user* settings -- backup interval,
+  - `data/system/backup.toml`: purely *user* settings -- backup interval,
     retention, exclude patterns. Optional: when absent the service runs on
     built-in defaults. Loading is tolerant: unknown keys (including the
     stale `[snapshot]` section pre-refactor bootstraps keep writing) and
     malformed values are logged and skipped -- they never crash the service
     or block the remaining valid settings.
-  - `runtime/secrets/restic.env`: the repository address + all secrets --
+  - `data/.secrets/restic.env`: the repository address + all secrets --
     `RESTIC_REPOSITORY` (the only source of the repo URL), `RESTIC_PASSWORD`
     (this workspace's repository password), and any backend credentials
     restic reads from the environment (e.g. `AWS_ACCESS_KEY_ID` /
@@ -73,7 +73,7 @@ an encrypted restic repo on cheaper object storage.
   M --keep-weekly W --keep-monthly O` runs (cheap, index-only). At most
   once per `prune_interval_hours` (default 24) we additionally run
   `restic prune` (the slow data deletion step); gated by
-  `runtime/last-restic-prune` (a timestamp file under runtime/, covered by
+  `data/.state/last-restic-prune` (a timestamp file under runtime/, covered by
   the opt-in GitHub sync when enabled).
 - The outer loop never exits. Every exception is logged with full traceback
   to loguru and as a `tick_error` event in the jsonl stream; the loop
@@ -134,12 +134,12 @@ Each restic command's full stdout / stderr is captured into the matching
 
 ## First-run setup
 
-In the minds app the whole `runtime/secrets/restic.env` is written for you
+In the minds app the whole `data/.secrets/restic.env` is written for you
 when you pick a backup provider on the create form -- minds initializes the
 repository (`restic init`, keyed solely by the workspace's own random
 password) from outside the workspace and injects the file. To configure
 backups by hand instead, populate
-`runtime/secrets/restic.env` with `RESTIC_REPOSITORY` (e.g.
+`data/.secrets/restic.env` with `RESTIC_REPOSITORY` (e.g.
 `s3:https://<account>.r2.cloudflarestorage.com/<bucket>`), the backend
 credentials (e.g. R2 access keys), and a `RESTIC_PASSWORD`, and initialize
 the repository yourself (`restic init`) before the first tick -- host_backup
@@ -148,7 +148,7 @@ does not create the repository.
 ## Stable contract (minds backup-service updates)
 
 The minds desktop app can inject a newer version of this service into a
-running workspace by checking out `libs/host_backup/**` at the `minds-v<X>`
+running workspace by checking out `system/libs/host_backup/**` at the `minds-v<X>`
 tag matching the app version, committing it with the subject
 `backup-update: minds-v<X>` (a convention like `update-self:` -- tools that
 classify built-in vs. user code match on it), running `uv sync`, and
@@ -163,7 +163,7 @@ never flagged even when the app is newer. For that mechanism to stay sound,
 the following are stable contracts that must NOT be changed by edits to this
 library alone:
 
-- the `[program:host-backup]` block in `supervisord.conf`,
+- the `[program:host-backup]` block in `system/supervisord.conf`,
 - this package's registration in the root `pyproject.toml` uv workspace,
 - the `uv run host-backup` / `uv run host-backup-now` entry points.
 
@@ -178,7 +178,7 @@ out.
 Out of scope for v1. To restore manually:
 
 ```
-set -a; source /home/user/workspace/runtime/secrets/restic.env; set +a
+set -a; source /home/user/workspace/data/.secrets/restic.env; set +a
 restic snapshots
 restic restore <snapshot_id> --target /tmp/restored
 ```

@@ -23,8 +23,8 @@
 
 - Simplified the secret-scanner delivery to just two things: the scanners are
   baked into every workspace at build/provision time by the common
-  scripts/setup_system.sh (which invokes the pinned
-  scripts/install_secret_scanners.sh), and if one is ever missing the scan
+  system/scripts/setup_system.sh (which invokes the pinned
+  system/scripts/install_secret_scanners.sh), and if one is ever missing the scan
   gate's error names the one command to reinstall both. Because setup_system.sh
   is the shared script the Dockerfile RUNs AND the Lima provider runs directly
   in the VM, both docker-built images and Lima VMs get the scanners (previously
@@ -62,7 +62,7 @@
   On its isolated worktree the worker runs `build_inspiration.sh` -- reset to
   the clean FCT base the mind was created from (first-parent-root fallback
   plus a bootable-base pre-check covering `pyproject.toml` and
-  `supervisord.conf`; no upstream fetch, provenance link only), overlay only
+  `system/supervisord.conf`; no upstream fetch, provenance link only), overlay only
   the selected paths, hard-failing secret scan scoped to the overlaid
   content, manifest + thumbnail generation, an inspiration-specific
   `/welcome` skill written into the snapshot, side-effect-free boot
@@ -70,7 +70,7 @@
   and replaces the placeholder thumbnail with a **bespoke, app-relevant SVG**
   (mock data only) before reporting done. Deterministic grep gates block
   publishing while any FILL-IN block or the placeholder-thumbnail marker
-  remains, and an SVG-safety check rejects scripts/event handlers/foreignObject.
+  remains, and an SVG-safety check rejects system/scripts/event handlers/foreignObject.
 
 - **No merge-back, ever**: the lead confirms in chat, then pushes directly
   from the worker's worktree. Nothing merges into or writes to the live
@@ -290,9 +290,9 @@
   scanner that errors at runtime fails the scan (exit 1 naming the tool) --
   a broken scanner must never silently pass. Both binaries are baked into
   every workspace at build/provision time by the common
-  `scripts/setup_system.sh` (the Dockerfile RUNs it, and the Lima provider
+  `system/scripts/setup_system.sh` (the Dockerfile RUNs it, and the Lima provider
   runs it directly in the VM), which invokes
-  `scripts/install_secret_scanners.sh` -- the single source of truth for the
+  `system/scripts/install_secret_scanners.sh` -- the single source of truth for the
   version pins and hard-coded per-arch sha256 checksums -- so docker-built
   images and Lima VMs both get the scanners.
 

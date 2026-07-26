@@ -31,7 +31,7 @@
 - Wrap-existing escape hatch: when an agent is wrapping a third-party tool (Jupyter, Grafana, Express dev server), they read the SKILL.md escape-hatch section and write a services.toml entry that runs `forward_port.py` + the third-party command directly — no `libs/<pkg>/` scaffold. The same gotchas and verification references apply.
 - Verification step (curl + Playwright two-tier) is identical for both paths and runs against `http://127.0.0.1:8000/service/<name>/`.
 - Diagnostic flow when something misbehaves (e.g. duplicated dockview tab bar, redirect loop, WebSocket failure): the agent loads `references/cross-flow-gotchas.md`, which is symptom-indexed and applies regardless of which path produced the service.
-- Modifying or removing an existing service is unchanged: the agent uses `edit-services` for the toml mechanics; the SKILL.md mentions `forward_port.py --remove` for cleanup of `runtime/applications.toml` when removing a service.
+- Modifying or removing an existing service is unchanged: the agent uses `edit-services` for the toml mechanics; the SKILL.md mentions `forward_port.py --remove` for cleanup of `data/.state/applications.toml` when removing a service.
 - PR #19 bug fixes are observable: a `--name system_interface` invocation is now rejected (was previously accepted while the actual reserved entry uses snake_case); two scaffolded libs run side-by-side without env-var collision; FastAPI's `/openapi.json` and any absolute redirects emit prefix-correct URLs by default.
 
 ## Changes
@@ -46,7 +46,7 @@
 
 - Create `.agents/skills/build-web-service/` (taking PR #19's name).
 - `SKILL.md` is substantive (not a thin router): contains the upfront branch (scaffold vs. wrap-existing), the pre-flight (port/name selection), the generator invocation, and links to `references/*` for verification and gotchas. Description is generic ("use when you want to create a new web view for the user") so it triggers on user-intent phrasing, not framework-specific keywords.
-- `scripts/scaffold_fastapi_lib.py` — PR #19's `run.py` with the bug fixes applied (reserved-names list aligned to the actual `services.toml` entries, per-service env-var naming, default `ROOT_PATH` env-var wiring in the generated runner).
+- `system/scripts/scaffold_fastapi_lib.py` — PR #19's `run.py` with the bug fixes applied (reserved-names list aligned to the actual `services.toml` entries, per-service env-var naming, default `ROOT_PATH` env-var wiring in the generated runner).
 - `references/cross-flow-gotchas.md` — symptom-indexed reference covering the dockview-bar fall-through, redirect/Location rewriting behavior, FastAPI `root_path` (now mostly redundant after the default change but documented for awareness), static-server trailing-slash handling, WebSocket scheme derivation, multi-port apps, port-already-in-use diagnostics. Loaded on demand when verification surfaces something unexpected.
 - `references/verify.md` — the shared two-tier verification recipe (curl against `/service/<name>/`, then Playwright assertion on a unique-to-the-app marker). Loaded by both the scaffold-new and wrap-existing flows.
 

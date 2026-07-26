@@ -47,7 +47,7 @@ export interface ProtoAgent {
   parent_agent_id: string | null;
 }
 
-// Names of the layout-mutation ops the agent-facing ``scripts/layout.py``
+// Names of the layout-mutation ops the agent-facing ``system/scripts/layout.py``
 // helper can emit. The frontend dispatches on this in DockviewWorkspace.
 export type LayoutOpName =
   | "open"
@@ -66,9 +66,9 @@ export interface LayoutOpEvent {
   op: LayoutOpName;
   // Op-specific arguments. Shape is verified at the call site (DockviewWorkspace)
   // rather than at the listener boundary -- the WS broadcast is the source of
-  // truth and ``scripts/layout.py`` enforces shape before broadcasting.
+  // truth and ``system/scripts/layout.py`` enforces shape before broadcasting.
   args: Record<string, unknown>;
-  // ``MNGR_AGENT_ID`` of the agent that invoked ``scripts/layout.py``. Empty
+  // ``MNGR_AGENT_ID`` of the agent that invoked ``system/scripts/layout.py``. Empty
   // string when the caller did not set ``MNGR_AGENT_ID``. Used to anchor
   // splits against the requester's own chat panel and to resolve the ``self``
   // ref.

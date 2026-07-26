@@ -9,7 +9,7 @@ re-check that fails outright keeps the last confirmed answer and is retried
 every tick (see _refresh_visibility).
 
 The service only exists when the github-sync skill has enabled sync (it adds
-the [program:github-sync] block to supervisord.conf). The skill normally also
+the [program:github-sync] block to system/supervisord.conf). The skill normally also
 creates the runtime/ worktree; if it is missing (e.g. a workspace recreated
 from a previously-synced repo), each tick retries the worktree init, which
 restores runtime/ from origin once the latchkey GitHub permissions have been
@@ -53,7 +53,7 @@ LOG_FILE = Path("/tmp/github-sync.log")
 # Machine-readable status mirror, read by the post-commit hook (to respect a
 # visibility halt) and by the github-sync skill's status report. Lives in /tmp
 # deliberately: it is per-boot state, not something to sync. The default path
-# is what scripts/git_hooks/post-commit reads.
+# is what system/scripts/git_hooks/post-commit reads.
 DEFAULT_STATUS_FILE = Path("/tmp/github-sync-status.json")
 
 # Minimum age before an index.lock is treated as stale and removed. A real git

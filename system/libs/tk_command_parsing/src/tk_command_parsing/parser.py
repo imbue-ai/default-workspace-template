@@ -16,7 +16,7 @@ tokenizing -- that is the lexer's one blind spot here, and the only place the
 raw string is scanned char by char.
 
 This module is intentionally **stdlib-only**: the PreToolUse gate hook
-(``scripts/claude_tk_standalone_check.py``) imports it under a bare ``python3``
+(``system/scripts/claude_tk_standalone_check.py``) imports it under a bare ``python3``
 with no virtualenv, so it must not pull in any third-party dependency. That is
 also why the records below are ``typing.NamedTuple`` rather than a pydantic
 model.
@@ -38,7 +38,7 @@ _PUNCT = "();<>|&"
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_]\w*=")
 
 # The command names that identify a tk invocation, after stripping any path
-# prefix (``vendor/tk/ticket`` -> ``ticket``).
+# prefix (``system/vendor/tk/ticket`` -> ``ticket``).
 _TK_BASENAMES = ("tk", "ticket")
 
 
@@ -229,7 +229,7 @@ def _classify_segment(words: tuple[str, ...], has_redirect: bool) -> CommandSegm
     """Build a :class:`CommandSegment`, recognizing a tk/ticket invocation.
 
     Skips a leading run of ``VAR=value`` env assignments, accepts an explicit
-    path prefix (``vendor/tk/ticket``) and the ``super`` plugin-bypass form, and
+    path prefix (``system/vendor/tk/ticket``) and the ``super`` plugin-bypass form, and
     records the subcommand verb plus the tokens that follow it.
     """
     i = 0

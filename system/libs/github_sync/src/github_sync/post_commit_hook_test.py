@@ -1,4 +1,4 @@
-"""Tests for the scripts/git_hooks/post-commit auto-push hook.
+"""Tests for the system/scripts/git_hooks/post-commit auto-push hook.
 
 The hook is the third piece of the opt-in GitHub sync (see the README): it
 auto-pushes the committed branch of any checkout, but only when sync is

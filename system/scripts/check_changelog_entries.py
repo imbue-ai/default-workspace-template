@@ -10,7 +10,7 @@ distinct from HEAD.
 A "project" is a directory under ``libs/`` or ``apps/`` containing a
 ``pyproject.toml``, the synthetic ``agents`` bucket that owns the ``.agents``
 tree (skills and shared agent config), or the synthetic top-level ``dev`` bucket
-that owns root-level files (scripts/, .github/, top-level docs, build tooling).
+that owns root-level files (system/scripts/, .github/, top-level docs, build tooling).
 Each project holds its per-PR entries in ``<project_dir>/changelog/`` (the
 ``agents`` bucket's entries live in ``.agents/changelog/``); a PR that touches a
 project must add ``<project_dir>/changelog/<branch>.md`` (slashes in the branch
@@ -19,7 +19,7 @@ name replaced with dashes).
 The gate is pure stdlib so it can run without ``uv sync``. Run it from the repo
 root::
 
-    python scripts/check_changelog_entries.py
+    python system/scripts/check_changelog_entries.py
 
 Exit codes:
     0  -- ok (entries present, or nothing to check: not a PR branch / no
@@ -249,7 +249,7 @@ def main(repo_root: Path = _REPO_ROOT) -> int:
         f"Create:\n" + "\n".join(f"  - {p}" for p in missing) + "\n"
         f"Each file should briefly describe the user-visible changes in this PR that "
         f"pertain to that project. The synthetic '{DEV_PROJECT}' project covers "
-        f"root-level files (scripts/, .github/, top-level docs, build tooling); the "
+        f"root-level files (system/scripts/, .github/, top-level docs, build tooling); the "
         f"synthetic '{AGENTS_PROJECT}' project covers the '{AGENTS_DIR}' tree (skills "
         f"and shared agent config).\n"
         f"\n"

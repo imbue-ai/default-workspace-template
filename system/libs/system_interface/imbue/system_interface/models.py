@@ -135,7 +135,7 @@ class AgentStateItem(FrozenModel):
 
 
 class ApplicationEntry(FrozenModel):
-    """An application registered in runtime/applications.toml."""
+    """An application registered in data/.state/applications.toml."""
 
     name: str = Field(description="Application name (e.g., 'web', 'terminal')")
     url: str = Field(description="Local URL where the application is accessible")

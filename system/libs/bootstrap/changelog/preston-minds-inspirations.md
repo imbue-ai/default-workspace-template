@@ -1,9 +1,9 @@
 - The two secret-scanner binaries the publish-inspiration skill hard-requires
   -- `betterleaks` v1.6.1 (MIT, replacing gitleaks) and `kingfisher` v1.106.0
   (Apache-2.0) -- are installed by a new shared
-  `scripts/install_secret_scanners.sh`, the single source of truth for the
+  `system/scripts/install_secret_scanners.sh`, the single source of truth for the
   version pins and hard-coded per-arch (x86_64 / aarch64) sha256 checksums.
-  The common `scripts/setup_system.sh` invokes it at build/provision time, so
+  The common `system/scripts/setup_system.sh` invokes it at build/provision time, so
   the scanners exist from the first second of every workspace -- both
   docker-built images (Dockerfile RUN of `setup_system.sh`) and
   Lima-provisioned VMs (which run `setup_system.sh` directly in the VM). If a

@@ -2,14 +2,14 @@
 
 Two on-disk inputs, both optional from the service's point of view:
 
-- `runtime/backup.toml` -- purely *user* settings (interval, retention,
+- `data/system/backup.toml` -- purely *user* settings (interval, retention,
   excludes). Entirely optional: when absent the service runs on built-in
   defaults. Loading is deliberately tolerant: unknown keys (including the
   `[snapshot]` section old bootstraps keep writing forever) and malformed
   values produce log warnings and fall back to defaults -- they never crash
   the service and never block the remaining valid settings from applying.
   Rides the opt-in GitHub sync of runtime/ when that is enabled.
-- `runtime/secrets/restic.env` -- restic's repository address + all secrets
+- `data/.secrets/restic.env` -- restic's repository address + all secrets
   (`RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, and any backend credentials restic
   reads from the environment, e.g. `AWS_ACCESS_KEY_ID` /
   `AWS_SECRET_ACCESS_KEY` for an S3/R2 backend). Written only by minds
@@ -34,9 +34,9 @@ from host_backup.capabilities import (
     SnapshotMethod as SnapshotMethod,  # compat re-export
 )
 
-BACKUP_TOML_PATH: Final[Path] = Path("runtime/backup.toml")
-RESTIC_ENV_PATH: Final[Path] = Path("runtime/secrets/restic.env")
-PRUNE_TIMESTAMP_PATH: Final[Path] = Path("runtime/last-restic-prune")
+BACKUP_TOML_PATH: Final[Path] = Path("data/system/backup.toml")
+RESTIC_ENV_PATH: Final[Path] = Path("data/.secrets/restic.env")
+PRUNE_TIMESTAMP_PATH: Final[Path] = Path("data/.state/last-restic-prune")
 
 # Top-level backup.toml keys that are known-stale rather than unknown: old
 # bootstraps rewrite a `[snapshot]` section into backup.toml on every boot
@@ -80,7 +80,7 @@ class RetentionSettings(FrozenModel):
 
 
 class BackupConfig(FrozenModel):
-    """User-tunable backup settings loaded (tolerantly) from runtime/backup.toml."""
+    """User-tunable backup settings loaded (tolerantly) from data/system/backup.toml."""
 
     backup_interval_seconds: float = Field(
         default=3600.0,
@@ -298,8 +298,8 @@ def resolve_service_events_dir() -> Path | None:
 # ---------------------------------------------------------------------------
 # Backwards-compatibility shims for pre-refactor bootstraps.
 #
-# Old workspaces keep their old `libs/bootstrap` forever (the minds backup
-# update mechanism replaces only `libs/host_backup/**`), and that old
+# Old workspaces keep their old `system/libs/bootstrap` forever (the minds backup
+# update mechanism replaces only `system/libs/host_backup/**`), and that old
 # bootstrap imports the names below from this module at container boot --
 # a missing name would crash boot before supervisord starts. Each shim is a
 # harmless no-op: templates are no longer written and `[snapshot]` is no
@@ -325,7 +325,7 @@ def render_default_backup_toml(snapshot: BackupCapabilities) -> str:
         "# Optional user settings for the host_backup service (interval, retention,\n"
         "# excludes). All settings have built-in defaults; this file may be deleted.\n"
         "# Snapshot mechanics are detected by the service at runtime and are not\n"
-        "# configured here. See libs/host_backup/README.md.\n"
+        "# configured here. See system/libs/host_backup/README.md.\n"
     )
 
 

@@ -9,7 +9,7 @@
 
 - The publish skill now handles a **GitHub push-protection rejection that names
   the Minds Google OAuth client** (`GOCSPX-...` / `...apps.googleusercontent.com`
-  under `vendor/mngr`) as an expected, safe case: it is the shared
+  under `system/vendor/mngr`) as an expected, safe case: it is the shared
   Minds-provided sign-in client baked into the template, not the user's own
   secret or data. The agent explains this plainly and tells the user it is okay
   to approve the secret via GitHub's bypass link and retry the push -- never

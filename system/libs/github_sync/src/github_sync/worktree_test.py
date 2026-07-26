@@ -121,7 +121,7 @@ def test_init_reattach_writes_missing_secrets_gitignore(
     branch is created just before the `worktree add` that failed) has no
     .gitignore in its history. Reattaching to it must still put the secrets
     exclusion in place, or the next sync tick's `git add -A` would push
-    runtime/secrets to the remote."""
+    data/.secrets to the remote."""
     main, origin = init_repo_with_origin(tmp_path)
     monkeypatch.chdir(main)
     # Mirror what the interrupted init leaves: a parentless empty-tree commit

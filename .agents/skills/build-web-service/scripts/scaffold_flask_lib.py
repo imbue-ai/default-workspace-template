@@ -8,7 +8,7 @@
 Creates `libs/<package>/` with a Flask starter (synchronous; flask-sock is
 available for WebSockets), updates the root pyproject.toml
 workspace/sources/dependencies, appends a `[program:<name>]` block to
-supervisord.conf, and runs `uv sync --all-packages` to materialize the
+system/supervisord.conf, and runs `uv sync --all-packages` to materialize the
 workspace.
 
 Usage:
@@ -94,7 +94,7 @@ def _applications_toml_ports(applications_toml: Path) -> set[int]:
 
 def _pick_port(repo_root: Path, requested: int | None) -> int:
     in_use = _supervisord_conf_ports(
-        repo_root / "supervisord.conf"
+        repo_root / "system/supervisord.conf"
     ) | _applications_toml_ports(repo_root / "runtime" / "applications.toml")
     if requested is not None:
         if requested in in_use:
@@ -373,7 +373,7 @@ def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
 
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
+command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -390,19 +390,19 @@ stderr_logfile_backups=3
 
 
 def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
-    # supervisord.conf is INI (not TOML) and has hand-written comments worth
+    # system/supervisord.conf is INI (not TOML) and has hand-written comments worth
     # preserving, so append a [program:<name>] block as text rather than
     # round-tripping through a parser. The command is wrapped in `bash -c "..."`
     # because supervisord exec's commands directly (no shell) and this one chains
     # forward_port.py with `&&`; the `oom_tag_service.py user` prefix tags the
     # new (user-created) service so it is shed before any built-in service under
-    # memory pressure (see libs/oom_priority/README.md).
-    path = repo_root / "supervisord.conf"
+    # memory pressure (see system/libs/oom_priority/README.md).
+    path = repo_root / "system/supervisord.conf"
     if not path.exists():
         sys.exit(f"error: {path} not found (cannot register the new service)")
     existing = path.read_text()
     if f"[program:{name}]" in existing:
-        sys.exit(f"error: supervisord.conf already has a [program:{name}] section")
+        sys.exit(f"error: system/supervisord.conf already has a [program:{name}] section")
     block = _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port)
     path.write_text(existing.rstrip("\n") + "\n\n" + block)
 
@@ -424,10 +424,10 @@ def _find_repo_root(start: Path) -> Path:
     current = start.resolve()
     for parent in [current, *current.parents]:
         if (parent / "pyproject.toml").exists() and (
-            parent / "supervisord.conf"
+            parent / "system/supervisord.conf"
         ).exists():
             return parent
-    sys.exit("error: could not locate repo root (pyproject.toml + supervisord.conf)")
+    sys.exit("error: could not locate repo root (pyproject.toml + system/supervisord.conf)")
 
 
 def main() -> None:
@@ -446,7 +446,7 @@ def main() -> None:
     parser.add_argument(
         "--repo-root",
         default=None,
-        help="repo root (defaults to nearest ancestor containing pyproject.toml + supervisord.conf)",
+        help="repo root (defaults to nearest ancestor containing pyproject.toml + system/supervisord.conf)",
     )
     parser.add_argument(
         "--skip-uv-sync",

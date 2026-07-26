@@ -5,7 +5,7 @@ pins such an argv against a *hand-written expected argv* (via a stubbed
 subprocess runner) only confirms "the code emits the bytes we told it to
 emit" -- the expected argv is authored from the same assumption as the
 production code, so the two drift together and the test can never notice when
-vendor/mngr renames or removes the subcommand or one of its flags. That
+system/vendor/mngr renames or removes the subcommand or one of its flags. That
 divergence then surfaces only at runtime.
 
 ``assert_mngr_argv_valid`` closes that gap by resolving the argv against the
@@ -17,7 +17,7 @@ verifying the CLI surface the repo depends on, not the runtime values a
 particular invocation carries.
 
 This lives in its own workspace package so both repo-side pytest passes (the
-root pass and the isolated apps/system_interface pass, which share one
+root pass and the isolated system/libs/system_interface pass, which share one
 workspace venv) import a single copy rather than duplicating the validator.
 """
 
@@ -43,7 +43,7 @@ def assert_mngr_argv_valid(argv: Sequence[str]) -> None:
     option parser.
 
     Raises ``MngrArgvContractError`` when the subcommand does not exist or any
-    option token is unrecognized -- i.e. exactly the drift that a vendor/mngr
+    option token is unrecognized -- i.e. exactly the drift that a system/vendor/mngr
     CLI change would introduce. Does not raise on value-level problems
     (nonexistent paths, missing required options): those are not CLI-surface
     drift and would make the contract check brittle.

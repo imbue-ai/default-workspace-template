@@ -22,7 +22,7 @@ principled home for these declarations.
   record's shape: `apt` (name-level pins as the portable default; the
   publisher's snapshot timestamp recorded as provenance), `npm_global`,
   `uv_tools`, and `binaries`/`script` entries for exotic installs (which
-  become `scripts/env.d/` units carried by the inspiration's tree).
+  become `system/scripts/env.d/` units carried by the inspiration's tree).
 - Adoption converges the union: `use-inspiration` installs every adopted
   inspiration's declared set at the ADOPTER's pinned snapshot timestamp (union
   semantics across multiple adopted inspirations is the natural merge). A

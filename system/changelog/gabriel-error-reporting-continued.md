@@ -2,7 +2,7 @@
   help -> have an agent help" flow. It reproduces and diagnoses the problem,
   confirms the diagnosis and proposed change with the user before editing
   anything, then fixes what it can (user code, template built-in code, and
-  `vendor/mngr` changes that affect this container) and reports built-in-code
+  `system/vendor/mngr` changes that affect this container) and reports built-in-code
   issues to imbue -- by POSTing its diagnosis to the minds report route, which
   opens a pre-filled "report a bug" modal for the user to review and submit.
   Issues that need a new desktop-app build (`apps/minds`, `mngr_forward`,
@@ -17,7 +17,7 @@
   the primary id pops it in the right window.
 
 - The `assist` skill applies fixes via the matching lifecycle path rather than
-  hand-editing in place: a `apps/system_interface` (workspace UI) fix is routed
+  hand-editing in place: a `system/libs/system_interface` (workspace UI) fix is routed
   through the `update-system-interface` skill (preview + safe reveal) and is
   never edited directly, since the `/assist` chat shares the served checkout;
   skill/service fixes are made live to unblock the user and then hardened in the

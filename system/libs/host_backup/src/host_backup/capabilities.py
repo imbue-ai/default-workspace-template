@@ -2,7 +2,7 @@
 
 Capabilities are environment-derived facts, not configuration: the service
 detects them in memory at startup by probing the container's filesystem, and
-they are deliberately excluded from `runtime/backup.toml` (which holds only
+they are deliberately excluded from `data/system/backup.toml` (which holds only
 user settings) and from the minds "backup service up to date" comparison
 surface. They are logged and included in the backup events stream for
 observability; there is no persisted capabilities file and no override

@@ -3,11 +3,11 @@
 Two phases with different contracts:
 
 - **Fast phase** (run synchronously by bootstrap BEFORE supervisord starts):
-  applies the declarative overlay list (`scripts/env.d/overlay-paths.json`) so
+  applies the declarative overlay list (`system/scripts/env.d/overlay-paths.json`) so
   services never write to a rootfs path that should persist. Instant, no
   network.
 - **Slow phase** (the `env-converge` supervisord one-shot; never blocks boot):
-  re-runs every `scripts/env.d/<NNNN>-<name>.sh` unit in lexical order (units
+  re-runs every `system/scripts/env.d/<NNNN>-<name>.sh` unit in lexical order (units
   are idempotent with fast satisfied-checks -- there are NO marker files;
   version stability comes from the units' pins and the snapshot-pinned apt
   sources, so re-running is deterministic), then installs anything present in

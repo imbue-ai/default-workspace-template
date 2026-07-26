@@ -1,6 +1,6 @@
-"""Tiny threaded HTTP/1.1 Werkzeug server, copied from apps/system_interface.
+"""Tiny threaded HTTP/1.1 Werkzeug server, copied from system/libs/system_interface.
 
-Copied verbatim (not imported) because ``libs/browser`` must not depend on an
+Copied verbatim (not imported) because ``system/libs/browser`` must not depend on an
 app. The browser daemon serves Flask + flask-sock over a thread-per-connection
 server: every long-lived NDJSON stream and every cast WebSocket owns its own OS
 thread, which is what flask-sock needs and what replaces uvicorn's single

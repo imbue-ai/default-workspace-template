@@ -1,7 +1,7 @@
 # Artifact: service
 
 A web service -- a scaffolded Flask lib under `libs/<package>/`, registered in
-`supervisord.conf`, reachable at `/service/<name>/` through the system_interface
+`system/supervisord.conf`, reachable at `/service/<name>/` through the system_interface
 proxy. This reference describes what a service *is*; for how to run and test a web
 frontend in isolation, see
 `.agents/shared/worker/references/web-frontend-testing.md`.
@@ -11,7 +11,7 @@ frontend in isolation, see
 - The scaffolded lib: `libs/<package>/src/<package>/runner.py` (the Flask app
   and routes), plus its `pyproject.toml`, `README.md`, and
   `test_<package>_ratchets.py`.
-- The service entry in `supervisord.conf` and the matching root `pyproject.toml`
+- The service entry in `system/supervisord.conf` and the matching root `pyproject.toml`
   workspace wiring -- you normally do not touch these; the scaffold created them.
 
 ## Running and testing
@@ -30,4 +30,4 @@ Service specifics:
 
 Beyond the live-service rules in `web-frontend-testing.md`: do not run `layout.py
 open` / `refresh` / `list` against the served tree, and do not touch
-`apps/system_interface`.
+`system/libs/system_interface`.

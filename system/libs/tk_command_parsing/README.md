@@ -28,7 +28,7 @@ interpreted the way a shell would.
 
 ## Consumers
 
-- `scripts/claude_tk_standalone_check.py` -- the PreToolUse gate that blocks a
+- `system/scripts/claude_tk_standalone_check.py` -- the PreToolUse gate that blocks a
   non-standalone `tk start`/`tk close`. It uses `parse_command` to split the
   Bash command into segments and inspect the verbs. It imports this package
   under a bare `python3` (no virtualenv) via an explicit `sys.path` entry, which

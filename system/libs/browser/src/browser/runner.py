@@ -28,7 +28,7 @@ are all async and run on ONE background asyncio event loop, quarantined behind a
 single :class:`~browser.loop_bridge.AsyncLoopBridge`. Every route handler reaches
 the async world only through ``bridge.run(coro)`` (blocking) or ``bridge.submit``
 (fire-and-forget, returns the in-loop asyncio.Task). This mirrors the proven
-Flask+WS pattern in apps/system_interface. ``ROOT_PATH`` is read for informational
+Flask+WS pattern in system/libs/system_interface. ``ROOT_PATH`` is read for informational
 parity but is no longer wired into URL generation: the viewer uses relative URLs,
 so the ``/service/browser/`` proxy prefix needs no server-side awareness (the
 FastAPI ``root_path`` it replaced only emitted prefix-aware URLs the page never

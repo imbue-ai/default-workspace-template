@@ -46,7 +46,7 @@
 
 ### Backend (system_interface)
 
-- New `claude_auth` module under `apps/system_interface/imbue/minds_workspace_server/` handling:
+- New `claude_auth` module under `system/libs/system_interface/imbue/minds_workspace_server/` handling:
   - Auth status check (`claude auth status --json` parsing).
   - PTY-driven `claude auth login --claudeai` / `--console` subprocess: parse the printed OAuth URL, accept the user's pasted code, complete the flow.
   - API-key write: append `ANTHROPIC_API_KEY=<key>` to the mind's host env file (same one bootstrap extends at boot for `CLAUDE_CONFIG_DIR`) and restart the chat agent's `claude` session via the existing mngr-internal restart path.
@@ -56,7 +56,7 @@
   - `POST /submit-code` → submits the user's pasted `CODE#STATE` to the running PTY subprocess.
   - `POST /submit-api-key` → persists the API key into the host env file and restarts the chat agent.
   - `GET /poll` → returns the live auth state while the modal is open (the modal polls this every ~3s instead of hitting `/status` directly, so backend can also notice success via the underlying subprocess completing).
-- Extend `apps/system_interface/imbue/minds_workspace_server/session_parser.py` to pattern-match assistant message text against the agreed auth-error regex set. When matched, set a new `is_auth_error: bool` field on the emitted `TranscriptEvent`. Patterns live in a new dedicated constants module so the list is easy to update independently of parser logic.
+- Extend `system/libs/system_interface/imbue/minds_workspace_server/session_parser.py` to pattern-match assistant message text against the agreed auth-error regex set. When matched, set a new `is_auth_error: bool` field on the emitted `TranscriptEvent`. Patterns live in a new dedicated constants module so the list is easy to update independently of parser logic.
 - New helper module for the welcome-text detection plus welcome resend:
   - At call time, read `.agents/skills/welcome/SKILL.md`, parse out the first non-frontmatter line, and use it as the substring to grep for in the chat agent's pane content (so the detector stays automatically in sync with the skill).
   - Pane-content read uses the existing `GET /api/agents/{agentId}/screen` route.
@@ -81,11 +81,11 @@
 
 ### Existing files modified
 
-- `apps/system_interface/imbue/minds_workspace_server/session_parser.py` — emit `is_auth_error` on `TranscriptEvent`.
-- `apps/system_interface/imbue/minds_workspace_server/server.py` (or equivalent) — register the new `/api/claude-auth/...` routes.
-- `apps/system_interface/frontend/src/views/ChatPanel.ts` — mount modal/banner, wire load-time check + SSE auth-error subscription.
-- `apps/system_interface/frontend/src/models/Response.ts` (or wherever `TranscriptEvent` is mirrored client-side) — add `is_auth_error?: boolean`.
-- `libs/bootstrap/` — confirm and (if needed) expose the existing host-env-file path as a constant the new `claude_auth` module can reuse for `ANTHROPIC_API_KEY` writes.
+- `system/libs/system_interface/imbue/minds_workspace_server/session_parser.py` — emit `is_auth_error` on `TranscriptEvent`.
+- `system/libs/system_interface/imbue/minds_workspace_server/server.py` (or equivalent) — register the new `/api/claude-auth/...` routes.
+- `system/libs/system_interface/frontend/src/views/ChatPanel.ts` — mount modal/banner, wire load-time check + SSE auth-error subscription.
+- `system/libs/system_interface/frontend/src/models/Response.ts` (or wherever `TranscriptEvent` is mirrored client-side) — add `is_auth_error?: boolean`.
+- `system/libs/bootstrap/` — confirm and (if needed) expose the existing host-env-file path as a constant the new `claude_auth` module can reuse for `ANTHROPIC_API_KEY` writes.
 
 ### Testing
 

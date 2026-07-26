@@ -18,9 +18,9 @@ Once enabled, three pieces work together:
    for every checkout in the container (main repo, worker worktrees, the
    runtime worktree). The GitHub credential is injected server-side by the
    gateway; no token ever enters the container. The wiring also points
-   `core.hooksPath` at `scripts/git_hooks`, activating the post-commit
+   `core.hooksPath` at `system/scripts/git_hooks`, activating the post-commit
    auto-push hook for every checkout.
-3. **The post-commit hook** (`scripts/git_hooks/post-commit`, in the repo but
+3. **The post-commit hook** (`system/scripts/git_hooks/post-commit`, in the repo but
    inert until the hooks path is wired): auto-pushes the active branch of any
    checkout after each commit, so both main-agent and worker commits land on
    the GitHub remote without manual pushes.
@@ -43,7 +43,7 @@ Once enabled, three pieces work together:
   case pushes would fail too) keeps the last confirmed answer and is retried
   every tick. The post-commit hook consults the same status and skips pushes
   during a halt.
-- `runtime/secrets` is excluded via the worktree's own `.gitignore` (written
+- `data/.secrets` is excluded via the worktree's own `.gitignore` (written
   at init), so e.g. the Cloudflare tunnel token never reaches the remote.
 - Each tick first clears a stale `index.lock` from the runtime worktree if
   one is present and older than the tick interval (a killed git process never

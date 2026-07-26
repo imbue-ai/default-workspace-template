@@ -30,7 +30,7 @@ def test_prevent_time_sleep() -> None:
     # start the real threaded Werkzeug server on an ephemeral port and poll for server
     # readiness and for a state transition over a real socket -- the only way to verify
     # the disconnect-as-lease + cast-WS contract that the in-process Flask test client
-    # cannot exercise. This mirrors apps/system_interface, whose boot-server tests bump
+    # cannot exercise. This mirrors system/libs/system_interface, whose boot-server tests bump
     # the same ratchet. No production code uses time.sleep.
     rc.check_time_sleep(_DIR, snapshot(2))
 

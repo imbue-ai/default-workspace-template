@@ -4,7 +4,7 @@
 extra_window). It performs first-boot setup -- global git config, writing
 CLAUDE_CONFIG_DIR into the host env, and creating the initial chat agent --
 and then `exec`s the system supervisord in the foreground. supervisord
-(configured by supervisord.conf) owns every background service from then on.
+(configured by system/supervisord.conf) owns every background service from then on.
 
 Running supervisord via exec keeps the bootstrap tmux window alive as
 supervisord and lets the supervised services inherit this shell's already-
@@ -20,7 +20,7 @@ from loguru import logger
 
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
-SUPERVISORD_CONF = Path("supervisord.conf")
+SUPERVISORD_CONF = Path("system/supervisord.conf")
 # Container-local directory for supervisord's own log + the per-service logs. Not
 # under runtime/, so these are never backed up.
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
@@ -211,7 +211,7 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
     """Build the `mngr create` argv for the initial chat agent.
 
     Mirrors the New Agent button's create path (see
-    apps/system_interface/.../agent_manager.py:create_chat_agent): the
+    system/libs/system_interface/.../agent_manager.py:create_chat_agent): the
     `chat` template, no-connect, and the inherited `project` label when
     present on the services agent. Adds `--message /welcome`, which used to
     live on `create_templates.main`. The chat agent belongs to its workspace
@@ -222,7 +222,7 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
         "create",
         host_name,
         # `--transfer none` matches what `AgentManager.create_chat_agent`
-        # uses for the "New Chat" button (apps/system_interface/.../
+        # uses for the "New Chat" button (system/libs/system_interface/.../
         # agent_manager.py). Without it, mngr defaults to creating a
         # per-agent git worktree on branch `mngr/<agent_name>` -- which
         # collides with the services agent's own worktree branch (set up
@@ -239,7 +239,7 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
         "/welcome",
         # Tags the initial chat as a user-created agent so the OOM agent-tagging
         # hook puts it in the protected user-agent band (matching the New Chat /
-        # New Agent paths in apps/system_interface).
+        # New Agent paths in system/libs/system_interface).
         "--label",
         "user_created=true",
         "--no-connect",
@@ -316,7 +316,7 @@ def _create_initial_chat_agent(host_name: str, labels: dict[str, str]) -> bool:
 
 
 def _touch_signal() -> None:
-    """Write the runtime/initial_chat_created signal file."""
+    """Write the data/.state/initial_chat_created signal file."""
     INITIAL_CHAT_SIGNAL.parent.mkdir(parents=True, exist_ok=True)
     INITIAL_CHAT_SIGNAL.write_text("")
 
@@ -487,8 +487,8 @@ def _ensure_supervisor_log_dir() -> None:
 def _exec_supervisord() -> None:
     """Replace this process with supervisord running in the foreground.
 
-    Uses the system supervisord (installed via scripts/setup_system.sh) and the
-    repo-root supervisord.conf. `-n` keeps it in the foreground (so the
+    Uses the system supervisord (installed via system/scripts/setup_system.sh) and the
+    repo-root system/supervisord.conf. `-n` keeps it in the foreground (so the
     bootstrap tmux window stays alive as supervisord) while still creating the
     [unix_http_server] socket that `supervisorctl` talks to.
     """
@@ -533,7 +533,7 @@ def main() -> None:
 
     # Make sure supervisord's log directory exists, then hand off: replace this
     # process with supervisord in the foreground. supervisord owns every
-    # background service from here on (see supervisord.conf).
+    # background service from here on (see system/supervisord.conf).
     _ensure_supervisor_log_dir()
     _exec_supervisord()
 

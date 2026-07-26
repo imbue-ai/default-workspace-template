@@ -18,7 +18,7 @@ def test_wrap_system_message_adds_no_newlines() -> None:
 
 def test_system_message_tag_matches_frontend_contract() -> None:
     # Cross-layer contract: the transcript UI recognises this exact tag
-    # (BROWSER_FLEET_TAG in apps/system_interface/frontend/src/views/message-kinds.ts).
+    # (BROWSER_FLEET_TAG in system/libs/system_interface/frontend/src/views/message-kinds.ts).
     # If this literal changes, the frontend constant must change with it, or fleet
     # nudges silently revert to bare user bubbles.
     assert session._SYSTEM_MESSAGE_TAG == "agentic-browser-fleet"

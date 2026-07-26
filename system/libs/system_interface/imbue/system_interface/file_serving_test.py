@@ -9,7 +9,7 @@ from imbue.system_interface.file_serving import try_serve_file
 @pytest.mark.parametrize(
     ("url_path", "expected_mime_type"),
     [
-        ("mngr/code/runtime/chat-images/chart.png", "image/png"),
+        ("mngr/code/data/chat-images/chart.png", "image/png"),
         ("a/b/photo.jpg", "image/jpeg"),
         ("a/b/photo.jpeg", "image/jpeg"),
         ("a/b/anim.gif", "image/gif"),

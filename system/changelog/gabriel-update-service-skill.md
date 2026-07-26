@@ -17,7 +17,7 @@
   logs) live in the shared reference
   `.agents/shared/references/service-processes.md` -- substrate mechanics common
   to every service flow, not specific to updating one. `update-service`,
-  `build-web-service` (SKILL + `cleanup.md`), and `libs/bootstrap/README.md` all
+  `build-web-service` (SKILL + `cleanup.md`), and `system/libs/bootstrap/README.md` all
   cross-link to it.
 
 - Extracted the "spin up an isolated throwaway instance of a service on a spare

@@ -208,7 +208,7 @@ wheels = [
 [[package]]
 name = "app-watcher"
 version = "0.1.0"
-source = { editable = "libs/app_watcher" }
+source = { editable = "system/libs/app_watcher" }
 dependencies = [
     { name = "httpx" },
     { name = "imbue-common" },
@@ -218,7 +218,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "imbue-common", editable = "vendor/mngr/libs/imbue_common" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "inotify-simple", specifier = ">=2.0.0" },
 ]
 
@@ -383,7 +383,7 @@ wheels = [
 [[package]]
 name = "bootstrap"
 version = "0.1.0"
-source = { editable = "libs/bootstrap" }
+source = { editable = "system/libs/bootstrap" }
 dependencies = [
     { name = "loguru" },
 ]
@@ -425,7 +425,7 @@ wheels = [
 [[package]]
 name = "browser"
 version = "0.1.0"
-source = { editable = "libs/browser" }
+source = { editable = "system/libs/browser" }
 dependencies = [
     { name = "browser-use", extra = ["core"] },
     { name = "flask" },
@@ -440,7 +440,7 @@ requires-dist = [
     { name = "browser-use", extras = ["core"], specifier = "==0.13.1" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
-    { name = "oom-priority", editable = "libs/oom_priority" },
+    { name = "oom-priority", editable = "system/libs/oom_priority" },
     { name = "simple-websocket", specifier = ">=1.0" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]
@@ -747,7 +747,7 @@ wheels = [
 [[package]]
 name = "cloudflare-tunnel"
 version = "0.1.0"
-source = { editable = "libs/cloudflare_tunnel" }
+source = { editable = "system/libs/cloudflare_tunnel" }
 
 [[package]]
 name = "cloudpickle"
@@ -770,7 +770,7 @@ wheels = [
 [[package]]
 name = "concurrency-group"
 version = "0.1.20"
-source = { editable = "vendor/mngr/libs/concurrency_group" }
+source = { editable = "system/vendor/mngr/libs/concurrency_group" }
 dependencies = [
     { name = "imbue-common" },
     { name = "loguru" },
@@ -779,7 +779,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "imbue-common", editable = "vendor/mngr/libs/imbue_common" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
@@ -1015,27 +1015,27 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "app-watcher", editable = "libs/app_watcher" },
-    { name = "bootstrap", editable = "libs/bootstrap" },
-    { name = "browser", editable = "libs/browser" },
-    { name = "cloudflare-tunnel", editable = "libs/cloudflare_tunnel" },
-    { name = "env-converge", editable = "libs/env_converge" },
-    { name = "github-sync", editable = "libs/github_sync" },
-    { name = "host-backup", editable = "libs/host_backup" },
-    { name = "imbue-common", editable = "vendor/mngr/libs/imbue_common" },
+    { name = "app-watcher", editable = "system/libs/app_watcher" },
+    { name = "bootstrap", editable = "system/libs/bootstrap" },
+    { name = "browser", editable = "system/libs/browser" },
+    { name = "cloudflare-tunnel", editable = "system/libs/cloudflare_tunnel" },
+    { name = "env-converge", editable = "system/libs/env_converge" },
+    { name = "github-sync", editable = "system/libs/github_sync" },
+    { name = "host-backup", editable = "system/libs/host_backup" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "litellm", specifier = ">=1.88.1" },
     { name = "playwright", specifier = "==1.58.0" },
-    { name = "tk-command-parsing", editable = "libs/tk_command_parsing" },
+    { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
     { name = "tomlkit", specifier = ">=0.12" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "imbue-mngr", editable = "vendor/mngr/libs/mngr" },
-    { name = "imbue-mngr-claude", editable = "vendor/mngr/libs/mngr_claude" },
+    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
+    { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
     { name = "import-linter", specifier = ">=2.0" },
     { name = "inline-snapshot", specifier = ">=0.31" },
-    { name = "mngr-cli-contract", editable = "libs/mngr_cli_contract" },
+    { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-timeout", specifier = ">=2.0" },
@@ -1079,7 +1079,7 @@ wheels = [
 [[package]]
 name = "env-converge"
 version = "0.1.0"
-source = { editable = "libs/env_converge" }
+source = { editable = "system/libs/env_converge" }
 dependencies = [
     { name = "click" },
     { name = "imbue-common" },
@@ -1089,7 +1089,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "imbue-common", editable = "vendor/mngr/libs/imbue_common" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
 
@@ -1330,7 +1330,7 @@ wheels = [
 [[package]]
 name = "github-sync"
 version = "0.1.0"
-source = { editable = "libs/github_sync" }
+source = { editable = "system/libs/github_sync" }
 dependencies = [
     { name = "click" },
     { name = "loguru" },
@@ -1670,7 +1670,7 @@ wheels = [
 [[package]]
 name = "host-backup"
 version = "0.1.0"
-source = { editable = "libs/host_backup" }
+source = { editable = "system/libs/host_backup" }
 dependencies = [
     { name = "click" },
     { name = "imbue-common" },
@@ -1680,7 +1680,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "imbue-common", editable = "vendor/mngr/libs/imbue_common" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
 
@@ -1765,7 +1765,7 @@ wheels = [
 [[package]]
 name = "imbue-common"
 version = "0.1.20"
-source = { editable = "vendor/mngr/libs/imbue_common" }
+source = { editable = "system/vendor/mngr/libs/imbue_common" }
 dependencies = [
     { name = "argon2-cffi" },
     { name = "boto3" },
@@ -1800,7 +1800,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "imbue-mngr"
 version = "0.2.17"
-source = { editable = "vendor/mngr/libs/mngr" }
+source = { editable = "system/vendor/mngr/libs/mngr" }
 dependencies = [
     { name = "cel-python" },
     { name = "click" },
@@ -1835,13 +1835,13 @@ requires-dist = [
     { name = "cel-python", specifier = ">=0.5.0" },
     { name = "click", specifier = ">=8.0" },
     { name = "click-option-group", specifier = ">=0.5.6" },
-    { name = "concurrency-group", editable = "vendor/mngr/libs/concurrency_group" },
+    { name = "concurrency-group", editable = "system/vendor/mngr/libs/concurrency_group" },
     { name = "coolname", specifier = ">=3.0.0" },
     { name = "cryptography", specifier = ">=42.0" },
     { name = "docker", specifier = "==7.1.0" },
-    { name = "imbue-common", editable = "vendor/mngr/libs/imbue_common" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "markdown-it-py", specifier = ">=2.2.0" },
-    { name = "overlay", editable = "vendor/mngr/libs/overlay" },
+    { name = "overlay", editable = "system/vendor/mngr/libs/overlay" },
     { name = "packaging", specifier = ">=21.0" },
     { name = "paramiko", specifier = ">=3.0" },
     { name = "pluggy", specifier = ">=1.5.0" },
@@ -1851,7 +1851,7 @@ requires-dist = [
     { name = "pyinfra", specifier = ">=3.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "requests", specifier = ">=2.26" },
-    { name = "resource-guards", editable = "vendor/mngr/libs/resource_guards" },
+    { name = "resource-guards", editable = "system/vendor/mngr/libs/resource_guards" },
     { name = "rich", specifier = ">=13.0" },
     { name = "setproctitle", specifier = ">=1.3" },
     { name = "tabulate", specifier = ">=0.9.0" },
@@ -1863,7 +1863,7 @@ requires-dist = [
 [[package]]
 name = "imbue-mngr-claude"
 version = "0.2.17"
-source = { editable = "vendor/mngr/libs/mngr_claude" }
+source = { editable = "system/vendor/mngr/libs/mngr_claude" }
 dependencies = [
     { name = "anthropic" },
     { name = "imbue-mngr" },
@@ -1873,12 +1873,12 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic" },
-    { name = "imbue-mngr", editable = "vendor/mngr/libs/mngr" },
-    { name = "overlay", editable = "vendor/mngr/libs/overlay" },
+    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
+    { name = "overlay", editable = "system/vendor/mngr/libs/overlay" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "imbue-mngr-modal", editable = "vendor/mngr/libs/mngr_modal" }]
+dev = [{ name = "imbue-mngr-modal", editable = "system/vendor/mngr/libs/mngr_modal" }]
 
 [[package]]
 name = "import-linter"
@@ -2342,7 +2342,7 @@ wheels = [
 [[package]]
 name = "mngr-cli-contract"
 version = "0.1.0"
-source = { editable = "libs/mngr_cli_contract" }
+source = { editable = "system/libs/mngr_cli_contract" }
 dependencies = [
     { name = "click" },
     { name = "imbue-mngr" },
@@ -2351,7 +2351,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "imbue-mngr", editable = "vendor/mngr/libs/mngr" },
+    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
 ]
 
 [[package]]
@@ -2530,7 +2530,7 @@ wheels = [
 [[package]]
 name = "oom-priority"
 version = "0.1.0"
-source = { editable = "libs/oom_priority" }
+source = { editable = "system/libs/oom_priority" }
 
 [[package]]
 name = "openai"
@@ -2554,7 +2554,7 @@ wheels = [
 [[package]]
 name = "overlay"
 version = "0.1.0"
-source = { editable = "vendor/mngr/libs/overlay" }
+source = { editable = "system/vendor/mngr/libs/overlay" }
 
 [package.metadata]
 requires-dist = [{ name = "inline-snapshot", marker = "extra == 'dev'", specifier = ">=0.13" }]
@@ -6299,7 +6299,7 @@ wheels = [
 [[package]]
 name = "resource-guards"
 version = "0.1.8"
-source = { editable = "vendor/mngr/libs/resource_guards" }
+source = { editable = "system/vendor/mngr/libs/resource_guards" }
 dependencies = [
     { name = "pluggy" },
     { name = "pytest" },
@@ -6647,7 +6647,7 @@ wheels = [
 [[package]]
 name = "system-interface"
 version = "0.1.0"
-source = { editable = "apps/system_interface" }
+source = { editable = "system/libs/system_interface" }
 dependencies = [
     { name = "flask" },
     { name = "flask-sock" },
@@ -6687,16 +6687,16 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "imbue-common", editable = "vendor/mngr/libs/imbue_common" },
-    { name = "imbue-mngr", editable = "vendor/mngr/libs/mngr" },
-    { name = "imbue-mngr-claude", editable = "vendor/mngr/libs/mngr_claude" },
-    { name = "oom-priority", editable = "libs/oom_priority" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
+    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
+    { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
+    { name = "oom-priority", editable = "system/libs/oom_priority" },
     { name = "pexpect", specifier = ">=4.9" },
     { name = "pluggy", specifier = ">=1.5" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "pyte", specifier = ">=0.8" },
     { name = "simple-websocket", specifier = ">=1.0" },
-    { name = "tk-command-parsing", editable = "libs/tk_command_parsing" },
+    { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]
@@ -6706,13 +6706,13 @@ dev = [
     { name = "coverage" },
     { name = "import-linter", specifier = ">=2.0" },
     { name = "inline-snapshot", specifier = ">=0.13" },
-    { name = "mngr-cli-contract", editable = "libs/mngr_cli_contract" },
+    { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
     { name = "playwright", specifier = ">=1.40" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
-    { name = "resource-guards", editable = "vendor/mngr/libs/resource_guards" },
+    { name = "resource-guards", editable = "system/vendor/mngr/libs/resource_guards" },
     { name = "ruff", specifier = "~=0.12.8" },
     { name = "ty", specifier = "==0.0.24" },
 ]
@@ -6794,7 +6794,7 @@ wheels = [
 [[package]]
 name = "tk-command-parsing"
 version = "0.1.0"
-source = { editable = "libs/tk_command_parsing" }
+source = { editable = "system/libs/tk_command_parsing" }
 
 [[package]]
 name = "tokenizers"

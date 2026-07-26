@@ -17,11 +17,11 @@ Opens at http://127.0.0.1:8000 by default.
 
 ```bash
 # Backend
-cd apps/system_interface
+cd system/libs/system_interface
 uv run system-interface
 
 # Frontend (with hot reload)
-cd apps/system_interface/frontend
+cd system/libs/system_interface/frontend
 npm install
 npm run dev
 ```
@@ -60,7 +60,7 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 ```
 
 It classifies what changed and does only what is needed: refreshes dependencies
-if a manifest changed (`npm ci` / `uv tool install -e apps/system_interface
+if a manifest changed (`npm ci` / `uv tool install -e system/libs/system_interface
 --reinstall`), rebuilds the gitignored `static/` bundle and broadcasts a
 `reload_system_interface` op (frontend), and/or restarts the services agent so
 the editable backend re-imports the merged `.py` (backend). For a backend change
@@ -75,7 +75,7 @@ The `reload_system_interface` op it broadcasts goes to the loopback-only
 `/api/layout/broadcast` endpoint, which relays a `layout_op` WebSocket message;
 the dockview shell (`DockviewWorkspace.ts`) reloads the top-level page -- shell
 chrome plus every child chat iframe -- so the browser picks up the new hashed
-assets. This is distinct from `scripts/layout.py refresh`, which only reloads a
+assets. This is distinct from `system/scripts/layout.py refresh`, which only reloads a
 single inner iframe/panel for arranging the workspace.
 
 ## Named layouts
@@ -106,7 +106,7 @@ attribute a request to a client via `layout.py context`.
 ## Driving the workspace layout from an agent
 
 An agent running inside the workspace container can rearrange the
-dockview through the agent-facing `scripts/layout.py` helper. The
+dockview through the agent-facing `system/scripts/layout.py` helper. The
 subcommand surface covers `list / inspect / where / context / load /
 open / focus / split / close / move / rename / maximize / restore /
 replace-url / refresh`.
@@ -114,24 +114,24 @@ replace-url / refresh`.
 ```bash
 # Print every addressable thing (registered services + mngr agents)
 # with open/running flags. YAML by default, ``--json`` to switch.
-python3 scripts/layout.py list
+python3 system/scripts/layout.py list
 
 # See which browser clients exist, their device kind, current layout,
 # and recent messages (to attribute a request to a client/layout).
-python3 scripts/layout.py context
+python3 system/scripts/layout.py context
 
 # Surface the given service in a tab split alongside the primary chat
 # (reports a no-op if one is already open; use ``focus`` to bring it
 # to the foreground). Mutating ops always name their target layout.
-python3 scripts/layout.py open web --layout desktop
+python3 system/scripts/layout.py open web --layout desktop
 
 # Reload one tab (or, for ``service:<name>``, every iframe tied to
 # that service).
-python3 scripts/layout.py refresh web
+python3 system/scripts/layout.py refresh web
 
 # Inspect the grid tree -- arrangements, sizes, active panel,
 # ref-resolved panel list -- of the last-active (or named) layout.
-python3 scripts/layout.py inspect --layout mobile
+python3 system/scripts/layout.py inspect --layout mobile
 ```
 
 Every op POSTs `{op, args, agent_id}` to the loopback-only
@@ -150,7 +150,7 @@ orientation.
 ## Building
 
 ```bash
-cd apps/system_interface/frontend
+cd system/libs/system_interface/frontend
 npm run build
 ```
 

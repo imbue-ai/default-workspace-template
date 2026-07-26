@@ -638,7 +638,7 @@ def test_start_app_watcher(agent_manager: AgentManager, tmp_path: Path) -> None:
 
 def test_applications_file_handler_fires_on_move(tmp_path: Path) -> None:
     """The applications watcher must react to move/rename events, not just
-    modify events. scripts/forward_port.py writes applications.toml atomically
+    modify events. system/scripts/forward_port.py writes applications.toml atomically
     via ``tempfile.mkstemp`` + ``os.replace``, which surfaces as an
     ``IN_MOVED_TO`` / ``FileMovedEvent`` in watchdog -- if the handler only
     listened on ``on_modified`` every service registration after startup
@@ -908,7 +908,7 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
 
 # --- mngr CLI argv contract ---
 # These confront each builder's argv with the live ``imbue.mngr.main.cli`` tree,
-# so a vendor/mngr subcommand/flag rename fails here at merge time rather than
+# so a system/vendor/mngr subcommand/flag rename fails here at merge time rather than
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
 
 

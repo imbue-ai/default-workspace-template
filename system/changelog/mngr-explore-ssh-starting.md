@@ -20,11 +20,11 @@
     container rebuilds. imbue_cloud pool hosts inherit this unit from the
     pool_host bake.
 
-- Both boot paths relaunch the agent via `scripts/minds_start_services_agent.sh`,
+- Both boot paths relaunch the agent via `system/scripts/minds_start_services_agent.sh`,
   which sources the host env AND the system-services agent's own env (matching
   mngr's host-then-agent env contract) before `mngr start`.
 
-- Added `scripts/minds_lima_autostart.sh` (in-VM lima boot unit),
-  `scripts/minds_install_outer_autostart.sh` (installs the outer-VM boot unit),
-  and `scripts/minds_start_services_agent.sh` (the shared env-sourcing start
+- Added `system/scripts/minds_lima_autostart.sh` (in-VM lima boot unit),
+  `system/scripts/minds_install_outer_autostart.sh` (installs the outer-VM boot unit),
+  and `system/scripts/minds_start_services_agent.sh` (the shared env-sourcing start
   action both units run).

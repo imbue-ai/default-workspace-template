@@ -68,7 +68,7 @@ def test_project_for_path_maps_libs_apps_and_dev(tmp_path: Path) -> None:
     assert gate.project_for_path(".agents/skills/foo/SKILL.md", repo) == "agents"
     assert gate.project_for_path(".agents/shared/references/x.md", repo) == "agents"
     # Root-level files -> dev.
-    assert gate.project_for_path("scripts/thing.sh", repo) == "dev"
+    assert gate.project_for_path("system/scripts/thing.sh", repo) == "dev"
     assert gate.project_for_path("README.md", repo) == "dev"
 
 

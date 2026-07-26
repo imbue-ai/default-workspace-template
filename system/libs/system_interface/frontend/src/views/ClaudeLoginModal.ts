@@ -138,7 +138,7 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   // True when the flow now underway started while the workspace was signed in
   // with an API key (raw or Imbue). Switching away leaves any API-integrated
   // services pinned to the key they were set up with (they snapshot it to
-  // runtime/secrets/anthropic.env; see the use-ai-integration skill), so the
+  // data/.secrets/anthropic.env; see the use-ai-integration skill), so the
   // applying/success screens carry a note saying so. Captured at flow start:
   // by the time those screens render, the live status may already reflect the
   // new sign-in.

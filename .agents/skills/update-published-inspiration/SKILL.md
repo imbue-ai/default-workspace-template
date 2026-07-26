@@ -54,8 +54,8 @@ worker's worktree.
 >   any step that mutates `/home/user/workspace`'s tree after assembly.
 > - **The ONE sanctioned write to `/home/user/workspace`: §8, the version-history entry.** After
 >   the push SUCCEEDS, `/home/user/workspace` gets exactly one write -- appending the v(n+1)
->   entry to `VERSION_HISTORY.md` and committing that single file on the branch
->   `/home/user/workspace` is already on (`git add VERSION_HISTORY.md` + `git commit`, NEVER a
+>   entry to `docs/VERSION_HISTORY.md` and committing that single file on the branch
+>   `/home/user/workspace` is already on (`git add docs/VERSION_HISTORY.md` + `git commit`, NEVER a
 >   merge, checkout, reset, or `git add -A`). If the push did not happen, it does
 >   not run at all.
 
@@ -72,7 +72,7 @@ worker's worktree.
 
 ## Shared conventions
 
-- **The ledger** is `VERSION_HISTORY.md`. Its `## Inspirations` section is
+- **The ledger** is `docs/VERSION_HISTORY.md`. Its `## Inspirations` section is
   where a publish/revise is recorded (the same format `publish-inspiration` §8
   step 4 and `update-self` §5b write); §1 reads it and §8 appends to it.
 - **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees under
@@ -99,7 +99,7 @@ SLUG="<slug>"
 SLUG="$SLUG" awk '
     $0 ~ "^### " ENVIRON["SLUG"] "  --  " { print; inside = 1; next }
     /^(## |### )/ { inside = 0 }
-    inside' VERSION_HISTORY.md
+    inside' docs/VERSION_HISTORY.md
 ```
 
 From that block extract:
@@ -225,9 +225,9 @@ stage it into the worker via `launch-task`'s `source_artifacts_dir` mechanism (a
 gitignored artifact pushed into the worker's worktree):
 
 ```bash
-mkdir -p runtime/launch-task/<slug>
+mkdir -p data/.tasks/launch-task/<slug>
 git tag -f "_pub-tip-<slug>" "$PUBLISHED_TIP"
-git bundle create runtime/launch-task/<slug>/published-tip.bundle "_pub-tip-<slug>"
+git bundle create data/.tasks/launch-task/<slug>/published-tip.bundle "_pub-tip-<slug>"
 git tag -d "_pub-tip-<slug>"
 ```
 
@@ -245,7 +245,7 @@ approved in §2e, plus any newly-added path), the `exclude` list and
 `modification_rules` from §2c, the new version `v(n+1)`, and a one-line
 description of what changed for the changelog entry.
 
-Set `source_artifacts_dir: runtime/launch-task/<slug>` in the task frontmatter so
+Set `source_artifacts_dir: data/.tasks/launch-task/<slug>` in the task frontmatter so
 the bundle is pushed to the worker. The task body directs the worker to:
 
 1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `FINISH_REPORT_PATH`) per
@@ -254,7 +254,7 @@ the bundle is pushed to the worker. The task body directs the worker to:
 2. **Load the published tip from the bundle** and confirm it matches the expected
    sha (objects only; no network):
    ```bash
-   git fetch runtime/launch-task/<slug>/published-tip.bundle "refs/tags/_pub-tip-<slug>:refs/tags/_pub-tip-<slug>"
+   git fetch data/.tasks/launch-task/<slug>/published-tip.bundle "refs/tags/_pub-tip-<slug>:refs/tags/_pub-tip-<slug>"
    test "$(git rev-parse refs/tags/_pub-tip-<slug>)" = "<PUBLISHED_TIP>"   # abort if not
    ```
 3. **Snapshot the secret-scan tools and stage the approved changed paths BEFORE
@@ -299,7 +299,7 @@ the bundle is pushed to the worker. The task body directs the worker to:
    date). Newest last; NEVER rewrite an earlier Publication-history entry, and
    NEVER write into "Adaptation history" (that is the adopters' log). Leave the
    thumbnail as published unless the lead's task says the user wants it changed.
-8. **Boot smoke-check** the result -- validate `supervisord.conf` via the
+8. **Boot smoke-check** the result -- validate `system/supervisord.conf` via the
    supervisor lib (`ServerOptions().realize()` / `process_config()`), NEVER
    `supervisord -t` (which launches the daemon), the same method
    `build_inspiration.sh` step 9 uses. If it fails, report `stuck`.
@@ -424,7 +424,7 @@ The single sanctioned write back to `/home/user/workspace` -- read the CWD-INVAR
 the top before running it. If the push failed or the user aborted, SKIP this
 entirely: an update that did not publish is never recorded.
 
-Write the entry directly into `VERSION_HISTORY.md` (cwd `/home/user/workspace`) -- the same
+Write the entry directly into `docs/VERSION_HISTORY.md` (cwd `/home/user/workspace`) -- the same
 `## Inspirations` recording contract `publish-inspiration` §8 step 4 owns, just
 computing the NEXT version instead of v1. Append-only; every `## Inspirations`
 line ends in a commit; a retried step is a no-op, never a duplicate. Inputs:
@@ -435,7 +435,7 @@ from `$WT`).
 
 - The slug's `### <slug>  --  <repo-url>` heading already exists (this mind
   published v1 through `publish-inspiration`). In the unlikely event
-  `VERSION_HISTORY.md` is missing, recreate the shipped three-section
+  `docs/VERSION_HISTORY.md` is missing, recreate the shipped three-section
   starter (`## Workspace`, `## Inspirations`, `## Adopted inspirations`; the exact
   heredoc lives in `update-self` §5b) and re-add the heading before appending.
 - Append one line under that heading:
@@ -455,7 +455,7 @@ Then commit that one file:
 
 ```bash
 ( cd /home/user/workspace \
-    && git add VERSION_HISTORY.md \
+    && git add docs/VERSION_HISTORY.md \
     && git commit -m "version history: updated inspiration <slug> to v(n+1)" )
 ```
 
@@ -471,7 +471,7 @@ On a successful push, clean up per `launch-task`: the worker can be destroyed no
 (`create_worker.py destroy --name <slug>`), and the local `mngr/<slug>` branch can
 go (the snapshot commit lives on the remote; the branch's intermediate commits
 were never pushed). Remove the bundle artifact
-(`runtime/launch-task/<slug>/published-tip.bundle`). No git remote cleanup is
+(`data/.tasks/launch-task/<slug>/published-tip.bundle`). No git remote cleanup is
 needed -- §2a/§7 fetch and push explicit URLs and add no named remote.
 
 If the push failed and you are stopping, leave the worker, `$WT`, and the branch

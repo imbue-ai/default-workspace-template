@@ -7,7 +7,7 @@
 #                                 runs it with --no-validate
 #
 # This file is the single source of truth for the version pins and per-arch
-# sha256s. It is invoked by the common scripts/setup_system.sh (which the
+# sha256s. It is invoked by the common system/scripts/setup_system.sh (which the
 # Dockerfile RUNs at image-build time and the Lima provider runs directly in
 # the VM), so every workspace -- docker-built or Lima-provisioned -- has both
 # binaries from second zero. If a binary is ever missing (an environment not

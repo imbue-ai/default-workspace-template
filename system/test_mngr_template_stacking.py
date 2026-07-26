@@ -5,7 +5,7 @@ and relies on the fact that tuple-typed options (e.g. ``extra_provision_command`
 concatenate when multiple templates stack, while scalar-typed options (e.g.
 ``provider``) get overridden by the latter template.
 
-If that behaviour ever regresses in vendor/mngr, the per-mode provisioning
+If that behaviour ever regresses in system/vendor/mngr, the per-mode provisioning
 on minds hosts silently loses either the shared ``main`` setup (e.g. the
 default tmux config) or the mode-specific commands. These tests pin the
 contract.

@@ -1,6 +1,6 @@
 """Unit tests for the shell-aware tk command parser.
 
-These pin the behaviour the gate hook (``scripts/claude_tk_standalone_check.py``)
+These pin the behaviour the gate hook (``system/scripts/claude_tk_standalone_check.py``)
 relies on, plus the ``extract_create_titles`` / ``flag_values`` surface the
 package exposes for callers that need step titles out of a ``tk create --step``
 command. The cases that motivated moving off regexes -- quoted operators, escaped
@@ -34,7 +34,7 @@ def test_standalone_invocation_is_a_single_segment() -> None:
 def test_env_prefix_path_prefix_and_super_are_seen_through() -> None:
     assert _verbs('TICKETS_DIR=/x tk close cod-step-x "s"') == ["close"]
     assert _verbs("A=1 B=2 tk start cod-step-x") == ["start"]
-    assert _verbs('vendor/tk/ticket close cod-step-x "s"') == ["close"]
+    assert _verbs('system/vendor/tk/ticket close cod-step-x "s"') == ["close"]
     assert _verbs("tk super close cod-step-x") == ["close"]
 
 

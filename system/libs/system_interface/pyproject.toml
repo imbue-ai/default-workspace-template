@@ -31,7 +31,7 @@ dev = [
     "playwright>=1.40",
     "pytest-playwright>=0.4",
     # Test infrastructure used by imbue.imbue_common.conftest_hooks
-    # (previously provided transitively by vendor/mngr's uv workspace dev group)
+    # (previously provided transitively by system/vendor/mngr's uv workspace dev group)
     "pytest>=9.0",
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.3.0",
@@ -45,7 +45,7 @@ dev = [
     "ruff~=0.12.8",
     # Used by check_no_type_errors in test_ratchets.py. Pinned to 0.0.24 because
     # that is the version the source was last verified clean against in
-    # vendor/mngr's uv.lock; newer versions surface stricter checks that don't
+    # system/vendor/mngr's uv.lock; newer versions surface stricter checks that don't
     # match what this code was reviewed under.
     "ty==0.0.24",
 ]
@@ -107,9 +107,9 @@ venv = ".venv"
 pythonVersion = "3.12"
 strict = ["**/*.py"]
 
-# Ruff config mirrors vendor/mngr/pyproject.toml so that lint/isort behavior
+# Ruff config mirrors system/vendor/mngr/pyproject.toml so that lint/isort behavior
 # matches what this code was previously checked under (it was a workspace
-# member of vendor/mngr before being promoted into apps/system_interface).
+# member of system/vendor/mngr before being promoted into system/libs/system_interface).
 [tool.ruff]
 line-length = 119
 

@@ -34,8 +34,8 @@ Use `$TARGET` for the artifact you are healing (e.g. `migrate-config`, a service
 name). Then:
 
 - Worker agent name and branch: `heal-$TARGET` / `mngr/heal-$TARGET`
-- Runtime dir / task file: `runtime/harden/heal-$TARGET/` /
-  `runtime/harden/heal-$TARGET/task.md`
+- Runtime dir / task file: `data/.tasks/harden/heal-$TARGET/` /
+  `data/.tasks/harden/heal-$TARGET/task.md`
 
 ## Step 1: Open a tracking ticket
 
@@ -47,7 +47,7 @@ and stop -- the superseding pass forced at their merge time covers your fix.
 Only dispatch if no pass is live (or you took over an abandoned one).
 
 ```bash
-mkdir -p runtime/harden/heal-$TARGET
+mkdir -p data/.tasks/harden/heal-$TARGET
 TICKET_ID=$(tk create "heal $TARGET" -t bug \
     --acceptance "task file written; worker launched; worker DONE; branch merged")
 tk start "$TICKET_ID"
@@ -63,10 +63,10 @@ misbehavior). Without anchors the worker scans the wrong region of your
 transcript.
 
 ```bash
-cat > runtime/harden/heal-$TARGET/task.md << TASK_EOF
+cat > data/.tasks/harden/heal-$TARGET/task.md << TASK_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-finish_report_path: runtime/harden/heal-$TARGET/reports/report.md
+finish_report_path: data/.tasks/harden/heal-$TARGET/reports/report.md
 operation: heal
 artifact: skill
 ---
@@ -120,8 +120,8 @@ background worker.
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name heal-$TARGET \
     --template subskill-worker \
-    --runtime-dir runtime/harden/heal-$TARGET/ \
-    --task-file runtime/harden/heal-$TARGET/task.md
+    --runtime-dir data/.tasks/harden/heal-$TARGET/ \
+    --task-file data/.tasks/harden/heal-$TARGET/task.md
 ```
 
 Then background-poll (`create_worker.py await --task-file ... --timeout 90m`,
@@ -129,9 +129,9 @@ Then background-poll (`create_worker.py await --task-file ... --timeout 90m`,
 Flow-specific substitutions:
 
 - Worker name: `heal-$TARGET`; branch: `mngr/heal-$TARGET`
-- Poll path: `runtime/harden/heal-$TARGET/reports/report.md`; reports dir
-  `runtime/harden/heal-$TARGET/reports/`; consumed
-  `runtime/harden/heal-$TARGET/reports/consumed/`
+- Poll path: `data/.tasks/harden/heal-$TARGET/reports/report.md`; reports dir
+  `data/.tasks/harden/heal-$TARGET/reports/`; consumed
+  `data/.tasks/harden/heal-$TARGET/reports/consumed/`
 - The only user-approval gate is `final-artifact` -- a heal has no outline gate.
 - Terminal statuses: `done` (go live, Step 4); `stuck` (failure flow per
   `.agents/skills/launch-task/references/worker-failure.md`).
@@ -148,7 +148,7 @@ last hardened merge.
 
 Then merge `mngr/heal-$TARGET` and go live by artifact: a **skill** needs
 nothing beyond the merge; a **service** wants a tab refresh (`python3
-scripts/layout.py refresh <service-name>`). Then close the ticket:
+system/scripts/layout.py refresh <service-name>`). Then close the ticket:
 
 ```bash
 tk close "$TICKET_ID" "Healed $TARGET -- worker branch merged."

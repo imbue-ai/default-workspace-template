@@ -42,9 +42,9 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 >
 > **The ONE sanctioned exception: §8 step 4, the version-history entry.** After
 > the push has SUCCEEDED, `/home/user/workspace` gets exactly one write -- appending this
-> publish to `VERSION_HISTORY.md` and committing that single file on the branch
+> publish to `docs/VERSION_HISTORY.md` and committing that single file on the branch
 > `/home/user/workspace` is already on. That is a normal one-file commit, not a tree
-> operation: `git add VERSION_HISTORY.md` + `git commit`, and NEVER a merge, a
+> operation: `git add docs/VERSION_HISTORY.md` + `git commit`, and NEVER a merge, a
 > checkout, a reset, a `git add -A`, or anything that touches another path. It
 > is what makes a publish knowable afterwards (slug, repo, version, and the
 > source commit the snapshot was cut from). Do not mistake it for the
@@ -53,8 +53,8 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 
 > **AN INSPIRATION MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
 > valid inspiration is always the FULL tree `build_inspiration.sh` assembles on
-> `mngr/<slug>`: the clean DEFAULT_WORKSPACE_TEMPLATE base (`pyproject.toml`, `supervisord.conf`,
-> `.mngr/`, `.agents/skills/` including the generated inspiration `/welcome`, `parent.toml`,
+> `mngr/<slug>`: the clean DEFAULT_WORKSPACE_TEMPLATE base (`pyproject.toml`, `system/supervisord.conf`,
+> `.mngr/`, `.agents/skills/` including the generated inspiration `/welcome`, `system/config/parent.toml`,
 > etc.) plus the selected app/feature paths -- never just the app code plus a
 > README. That full tree is what makes `/use-inspiration`'s template path work:
 > another mind must be creatable FROM the published repo, not merely able to
@@ -196,7 +196,7 @@ Two marker kinds; the newest one on the first-parent chain wins:
   creation (the same subject convention `update-self` / `assist` rely on).
 - **`Initial workspace commit`** -- written by bootstrap on the mind's very
   first boot (always present -- it is created `--allow-empty` by
-  `libs/bootstrap` -- and it snapshots exactly what the workspace started
+  `system/libs/bootstrap` -- and it snapshots exactly what the workspace started
   from, including any uncommitted source state a dev-flow clone carried).
   This is the normal answer for a mind that never ran `update-self`.
 
@@ -216,16 +216,16 @@ The fallback MUST be the first-parent root, never a bare root-commit lookup
 (`git rev-list --max-parents=0 HEAD`): subtree merges add parallel root commits
 that are NOT the seed (a mind repo can have several near-empty roots), while
 the first-parent chain from HEAD always ends at the true template seed. Do NOT
-fetch or pull from upstream to obtain `BASE_REF` in any case -- `parent.toml`
+fetch or pull from upstream to obtain `BASE_REF` in any case -- `system/config/parent.toml`
 is a provenance link only.
 
 **Mandatory pre-check (before ANY assembly).** Verify the resolved base is a
 bootable template -- its tree must name both `pyproject.toml` and
-`supervisord.conf`:
+`system/supervisord.conf`:
 
 ```bash
 git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx pyproject.toml \
-  && git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx supervisord.conf
+  && git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx system/supervisord.conf
 ```
 
 If the check fails, STOP and reconsider the base (e.g. walk forward along the
@@ -286,12 +286,12 @@ requested." if there are none) into the body -- the worker must be able to
 run the script verbatim, with zero back-and-forth:
 
 ````bash
-mkdir -p runtime/launch-task/<slug>
+mkdir -p data/.tasks/launch-task/<slug>
 {
 cat << FRONTMATTER_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-finish_report_path: runtime/launch-task/<slug>/reports/report.md
+finish_report_path: data/.tasks/launch-task/<slug>/reports/report.md
 ---
 FRONTMATTER_EOF
 cat << 'BODY_EOF'
@@ -474,8 +474,8 @@ worktree to a clean template base and deletes gitignored state -- including
 Follow `.agents/shared/references/worker-reporting.md` for the full report
 procedure. Substitutions for this task:
 
-- `<TASK_FILE_GLOB>` -> `runtime/launch-task/*/task.md`
-- `<RUNTIME_REPORTS_DIR>` -> `runtime/launch-task/<slug>/reports/` (recreate
+- `<TASK_FILE_GLOB>` -> `data/.tasks/launch-task/*/task.md`
+- `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/launch-task/<slug>/reports/` (recreate
   it with `mkdir -p` -- the assembly script deleted `runtime/`)
 - Valid `name:` values: `question` (mid-flight gate), `done` / `stuck`
   (terminal).
@@ -485,7 +485,7 @@ In a `done` report body, include your worktree's absolute path (from
 publishes directly from that worktree. In a `stuck` report, quote the
 assembly script's stderr verbatim.
 BODY_EOF
-} > runtime/launch-task/<slug>/task.md
+} > data/.tasks/launch-task/<slug>/task.md
 ````
 
 **Launch** (foreground, so a failed launch surfaces immediately):
@@ -494,8 +494,8 @@ BODY_EOF
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name <slug> \
     --template worker \
-    --runtime-dir runtime/launch-task/<slug>/ \
-    --task-file runtime/launch-task/<slug>/task.md
+    --runtime-dir data/.tasks/launch-task/<slug>/ \
+    --task-file data/.tasks/launch-task/<slug>/task.md
 ```
 
 **Background-await the report** (Bash `run_in_background: true` -- never block
@@ -505,7 +505,7 @@ on it), then continue with whatever else you were doing:
 # Run with Bash run_in_background: true
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name <slug> \
-    --task-file runtime/launch-task/<slug>/task.md
+    --task-file data/.tasks/launch-task/<slug>/task.md
 ```
 
 **Handle the report** per `.agents/shared/references/lead-proxy.md` (proxy or
@@ -574,7 +574,7 @@ stderr. What each exit means, and what you do:
   fail the check.
 - **Non-template base (exit 5).** The `--base-ref` does not resolve to a tree
   in the repo, or its tree is not a bootable template: it lacks
-  `pyproject.toml` and/or `supervisord.conf` (e.g. a parallel subtree root was
+  `pyproject.toml` and/or `system/supervisord.conf` (e.g. a parallel subtree root was
   picked instead of the real seed). Nothing was committed; re-resolve
   `BASE_REF` per
   §2 (its pre-check should have caught this before launch) and relaunch.
@@ -897,7 +897,7 @@ remote: `git merge-base --is-ancestor <BASE_REF> "$SNAPSHOT_COMMIT"` fails
 base, and `rev-list --count > 1` fails if the mint came out parentless
 (an empty `<BASE_REF>` makes `git commit-tree` drop `-p` and produce a lone
 orphan). If either check fails, nothing is pushed -- STOP, re-resolve
-`BASE_REF` per §2 (its tree must name `pyproject.toml` and `supervisord.conf`),
+`BASE_REF` per §2 (its tree must name `pyproject.toml` and `system/supervisord.conf`),
 re-mint, and only then push. A correct push always lands MORE than one commit
 on `main`.
 
@@ -937,7 +937,7 @@ the exception in the CWD-INVARIANT callout at the top of this skill before
 running it. Nothing is recorded for a publish that did not happen: if step 2's
 push failed, or the user aborted, SKIP this entirely.
 
-Write the entry directly into `VERSION_HISTORY.md` (cwd `/home/user/workspace`). There is
+Write the entry directly into `docs/VERSION_HISTORY.md` (cwd `/home/user/workspace`). There is
 no helper skill: this block is the whole recording contract, and it owns the
 format so `publish-inspiration`, `update-published-inspiration`, and `update-self` all
 write identical lines. Rules: append-only (existing lines copied through
@@ -947,7 +947,7 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 `SOURCE_SHA` from §2 -- the source workspace commit the snapshot was cut from
 (NOT `BASE_REF`, not anything from `$WT`).
 
-- **If `VERSION_HISTORY.md` is missing** (deleted since creation), recreate
+- **If `docs/VERSION_HISTORY.md` is missing** (deleted since creation), recreate
   the shipped starter first -- the `# Version history` heading, its explanatory
   paragraph, and the three empty sections `## Workspace`, `## Inspirations`,
   `## Adopted inspirations` in that order (byte-identical to the shipped root
@@ -989,7 +989,7 @@ Then commit exactly this one file:
 
 ```bash
 ( cd /home/user/workspace \
-    && git add VERSION_HISTORY.md \
+    && git add docs/VERSION_HISTORY.md \
     && git commit -m "version history: published inspiration <slug> v1" )
 ```
 
@@ -1002,7 +1002,7 @@ If the commit fails (e.g. a hook rejects it), the publish still succeeded --
 say so plainly, and fix the entry rather than re-pushing anything.
 
 **Failure handling.** A failure anywhere in this section means step 4 never
-runs: an unpublished inspiration is never recorded in `VERSION_HISTORY.md`.
+runs: an unpublished inspiration is never recorded in `docs/VERSION_HISTORY.md`.
 If the create fails, read the response body: a
 `"request not permitted by the user"` error means the `github-rest-api`
 grant is missing or too narrow -- go back to §7; a name-taken error means
@@ -1020,11 +1020,11 @@ diagnose before retrying step 2 -- do NOT re-create the repo:
 - A **GitHub secret-scanning / push-protection** rejection (e.g. `GH013:
   Repository rule violations`, "push cannot contain secrets") that names a
   **Google OAuth client ID or secret** -- a `GOCSPX-...` value or a
-  `...apps.googleusercontent.com` client ID, found under `vendor/mngr` -- is
+  `...apps.googleusercontent.com` client ID, found under `system/vendor/mngr` -- is
   EXPECTED and safe. This is the shared **Minds-provided** Google OAuth client
   baked into the template (`MINDS_GOOGLE_OAUTH_CLIENT_ID` /
   `MINDS_GOOGLE_OAUTH_CLIENT_SECRET` in
-  `vendor/mngr/libs/mngr_latchkey/imbue/mngr_latchkey/core.py`); it is the
+  `system/vendor/mngr/libs/mngr_latchkey/imbue/mngr_latchkey/core.py`); it is the
   app's built-in Google sign-in client that ships with every mind. It is NOT
   the user's own secret and NOT the user's data, and it is safe to publish.
   Do NOT strip it, rewrite the template, or treat the publish as failed.
@@ -1077,9 +1077,9 @@ delete work the user may want to retry or reassemble from.
 Close the delegation step with a work-summary line. Report the new repo URL in
 your final assistant message to the user (not in the step summary).
 
-## The assembly script: `scripts/build_inspiration.sh`
+## The assembly script: `system/scripts/build_inspiration.sh`
 
-The worker runs `scripts/build_inspiration.sh` from its worktree root (§3). It
+The worker runs `system/scripts/build_inspiration.sh` from its worktree root (§3). It
 is self-contained (the dev `create-new-mind-repo` recipe is NOT available in
 the VM). Interface (cwd = worktree repo root):
 
@@ -1096,7 +1096,7 @@ the VM). Interface (cwd = worktree repo root):
 What it does, in order (see the script for the exact commands):
 
 1. Validates that the `--base-ref` tree names `pyproject.toml` and
-   `supervisord.conf` (a bootable template base); exits 5 with a clear
+   `system/supervisord.conf` (a bootable template base); exits 5 with a clear
    message otherwise, before touching the worktree (see §5).
 2. Stages the selected paths out of the worker's checkout into a scratch dir
    (preserving relative paths) BEFORE resetting.
@@ -1132,12 +1132,12 @@ What it does, in order (see the script for the exact commands):
 9. Overwrites the snapshot's `welcome/SKILL.md` with a generated
    inspiration-specific welcome describing the
    newly-published inspiration.
-10. Removes `VERSION_HISTORY.md` from the snapshot entirely: that ledger is a
+10. Removes `docs/VERSION_HISTORY.md` from the snapshot entirely: that ledger is a
     WORKSPACE artifact -- the SOURCE mind's own record of what it came from and
     everything it has published -- and never belongs in a published inspiration.
     A mind created from this inspiration grows its own ledger on demand (this
     skill's §8 step 4 and `update-self` §5b write the starter the first time it
     is needed), so nothing is lost by omitting it. Runs after the no-diff guard, so it can
     never make an empty include set look publishable.
-11. Validates `supervisord.conf` WITHOUT starting the daemon (never
+11. Validates `system/supervisord.conf` WITHOUT starting the daemon (never
     `supervisord -t`), then makes a single commit for the assembled snapshot.

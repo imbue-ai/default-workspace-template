@@ -32,7 +32,7 @@ host_env__extend = [
     # sync (github-sync skill) when the user enables it.
     # tk reads TICKETS_DIR if set; absolute path so it works from worktree
     # subdirs too. /home/user/workspace/ is the container WORKDIR (set by the Dockerfile).
-    "TICKETS_DIR=/home/user/workspace/runtime/tickets",
+    "TICKETS_DIR=/home/user/workspace/data/.tickets",
     # The OOM shed ledger + agent-pid registry live under runtime/ (so they ride
     # the runtime-backup branch). The container-level earlyoom kill hook runs
     # with work dir /home/user/workspace, but each agent's SessionStart hooks resolve paths
@@ -40,7 +40,7 @@ host_env__extend = [
     # own worktree, not /home/user/workspace. Pinning the absolute path here (same
     # rationale as TICKETS_DIR above) makes the kill hook and every agent's hook
     # resolve one shared ledger and registry, regardless of work dir.
-    "OOM_PRIORITY_RUNTIME_DIR=/home/user/workspace/runtime/oom_priority",
+    "OOM_PRIORITY_RUNTIME_DIR=/home/user/workspace/data/.state/oom_priority",
     # Keep regenerable caches off the persistent /home/user volume (and out of
     # backups): XDG-aware tools (uv, pip, playwright) follow XDG_CACHE_HOME,
     # npm follows npm_config_cache, and the seed script's ~/.cache symlink
@@ -87,7 +87,7 @@ auto_disable_questions = true
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
 settings_overrides__extend = {model = "opus[1m]", fastMode = true}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
-# directly. The wrapper (scripts/claude_oom_launch.py) sets its own
+# directly. The wrapper (system/scripts/claude_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
 # agent-pid registry, then execs the real claude with the args mngr appends
 # (assemble_command splices --settings / --resume / --session-id after this
@@ -98,7 +98,7 @@ settings_overrides__extend = {model = "opus[1m]", fastMode = true}
 # spawned. ${MNGR_AGENT_WORK_DIR:-.} mirrors
 # the OOM Claude hooks' path form; the "main" type overrides command below so
 # its sleeping window-0 is unaffected.
-command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_oom_launch.py"
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_oom_launch.py"
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with CLAUDE_CODE_VERSION in the Dockerfile.
@@ -143,7 +143,7 @@ parent_type = "claude"
 # band. (load_config's final model_validate re-marks every field as set, so the
 # parent_type merge sees the worker's defaulted command and clobbers the inherited
 # one; verified live.)
-command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_oom_launch.py"
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_oom_launch.py"
 
 # --- Provider configurations ---
 
@@ -264,14 +264,14 @@ type = "main"
 # CLAUDE_CONFIG_DIR host-env write, initial chat agent) and then launches
 # supervisord, which runs every background service (system_interface, web,
 # cloudflared, app-watcher, host-backup, terminal, and the one-shot
-# deferred-install -- see supervisord.conf; the opt-in github-sync service is
+# deferred-install -- see system/supervisord.conf; the opt-in github-sync service is
 # added by its skill). The old git_auth_setup window is gone (the git config
 # it performed now runs inside bootstrap), and terminal is a supervisord
 # service rather than its own window.
 extra_window = ["bootstrap='uv run bootstrap'"]
 # Write a sane default tmux config on every minds host. tuple-typed
 # `extra_provision_command` stacks across templates (see
-# `apply_create_template` in vendor/mngr/.../common_opts.py), so the
+# `apply_create_template` in system/vendor/mngr/.../common_opts.py), so the
 # mode-specific templates (docker/lima/...) keep their own commands.
 #
 # `mouse on` keeps wheel scroll and in-app mouse working in the browser
@@ -282,12 +282,12 @@ extra_window = ["bootstrap='uv run bootstrap'"]
 # mngr_ttyd plugin serving an OSC 52-capable web client (the stock ttyd client
 # drops these escapes); see libs/mngr_ttyd in the mngr repo.
 #
-# The final `if-shell ... source-file` line pulls in scripts/terminal_tmux.conf
+# The final `if-shell ... source-file` line pulls in system/scripts/terminal_tmux.conf
 # (committed to /home/user/workspace), which holds the in-memory-persistent-terminals
 # settings: a larger history-limit, window-size latest, and the tab-title
 # tracking hooks. It lives in its own file so those hook lines stay readable.
 extra_provision_command__extend = [
-    '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' 'set -g set-clipboard on' 'set -as terminal-features ,*:clipboard' 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'if-shell "test -f /home/user/workspace/scripts/terminal_tmux.conf" "source-file /home/user/workspace/scripts/terminal_tmux.conf"' > "$HOME/.tmux.conf"''',
+    '''printf '%s\n' 'set -g alternate-screen off' 'set -g mouse on' 'set -g set-clipboard on' 'set -as terminal-features ,*:clipboard' 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel' 'if-shell "test -f /home/user/workspace/system/scripts/terminal_tmux.conf" "source-file /home/user/workspace/system/scripts/terminal_tmux.conf"' > "$HOME/.tmux.conf"''',
 ]
 
 # Shared base template for the local docker provider. Used on its own for the
@@ -300,7 +300,7 @@ extra_provision_command__extend = [
 provider = "docker"
 target_path = "/home/user/workspace/"
 setting__extend = ["providers.docker.is_enabled=true"]
-build_arg__extend = ["--file=Dockerfile", "."]
+build_arg__extend = ["--file=system/Dockerfile", "."]
 # Security hardening for `docker run`: block privilege escalation via setuid
 # binaries. `--cap-add=SYS_PTRACE` was removed deliberately -- gVisor is the
 # isolation boundary now, and the extra capability widened the container's
@@ -325,7 +325,7 @@ idle_mode = "disabled"
 # Seed /home/user/workspace from /docker_build_code (baked into the image) onto the
 # per-host volume. Runs synchronously after the host is online but
 # before any agent work_dir setup, so the workspace is in place by the
-# time the user's git refs land on top. See scripts/default_workspace_template_seed.sh.
+# time the user's git refs land on top. See system/scripts/default_workspace_template_seed.sh.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
 
 # gVisor (runsc) runtime overlay for the docker provider. Always stacked on top
@@ -364,7 +364,7 @@ setting__extend = ["providers.lima.is_enabled=true"]
 # Run the SAME setup as a Dockerfile-built workspace, directly in the VM as root.
 # These run after the project is synced to /home/user/workspace (agent-level provisioning,
 # post work_dir sync) and reuse the exact scripts the Dockerfile RUNs. There is
-# no docker build (so no `--file=Dockerfile` build arg) and no /docker_build_code
+# no docker build (so no `--file=system/Dockerfile` build arg) and no /docker_build_code
 # relocation (the repo lands straight on the VM's btrfs /home/user disk), so the
 # docker template's build_arg + post_host_create_command (default-workspace-template-seed) are
 # intentionally absent here. extra_provision_command__extend stacks after the
@@ -377,18 +377,18 @@ extra_provision_command__extend = [
     # (Direct passwd edit rather than `usermod -d`: usermod refuses to modify
     # a user with running processes, and root always has one here.)
     "sed -i 's|^root:\\([^:]*:[^:]*:[^:]*:[^:]*\\):/root:|root:\\1:/home/user:|' /etc/passwd && grep -q '^root:.*:/home/user:' /etc/passwd && mkdir -p /home/user /var/cache/user",
-    "bash /home/user/workspace/scripts/setup_system.sh",
-    "bash /home/user/workspace/scripts/install_dependencies.sh",
-    "bash /home/user/workspace/scripts/build_workspace.sh",
+    "bash /home/user/workspace/system/scripts/setup_system.sh",
+    "bash /home/user/workspace/system/scripts/install_dependencies.sh",
+    "bash /home/user/workspace/system/scripts/build_workspace.sh",
     # Same home-skeleton seeding the docker first-boot seed performs
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
-    "sh /home/user/workspace/scripts/seed_home_skeleton.sh",
+    "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
     # Install a systemd unit that relaunches the system-services agent on VM
     # boot, so the workspace recovers from a VM reboot even when the minds
     # desktop app is not running. The agent runs directly in the VM here, so
     # this runs `mngr start system-services` in the VM (mngr is installed by
     # build_workspace.sh above).
-    "bash /home/user/workspace/scripts/minds_lima_autostart.sh",
+    "bash /home/user/workspace/system/scripts/minds_lima_autostart.sh",
 ]
 
 # template for the Modal sandbox provider (the "modal" compute provider).
@@ -427,12 +427,12 @@ extra_provision_command__extend = [
     # (Direct passwd edit rather than `usermod -d`: usermod refuses to modify
     # a user with running processes, and root always has one here.)
     "sed -i 's|^root:\\([^:]*:[^:]*:[^:]*:[^:]*\\):/root:|root:\\1:/home/user:|' /etc/passwd && grep -q '^root:.*:/home/user:' /etc/passwd && mkdir -p /home/user /var/cache/user",
-    "bash /home/user/workspace/scripts/setup_system.sh",
-    "bash /home/user/workspace/scripts/install_dependencies.sh",
-    "bash /home/user/workspace/scripts/build_workspace.sh",
+    "bash /home/user/workspace/system/scripts/setup_system.sh",
+    "bash /home/user/workspace/system/scripts/install_dependencies.sh",
+    "bash /home/user/workspace/system/scripts/build_workspace.sh",
     # Same home-skeleton seeding the docker first-boot seed performs
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
-    "sh /home/user/workspace/scripts/seed_home_skeleton.sh",
+    "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
 ]
 
 # template for vultr VPS provider (cloud mode)
@@ -448,7 +448,7 @@ target_path = "/home/user/workspace/"
 # imbue_cloud-pool create lands in the same place; CLI users who want
 # a different region can still override per-invocation with
 # ``-b --vps-region=<other>``.
-build_arg__extend = ["--file=Dockerfile", "--vps-plan=vc2-2c-4gb", "--vps-region=sjc", "."]
+build_arg__extend = ["--file=system/Dockerfile", "--vps-plan=vc2-2c-4gb", "--vps-region=sjc", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
 idle_mode = "disabled"
@@ -478,7 +478,7 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 set -u
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
     docker start "$cid" >/dev/null 2>&1 || true
-    docker exec --workdir / "$cid" bash -lc 'exec /home/user/workspace/scripts/minds_start_services_agent.sh' || true
+    docker exec --workdir / "$cid" bash -lc 'exec /home/user/workspace/system/scripts/minds_start_services_agent.sh' || true
 done
 BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
@@ -513,7 +513,7 @@ target_path = "/home/user/workspace/"
 # invocation -- the OVH backend appends ``-b --vps-datacenter=<region>`` (plan
 # defaults from ``OvhProviderConfig.default_plan``), the slice backend passes the
 # box address + per-slice carve sizing via ``-S providers.imbue_cloud_slice.*``.
-build_arg__extend = ["--file=Dockerfile", "."]
+build_arg__extend = ["--file=system/Dockerfile", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
 idle_mode = "disabled"
@@ -548,7 +548,7 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 set -u
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
     docker start "$cid" >/dev/null 2>&1 || true
-    docker exec --workdir / "$cid" bash -lc 'exec /home/user/workspace/scripts/minds_start_services_agent.sh' || true
+    docker exec --workdir / "$cid" bash -lc 'exec /home/user/workspace/system/scripts/minds_start_services_agent.sh' || true
 done
 BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
@@ -582,7 +582,7 @@ target_path = "/home/user/workspace/"
 # type is baked in: the region comes from the provider block's `default_region`
 # (and the matching `-b --aws-region=` minds passes), the instance type from
 # `AwsProviderConfig.default_instance_type`.
-build_arg__extend = ["--file=Dockerfile", "."]
+build_arg__extend = ["--file=system/Dockerfile", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown. The
 # AWS provider's `auto_shutdown_seconds` max-lifetime cap is also left unset
 # (the minds-written provider blocks don't set it), so the EC2 instance stays
@@ -615,7 +615,7 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 set -u
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
     docker start "$cid" >/dev/null 2>&1 || true
-    docker exec --workdir / "$cid" bash -lc 'exec /home/user/workspace/scripts/minds_start_services_agent.sh' || true
+    docker exec --workdir / "$cid" bash -lc 'exec /home/user/workspace/system/scripts/minds_start_services_agent.sh' || true
 done
 BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
@@ -660,7 +660,7 @@ target_path = "/home/user/workspace/"
 # container and rebuilds it from this Dockerfile). The FAST path adopts the
 # pre-baked image and ignores these (the imbue_cloud provider treats them as
 # pass-through and only the slow path consumes them). Mirrors the ovh template.
-build_arg__extend = ["--file=Dockerfile", "."]
+build_arg__extend = ["--file=system/Dockerfile", "."]
 # `--restart=unless-stopped` on the inner agent container so a slow-path rebuild
 # (which recreates the container) comes back after a pool-VM reboot, matching the
 # baked container from the pool_host template. The fast (adopt) path reuses the
@@ -694,7 +694,7 @@ type = "claude"
 # Worker template: general purpose sub agent for doing tasks reliably (and ensuring that they are verified)
 [create_templates.worker]
 type = "worker"
-extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+extra_window = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 # The stop hook stays enabled (REVIEWER_STOP_HOOK_ENABLE=1) for a single
 # purpose: its uncommitted-changes gate, which keeps a worker from ending a
 # turn with uncommitted work (that work is silently lost when the branch is
@@ -726,7 +726,7 @@ agent_args = [
 #    file and composes the matching references.
 [create_templates.subskill-worker]
 type = "worker"
-extra_window = ["reviewer_settings='scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+extra_window = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 # Same rationale as the worker template: stop hook on for commit enforcement
 # only, autofix + architecture gates off (handled by skill prompting), CI off.
 env = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]

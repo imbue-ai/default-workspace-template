@@ -485,7 +485,7 @@ def _activity_endpoint() -> Response:
 
 
 def _upload_attachment() -> Response:
-    """Store a file the user attached to a chat message under uploads/.
+    """Store a file the user attached to a chat message under data/uploads/.
 
     The frontend uploads each attachment here as soon as the user drops, pastes,
     or picks it, then appends the returned absolute path to the message text it
@@ -510,7 +510,7 @@ def _upload_attachment() -> Response:
 
 
 def _serve_attachment(relative_path: str) -> Response:
-    """Serve a stored attachment for inline preview, confined to uploads/."""
+    """Serve a stored attachment for inline preview, confined to data/uploads/."""
     resolved_path = resolve_upload_path(get_uploads_directory(), relative_path)
     if resolved_path is None:
         error = ErrorResponse(detail=f"Attachment '{relative_path}' not found")
@@ -904,7 +904,7 @@ def _set_terminal_banner_dismissed() -> Response:
 def _resolve_terminal_id_for_tty(client_tty: str) -> str | None:
     """Reverse-look-up the dockview terminal id bound to a tmux client tty.
 
-    ``scripts/run_ttyd.sh`` records ``terminal_id -> $(tty)`` files under
+    ``system/scripts/run_ttyd.sh`` records ``terminal_id -> $(tty)`` files under
     ``$MNGR_AGENT_STATE_DIR/commands/ttyd/clients/`` when a tab attaches; this
     finds the id whose recorded tty matches ``client_tty``. Returns None when
     the mapping directory or a matching entry is absent.
@@ -1346,7 +1346,7 @@ def _resolve_requested_layout_slug(
 
 
 def _layout_broadcast_endpoint() -> Response:
-    """Unified loopback endpoint for the agent-facing ``scripts/layout.py`` helper.
+    """Unified loopback endpoint for the agent-facing ``system/scripts/layout.py`` helper.
 
     Body: ``{op, args, agent_id}``.
 
@@ -1661,7 +1661,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
         application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
 
     # Service forwarding routes: /service/<name>/... forwards to the service's
-    # local backend (from runtime/applications.toml) with path rewriting,
+    # local backend (from data/.state/applications.toml) with path rewriting,
     # cookie scoping, WS shim, and a scoped service worker.
     register_service_routes(application, sock)
 

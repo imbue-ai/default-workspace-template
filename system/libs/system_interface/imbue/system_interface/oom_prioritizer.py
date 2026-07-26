@@ -1,7 +1,7 @@
 """Re-tag chat agents' memory-shedding priority from live workspace activity.
 
 The launch wrapper tags every agent's ``oom_score_adj`` once at startup (see
-``libs/oom_priority``). This engine keeps *chat* agents' scores current as the
+``system/libs/oom_priority``). This engine keeps *chat* agents' scores current as the
 user engages with them: the more a chat is engaged with, the more protected it is
 from an out-of-memory shed. Three signals feed it, all reported by the frontend
 through the single ``/api/activity`` endpoint:

@@ -8,7 +8,7 @@ from werkzeug.utils import secure_filename
 
 from imbue.system_interface.models import AttachmentError
 
-# Chat attachments live under a top-level, gitignored ``uploads/`` directory.
+# Chat attachments live under a top-level, gitignored ``data/uploads/`` directory.
 # They are kept OUT of ``runtime/`` because a user upload can be arbitrarily
 # large and of any format, which does not belong in the runtime-backed content;
 # the directory is gitignored so uploads are never committed to the main branch.

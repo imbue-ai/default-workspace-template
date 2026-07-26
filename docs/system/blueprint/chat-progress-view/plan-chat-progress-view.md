@@ -183,7 +183,7 @@
 
 ## Implementation plan
 
-### `vendor/tk/ticket`
+### `system/vendor/tk/ticket`
 
 - `cmd_create`: when `--step`, print `Created <id>: <title>` on **stdout** (today
   it prints the bare id). Keep bare-id stdout for regular (non-step) creates so
@@ -201,7 +201,7 @@
   primary "is a step" signal), the `agent` creator stamp, and the mandatory
   close summary.
 
-### `apps/system_interface/imbue/system_interface/session_parser.py`
+### `system/libs/system_interface/imbue/system_interface/session_parser.py`
 
 - Extend `_truncate_tool_output` to also preserve `tk-step <id> ...` lines (same
   mechanism that protects `Updated <id> -> <status>` today).
@@ -210,7 +210,7 @@
   truncation, so batched multi-create commands and long titles survive for the
   historical input fallback.
 
-### `apps/system_interface/frontend/src/views/turn-grouping.ts`
+### `system/libs/system_interface/frontend/src/views/turn-grouping.ts`
 
 - **Decoration source:** parse `Created <id>: ...` and `tk-step <id> title|summary: ...`
   from tool outputs into a per-id decoration map built in **one global pass over
@@ -234,13 +234,13 @@
 - **Deletions:** the `enrichment` parameter and all joins on it; `file_missing`
   handling.
 
-### `apps/system_interface/frontend/src/models/Response.ts` and `StreamingMessage.ts`
+### `system/libs/system_interface/frontend/src/models/Response.ts` and `StreamingMessage.ts`
 
 - Delete `StepEnrichment`, the `#enrichment` store, `applyEnrichment` /
   `applyEnrichmentSnapshot` / `getEnrichmentForAgent`, the `step_enrichment`
   field on the events response, and the `step_enrichment` SSE message handling.
 
-### `apps/system_interface/frontend/src/views/ProgressBlock.ts` + `style.css`
+### `system/libs/system_interface/frontend/src/views/ProgressBlock.ts` + `style.css`
 
 - Remove the `file_missing` "?" marker UI and its tooltip/aria handling.
 - Remove the dead `.pv-tl-children` / `.pv-tl-node--ticket` CSS.
@@ -248,7 +248,7 @@
   ejection model, ejected prose renders as an ordinary ungrouped block, so the
   dedicated `.pv-interstep` block can be removed (confirm against mocks).
 
-### `apps/system_interface/frontend/src/views/ChatPanel.ts`
+### `system/libs/system_interface/frontend/src/views/ChatPanel.ts`
 
 - Update `buildSections` call site to drop the enrichment argument; everything
   else (virtualization, buildRows) is unchanged.
@@ -260,7 +260,7 @@
   `app.state.tickets_watchers`, the `step_enrichment` field on GET `/events`, and
   the shutdown teardown loop.
 
-### Hooks + CLAUDE.md (`scripts/`, `CLAUDE.md`)
+### Hooks + CLAUDE.md (`system/scripts/`, `CLAUDE.md`)
 
 - `claude_open_tickets_stop_nudge.sh` and `claude_open_tickets_reminder.sh`:
   **unchanged.** Carryover means there is no auto-close to perform; the existing
@@ -308,7 +308,7 @@
   matches today's; leave a step open across a follow-up user message and confirm
   it carries over to the next turn while the prior node freezes.
 - **Full suites before done:** `npm run lint`, `npm run test`, and
-  `uv run pytest` for `apps/system_interface`.
+  `uv run pytest` for `system/libs/system_interface`.
 
 ## Open questions
 
@@ -327,7 +327,7 @@
 
 ## Related (not superseded)
 
-- `blueprint/scaling-design/` covers the virtualized list / pagination and is a
+- `docs/system/blueprint/scaling-design/` covers the virtualized list / pagination and is a
   separate concern. It references the old `step_enrichment` response field in its
   description of the `/events` shape; that reference is stale once Phase 2 lands
   and should be read as historical.

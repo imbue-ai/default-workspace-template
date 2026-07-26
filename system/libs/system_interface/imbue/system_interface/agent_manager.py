@@ -55,7 +55,7 @@ from imbue.system_interface.models import ApplicationEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
-_APPLICATIONS_TOML_FILENAME = "runtime/applications.toml"
+_APPLICATIONS_TOML_FILENAME = "data/.state/applications.toml"
 _APPLICATIONS_TOML_BASENAME = "applications.toml"
 _DEFAULT_MNGR_BINARY = "mngr"
 # The production messenger: a stateless, frozen value whose discover/send are the
@@ -238,7 +238,7 @@ class _ApplicationsFileHandler(FileSystemEventHandler):
     a feedback loop -- the handler reads the file, the read triggers fresh
     open/close-no-write events, and one CPU core is pinned per agent watcher.
 
-    ``on_modified`` alone is insufficient because scripts/forward_port.py
+    ``on_modified`` alone is insufficient because system/scripts/forward_port.py
     upserts atomically via ``tempfile.mkstemp`` + ``os.replace``, which
     surfaces as a moved/created event, not a modified event. ``on_closed``
     (``IN_CLOSE_WRITE``) is included so that direct writers which don't go
@@ -285,7 +285,7 @@ class AgentManager:
     """Manages agent lifecycle detection, application watching, and agent creation.
 
     Runs mngr observe as a subprocess for event-driven agent lifecycle detection.
-    Watches runtime/applications.toml for each agent.
+    Watches data/.state/applications.toml for each agent.
     Handles agent creation via local mngr create calls.
     """
 
@@ -1080,7 +1080,7 @@ class AgentManager:
         )
 
     def _start_app_watcher(self, agent_id: str, work_dir: Path) -> None:
-        """Start watching runtime/applications.toml for an agent."""
+        """Start watching data/.state/applications.toml for an agent."""
         with self._lock:
             if agent_id in self._app_observers:
                 return
@@ -1283,7 +1283,7 @@ class AgentManager:
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
     def _read_applications(self, toml_path: Path) -> None:
-        """Read and parse runtime/applications.toml for the primary agent."""
+        """Read and parse data/.state/applications.toml for the primary agent."""
         apps: list[ApplicationEntry] = []
         if toml_path.exists():
             try:

@@ -128,7 +128,7 @@ def _upload_relative_path(stored_path: str) -> str:
 
 
 def test_upload_attachment_stores_file_and_returns_path(client: FlaskClient) -> None:
-    """Uploading a file stores it under uploads/ and returns its path and size."""
+    """Uploading a file stores it under data/uploads/ and returns its path and size."""
     response = client.post(
         "/api/uploads",
         data={"file": (io.BytesIO(b"image-bytes"), "diagram.png")},
@@ -1717,7 +1717,7 @@ def test_start_failure_returns_500(client: FlaskClient, app: Flask) -> None:
 
 def test_destroy_argv_accepted_by_live_cli() -> None:
     """Confront the ``mngr destroy`` argv with the live ``imbue.mngr.main.cli``
-    tree, so a vendor/mngr rename of that subcommand/flag fails here at merge
+    tree, so a system/vendor/mngr rename of that subcommand/flag fails here at merge
     time rather than only surfacing at runtime."""
     assert_mngr_argv_valid(_build_destroy_command("demo"))
 

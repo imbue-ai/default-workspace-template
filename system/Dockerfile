@@ -1,12 +1,12 @@
 FROM python:3.12-slim-trixie
 
-# /root/.local/bin holds uv + claude (installed by scripts/setup_system.sh); put
+# /root/.local/bin holds uv + claude (installed by system/scripts/setup_system.sh); put
 # it on PATH for every build layer and at runtime.
 ENV PATH="/root/.local/bin:$PATH"
 
 # Pin Claude Code; passed to setup_system.sh and recorded for the runtime version
 # check. Keep in sync with agent_types.claude.version in .mngr/settings.toml and
-# the default in scripts/setup_system.sh. Bump deliberately, not by accident.
+# the default in system/scripts/setup_system.sh. Bump deliberately, not by accident.
 ARG CLAUDE_CODE_VERSION=2.1.207
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 
@@ -34,14 +34,14 @@ ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 # system-toolchain layer below resolves against the frozen universe; the
 # script and timestamp ride their own COPY so a T bump invalidates exactly
 # the layers that depend on package versions.
-COPY scripts/write_apt_sources.sh /usr/local/bin/default-workspace-template-write-apt-sources
+COPY system/scripts/write_apt_sources.sh /usr/local/bin/default-workspace-template-write-apt-sources
 COPY .mngr/apt-snapshot-timestamp /etc/default-workspace-template-apt-snapshot-timestamp
 RUN chmod +x /usr/local/bin/default-workspace-template-write-apt-sources \
     && default-workspace-template-write-apt-sources "$(cat /etc/default-workspace-template-apt-snapshot-timestamp)"
 
-COPY scripts/setup_system.sh /usr/local/bin/default-workspace-template-setup-system
-COPY scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
-COPY scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
+COPY system/scripts/setup_system.sh /usr/local/bin/default-workspace-template-setup-system
+COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
+COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
 RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners && default-workspace-template-setup-system
 
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
@@ -65,32 +65,32 @@ WORKDIR /home/user/workspace/
 
 # Root + per-workspace-member pyproject.toml + uv.lock.
 COPY pyproject.toml uv.lock /home/user/workspace/
-COPY libs/app_watcher/pyproject.toml /home/user/workspace/libs/app_watcher/pyproject.toml
-COPY libs/bootstrap/pyproject.toml /home/user/workspace/libs/bootstrap/pyproject.toml
-COPY libs/cloudflare_tunnel/pyproject.toml /home/user/workspace/libs/cloudflare_tunnel/pyproject.toml
-COPY libs/github_sync/pyproject.toml /home/user/workspace/libs/github_sync/pyproject.toml
-COPY apps/system_interface/pyproject.toml /home/user/workspace/apps/system_interface/pyproject.toml
+COPY system/libs/app_watcher/pyproject.toml /home/user/workspace/system/libs/app_watcher/pyproject.toml
+COPY system/libs/bootstrap/pyproject.toml /home/user/workspace/system/libs/bootstrap/pyproject.toml
+COPY system/libs/cloudflare_tunnel/pyproject.toml /home/user/workspace/system/libs/cloudflare_tunnel/pyproject.toml
+COPY system/libs/github_sync/pyproject.toml /home/user/workspace/system/libs/github_sync/pyproject.toml
+COPY system/libs/system_interface/pyproject.toml /home/user/workspace/system/libs/system_interface/pyproject.toml
 
-# vendor/mngr path-dependency manifests. The root pyproject.toml's
+# system/vendor/mngr path-dependency manifests. The root pyproject.toml's
 # [tool.uv.sources] points imbue-common, imbue-mngr, imbue-mngr-claude,
-# resource-guards, and concurrency-group at vendor/mngr/libs/<pkg>; uv
+# resource-guards, and concurrency-group at system/vendor/mngr/libs/<pkg>; uv
 # needs each pyproject.toml present to resolve the workspace. mngr_modal
 # and mngr_wait are also workspace members whose transitive deps benefit
 # from pre-warming even though only mngr_wait is registered post-COPY
 # (as a mngr plugin, not a tool install).
-COPY vendor/mngr/libs/imbue_common/pyproject.toml /home/user/workspace/vendor/mngr/libs/imbue_common/pyproject.toml
-COPY vendor/mngr/libs/mngr/pyproject.toml /home/user/workspace/vendor/mngr/libs/mngr/pyproject.toml
-COPY vendor/mngr/libs/mngr_claude/pyproject.toml /home/user/workspace/vendor/mngr/libs/mngr_claude/pyproject.toml
-COPY vendor/mngr/libs/mngr_modal/pyproject.toml /home/user/workspace/vendor/mngr/libs/mngr_modal/pyproject.toml
-COPY vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/vendor/mngr/libs/mngr_wait/pyproject.toml
-COPY vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/vendor/mngr/libs/resource_guards/pyproject.toml
-COPY vendor/mngr/libs/concurrency_group/pyproject.toml /home/user/workspace/vendor/mngr/libs/concurrency_group/pyproject.toml
+COPY system/vendor/mngr/libs/imbue_common/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/imbue_common/pyproject.toml
+COPY system/vendor/mngr/libs/mngr/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_claude/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_claude/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_modal/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_modal/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_wait/pyproject.toml
+COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/resource_guards/pyproject.toml
+COPY system/vendor/mngr/libs/concurrency_group/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/concurrency_group/pyproject.toml
 
 # Frontend npm manifest (lockfile + package.json) -- install needs only these.
-COPY apps/system_interface/frontend/package.json apps/system_interface/frontend/package-lock.json /home/user/workspace/apps/system_interface/frontend/
+COPY system/libs/system_interface/frontend/package.json system/libs/system_interface/frontend/package-lock.json /home/user/workspace/system/libs/system_interface/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
-COPY scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies
+COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies
 RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
 
 # ============================================================================
@@ -101,7 +101,7 @@ RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && d
 COPY . /home/user/workspace/
 
 # Build the workspace from full source. Shared verbatim with the Lima provider.
-RUN bash /home/user/workspace/scripts/build_workspace.sh
+RUN bash /home/user/workspace/system/scripts/build_workspace.sh
 
 # Move the baked workspace off the volume mount path so the shipped
 # image has /home/user/workspace/ EMPTY. At runtime, /home/user is a persistent
@@ -143,5 +143,5 @@ RUN sed -i 's|^root:\([^:]*:[^:]*:[^:]*:[^:]*\):/root:|root:\1:/home/user:|' /et
 #
 # Source mode bits are already +x; chmod is defensive in case the file
 # is checked out without exec bits.
-COPY scripts/default_workspace_template_seed.sh /usr/local/bin/default-workspace-template-seed
+COPY system/scripts/default_workspace_template_seed.sh /usr/local/bin/default-workspace-template-seed
 RUN chmod +x /usr/local/bin/default-workspace-template-seed

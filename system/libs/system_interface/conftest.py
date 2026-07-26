@@ -1,6 +1,6 @@
 """Project-level conftest for system-interface.
 
-When running tests from apps/system_interface/, this conftest provides the common pytest hooks
+When running tests from system/libs/system_interface/, this conftest provides the common pytest hooks
 that would otherwise come from the monorepo root conftest.py (which is not discovered
 when pytest runs from a subdirectory).
 

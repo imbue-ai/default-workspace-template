@@ -214,7 +214,7 @@ class WebSocketBroadcaster(MutableModel):
         ``open``).
 
         ``requester_agent_id`` is the ``MNGR_AGENT_ID`` of the agent that invoked
-        ``scripts/layout.py``. The frontend uses it to anchor splits against the
+        ``system/scripts/layout.py``. The frontend uses it to anchor splits against the
         requester's own chat panel and to resolve the ``self`` ref.
 
         ``target_layout_slug`` restricts delivery to clients whose active layout

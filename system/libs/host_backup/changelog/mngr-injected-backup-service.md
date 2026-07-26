@@ -2,9 +2,9 @@ Refactored host_backup so the minds desktop app can idempotently inject/update t
 
 - Snapshot mechanics are now "backup capabilities" detected in memory by the service itself at startup (new `host_backup/capabilities.py`, same trigger-dir/findmnt decision tree bootstrap used); they are no longer configured via `backup.toml`. A `capabilities_detected` event is emitted once at service startup.
 
-- `runtime/backup.toml` is now purely optional user settings (interval, retention, excludes) with built-in defaults. Loading is tolerant: unknown keys (including the stale `[snapshot]` section pre-refactor bootstraps keep writing) and malformed values are logged and skipped instead of crashing the service, and one malformed value never blocks the remaining valid settings. The config is re-parsed only when `backup.toml`'s mtime moves, so tolerant-parse warnings appear once per edit rather than every poll.
+- `data/system/backup.toml` is now purely optional user settings (interval, retention, excludes) with built-in defaults. Loading is tolerant: unknown keys (including the stale `[snapshot]` section pre-refactor bootstraps keep writing) and malformed values are logged and skipped instead of crashing the service, and one malformed value never blocks the remaining valid settings. The config is re-parsed only when `backup.toml`'s mtime moves, so tolerant-parse warnings appear once per edit rather than every poll.
 
-- A missing `runtime/secrets/restic.env` simply means backups are not configured; the minds app is the only writer (bootstrap no longer seeds a template).
+- A missing `data/.secrets/restic.env` simply means backups are not configured; the minds app is the only writer (bootstrap no longer seeds a template).
 
 - A config file *appearing* (or disappearing) now counts as a config change: since neither file is seeded anymore, the runner fires a prompt backup tick when minds first injects `restic.env` into a running workspace, or when `host-backup-now` creates an absent `backup.toml` -- instead of waiting out the full backup interval.
 

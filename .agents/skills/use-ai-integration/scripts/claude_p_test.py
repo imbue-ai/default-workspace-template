@@ -195,7 +195,7 @@ def test_child_env_strips_mngr_vars_when_requested(
 def _isolate_credential_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point every credential source at an empty tmp dir; return a settings path.
 
-    chdir isolates the runtime/secrets/anthropic.env snapshot (a repo-root
+    chdir isolates the data/.secrets/anthropic.env snapshot (a repo-root
     relative path); CLAUDE_CONFIG_DIR points at the tmp dir for settings; the
     process-env credential vars are cleared.
     """

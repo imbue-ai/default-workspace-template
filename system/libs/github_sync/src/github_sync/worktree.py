@@ -236,7 +236,7 @@ def init_runtime_worktree() -> bool:
         git_runtime("branch", "--set-upstream-to", remote_ref)
 
     # Every path must end with the secrets-excluding .gitignore in place:
-    # runtime/secrets holds e.g. the Cloudflare tunnel token, which must never
+    # data/.secrets holds e.g. the Cloudflare tunnel token, which must never
     # reach the remote. A restored or reattached branch normally already
     # carries the file in its history, but a branch left behind by an
     # interrupted prior init (created just before its `worktree add` failed)

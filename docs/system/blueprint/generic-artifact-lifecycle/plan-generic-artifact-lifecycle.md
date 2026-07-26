@@ -76,12 +76,12 @@
 
 - Delete `crystallize-task/`, `update-skill/`, `heal-skill/` (skill dirs + their `assets/worker/` and per-flow references). Their behavior is fully covered by the generic leads with `artifact=skill`; their triggers move to the leads' `description`s.
 - `build-web-service/` and `fetch-process-show/` stay as live-half wrappers; their `assets/worker/` is removed and their harden handoff points at `crystallize-artifact` + the generic worker.
-- `update-system-interface/` stays as the entry point but becomes a thin wrapper over `update-artifact` (`artifact=system-interface`): it keeps `scripts/reveal_system_interface.py`, the pre-merge **preview** step, and `safe-reveal` go-live, but delegates the worker/orchestration core. Its `assets/worker/SKILL.md` collapses into the generic worker + `artifact-system-interface.md`.
+- `update-system-interface/` stays as the entry point but becomes a thin wrapper over `update-artifact` (`artifact=system-interface`): it keeps `system/scripts/reveal_system_interface.py`, the pre-merge **preview** step, and `safe-reveal` go-live, but delegates the worker/orchestration core. Its `assets/worker/SKILL.md` collapses into the generic worker + `artifact-system-interface.md`.
 - `do-something-new/`, `launch-task/` unchanged (router; worker plumbing).
 
 ### Migration and cleanup
 
-- Delete `scripts/detect_crystallization_candidate.py` and `scripts/detect_crystallization_candidate_test.py` — referenced in docs as a Stop-hook nudge but never wired into `.claude/settings.json`.
+- Delete `system/scripts/detect_crystallization_candidate.py` and `system/scripts/detect_crystallization_candidate_test.py` — referenced in docs as a Stop-hook nudge but never wired into `.claude/settings.json`.
 - Repo-wide grep: repoint every reference to `crystallize-task` / `update-skill` / `heal-skill` (and the `crystallize-artifact.md` reference rename) to the generic leads / `harden-artifact.md` — including `CLAUDE.md`'s lifecycle section, `README.md:38`, the `worker-gates-via-main` spec mentions, and the live-half wrappers.
 - `CLAUDE.md` lifecycle section: restate the three operations as `crystallize-artifact` / `update-artifact` / `heal-artifact`, correct the "stop-hook crystallization nudge" wording (it is documentation/manual, not a wired hook), and point at `harden-artifact.md` as the universal worker contract.
 

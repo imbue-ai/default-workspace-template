@@ -3,7 +3,7 @@
 ## Overview
 
 - The three skill-lifecycle flows (`crystallize-task`, `heal-skill`, `update-skill`) plus their worker sub-skills currently duplicate substantial prose and embed shared scripts under `crystallize-task/`. This refactor extracts the shared pieces into a new non-skill directory so each flow owns only its flow-specific content.
-- New home: `.agents/shared/` — sibling to `.agents/skills/`, with no SKILL.md so the skill loader ignores it. Contains `scripts/` and `references/` only.
+- New home: `.agents/shared/` — sibling to `.agents/skills/`, with no SKILL.md so the skill loader ignores it. Contains `system/scripts/` and `references/` only.
 - Worker sub-skills move to live under their parent skill's `assets/worker/` rather than all three being nested inside `crystallize-task/assets/`.
 - The `Mode A` / `Mode B` dichotomy in `update-skill` and `update-skill-worker` is renamed to `absorb` / `verify` — both in filenames and in the `MODE: A|B` task-file marker (now `FLOW: absorb|verify`).
 - CLAUDE.md's "Proxying worker reports" section is deleted outright (that content is now in the shared references); "Using crystallized skills" shrinks to a 3-5 bullet trigger list.

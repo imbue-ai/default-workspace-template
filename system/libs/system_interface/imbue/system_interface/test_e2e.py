@@ -485,7 +485,7 @@ _TRIGGER_TIMEOUT_MS = 20000
 def _broadcast_layout_op(base_url: str, op: str, args: dict[str, Any], agent_id: str) -> None:
     """POST a layout op to the loopback ``/api/layout/broadcast`` endpoint.
 
-    This is the same path ``scripts/layout.py`` drives, so issuing a ``split``
+    This is the same path ``system/scripts/layout.py`` drives, so issuing a ``split``
     here exercises the real frontend ``handleSplit`` handler (which carves the
     second group) rather than reaching into dockview internals from the test.
 

@@ -75,7 +75,7 @@ from typing import Any, Callable
 import tomlkit
 import yaml
 
-DEFAULT_APPLICATIONS_FILE = "runtime/applications.toml"
+DEFAULT_APPLICATIONS_FILE = "data/.state/applications.toml"
 ENV_APPLICATIONS_FILE = "MINDS_APPLICATIONS_FILE"
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
@@ -150,7 +150,7 @@ def _mngr_agent_id() -> str:
 def _applications_file() -> Path:
     """Path to the agent's applications.toml registry.
 
-    Defaults to ``runtime/applications.toml`` relative to cwd (the script
+    Defaults to ``data/.state/applications.toml`` relative to cwd (the script
     is invoked from the agent's repo root). Override via
     ``MINDS_APPLICATIONS_FILE`` -- used by tests to point at a sandboxed
     fixture without depending on cwd.

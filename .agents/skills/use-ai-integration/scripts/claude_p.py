@@ -16,7 +16,7 @@ Workspace credentials live in the ``env`` block of the shared
 modal), NOT in the process environment -- long-lived services inherit a
 frozen env from supervisord, so an env-var check would go stale the moment
 the user changes auth. Keyed (API key) integrations additionally snapshot
-the key + base URL into ``runtime/secrets/anthropic.env`` at setup time
+the key + base URL into ``data/.secrets/anthropic.env`` at setup time
 (``write_anthropic_env_snapshot``): the workspace's sign-in can change
 after a service is built, and a keyed service keeps billing against the
 key it was set up with rather than silently switching. The user removes or
@@ -97,7 +97,7 @@ class WorkspaceAICredentials:
 # them from /home/user/workspace). Holds ONLY ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL): the
 # subscription oauth token cannot authenticate direct API calls, so it is
 # never written here.
-ANTHROPIC_ENV_SNAPSHOT_PATH = "runtime/secrets/anthropic.env"
+ANTHROPIC_ENV_SNAPSHOT_PATH = "data/.secrets/anthropic.env"
 
 
 def _read_env_file(path: str) -> dict[str, str]:
@@ -120,7 +120,7 @@ def _read_env_file(path: str) -> dict[str, str]:
 def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     """Resolve current credentials: the snapshot file, then shared settings, then env.
 
-    ``runtime/secrets/anthropic.env`` -- the key snapshot a keyed integration
+    ``data/.secrets/anthropic.env`` -- the key snapshot a keyed integration
     writes at setup (``write_anthropic_env_snapshot``) -- wins for the API key
     and base URL: a built service stays pinned to the key it was set up with
     even after the user switches the workspace's sign-in in the modal. The
@@ -167,8 +167,8 @@ def write_anthropic_env_snapshot() -> str:
 
     Run once at integration-setup time (and again only to deliberately
     re-key). Writes ``ANTHROPIC_API_KEY`` and, when present,
-    ``ANTHROPIC_BASE_URL`` to ``runtime/secrets/anthropic.env`` with owner-only
-    permissions, creating ``runtime/secrets/`` if needed. Deliberately never
+    ``ANTHROPIC_BASE_URL`` to ``data/.secrets/anthropic.env`` with owner-only
+    permissions, creating ``data/.secrets/`` if needed. Deliberately never
     writes ``CLAUDE_CODE_OAUTH_TOKEN`` -- a subscription token cannot
     authenticate direct API calls. Raises when the workspace has no API key
     configured (the integration should use the keyless ``claude -p`` path

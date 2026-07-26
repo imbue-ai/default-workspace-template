@@ -187,7 +187,7 @@ browsers, each with an atomic ownership state machine, plus an
   persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/` (on the
   workspace volume), so cookies/logins/history come back -- using Chromium's own
   profile persistence (a `user_data_dir`), not anything hand-rolled. A tiny manifest
-  (`runtime/browser-fleet.json`, git-backed to the mindsbackup branch) records which
+  (`data/.state/browser-fleet.json`, git-backed to the mindsbackup branch) records which
   browsers existed and their tab URLs, so even a full rebuild restores the tab list.
   On daemon startup the fleet is restored eager-sequentially (one browser at a time --
   no cold-boot memory spike) behind an init gate: state-changing commands return a 503

@@ -75,7 +75,7 @@ rm -rf /var/lib/apt/lists/*
 # The Debian `supervisor` package enables a systemd unit that immediately starts
 # a supervisord against the default /etc/supervisor/supervisord.conf. On
 # systemd-based providers (lima/VPS) that daemon grabs /var/run/supervisor.sock
-# and makes `uv run bootstrap`'s `supervisord -c /home/user/workspace/supervisord.conf`
+# and makes `uv run bootstrap`'s `supervisord -c /home/user/workspace/system/supervisord.conf`
 # fail with "Another program is already listening". We always launch our own
 # supervisord from bootstrap, so disable + mask the packaged unit. Guarded so
 # it is a no-op on docker (no systemd / no systemctl on the slim image).
@@ -83,6 +83,12 @@ if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now supervisor 2>/dev/null || true
     systemctl mask supervisor 2>/dev/null || true
 fi
+
+# Point supervisor's default config search path at the workspace config so a
+# bare `supervisorctl` works from any cwd (the config lives under system/, so
+# the old "run it from the repo root" $CWD/supervisord.conf lookup no longer
+# applies). Dangles harmlessly until the workspace is seeded at first boot.
+ln -sfn /home/user/workspace/system/supervisord.conf /etc/supervisord.conf
 
 # The distro restic (bookworm ships 0.14) predates `restic restore --delete`,
 # which the minds in-place backup restore requires (restic >= 0.17). Install
@@ -176,7 +182,7 @@ cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
 #!/bin/sh
 # Best-effort apt Post-Invoke hook: refresh the environment record.
 [ -d /home/user/.mngr ] || exit 0
-[ -d /home/user/workspace/libs/env_converge ] || exit 0
+[ -d /home/user/workspace/system/libs/env_converge ] || exit 0
 cd /home/user/workspace || exit 0
 MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run env-converge capture >/dev/null 2>&1 || true
 HOOK

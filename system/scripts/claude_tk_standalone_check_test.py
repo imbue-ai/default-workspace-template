@@ -29,7 +29,7 @@ _ALLOWED = [
     'git commit -m "tk close the bug"',  # tk close only inside the commit message
     "echo 'run tk start later'",
     "git push origin main",
-    'vendor/tk/ticket close cod-step-x "s"',  # path-prefixed, still standalone
+    'system/vendor/tk/ticket close cod-step-x "s"',  # path-prefixed, still standalone
     "tk start $S1",
     # A leading env-var assignment does not suppress or reposition the output,
     # so it is benign -- the shell still prints `Updated ... -> ...` in place.

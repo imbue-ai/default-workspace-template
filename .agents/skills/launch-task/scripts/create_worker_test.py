@@ -165,7 +165,7 @@ def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
     live mngr CLI surface.
 
     Rather than re-asserting a hand-written expected argv (which mirrors the
-    production assumption and so can never catch a divergence when vendor/mngr
+    production assumption and so can never catch a divergence when system/vendor/mngr
     changes its CLI), we take exactly what ``launch`` hands the runner and
     confront it with ``imbue.mngr.main.cli``. It exercises the broadest argv set
     (create + two rsyncs + message) by declaring a ``source_artifacts_dir``.
@@ -831,11 +831,11 @@ def test_await_report_wins_over_pending_shed(tmp_path: Path) -> None:
 def test_read_finish_report_path_returns_field(tmp_path: Path) -> None:
     """_read_finish_report_path pulls the path out of the task frontmatter."""
     task = tmp_path / "task.md"
-    _write_await_task(task, Path("runtime/harden/crystallize-demo/reports/report.md"))
+    _write_await_task(task, Path("data/.tasks/harden/crystallize-demo/reports/report.md"))
 
     result = create_worker_mod._read_finish_report_path(task)
 
-    assert result == Path("runtime/harden/crystallize-demo/reports/report.md")
+    assert result == Path("data/.tasks/harden/crystallize-demo/reports/report.md")
 
 
 def test_read_finish_report_path_missing_raises(tmp_path: Path) -> None:

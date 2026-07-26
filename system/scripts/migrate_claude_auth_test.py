@@ -2,7 +2,7 @@
 
 The script's file-move phase is exercised directly (via importlib, the same
 pattern as claude_oom_launch_test.py); the detached restart phase is covered
-by the restart tests in apps/system_interface/claude_auth_test.py, which
+by the restart tests in system/libs/system_interface/claude_auth_test.py, which
 test the same `ClaudeAuthService.restart_all_claude_agents` the script calls.
 """
 

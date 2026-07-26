@@ -13,15 +13,15 @@ mngr create my-workspace main -t local \
 ## Structure
 
 - `CLAUDE.md` - Agent instructions
-- `parent.toml` - Upstream repo for pulling updates
+- `system/config/parent.toml` - Upstream repo for pulling updates
 - `.mngr/settings.toml` - Agent types, create templates, command defaults
 - `skills/` - Agent skills (task delegation, services, self-update)
-- `scripts/` - Utility scripts (reviewer settings)
+- `system/scripts/` - Utility scripts (reviewer settings)
 - `event-processor/` - Pre-configured directory for creating persistent sub-agents
-- `supervisord.conf` - Supervisord config defining the background services
-- `libs/bootstrap/` - First-boot setup, then launches supervisord to supervise the services
-- `vendor/mngr/` - A vendored, mutable copy of mngr. Note that making changes here *will* affect the behavior of the `mngr` command
-- `vendor/tk/` - A vendored copy of the [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script (also callable as `tk`) manages tickets stored as markdown. We point `TICKETS_DIR` at `runtime/tickets/` (set in `.mngr/settings.toml`'s `host_env`) so tickets live alongside the rest of `runtime/` (and are covered by the opt-in GitHub sync when the `github-sync` skill has enabled it).
+- `system/supervisord.conf` - Supervisord config defining the background services
+- `system/libs/bootstrap/` - First-boot setup, then launches supervisord to supervise the services
+- `system/vendor/mngr/` - A vendored, mutable copy of mngr. Note that making changes here *will* affect the behavior of the `mngr` command
+- `system/vendor/tk/` - A vendored copy of the [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script (also callable as `tk`) manages tickets stored as markdown. We point `TICKETS_DIR` at `data/.tickets/` (set in `.mngr/settings.toml`'s `host_env`) so tickets live alongside the rest of `runtime/` (and are covered by the opt-in GitHub sync when the `github-sync` skill has enabled it).
 
 ## Create templates
 
@@ -38,4 +38,4 @@ The main agent can promote ad-hoc work into reusable artifacts, fix artifacts th
 
 Each lead spawns a `subskill-worker` sub-agent that runs the single generic `harden-worker` sub-skill. The worker reads the operation and artifact from its task file and composes the universal `harden-artifact.md` contract with one `op-*.md` and one `artifact-*.md` reference under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs the `update-system-interface` flow, which wraps `update-artifact` with `artifact=system-interface` and adds its preview / safe-reveal go-live.)
 
-Crystallized skills are marked with `metadata.crystallized: true` in their SKILL.md frontmatter and follow the [agentskills.io](https://agentskills.io/specification) layout (`scripts/run.py` as a PEP 723 script, companion SKILL.md, optional `references/` and `assets/`).
+Crystallized skills are marked with `metadata.crystallized: true` in their SKILL.md frontmatter and follow the [agentskills.io](https://agentskills.io/specification) layout (`system/scripts/run.py` as a PEP 723 script, companion SKILL.md, optional `references/` and `assets/`).
