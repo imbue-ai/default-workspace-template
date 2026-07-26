@@ -2403,6 +2403,13 @@ function createReactiveIframeRenderer(panelId: string): IContentRenderer {
         },
       });
       postVisibility(parameters.api.isVisible);
+      // Re-post once the iframe document loads: the initial post above races the iframe's
+      // own message listener and is usually lost, so a pane restored HIDDEN would keep the
+      // embedded service (the browser encoder) running until the next visibility change.
+      const iframeEl = element.querySelector("iframe");
+      if (iframeEl !== null) {
+        iframeEl.addEventListener("load", () => postVisibility(parameters.api.isVisible));
+      }
       visibilityDisposable = parameters.api.onDidVisibilityChange((event) => postVisibility(event.isVisible));
     },
     dispose() {
