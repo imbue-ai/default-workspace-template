@@ -24,18 +24,30 @@ from typing import Any
 
 from loguru import logger
 
-# pixelflux's wheel links the VA-API runtime (libva-drm.so.2) at IMPORT time, even in
-# CPU mode. That lib is absent on CI runners and bare dev boxes, where the browser view
-# never actually runs (headless). So keep this module importable there -- guard the
-# import, and fail clearly only if a capture is actually started without the native lib
-# (the workspace's deferred-install apt-installs libva for the headful path).
-try:
-    from pixelflux import CaptureSettings, ScreenCapture
+# pixelflux's wheel links native libs (libva*, libgbm, libdrm, ...) at IMPORT time,
+# even in CPU mode. Those are absent on CI / bare boxes (where the live view never
+# runs), AND on a fresh workspace they're apt-installed by deferred-install, which may
+# still be running when the browser service first imports this module. So DON'T import
+# pixelflux at module load -- import it LAZILY on the first real capture (retried each
+# start). The module then always imports (CI stays green), and a capture self-heals the
+# moment the libs land, with no service restart and no boot-time race.
+_pixelflux: "tuple[Any, Any] | None" = None  # cached (CaptureSettings, ScreenCapture)
 
-    _PIXELFLUX_IMPORT_ERROR: str | None = None
-except ImportError as _e:  # native lib (libva) missing: capture unavailable in this env
-    CaptureSettings = ScreenCapture = None  # type: ignore[assignment,misc]
-    _PIXELFLUX_IMPORT_ERROR = str(_e)
+
+def _load_pixelflux() -> "tuple[Any, Any] | None":
+    """Import pixelflux on demand (cached once it succeeds). Returns
+    ``(CaptureSettings, ScreenCapture)``, or None if its native libs aren't present yet
+    (deferred-install still running, or CI / a bare box)."""
+    global _pixelflux
+    if _pixelflux is None:
+        try:
+            from pixelflux import CaptureSettings, ScreenCapture
+
+            _pixelflux = (CaptureSettings, ScreenCapture)
+        except ImportError as e:
+            logger.warning("pixelflux import failed ({}); no video until its native libs are present", e)
+            return None
+    return _pixelflux
 
 # Outbound depth per stream socket. Stripes are small (damage-driven, ~hundreds of
 # bytes) so this is generous slack; a client that still overruns drops its oldest
@@ -118,16 +130,18 @@ class Capture:
                 logger.debug("capture region update ignored ({})", e)
 
     def _start_locked(self) -> None:
-        if CaptureSettings is None or ScreenCapture is None:
+        loaded = _load_pixelflux()
+        if loaded is None:
             logger.error(
-                "browser stream {}: pixelflux unavailable ({}); no video for this browser. "
-                "The workspace's deferred-install provides the native lib (libva) for the "
-                "headful path -- confirm it completed.",
-                self._display_name, _PIXELFLUX_IMPORT_ERROR,
+                "browser stream {}: pixelflux unavailable; no video for this browser. The "
+                "workspace's deferred-install provides its native libs (libva*, libgbm) for "
+                "the headful path -- confirm it completed.",
+                self._display_name,
             )
             return
+        capture_settings_cls, screen_capture_cls = loaded
         x, y, w, h = self._region()
-        settings = CaptureSettings()
+        settings = capture_settings_cls()
         settings.capture_x, settings.capture_y = x, y
         settings.capture_width, settings.capture_height = w, h
         settings.target_fps = _TARGET_FPS
@@ -135,7 +149,7 @@ class Capture:
         settings.use_cpu = True
         settings.encode_node_index = -1  # force software x264 (no GPU in the sandbox)
         settings.video_crf = _VIDEO_CRF
-        cap = ScreenCapture()
+        cap = screen_capture_cls()
         try:
             cap.set_cursor_rendering(True)  # composite the pointer into the video (R1)
         except _PIXELFLUX_ERRORS as e:  # optional; older builds may lack the method
