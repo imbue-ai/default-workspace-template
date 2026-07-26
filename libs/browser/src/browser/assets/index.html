@@ -594,7 +594,10 @@
       if (w > 0 && h > 0) sendCast({ type: "resize", width: w, height: h });
     }, 150);
   }
-  new ResizeObserver(reportSize).observe(stage);
+  // Reports size AND drives visibility off the real rendered size: the stage collapsing to
+  // zero (tab hidden) pauses the stream, and it getting real size (tab shown / first load)
+  // resumes it -- so activation works even if a panel-visibility message is missed/mistimed.
+  new ResizeObserver(() => { reportSize(); setPaneVisible(staged()); }).observe(stage);
 
   // --- coordinate scaling: canvas CSS px -> frame device px ---
   function scaled(e) {
@@ -877,11 +880,18 @@
     if (paneVisible && pageVisible) { openStream(); openAudio(); }
     else { closeStream(); closeAudio(); }
   }
+  // Whether our pane is actually shown, as ground truth: dockview collapses a hidden tab to
+  // ZERO size, so a rendered (non-zero) stage means the pane IS visible regardless of what a
+  // panel-visibility message said. This makes the stream immune to a mistimed/spurious
+  // `visible:false` posted while the pane is loading (the "black until I reopen the tab" bug).
+  function staged() { return stage.clientWidth > 0 && stage.clientHeight > 0; }
+  function setPaneVisible(v) { if (v !== paneVisible) { paneVisible = v; syncStream(); } }
   window.addEventListener("message", (e) => {
     const d = e.data;
     if (!d || d.type !== "minds:panel-visibility") return;
-    paneVisible = d.visible !== false;
-    syncStream();
+    // Honor a hide only if the stage is really collapsed; ignore a false while we still have
+    // real size (a transient load-time signal on a pane that's actually shown).
+    setPaneVisible(d.visible !== false || staged());
   });
   document.addEventListener("visibilitychange", () => { pageVisible = !document.hidden; syncStream(); });
 

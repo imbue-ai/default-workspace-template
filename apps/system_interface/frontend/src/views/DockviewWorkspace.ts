@@ -649,7 +649,17 @@ function openBrowserSessionTab(name: string, targetGroup?: DockviewGroupPanel | 
     targetGroup && dockview.groups.some((g) => g.id === targetGroup.id)
       ? { position: { referenceGroup: targetGroup.id } }
       : {};
-  addPanelForRef(`service:browser?session=${name}`, getPrimaryAgentId(), placement);
+  const panelId = addPanelForRef(`service:browser?session=${name}`, getPrimaryAgentId(), placement);
+  // A newly-created browser pane MUST be the active (visible) tab. The viewer streams
+  // encode-on-demand and PAUSES on a ``visible:false`` posted at iframe-load time, so a
+  // pane that isn't the active tab when its iframe loads comes up paused (black screen)
+  // until the next visibility change -- exactly the "reopen/switch tabs to make it show"
+  // symptom. ``addPanelForRef`` already focuses a pane it deduped onto, so only
+  // force-activate one THIS call created (never steal focus from a re-focus).
+  if (!alreadyOpen && panelId !== null) {
+    const panel = dockview.panels.find((p) => p.id === panelId);
+    if (panel) dockview.setActivePanel(panel);
+  }
   return !alreadyOpen;
 }
 
