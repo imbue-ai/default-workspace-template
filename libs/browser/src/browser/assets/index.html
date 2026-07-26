@@ -10,21 +10,6 @@
   html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; background: #1e1e1e; color: #ddd; }
   #app { display: flex; flex-direction: column; height: 100vh; min-width: 0; }
 
-  #tabbar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: #252525; border-bottom: 1px solid #333; overflow-x: auto; }
-  .tab { padding: 4px 8px; background: #333; border-radius: 4px 4px 0 0; font-size: 12px; white-space: nowrap; cursor: pointer; max-width: 180px; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 6px; align-items: center; }
-  .tab.active { background: #0e639c; }
-  .tab .close { opacity: .6; }
-  .tab .close:hover { opacity: 1; }
-  #newtab { padding: 4px 9px; background: #333; border: none; color: #ddd; border-radius: 4px; cursor: pointer; }
-  #newtab:disabled { opacity: .5; cursor: not-allowed; }
-
-  #navbar { display: flex; gap: 6px; padding: 6px; background: #252525; border-bottom: 1px solid #333; align-items: center; }
-  .navbtn { padding: 4px 9px; background: #333; border: none; color: #ddd; border-radius: 4px; cursor: pointer; font-size: 15px; line-height: 1; }
-  .navbtn:hover:not(:disabled) { background: #3d3d3d; }
-  .navbtn:disabled { opacity: .4; cursor: not-allowed; }
-  #url { flex: 1; padding: 5px 8px; background: #1e1e1e; border: 1px solid #444; color: #ddd; border-radius: 4px; }
-  #url:disabled { opacity: .5; }
-
   /* A small persistent status bar shown whenever the human can drive the browser
      (resting/AI-untouched OR explicitly taken). Always-on "You have control"
      indicator; the hand-back button appears only when an agent is queued for it. */
@@ -60,17 +45,14 @@
 
   /* Full-stage cover shown while the browser is in the `init` lifecycle state:
      registered, but Chromium isn't up yet. It covers the WHOLE pane (above the
-     canvas) so the user never sees a half-built browser; the chrome (tab/nav bars)
-     is hidden too while it shows. Removed deterministically on the init->running
-     control message, not on "a frame arrived". A spinner gives a sense of progress. */
+     canvas) so the user never sees a half-built browser. Removed deterministically
+     on the init->running control message, not on "a frame arrived". A spinner
+     gives a sense of progress. */
   #initoverlay { display: none; position: absolute; inset: 0; z-index: 15; background: #1e1e1e; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 24px; }
   #initoverlay.show { display: flex; }
   #initoverlay .spinner { width: 28px; height: 28px; border: 3px solid #444; border-top-color: #0e639c; border-radius: 50%; animation: spin 0.8s linear infinite; }
   #initoverlay .msg { font-size: 15px; color: #ccc; font-weight: 600; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  /* While init/crashed cover the pane, hide the tab + nav chrome so a half-built
-     browser never peeks through. Toggled by the `chrome-hidden` class on #app. */
-  #app.chrome-hidden #tabbar, #app.chrome-hidden #navbar, #app.chrome-hidden #returnbar { display: none; }
 
   /* Non-blocking top-center pill shown while a larger clipboard op is in flight
      (image paste/copy, long text). pointer-events:none so it never traps the user
@@ -92,13 +74,6 @@
 </head>
 <body>
 <div id="app">
-  <div id="tabbar"><button id="newtab" title="New tab">+</button></div>
-  <div id="navbar">
-    <button id="back" class="navbtn" title="Back">&#8592;</button>
-    <button id="forward" class="navbtn" title="Forward">&#8594;</button>
-    <button id="reload" class="navbtn" title="Reload this page">&#8635;</button>
-    <input id="url" placeholder="Enter URL and press Enter" />
-  </div>
   <div id="returnbar">
     <span id="returnqueue">You have control.</span>
     <button id="returnbtn">Return control to agents</button>
@@ -127,19 +102,12 @@
 <script>
 (function () {
   "use strict";
-  const app = document.getElementById("app");
   const stage = document.getElementById("stage");
   const cliptoast = document.getElementById("cliptoast");
   const canvas = document.getElementById("screen");
   const ctx = canvas.getContext("2d");
   const fsbtn = document.getElementById("fsbtn");
   const placeholder = document.getElementById("placeholder");
-  const tabbar = document.getElementById("tabbar");
-  const newtabBtn = document.getElementById("newtab");
-  const backBtn = document.getElementById("back");
-  const forwardBtn = document.getElementById("forward");
-  const reloadBtn = document.getElementById("reload");
-  const urlInput = document.getElementById("url");
   const overlay = document.getElementById("overlay");
   const crashOverlay = document.getElementById("crashoverlay");
   const initOverlay = document.getElementById("initoverlay");
@@ -172,8 +140,8 @@
   let crashed = false;        // set on a {type:"crashed"} message: Chromium died; show a dead state.
   // The explicit per-browser lifecycle ("init" | "running" | "crashed"), carried on
   // every {type:"control"} broadcast and the register-time seed. The viewer renders
-  // DETERMINISTICALLY off this -- init shows the full "Starting browser…" overlay (chrome
-  // hidden), running shows the live page, crashed shows the crashed overlay -- rather than
+  // DETERMINISTICALLY off this -- init shows the full "Starting browser…" overlay,
+  // running shows the live page, crashed shows the crashed overlay -- rather than
   // guessing state from whether a frame arrived. Starts "init": until the first control
   // message we assume the browser is still coming up and show the starting overlay.
   let lifecycle = "init";
@@ -211,17 +179,13 @@
   // Drive the overlay / return-bar / input lock from the latest control message.
   // owner == "agent":                      grey overlay + "Take control".
   // owner == "human" && human_pinned:      no overlay, persistent "Return to agents" bar.
-  // owner == "human" && !human_pinned:     resting state, fully interactive, no chrome.
+  // owner == "human" && !human_pinned:     resting state, fully interactive.
   function setControl(state) {
     lastControlState = state;
     controlOwner = state.owner;
     const agentDriving = state.owner === "agent";
     const humanPinned = state.owner === "human" && !!state.human_pinned;
     if (agentDriving) { handoffReason = null; handoffAgent = null; }  // resumed -> clear the ask
-
-    tabbar.style.opacity = agentDriving ? "0.5" : "1";
-    tabbar.style.pointerEvents = agentDriving ? "none" : "auto";
-    [urlInput, newtabBtn, backBtn, forwardBtn, reloadBtn].forEach((el) => (el.disabled = agentDriving));
 
     if (agentDriving) {
       const who = state.owner_name || state.owner_agent_id || "an agent";
@@ -274,9 +238,9 @@
 
   // Render DETERMINISTICALLY from the explicit lifecycle on each control message.
   // This is the single source of truth for the init/running overlays:
-  //   init    -> full "Starting browser…" overlay covering the pane; chrome hidden;
+  //   init    -> full "Starting browser…" overlay covering the pane;
   //              canvas/frames suppressed (don't show a half-built browser).
-  //   running -> overlays down, chrome shown; the live canvas + frames are visible.
+  //   running -> overlays down; the live canvas + frames are visible.
   //   crashed -> handed off to showCrashed() (the terminal dead state).
   // Driven off the lifecycle field, NOT off "did a frame arrive", so init->running is
   // exact: the moment the daemon broadcasts running, the starting overlay comes down.
@@ -286,11 +250,9 @@
     if (next === "crashed") { showCrashed(); return; }
     if (next === "init") {
       initOverlay.classList.add("show");
-      app.classList.add("chrome-hidden");
       placeholder.style.display = "none";  // the full overlay covers the pane instead
     } else if (next === "running") {
       initOverlay.classList.remove("show");
-      app.classList.remove("chrome-hidden");
       placeholder.style.display = "none";
     }
   }
@@ -307,36 +269,11 @@
     overlay.classList.remove("show");
     returnBar.classList.remove("show");
     initOverlay.classList.remove("show");  // a crash from init replaces the starting overlay
-    app.classList.remove("chrome-hidden");  // the crashed overlay covers the pane on its own
     // Full near-opaque cover over the whole pane (see #crashoverlay) -- the dead
     // state must read at a glance, not as faint text on the black canvas. Hide the
     // small placeholder so the two don't both show.
     placeholder.style.display = "none";
     crashOverlay.classList.add("show");
-    tabbar.style.opacity = "0.5";
-    tabbar.style.pointerEvents = "none";
-    [urlInput, newtabBtn, backBtn, forwardBtn, reloadBtn].forEach((el) => (el.disabled = true));
-  }
-
-  function renderTabs(tabs) {
-    [...tabbar.querySelectorAll(".tab")].forEach((t) => t.remove());
-    tabs.forEach((tab) => {
-      const el = document.createElement("div");
-      el.className = "tab" + (tab.active ? " active" : "");
-      el.title = tab.url;
-      const label = document.createElement("span");
-      label.textContent = tab.title || tab.url || "tab";
-      el.appendChild(label);
-      const close = document.createElement("span");
-      close.className = "close";
-      close.textContent = "x";
-      close.onclick = (e) => { e.stopPropagation(); sendCast({ type: "tab", action: "close", index: tab.index }); };
-      el.appendChild(close);
-      el.onclick = () => { showLoading(); sendCast({ type: "tab", action: "activate", index: tab.index }); };
-      tabbar.insertBefore(el, newtabBtn);
-      // Don't clobber the URL while the user is typing in it.
-      if (tab.active && document.activeElement !== urlInput) urlInput.value = tab.url || "";
-    });
   }
 
   // --- WebCodecs video decode: per-stripe VideoDecoder (H.264) or ImageBitmap (JPEG) ---
@@ -611,22 +548,20 @@
     }
   }
   // Listen on the canvas (focused by a click), so host/browser shortcuts still
-  // work when the browser pane isn't focused, and typing in the URL input is
-  // unaffected.
+  // work when the browser pane isn't focused.
   canvas.addEventListener("keydown", (e) => key("keyDown", e));
   canvas.addEventListener("keyup", (e) => key("keyUp", e));
 
   // --- focus-capture (focused tier) -------------------------------------------
   // Clicking into the canvas grabs the keyboard: window-level listeners forward every
   // (non-reserved) key to the remote, and #stage.focused shows the glow + chip. Releasing
-  // (click outside, Esc, focusing the URL bar) all funnel through the canvas blur.
+  // (click outside, Esc) funnels through the canvas blur.
   function setFocus(on) { focused = on; stage.classList.toggle("focused", on); }
   canvas.addEventListener("focus", () => setFocus(true));
   canvas.addEventListener("blur", () => setFocus(false));
   function windowKey(type, e) {
     if (!focused) return;
     if (e.target === canvas) return;                 // the canvas listener already handled it
-    if (document.activeElement === urlInput) return; // keep the URL bar / tab bar typable
     key(type, e);
   }
   window.addEventListener("keydown", (e) => windowKey("keyDown", e));
@@ -676,19 +611,6 @@
   });
 
   // --- controls ---
-  newtabBtn.onclick = () => { showLoading(); sendCast({ type: "tab", action: "new" }); };  // server opens the home page
-  // Page navigation (only active while the human has control; the server also
-  // gates on that). These drive the live page's own history, not the pane.
-  backBtn.onclick = () => sendCast({ type: "back" });
-  forwardBtn.onclick = () => sendCast({ type: "forward" });
-  reloadBtn.onclick = () => sendCast({ type: "reload" });
-  urlInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      let u = urlInput.value.trim();
-      if (u && !/^https?:\/\//.test(u)) u = "https://" + u;
-      if (u) { showLoading(); sendCast({ type: "navigate", url: u }); }
-    }
-  });
   // Take control: optimistically hide the overlay so a laggy round-trip can't
   // invite a double-click; the authoritative {type:"control"} broadcast reconciles.
   takeControlBtn.onclick = () => {
@@ -739,8 +661,8 @@
         handoffAgent = m.agent_name || "An agent";
         setControl(lastControlState);
       }
-      else if (m.type === "tabs") { if (lifecycle === "running") renderTabs(m.tabs); }  // tabs only meaningful once running
       // m.type === "ping" -> ignore; it only keeps the proxy stream alive.
+      // m.type === "tabs" -> ignore; the native tab strip is in the streamed video now.
     };
     castWs.onclose = (ev) => {
       hasFrame = false;
@@ -763,7 +685,6 @@
       if (ev.code === 1013) {
         setLifecycle("init");
         initOverlay.classList.add("show");
-        app.classList.add("chrome-hidden");
         scheduleReconnect();
         return;
       }
@@ -772,7 +693,6 @@
       // starting overlay rather than flashing a reconnect banner.
       if (lifecycle === "init") {
         initOverlay.classList.add("show");
-        app.classList.add("chrome-hidden");
       } else {
         placeholder.style.display = "block";
         placeholder.textContent = "Reconnecting…";
@@ -803,7 +723,6 @@
     // the optimistic pane opens before the browser is registered/running, so the user
     // sees the starting state until the first control message resolves the lifecycle.
     initOverlay.classList.add("show");
-    app.classList.add("chrome-hidden");
     connect(name);
   }
   boot();

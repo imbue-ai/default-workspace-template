@@ -31,7 +31,9 @@ daemon (browser-service, one asyncio loop — UNCHANGED process model):
 
 viewer (assets/index.html — same iframe/pane/session model):
   WebCodecs VideoDecoder-per-stripe -> canvas   (replaces JPEG <img> paint)
-  our tab bar / navbar / overlays / take-control  (UNCHANGED contract)
+  overlays / take-control / returnbar            (NO custom tab bar/navbar --
+    the WHOLE Chromium window is streamed, native chrome and all; the user drives
+    the native tabs / URL bar / new-tab button directly via XTest)
   focus-capture (focused + immersive) modes
 ```
 
@@ -78,29 +80,29 @@ Changed:
 - The `{type:"frame"}` JPEG message is DELETED (video is on `/stream`).
 - Inbound `{type:"mouse"}` / `{type:"key"}` now carry **display coordinates** and are
   injected via XTest (python-xlib), not CDP `Input.dispatch*`. Coords: the viewer maps
-  canvas px → frame px 1:1 (frame IS the display region); the daemon adds the capture
-  crop offset (`display_y = frame_y + crop_y`) before injecting. Key events carry the
-  browser `key`/`code`; the daemon maps to an X keysym (small table + Unicode rule).
+  canvas px → display px 1:1 (the frame IS the whole window at (0,0), no crop). Key
+  events carry the browser `key`/`code`; the daemon maps to an X keysym (physical-code
+  table + Unicode rule).
 - `{type:"resize"}`: still `_input_enabled`-gated (frozen while an agent drives). Now
   resizes the Chromium WINDOW (CDP `Browser.setWindowBounds`) and moves the pixelflux
   capture region; `_render_w/h` stay the source of truth; resolution-on-resume nudge
   preserved.
-- NEW server→client `{type:"clipboard", mime, data}`: pushed by the XFIXES watcher when
-  an app inside the remote page copies (e.g. right-click → Copy). The viewer writes the
-  user's local clipboard (`navigator.clipboard`), caching for the next gesture if denied.
-- NEW client→server (immersive/tab semantics) `{type:"tab", action:"new"|"close"
-  |"activate"|"reopen"}` already exists; `reopen` (Ctrl+Shift+T) pops a per-browser
-  recently-closed URL stack.
+- NEW server→client `{type:"clipboard", mime, data}`: pushed by a ~500ms clipboard poll
+  when an app inside the remote page copies (e.g. right-click → Copy). The viewer writes
+  the user's local clipboard (`navigator.clipboard`), caching for the next gesture if denied.
+- Human tab/navigation is done on the NATIVE browser chrome (streamed + XTest-clicked),
+  so the viewer sends no tab/nav messages; the agent's own tab control (`act_tab` → CDP)
+  is unchanged.
 
-## Display / chromeless / resize
+## Display / whole-browser / resize
 
 - One Xvfb `:N` per browser at 1920x1080 (`_RENDER_MAX`), `+extension RANDR`. Chromium
   DISPLAY=:N by mutating `os.environ["DISPLAY"]` around the serialized `session.start()`
   (browser-use's subprocess inherits `os.environ`; the start is already under
   `_startup_lock`, so it's race-free). Restored after.
-- Chromeless: plain window at (0,0); the top chrome height is MEASURED once
-  (`Browser.getWindowBounds` height − `Page.getLayoutMetrics` viewport height) and
-  cropped from the capture region. Our tab bar drives tabs via CDP targets.
+- Whole-browser stream: the WHOLE Chromium window (native tab strip, toolbar, URL bar)
+  is captured (region = the window at (0,0), no crop); the user drives the native chrome
+  directly via XTest. The daemon only records the window id (for resize).
 - Resize-to-pane: shrink the window (never grow the framebuffer past its initial max —
   Xvfb can't) via `Browser.setWindowBounds` + `update_capture_region`. Frozen during
   agent control (existing `_apply_resize` gate).
