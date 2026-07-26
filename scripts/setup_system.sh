@@ -13,6 +13,11 @@ export DEBIAN_FRONTEND=noninteractive
 . "$(dirname "$0")/_provision_guard.sh"
 provision_skip_if_done setup_system
 
+# Pin all apt operations to the committed archive snapshot timestamp before the
+# first apt-get below. Idempotent: the docker build already ran this (the image
+# carries the pinned sources); lima/modal VMs get their sources pinned here.
+bash "$(dirname "$0")/write_apt_sources.sh"
+
 # Pinned versions (single source of truth; override via env if needed). Keep
 # CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
 : "${TTYD_VERSION:=1.7.7}"
@@ -20,7 +25,7 @@ provision_skip_if_done setup_system
 : "${UV_VERSION:=0.11.7}"
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
 : "${MODAL_VERSION:=1.4.2}"
-: "${NODE_MAJOR:=20}"
+: "${GH_VERSION:=2.96.0}"
 : "${LATCHKEY_VERSION:=3.1.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
@@ -94,17 +99,21 @@ install_downloaded_binary "https://github.com/tsl0922/ttyd/releases/download/${T
 cloudflared_arch="$(dpkg --print-architecture)"
 install_downloaded_binary "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${cloudflared_arch}" /usr/local/bin/cloudflared
 
-# GitHub CLI from its official apt repo.
-mkdir -p -m 755 /etc/apt/keyrings
-gh_keyring="$(mktemp)"
-wget -nv -O"$gh_keyring" https://cli.github.com/packages/githubcli-archive-keyring.gpg
-tee /etc/apt/keyrings/githubcli-archive-keyring.gpg < "$gh_keyring" > /dev/null
-chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-mkdir -p -m 755 /etc/apt/sources.list.d
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
-apt-get update
-apt-get install -y gh
-rm -rf /var/lib/apt/lists/*
+# GitHub CLI as a pinned, sha256-verified GitHub-release tarball. gh is not in
+# Debian, and a third-party apt repo would escape the snapshot-pinned mirror,
+# so it installs like ttyd/cloudflared: fixed version, checksummed download.
+gh_arch="$(uname -m)"
+case "${gh_arch}" in
+    x86_64) gh_goarch="amd64"; gh_sha256="83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60" ;;
+    aarch64) gh_goarch="arm64"; gh_sha256="06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909" ;;
+    *) echo "Unsupported architecture for gh: ${gh_arch}" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gh_goarch}.tar.gz" -o /tmp/gh.tar.gz
+echo "${gh_sha256}  /tmp/gh.tar.gz" | sha256sum -c -
+tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_${gh_goarch}/bin/gh"
+mv -f "/tmp/gh_${GH_VERSION}_linux_${gh_goarch}/bin/gh" /usr/local/bin/gh
+chmod 0755 /usr/local/bin/gh
+rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${gh_goarch}"
 
 # uv (pinned). Installs to /root/.local/bin.
 curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
@@ -139,9 +148,11 @@ curl -fsSL https://claude.ai/install.sh > /tmp/install_claude.sh
 bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"
 test -x /root/.local/bin/claude
 
-# Node.js (NodeSource pins the major; apt resolves within it).
-curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
-apt-get install -y nodejs
+# Node.js from trixie main (pinned by the snapshot timestamp like every other
+# apt package; trixie ships the nodejs 20.x line). npm is its own package on
+# Debian, unlike the NodeSource builds that bundled it.
+apt-get update
+apt-get install -y --no-install-recommends nodejs npm
 rm -rf /var/lib/apt/lists/*
 
 # Pre-seed github.com SSH host keys so git operations don't block on interactive

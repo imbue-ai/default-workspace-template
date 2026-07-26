@@ -1,4 +1,4 @@
-FROM python:3.12.13-slim-bookworm
+FROM python:3.12-slim-trixie
 
 # /root/.local/bin holds uv + claude (installed by scripts/setup_system.sh); put
 # it on PATH for every build layer and at runtime.
@@ -29,6 +29,16 @@ ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 # layer (apt/node/uv + scanners) rather than a scanner-only layer -- accepted
 # so a single common script covers docker AND Lima.
 # ============================================================================
+# Pin every apt operation (this build and all runtime installs) to the
+# committed archive snapshot timestamp. Runs before any apt usage so the
+# system-toolchain layer below resolves against the frozen universe; the
+# script and timestamp ride their own COPY so a T bump invalidates exactly
+# the layers that depend on package versions.
+COPY scripts/write_apt_sources.sh /usr/local/bin/default-workspace-template-write-apt-sources
+COPY .mngr/apt-snapshot-timestamp /etc/default-workspace-template-apt-snapshot-timestamp
+RUN chmod +x /usr/local/bin/default-workspace-template-write-apt-sources \
+    && default-workspace-template-write-apt-sources "$(cat /etc/default-workspace-template-apt-snapshot-timestamp)"
+
 COPY scripts/setup_system.sh /usr/local/bin/default-workspace-template-setup-system
 COPY scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners

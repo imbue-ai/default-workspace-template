@@ -187,6 +187,12 @@ is_enabled = false
 # config (imbue-ai/mngr#1914).
 is_host_data_volume_exposed = false
 is_run_as_root = true
+# Pin the Lima guest to the same Debian release the docker image uses (trixie),
+# so setup_system.sh provisions an identical toolchain everywhere. Set here
+# (dwt-side) rather than bumping mngr_lima's bookworm default, which outside
+# mngr users keep.
+default_image_url_aarch64 = "https://cloud.debian.org/images/cloud/trixie/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
+default_image_url_x86_64 = "https://cloud.debian.org/images/cloud/trixie/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
 
 # vultr VPS provider (cloud mode). is_enabled=false mirrors the lima/docker blocks:
 # the vps_docker backend plugin is not installed in the agent container, so a parsed
