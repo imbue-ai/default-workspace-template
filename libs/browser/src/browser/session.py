@@ -626,6 +626,12 @@ class LiveBrowser(MutableModel):
                 "--disable-component-update",
                 "--disable-sync",
                 "--disable-features=Translate,MediaRouter",
+                # Keep Chromium ALIVE when the human closes the last tab. Normally the last
+                # window closing exits the process, which our crash detector then (correctly,
+                # for that signal) reports as a crash -- so closing all tabs looked like a
+                # crash. With this, the process stays up window-less; _on_page_closed then
+                # reliably opens a fresh home tab (no race against Chromium's shutdown).
+                "--keep-alive-for-test",
             ],
             # Strip browser-use's default --disable-gpu-sandbox: it's redundant with
             # --no-sandbox and triggers Chromium's yellow "unsupported command-line flag"
