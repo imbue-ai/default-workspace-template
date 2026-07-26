@@ -38,7 +38,9 @@ from host_backup.restic import (
 )
 from host_backup.restic import forget as restic_forget
 from host_backup.restic import forget_snapshot_ids as restic_forget_snapshot_ids
-from host_backup.restic import list_snapshots_with_any_tag as restic_list_snapshots_with_any_tag
+from host_backup.restic import (
+    list_snapshots_with_any_tag as restic_list_snapshots_with_any_tag,
+)
 from host_backup.restic import prune as restic_prune
 from host_backup.restic import unlock as restic_unlock
 from host_backup.snapshot import (
@@ -53,6 +55,16 @@ LOG_FILE = Path("/tmp/host-backup.log")
 # Number of consecutive failed ticks after which the runner raises a prominent,
 # durable alarm so a silent multi-day backup outage cannot go unnoticed.
 CONSECUTIVE_FAILURE_ALARM_THRESHOLD: Final[int] = 3
+
+# Where `uv run env-converge capture` resolves its venv from; matches the
+# host-backup program's `directory=` in supervisord.conf, made explicit so the
+# capture also works when the runner is launched from another cwd.
+WORKSPACE_DIR: Final[Path] = Path("/home/user/workspace")
+
+# Hard ceiling for the pre-snapshot `env-converge capture` refresh. The probes
+# (dpkg/npm/uv listings) normally take a few seconds; a wedged probe must not
+# stall the backup cadence.
+ENV_RECORD_CAPTURE_TIMEOUT_SECONDS: Final[float] = 120.0
 
 # The restic-call signatures the backup step depends on, injected so the
 # orchestration can be unit-tested without shelling out to restic.
@@ -248,6 +260,7 @@ def _run_one_tick(
     # (and keyed) by the minds app, so host_backup just backs up to it -- it
     # never probes-then-inits the repo itself.
     env_overrides = dict(env)
+    _refresh_environment_record(state=state)
     snapshot_result = _take_snapshot(state=state)
     if snapshot_result is None:
         return
@@ -288,6 +301,59 @@ def _check_secrets_present(*, state: _LoopState) -> dict[str, str] | None:
         logger.warning("Skipping tick: missing required restic.env keys: {}", missing)
         return None
     return env
+
+
+def _refresh_environment_record(
+    *,
+    state: _LoopState,
+    run_fn: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> None:
+    """Re-capture the environment record so the snapshot carries current package state.
+
+    The env-converge record (`~/.mngr/plugin/env-converge/`) rides the backup
+    and is what a restore onto a fresh base replays -- so it must describe the
+    machine as of backup time. apt is already event-fresh (its DPkg::Post-Invoke
+    hook rewrites the record on every install), but the probe-based sources
+    (npm globals, uv tools) are otherwise only refreshed at boot; without this,
+    anything installed since boot would be missing from a restored workspace.
+
+    Best-effort by design: capture is read-only and takes seconds, and a
+    failure (or absent env-converge, e.g. a pre-cutover workspace) must never
+    block the backup itself -- a slightly stale record beats no backup.
+    """
+    start = time.monotonic()
+    exit_code: int | None = None
+    stderr = ""
+    try:
+        result = run_fn(
+            ["uv", "run", "env-converge", "capture"],
+            cwd=WORKSPACE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
+            check=False,
+        )
+        exit_code = result.returncode
+        stderr = result.stderr.strip()[-500:]
+    except (OSError, subprocess.TimeoutExpired) as e:
+        stderr = str(e)[-500:]
+    duration = time.monotonic() - start
+    success = exit_code == 0
+    if not success:
+        logger.warning(
+            "Pre-snapshot env-converge capture failed (rc={}): {}", exit_code, stderr
+        )
+    write_event(
+        state.events_dir,
+        make_event(
+            BackupEventType.ENV_RECORD_CAPTURE_COMPLETED,
+            tick_id=state.current_tick_id,
+            success=success,
+            exit_code=exit_code,
+            duration_seconds=duration,
+            stderr="" if success else stderr,
+        ),
+    )
 
 
 def _take_snapshot(*, state: _LoopState) -> SnapshotResult | None:
@@ -615,7 +681,11 @@ def _age_out_restore_markers(
             continue
         snapshot_time = _parse_restic_timestamp(str(snapshot.get("time", "")))
         snapshot_id = snapshot.get("id")
-        if snapshot_time is not None and isinstance(snapshot_id, str) and snapshot_time < cutoff:
+        if (
+            snapshot_time is not None
+            and isinstance(snapshot_id, str)
+            and snapshot_time < cutoff
+        ):
             expired_ids.append(snapshot_id)
     if not expired_ids:
         return

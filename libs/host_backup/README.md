@@ -38,6 +38,15 @@ an encrypted restic repo on cheaper object storage.
   set in `restic.env`. Backend credentials are not gated by host_backup --
   restic reports its own error if the chosen backend needs one that is
   missing.
+- Before the snapshot is taken, the tick runs `uv run env-converge capture`
+  (best-effort, bounded at 120s) so the environment record
+  (`~/.mngr/plugin/env-converge/`) inside the backup describes the packages
+  installed at backup time. apt is already event-fresh via its
+  `DPkg::Post-Invoke` hook; this refreshes the probe-based sources (npm
+  globals, uv tools), which are otherwise only captured at boot -- without it,
+  a restore onto a fresh base would silently drop anything installed since
+  boot. A capture failure emits an `env_record_capture_completed` event with
+  `success=false` and never blocks the backup.
 - Snapshot method ("backup capabilities", detected in memory by the service
   itself at startup -- never configured; see `host_backup/capabilities.py`):
   - `btrfs_local`: take a `sudo btrfs subvolume snapshot -r` directly into

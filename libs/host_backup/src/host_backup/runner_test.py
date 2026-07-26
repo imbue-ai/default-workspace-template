@@ -12,10 +12,12 @@ from host_backup.capabilities import BackupCapabilities, SnapshotMethod
 from host_backup.config import BackupConfig, RetentionSettings
 from host_backup.runner import (
     CONSECUTIVE_FAILURE_ALARM_THRESHOLD,
+    ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
     _age_out_restore_markers,
     _load_config_if_changed,
     _LoopState,
     _parse_restic_timestamp,
+    _refresh_environment_record,
     _run_restic_backup,
     _should_tick_now,
     _take_snapshot,
@@ -174,6 +176,99 @@ def test_take_snapshot_emits_snapshot_failed_event_on_failure(tmp_path: Path) ->
     assert failed_events[0]["tick_id"] == "tick-under-test"
     assert failed_events[0]["method"] == "OUTER_TRIGGER"
     assert failed_events[0]["error_message"]
+
+
+def _read_events(events_dir: Path) -> list[dict[str, object]]:
+    return [
+        json.loads(line)
+        for line in (events_dir / "events.jsonl").read_text().splitlines()
+    ]
+
+
+def test_refresh_environment_record_emits_success_event(tmp_path: Path) -> None:
+    """A clean capture emits ENV_RECORD_CAPTURE_COMPLETED with success=True."""
+    state = _LoopState(_direct_capabilities())
+    state.events_dir = tmp_path / "events"
+    state.current_tick_id = "tick-under-test"
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        assert kwargs["timeout"] == ENV_RECORD_CAPTURE_TIMEOUT_SECONDS
+        return subprocess.CompletedProcess(
+            args=argv, returncode=0, stdout="", stderr=""
+        )
+
+    _refresh_environment_record(state=state, run_fn=fake_run)
+
+    assert calls == [["uv", "run", "env-converge", "capture"]]
+    events = _read_events(state.events_dir)
+    capture_events = [e for e in events if e["type"] == "ENV_RECORD_CAPTURE_COMPLETED"]
+    assert len(capture_events) == 1
+    assert capture_events[0]["tick_id"] == "tick-under-test"
+    assert capture_events[0]["success"] is True
+    assert capture_events[0]["exit_code"] == 0
+    assert capture_events[0]["stderr"] == ""
+
+
+def test_refresh_environment_record_failure_is_best_effort(tmp_path: Path) -> None:
+    """A failed capture emits success=False with the stderr tail and does not raise.
+
+    The record refresh must never block the backup itself: a slightly stale
+    record in the snapshot beats no snapshot.
+    """
+    state = _LoopState(_direct_capabilities())
+    state.events_dir = tmp_path / "events"
+    state.current_tick_id = "tick-under-test"
+
+    def failing_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=argv, returncode=3, stdout="", stderr="probe exploded"
+        )
+
+    _refresh_environment_record(state=state, run_fn=failing_run)
+
+    capture_events = [
+        e
+        for e in _read_events(state.events_dir)
+        if e["type"] == "ENV_RECORD_CAPTURE_COMPLETED"
+    ]
+    assert len(capture_events) == 1
+    assert capture_events[0]["success"] is False
+    assert capture_events[0]["exit_code"] == 3
+    assert capture_events[0]["stderr"] == "probe exploded"
+
+
+def test_refresh_environment_record_tolerates_unlaunchable_capture(
+    tmp_path: Path,
+) -> None:
+    """A capture that cannot run at all (missing binary, timeout) still just events.
+
+    Covers pre-cutover workspaces where env-converge does not exist: the
+    backup must proceed and the event records exit_code=None.
+    """
+    state = _LoopState(_direct_capabilities())
+    state.events_dir = tmp_path / "events"
+    state.current_tick_id = "tick-under-test"
+
+    def raising_run(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("uv not found")
+
+    _refresh_environment_record(state=state, run_fn=raising_run)
+
+    capture_events = [
+        e
+        for e in _read_events(state.events_dir)
+        if e["type"] == "ENV_RECORD_CAPTURE_COMPLETED"
+    ]
+    assert len(capture_events) == 1
+    assert capture_events[0]["success"] is False
+    assert capture_events[0]["exit_code"] is None
+    assert "uv not found" in str(capture_events[0]["stderr"])
 
 
 def _direct_snapshot() -> SnapshotResult:
@@ -403,8 +498,16 @@ def test_age_out_restore_markers_forgets_old_and_keeps_recent(tmp_path: Path) ->
         list_calls.append(tags)
         return _snapshots_result(
             [
-                {"id": "old-marker", "time": "2026-07-10T00:00:00Z", "tags": ["restored"]},
-                {"id": "recent-marker", "time": "2026-07-22T00:00:00Z", "tags": ["pre-restore"]},
+                {
+                    "id": "old-marker",
+                    "time": "2026-07-10T00:00:00Z",
+                    "tags": ["restored"],
+                },
+                {
+                    "id": "recent-marker",
+                    "time": "2026-07-22T00:00:00Z",
+                    "tags": ["pre-restore"],
+                },
             ]
         )
 
@@ -428,7 +531,9 @@ def test_age_out_restore_markers_forgets_old_and_keeps_recent(tmp_path: Path) ->
     assert list_calls == [("restored", "pre-restore")]
     assert forget_calls == [("old-marker",)]
     forgotten_events = [
-        e for e in _events_in(state.events_dir) if e["type"] == "RESTORE_MARKERS_FORGOTTEN"
+        e
+        for e in _events_in(state.events_dir)
+        if e["type"] == "RESTORE_MARKERS_FORGOTTEN"
     ]
     assert len(forgotten_events) == 1
     assert forgotten_events[0]["forgotten_count"] == 1

@@ -33,6 +33,7 @@ class BackupEventType(UpperCaseStrEnum):
 
     CAPABILITIES_DETECTED = auto()
     BACKUP_STARTED = auto()
+    ENV_RECORD_CAPTURE_COMPLETED = auto()
     SNAPSHOT_CREATED = auto()
     SNAPSHOT_FAILED = auto()
     SNAPSHOT_DELETED = auto()
@@ -92,6 +93,27 @@ class SnapshotCreatedEvent(BackupEvent):
     )
     helper_stdout: str = Field(default="")
     helper_stderr: str = Field(default="")
+
+
+class EnvRecordCaptureCompletedEvent(BackupEvent):
+    """The pre-snapshot `env-converge capture` refresh finished (success or not).
+
+    Runs before the snapshot is taken so the environment record inside the
+    backup describes the packages installed at backup time (the probe-based
+    npm/uv sources are otherwise only refreshed at boot). Best-effort: a
+    failure is recorded here but never blocks the tick.
+    """
+
+    tick_id: str
+    success: bool
+    exit_code: int | None = Field(
+        default=None,
+        description="env-converge exit code; None when the process could not run or timed out",
+    )
+    duration_seconds: float
+    stderr: str = Field(
+        description="Trailing stderr from env-converge (empty on clean success)"
+    )
 
 
 class SnapshotFailedEvent(BackupEvent):
