@@ -4,7 +4,7 @@ Full-fidelity interaction now works: native right-click context menus, native dr
 
 Because every browser now has its own display, copy/paste no longer leaks between two open browsers, and a copy made inside the remote page (for example via right-click -> Copy) now reaches your local clipboard automatically.
 
-Resizing the pane resizes the real browser window (and the capture) to match -- now up to 4K, so viewing a browser fullscreen fills the whole screen instead of stopping at a smaller size -- still frozen while an agent is driving and reported back to the agent on hand-back. The old CDP screencast, its JPEG frames, and page-scoped input have been removed -- this stack replaces them entirely.
+Resizing the pane resizes the real browser window (and the capture) to match, and the view now stretches to fill its pane, so viewing a browser fullscreen fills the whole screen instead of stopping at a smaller size -- still frozen while an agent is driving and reported back to the agent on hand-back. The old CDP screencast, its JPEG frames, and page-scoped input have been removed -- this stack replaces them entirely.
 
 Typing is robust: a modifier combo whose key-release the browser drops (Chrome does this for letters held with Ctrl/Cmd) no longer makes the key repeat forever. Pasting an image from your clipboard into the remote browser now works even when the paste event doesn't carry the image (a common browser quirk).
 
