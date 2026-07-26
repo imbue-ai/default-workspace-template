@@ -43,7 +43,7 @@ import pytest
 
 pytestmark = pytest.mark.release
 
-_REPO_ROOT = Path(__file__).parent.parent.parent
+_REPO_ROOT = Path(__file__).parents[3]
 _CAPTURE_WAIT_SECONDS = 60.0
 
 

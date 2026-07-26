@@ -401,7 +401,7 @@ def test_maybe_create_initial_chat_creates_and_writes_signal(
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
     _maybe_create_initial_chat()
     assert len(stub.calls) == 1
-    assert (_bootstrap_env / "runtime" / "initial_chat_created").exists()
+    assert (_bootstrap_env / "data" / ".state" / "initial_chat_created").exists()
 
 
 def test_maybe_create_initial_chat_persists_created_agent_id(
@@ -419,7 +419,7 @@ def test_maybe_create_initial_chat_persists_created_agent_id(
 def test_maybe_create_initial_chat_skips_when_signal_present(
     monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
 ) -> None:
-    runtime = _bootstrap_env / "runtime"
+    runtime = _bootstrap_env / "data" / ".state"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "initial_chat_created").write_text("")
     stub = _StubSubprocess(returncode=0)
@@ -435,7 +435,7 @@ def test_maybe_create_initial_chat_skips_signal_on_failure(
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
     _maybe_create_initial_chat()
     assert len(stub.calls) == 1
-    assert not (_bootstrap_env / "runtime" / "initial_chat_created").exists()
+    assert not (_bootstrap_env / "data" / ".state" / "initial_chat_created").exists()
 
 
 def test_maybe_create_initial_chat_skips_when_host_name_missing(
@@ -450,7 +450,7 @@ def test_maybe_create_initial_chat_skips_when_host_name_missing(
     monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
     _maybe_create_initial_chat()
     assert stub.calls == []
-    assert not (tmp_path / "runtime" / "initial_chat_created").exists()
+    assert not (tmp_path / "data" / ".state" / "initial_chat_created").exists()
 
 
 # --- _initialize_workspace_main_branch ---

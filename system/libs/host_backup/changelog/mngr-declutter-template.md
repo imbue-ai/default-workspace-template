@@ -1,0 +1,1 @@
+Backup settings move to `data/system/backup.toml`, the injected restic env to `data/.secrets/restic.env`, and the prune timestamp to `data/.state/last-restic-prune`, following the workspace-root declutter (the package itself moves to `system/libs/host_backup`).

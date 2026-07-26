@@ -46,8 +46,8 @@ _BASE_URL = f"http://127.0.0.1:{_PORT}"
 _AGENT_ID = "test-agent-id"
 _AGENT_NAME = "alice"
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-_LAYOUT_SCRIPT = _REPO_ROOT / "scripts" / "layout.py"
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+_LAYOUT_SCRIPT = _REPO_ROOT / "system" / "scripts" / "layout.py"
 
 
 def _server_is_up(url: str) -> bool:
@@ -255,8 +255,8 @@ def test_open_terminal_returns_ref_via_stdout_and_broadcasts_panel_id(
     # The script polls data/.state/applications.toml for the named service;
     # seed ``terminal`` so registration succeeds without the real
     # forward_port pipeline.
-    applications_dir = sandbox / "runtime"
-    applications_dir.mkdir()
+    applications_dir = sandbox / "data" / ".state"
+    applications_dir.mkdir(parents=True)
     (applications_dir / "applications.toml").write_text(
         '[[applications]]\nname = "terminal"\nurl = "http://localhost:9000/terminal"\n'
     )

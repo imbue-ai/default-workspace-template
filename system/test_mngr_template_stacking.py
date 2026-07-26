@@ -22,7 +22,7 @@ from click.core import ParameterSource
 from imbue.mngr.cli.common_opts import apply_create_template
 from imbue.mngr.config.data_types import CreateTemplate, CreateTemplateName, MngrConfig
 
-_REPO_ROOT = Path(__file__).parent
+_REPO_ROOT = Path(__file__).parents[1]
 _SETTINGS_PATH = _REPO_ROOT / ".mngr" / "settings.toml"
 _TMUX_MARKER = ".tmux.conf"
 

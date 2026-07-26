@@ -7,25 +7,35 @@ import pytest
 import tomlkit
 from inline_snapshot import snapshot
 
-_REPO_ROOT = Path(__file__).parent
+_REPO_ROOT = Path(__file__).parents[1]
 
 # Directories excluded from scanning (vendored code)
-_VENDORED_DIR = _REPO_ROOT / "vendor"
+_VENDORED_DIR = _REPO_ROOT / "system" / "vendor"
 
 _SELF_EXCLUSION: tuple[str, ...] = ("test_meta_ratchets.py",)
 
 pytestmark = pytest.mark.xdist_group(name="meta_ratchets")
 
 
+# system_interface runs its own pytest config (the root config ignores it) and
+# carries the mngr-monorepo-style test_ratchets.py rather than the dwt-standard
+# test_<name>_ratchets.py set, so it is exempt from the meta checks here --
+# exactly as it was when it lived under apps/ (which the old scan never
+# visited).
+_META_EXEMPT_PROJECTS = frozenset({"system_interface"})
+
+
 def _get_all_project_dirs() -> list[Path]:
-    """Return all project directories (libs/*) excluding vendored code."""
+    """Return all project directories (system/libs/* and creations/*) excluding vendored code."""
     project_dirs: list[Path] = []
-    libs_dir = _REPO_ROOT / "libs"
-    if not libs_dir.is_dir():
-        return project_dirs
-    for child in sorted(libs_dir.iterdir()):
-        if child.is_dir() and (child / "pyproject.toml").exists():
-            project_dirs.append(child)
+    for parent in (_REPO_ROOT / "system" / "libs", _REPO_ROOT / "creations"):
+        if not parent.is_dir():
+            continue
+        for child in sorted(parent.iterdir()):
+            if child.name in _META_EXEMPT_PROJECTS:
+                continue
+            if child.is_dir() and (child / "pyproject.toml").exists():
+                project_dirs.append(child)
     return project_dirs
 
 

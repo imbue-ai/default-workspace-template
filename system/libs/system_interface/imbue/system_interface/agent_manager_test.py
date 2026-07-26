@@ -566,7 +566,7 @@ def test_on_applications_changed(
     """Application changes are detected and broadcast."""
     q = broadcaster.register()
 
-    toml_path = tmp_path / "runtime" / "applications.toml"
+    toml_path = tmp_path / "data" / ".state" / "applications.toml"
     toml_path.parent.mkdir(parents=True, exist_ok=True)
     toml_path.write_text('[[applications]]\nname = "web"\nurl = "http://localhost:8000"\n')
 
@@ -630,7 +630,7 @@ def test_create_worktree_raises_for_unknown_agent(agent_manager: AgentManager) -
 @pytest.mark.flaky
 def test_start_app_watcher(agent_manager: AgentManager, tmp_path: Path) -> None:
     """Starting an app watcher for an agent creates the runtime directory."""
-    runtime_dir = tmp_path / "runtime"
+    runtime_dir = tmp_path / "data" / ".state"
     agent_manager._start_app_watcher("watcher-test", tmp_path)
     assert runtime_dir.exists()
     agent_manager._stop_app_watcher("watcher-test")

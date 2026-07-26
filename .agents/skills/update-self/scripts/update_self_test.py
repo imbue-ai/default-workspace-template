@@ -98,7 +98,7 @@ def test_classify_path_reveal_classes() -> None:
         "system/scripts/install_secret_scanners.sh": update_self.CLASS_PROVISIONER,
         "system/scripts/_provision_guard.sh": update_self.CLASS_PROVISIONER,
         ".mngr/settings.toml": update_self.CLASS_PROVISIONER,
-        "Dockerfile": update_self.CLASS_DOCKERFILE,
+        "system/Dockerfile": update_self.CLASS_DOCKERFILE,
         "CLAUDE.md": update_self.CLASS_DOCS,
         "changelog/some-entry.md": update_self.CLASS_DOCS,
         "system/config/parent.toml": update_self.CLASS_OTHER,
@@ -263,7 +263,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     _write("system/changelog/my-branch.md")
     _write("system/libs/browser/changelog/my-branch.md")
     _write("system/libs/system_interface/changelog/my-branch.md")
-    _write("changelog/my-branch.md")
+    _write("creations/beta/changelog/my-branch.md")
     _write("system/vendor/mngr/libs/mngr/changelog/upstream-entry.md")
     _write("system/libs/browser/src/browser/session.py", "print('bye')\n")
     _git("add", "-A")
@@ -287,10 +287,10 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     added = json.loads(capsys.readouterr().out)["added"]
     assert sorted(added) == [
         ".agents/changelog/my-branch.md",
-        "system/libs/system_interface/changelog/my-branch.md",
-        "changelog/my-branch.md",
+        "creations/beta/changelog/my-branch.md",
         "system/changelog/my-branch.md",
         "system/libs/browser/changelog/my-branch.md",
+        "system/libs/system_interface/changelog/my-branch.md",
     ]
 
 
