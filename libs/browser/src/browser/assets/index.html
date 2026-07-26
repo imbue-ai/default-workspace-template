@@ -300,6 +300,7 @@
     hasFrame = false;
     clearFrameWait();
     closeStream();  // stop pulling video and drop every decoder; this browser is gone
+    closeAudio();   // and stop the sound
     stopIdleTimer();
     overlay.classList.remove("show");
     returnBar.classList.remove("show");
@@ -471,6 +472,62 @@
     resetDecoders();
   }
   function openStream() { streamWanted = true; connectStream(); }  // pane visible again
+
+  // --- audio: the browser's sound as raw PCM (48 kHz stereo s16le) over its own socket ---
+  // Played through a Web Audio worklet ring buffer: incoming chunks queue up and the
+  // worklet drains them at the audio clock, underrunning to silence in the gaps (the
+  // server drops silent chunks). Same on-demand gating as video (openAudio/closeAudio ride
+  // syncStream), so a hidden pane costs no capture. Autoplay policy: the AudioContext
+  // starts suspended and is resumed on the first user gesture (see resumeAudio()).
+  let audioCtx = null, audioNode = null, audioWs = null, audioWanted = false, audioReconnect = null;
+  const AUDIO_WORKLET = `
+    class PCMPlayer extends AudioWorkletProcessor {
+      constructor() { super(); this.q = []; this.cur = null; this.pos = 0;
+        this.port.onmessage = (e) => { this.q.push(e.data);
+          if (this.q.length > 50) this.q.shift(); };  // ~1s cap: drop oldest, stay live
+      }
+      process(_, outputs) {
+        const out = outputs[0], L = out[0], R = out[1] || out[0];
+        for (let i = 0; i < L.length; i++) {
+          if (!this.cur || this.pos + 1 >= this.cur.length) { this.cur = this.q.shift() || null; this.pos = 0; }
+          if (this.cur && this.pos + 1 < this.cur.length) { L[i] = this.cur[this.pos] / 32768; R[i] = this.cur[this.pos + 1] / 32768; this.pos += 2; }
+          else { L[i] = 0; R[i] = 0; }
+        }
+        return true;
+      }
+    }
+    registerProcessor('pcm-player', PCMPlayer);`;
+  async function ensureAudioGraph() {
+    if (audioNode) return true;
+    if (!window.AudioContext || !window.AudioWorklet) return false;
+    try {
+      audioCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
+      const url = URL.createObjectURL(new Blob([AUDIO_WORKLET], { type: "application/javascript" }));
+      await audioCtx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      audioNode = new AudioWorkletNode(audioCtx, "pcm-player", { outputChannelCount: [2] });
+      audioNode.connect(audioCtx.destination);
+      return true;
+    } catch (_) { audioNode = null; return false; }
+  }
+  async function openAudio() {
+    audioWanted = true;
+    if (!(await ensureAudioGraph()) || audioWs || browserId === null || crashed) return;
+    resumeAudio();
+    const ws = new WebSocket(wsUrl("browsers/" + browserId + "/audio"));
+    audioWs = ws; ws.binaryType = "arraybuffer";
+    ws.onmessage = (ev) => { if (audioNode && ev.data.byteLength) audioNode.port.postMessage(new Int16Array(ev.data), [ev.data]); };
+    ws.onclose = () => { if (audioWs === ws) audioWs = null;
+      if (audioWanted && !crashed) { audioReconnect = setTimeout(() => { audioReconnect = null; openAudio(); }, 1000); } };
+    ws.onerror = () => { try { ws.close(); } catch (_) {} };
+  }
+  function closeAudio() {
+    audioWanted = false;
+    if (audioReconnect) { clearTimeout(audioReconnect); audioReconnect = null; }
+    if (audioWs) { try { audioWs.close(); } catch (_) {} audioWs = null; }
+    if (audioCtx && audioCtx.state === "running") { try { audioCtx.suspend(); } catch (_) {} }
+  }
+  function resumeAudio() { if (audioCtx && audioCtx.state === "suspended") { audioCtx.resume().catch(() => {}); } }
 
   // Canvas backing store = the full display region; stripes paint into it at their y_start.
   // A size change means the capture region resized, so the stripe dimensions changed too:
@@ -750,8 +807,9 @@
     const p = pendingClipboard; pendingClipboard = null;
     writeClipboard(p.mime, p.data).then((ok) => { if (!ok) pendingClipboard = p; });
   }
-  document.addEventListener("pointerdown", flushPendingClipboard);
-  document.addEventListener("keydown", flushPendingClipboard);
+  // Any user gesture also satisfies the autoplay policy -> let queued audio actually play.
+  document.addEventListener("pointerdown", () => { flushPendingClipboard(); resumeAudio(); });
+  document.addEventListener("keydown", () => { flushPendingClipboard(); resumeAudio(); });
 
   // --- visibility: pause encode while not actually watched --------------------
   // Two independent signals: the dockview pane being hidden (host->iframe postMessage)
@@ -759,7 +817,10 @@
   // without this the frame queue would grow with unclosed VideoFrames and leak while the
   // server keeps encoding). Stream only when BOTH say visible.
   let paneVisible = true, pageVisible = !document.hidden;
-  function syncStream() { if (paneVisible && pageVisible) openStream(); else closeStream(); }
+  function syncStream() {
+    if (paneVisible && pageVisible) { openStream(); openAudio(); }
+    else { closeStream(); closeAudio(); }
+  }
   window.addEventListener("message", (e) => {
     const d = e.data;
     if (!d || d.type !== "minds:panel-visibility") return;
@@ -782,6 +843,7 @@
   function connect(id) {
     browserId = id;
     connectStream();  // separate binary video socket; opening it is the "encode on demand" signal
+    openAudio();      // separate audio socket; plays once the user's first gesture resumes it
     castWs = new WebSocket(wsUrl("browsers/" + id + "/cast"));
     castWs.onopen = () => reportSize();  // send our pane size once the socket is live
     castWs.onmessage = (ev) => {
@@ -829,6 +891,7 @@
       if (ev.code === 1008) {
         closedForGood = true;
         closeStream();
+        closeAudio();
         overlay.classList.remove("show");
         returnBar.classList.remove("show");
         initOverlay.classList.remove("show");

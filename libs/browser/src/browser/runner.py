@@ -939,6 +939,36 @@ def stream_socket(ws: Any, browser_id: str) -> None:
         bridge.run(session.remove_stream_subscriber(client_queue), timeout=_ROUTE_TIMEOUT)
 
 
+def audio_socket(ws: Any, browser_id: str) -> None:
+    """Bridge one audio WebSocket: the browser's sound as raw PCM (48 kHz, stereo, s16le),
+    binary. Separate from /stream so audio and video never head-of-line-block each other;
+    capture starts on the first subscriber and stops when the last leaves (on-demand, same
+    as video). No handshake -- the client just receives PCM chunks. Its own Flask thread."""
+    session = _resolve_sync_for_ws(browser_id)
+    if session is None:
+        ws.close(1013 if is_valid_browser_name(browser_id) else 1008)
+        return
+    client_queue = bridge.run(session.add_audio_subscriber(), timeout=_ROUTE_TIMEOUT)
+    if client_queue is None:
+        ws.close(1013)  # no sink / not running yet -- viewer retries (audio is best-effort)
+        return
+    streaming = True
+    try:
+        while streaming:
+            try:
+                chunk = client_queue.get(timeout=_CAST_OUTBOUND_POLL_SECONDS)
+            except queue.Empty:
+                continue
+            if chunk is None:
+                streaming = False  # capture shutdown sentinel
+            else:
+                ws.send(chunk)
+    except ConnectionClosed:
+        pass
+    finally:
+        bridge.run(session.remove_audio_subscriber(client_queue), timeout=_ROUTE_TIMEOUT)
+
+
 # --- app construction + lifecycle --------------------------------------------
 
 
@@ -969,6 +999,7 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_paste, methods=["POST"], endpoint="clipboard_paste")
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
     sock.route("/browsers/<string:browser_id>/stream")(stream_socket)
+    sock.route("/browsers/<string:browser_id>/audio")(audio_socket)
 
 
 _register_routes()

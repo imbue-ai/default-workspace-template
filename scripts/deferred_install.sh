@@ -174,11 +174,35 @@ _install_xvfb() {
     fi
 }
 
+_install_audio() {
+    local marker
+    marker="$(_marker_for audio)"
+    if [ -f "$marker" ]; then
+        _log "audio: marker present at $marker, skipping"
+        return 0
+    fi
+    # PulseAudio (the sound server + pactl) plus ffmpeg give the browser fleet audio: each
+    # browser plays into its own PulseAudio null sink, which ffmpeg captures to PCM and we
+    # stream to the viewer (browser.audio + the pulseaudio supervisord program). Separate
+    # marker from xvfb so a box that already ran the earlier install still picks audio up.
+    _recover_interrupted_dpkg
+    _log "audio: installing pulseaudio + pulseaudio-utils + ffmpeg"
+    if apt-get update -y && apt-get install -y --no-install-recommends \
+        pulseaudio pulseaudio-utils ffmpeg; then
+        touch "$marker"
+        _log "audio: install complete, marker written to $marker"
+    else
+        _log "audio: install FAILED; marker not written so the next boot retries"
+        return 1
+    fi
+}
+
 main() {
     mkdir -p "$MARKER_DIR"
     local rc=0
     _install_fortress || rc=$?
     _install_xvfb || rc=$?
+    _install_audio || rc=$?
     if [ "$rc" -eq 0 ]; then
         _log "all deferred installs complete"
     else

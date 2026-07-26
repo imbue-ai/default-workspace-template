@@ -71,6 +71,7 @@ from playwright.async_api import Error as PlaywrightError
 from pydantic import PrivateAttr
 
 from browser import manifest as fleet_manifest
+from browser.audio import AudioCapture, create_null_sink, remove_null_sink
 from browser.capture import Capture
 from browser.display import SCREEN_H, SCREEN_W, Display, DisplayError
 from browser.names import generate_browser_name, is_valid_browser_name
@@ -497,6 +498,11 @@ class LiveBrowser(MutableModel):
     # close().
     _display: Display | None = PrivateAttr(default=None)
     _capture: Capture | None = PrivateAttr(default=None)
+    # Per-browser audio: its own PulseAudio null sink (Chromium plays into it via
+    # PULSE_SINK, so sound is isolated per browser) captured on demand to PCM. Best-effort:
+    # None when PulseAudio isn't available -- the browser just has no sound.
+    _audio: "AudioCapture | None" = PrivateAttr(default=None)
+    _audio_sink_module: str | None = PrivateAttr(default=None)
     # Browser-level CDP session (distinct from a page target's) for window bounds --
     # resize-to-pane sets Browser.setWindowBounds and measures the chrome height.
     _browser_cdp: CDPSession | None = PrivateAttr(default=None)
@@ -691,8 +697,18 @@ class LiveBrowser(MutableModel):
             except (DisplayError, OSError) as e:
                 raise BrowserStartupError(f"could not start the browser's X display: {e}") from e
         prior_display = os.environ.get("DISPLAY")
+        prior_sink = os.environ.get("PULSE_SINK")
         if self._display is not None:
             os.environ["DISPLAY"] = self._display.name
+            # Give this browser its own PulseAudio sink and point Chromium at it (PULSE_SINK,
+            # inherited like DISPLAY), so its sound is captured in isolation. Best-effort:
+            # if PulseAudio isn't up, no sink -> no PULSE_SINK -> the browser just has no
+            # audio, and the launch proceeds normally.
+            sink_name = f"mind_{self._display.num}"
+            self._audio_sink_module = create_null_sink(sink_name)
+            if self._audio_sink_module is not None:
+                os.environ["PULSE_SINK"] = sink_name
+                self._audio = AudioCapture(["-f", "pulse", "-i", f"{sink_name}.monitor"])
         try:
             self._bu_session = await self._start_bu_session(profile_dir, chromium_path)
         finally:
@@ -701,6 +717,11 @@ class LiveBrowser(MutableModel):
                     os.environ.pop("DISPLAY", None)
                 else:
                     os.environ["DISPLAY"] = prior_display
+            if self._audio_sink_module is not None:
+                if prior_sink is None:
+                    os.environ.pop("PULSE_SINK", None)
+                else:
+                    os.environ["PULSE_SINK"] = prior_sink
         # The Chromium tree just spawned (and its processes self-write their
         # oom_score_adj moments later): have the OOM sweep re-band it.
         notify_chromium_processes_expected()
@@ -965,6 +986,18 @@ class LiveBrowser(MutableModel):
     async def remove_stream_subscriber(self, client_queue: "queue.Queue[bytes | None]") -> None:
         if self._capture is not None:
             self._capture.remove_subscriber(client_queue)
+
+    async def add_audio_subscriber(self) -> "queue.Queue[bytes | None] | None":
+        """Register an ``/audio`` PCM socket, starting the sink capture on demand. Returns
+        its outbound queue, or None when there's no audio (no PulseAudio sink, the browser
+        isn't running, or it's tearing down) -- the handler closes the socket, viewer retries."""
+        if self._audio is None or not self._is_running or self._closed:
+            return None
+        return self._audio.add_subscriber()
+
+    async def remove_audio_subscriber(self, client_queue: "queue.Queue[bytes | None]") -> None:
+        if self._audio is not None:
+            self._audio.remove_subscriber(client_queue)
 
     async def _broadcast_tabs(self) -> None:
         # Stays async: it awaits _tab_list() (a CDP round-trip). The fan-out itself
@@ -1547,6 +1580,8 @@ class LiveBrowser(MutableModel):
         # open, frozen sockets) until each happens to disconnect on its own.
         if self._capture is not None:
             self._capture.close()
+        if self._audio is not None:
+            self._audio.close()
         self._broadcast({"type": "crashed", "browser_id": self.browser_id})
         # Release anyone queued for this browser: it will never free, so wait-queue waiters
         # must not hang and resume-queue agents must be told rather than wait for a wake
@@ -2328,6 +2363,12 @@ class LiveBrowser(MutableModel):
         # Stop the display encoder (and shut its stream sockets) before the display goes.
         if self._capture is not None:
             self._capture.close()
+        # Stop the audio capture and unload this browser's PulseAudio sink.
+        if self._audio is not None:
+            self._audio.close()
+        if self._audio_sink_module is not None:
+            remove_null_sink(self._audio_sink_module)
+            self._audio_sink_module = None
         # Release every queued agent so none hangs on a browser being torn down: wait-queue
         # waiters unblock (their acquire returns `closed`); resume-queue agents are messaged
         # it's gone and cleared.
