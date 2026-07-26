@@ -758,6 +758,15 @@ class LiveBrowser(MutableModel):
         # subscriber), measure the window so resize works, and start the clipboard watcher.
         if self._display is not None:
             await self._setup_display_capture(observer)
+            # Apply the current render size to the real window NOW that CDP + the window id
+            # exist. A pane-size resize can arrive DURING startup (the viewer reports its
+            # size as soon as its cast socket opens, well before this point); that early
+            # resize updated _render_w/h but _resize_window() no-op'd because the browser
+            # CDP wasn't attached yet. Without this, the window would keep its default
+            # launch size while _render_w/h says the pane size -- the "doesn't fit the pane
+            # until I manually resize" bug -- and the capture region (== _render_w/h) would
+            # mismatch the window. Aligning here makes first load fit the pane.
+            await self._resize_window()
             self._clip_watch_task = asyncio.create_task(self._clipboard_out_loop())
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         # Flip init -> running NOW -- Chromium + the encoder are ready -- so the viewer
