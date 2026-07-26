@@ -94,7 +94,7 @@ class WorkspaceAICredentials:
 # Where a keyed integration's snapshot of the workspace API key lives, written
 # at integration-setup time by ``write_anthropic_env_snapshot``. Relative to
 # the repo root, which is every service's working directory (supervisord runs
-# them from /code). Holds ONLY ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL): the
+# them from /home/user/workspace). Holds ONLY ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL): the
 # subscription oauth token cannot authenticate direct API calls, so it is
 # never written here.
 ANTHROPIC_ENV_SNAPSHOT_PATH = "runtime/secrets/anthropic.env"

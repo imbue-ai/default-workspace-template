@@ -165,7 +165,7 @@ out.
 Out of scope for v1. To restore manually:
 
 ```
-set -a; source /code/runtime/secrets/restic.env; set +a
+set -a; source /home/user/workspace/runtime/secrets/restic.env; set +a
 restic snapshots
 restic restore <snapshot_id> --target /tmp/restored
 ```
