@@ -184,6 +184,17 @@ chmod +x /usr/local/bin/env-converge-capture-hook
 printf 'DPkg::Post-Invoke { "/usr/local/bin/env-converge-capture-hook || true"; };\n' \
     > /etc/apt/apt.conf.d/90env-converge-capture
 
+# Root's passwd home moves to /home/user (the persistent volume) at the end of
+# the image build / VM provisioning, but mngr's SSH provisioning writes root's
+# authorized_keys to /root/.ssh -- tooling-owned and container-local, exactly
+# where it should live (never backed up, never clobbered by a restore). Point
+# sshd at BOTH the passwd-home default and /root/.ssh so that provisioning
+# keeps working across the home move. Debian's sshd_config includes
+# /etc/ssh/sshd_config.d/*.conf by default.
+mkdir -p /etc/ssh/sshd_config.d
+printf 'AuthorizedKeysFile .ssh/authorized_keys /root/.ssh/authorized_keys\n' \
+    > /etc/ssh/sshd_config.d/60-workspace-root-keys.conf
+
 # Pre-seed github.com SSH host keys so git operations don't block on interactive
 # host-key confirmation. Idempotent: only added when absent.
 mkdir -p /root/.ssh

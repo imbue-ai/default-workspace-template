@@ -26,6 +26,16 @@ if [ ! -e /home/user/.bashrc ]; then
         > /home/user/.bashrc
 fi
 
+# Outgoing ssh reads $HOME/.ssh/known_hosts, which lives on the volume now;
+# seed it from the image's /root/.ssh copy (github.com host keys, written by
+# setup_system.sh) so git-over-ssh does not block on interactive confirmation.
+if [ ! -e /home/user/.ssh/known_hosts ] && [ -f /root/.ssh/known_hosts ]; then
+    mkdir -p /home/user/.ssh
+    chmod 700 /home/user/.ssh
+    cp /root/.ssh/known_hosts /home/user/.ssh/known_hosts
+    chmod 600 /home/user/.ssh/known_hosts
+fi
+
 # Stamp the data-layout version so every backup of /home/user self-describes
 # which layout its paths follow.
 mkdir -p /home/user/.mngr
