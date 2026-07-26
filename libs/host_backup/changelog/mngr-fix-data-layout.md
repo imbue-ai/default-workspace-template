@@ -1,0 +1,1 @@
+Backups now cover the whole persistent home tree (`/home/user`) instead of the mngr host dir: detection resolves the provider's home symlink for lima btrfs probing (findmnt -T), vps snapshots are read through their `home/` subtree, and the provisioning-owned `.ssh/authorized_keys` joins the default excludes so a restore can never lock the tooling out.
