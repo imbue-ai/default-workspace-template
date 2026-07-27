@@ -46,7 +46,7 @@ pure-prose skill (no scripts) has all of its behavior in SKILL.md.
 ## Data capture
 
 Beyond the universal preserve-and-surface rule (`harden-creation.md`), persist
-each record under `data/.apps/<name>/`, capture *all reasonable fields per record*
+each record under `data/.skills/<name>/`, capture *all reasonable fields per record*
 in the calls you already make (not just the fields the original turn displayed),
 and treat pagination as normal when the ask requires it -- but do NOT make extra
 un-asked-for API calls just to gather more data.
