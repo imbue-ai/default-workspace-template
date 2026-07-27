@@ -72,15 +72,20 @@ def test_anthropic_key_status_reflects_availability(monkeypatch: pytest.MonkeyPa
     assert "Anthropic API key" in reason
 
 
-def test_deferred_install_ready_gates_on_marker(
+def test_deferred_install_ready_gates_on_fortress_executable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
-    marker = tmp_path / "done.fortress"
-    monkeypatch.setattr(bsession, "_FORTRESS_MARKER", marker)
+    fortress = tmp_path / "tilion"
+    monkeypatch.setattr(bsession, "_FORTRESS_EXECUTABLE", str(fortress))
+    # Missing binary: still installing.
     ready, _ = bsession.deferred_install_ready()
     assert ready is False
-    marker.write_text("")
+    # Present but not executable (a partially-staged install): still not ready.
+    fortress.write_text("")
+    ready, _ = bsession.deferred_install_ready()
+    assert ready is False
+    fortress.chmod(0o755)
     ready, reason = bsession.deferred_install_ready()
     assert ready is True
     assert reason == "ready"

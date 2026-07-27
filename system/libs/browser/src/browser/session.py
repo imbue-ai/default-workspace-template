@@ -105,14 +105,13 @@ _SCREENCAST_MAX_HEIGHT = 800
 # tab feels snappier. Slightly more bandwidth than skipping frames.
 _SCREENCAST_EVERY_NTH_FRAME = 1
 
-# Deferred-install marker (see system/scripts/deferred_install.sh). Fortress installs
-# asynchronously on first container boot; launching a browser before it exists
-# fails, so callers gate on this. No Xvfb: CDP streaming/input are headless.
-_FORTRESS_MARKER = Path("/var/lib/minds/deferred-install/done.fortress")
-
-# Fortress's fixed install path (see system/scripts/deferred_install.sh's
-# _install_fortress). A stealth, C++-patched Chromium fork -- replaces
-# vanilla Chromium as the engine for every browser the fleet launches.
+# Fortress's fixed install path (see the env.d unit
+# system/scripts/env.d/1000-playwright-fortress.sh). A stealth, C++-patched
+# Chromium fork -- replaces vanilla Chromium as the engine for every browser
+# the fleet launches. It installs asynchronously on first container boot via
+# the env-converge one-shot; launching a browser before it exists fails, so
+# callers gate on the binary itself (the unit's own satisfied condition --
+# there are no marker files). No Xvfb: CDP streaming/input are headless.
 _FORTRESS_EXECUTABLE = "/opt/fortress/tilion-fortress/tilion"
 
 # Default model. browser-use's own default LLM is ChatBrowserUse (its hosted
@@ -355,8 +354,8 @@ def anthropic_key_status() -> tuple[bool, str]:
 def deferred_install_ready() -> tuple[bool, str]:
     """Return ``(ready, reason)`` once Chromium is installed."""
     if os.environ.get("BROWSER_SKIP_INSTALL_CHECK") == "1":
-        return True, "ready"  # host/CI testing without the deferred-install marker
-    if not _FORTRESS_MARKER.exists():
+        return True, "ready"  # host/CI testing without an installed Fortress
+    if not os.access(_FORTRESS_EXECUTABLE, os.X_OK):
         return False, "Chromium is still installing in this workspace; try again in a minute."
     return True, "ready"
 

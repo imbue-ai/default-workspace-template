@@ -82,6 +82,6 @@ def emit_event(event_type: EnvConvergeEventType, detail: dict[str, object]) -> N
     try:
         events_path.parent.mkdir(parents=True, exist_ok=True)
         with events_path.open("a") as f:
-            f.write(json.dumps(event.to_jsonl_dict()) + "\n")
+            f.write(json.dumps(event.model_dump()) + "\n")
     except OSError as e:
         logger.warning("Cannot append env-converge event to {}: {}", events_path, e)
