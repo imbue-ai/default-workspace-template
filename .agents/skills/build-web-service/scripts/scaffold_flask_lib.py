@@ -3,12 +3,13 @@
 # requires-python = ">=3.11"
 # dependencies = ["tomlkit>=0.12"]
 # ///
-"""Stand up a new Flask web-service lib (and its supervisord program entry).
+"""Stand up a new Flask web-service creation (and its supervisord program entry).
 
-Creates `libs/<package>/` with a Flask starter (synchronous; flask-sock is
-available for WebSockets), updates the root pyproject.toml
-workspace/sources/dependencies, appends a `[program:<name>]` block to
-supervisord.conf, and runs `uv sync --all-packages` to materialize the
+Creates `creations/<package>/` with a Flask starter (synchronous; flask-sock
+is available for WebSockets), updates the root pyproject.toml
+sources/dependencies (the `creations/*` member glob picks the package up
+automatically), appends a `[program:<name>]` block to
+system/supervisord.conf, and runs `uv sync --all-packages` to materialize the
 workspace.
 
 Usage:
@@ -16,7 +17,7 @@ Usage:
         --name inbox-status --description "inbox status dashboard" \\
         [--port 8081] [--extra-dep "jinja2>=3.1"] [--extra-dep "anthropic>=0.40"]
 
-Run from the repo root (`/mngr/code`). Fails non-zero with a clear message on
+Run from the repo root (`/home/user/workspace`). Fails non-zero with a clear message on
 any failure (lib already exists, reserved name, sync failure, etc.).
 """
 
@@ -35,22 +36,20 @@ from tomlkit.items import Array, Table
 # a snake-cased existing service name is also rejected.
 RESERVED_NAMES = frozenset(
     {
-        "web",
-        "web-server",
         "system-interface",
         "system_interface",
         "cloudflared",
         "cloudflare-tunnel",
         "app-watcher",
         "bootstrap",
-        "runtime-backup",
+        "github-sync",
         "host-backup",
         "terminal",
         "deferred-install",
         "imbue-common",
     }
 )
-LOWEST_AUTO_PORT = 8081
+LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 
@@ -96,8 +95,8 @@ def _applications_toml_ports(applications_toml: Path) -> set[int]:
 
 def _pick_port(repo_root: Path, requested: int | None) -> int:
     in_use = _supervisord_conf_ports(
-        repo_root / "supervisord.conf"
-    ) | _applications_toml_ports(repo_root / "runtime" / "applications.toml")
+        repo_root / "system/supervisord.conf"
+    ) | _applications_toml_ports(repo_root / "data" / ".state" / "applications.toml")
     if requested is not None:
         if requested in in_use:
             sys.exit(f"error: --port {requested} is already in use by another service")
@@ -140,19 +139,30 @@ packages = ["src/{package}"]
 
 
 def _lib_runner(name: str, package: str, description: str, port: int) -> str:
+    env_var = f"{package.upper()}_DATA_DIR"
+    port_env_var = f"{package.upper()}_PORT"
     return f'''"""{description}.
 
-Services run from /mngr/code (the repo root). Conventions:
+Services run from /home/user/workspace (the repo root). Conventions:
 
-- Runtime state files (anything written and read across runs, e.g.
-  cursors, caches, last-visit timestamps): use cwd-relative paths like
-  ``Path("runtime/{name}/...")``. Do NOT use ``Path(__file__)``-based
-  paths for runtime state -- the bug to avoid is one process writing
-  to ``/mngr/code/runtime/...`` while another reads from
-  ``/mngr/code/libs/<pkg>/runtime/...``.
+- Persistent state (anything written and read across runs -- cursors,
+  caches, snapshots, user records): read and write it under ``DATA_DIR``
+  (defined below), never a hardcoded ``data/creations/{name}/`` at the
+  call site. ``DATA_DIR`` defaults to ``data/creations/{name}/`` but
+  honors the ``{env_var}`` env var, so an editing agent can point a
+  throwaway instance at a *copy* of the data instead of the live store
+  (see the update-service skill). Do NOT use ``Path(__file__)``-based
+  paths for state -- the bug to avoid is one process writing to
+  ``/home/user/workspace/data/creations/...`` while another reads from
+  ``/home/user/workspace/creations/<pkg>/data/...``.
 - Static assets shipped alongside this file (templates, default
   configs, bundled JSON): ``Path(__file__).parent / "assets/..."`` is
   fine and is the right pattern.
+- Listen port: bind ``PORT`` (defined below), which defaults to this
+  service's assigned port but honors the ``{port_env_var}`` env var, so
+  an editing agent can boot a throwaway instance on a *spare* port
+  alongside the live one (see the update-service skill). Never hardcode
+  the port at the ``run_simple`` call.
 
 This is a synchronous Flask app served by the threaded Werkzeug server.
 The system_interface proxy at ``/service/{name}/`` rewrites absolute
@@ -161,9 +171,26 @@ the prefix to the page's own fetches, so the app can serve at ``/`` and
 still work behind the proxy. Use ``flask_sock`` if you need WebSockets.
 """
 
-from flask import Flask
-from flask import Response
+import os
+from pathlib import Path
+
+from flask import Flask, Response
 from werkzeug.serving import run_simple
+
+# Persistent state for this service lives under DATA_DIR. It defaults to
+# ``data/creations/{name}/`` but is overridable via the ``{env_var}`` env var
+# so a throwaway instance can run against a *copy* of the data while editing --
+# see the update-service skill. Always read/write state through DATA_DIR;
+# never hardcode ``data/creations/{name}/`` at a call site, or the override is
+# bypassed. A writing call site should ``DATA_DIR.mkdir(parents=True,
+# exist_ok=True)`` before writing.
+DATA_DIR = Path(os.environ.get("{env_var}", "data/creations/{name}"))
+
+# Listen port. Defaults to this service's assigned port but is overridable via
+# the ``{port_env_var}`` env var so an editing agent can boot a throwaway
+# instance on a spare port next to the live one (see the update-service skill).
+# Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
+PORT = int(os.environ.get("{port_env_var}", "{port}"))
 
 app = Flask("{package}", static_folder=None)
 
@@ -185,7 +212,9 @@ def health() -> Response:
 
 
 def main() -> None:
-    run_simple("127.0.0.1", {port}, app, threaded=True, use_reloader=False, use_debugger=False)
+    run_simple(
+        "127.0.0.1", PORT, app, threaded=True, use_reloader=False, use_debugger=False
+    )
 
 
 if __name__ == "__main__":
@@ -280,7 +309,7 @@ def _write_lib(
     repo_root: Path, name: str, description: str, port: int, extras: list[str]
 ) -> Path:
     package = _kebab_to_snake(name)
-    lib_dir = repo_root / "libs" / package
+    lib_dir = repo_root / "creations" / package
     if lib_dir.exists():
         sys.exit(f"error: {lib_dir} already exists")
     src_dir = lib_dir / "src" / package
@@ -327,11 +356,8 @@ def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
     workspace = uv.get("workspace")
     if not isinstance(workspace, Table):
         sys.exit("error: root pyproject.toml is missing [tool.uv.workspace]")
-    members = workspace.get("members")
-    if not isinstance(members, Array):
-        sys.exit("error: [tool.uv.workspace].members is missing or not an array")
-    _ensure_in_array(members, f"libs/{package}")
-
+    # No members edit needed: the root pyproject's "creations/*" member glob
+    # already covers every package under creations/.
     sources = uv.get("sources")
     if not isinstance(sources, Table):
         sys.exit("error: root pyproject.toml is missing [tool.uv.sources]")
@@ -345,8 +371,8 @@ def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
 
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=bash -c "python3 scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
-directory=/mngr/code
+command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
+directory=/home/user/workspace
 autostart=true
 autorestart=true
 startretries=1000000
@@ -362,17 +388,19 @@ stderr_logfile_backups=3
 
 
 def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
-    # supervisord.conf is INI (not TOML) and has hand-written comments worth
+    # system/supervisord.conf is INI (not TOML) and has hand-written comments worth
     # preserving, so append a [program:<name>] block as text rather than
     # round-tripping through a parser. The command is wrapped in `bash -c "..."`
     # because supervisord exec's commands directly (no shell) and this one chains
-    # forward_port.py with `&&`.
-    path = repo_root / "supervisord.conf"
+    # forward_port.py with `&&`; the `oom_tag_service.py user` prefix tags the
+    # new (user-created) service so it is shed before any built-in service under
+    # memory pressure (see system/libs/oom_priority/README.md).
+    path = repo_root / "system/supervisord.conf"
     if not path.exists():
         sys.exit(f"error: {path} not found (cannot register the new service)")
     existing = path.read_text()
     if f"[program:{name}]" in existing:
-        sys.exit(f"error: supervisord.conf already has a [program:{name}] section")
+        sys.exit(f"error: system/supervisord.conf already has a [program:{name}] section")
     block = _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port)
     path.write_text(existing.rstrip("\n") + "\n\n" + block)
 
@@ -394,10 +422,10 @@ def _find_repo_root(start: Path) -> Path:
     current = start.resolve()
     for parent in [current, *current.parents]:
         if (parent / "pyproject.toml").exists() and (
-            parent / "supervisord.conf"
+            parent / "system/supervisord.conf"
         ).exists():
             return parent
-    sys.exit("error: could not locate repo root (pyproject.toml + supervisord.conf)")
+    sys.exit("error: could not locate repo root (pyproject.toml + system/supervisord.conf)")
 
 
 def main() -> None:
@@ -416,7 +444,7 @@ def main() -> None:
     parser.add_argument(
         "--repo-root",
         default=None,
-        help="repo root (defaults to nearest ancestor containing pyproject.toml + supervisord.conf)",
+        help="repo root (defaults to nearest ancestor containing pyproject.toml + system/supervisord.conf)",
     )
     parser.add_argument(
         "--skip-uv-sync",

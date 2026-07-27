@@ -15,7 +15,7 @@ surface beyond that only when a specific invariant demands it. Split into a
 ## Where a skill's behavior lives
 
 A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, in
-`scripts/`) and its SKILL.md prose, so a change -- or a fix -- may touch either or
+`system/scripts/`) and its SKILL.md prose, so a change -- or a fix -- may touch either or
 both. When a wrong behavior traces to an ambiguous or incorrect prose
 instruction, the edit is a SKILL.md edit even if the skill has scripts; a
 pure-prose skill (no scripts) has all of its behavior in SKILL.md.
@@ -34,25 +34,25 @@ pure-prose skill (no scripts) has all of its behavior in SKILL.md.
   checks).
 - Hand-craft and run 2-3 scenarios (template in `spec-summary.md`); they are
   **ephemeral** -- run them in your transcript, never saved as files. For a
-  `[script]` / `[ai-script]` step, invoke `scripts/run.py` on real input and
+  `[script]` / `[ai-script]` step, invoke `system/scripts/run.py` on real input and
   inspect the output (an `[ai-script]` step makes a real Claude call -- run it on
   a small input to note cost). For a `[prose]` step, walk the SKILL.md
   instructions as the executing agent.
 - The universal fixture-test rule (`harden-artifact.md`), for a skill: save 1-3
   samples under `.agents/skills/<name>/tests/fixtures/` and add a
-  `scripts/<name>_test.py` that feeds each through the parser and asserts the
+  `system/scripts/<name>_test.py` that feeds each through the parser and asserts the
   exact output shape.
 
 ## Data capture
 
 Beyond the universal preserve-and-surface rule (`harden-artifact.md`), persist
-each record under `runtime/<name>/`, capture *all reasonable fields per record*
+each record under `data/creations/<name>/`, capture *all reasonable fields per record*
 in the calls you already make (not just the fields the original turn displayed),
 and treat pagination as normal when the ask requires it -- but do NOT make extra
 un-asked-for API calls just to gather more data.
 
 ## Built-in skills
 
-Some skills are built-ins synced from the upstream template (`parent.toml`).
+Some skills are built-ins synced from the upstream template (`system/config/parent.toml`).
 Editing one creates local drift to reconcile later; treat such an edit as a
 change to shared infrastructure, not a private one.

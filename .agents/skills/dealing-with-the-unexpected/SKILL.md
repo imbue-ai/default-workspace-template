@@ -13,26 +13,21 @@ Before doing anything, understand what is actually happening:
 
 - Read any error messages carefully
 - Check the tmux windows: `tmux list-windows -t $(tmux display-message -p '#S')`
-- Check if services are running: `supervisorctl status` (compare against the programs defined in `supervisord.conf`)
-- Check the wait counter state: `cat runtime/wait_counter 2>/dev/null || echo "no counter"`
+- Check if services are running: `supervisorctl status` (compare against the programs defined in `system/supervisord.conf`)
+- Check the wait counter state: `cat data/.state/wait_counter 2>/dev/null || echo "no counter"`
 
 ## 2. Diagnose
 
 Common issues and their causes:
 
-- **User-messaging channel broken**: if a configured outbound channel is not
-  delivering, check that channel's process for errors and confirm the relevant
-  env vars are set. See the `send-user-message` skill
-  for how channel selection works; fall back to inline responses until the
-  channel is restored.
-- **Services not starting**: Run `supervisorctl status` and read the service's logs under `/var/log/supervisor/<name>-stderr.log` (or `supervisorctl tail -f <name> stderr`). The `bootstrap` tmux window shows supervisord's own output. Verify `supervisord.conf` is valid, then `supervisorctl reread && supervisorctl update`.
-- **Wait script behaving oddly**: Check `runtime/wait_counter` contents. Delete it to reset: `rm -f runtime/wait_counter`
+- **Services not starting**: Run `supervisorctl status` and read the service's logs under `/var/log/supervisor/<name>-stderr.log` (or `supervisorctl tail -f <name> stderr`). The `bootstrap` tmux window shows supervisord's own output. Verify `system/supervisord.conf` is valid, then `supervisorctl reread && supervisorctl update`.
+- **Wait script behaving oddly**: Check `data/.state/wait_counter` contents. Delete it to reset: `rm -f data/.state/wait_counter`
 
 ## 3. Fix or escalate
 
 If you can fix the issue yourself (edit a config, restart a service, etc.), do so and commit the fix.
 
-If you cannot fix the issue, tell the user via `send-user-message`:
+If you cannot fix the issue, tell the user:
 - What you observed
 - What you tried
 - What you think the problem might be

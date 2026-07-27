@@ -10,7 +10,8 @@ Start a background poll for the report file with `create_worker.py await`. It
 reads `finish_report_path` from the task file's frontmatter, blocks until that
 file appears, prints its contents, and exits 0; on timeout it exits non-zero
 (code 124). Run it with Bash's `run_in_background: true` so it returns the
-instant the report lands.
+instant the report lands. `--name <WORKER_NAME>` is required (the same name you
+passed to `launch`) so the poll also watches the OOM shed ledger.
 
 `await` is a generic poll-until-file primitive; the gate cycle below is this
 flow's *use* of it. Non-interactive callers that launch a tightly-scoped agent
@@ -20,6 +21,7 @@ and wait for one finish report use the same `await` (or the synchronous
 ```bash
 # Run with Bash run_in_background: true
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    --name <WORKER_NAME> \
     --task-file <TASK_FILE>
 ```
 
@@ -28,6 +30,15 @@ wait. The tool output is the report contents: YAML frontmatter (`type`, `name`)
 plus a body. If await exits non-zero (timeout) without printing a report, do
 *not* immediately treat it as a terminal failure -- see "Diagnose worker
 liveness" below.
+
+If await exits with code 75, the worker's own agent was **shed by the OOM
+daemon** to relieve memory pressure: it will not report until revived. This is
+not a worker bug -- revive it with `mngr start <WORKER_NAME> --restart` (a plain
+`mngr message` or `mngr start` does not relaunch a shed agent), then nudge it to
+continue (`mngr message <WORKER_NAME> -m continue`). You do not need to resend
+the task: it survives in the worker's conversation history, and a SessionStart
+hook already tells the revived worker it was paused, so it re-checks state before
+continuing.
 
 ## Diagnose worker liveness before invoking failure flow
 
@@ -75,7 +86,10 @@ On `type: gate`:
   `outline-approval` gates default to answer-yourself; only escalate if the
   worker has surfaced a *genuine process question* (a decision about user
   intent, scope, or domain that you cannot make from context). Most
-  outline gates do not contain such questions and should not be forwarded.
+  outline gates do not contain such questions and should not be forwarded. **One
+  exception: an outline that carries a cost/time estimate the user will incur (a
+  metered pipeline, a paid API) is a spend decision -- surface that estimate and
+  get their approval rather than auto-answering the gate.**
 - **Mix**: if a gate bundles an approval (escalate) with implementation
   sub-questions, pre-answer the sub-questions in the message you forward to the
   user so they do not have to weigh in on them.
@@ -87,7 +101,7 @@ your reply in the user's voice and forward via `mngr message`:
 mngr message <WORKER_NAME> -m "<reply, in the user's voice>"
 ```
 
-To escalate, use the `send-user-message` skill on your own channel, wait for
+To escalate, ask the user, wait for
 the user's reply, then forward it via `mngr message`.
 
 After forwarding, consume the report so the next push can land a fresh
@@ -109,8 +123,12 @@ On `type: status`:
   git fetch . <WORKER_BRANCH>:<WORKER_BRANCH>
   git merge --no-ff <WORKER_BRANCH>
   ```
-  If the merge conflicts, resolve manually. On successful merge, close any
-  tracking ticket and optionally destroy the worker.
+  On a clean merge, close any tracking ticket and optionally destroy the
+  worker. On a conflict, recovery depends on the calling skill: if it defines
+  a staleness rule (the harden flows do -- see
+  `.agents/shared/references/harden-contention.md`), abort the merge and
+  follow that rule rather than hand-resolving; otherwise resolve the conflict
+  manually.
 
 - `name: stuck`, or the 30m timeout tripped without a report arriving -- follow
   `.agents/skills/launch-task/references/worker-failure.md`: surface the report
@@ -138,7 +156,7 @@ mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
   first, then the `<WORKER>:<PATH>` agent endpoint. Exactly one side must
   reference an agent or remote host.
 - Path resolution: mngr treats an argument as a *local path* only when it
-  starts with `/`, `./`, `../`, or `~/` -- a bare `runtime/foo` is read as an
+  starts with `/`, `./`, `../`, or `~/` -- a bare `data/foo` is read as an
   *agent name* (hence the `./` on the source above). On an agent endpoint, a
   relative `<WORKER>:PATH` resolves against the worker's workdir; an absolute
   `<WORKER>:/PATH` is used verbatim.

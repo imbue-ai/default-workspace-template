@@ -16,6 +16,7 @@ import importlib.util
 import io
 import json
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -71,11 +72,11 @@ def _make_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     The task file has plain frontmatter (no ``source_artifacts_dir``); tests
     that exercise the artifacts sync overwrite it via ``_write_task``.
     """
-    runtime = tmp_path / "runtime" / "launch-task" / "demo"
+    runtime = tmp_path / "data" / ".tasks" / "launch-task" / "demo"
     runtime.mkdir(parents=True)
     task = runtime / "task.md"
     task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
-    artifacts = tmp_path / "runtime" / "fetch-process-show" / "demo"
+    artifacts = tmp_path / "data" / ".tasks" / "fetch-process-show" / "demo"
     artifacts.mkdir(parents=True)
     (artifacts / "sample.json").write_text("{}")
     return runtime, task, artifacts
@@ -104,7 +105,16 @@ def test_happy_path_no_artifacts(tmp_path: Path) -> None:
     assert rc == 0
     argvs = [c.argv for c in runner.calls]
     assert argvs == [
-        ["mngr", "create", "demo-worker", "-t", "worker"],
+        ["git", "status", "--porcelain"],
+        [
+            "mngr",
+            "create",
+            "demo-worker",
+            "-t",
+            "worker",
+            "--label",
+            "agent_created=true",
+        ],
         [
             "mngr",
             "rsync",
@@ -155,7 +165,7 @@ def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
     live mngr CLI surface.
 
     Rather than re-asserting a hand-written expected argv (which mirrors the
-    production assumption and so can never catch a divergence when vendor/mngr
+    production assumption and so can never catch a divergence when system/vendor/mngr
     changes its CLI), we take exactly what ``launch`` hands the runner and
     confront it with ``imbue.mngr.main.cli``. It exercises the broadest argv set
     (create + two rsyncs + message) by declaring a ``source_artifacts_dir``.
@@ -191,7 +201,7 @@ def test_relative_runtime_dir_is_prefixed_for_local_source(
     """A repo-relative runtime dir is ``./``-prefixed as the local rsync source.
 
     This is the real launch contract (the skill passes repo-relative paths from
-    the repo root). ``mngr rsync`` reads a bare ``runtime/foo/`` as an agent name
+    the repo root). ``mngr rsync`` reads a bare ``data/foo/`` as an agent name
     and fails, so the source must be ``./``-prefixed -- while the agent
     destination stays repo-relative so mngr resolves it against the worker's
     workdir rather than the lead's. The absolute-path tests above don't exercise
@@ -264,6 +274,119 @@ def test_source_artifacts_dir_non_string_raises(tmp_path: Path) -> None:
         )
 
     assert runner.calls == []
+
+
+def test_launch_refuses_when_stale_report_exists(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A leftover file at ``finish_report_path`` aborts before any mngr call.
+
+    ``await`` returns as soon as the report file exists, so launching over a
+    stale report would hand the caller the previous run's report instead of the
+    new worker's -- launch must force the caller to deal with it first.
+    """
+    runtime, task, _ = _make_layout(tmp_path)
+    report = runtime / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("---\ntype: status\nname: done\n---\n\nold run\n")
+    task.write_text(
+        f"---\nlead_agent: lead\nfinish_report_path: {report}\n---\n\nbody\n"
+    )
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 2
+    assert runner.calls == []
+    err = capsys.readouterr().err
+    assert "report path" in err
+    assert str(report) in err
+
+
+def test_launch_proceeds_when_report_path_is_clear(tmp_path: Path) -> None:
+    """A declared ``finish_report_path`` with nothing at it launches normally."""
+    runtime, task, _ = _make_layout(tmp_path)
+    task.write_text(
+        f"---\nlead_agent: lead\nfinish_report_path: {runtime / 'reports' / 'report.md'}\n---\n\nbody\n"
+    )
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert [c.argv[:2] for c in runner.calls] == [
+        ["git", "status"],
+        ["mngr", "create"],
+        ["mngr", "rsync"],
+        ["mngr", "message"],
+    ]
+
+
+def test_launch_refuses_dirty_worktree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A dirty working tree aborts before any mngr call, with a commit-first
+    message that names stashing as the wrong move.
+
+    The worker branches from committed HEAD, so uncommitted changes never reach
+    it; ``mngr create`` also refuses a dirty tree. Catching it here turns an
+    opaque ``mngr create`` failure into an actionable one.
+    """
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("git", "status"), _StubResult(stdout=" M some_file.py\n"))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 2
+    # The clean check ran, and nothing was handed to mngr.
+    assert ["git", "status", "--porcelain"] in [c.argv for c in runner.calls]
+    assert not any(c.argv[:1] == ["mngr"] for c in runner.calls)
+    err = capsys.readouterr().err
+    assert "uncommitted changes" in err
+    assert "Commit" in err
+    assert "stash" in err
+
+
+def test_launch_proceeds_when_not_a_git_repo(tmp_path: Path) -> None:
+    """A non-zero ``git status`` (not a git repo / git unavailable) is treated as
+    'nothing to gate on' and launch proceeds -- mngr surfaces its own error later
+    if it needs a repo."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("git", "status"),
+        _StubResult(returncode=128, stderr="fatal: not a git repository"),
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert any(c.argv[:2] == ["mngr", "create"] for c in runner.calls)
 
 
 def test_invalid_frontmatter_yaml_raises(tmp_path: Path) -> None:
@@ -424,7 +547,16 @@ def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
     argvs = [c.argv for c in runner.calls]
     expected_script = str(state_dir / "commands" / "common_transcript.sh")
     assert argvs == [
-        ["mngr", "create", "demo-worker", "-t", "worker"],
+        ["git", "status", "--porcelain"],
+        [
+            "mngr",
+            "create",
+            "demo-worker",
+            "-t",
+            "worker",
+            "--label",
+            "agent_created=true",
+        ],
         [
             "mngr",
             "rsync",
@@ -557,6 +689,16 @@ def _no_sleep(_seconds: float) -> None:
     return None
 
 
+def _write_report_on_sleep(report: Path, text: str):
+    """A sleeper that plays the worker: the report appears during the first
+    poll sleep (launch refuses a report that pre-exists the worker)."""
+
+    def _sleeper(_seconds: float) -> None:
+        report.write_text(text)
+
+    return _sleeper
+
+
 def _write_await_task(task_file: Path, report_path: Path) -> None:
     """Write a task file whose frontmatter points await at ``report_path``."""
     task_file.write_text(
@@ -566,7 +708,7 @@ def _write_await_task(task_file: Path, report_path: Path) -> None:
 
 def test_await_returns_report_immediately_when_present(tmp_path: Path) -> None:
     """A report already on disk is printed at once, before any sleep."""
-    report = tmp_path / "runtime" / "launch-task" / "demo" / "reports" / "report.md"
+    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
     report.parent.mkdir(parents=True)
     report.write_text("---\ntype: status\nname: done\n---\n\nall good\n")
     out = io.StringIO()
@@ -590,7 +732,7 @@ def test_await_returns_report_immediately_when_present(tmp_path: Path) -> None:
 
 def test_await_polls_until_report_appears(tmp_path: Path) -> None:
     """await loops, sleeping, until the report shows up, then prints it."""
-    report = tmp_path / "runtime" / "launch-task" / "demo" / "reports" / "report.md"
+    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
     report.parent.mkdir(parents=True)
     out = io.StringIO()
 
@@ -619,7 +761,7 @@ def test_await_times_out_when_report_never_appears(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """When the deadline passes with no report, await returns the timeout code."""
-    report = tmp_path / "runtime" / "launch-task" / "demo" / "reports" / "report.md"
+    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
     report.parent.mkdir(parents=True)
     out = io.StringIO()
 
@@ -637,14 +779,63 @@ def test_await_times_out_when_report_never_appears(
     assert "timed out" in capsys.readouterr().err
 
 
+def test_await_returns_shed_code_when_worker_shed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A worker shed for memory pressure ends the poll early with the shed code
+    and an actionable revive message -- not the silent full-length timeout."""
+    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    out = io.StringIO()
+
+    rc = create_worker_mod.await_report(
+        report_path=report,
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        sleeper=_no_sleep,
+        clock=lambda: 0.0,
+        out=out,
+        worker_name="demo",
+        pending_shed_check=lambda name: name == "demo",
+    )
+
+    assert rc == create_worker_mod._AWAIT_SHED_RC
+    assert out.getvalue() == ""
+    err = capsys.readouterr().err
+    assert "demo" in err and "--restart" in err
+
+
+def test_await_report_wins_over_pending_shed(tmp_path: Path) -> None:
+    """The report file is checked before the shed ledger, so a worker that
+    reported and was then shed still yields its report (rc 0)."""
+    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("---\ntype: status\nname: done\n---\n\nfinished first\n")
+    out = io.StringIO()
+
+    rc = create_worker_mod.await_report(
+        report_path=report,
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        sleeper=_no_sleep,
+        clock=lambda: 0.0,
+        out=out,
+        worker_name="demo",
+        pending_shed_check=lambda _name: True,
+    )
+
+    assert rc == 0
+    assert "finished first" in out.getvalue()
+
+
 def test_read_finish_report_path_returns_field(tmp_path: Path) -> None:
     """_read_finish_report_path pulls the path out of the task frontmatter."""
     task = tmp_path / "task.md"
-    _write_await_task(task, Path("runtime/harden/crystallize-demo/reports/report.md"))
+    _write_await_task(task, Path("data/.tasks/harden/crystallize-demo/reports/report.md"))
 
     result = create_worker_mod._read_finish_report_path(task)
 
-    assert result == Path("runtime/harden/crystallize-demo/reports/report.md")
+    assert result == Path("data/.tasks/harden/crystallize-demo/reports/report.md")
 
 
 def test_read_finish_report_path_missing_raises(tmp_path: Path) -> None:
@@ -657,7 +848,7 @@ def test_read_finish_report_path_missing_raises(tmp_path: Path) -> None:
 
 
 def _await_argv(task_file: Path, extra: Sequence[str] = ()) -> list[str]:
-    return ["await", "--task-file", str(task_file), *extra]
+    return ["await", "--task-file", str(task_file), "--name", "demo", *extra]
 
 
 def test_main_await_prints_report(
@@ -668,7 +859,7 @@ def test_main_await_prints_report(
     The report exists up front, so main()'s real ``time.sleep`` is never
     reached and the loop returns immediately.
     """
-    report = tmp_path / "runtime" / "launch-task" / "demo" / "reports" / "report.md"
+    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
     report.parent.mkdir(parents=True)
     report.write_text("hello from worker\n")
     task = tmp_path / "task.md"
@@ -688,6 +879,44 @@ def test_main_await_missing_finish_report_path_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="finish_report_path"):
         create_worker_mod.main(_await_argv(task))
+
+
+def test_main_await_requires_name(tmp_path: Path) -> None:
+    """await refuses to run without --name: the shed-ledger watch needs the
+    worker name, and it is the same name the caller already passed to launch."""
+    report = tmp_path / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("hi\n")
+    task = tmp_path / "task.md"
+    _write_await_task(task, report)
+
+    with pytest.raises(SystemExit):
+        create_worker_mod.main(["await", "--task-file", str(task)])
+
+
+def test_worker_has_pending_shed_reflects_real_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_worker_has_pending_shed imports oom_priority for real (no swallowed
+    ImportError) and reflects a shed recorded in the ledger -- True only for the
+    worker whose own agent was shed."""
+    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path))
+    # No ledger yet: nothing is pending.
+    assert create_worker_mod._worker_has_pending_shed("demo-worker") is False
+
+    # Record a shed of this worker's own agent via oom_priority's own writer
+    # (the same module the kill hook uses -- no schema duplicated here).
+    src = create_worker_mod._oom_priority_src()
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+    from oom_priority.ledger import append_shed_record
+
+    append_shed_record(
+        pid=4321, comm="claude", agent_name="demo-worker", is_worker=True
+    )
+
+    assert create_worker_mod._worker_has_pending_shed("demo-worker") is True
+    assert create_worker_mod._worker_has_pending_shed("other-worker") is False
 
 
 @pytest.mark.parametrize(
@@ -770,7 +999,6 @@ def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
-    report.write_text("---\ntype: status\nname: done\n---\n\nshipped it\n")
     _write_launch_sync_task(task, report)
     result_json = tmp_path / "result.json"
     runner = _RecordingRunner()
@@ -784,7 +1012,11 @@ def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
         timeout_seconds=1800,
         poll_interval_seconds=5,
         runner=runner,
-        sleeper=_no_sleep,
+        # The report lands only after launch (launch refuses a pre-existing
+        # one), so the "worker" writes it during the first await sleep.
+        sleeper=_write_report_on_sleep(
+            report, "---\ntype: status\nname: done\n---\n\nshipped it\n"
+        ),
         clock=lambda: 0.0,
         out=out,
         result_path=result_json,
@@ -806,11 +1038,74 @@ def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
     assert json.loads(out.getvalue()) == expected
 
 
+def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
+    tmp_path: Path,
+) -> None:
+    # Regression: launch_sync calls launch(), whose stale-report guard refuses to
+    # launch when anything sits at finish_report_path. destroy() removes the
+    # worker's agent/worktree but NOT the report (it lives in the caller's runtime
+    # dir), so without cleanup the report launch_sync just collected would trap the
+    # next call. A non-interactive caller (a service) that calls launch_sync
+    # repeatedly with the same task file -- hence the same report path -- must not
+    # be blocked by its own previous report. So launch_sync moves the collected
+    # report aside into consumed/ (archived, not deleted) once it is collected.
+    runtime, task, _ = _make_layout(tmp_path)
+    report = runtime / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    _write_launch_sync_task(task, report)
+    consumed = report.parent / "consumed"
+
+    def _run_once(runner: create_worker_mod.Runner) -> int:
+        return create_worker_mod.launch_sync(
+            name="demo-worker",
+            template="worker",
+            runtime_dir=runtime,
+            task_file=task,
+            timeout_seconds=1800,
+            poll_interval_seconds=5,
+            runner=runner,
+            sleeper=_write_report_on_sleep(
+                report, "---\ntype: status\nname: done\n---\n\nround\n"
+            ),
+            clock=lambda: 0.0,
+            out=io.StringIO(),
+        )
+
+    first = _RecordingRunner()
+    assert _run_once(first) == 0
+    # The collected report is cleared from the report path but preserved in
+    # consumed/, not deleted.
+    assert not report.exists()
+    assert (consumed / "report.md").read_text() == (
+        "---\ntype: status\nname: done\n---\n\nround\n"
+    )
+
+    # A second identical call re-creates the worker and returns 0 instead of
+    # aborting on the guard (exit 2, which would emit no `mngr create`).
+    second = _RecordingRunner()
+    assert _run_once(second) == 0
+    create_calls = [c.argv for c in second.calls if c.argv[:2] == ["mngr", "create"]]
+    assert create_calls == [
+        [
+            "mngr",
+            "create",
+            "demo-worker",
+            "-t",
+            "worker",
+            "--label",
+            "agent_created=true",
+        ]
+    ]
+    # The second run's report is archived under a disambiguated name -- the first
+    # archive is not overwritten, so both are retained.
+    assert not report.exists()
+    assert sorted(p.name for p in consumed.iterdir()) == ["report.1.md", "report.md"]
+
+
 def test_launch_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
-    report.write_text("---\ntype: status\nname: done\n---\n\nok\n")
     _write_launch_sync_task(task, report)
     runner = _RecordingRunner()
 
@@ -823,7 +1118,9 @@ def test_launch_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
         poll_interval_seconds=5,
         destroy_on_finish=False,
         runner=runner,
-        sleeper=_no_sleep,
+        sleeper=_write_report_on_sleep(
+            report, "---\ntype: status\nname: done\n---\n\nok\n"
+        ),
         clock=lambda: 0.0,
         out=io.StringIO(),
     )
@@ -928,10 +1225,20 @@ def test_main_launch_sync_emits_result_json(tmp_path: Path) -> None:
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
-    report.write_text("---\ntype: status\nname: done\n---\n\ndone\n")
     _write_launch_sync_task(task, report)
     result_json = tmp_path / "result.json"
-    runner = _RecordingRunner()
+
+    # main() wires the real sleeper, so the "worker" writes its report as a
+    # side effect of receiving the task message -- await then finds it on its
+    # first existence check. (It cannot pre-exist: launch refuses that.)
+    class _WorkerRespondsRunner(_RecordingRunner):
+        def run(self, argv: Sequence[str], **kwargs):
+            result = super().run(argv, **kwargs)
+            if list(argv)[:2] == ["mngr", "message"]:
+                report.write_text("---\ntype: status\nname: done\n---\n\ndone\n")
+            return result
+
+    runner = _WorkerRespondsRunner()
 
     rc = create_worker_mod.main(
         [

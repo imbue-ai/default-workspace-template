@@ -34,13 +34,20 @@ Use `$TARGET` for the artifact you are healing (e.g. `migrate-config`, a service
 name). Then:
 
 - Worker agent name and branch: `heal-$TARGET` / `mngr/heal-$TARGET`
-- Runtime dir / task file: `runtime/harden/heal-$TARGET/` /
-  `runtime/harden/heal-$TARGET/task.md`
+- Runtime dir / task file: `data/.tasks/harden/heal-$TARGET/` /
+  `data/.tasks/harden/heal-$TARGET/task.md`
 
 ## Step 1: Open a tracking ticket
 
+**Single-flight check first.** At most one harden pass per artifact may be in
+flight (counting `update` passes on the same target). Run the pre-dispatch
+check in [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md);
+if another agent's pass is live, leave the note it describes on their ticket
+and stop -- the superseding pass forced at their merge time covers your fix.
+Only dispatch if no pass is live (or you took over an abandoned one).
+
 ```bash
-mkdir -p runtime/harden/heal-$TARGET
+mkdir -p data/.tasks/harden/heal-$TARGET
 TICKET_ID=$(tk create "heal $TARGET" -t bug \
     --acceptance "task file written; worker launched; worker DONE; branch merged")
 tk start "$TICKET_ID"
@@ -56,10 +63,10 @@ misbehavior). Without anchors the worker scans the wrong region of your
 transcript.
 
 ```bash
-cat > runtime/harden/heal-$TARGET/task.md << TASK_EOF
+cat > data/.tasks/harden/heal-$TARGET/task.md << TASK_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-finish_report_path: runtime/harden/heal-$TARGET/reports/report.md
+finish_report_path: data/.tasks/harden/heal-$TARGET/reports/report.md
 operation: heal
 artifact: skill
 ---
@@ -101,12 +108,20 @@ placeholders.
 
 ## Step 3: Launch the worker and poll
 
+**Commit any pending changes before you launch, and never harden inline.** The
+worker is created from your committed HEAD, so uncommitted changes never reach
+it -- and `create_worker.py launch` refuses a dirty tree outright. Commit your
+work first; **commit, never stash** -- stashed work gets lost during
+multi-agent coordination. A dirty tree (even unrelated changes) is never a
+reason to do the fix inline: commit, then dispatch. Healing always runs in the
+background worker.
+
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name heal-$TARGET \
     --template subskill-worker \
-    --runtime-dir runtime/harden/heal-$TARGET/ \
-    --task-file runtime/harden/heal-$TARGET/task.md
+    --runtime-dir data/.tasks/harden/heal-$TARGET/ \
+    --task-file data/.tasks/harden/heal-$TARGET/task.md
 ```
 
 Then background-poll (`create_worker.py await --task-file ... --timeout 90m`,
@@ -114,18 +129,26 @@ Then background-poll (`create_worker.py await --task-file ... --timeout 90m`,
 Flow-specific substitutions:
 
 - Worker name: `heal-$TARGET`; branch: `mngr/heal-$TARGET`
-- Poll path: `runtime/harden/heal-$TARGET/reports/report.md`; reports dir
-  `runtime/harden/heal-$TARGET/reports/`; consumed
-  `runtime/harden/heal-$TARGET/reports/consumed/`
+- Poll path: `data/.tasks/harden/heal-$TARGET/reports/report.md`; reports dir
+  `data/.tasks/harden/heal-$TARGET/reports/`; consumed
+  `data/.tasks/harden/heal-$TARGET/reports/consumed/`
 - The only user-approval gate is `final-artifact` -- a heal has no outline gate.
 - Terminal statuses: `done` (go live, Step 4); `stuck` (failure flow per
   `.agents/skills/launch-task/references/worker-failure.md`).
 
 ## Step 4: Merge and go live
 
-On `done`, merge `mngr/heal-$TARGET`, then go live by artifact: a **skill** needs
+On `done`, first run the merge-time checks in
+[`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md):
+wait out any foreground editing lease on the service, confirm the branch is
+still fresh (the artifact's footprint has not changed since the worker
+branched), and never hand-resolve a conflicted merge -- a stale or conflicted
+pass is discarded and superseded by one new pass covering everything since the
+last hardened merge.
+
+Then merge `mngr/heal-$TARGET` and go live by artifact: a **skill** needs
 nothing beyond the merge; a **service** wants a tab refresh (`python3
-scripts/layout.py refresh <service-name>`). Then close the ticket:
+system/scripts/layout.py refresh <service-name>`). Then close the ticket:
 
 ```bash
 tk close "$TICKET_ID" "Healed $TARGET -- worker branch merged."

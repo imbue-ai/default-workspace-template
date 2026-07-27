@@ -49,7 +49,7 @@ any plausible skill shape, propose it and let them decide.
 the prior turn) **or when a live-half wrapper invoked this lead** after the user
 approved a sample/mock. In those cases go straight to Step 2.
 
-Otherwise send a one-line pre-gate question via `send-user-message`:
+Otherwise send a one-line pre-gate question to the user:
 
 > "I just did X and Y. Worth crystallizing into a reusable skill? (yes/no)"
 
@@ -61,19 +61,19 @@ Pick a short kebab-case slug `$NAME` for the artifact (e.g. `migrate-config`).
 If a wrapper handed you a slug (and a `source_artifacts_dir`), reuse it. Then:
 
 - Worker agent name and branch: `crystallize-$NAME` / `mngr/crystallize-$NAME`
-- Runtime dir: `runtime/harden/crystallize-$NAME/`
-- Task file: `runtime/harden/crystallize-$NAME/task.md`
+- Runtime dir: `data/.tasks/harden/crystallize-$NAME/`
+- Task file: `data/.tasks/harden/crystallize-$NAME/task.md`
 
 ## Step 2: Open a tracking ticket
 
 The ticket survives until the post-merge migration, so record its ID to disk:
 
 ```bash
-mkdir -p runtime/harden/crystallize-$NAME
+mkdir -p data/.tasks/harden/crystallize-$NAME
 TICKET_ID=$(tk create "crystallize $NAME" -t task \
     --acceptance "task file written; worker launched; worker DONE; branch merged")
 tk start "$TICKET_ID"
-echo "$TICKET_ID" > runtime/harden/crystallize-$NAME/ticket_id.txt
+echo "$TICKET_ID" > data/.tasks/harden/crystallize-$NAME/ticket_id.txt
 ```
 
 ## Step 3: Write the task file
@@ -93,12 +93,12 @@ flow steps, or argparse surfaces -- those are the worker's decisions.
 cat << FRONTMATTER_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-finish_report_path: runtime/harden/crystallize-$NAME/reports/report.md
+finish_report_path: data/.tasks/harden/crystallize-$NAME/reports/report.md
 operation: crystallize
 artifact: skill
 FRONTMATTER_EOF
 # If a wrapper staged artifacts, add this line inside the frontmatter:
-#   source_artifacts_dir: runtime/<calling-skill>/$NAME/
+#   source_artifacts_dir: data/.tasks/<calling-skill>/$NAME/
 cat << FRONTMATTER_CLOSE
 ---
 FRONTMATTER_CLOSE
@@ -132,7 +132,7 @@ destination is `finish_report_path`.
 - For a reconstructed skill: the user approved the outline (Gate 1) and the
   final artifact (Gate 2), each via a pushed report.
 BODY_EOF
-} > runtime/harden/crystallize-$NAME/task.md
+} > data/.tasks/harden/crystallize-$NAME/task.md
 ```
 
 Set `artifact: service` (and adjust the body to point at the already-built lib)
@@ -142,12 +142,21 @@ when invoked by `build-web-service`. Fill in the real `## What was done` and
 
 ## Step 4: Launch the worker
 
+**Commit any pending changes before you launch, and never harden inline.** The
+worker is created from your committed HEAD, so uncommitted changes never reach
+it -- and `create_worker.py launch` refuses a dirty tree outright. Commit your
+work first (the just-finished change is exactly what belongs on the branch);
+**commit, never stash** -- stashed work gets lost during multi-agent
+coordination. A dirty tree (even unrelated changes) is never a reason to do the
+hardening inline: commit, then dispatch. Hardening always runs in the background
+worker.
+
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name crystallize-$NAME \
     --template subskill-worker \
-    --runtime-dir runtime/harden/crystallize-$NAME/ \
-    --task-file runtime/harden/crystallize-$NAME/task.md
+    --runtime-dir data/.tasks/harden/crystallize-$NAME/ \
+    --task-file data/.tasks/harden/crystallize-$NAME/task.md
 ```
 
 The `subskill-worker` template installs the generic `harden-worker` sub-skill.
@@ -163,7 +172,8 @@ Reports surface as task notifications; handle them when they arrive.
 ```bash
 # Run with Bash run_in_background: true.
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
-    --task-file runtime/harden/crystallize-$NAME/task.md \
+    --name crystallize-$NAME \
+    --task-file data/.tasks/harden/crystallize-$NAME/task.md \
     --timeout 90m
 ```
 
@@ -174,10 +184,10 @@ the "do not interrupt more recent user work" rule, and terminal-status handling.
 Flow-specific substitutions:
 
 - Worker name: `crystallize-$NAME`; branch: `mngr/crystallize-$NAME`
-- Task file / poll path: `runtime/harden/crystallize-$NAME/task.md` /
-  `runtime/harden/crystallize-$NAME/reports/report.md`
-- Reports dir: `runtime/harden/crystallize-$NAME/reports/`;
-  consumed: `runtime/harden/crystallize-$NAME/reports/consumed/`
+- Task file / poll path: `data/.tasks/harden/crystallize-$NAME/task.md` /
+  `data/.tasks/harden/crystallize-$NAME/reports/report.md`
+- Reports dir: `data/.tasks/harden/crystallize-$NAME/reports/`;
+  consumed: `data/.tasks/harden/crystallize-$NAME/reports/consumed/`
 - Gates: **skill** → `outline-approval` (Gate 1) and `final-artifact` (Gate 2);
   **service** → none (the worker merges straight to `done`).
 - Terminal statuses: `done` (merge, then Step 6); `stuck` (failure flow per
@@ -191,10 +201,10 @@ On `done`, after merging the worker's branch:
   declaring crystallize done -- point consumers at the installed skill path,
   delete the stale runtime artifact dir, pick up any breaking renames the worker
   introduced, restart any caching service, and close the ticket recorded in
-  `runtime/harden/crystallize-$NAME/ticket_id.txt`. Commit consumer changes as a
+  `data/.tasks/harden/crystallize-$NAME/ticket_id.txt`. Commit consumer changes as a
   separate commit.
 - **service**: refresh the tab so the user sees the merged build
-  (`python3 scripts/layout.py refresh <service-name>`), then close the ticket.
+  (`python3 system/scripts/layout.py refresh <service-name>`), then close the ticket.
 
 ## Guidelines
 

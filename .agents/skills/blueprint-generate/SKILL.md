@@ -13,12 +13,12 @@ Recall the template name from the blueprint Q&A conversation. Read [references/t
 
 ### Step 2: Generate slug
 
-Create a concise 2-5 word kebab-case slug (max 50 chars) for the feature. Sanitize: lowercase, alphanumeric + hyphens only, no leading/trailing hyphens. If `blueprint/<slug>` already exists, append `-2`, `-3`, etc.
+Create a concise 2-5 word kebab-case slug (max 50 chars) for the feature. Sanitize: lowercase, alphanumeric + hyphens only, no leading/trailing hyphens. If `docs/system/blueprint/<slug>` already exists, append `-2`, `-3`, etc.
 
 ### Step 3: Create plan directory
 
 ```bash
-mkdir -p blueprint/<slug>
+mkdir -p docs/system/blueprint/<slug>
 ```
 
 ### Step 4: Refine the prompt

@@ -8,7 +8,7 @@ description: Create a sub-agent to perform a larger task. Use when work is large
 Pick a short kebab-case slug `$NAME` for this dispatch (e.g.
 `fix-login-bug`, `add-search-feature`). It is used for the worker name,
 its branch (`mngr/$NAME`), and the local runtime path
-(`runtime/launch-task/$NAME/`). Names must be unique.
+(`data/.tasks/launch-task/$NAME/`). Names must be unique.
 
 ## 0. Open a single tk step for the whole delegation
 
@@ -35,12 +35,12 @@ reports back to you) followed by the human-readable task description.
 The frontmatter contains `lead_agent` and `finish_report_path`.
 
 ```bash
-mkdir -p runtime/launch-task/$NAME
+mkdir -p data/.tasks/launch-task/$NAME
 {
 cat << FRONTMATTER_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-finish_report_path: runtime/launch-task/$NAME/reports/report.md
+finish_report_path: data/.tasks/launch-task/$NAME/reports/report.md
 ---
 FRONTMATTER_EOF
 cat << 'BODY_EOF'
@@ -62,7 +62,7 @@ report procedure: it has you parse this task's frontmatter to get
 `LEAD_AGENT` / `FINISH_REPORT_PATH`, then write the report file and push
 its parent directory back to the lead. Substitutions for this task:
 
-- `<TASK_FILE_GLOB>` -> `runtime/launch-task/*/task.md`
+- `<TASK_FILE_GLOB>` -> `data/.tasks/launch-task/*/task.md`
 - `<RUNTIME_REPORTS_DIR>` -> the directory part of `finish_report_path`,
   i.e. `dirname "$FINISH_REPORT_PATH"` (your worktree path matches the
   lead's destination for this flow)
@@ -73,21 +73,26 @@ For a mid-flight `question` gate, stop your turn after pushing -- the
 lead replies via `mngr message` and you resume. For terminal statuses,
 the run ends.
 BODY_EOF
-} > runtime/launch-task/$NAME/task.md
+} > data/.tasks/launch-task/$NAME/task.md
 ```
 
 ## 2. Launch the worker
 
-`scripts/create_worker.py launch` runs the worker lifecycle: `mngr create`,
+`system/scripts/create_worker.py launch` runs the worker lifecycle: `mngr create`,
 the runtime-dir push, and the task message. Run it in the foreground so a
 failed launch surfaces immediately.
+
+**Commit any pending changes first.** The worker is created from your committed
+HEAD (`mngr create` refuses a dirty tree), so uncommitted work never reaches it.
+Commit -- never stash (stashed work gets lost during multi-agent coordination)
+-- then launch.
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name $NAME \
     --template worker \
-    --runtime-dir runtime/launch-task/$NAME/ \
-    --task-file runtime/launch-task/$NAME/task.md
+    --runtime-dir data/.tasks/launch-task/$NAME/ \
+    --task-file data/.tasks/launch-task/$NAME/task.md
 ```
 
 If the task references gitignored files outside the runtime dir, set
@@ -99,13 +104,17 @@ pushes that directory into the worker's worktree automatically.
 Poll with `create_worker.py await` as a background task
 (`run_in_background: true`) and continue with whatever else you were doing. It
 reads `finish_report_path` from the task file
-(`runtime/launch-task/$NAME/reports/report.md`), blocks until the worker pushes
-back, then prints the report.
+(`data/.tasks/launch-task/$NAME/reports/report.md`), blocks until the worker pushes
+back, then prints the report. `--name $NAME` is required so the poll also
+watches the OOM shed ledger: if the worker's own agent is shed for memory
+pressure (so it will never report until revived), the poll surfaces that
+promptly and actionably (exit code 75) instead of waiting out the full timeout.
 
 ```bash
 # Run with Bash run_in_background: true
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
-    --task-file runtime/launch-task/$NAME/task.md
+    --name $NAME \
+    --task-file data/.tasks/launch-task/$NAME/task.md
 ```
 
 You own this poll for the lifetime of the dispatch. Without it, gate
@@ -127,10 +136,10 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 
 - Worker name: `$NAME`
 - Branch: `mngr/$NAME`
-- Task file (pass to `create_worker.py await --task-file`): `runtime/launch-task/$NAME/task.md`
-- `finish_report_path`: `runtime/launch-task/$NAME/reports/report.md`
-- Reports dir (for `<REPORTS_DIR>`, i.e. `dirname finish_report_path`): `runtime/launch-task/$NAME/reports/`
-- Consumed dir: `runtime/launch-task/$NAME/reports/consumed/`
+- Task file (pass to `create_worker.py await --task-file`): `data/.tasks/launch-task/$NAME/task.md`
+- `finish_report_path`: `data/.tasks/launch-task/$NAME/reports/report.md`
+- Reports dir (for `<REPORTS_DIR>`, i.e. `dirname finish_report_path`): `data/.tasks/launch-task/$NAME/reports/`
+- Consumed dir: `data/.tasks/launch-task/$NAME/reports/consumed/`
 - Gate names: `question` (mid-flight; default-escalate to the user
   unless you can answer from context).
 - Terminal statuses: `done` (merge); `stuck` (failure flow).
