@@ -1025,13 +1025,6 @@ body {
   animation-delay: 0.3s;
 }
 
-/* ── Scrollbar ──
- * Left NATIVE: the custom 6px ``.app-content::-webkit-scrollbar`` bar sat
- * flush against the content edge (it read as "touching the wall"). The OS
- * native overlay bar auto-hides, aligns to the container edge with the
- * platform's own inset, and matches the light/dark scheme -- so no custom
- * geometry is needed. */
-
 /* ── Structured tool call blocks (non-markdown) ── */
 .tool-call-block {
   margin-top: 0.25em;
