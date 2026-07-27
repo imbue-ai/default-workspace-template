@@ -1,0 +1,1 @@
+The browser fleet manifest and screenshots move to `data/.state/`, and repo-root detection follows the new `system/scripts` + `system/libs` layout, following the workspace-root declutter (the package itself moves to `system/libs/browser`).

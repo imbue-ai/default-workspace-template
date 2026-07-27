@@ -1,0 +1,1 @@
+Skills and shared references move to the /home/user layout paths (`~/workspace`, `~/worktrees`, `~/.mngr`), and update-self gains step 5c: `uv run env-converge upgrade` -- the one moment package versions advance (re-pinned apt sources, full-upgrade, env.d unit re-run, record re-capture).

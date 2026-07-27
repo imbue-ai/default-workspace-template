@@ -2,7 +2,7 @@
 # Assemble a clean, shareable "inspiration" snapshot on top of the DEFAULT_WORKSPACE_TEMPLATE base the
 # mind was created from, then commit it. Run by the launch-task WORKER the
 # publish-inspiration skill dispatches, from the worker's own git worktree
-# (cwd = worktree repo root); the live mind's /mngr/code is never touched. This is
+# (cwd = worktree repo root); the live mind's /home/user/workspace is never touched. This is
 # v1 of the inspirations flow (see INSPIRATION_FLOW_VERSION below); the
 # generated manifest records it as `format: v1` in its front-matter.
 #
@@ -46,7 +46,7 @@ INSPIRATION_FLOW_VERSION="v1"
 # The published version of THIS inspiration (front-matter `version:`), distinct
 # from the flow/manifest-format version above. A first publish is always v1; a
 # later update of the same inspiration publishes v2, v3, ... and the source
-# workspace's VERSION_HISTORY.md counts them.
+# workspace's docs/VERSION_HISTORY.md counts them.
 INSPIRATION_VERSION="v1"
 
 # Resolve this script's own directory up front, before any cd: the sibling
@@ -135,7 +135,7 @@ THUMBNAIL="inspiration-${SLUG}.svg"
 # Guard against a wrong --base-ref: minds assembled via subtree merges can have
 # several parallel root commits, and a naive fallback can land on a near-empty
 # one instead of the real DEFAULT_WORKSPACE_TEMPLATE seed. Any bootable template tree must contain
-# pyproject.toml and supervisord.conf, so require both in BASE_REF's tree. This
+# pyproject.toml and system/supervisord.conf, so require both in BASE_REF's tree. This
 # runs BEFORE the destructive read-tree in step 2 so a bad ref aborts cleanly
 # without touching the worktree.
 if ! git rev-parse --verify --quiet "${BASE_REF}^{tree}" > /dev/null; then
@@ -143,7 +143,7 @@ if ! git rev-parse --verify --quiet "${BASE_REF}^{tree}" > /dev/null; then
     exit 5
 fi
 base_missing=""
-for required in pyproject.toml supervisord.conf; do
+for required in pyproject.toml system/supervisord.conf; do
     if [ -z "$(git ls-tree --name-only "${BASE_REF}^{tree}" -- "$required")" ]; then
         base_missing="${base_missing} ${required}"
     fi
@@ -350,7 +350,7 @@ ${included_paths_block}
 with prose that makes the list above self-explanatory: for each included path,
 say what it is (an app or lib with code, a skill, data) and what role it plays.
 Then describe how the pieces wire together at runtime: which supervisord
-programs (in supervisord.conf) run them, which ports they listen on and how
+programs (in system/supervisord.conf) run them, which ports they listen on and how
 those are registered in forward_port.py (if applicable), and any scripts or
 services that connect them. -->
 
@@ -591,7 +591,7 @@ README_EOF
 
 # --- 8.6 remove the version history so it never ships in an inspiration ------
 
-# VERSION_HISTORY.md is a WORKSPACE artifact, not an inspiration one: it records
+# docs/VERSION_HISTORY.md is a WORKSPACE artifact, not an inspiration one: it records
 # where a mind came from and every inspiration it has published (slugs, repo
 # URLs, source commits). None of that belongs in a published inspiration -- and
 # after an update-self, BASE_REF's tree can carry an accumulated copy of it --
@@ -601,11 +601,11 @@ README_EOF
 # nothing is lost by omitting it here. `rm -f` is safe whether or not the base
 # tree carried the file. This runs AFTER the no-diff guard so it can never make
 # an empty include set look like it had something to publish.
-rm -f VERSION_HISTORY.md
+rm -f docs/VERSION_HISTORY.md
 
 # --- 9. boot smoke-check WITHOUT side effects, then single commit -------------
 
-# Validate supervisord.conf via the supervisor python lib -- realize() +
+# Validate system/supervisord.conf via the supervisor python lib -- realize() +
 # process_config() parse and check the config WITHOUT starting the daemon.
 # NEVER `supervisord -t`: in supervisord, -t means --strip_ansi and LAUNCHES the
 # daemon. If the lib is unavailable, skip the check (config holes in selected
@@ -619,7 +619,7 @@ rm -f VERSION_HISTORY.md
 # build error, spuriously aborting a publish that is otherwise fine. Deriving
 # the interpreter from the supervisord shebang keeps the check ~0.1s and robust.
 smoke_ok=1
-if [ -f "supervisord.conf" ]; then
+if [ -f "system/supervisord.conf" ]; then
     SMOKE_PY="python3"
     SUPERVISORD_BIN="$(command -v supervisord 2>/dev/null || true)"
     if [ -n "$SUPERVISORD_BIN" ]; then
@@ -642,7 +642,7 @@ except Exception:
     sys.exit(0)
 
 options = ServerOptions()
-options.configfile = "supervisord.conf"
+options.configfile = "system/supervisord.conf"
 options.realize(args=[])
 options.process_config(do_usage=False)
 PYEOF
@@ -651,7 +651,7 @@ PYEOF
     fi
 fi
 if [ "$smoke_ok" -ne 1 ]; then
-    echo "build_inspiration.sh: boot smoke-check FAILED -- supervisord.conf did not realize cleanly" >&2
+    echo "build_inspiration.sh: boot smoke-check FAILED -- system/supervisord.conf did not realize cleanly" >&2
     exit 4
 fi
 

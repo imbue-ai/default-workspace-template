@@ -6,7 +6,7 @@ description: "Use immediately whenever the user asks you to update, change, fix,
 # Changing an existing service
 
 A "service" here is a `[program:<name>]` under supervisord (see
-`supervisord.conf`). Two kinds, differing only in whether there's a tab to
+`system/supervisord.conf`). Two kinds, differing only in whether there's a tab to
 refresh:
 
 - **User-facing web service** -- the user opens it as a tab rendering at
@@ -22,7 +22,7 @@ refreshed. The live change loop below handles both.
 If you're doing something *other* than editing an existing service:
 
 - **Creating a new web view** -> `build-web-service`.
-- **Changing the workspace UI itself** (`apps/system_interface` -- the
+- **Changing the workspace UI itself** (`system/libs/system_interface` -- the
   dockview shell, chat panels, progress view) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
   reveals only when known-good).
@@ -118,7 +118,7 @@ Make the change interactive and keep the user's view in sync as you go.
 
 ### 1. Make the change
 
-Edit the service's code under `libs/<package>/` (or wherever the program's
+Edit the service's code under `creations/<package>/` (or wherever the program's
 command points). If the change renders HTML a person looks at, invoke the
 `frontend-design` skill before writing markup, and if it calls Claude,
 follow `use-ai-integration` -- the same rules as when the service was
@@ -143,7 +143,7 @@ process restarts:
   markup. Skip straight to the refresh.
 
 - **Change to the service *definition*** (its port, its `command`, its log
-  config, or adding/removing a program): edit `supervisord.conf`, then
+  config, or adding/removing a program): edit `system/supervisord.conf`, then
   `supervisorctl reread && supervisorctl update`. The full program schema,
   the add/remove/inspect mechanics, and the `forward_port.py` wiring live
   in [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
@@ -162,12 +162,12 @@ pre-change page. Refresh it so the user sees the update without being told
 to click Refresh:
 
 ```bash
-python3 scripts/layout.py refresh <name>
+python3 system/scripts/layout.py refresh <name>
 ```
 
 `refresh` reloads every iframe for the service. If no tab is open yet and
 the change is ready to show, surface it instead with
-`python3 scripts/layout.py open <name>`. For any other tab manipulation,
+`python3 system/scripts/layout.py open <name>`. For any other tab manipulation,
 see `manage-layout`. Background daemons have no tab -- skip this step.
 
 ### 4. Verify
@@ -186,7 +186,7 @@ would (not just "the process is up"):
 
 ### Protect the user's data while you verify
 
-The service's persistent store -- `runtime/<name>/` (whatever `DATA_DIR`
+The service's persistent store -- `data/creations/<name>/` (whatever `DATA_DIR`
 resolves to) -- **is the user's real data**. The recurring, expensive
 failure mode is not the code edit: it is *verifying* a change by writing
 test data into the live store and then "cleaning up" with a delete/reset
@@ -200,7 +200,7 @@ where the data dies. Encode these, cheapest first:
 
 - **If exercising the change must write, mutate, or delete data, never
   point it at the live store.** Copy the store to a scratch path *outside*
-  `runtime/` (so it is neither served nor swept into runtime-backup), boot a
+  `data/` (so it is neither served by the live service nor backed up), boot a
   throwaway instance against the copy on a *spare* port, exercise it there,
   then delete the *copy*. The shared
   [`serve_isolated_instance.py`](../../shared/scripts/serve_isolated_instance.py)
@@ -209,7 +209,7 @@ where the data dies. Encode these, cheapest first:
   instance to answer, and prints its URL:
 
   ```bash
-  cp -r runtime/<name> /tmp/<name>-scratch
+  cp -r data/creations/<name> /tmp/<name>-scratch
   URL=$(python3 .agents/shared/scripts/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
@@ -229,7 +229,7 @@ where the data dies. Encode these, cheapest first:
   instance -- a redesign, or a risky change where a hand mock won't convince --
   add `--service-name <name>-preview-app --preview-service-name <name>-preview
   --preview-title "<change>"` to the `up` call to surface it as a labeled
-  "preview" tab (open it with `python3 scripts/layout.py open <name>-preview`);
+  "preview" tab (open it with `python3 system/scripts/layout.py open <name>-preview`);
   that is the same machinery the system-interface flow uses. Use judgment on
   when that is worth it.
 
@@ -240,7 +240,7 @@ where the data dies. Encode these, cheapest first:
 
 - **Snapshot before any genuinely in-place change to the real store.** If a
   change truly must rewrite the live store (a data migration you can't run
-  on a copy), `cp -r runtime/<name> /tmp/<name>-pre-<change>` first, run the
+  on a copy), `cp -r data/creations/<name> /tmp/<name>-pre-<change>` first, run the
   change, confirm the real data survived, and only then remove the snapshot.
   The snapshot is a *recovery net* -- do **not** turn it into a routine
   "wipe live and restore backup" step: overwriting a running service's store
@@ -248,10 +248,10 @@ where the data dies. Encode these, cheapest first:
   are silently lost on restore.
 
 - **Retrofit older services when you touch them.** A service that predates
-  this convention hardcodes `runtime/<name>/` and its listen port at its call
+  this convention hardcodes `data/creations/<name>/` and its listen port at its call
   sites. Add both overrides the scaffold now emits, as part of your change, so
   the throwaway instance above works: the data-dir override
-  `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "runtime/<name>"))`
+  `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "data/creations/<name>"))`
   (route reads/writes through it), and the port override
   `PORT = int(os.environ.get("<PACKAGE_UPPER>_PORT", "<assigned-port>"))`
   (bind `PORT` in `run_simple`, never a hardcoded literal). If you genuinely
@@ -266,14 +266,14 @@ where the data dies. Encode these, cheapest first:
 
 Dropping a service is the definition-level case of step 2: remove its
 `[program:<name>]` block, `supervisorctl reread && supervisorctl update`,
-and (for a web service) `python3 scripts/forward_port.py --name <name>
+and (for a web service) `python3 system/scripts/forward_port.py --name <name>
 --remove` plus reverting the scaffolded lib. The mechanics are in
 [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md); for a
 scaffolded web lib, `build-web-service`'s `cleanup.md` reference has the
 full teardown.
 
 Teardown stops at the code and the process. **Leave the service's data
-(`runtime/<name>/`) in place** -- removing a service is not license to
+(`data/creations/<name>/`) in place** -- removing a service is not license to
 delete the user's records. Delete the data dir only if the user explicitly
 asks, and confirm before you do.
 
@@ -301,7 +301,7 @@ exactly as `build-web-service`'s Step 5 gates on the working site.)
   gates, merges, and refreshes the tab on go-live.
 - **The service errored or produced a wrong result and you worked around
   it** -> invoke `heal-artifact` (artifact = service) at turn-end instead.
-- **The workspace UI (`apps/system_interface`)** -> `update-system-interface`
+- **The workspace UI (`system/libs/system_interface`)** -> `update-system-interface`
   owns its own preview-before-merge and safe-reveal go-live; use it rather
   than this flow.
 

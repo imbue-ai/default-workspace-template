@@ -36,7 +36,7 @@ jobs:
           python-version: '3.12'
 
       - name: Check changelog entries
-        run: python scripts/check_changelog_entries.py
+        run: python system/scripts/check_changelog_entries.py
 
   test:
     runs-on: ubuntu-latest
@@ -59,7 +59,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: apps/system_interface/frontend/package-lock.json
+          cache-dependency-path: system/libs/system_interface/frontend/package-lock.json
 
       - name: Install Python dependencies
         run: uv sync --all-packages
@@ -67,8 +67,8 @@ jobs:
       - name: Install Playwright browsers
         run: uv run playwright install --with-deps chromium
 
-      - name: Build apps/system_interface frontend
-        working-directory: apps/system_interface/frontend
+      - name: Build system/libs/system_interface frontend
+        working-directory: system/libs/system_interface/frontend
         run: |
           npm ci
           npm run build
@@ -76,6 +76,6 @@ jobs:
       - name: Run root tests
         run: PYTEST_MAX_DURATION_SECONDS=300 uv run pytest
 
-      - name: Run apps/system_interface tests
-        working-directory: apps/system_interface
+      - name: Run system/libs/system_interface tests
+        working-directory: system/libs/system_interface
         run: PYTEST_MAX_DURATION_SECONDS=300 uv run pytest

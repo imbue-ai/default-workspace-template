@@ -156,7 +156,7 @@ mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
   first, then the `<WORKER>:<PATH>` agent endpoint. Exactly one side must
   reference an agent or remote host.
 - Path resolution: mngr treats an argument as a *local path* only when it
-  starts with `/`, `./`, `../`, or `~/` -- a bare `runtime/foo` is read as an
+  starts with `/`, `./`, `../`, or `~/` -- a bare `data/foo` is read as an
   *agent name* (hence the `./` on the source above). On an agent endpoint, a
   relative `<WORKER>:PATH` resolves against the worker's workdir; an absolute
   `<WORKER>:/PATH` is used verbatim.
