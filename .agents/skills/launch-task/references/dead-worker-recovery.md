@@ -8,9 +8,9 @@ A worker can die because the **OOM daemon** (earlyoom) shed it -- the container 
 
 ```bash
 # Did the OOM daemon shed this worker? (look for your worker's name)
-# Absolute path: the ledger is shared at /mngr/code/runtime/, but your cwd is
-# your own worktree, so a relative `runtime/...` would miss it.
-grep '"agent_name": *"<worker>"' /mngr/code/runtime/oom_priority/events/shed.jsonl
+# Absolute path: the ledger is shared at /home/user/workspace/data/, but your cwd is
+# your own worktree, so a relative `data/...` would miss it.
+grep '"agent_name": *"<worker>"' /home/user/workspace/data/.state/oom_priority/events/shed.jsonl
 ```
 
 Revival guidelines when a worker was shed:
@@ -40,10 +40,10 @@ If the worker was *not* in the ledger, it died for some other reason (e.g. a cla
 
 Only fall back to this path when the default doesn't apply: `mngr start` itself fails to bring the agent back, the worker is wedged in a way that another claude session can't unstick, or the agent has already been destroyed and you're recovering from its leftover worktree. In normal "claude crashed once" cases, restart instead.
 
-1. Locate the worktree at `/mngr/worktree/<worker>-<hash>/` and inspect what's there:
+1. Locate the worktree at `/home/user/worktrees/<worker>-<hash>/` and inspect what's there:
 
    ```bash
-   cd /mngr/worktree/<worker>-<hash>/
+   cd /home/user/worktrees/<worker>-<hash>/
    git status
    git diff
    ```
@@ -51,7 +51,7 @@ Only fall back to this path when the default doesn't apply: `mngr start` itself 
 2. Discard auto-generated lockfile churn so it doesn't ship alongside the substantive fix:
 
    ```bash
-   git checkout HEAD -- vendor/mngr/uv.lock      # or whichever lockfile was touched
+   git checkout HEAD -- system/vendor/mngr/uv.lock      # or whichever lockfile was touched
    ```
 
 3. Stage only the substantive files and commit with a `WIP:` message that names the worker and notes that it was killed mid-iteration:

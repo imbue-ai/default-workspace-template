@@ -1,27 +1,27 @@
 ---
 name: submit-upstream-changes
-description: Push local improvements to shared infrastructure (skills, scripts, CLAUDE.md scaffolding, Dockerfile, supervisord.conf) back to the parent template repo so other agents derived from the template benefit. Opens a separate per-feature PR per logical fix; never pushes directly to upstream `main`. Do not push agent-specific content (PURPOSE.md, memory, runtime state). For pulling updates from upstream, use the `update-self` skill instead.
+description: Push local improvements to shared infrastructure (skills, scripts, CLAUDE.md scaffolding, Dockerfile, system/supervisord.conf) back to the parent template repo so other agents derived from the template benefit. Opens a separate per-feature PR per logical fix; never pushes directly to upstream `main`. Do not push agent-specific content (PURPOSE.md, memory, runtime state). For pulling updates from upstream, use the `update-self` skill instead.
 ---
 
 # Pushing changes upstream
 
-This repo was created from a parent template repo (see `parent.toml` for the upstream URL and branch). The default flow for pushing improvements back is: **one logical fix per PR, on a `submit/<short-name>` branch**. We do not push directly to upstream `main`.
+This repo was created from a parent template repo (see `system/config/parent.toml` for the upstream URL and branch). The default flow for pushing improvements back is: **one logical fix per PR, on a `submit/<short-name>` branch**. We do not push directly to upstream `main`.
 
 ## What to push (and what not to)
 
 Push **shared infrastructure** that benefits other agents derived from the template:
 
 - Skills (`.agents/skills/`)
-- Scripts (`scripts/`, `.agents/shared/scripts/`)
+- Scripts (`system/scripts/`, `.agents/shared/scripts/`)
 - CLAUDE.md scaffolding (template-level sections only)
 - Dockerfile
-- `supervisord.conf` (template-level service programs)
+- `system/supervisord.conf` (template-level service programs)
 
 Do **not** push agent-specific content:
 
 - `PURPOSE.md`
 - Memory contents
-- Runtime state (`runtime/`)
+- Workspace data and runtime state (`data/`)
 - Agent-specific services, settings, or CLAUDE.md sections
 
 ## PR conventions
@@ -34,14 +34,14 @@ Do **not** push agent-specific content:
 
 ## Recipe
 
-The upstream URL and base branch are in `parent.toml`.
+The upstream URL and base branch are in `system/config/parent.toml`.
 
 1. Ensure the `upstream` remote points at the template (idempotent):
 
    ```bash
    git remote get-url upstream 2>/dev/null || git remote add upstream "$(python3 -c "
    import tomllib
-   with open('parent.toml', 'rb') as f:
+   with open('system/config/parent.toml', 'rb') as f:
        print(tomllib.load(f)['url'])
    ")"
    ```
@@ -54,7 +54,7 @@ The upstream URL and base branch are in `parent.toml`.
    git fetch upstream
    BASE=$(python3 -c "
    import tomllib
-   with open('parent.toml', 'rb') as f:
+   with open('system/config/parent.toml', 'rb') as f:
        print(tomllib.load(f)['branch'])
    ")
    git worktree add /tmp/wt-<short-name> "upstream/$BASE"
@@ -72,7 +72,7 @@ The upstream URL and base branch are in `parent.toml`.
    git fetch upstream
    BASE=$(python3 -c "
    import tomllib
-   with open('parent.toml', 'rb') as f:
+   with open('system/config/parent.toml', 'rb') as f:
        print(tomllib.load(f)['branch'])
    ")
    git branch -f submit/<short-name> "upstream/$BASE"
@@ -84,7 +84,7 @@ The upstream URL and base branch are in `parent.toml`.
 
    If the cherry-pick conflicts against current upstream (a real conflict, not the dirty-tree case above), resolve it the same way you would for any cherry-pick (or rebase your fix on a fresh `update-self` first).
 
-3. Open the PR against the template's default branch (read from `parent.toml`, usually `main`):
+3. Open the PR against the template's default branch (read from `system/config/parent.toml`, usually `main`):
 
    ```bash
    gh pr create \

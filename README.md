@@ -1,41 +1,31 @@
-# default-workspace-template
+# Your workspace
 
-A self-contained template for running a persistent Claude agent that delegates work to sub-agents and can manage its own background services.
+This folder is your mind's home: everything it knows, everything it builds,
+and the machinery that keeps it running.
 
-## Usage
+## What's here
 
-```bash
-mngr create my-workspace main -t local \
-    --host-env MINDS_WORKSPACE_NAME=my-workspace \
-    --project ~/project/default-workspace-template
-```
+- `creations/` - Things your mind has built for you: apps, dashboards, tools,
+  and services. Each creation lives in its own folder.
+- `data/` - Your workspace's data: files you've uploaded, files shared back to
+  you in chat, your mind's memories, and each creation's stored data.
+- `docs/` - Guides to this workspace: what it is, how it works, and a history
+  of where it came from.
+- `system/` - The machinery that runs the workspace: background services,
+  scripts, and configuration. You can look around (every folder has a README),
+  and your mind maintains it for you.
 
-## Structure
+A few housekeeping files live alongside them:
 
-- `CLAUDE.md` - Agent instructions
-- `parent.toml` - Upstream repo for pulling updates
-- `.mngr/settings.toml` - Agent types, create templates, command defaults
-- `skills/` - Agent skills (task delegation, services, self-update)
-- `scripts/` - Utility scripts (reviewer settings)
-- `event-processor/` - Pre-configured directory for creating persistent sub-agents
-- `supervisord.conf` - Supervisord config defining the background services
-- `libs/bootstrap/` - First-boot setup, then launches supervisord to supervise the services
-- `vendor/mngr/` - A vendored, mutable copy of mngr. Note that making changes here *will* affect the behavior of the `mngr` command
-- `vendor/tk/` - A vendored copy of the [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script (also callable as `tk`) manages tickets stored as markdown. We point `TICKETS_DIR` at `runtime/tickets/` (set in `.mngr/settings.toml`'s `host_env`) so tickets live alongside the rest of `runtime/` (and are covered by the opt-in GitHub sync when the `github-sync` skill has enabled it).
+- `README.md` - This file.
+- `CLAUDE.md` - The standing instructions your mind follows.
+- `pyproject.toml` and `uv.lock` - The Python project definition; the tooling
+  requires them at the top level.
 
-## Create templates
+## Where things are kept safe
 
-- `worker` - For sub-agents created via the launch-task skill (includes code review)
-- `subskill-worker` - Sub-agent for any flow that hands its worker the generic harden worker (the crystallize / update / heal artifact lifecycle, including the update-system-interface flow). Inherits from `worker` and pre-installs the single generic worker from `.agents/shared/worker/` into its own `.agents/skills/` as `harden-worker`.
-
-## Artifact harden lifecycle
-
-The main agent can promote ad-hoc work into reusable artifacts, fix artifacts that fail, and extend artifacts that came up short -- across skills, web services, and the system interface. The user-invokable surface is three generic operation leads (main agent side), each parameterized by the artifact:
-
-- `crystallize-artifact` - Create a new artifact (default: a skill reconstructed from the just-finished turn). Invoked directly post-turn, or by the live-half wrappers (`build-web-service`, `fetch-process-show`) once a prototype is confirmed.
-- `heal-artifact` - Fix a skill or service that errored or produced wrong results.
-- `update-artifact` - Extend / refactor / verify a skill, service, or shared reference; one flow with a committed-vs-emergent design-gate toggle.
-
-Each lead spawns a `subskill-worker` sub-agent that runs the single generic `harden-worker` sub-skill. The worker reads the operation and artifact from its task file and composes the universal `harden-artifact.md` contract with one `op-*.md` and one `artifact-*.md` reference under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs the `update-system-interface` flow, which wraps `update-artifact` with `artifact=system-interface` and adds its preview / safe-reveal go-live.)
-
-Crystallized skills are marked with `metadata.crystallized: true` in their SKILL.md frontmatter and follow the [agentskills.io](https://agentskills.io/specification) layout (`scripts/run.py` as a PEP 723 script, companion SKILL.md, optional `references/` and `assets/`).
+The workspace is a git repository: code and configuration changes are
+committed as your mind works. Everything under `data/` is deliberately kept
+out of git (it can be large, personal, or both) and is protected by the
+workspace's continuous encrypted backup instead, along with the rest of the
+workspace. See `docs/` for details.
