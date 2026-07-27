@@ -23,7 +23,7 @@ backend, so the request fell through to the top-level UI. Either:
 - The `--name` passed to `forward_port.py` does not match the URL
   segment the user clicked.
 
-Fix: re-check pre-flight (bind to 127.0.0.1, port matches supervisord.conf,
+Fix: re-check pre-flight (bind to 127.0.0.1, port matches system/supervisord.conf,
 name matches the URL segment) and Step 3 verification.
 
 ## Backend redirects (3xx Location headers)
@@ -103,8 +103,8 @@ will fail loudly (the framework will print an error and exit). With
 crash loop visible via `supervisorctl status <name>` and
 `/var/log/supervisor/<name>-stderr.log`. Pick a different port.
 
-The scaffolder's port-picking pre-flight (which parses `supervisord.conf`
-and `runtime/applications.toml`) catches this before you write the
+The scaffolder's port-picking pre-flight (which parses `system/supervisord.conf`
+and `data/.state/applications.toml`) catches this before you write the
 program entry. For the wrap-existing escape hatch, run `ss -tln`
 manually before choosing a port.
 

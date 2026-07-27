@@ -1,0 +1,1 @@
+Chat attachments move to `data/uploads/`, inline chat files/images to `data/chat-files/` and `data/chat-images/`, and the applications registry to `data/.state/applications.toml`, following the workspace-root declutter (the package itself moves to `system/libs/system_interface`).

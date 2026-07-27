@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# Wrapper script for ttyd that:
+# 1. Runs ttyd on a fixed, known-by-convention port (7681)
+# 2. Registers the port via forward_port.py before starting ttyd
+# 3. Writes server events for discovery
+#
+# Runs as the supervisord `terminal` program (started by supervisord, which
+# bootstrap launches), so terminal access is supervised and restarted alongside
+# the other services.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# The script lives at system/scripts/, so the repo root is two levels up.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+TTYD_PORT=7681
+
+# Build the ttyd dispatch command (matches the mngr_ttyd plugin's approach)
+DISPATCH_SCRIPT='
+KEY="${1:-}"
+if [ -z "$KEY" ]; then
+  exec bash
+fi
+SCRIPT="$MNGR_AGENT_STATE_DIR/commands/ttyd/$KEY.sh"
+if [ -f "$SCRIPT" ]; then
+  shift
+  exec bash "$SCRIPT" "$@"
+fi
+echo "Unknown ttyd key: $KEY" >&2
+read -r
+exit 1
+'
+
+# Ensure ttyd commands directory exists and has an agent dispatch script
+if [ -n "${MNGR_AGENT_STATE_DIR:-}" ]; then
+    mkdir -p "$MNGR_AGENT_STATE_DIR/commands/ttyd"
+    # Rewrite agent.sh on every run so old deployments pick up the name-arg
+    # support -- otherwise stale single-session copies keep attaching to the
+    # primary agent regardless of the ?arg=agent&arg=<name> we now pass.
+    cat > "$MNGR_AGENT_STATE_DIR/commands/ttyd/agent.sh" << 'AGENT_SCRIPT'
+#!/bin/bash
+# Attach to a mngr agent's tmux session window 0.
+#
+# If a session name is provided as $1, use "$MNGR_PREFIX$1" as the target
+# session (so the minds chat UI can deep-link to a specific sub-agent's
+# terminal by passing the agent name). Otherwise fall back to the current
+# tmux session -- useful when ttyd is invoked without args.
+set -euo pipefail
+if [ $# -gt 0 ] && [ -n "$1" ]; then
+    TARGET_SESSION="${MNGR_PREFIX:-mngr-}$1"
+else
+    TARGET_SESSION=$(tmux display-message -p '#{session_name}')
+fi
+unset TMUX
+exec tmux attach -t "$TARGET_SESSION":0
+AGENT_SCRIPT
+    chmod +x "$MNGR_AGENT_STATE_DIR/commands/ttyd/agent.sh"
+    if [ ! -f "$MNGR_AGENT_STATE_DIR/commands/ttyd/workdir.sh" ]; then
+        cat > "$MNGR_AGENT_STATE_DIR/commands/ttyd/workdir.sh" << 'WORKDIR_SCRIPT'
+#!/bin/bash
+cd "$1" 2>/dev/null && exec bash
+WORKDIR_SCRIPT
+        chmod +x "$MNGR_AGENT_STATE_DIR/commands/ttyd/workdir.sh"
+    fi
+    # Named, in-memory persistent terminal sessions. Each dockview "New
+    # terminal" tab attaches to (or creates) its own tmux session on the
+    # shared default socket, so the session survives closing the tab,
+    # reloading the iframe, and restarting this ttyd service -- everything
+    # short of a container/host restart (which clears the tmux server).
+    # Rewritten on every run so old deployments pick up logic changes.
+    cat > "$MNGR_AGENT_STATE_DIR/commands/ttyd/session.sh" << 'SESSION_SCRIPT'
+#!/bin/bash
+# Attach to (or create) a named, in-memory tmux terminal session.
+#
+# Args (passed by the ttyd dispatch after the "session" key is consumed):
+#   $1 = session name (e.g. "terminal-1")
+#   $2 = terminal id  (per-tab id used to map this ttyd client's pty back to
+#                      the dockview tab for live tab-title tracking; may be "")
+#   $3 = working directory to anchor a newly-created session in (may be "")
+#
+# `tmux new-session -A` attaches when the session exists and creates it
+# otherwise, so this single path covers reattach (tab reopen / reload / ttyd
+# restart) and first creation, as well as recreation after a container restart
+# cleared the tmux server (the tab just comes back as a fresh shell).
+set -euo pipefail
+SESSION_NAME="${1:-}"
+TERMINAL_ID="${2:-}"
+WORKDIR="${3:-}"
+unset TMUX
+
+if [ -z "$SESSION_NAME" ]; then
+    exec bash
+fi
+
+# Record this connection's pty under the terminal id so the tmux
+# client-session-changed / session-renamed hooks can map a live client back
+# to the dockview tab that owns it (best-effort; never fatal).
+if [ -n "$TERMINAL_ID" ] && [ -n "${MNGR_AGENT_STATE_DIR:-}" ]; then
+    CLIENTS_DIR="$MNGR_AGENT_STATE_DIR/commands/ttyd/clients"
+    mkdir -p "$CLIENTS_DIR"
+    MY_TTY="$(tty 2>/dev/null || true)"
+    if [ -n "$MY_TTY" ]; then
+        # This pty now authoritatively belongs to this terminal id. Drop any
+        # stale mapping that still points at the same pty: Linux reuses a pty
+        # number after a client disconnects, so a since-closed tab's leftover
+        # file could otherwise shadow this one and misroute title updates to a
+        # closed tab (the resolver returns the first matching entry).
+        for existing in "$CLIENTS_DIR"/*; do
+            [ -f "$existing" ] || continue
+            if [ "$(cat "$existing" 2>/dev/null)" = "$MY_TTY" ]; then
+                rm -f "$existing"
+            fi
+        done
+        printf '%s\n' "$MY_TTY" > "$CLIENTS_DIR/$TERMINAL_ID" 2>/dev/null || true
+    fi
+fi
+
+WORKDIR_ARGS=()
+if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
+    WORKDIR_ARGS=(-c "$WORKDIR")
+fi
+
+exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}"
+SESSION_SCRIPT
+    chmod +x "$MNGR_AGENT_STATE_DIR/commands/ttyd/session.sh"
+fi
+
+# Serve the OSC 52-capable ttyd web client so a mouse-drag copy inside tmux
+# reaches the system clipboard. The tmux config (~/.tmux.conf, written by the
+# template's extra_provision_command) emits an OSC 52 escape on copy, but the
+# stock ttyd 1.7.7 client has no OSC 52 handler and silently drops it; the
+# patched client vendored with the mngr_ttyd plugin honors it. The mngr_ttyd
+# plugin is disabled here (the terminal is a supervised service, not an mngr
+# window), so we replicate its client install: decompress that vendored client
+# and serve it via `ttyd -I`, falling back to the stock client if the asset is
+# missing (so ttyd still starts).
+TTYD_INDEX_FLAGS=()
+TTYD_CLIENT_GZ="$REPO_ROOT/system/vendor/mngr/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
+if [ -n "${MNGR_AGENT_STATE_DIR:-}" ] && [ -f "$TTYD_CLIENT_GZ" ]; then
+    TTYD_INDEX_PATH="$MNGR_AGENT_STATE_DIR/commands/ttyd/index.html"
+    if gzip -dc "$TTYD_CLIENT_GZ" > "$TTYD_INDEX_PATH"; then
+        TTYD_INDEX_FLAGS=(-I "$TTYD_INDEX_PATH")
+    else
+        echo "warning: failed to decompress ttyd web client at $TTYD_CLIENT_GZ; using stock client" >&2
+        rm -f "$TTYD_INDEX_PATH"
+    fi
+fi
+
+# Register the terminal port before starting ttyd (port is known ahead of time)
+uv run python3 "$REPO_ROOT/system/scripts/forward_port.py" --name terminal --url "http://localhost:$TTYD_PORT"
+
+# Write server events for discovery. The "agent" sub-URL is intentionally not
+# registered as its own application: the chat UI exposes it via an inline link
+# instead of a top-level application tile.
+if [ -n "${MNGR_AGENT_STATE_DIR:-}" ]; then
+    mkdir -p "$MNGR_AGENT_STATE_DIR/events/servers"
+    _TS=$(date -u +"%Y-%m-%dT%H:%M:%S.000000000Z")
+    _EID="evt-$(echo -n "terminal:http://localhost:$TTYD_PORT" | sha256sum | cut -c1-32)"
+    printf '{"timestamp":"%s","type":"server_registered","event_id":"%s","source":"servers","server":"terminal","url":"http://localhost:%s"}\n' \
+        "$_TS" "$_EID" "$TTYD_PORT" \
+        >> "$MNGR_AGENT_STATE_DIR/events/servers/events.jsonl"
+fi
+
+# Start ttyd on the fixed port (exec replaces this shell for clean process management)
+exec ttyd -p "$TTYD_PORT" -a -t disableLeaveAlert=true "${TTYD_INDEX_FLAGS[@]}" -W bash -c "$DISPATCH_SCRIPT"
