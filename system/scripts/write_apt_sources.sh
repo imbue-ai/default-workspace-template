@@ -29,7 +29,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+# The script lives at system/scripts/, so the repo root (where .mngr/ sits) is
+# two levels up. Only the no-argument invocation reads this; the baked-image
+# path passes T explicitly.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 SNAPSHOT_TIMESTAMP="${1:-}"
 if [ -z "$SNAPSHOT_TIMESTAMP" ]; then
