@@ -112,6 +112,11 @@ addopts = [
     # system/apps/system_interface has its own pytest config (coverage, slow-test reporting,
     # ratchets) that conflicts with the root config; it is run from inside its own dir.
     "--ignore=system/apps/system_interface",
+    # The top-level apps and skills symlinks (discoverability shortcuts to
+    # system/apps/ and .agents/skills/) would otherwise make pytest collect
+    # every test under them a second time via the symlink path.
+    "--ignore=apps",
+    "--ignore=skills",
 ]
 
 [tool.ruff]
@@ -123,4 +128,6 @@ select = ["F", "I", "UP006", "UP007"]
 
 [tool.pyright]
 pythonVersion = "3.11"
-exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface"]
+# apps and skills are the top-level discoverability symlinks; excluding them
+# keeps pyright from analyzing the same files twice via the symlink paths.
+exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface", "apps", "skills"]
