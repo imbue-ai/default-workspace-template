@@ -10,6 +10,6 @@ Provisioning and utility scripts:
   `.claude/settings.json`.
 - Service helpers: `forward_port.py` (port registry), `layout.py` (dockview
   layout ops), `oom_tag_service.py` and friends (memory-pressure bands),
-  `run_ttyd.sh`, `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
+  `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
 - Git hooks in `git_hooks/` (activated by the github-sync skill).
 - The changelog gate: `check_changelog_entries.py`.
