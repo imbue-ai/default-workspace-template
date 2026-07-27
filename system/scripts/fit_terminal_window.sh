@@ -24,14 +24,17 @@
 # hook's run-shell would re-expand a name containing shell metacharacters
 # (same convention as notify_terminal_session.py).
 
-set -uo pipefail
+set -euo pipefail
 
 CLIENT_TTY="${1:?client tty required}"
 
 # Resolve which session the triggering client is attached to (tab-separated so
 # the tty key can never collide with the name; empty if the client detached).
+# Every tmux query here is best-effort -- the server can go away mid-hook, and
+# a dead query means "nothing to fit", not "abort" -- so each one degrades to
+# an empty result explicitly rather than tripping `set -e`.
 SESSION="$(tmux list-clients -F "#{client_tty}$(printf '\t')#{client_session}" 2>/dev/null \
-    | awk -F '\t' -v tty="${CLIENT_TTY}" '$1 == tty {print $2; exit}')"
+    | awk -F '\t' -v tty="${CLIENT_TTY}" '$1 == tty {print $2; exit}')" || SESSION=""
 
 # The guard also ensures the name is safe to use in tmux targets below:
 # terminal-<N> names contain no whitespace or metacharacters.
@@ -47,7 +50,7 @@ FIT_SETTLE_SECONDS="${MINDS_TERMINAL_FIT_SETTLE_SECONDS:-1}"
 _fit() {
     local size width height
     size="$(tmux list-clients -t "=${SESSION}" -F '#{client_activity} #{client_width} #{client_height}' 2>/dev/null \
-        | sort -rn | awk 'NR==1 {print $2, $3}')"
+        | sort -rn | awk 'NR==1 {print $2, $3}')" || size=""
     [ -n "${size}" ] || return 0
     width="${size% *}"
     height="${size#* }"
