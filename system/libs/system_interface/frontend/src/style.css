@@ -740,7 +740,8 @@ body {
   list-style: none;
   margin: 0;
   padding-right: 4px;
-  scrollbar-color: var(--color-border) transparent;
+  /* Native scrollbar (no ``scrollbar-color`` override) to match the rest of
+     the UI; the OS draws its own thin overlay bar. */
 }
 
 @supports (-moz-appearance: none) {
@@ -1026,23 +1027,12 @@ body {
   animation-delay: 0.3s;
 }
 
-/* ── Scrollbar ── */
-.app-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.app-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.app-content::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
-}
-
-.app-content::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-faint);
-}
+/* ── Scrollbar ──
+ * Left NATIVE: the custom 6px ``.app-content::-webkit-scrollbar`` bar sat
+ * flush against the content edge (it read as "touching the wall"). The OS
+ * native overlay bar auto-hides, aligns to the container edge with the
+ * platform's own inset, and matches the light/dark scheme -- so no custom
+ * geometry is needed. */
 
 /* ── Structured tool call blocks (non-markdown) ── */
 .tool-call-block {
