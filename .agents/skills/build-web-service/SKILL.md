@@ -81,19 +81,19 @@ Adding a Python proxy in front of the third-party server adds a hop,
 costs an extra process, and complicates WebSocket and streaming
 behavior. Use the escape hatch instead.
 
-Do not extend `apps/system_interface/` to add a new view. That app runs
+Do not extend `system/libs/system_interface/` to add a new view. That app runs
 the top-level workspace UI; new web views go in their own scaffolded lib
-under `libs/<your-package>/` so they get an isolated tab and prefix.
+under `creations/<your-package>/` so they get an isolated tab and prefix.
 
 ## Pre-flight (both paths)
 
 - **Pick a kebab-case service name.** Becomes the URL segment
   `/service/<name>/`. Short and descriptive (`news`, `docs-viewer`)
-  beats clever. Avoid names already used in `supervisord.conf`
+  beats clever. Avoid names already used in `system/supervisord.conf`
   (`system_interface`, `browser`, etc. are reserved by the scaffolder).
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
-  `supervisord.conf` and `runtime/applications.toml`; if you're choosing
+  `system/supervisord.conf` and `data/.state/applications.toml`; if you're choosing
   manually, avoid `8000` (system_interface) and `8081` (the browser
   service).
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
@@ -131,37 +131,37 @@ is taken, or `uv sync` fails.
 
 What gets generated:
 
-- `libs/<package>/pyproject.toml` -- declares
+- `creations/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`.
-- `libs/<package>/src/<package>/__init__.py` -- empty.
-- `libs/<package>/src/<package>/runner.py` -- sync Flask starter.
+- `creations/<package>/src/<package>/__init__.py` -- empty.
+- `creations/<package>/src/<package>/runner.py` -- sync Flask starter.
   Builds a `Flask` app and serves it with
   `werkzeug.serving.run_simple(..., threaded=True)`. It serves at `/`;
   the system_interface proxy handles the `/service/<name>/` prefixing,
   so no `root_path`/`ROOT_PATH` is needed. It also defines a `DATA_DIR`
-  constant (defaults to `runtime/<name>/`, overridable via the
+  constant (defaults to `data/creations/<name>/`, overridable via the
   `<PACKAGE_UPPER>_DATA_DIR` env var) -- route all persistent state
   through it (see File-path conventions below) -- and a `PORT` constant
   (defaults to this service's assigned port, overridable via the
   `<PACKAGE_UPPER>_PORT` env var) bound in `run_simple`. Both overrides
   are what let a future edit boot a throwaway instance on a spare port
   against a data copy (see `update-service`).
-- `libs/<package>/test_<package>_ratchets.py` -- standard ratchets at
+- `creations/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
-- `libs/<package>/README.md` -- one-line description.
+- `creations/<package>/README.md` -- one-line description.
 
 What gets updated:
 
 - Root `pyproject.toml` -- adds `<service-name>` to
-  `[project].dependencies`, `libs/<package>` to
-  `[tool.uv.workspace].members`, and `<service-name> = { workspace = true }`
-  to `[tool.uv.sources]`.
-- `supervisord.conf` -- appends a program block:
+  `[project].dependencies` and `<service-name> = { workspace = true }` to
+  `[tool.uv.sources]` (the `creations/*` member glob picks the package up
+  without a members edit).
+- `system/supervisord.conf` -- appends a program block:
 
   ```ini
   [program:<name>]
-  command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
-  directory=/mngr/code
+  command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
+  directory=/home/user/workspace
   autostart=true
   autorestart=true
   # plus rotated stdout/stderr logfiles under /var/log/supervisor/<name>-*.log
@@ -175,7 +175,7 @@ What gets updated:
   directly (no shell) and this one chains `forward_port.py` with `&&`. The
   `oom_tag_service.py user` prefix tags this user-created service so it is
   shed before any built-in service under memory pressure (see
-  `libs/oom_priority/README.md`).
+  `system/libs/oom_priority/README.md`).
 
 supervisord does not watch the config, so tell it to pick up the new
 program, then confirm it is running:
@@ -296,14 +296,14 @@ Two cases, two patterns:
 - **Persistent state** (caches, cursors, last-visit timestamps, JSON
   snapshots, user records -- anything written and read across runs):
   read and write it under the generated `DATA_DIR` constant, never a
-  hardcoded `runtime/<name>/` at the call site. `DATA_DIR` defaults to
-  `runtime/<name>/` (cwd-relative, resolved from `/mngr/code` where the
+  hardcoded `data/creations/<name>/` at the call site. `DATA_DIR` defaults to
+  `data/creations/<name>/` (cwd-relative, resolved from `/home/user/workspace` where the
   supervisord-managed service runs) but honors the
   `<PACKAGE_UPPER>_DATA_DIR` env var. That override is what makes a
   future edit safe: an agent changing the service can run a throwaway
   instance against a *copy* of the data instead of the live store (see
   `update-service`), so keep every read/write going through `DATA_DIR`
-  -- a hardcoded `runtime/<name>/` silently bypasses the override and
+  -- a hardcoded `data/creations/<name>/` silently bypasses the override and
   re-exposes the live data. Do NOT use `Path(__file__)`-based paths for
   state.
 - **Static assets shipped alongside the .py file** (templates,
@@ -330,7 +330,7 @@ new tab. Without this step the user would have to discover it via the
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-python3 scripts/layout.py open <name>
+python3 system/scripts/layout.py open <name>
 ```
 
 `layout.py` POSTs to a loopback-only workspace_server endpoint that
@@ -338,14 +338,14 @@ broadcasts a `layout_op` message over its WebSocket. The frontend
 focuses the panel if a tab for `<name>` is already open, otherwise
 splits a new iframe alongside the primary chat (60% web / 40% chat).
 The script briefly waits for the service to appear in
-`runtime/applications.toml` so it's safe to run immediately after the
+`data/.state/applications.toml` so it's safe to run immediately after the
 `forward_port.py` call.
 
 To force a reload of an already-open tab (e.g. after redeploying the
 service) without prompting the user to click Refresh:
 
 ```bash
-python3 scripts/layout.py refresh <name>
+python3 system/scripts/layout.py refresh <name>
 ```
 
 You should always `refresh` services after making changes, to make sure the user can see the updates.
@@ -407,18 +407,18 @@ calling the work done.
 ## Escape hatch: wrap an existing server
 
 For pre-existing third-party tools, do not scaffold a lib. Add a
-`[program:<name>]` block to `supervisord.conf` that runs
+`[program:<name>]` block to `system/supervisord.conf` that runs
 `forward_port.py` and then your existing start command. supervisord runs
 commands directly (no shell), so wrap any command that chains with `&&`
 in `bash -c "..."`, and prefix the whole thing with
-`python3 scripts/oom_tag_service.py user` so this user-created service is
+`python3 system/scripts/oom_tag_service.py user` so this user-created service is
 shed before any built-in service under memory pressure (see
-`libs/oom_priority/README.md`):
+`system/libs/oom_priority/README.md`):
 
 ```ini
 [program:<name>]
-command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:<port> --name <name> && <existing_start_command>"
-directory=/mngr/code
+command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && <existing_start_command>"
+directory=/home/user/workspace
 autostart=true
 autorestart=true
 ```
@@ -429,8 +429,8 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 scripts/oom_tag_service.py user bash -c "python3 scripts/forward_port.py --url http://localhost:8090 --name docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
-  directory=/mngr/code
+  command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  directory=/home/user/workspace
   autostart=true
   autorestart=true
   ```
@@ -438,22 +438,22 @@ Two valid shapes:
 - **Wrapper script** (preferred for multi-step bootstrap or env exports):
 
   ```bash
-  # scripts/run_<name>.sh
+  # system/scripts/run_<name>.sh
   #!/usr/bin/env bash
   set -euo pipefail
-  python3 scripts/forward_port.py --url http://localhost:<port> --name <name>
+  python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name>
   exec <existing_start_command>
   ```
 
   ```ini
   [program:<name>]
-  command=python3 scripts/oom_tag_service.py user bash scripts/run_<name>.sh
-  directory=/mngr/code
+  command=python3 system/scripts/oom_tag_service.py user bash system/scripts/run_<name>.sh
+  directory=/home/user/workspace
   autostart=true
   autorestart=true
   ```
 
-After editing `supervisord.conf`, run `supervisorctl reread &&
+After editing `system/supervisord.conf`, run `supervisorctl reread &&
 supervisorctl update` to start the new program.
 
 The `forward_port.py` call MUST come first in the command -- the port
@@ -471,8 +471,8 @@ Used by both paths (the scaffolder generates the call; the escape
 hatch has you write it directly).
 
 ```
-python3 scripts/forward_port.py --name NAME --url URL
-python3 scripts/forward_port.py --name NAME --remove
+python3 system/scripts/forward_port.py --name NAME --url URL
+python3 system/scripts/forward_port.py --name NAME --remove
 ```
 
 Flags:
@@ -482,13 +482,13 @@ Flags:
 - `--url`: full URL where the app is reachable from inside the
   container (e.g. `http://localhost:8090`).
 - `--remove`: remove the named entry from
-  `runtime/applications.toml`. Use this when tearing down a service.
+  `data/.state/applications.toml`. Use this when tearing down a service.
 
 ## The global (Cloudflare) URL
 
 If the workspace has Cloudflare tunneling configured, the service is also
 reachable at a public URL -- with caveats about where that hostname lives and
-why it isn't in `runtime/applications.toml`. See
+why it isn't in `data/.state/applications.toml`. See
 [references/public-url.md](references/public-url.md).
 
 ## Cleanup

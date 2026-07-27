@@ -1,0 +1,1 @@
+The github-sync service drops the runtime-sync orphan-branch machinery: `data/` (formerly `runtime/`) is fully gitignored and covered by the restic host backup, so the service becomes a wiring + visibility watchdog for the post-commit auto-push hook. Its config moves to `data/system/github_sync.toml`, and the `setup-worktree` CLI subcommand is removed.

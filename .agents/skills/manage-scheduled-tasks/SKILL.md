@@ -11,7 +11,7 @@ has two failure modes that drive every choice below: **it only fires when the
 machine is up at that moment** (a job whose time passes while the container
 is off or asleep is skipped, never made up), and **it does not care whether
 the job finished** (a run that dies mid-flight is simply gone). When a job
-must not be missed, run it through `scripts/run_job.sh`: an every-minute cron
+must not be missed, run it through `system/scripts/run_job.sh`: an every-minute cron
 line ticks it, and it runs the job on its cadence when the machine is up --
 catching up the first minute the machine is back after downtime, and
 **retrying a run that failed or was killed before completing**. The built-in
@@ -72,23 +72,23 @@ from the env files mngr maintains on the host dir and runs the command from
 the repo root:
 
 ```
-/mngr/code/scripts/with_agent_env.sh <command...>
+/home/user/workspace/system/scripts/with_agent_env.sh <command...>
 ```
 
 Also redirect output to a log file (cron would otherwise try to mail it):
 `>> /var/log/supervisor/<job-name>.log 2>&1`.
 
-## Entries live in runtime/cron.d, installed live to /etc/cron.d
+## Entries live in data/.state/cron.d, installed live to /etc/cron.d
 
 `/etc/cron.d/` sits on the container rootfs, which starts fresh if the
 container is ever recreated. Keep each entry's durable copy under
-`runtime/cron.d/<job-name>` (persistent volume; rides the opt-in GitHub
+`data/.state/cron.d/<job-name>` (persistent volume; rides the opt-in GitHub
 sync) -- the bootstrap reinstalls everything in that directory into
 `/etc/cron.d/` at each boot. When adding or editing a job, write the durable
 copy first, then make it live:
 
 ```
-install -m 0644 /mngr/code/runtime/cron.d/<job-name> /etc/cron.d/<job-name>
+install -m 0644 /home/user/workspace/data/.state/cron.d/<job-name> /etc/cron.d/<job-name>
 ```
 
 The entry file is still the job's on/off switch -- removing both copies stops
@@ -101,7 +101,7 @@ Write the entry (durable copy, then install live, per the section above) with
 a line that ticks every minute through the wrapper and the runner:
 
 ```
-* * * * *   root   /mngr/code/scripts/with_agent_env.sh /mngr/code/scripts/run_job.sh <job-id> --every <N[mhd]> [--at <hour>] [--retry-after <N[mhd]>] <command...> >> /var/log/supervisor/<job>.log 2>&1
+* * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/scripts/run_job.sh <job-id> --every <N[mhd]> [--at <hour>] [--retry-after <N[mhd]>] <command...> >> /var/log/supervisor/<job>.log 2>&1
 ```
 
 - `--every` -- the cadence: `15m`, `3h`, `1d`, `7d`, ...
@@ -130,7 +130,7 @@ whole duration makes overlapping ticks skip. The semantics:
 
 A job with no state yet is due immediately (with `--at`, at that hour). To
 make a new job wait one full interval from now instead, seed a completion:
-`mkdir -p /mngr/code/runtime/jobs/<job-id> && date +%s > /mngr/code/runtime/jobs/<job-id>/last_success`
+`mkdir -p /home/user/workspace/data/.state/jobs/<job-id> && date +%s > /home/user/workspace/data/.state/jobs/<job-id>/last_success`
 
 ## Add a cron job (exact schedule, no catch-up)
 
@@ -138,7 +138,7 @@ Write the entry (same two-copy dance) with a standard 5-field schedule, then
 the **user** (always `root` here), then the command:
 
 ```
-30 9 * * 1   root   /mngr/code/scripts/with_agent_env.sh bash scripts/weekly_report.sh >> /var/log/supervisor/weekly-report.log 2>&1
+30 9 * * 1   root   /home/user/workspace/system/scripts/with_agent_env.sh bash scripts/weekly_report.sh >> /var/log/supervisor/weekly-report.log 2>&1
 ```
 
 The 5 schedule fields are minute (0-59), hour (0-23), day of month (1-31),
@@ -159,15 +159,15 @@ one -- say a news digest:
    at 9 AM, or every 15 minutes -- same pattern, different `--every`:
 
    ```
-   * * * * *   root   /mngr/code/scripts/with_agent_env.sh /mngr/code/scripts/run_job.sh news --every 1d --at 9 bash /mngr/code/scripts/run_schedule_agent.sh news >> /var/log/supervisor/news-job.log 2>&1
-   * * * * *   root   /mngr/code/scripts/with_agent_env.sh /mngr/code/scripts/run_job.sh news --every 15m bash /mngr/code/scripts/run_schedule_agent.sh news >> /var/log/supervisor/news-job.log 2>&1
+   * * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/scripts/run_job.sh news --every 1d --at 9 bash /home/user/workspace/system/scripts/run_schedule_agent.sh news >> /var/log/supervisor/news-job.log 2>&1
+   * * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/scripts/run_job.sh news --every 15m bash /home/user/workspace/system/scripts/run_schedule_agent.sh news >> /var/log/supervisor/news-job.log 2>&1
    ```
 
-That is all -- no new agent template is required. `scripts/run_schedule_agent.sh
+That is all -- no new agent template is required. `system/scripts/run_schedule_agent.sh
 <skill>` creates a persistent singleton agent (labelled `schedule_agent=<skill>`),
 keeps it alive across runs, and on each run clears its chat and re-sends
 `/<skill>`, so the skill runs fresh; the agent surfaces its own chat tab
-right after its first message via `scripts/layout.py open` (the same way web
+right after its first message via `system/scripts/layout.py open` (the same way web
 apps are surfaced). Pass `--template <t>` only when you want a custom agent
 template; otherwise the generic `schedule_agent` template is used.
 
@@ -177,10 +177,10 @@ The Caretaker is the schedule-agent pattern above, **off by default**: no
 cron entry exists until the user enables it, and even when on, the agent only
 wakes when a deterministic check found something. Enabling (the
 enable-caretaker skill) writes the single line in
-`runtime/cron.d/minds-caretaker` (installed live to `/etc/cron.d/`):
+`data/.state/cron.d/minds-caretaker` (installed live to `/etc/cron.d/`):
 
 ```
-* * * * *   root   /mngr/code/scripts/with_agent_env.sh /mngr/code/scripts/run_job.sh caretaker --every 7d --at 3 bash /mngr/code/scripts/caretaker_check.sh >> /var/log/supervisor/caretaker-job.log 2>&1
+* * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/scripts/run_job.sh caretaker --every 7d --at 3 bash /home/user/workspace/system/scripts/caretaker_check.sh >> /var/log/supervisor/caretaker-job.log 2>&1
 ```
 
 - **Timing** is the standard runner: `--every 7d --at 3`, catch-up after
@@ -189,15 +189,15 @@ enable-caretaker skill) writes the single line in
 - **The deterministic check** looks for services in FATAL/BACKOFF, fresh
   error output in `/var/log/supervisor/` since the last check, disk at or
   above 85 percent, and new OOM-guard shedding. Findings are written to
-  `runtime/caretaker/findings.md` and the Caretaker agent is woken via
+  `data/.state/caretaker/findings.md` and the Caretaker agent is woken via
   `run_schedule_agent.sh caretaker --template caretaker`; with no findings,
   nothing runs until the next weekly check. The one exception: if the agent
-  has never introduced itself (no `runtime/caretaker/permissions.md`), it is
+  has never introduced itself (no `data/.state/caretaker/permissions.md`), it is
   woken once regardless of findings.
 - **On and off:** the entry IS the switch. The enable-caretaker skill writes
   both copies (and clears any stale job state so the introduction lands
   promptly); the disable-caretaker skill removes both, and nothing runs at
-  all while disabled. The Caretaker's state under `runtime/caretaker/`
+  all while disabled. The Caretaker's state under `data/.state/caretaker/`
   survives a disable for a later re-enable.
 - **When the agent runs:** at most once a week, at 3 AM local when the
   container is up (first minute back up after an overdue window otherwise),
@@ -206,13 +206,13 @@ enable-caretaker skill) writes the single line in
 
 ## See, pause, or remove a job
 
-- **List:** `ls /etc/cron.d/` (live) and `ls /mngr/code/runtime/cron.d/`
+- **List:** `ls /etc/cron.d/` (live) and `ls /home/user/workspace/data/.state/cron.d/`
   (durable) and read the files -- they are the complete truth about what is
   scheduled.
 - **Remove:** delete both copies of the entry file.
 - **Pause without losing the definition:** comment the line out with `#` in
   both copies.
-- **Check a runner job's state:** read `runtime/jobs/<job-id>/` --
+- **Check a runner job's state:** read `data/.state/jobs/<job-id>/` --
   `last_success` (epoch of the last completed run), `last_attempt` (epoch of
   the last start), `failures` (consecutive failed attempts, absent when
   healthy). Deleting `last_success` makes the job due again; deleting the
@@ -222,24 +222,24 @@ enable-caretaker skill) writes the single line in
 
 The complete map of the scheduling machinery, for edits and debugging:
 
-- `/mngr/code/runtime/cron.d/` -- the durable copy of each entry; the
+- `/home/user/workspace/data/.state/cron.d/` -- the durable copy of each entry; the
   bootstrap installs these into `/etc/cron.d/` at each boot.
 - `/etc/cron.d/` -- the live drop-ins cron actually reads, one file per job:
   runner jobs are every-minute lines through `run_job.sh`, precise jobs are
   ordinary schedule lines (cron rescans the directory within a minute).
 - `/etc/cron.d/minds-caretaker` -- the Caretaker's drop-in (only exists
   while the Caretaker is enabled; see enable-caretaker/disable-caretaker).
-- `/mngr/code/scripts/run_job.sh` -- the runner (cadence, catch-up,
+- `/home/user/workspace/system/scripts/run_job.sh` -- the runner (cadence, catch-up,
   completion tracking, and retry -- with unit tests in
-  `scripts/run_job_test.py`).
-- `/mngr/code/runtime/jobs/<job-id>/` -- each runner job's state
+  `system/scripts/run_job_test.py`).
+- `/home/user/workspace/data/.state/jobs/<job-id>/` -- each runner job's state
   (`last_attempt`, `last_success`, `failures`, `lock`).
 - `supervisord.conf` -- `[program:cron]` is the cron daemon (check it with
   `supervisorctl status cron`).
 - `/var/log/supervisor/<job>.log` -- each job's own output (per the redirect
   on its entry); `/var/log/supervisor/cron-*.log` -- the cron daemon's logs.
-- `/mngr/env` and `/mngr/agents/<id>/env` -- the host and per-agent env
-  files mngr maintains; `scripts/with_agent_env.sh` sources them (host first,
+- `/home/user/.mngr/env` and `/home/user/.mngr/agents/<id>/env` -- the host and per-agent env
+  files mngr maintains; `system/scripts/with_agent_env.sh` sources them (host first,
   then the services agent's) to rebuild the job environment.
 - `/etc/localtime` + `/etc/timezone` -- the container clock, set from the
   user's timezone at each boot by the bootstrap (see the timezone section

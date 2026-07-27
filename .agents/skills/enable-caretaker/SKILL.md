@@ -18,17 +18,17 @@ and get their explicit confirmation. Only proceed on a clear yes.
 To enable, write the Caretaker's schedule entry (durably, then live) and
 clear any stale job state:
 
-    mkdir -p /mngr/code/runtime/cron.d
-    printf '%s\n' '* * * * *   root   /mngr/code/scripts/with_agent_env.sh /mngr/code/scripts/run_job.sh caretaker --every 7d --at 3 bash /mngr/code/scripts/caretaker_check.sh >> /var/log/supervisor/caretaker-job.log 2>&1' > /mngr/code/runtime/cron.d/minds-caretaker
-    install -m 0644 /mngr/code/runtime/cron.d/minds-caretaker /etc/cron.d/minds-caretaker
-    rm -rf /mngr/code/runtime/jobs/caretaker
+    mkdir -p /home/user/workspace/data/.state/cron.d
+    printf '%s\n' '* * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/scripts/run_job.sh caretaker --every 7d --at 3 bash /home/user/workspace/system/scripts/caretaker_check.sh >> /var/log/supervisor/caretaker-job.log 2>&1' > /home/user/workspace/data/.state/cron.d/minds-caretaker
+    install -m 0644 /home/user/workspace/data/.state/cron.d/minds-caretaker /etc/cron.d/minds-caretaker
+    rm -rf /home/user/workspace/data/.state/jobs/caretaker
 
 This is the standard recurring-job pattern from the manage-scheduled-tasks
 skill: the every-minute tick is `run_job.sh` (weekly, due hour 3, catch-up
 after downtime, and completion-tracked -- a check that fails or is killed
 mid-run is retried within minutes instead of silently losing the week), and
 `caretaker_check.sh` is the deterministic check that wakes the agent only
-when it finds something. The copy under `runtime/cron.d/` is the durable
+when it finds something. The copy under `data/.state/cron.d/` is the durable
 switch (the bootstrap reinstalls it at each boot, so it survives container
 recreation); the `install` makes it live immediately. Cron picks the file up
 within a minute, so the Caretaker introduces itself shortly afterwards

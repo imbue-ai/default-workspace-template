@@ -1,6 +1,6 @@
 # Artifact: system interface
 
-`apps/system_interface` -- the live web workspace UI (dockview shell, chat
+`system/libs/system_interface` -- the live web workspace UI (dockview shell, chat
 panels, progress view) and its Flask backend. This reference describes what the
 system interface *is*; for how to run and test a web frontend in isolation, see
 `.agents/shared/worker/references/web-frontend-testing.md`.
@@ -10,11 +10,11 @@ It is what the user is looking at *right now*, so you always work against an
 
 ## Where the source lives
 
-- Backend: `apps/system_interface/imbue/system_interface/` (Flask + flask-sock,
+- Backend: `system/libs/system_interface/imbue/system_interface/` (Flask + flask-sock,
   served by the threaded Werkzeug server).
-- Frontend: `apps/system_interface/frontend/src/` (TypeScript + Vite + Tailwind
+- Frontend: `system/libs/system_interface/frontend/src/` (TypeScript + Vite + Tailwind
   + mithril/dockview). Build output goes to the gitignored
-  `apps/system_interface/imbue/system_interface/static/`.
+  `system/libs/system_interface/imbue/system_interface/static/`.
 
 ## Running and testing
 
@@ -26,25 +26,37 @@ System-interface specifics:
   (`uv add` for Python, `npm install <pkg>` for the frontend) and **commit the
   manifest changes** (`pyproject.toml` / `uv.lock` / `package.json` /
   `package-lock.json`).
-- Backend: exercise the edited Python **in-process** -- `cd apps/system_interface
+- Backend: exercise the edited Python **in-process** -- `cd system/libs/system_interface
   && uv run pytest` imports `create_application` and exercises it via Flask's
   test client (and a threaded Werkzeug server in-process for WebSocket/SSE tests),
   so your edits are picked up with no reinstall and no restart. Never install the
   global `system-interface` tool.
-- Frontend: `cd apps/system_interface/frontend && npm run build` (you must
+- Frontend: `cd system/libs/system_interface/frontend && npm run build` (you must
   produce a clean build) plus `npm run lint` and `npm run test`.
 - The Playwright harness in
-  `apps/system_interface/imbue/system_interface/test_e2e.py` already spins up an
+  `system/libs/system_interface/imbue/system_interface/test_e2e.py` already spins up an
   isolated threaded Werkzeug server on an alternate port, builds fake
   agent/session fixtures via `_make_agent_fixture`, and drives it with Playwright
   (auto-skips when browsers aren't installed). Extend it -- and use it as the
   same instance you screenshot.
 - To drive the UI manually, launch a **throwaway** instance on an alternate port,
   e.g. `SYSTEM_INTERFACE_PORT=8137 uv run system-interface` from
-  `apps/system_interface/`. With `MNGR_HOST_DIR` left at its default it discovers
+  `system/libs/system_interface/`. With `MNGR_HOST_DIR` left at its default it discovers
   the **real** agents (this is how you open the motivating conversation named in
   `## Real scenario` -- see below); point it at fixture data instead when you want
   an isolated, reproducible scene for a committed test.
+
+## Leave a built frontend in your work_dir (required, even for a backend-only change)
+
+Before you report `done`, your work_dir **must** contain a current frontend
+build (`cd system/libs/system_interface/frontend && npm ci && npm run build`, output in
+the gitignored `imbue/system_interface/static/`). This is **not** conditional on
+whether you touched the frontend: the lead previews your change by booting your
+work_dir directly, and the preview **refuses to boot a work_dir with no build**
+(it serves the backend's "Frontend not built" placeholder otherwise, which reads
+as a broken UI). A fresh worktree has no `node_modules` and no `static/`, so a
+backend-only change that skips the build leaves nothing to preview. Build it and
+confirm `imbue/system_interface/static/index.html` exists before reporting `done`.
 
 ## Real scenario: look at it firsthand, do not imagine it
 

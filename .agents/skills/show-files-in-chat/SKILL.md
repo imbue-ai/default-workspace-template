@@ -13,10 +13,10 @@ any other file is offered as a download.
 
 ## Show an image inline
 
-1. Write the image to disk under `runtime/chat-images/` (create it once with
-   `mkdir -p runtime/chat-images` if it does not exist). That directory is
-   gitignored and persists with the rest of `runtime/` (covered by the opt-in
-   GitHub sync when the user has enabled the `github-sync` skill).
+1. Write the image to disk under `data/chat-images/` (create it once with
+   `mkdir -p data/chat-images` if it does not exist). That directory is
+   gitignored and persists with the rest of `data/` (covered by the restic
+   host backup).
 
    Give each image a unique, descriptive filename, e.g.
    `revenue-by-quarter-2026.png`. Served image URLs are cached immutably, so
@@ -25,23 +25,23 @@ any other file is offered as a download.
 2. Reference it by its **absolute** on-disk path with markdown image syntax:
 
    ```
-   ![Revenue by quarter](/mngr/code/runtime/chat-images/revenue-by-quarter-2026.png)
+   ![Revenue by quarter](/home/user/workspace/data/chat-images/revenue-by-quarter-2026.png)
    ```
 
    The path must be absolute (start with `/`). A relative path such as
-   `![x](runtime/chat-images/x.png)` will not render.
+   `![x](data/chat-images/x.png)` will not render.
 
 Supported inline image formats: `.png`, `.jpg` / `.jpeg`, `.gif`, `.webp`, `.avif`, `.bmp`, `.ico`, `.svg`.
 
 ## Offer a file for download
 
 For anything that is not an image -- a PDF, CSV, log, zip, spreadsheet, etc. --
-write the file to disk (a `runtime/chat-files/` directory is a good convention,
+write the file to disk (a `data/chat-files/` directory is a good convention,
 though any path works) and reference its **absolute** path with an ordinary
 markdown link (not image syntax):
 
 ```
-[Q4 report (PDF)](/mngr/code/runtime/chat-files/q4-report.pdf)
+[Q4 report (PDF)](/home/user/workspace/data/chat-files/q4-report.pdf)
 ```
 
 Clicking the link downloads the file. There is nothing else to do -- the system

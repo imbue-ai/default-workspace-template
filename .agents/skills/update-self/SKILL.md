@@ -6,12 +6,12 @@ description: Safely pull updates from the upstream template repo (default target
 # Pulling updates from the upstream template, safely
 
 This repo was created from a template repo and stays connected to it via a git
-remote (`parent.toml` has the URL and branch). Upstream carries the shared
+remote (`system/config/parent.toml` has the URL and branch). Upstream carries the shared
 infrastructure: skills, scripts, `CLAUDE.md` scaffolding, `Dockerfile`,
-`supervisord.conf`, the system interface, the vendored `mngr`.
+`system/supervisord.conf`, the system interface, the vendored `mngr`.
 
 Merging upstream can break the live workspace -- a settings-schema change the
-running `system_interface` can't parse, a bumped `vendor/mngr`, a new service.
+running `system_interface` can't parse, a bumped `system/vendor/mngr`, a new service.
 So, like `update-system-interface`, this flow never mutates the live tree from an
 unverified state: an isolated **worker** does the merge and validation on its own
 branch, and only a known-good, user-approved result is landed and applied.
@@ -24,6 +24,16 @@ validation; you own going live.
 The default target is the **latest stable `minds-v*` tag** (released,
 already-tested), not `origin/main`. The user may override to a specific tag or to
 `main`.
+
+Because the update flow itself evolves, once the target is resolved this pass
+**re-points itself at the target version's own copy of the update-self skill**
+(Step 2a) and runs the rest -- lead *and* worker -- from there. So a fix to the
+conflict triage, validation, or reveal logic that shipped in the release is
+applied on the way *in*, instead of staying a release behind in the local copy.
+That copy is staged at one fixed path --
+`data/.tasks/update-self/skill-at-target/.agents/skills/update-self` -- which the lead
+and worker both address by literal (no shell state carried between commands, since
+each bash invocation starts a fresh shell).
 
 ## 1. Preconditions
 
@@ -38,7 +48,7 @@ uv run host-backup-now
 It waits for any in-flight backup, forces a fresh tick, and prints the
 `restic_backup_succeeded` / `restic_backup_failed` event -- confirm success before
 continuing. If it reports backups aren't configured
-(`tick_skipped_due_to_missing_secrets` -- no `runtime/secrets/restic.env`), there
+(`tick_skipped_due_to_missing_secrets` -- no `data/.secrets/restic.env`), there
 is **no** restore point: tell the user, and get their explicit go-ahead before
 proceeding without one.
 
@@ -63,7 +73,7 @@ Ensure the remote exists, fetch with tags, and resolve the ref:
 ```bash
 git remote get-url upstream 2>/dev/null || git remote add upstream "$(python3 -c "
 import tomllib
-with open('parent.toml', 'rb') as f:
+with open('system/config/parent.toml', 'rb') as f:
     print(tomllib.load(f)['url'])
 ")"
 git fetch upstream --tags
@@ -88,13 +98,68 @@ change as if upstream were reverting it, which reads as phantom upstream churn:
 git diff --name-status "$(git merge-base HEAD "$REF")" "$REF"
 ```
 
+### 2a. Hand off to the target's own update-self flow
+
+Now re-point the rest of this pass at the update-self skill **as it exists at
+`$REF`**. Stage that copy (from the already-fetched objects -- no network, no
+working-tree mutation) at the fixed path
+`data/.tasks/update-self/skill-at-target/.agents/skills/update-self`, and learn
+whether it differs from your local one:
+
+```bash
+DIFFERS=$(python3 .agents/skills/update-self/scripts/update_self.py bootstrap-skill --ref "$REF" \
+    | python3 -c 'import sys, json; print(json.load(sys.stdin)["differs"])')
+echo "differs=$DIFFERS"
+```
+
+`bootstrap-skill` always leaves a runnable flow at that fixed path (the target's
+copy, or -- when the ref predates the skill -- the local copy), so **the worker
+runs from `data/.tasks/update-self/skill-at-target/.agents/skills/update-self`
+regardless**. `differs` decides only which `SKILL.md` prose *you* follow next:
+
+- **`differs` is `False`** (the staged flow is byte-identical to yours, or the ref
+  predates the skill) -> **continue with this document**.
+
+- **`differs` is `True`** -> the target's copy of the flow differs from your local
+  one (it shipped changes, or this workspace customized the flow locally). **Stop
+  following this document** and follow the staged copy's `SKILL.md` from **Step 3**
+  onward:
+
+  ```bash
+  # read and follow "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/SKILL.md" from Step 3
+  ```
+
+  You have already completed Steps 1-2 (backup, single-flight, clean tree, target
+  resolved), so do **not** re-run the staged doc's Step 2 or re-stage -- just carry
+  `$REF` forward into its Step 3.
+
+Either way, `data/.tasks/update-self/skill-at-target/.agents/skills/update-self` now
+holds the copy of the flow to run. Everything below reaches the skill's scripts
+and worker reference through that literal path (and points the worker at it), so
+both dispatch against the correct version.
+
+**The handoff contract (keep this boundary stable when editing this skill).**
+Steps 1-2 -- preconditions and target resolution -- always run from the *local*
+copy: they are what decide `$REF`, so by construction they cannot come from the
+target. The target's flow is entered at **Step 3**. So an edit to this skill must
+preserve that boundary: a future version's Steps 1-2 must stay "capture a backup,
+the single-flight/clean-tree checks, then resolve a ref into `$REF`", and its
+Step 3 must stay the worker dispatch -- otherwise an older initiator handing off
+into a newer copy (or vice versa) lands at the wrong step. Keep the staging path
+(`data/.tasks/update-self/skill-at-target/.agents/skills/update-self`) stable for the
+same reason. Note also that this handoff runs the target ref's `update_self.py`
+and follows its prose *before* the Step 5a approval gate; for the default target
+(a stable, already-tested `minds-v*` tag) that is the same trust basis as the
+merge itself, but a `--override` to an untrusted ref means trusting that ref's
+flow code and instructions -- only override to a ref you trust.
+
 ## 3. Dispatch the worker
 
 Open a tracking ticket, write the task file, launch via the `launch-task`
 machinery, and background-poll.
 
 ```bash
-mkdir -p runtime/update-self
+mkdir -p data/.tasks/update-self
 tk create "update-self" -t task \
     --acceptance "worker launched; conflicts triaged; validated; branch merged; revealed"
 ```
@@ -116,7 +181,7 @@ Write the task file. Use the two-heredoc form the other worker skills use: an
 cat << FRONTMATTER_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-finish_report_path: runtime/update-self/reports/report.md
+finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---
 FRONTMATTER_EOF
@@ -125,19 +190,24 @@ cat << 'BODY_EOF'
 # Task: safe update-self
 
 ## What to do
-Follow `.agents/skills/update-self/references/update-self-worker.md` end to end:
-trial-merge conflict triage, complete the merge (preserving the `update-self:`
-merge-commit subject), validate the merged set, generate the "what's new" report,
-and report `done`. Your target is the `target_ref` in this file's frontmatter
-(already fetched into `upstream`).
+Follow the worker guide at
+`data/.tasks/update-self/skill-at-target/.agents/skills/update-self/references/update-self-worker.md`
+end to end: trial-merge conflict triage, complete the merge (preserving the
+`update-self:` merge-commit subject), validate the merged set, generate the
+"what's new" report, and report `done`. That
+`data/.tasks/update-self/skill-at-target/.agents/skills/update-self` path is the copy
+of the update-self flow shipped with the version being updated to (staged by the
+lead and synced into your worktree with this runtime dir) -- run *all* its
+`update_self.py` calls from its `system/scripts/` too. Your target is the `target_ref` in
+this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
 Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
 `question` (mid-flight gate for a genuine, unresolvable conflict), `done` /
-`stuck` (terminal). Substitutions: `<TASK_FILE_GLOB>` -> `runtime/update-self/task.md`;
-`<RUNTIME_REPORTS_DIR>` -> `runtime/update-self/reports`.
+`stuck` (terminal). Substitutions: `<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
+`<RUNTIME_REPORTS_DIR>` -> `data/.tasks/update-self/reports`.
 BODY_EOF
-} > runtime/update-self/task.md
+} > data/.tasks/update-self/task.md
 ```
 
 Launch with the plain `worker` template (this flow uses its own worker guidance,
@@ -147,16 +217,16 @@ true`), re-arming per `lead-proxy.md`:
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-self --template worker \
-    --runtime-dir runtime/update-self/ --task-file runtime/update-self/task.md
+    --runtime-dir data/.tasks/update-self/ --task-file data/.tasks/update-self/task.md
 
 uv run .agents/skills/launch-task/scripts/create_worker.py await \
-    --name update-self --task-file runtime/update-self/task.md --timeout 90m
+    --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```
 
 ## 4. Proxy the `question` gate
 
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
-`mngr/update-self`, reports dir `runtime/update-self/reports/`). The worker
+`mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). The worker
 surfaces only genuine, unresolvable conflicts -- a real decision about how to
 reconcile a file both sides rewrote incompatibly. **Escalate it to the user**,
 relay their resolution via `mngr message`, consume the report, and re-arm.
@@ -187,7 +257,7 @@ applied and the workspace is untouched.
   whoever they escalate to**: the target ref, the step or phase that failed, the
   specific file or component, and the **actual error text or log excerpt
   verbatim** (not paraphrased), with a pointer to the full report and logs under
-  `runtime/update-self/reports/`. Never leave the user at a dead end, and never
+  `data/.tasks/update-self/reports/`. Never leave the user at a dead end, and never
   hand them a failure so vague it's useless in a bug report.
 - **`done`** -> the approval gate below.
 
@@ -197,7 +267,7 @@ The `done` report is *your* raw material, not the user's message. It is a
 comprehensive, technical digest for the lead -- changelog entries in range, the
 conflicts and how the worker resolved them, reveal-class breakdown, impact
 analysis, lockfile handling, and validation. **Do not forward it verbatim.**
-Keep it available (it is persisted under `runtime/update-self/reports/` -- offer
+Keep it available (it is persisted under `data/.tasks/update-self/reports/` -- offer
 to show it if the user wants the specifics), and **compose a plain-language
 approval message** from it. Then **wait for explicit approval** -- mandatory even
 on a clean pull.
@@ -254,7 +324,7 @@ WORK_DIR=$(mngr ls --include 'name == "update-self"' --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
     --slug update-self --work-dir "$WORK_DIR"
-python3 scripts/layout.py open si-preview
+python3 system/scripts/layout.py open si-preview
 ```
 
 **Other web services are optional previews.** When the report says another user
@@ -265,7 +335,7 @@ it from inside that preview. Skip previews for services that came in clean.
 
 ### 5b. Land the merge
 
-**When the update touches `apps/system_interface/` at all** (merged *or* pulled
+**When the update touches `system/libs/system_interface/` at all** (merged *or* pulled
 in -- anything that makes 5c run the safe-reveal), first take the
 `editing service system_interface` lease and hold it through the end of 5c,
 exactly as `update-system-interface` Step 4 does: the reveal's auto-rollback
@@ -289,6 +359,130 @@ If the fast-forward is refused, `HEAD` moved under the pass: treat it as stale
 per `.agents/shared/references/harden-contention.md` and re-dispatch off the
 current `HEAD` -- do not hand-resolve.
 
+**Record the version, in the same landing.** Landing an update is what makes the
+workspace a new version, so the entry belongs in the git tree, right here --
+never left to a later turn. The merge sha only exists once the merge has landed,
+so this is a follow-up commit of exactly one file (the worker never writes it --
+only the lead knows the merge sha).
+
+Capture the merge sha **right here** -- immediately after the fast-forward, while
+`HEAD` still is the merge and before the ledger commit moves it:
+
+```bash
+MERGE_SHA=$(git rev-parse HEAD)
+```
+
+Then write the entry directly into `docs/VERSION_HISTORY.md`. There is no helper
+skill -- this block is the whole recording contract, and it owns the format so
+`update-self`, `publish-inspiration`, and `update-published-inspiration` all write
+identical lines. The rules: append-only (existing lines are copied through
+verbatim, never re-flowed); every `## Workspace` line ends in a commit; and a
+retried landing must be a no-op, never a duplicate. Do the three parts below in
+order.
+
+**Part 1 -- if `docs/VERSION_HISTORY.md` is missing** (deleted since creation),
+recreate the shipped starter first, then append. This heredoc is the canonical
+starter that `publish-inspiration` and `update-published-inspiration` recreate by reference
+to here:
+
+```bash
+[ -f docs/VERSION_HISTORY.md ] || cat > docs/VERSION_HISTORY.md <<'VERSION_HISTORY_EOF'
+# Version history
+
+Where this workspace came from, what it has published, and the inspirations it
+has adopted. Entries are appended automatically -- by `update-self` when it lands
+a template update, by `publish-inspiration` and `update-published-inspiration` when they
+publish, and by `update-installed-inspiration` when it pulls a newer version of an
+adopted inspiration -- and earlier lines are never rewritten. Each Workspace and
+Inspirations line ends in the commit it was cut from.
+
+## Workspace
+
+## Inspirations
+
+## Adopted inspirations
+
+Each inspiration this mind has adopted and the version it is on;
+`update-installed-inspiration` appends here when it pulls a newer version.
+VERSION_HISTORY_EOF
+```
+
+**Part 2 -- seed the `## Workspace` creation line if it is absent** -- exactly
+once per workspace, inserted as the FIRST line under `## Workspace` (the oldest
+event, so it never appends at the end). Resolve the creation snapshot as the
+**OLDEST** first-parent template-state marker (`^update-self:` or `Initial
+workspace commit`), and resolve its date/version/sha **from that commit itself**
+so seeding late still records when the workspace was actually created:
+
+```bash
+if ! grep -q "created from" docs/VERSION_HISTORY.md; then
+    CREATION=$(git log --first-parent --format='%H %s' HEAD \
+        | awk '{h=$1; sub(/^[^ ]+ /,""); if ($0 ~ /^update-self:/ || $0 == "Initial workspace commit") last=h} END {if (last) print last}')
+    # Fallback (a hand-made or pre-bootstrap repo with no marker): the FIRST-PARENT
+    # root -- never `git rev-list --max-parents=0 HEAD`, whose parallel subtree roots
+    # are not the seed.
+    [ -n "$CREATION" ] || CREATION=$(git rev-list --first-parent HEAD | tail -1)
+    C_DATE=$(git log -1 --format=%ad --date=short "$CREATION")
+    C_SHA=$(git rev-parse --short=7 "$CREATION")
+    C_VERSION=$(git describe --tags --abbrev=0 --match 'minds-v*' "$CREATION" 2>/dev/null)
+    # Then insert `- <C_DATE>  created from <C_VERSION or "the workspace template">
+    # <C_SHA>` as the FIRST line under the `## Workspace` heading, note padded to 26.
+fi
+```
+
+**Use `git describe` (reachability), NEVER `git tag --points-at`.** No tag is ever
+*on* a creation snapshot: `Initial workspace commit` is an `--allow-empty` commit
+bootstrap writes ON TOP of the cloned template commit, and an `update-self:`
+marker is a merge commit -- in both cases the `minds-v*` tag is on an ancestor, so
+a pointing-at lookup always comes up empty and every creation line would silently
+degrade to the unnamed `created from the workspace template` fallback. (This walk
+takes the **OLDEST** marker -- where the mind *started*. `publish-inspiration`
+§2's `BASE_REF` walk uses the same markers but takes the **NEWEST**; the
+difference is load-bearing.)
+
+**Part 3 -- append the update line.** Under `## Workspace`, after its last
+existing line, append exactly one line of the form:
+
+```
+- <today, YYYY-MM-DD>  updated to <$REF>  <7-char $MERGE_SHA>
+```
+
+Pad the note (`updated to <$REF>`) to width 26 so the sha lines up; a longer note
+just pushes its own sha right, and earlier lines are never re-flowed. Compute the
+sha as `git rev-parse --short=7 "$MERGE_SHA"`. **Idempotence:** if a `##
+Workspace` line already carries this exact note AND this exact 7-char sha, it is
+already recorded -- change nothing and skip the commit below.
+
+Then commit exactly this one file:
+
+```bash
+git add docs/VERSION_HISTORY.md
+git commit -m "version history: updated to $REF"
+```
+
+Stage `docs/VERSION_HISTORY.md` **by name** -- NEVER `git add -A` (it would sweep
+up the mind's unrelated working state), and never a merge, checkout, or reset as
+part of recording. If the idempotence check found the entry already recorded,
+nothing is staged and you skip the commit.
+
+**Pass `$MERGE_SHA`, never `HEAD`.** The append de-duplicates on note + sha, and
+the `git commit` above moves `HEAD` onto the version-history commit: a re-run
+that reaches for `HEAD` would pass a different sha, defeat the no-op, and append
+a second line pointing at the ledger commit instead of the merge. On a re-run,
+re-derive the merge sha rather than re-reading `HEAD`:
+
+```bash
+MERGE_SHA=$(git log --first-parent --grep '^update-self:' -1 --format=%H)
+```
+
+That prints the newest template-state marker -- the merge you just landed -- and
+keeps printing it afterwards, so the whole block is safe to re-run.
+
+**Never give this commit an `update-self:` subject**: that prefix is the
+template-state marker `assist` and `publish-inspiration` §2 resolve `BASE_REF`
+from, it belongs to the merge commit alone, and `$MERGE_SHA` above depends on it
+staying that way.
+
 ### 5c. Reveal by change class
 
 The report says which classes merged. Apply each; a clean pull-in is still
@@ -302,7 +496,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
   python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py reveal \
       --rollback-to "$ROLLBACK_TO"
   python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
-  python3 scripts/layout.py close si-preview
+  python3 system/scripts/layout.py close si-preview
   ```
 
   Exit codes per `update-system-interface` Step 5 (`0` revealed; `2`
@@ -312,28 +506,28 @@ The report says which classes merged. Apply each; a clean pull-in is still
   longer contains the update), surface the failure, and re-dispatch once the
   cause is fixed. Exit 3 means the restore itself failed -- surface immediately.
 
-- **`service` / `supervisord.conf` / `bootstrap`** -- restart the services agent
-  so `bootstrap` re-runs and `supervisord` reloads every program, then refresh
-  any affected tab (`python3 scripts/layout.py refresh <name>`):
+- **`service` / `system/supervisord.conf` / `bootstrap`** -- restart the whole services
+  agent (do not use `supervisorctl reread && update` here), then refresh any
+  affected tab (`python3 system/scripts/layout.py refresh <name>`):
 
   ```bash
   mngr start --restart system-services
   ```
 
-- **`editable_tool` (`vendor/mngr/**`)** -- `.py` is picked up live; a manifest
+- **`editable_tool` (`system/vendor/mngr/**`)** -- `.py` is picked up live; a manifest
   change needs an env refresh (`uv sync --all-packages`, or `uv tool install -e
-  vendor/mngr --reinstall` for a tool entry point). Any other `is_manifest` change
+  system/vendor/mngr --reinstall` for a tool entry point). Any other `is_manifest` change
   the report flags (a root-workspace `pyproject.toml` / `uv.lock`) likewise needs
   `uv sync --all-packages` so the new dependencies resolve.
 
 - **`Dockerfile`** -- apply the live-applicable hunks the report calls out
   (canonically a `CLAUDE_CODE_VERSION` bump -> `CLAUDE_CODE_VERSION=<v> bash
-  scripts/setup_system.sh`, keeping `agent_types.claude.version` in
+  system/scripts/setup_system.sh`, keeping `agent_types.claude.version` in
   `.mngr/settings.toml` in sync). Tell the user any image-level hunk (base
   `FROM`, `apt-get` packages, build-time layout) needs a manual workspace rebuild.
 
-- **`provisioner` (`scripts/setup_system.sh`,
-  `scripts/install_secret_scanners.sh`, `scripts/_provision_guard.sh`,
+- **`provisioner` (`system/scripts/setup_system.sh`,
+  `system/scripts/install_secret_scanners.sh`, `system/scripts/_provision_guard.sh`,
   `.mngr/**`)** -- shapes how the workspace image and agents are *provisioned*,
   not live runtime code, so it doesn't reveal by merely restarting a dependent
   service the way `shared_runtime` does. Work the report's apply plan by sub-case:
@@ -345,7 +539,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
     until a rebuild. Apply it live by re-running the provisioner:
 
     ```bash
-    bash scripts/setup_system.sh
+    bash system/scripts/setup_system.sh
     ```
 
     This now actually runs (rather than skipping): the merge changed the repo
@@ -359,7 +553,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
     upstream template -- the same release tested it against the new dep),
     hot-running the provisioner is safe; apply it live as above. If the dependent
     is **user-created** (built in this workspace, absent from upstream -- e.g. a
-    `build-web-service` app, which also lives under `libs/`), do **not** hot-run
+    `build-web-service` app under `creations/`), do **not** hot-run
     the provisioner: upstream never tested that code against the new dep and the
     worker couldn't validate it either, so treat it as **rebuild-only** -- surface
     it to the user for a workspace recreate (which provisions the new substrate and
@@ -396,23 +590,43 @@ The report says which classes merged. Apply each; a clean pull-in is still
     rebuild comes back as `stuck`, handled in Step 5's terminal status -- nothing
     is landed.)
 
-- **`shared_runtime` (`scripts/**` other than the provisioning scripts above,
-  `libs/**`, `.agents/**`)** -- applies to
+- **`shared_runtime` (`system/scripts/**` other than the provisioning scripts above,
+  `system/libs/**`, `creations/**`, `.agents/**`)** -- applies to
   future agents automatically unless a live service depends on the file. The
   report's impact analysis names any live consumer; restart that service
   (usually `mngr start --restart system-services`). Only "nothing to reveal"
   when the analysis found none.
 
+## 5c. Advance the environment (bundled, not optional)
+
+update-self is the one moment package versions are allowed to move: the merged
+template carries a (possibly newer) committed apt snapshot timestamp in
+`.mngr/apt-snapshot-timestamp`, and the environment stays pinned to the OLD
+timestamp until explicitly advanced. After the merge has landed and revealed,
+run:
+
+```bash
+uv run env-converge upgrade
+```
+
+This re-renders the pinned apt sources at the new timestamp, `apt-get
+full-upgrade`s against that frozen universe, re-runs the `system/scripts/env.d/`
+units (whose pins may have advanced with the template), re-captures the
+environment record, and prints the package-version deltas as JSON. Summarize
+the delta count for the user in plain language ("system packages moved to the
+newer pinned snapshot; N changed"). If the timestamp did not change, the
+command is a cheap no-op pass -- run it anyway so unit-pin bumps still apply.
+
 ## 6. Teardown
 
 If you previewed a non-system_interface service in 5a, tear that preview down
-too: stop its isolated instance and close its tab (`python3 scripts/layout.py
+too: stop its isolated instance and close its tab (`python3 system/scripts/layout.py
 close <name>`). Then:
 
 ```bash
-mkdir -p runtime/update-self/reports/consumed
-mv runtime/update-self/reports/report.md \
-    runtime/update-self/reports/consumed/$(date +%s)-done.md
+mkdir -p data/.tasks/update-self/reports/consumed
+mv data/.tasks/update-self/reports/report.md \
+    data/.tasks/update-self/reports/consumed/$(date +%s)-done.md
 uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name update-self
 ```
 
