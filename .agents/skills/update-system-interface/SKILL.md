@@ -164,10 +164,12 @@ up, `preview` refuses rather than hijacking it -- surface that to the user and
 coordinate with the other pass (its stderr says how to tear down an abandoned
 one).
 
-Open it as a tab and ask the user to explore:
+Open it as a tab and ask the user to explore. `open` requires `--layout` and
+only applies on clients with that layout active, so try both named layouts --
+the one the user is not on fails fast and harmlessly:
 
 ```bash
-python3 system/scripts/layout.py open si-preview
+for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
 
 **Self-verify against the real scenario before you ask the user.** The preview's
@@ -302,10 +304,10 @@ way to clean up after a `preview` that failed partway.
 layout. The `si-preview` tab you opened earlier with `layout.py open` is a
 separate concern (a layout panel, not a service), so you must close it yourself
 -- otherwise the user is left with a stale tab pointing at a now-deregistered
-service:
+service (again once per named layout, since `close` requires `--layout`):
 
 ```bash
-python3 system/scripts/layout.py close si-preview
+for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
 ```
 
 Do this whenever you tear the preview down -- after a successful reveal *or*

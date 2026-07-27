@@ -166,9 +166,12 @@ python3 system/scripts/layout.py refresh <name>
 ```
 
 `refresh` reloads every iframe for the service. If no tab is open yet and
-the change is ready to show, surface it instead with
-`python3 system/scripts/layout.py open <name>`. For any other tab manipulation,
-see `manage-layout`. Background daemons have no tab -- skip this step.
+the change is ready to show, surface it instead by opening it on each named
+layout -- `open` requires `--layout` and only applies on clients with that
+layout active, so the layout the user is not on fails fast and harmlessly:
+`for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>; done`.
+For any other tab manipulation, see `manage-layout`. Background daemons have
+no tab -- skip this step.
 
 ### 4. Verify
 
@@ -229,7 +232,8 @@ where the data dies. Encode these, cheapest first:
   instance -- a redesign, or a risky change where a hand mock won't convince --
   add `--service-name <name>-preview-app --preview-service-name <name>-preview
   --preview-title "<change>"` to the `up` call to surface it as a labeled
-  "preview" tab (open it with `python3 system/scripts/layout.py open <name>-preview`);
+  "preview" tab (open it with
+  `for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>-preview; done`);
   that is the same machinery the system-interface flow uses. Use judgment on
   when that is worth it.
 
