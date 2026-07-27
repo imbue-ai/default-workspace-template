@@ -13,15 +13,15 @@
           },
           {
             "type": "command",
-            "command": "./scripts/claude_update_plugin.sh"
+            "command": "./system/scripts/claude_update_plugin.sh"
           },
           {
             "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/ensure_tk_on_path.sh"
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/ensure_tk_on_path.sh"
           },
           {
             "type": "command",
-            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_shed_notice_hook.py 2>/dev/null || true"
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_shed_notice_hook.py 2>/dev/null || true"
           }
         ]
       }
@@ -31,23 +31,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_prevent_commit_rewrite.sh"
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_prevent_commit_rewrite.sh"
           },
           {
             "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_block_pipe_tail_head.sh"
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_block_pipe_tail_head.sh"
           },
           {
             "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_tk_standalone.sh"
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_tk_standalone.sh"
           },
           {
             "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_require_steps_pretool.sh"
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_require_steps_pretool.sh"
           },
           {
             "type": "command",
-            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_rewrite_bash_command.py 2>/dev/null || true"
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_rewrite_bash_command.py 2>/dev/null || true"
           }
         ]
       }
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_open_tickets_reminder.sh"
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_open_tickets_reminder.sh"
           }
         ]
       }
@@ -71,7 +71,7 @@
           },
           {
             "type": "command",
-            "command": "[ -n \"$MNGR_CLAUDE_SUBAGENT_PROXY_CHILD\" ] && exit 0; ${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_open_tickets_stop_nudge.sh"
+            "command": "[ -n \"$MNGR_CLAUDE_SUBAGENT_PROXY_CHILD\" ] && exit 0; ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_open_tickets_stop_nudge.sh"
           }
         ]
       }
@@ -79,7 +79,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_status_line.sh"
+    "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_status_line.sh"
   },
   "enabledPlugins": {
     "imbue-code-guardian@imbue-code-guardian": true,
@@ -100,5 +100,5 @@
     }
   },
   "effortLevel": "high",
-  "autoMemoryDirectory": "runtime/memory"
+  "autoMemoryDirectory": "data/memories"
 }

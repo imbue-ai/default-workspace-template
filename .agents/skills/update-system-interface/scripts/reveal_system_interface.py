@@ -15,7 +15,7 @@ What it does, given the pre-merge revision (``--rollback-to``):
 2. Classify what changed since the known-good revision (frontend src / frontend
    manifest / backend src / backend manifest).
 3. Refresh dependencies only if a manifest changed (``npm ci`` / ``uv tool
-   install -e apps/system_interface --reinstall``). A plain restart does NOT
+   install -e system/libs/system_interface --reinstall``). A plain restart does NOT
    re-resolve the editable tool's dependencies, so a backend dependency add
    would otherwise crash the service on restart.
 4. For a backend change, *pre-flight* the merged code on a throwaway port before
@@ -97,9 +97,9 @@ ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
 MNGR_AGENT_ID_HEADER = "X-Mngr-Agent-Id"
 
 # The served app, the editable tool the live service runs from, and the build
-# surfaces. These mirror scripts/build_workspace.sh -- the source of truth for
+# surfaces. These mirror system/scripts/build_workspace.sh -- the source of truth for
 # how the served environment is constructed.
-APP_DIR = "apps/system_interface"
+APP_DIR = "system/libs/system_interface"
 FRONTEND_DIR = f"{APP_DIR}/frontend"
 # The frontend build output the backend serves at ``/``. Both ``node_modules``
 # and this ``static/`` bundle are gitignored, so a fresh worktree has neither
@@ -136,7 +136,7 @@ PREVIEW_SERVICE_NAME = "si-preview"
 # the service names above are fixed, a second concurrent preview would silently
 # hijack the tab of the one already up, and its teardown would later deregister
 # the service out from under it.
-_INSTANCES_ROOT = "runtime/isolated-instances"
+_INSTANCES_ROOT = "data/.state/isolated-instances"
 _INSTANCE_STATE_FILENAME = "instance.json"
 # The system interface reads its bind host/port from the environment; the shared
 # script injects the free port into PORT and 127.0.0.1 into HOST.
@@ -739,7 +739,7 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             f"preview: no frontend build in {work_dir} "
             f"({FRONTEND_BUILD_INDEX} is missing), so the preview would serve the "
             "'Frontend not built' placeholder. The worker must build the frontend "
-            "(cd apps/system_interface/frontend && npm ci && npm run build) before "
+            "(cd system/libs/system_interface/frontend && npm ci && npm run build) before "
             "its work_dir can be previewed -- re-brief it to build, then retry.\n"
         )
         return 1

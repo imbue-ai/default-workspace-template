@@ -8,9 +8,9 @@ and report; the lead applies the update.
 
 The deterministic pieces (target resolution, merged-vs-pulled classification,
 changelog gathering) live in
-`runtime/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py`
+`data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py`
 -- call it, don't reimplement. That
-`runtime/update-self/skill-at-target/.agents/skills/update-self` path is the copy
+`data/.tasks/update-self/skill-at-target/.agents/skills/update-self` path is the copy
 of the update-self flow shipped with the version being updated to (the lead staged
 it and it was synced into this worktree with the runtime dir); running from it
 means you use the target version's flow, not this worktree's possibly-stale copy.
@@ -20,12 +20,12 @@ Step 4a is your recipe for it.
 ## 1. Resolve inputs
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'runtime/update-self/task.md')"
+eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 ```
 
 Sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, and `TARGET_REF`. Run every
 `update_self.py` call below from
-`runtime/update-self/skill-at-target/.agents/skills/update-self/scripts/` (a fixed
+`data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/` (a fixed
 path -- reference it by literal each time rather than stashing it in a shell
 variable, since each bash invocation starts a fresh shell). If the worktree has no
 `.venv`, `uv sync --all-packages` once. Ensure the ref is present:
@@ -43,7 +43,7 @@ renamed interface a local customization depends on, both sides rewriting the sam
 region) -- so you can frame a precise `question` before committing to the merge:
 
 ```bash
-python3 runtime/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     classify-merge --local HEAD --target "$TARGET_REF" --base "$BASE"
 ```
 
@@ -62,7 +62,7 @@ Triage each conflict, first rule that applies wins:
   produces a file the tool can't parse. Resolve the corresponding manifest
   first, then regenerate from it (`uv lock` in the lock's directory; `npm
   install --package-lock-only` for npm) and `git add` the result.
-- **Agent-owned files -> keep local** (`PURPOSE.md`, `runtime/`):
+- **Agent-owned files -> keep local** (`PURPOSE.md`, `data/`):
   `git checkout --ours -- <path> && git add <path>`.
 - **Mixed files (`CLAUDE.md` and similar) -> merge by judgment.** Do not blanket
   keep-local: upstream additions (new sections, updated shared guidance) are
@@ -103,7 +103,7 @@ git commit -m "update-self: merge upstream template ($TARGET_REF)"
 If a fix needs a new dependency, add it and commit the manifest change so it's in
 the merge.
 
-**Do not touch `VERSION_HISTORY.md`.** The workspace's version entry records the
+**Do not touch `docs/VERSION_HISTORY.md`.** The workspace's version entry records the
 *merge commit sha*, which does not exist until the lead fast-forwards onto your
 branch, so the lead appends it (per its own inlined recording block) as part of
 landing -- see the `update-self` skill's Step 5b. A line written here would carry
@@ -115,7 +115,7 @@ Split what upstream changed into the reconciled **merged** set (validate) vs the
 clean **pulled-in** set (trust as upstream-tested):
 
 ```bash
-python3 runtime/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     classify-merge --local HEAD^1 --target "$TARGET_REF"
 ```
 
@@ -129,12 +129,12 @@ local question of who depends on the file.
 ### 4a. Identify impacted services and skills
 
 No script can enumerate what depends on a changed file -- this is exploration
-work, and you must do it for every changed `scripts/**`, `libs/**`, and
-`.agents/**` path. Build the impact set like this:
+work, and you must do it for every changed `system/scripts/**`, `system/libs/**`,
+`creations/**`, and `.agents/**` path. Build the impact set like this:
 
 1. **Enumerate the consumer universe** up front, independent of the diff: every
-   `supervisord.conf` program (and everything its `command` invokes, directly or
-   through a wrapper), every service under `libs/`, every workspace-added skill
+   `system/supervisord.conf` program (and everything its `command` invokes, directly or
+   through a wrapper), every service under `system/libs/` and `creations/`, every workspace-added skill
    under `.agents/skills/` (e.g. a crystallized `fetch-process-show` pipeline
    whose scripts a daemon or scheduled job runs), and any cron/scheduled
    runners.
@@ -151,10 +151,10 @@ work, and you must do it for every changed `scripts/**`, `libs/**`, and
    you checked and how, so the lead sees the coverage instead of trusting an
    unstated search.
 5. **When you label a lib or skill "workspace-added," verify it -- do not infer
-   it from the directory.** "Not under `vendor/`" does **not** mean
-   workspace-added: most `libs/` and `.agents/skills/` entries are built-in
-   template code. A path is built-in if it exists at the target ref; check
-   before labeling: `git ls-tree -r --name-only "$TARGET_REF" -- libs/<name>`
+   it from the directory.** The layout is a strong hint (`system/libs/` holds
+   built-in template services, `creations/` holds workspace-built ones), but
+   the check is provenance: a path is built-in if it exists at the target ref;
+   check before labeling: `git ls-tree -r --name-only "$TARGET_REF" -- <dir>`
    (empty output = genuinely workspace-added). This matters because only
    genuinely workspace-added code is un-validated-by-upstream -- mislabeling
    built-in code as workspace-added misattributes pre-existing issues (a failing
@@ -162,8 +162,8 @@ work, and you must do it for every changed `scripts/**`, `libs/**`, and
    the lead's approval message repeats the error.
 
 **Provisioning files always count as impacted -- and you best-effort apply them.**
-A change to `scripts/setup_system.sh`, `scripts/install_secret_scanners.sh`,
-`scripts/_provision_guard.sh`, or `.mngr/**` (the `provisioner` reveal class) has
+A change to `system/scripts/setup_system.sh`, `system/scripts/install_secret_scanners.sh`,
+`system/scripts/_provision_guard.sh`, or `.mngr/**` (the `provisioner` reveal class) has
 no *running* consumer to grep for -- nothing imports it -- yet it installs and
 configures the global toolchain (the latchkey CLI, uv, claude, modal, the secret
 scanners) and the `mngr create` config every live agent, service, and future
@@ -174,7 +174,7 @@ the in-repo edits an apply implies, but the lead runs the live restarts):
 
 - **Toolchain-script pins** (`setup_system.sh` / `install_secret_scanners.sh`) --
   a pinned-version bump (e.g. `LATCHKEY_VERSION`) is **live-applicable**: the lead
-  re-runs the idempotent provisioner (`bash scripts/setup_system.sh`) to install
+  re-runs the idempotent provisioner (`bash system/scripts/setup_system.sh`) to install
   the new version. A hunk only a fresh image build reproduces is **rebuild-only**.
 - **`.mngr/**` settings** -- `.mngr/settings.toml` only governs `mngr create`, so
   the merged file governs every *future* create automatically (a new workspace,
@@ -185,11 +185,11 @@ the in-repo edits an apply implies, but the lead runs the live restarts):
     "it's fiddly to get right" is not a reason to defer -- only a genuine lack of
     any live lever is.
 
-    **Ground every apply in how `vendor/mngr` consumes the setting -- do not guess
-    the live mechanism.** For each changed key, grep `vendor/mngr` for its name to
+    **Ground every apply in how `system/vendor/mngr` consumes the setting -- do not guess
+    the live mechanism.** For each changed key, grep `system/vendor/mngr` for its name to
     find exactly where mngr reads and enacts it at create time, then mirror *that*
     mechanism. E.g. a `commands.create` `host_env__extend` change: `grep -rn
-    host_env vendor/mngr` shows where mngr turns those entries into the agent
+    host_env system/vendor/mngr` shows where mngr turns those entries into the agent
     container's environment (which env file / process env it writes), so you know
     the precise place to set them live and which process must restart to re-read
     them. Likewise `settings_overrides` -> where mngr writes Claude's settings;
@@ -240,15 +240,16 @@ not the host-global toolchain, so your env still has the **old** dep; do **not**
 globally install the new one to test, that mutates the shared toolchain the live
 workspace and other agents run on. So decide by the **provenance** of the
 dependent -- does its code come from the upstream template, or was it built in
-this workspace? Decide this by *origin, not directory*: path is not the signal
-(a workspace's own `build-web-service` app lands as a new lib under `libs/`, right
-alongside the template's built-in `libs/*` services). The check is whether the
+this workspace? Decide this by *origin, not directory*: the layout is only a
+hint (a workspace's own `build-web-service` app lands under `creations/`, and
+the template's built-in services under `system/libs/`, but an adapted
+inspiration can bring third-party creations along). The check is whether the
 dependent's code exists in upstream at the target ref -- e.g. `git cat-file -e
 "$TARGET_REF":<path>` for its files, or whether it's part of the merge base's
 template rather than added locally.
 
 - **Dependent is built-in code** (present in the upstream template at the target
-  ref -- e.g. `apps/system_interface`, a template-shipped `libs/*` service, a
+  ref -- e.g. `system/libs/system_interface`, a template-shipped `system/libs/*` service, a
   `.agents/shared/` script): **classify it live-applicable and report that** -- the
   upstream release tested that built-in code against the bumped dependency
   *together*, so it's safe to apply on the same "trust upstream's testing" basis
@@ -260,7 +261,7 @@ template rather than added locally.
   don't validate the built-in against the new dep either, because you're trusting
   upstream's testing rather than re-doing it.
 - **Dependent is user-created** (absent from upstream -- built in this workspace:
-  a `build-web-service` app in its own `libs/` lib, a crystallized skill's scripts
+  a `build-web-service` app in its own `creations/` package, a crystallized skill's scripts
   under `.agents/skills/<skill>/`, a local script): **unsafe to hot-apply.**
   Upstream never saw that code, so it never tested it against the new dependency,
   and you can't either (shared toolchain). Classify it **rebuild-only** -- the safe
@@ -300,9 +301,9 @@ tests, or exercise its scripts -- and called out in the report.
   mode: `bootstrap` is `uv run`-launched, so an unparseable root lock means no
   service in the workspace can start.
 - **Suites/lint/ratchets** for each project in `projects_to_validate`: root `.`
-  (`uv run pytest` + `uv run ruff check`) covers `libs/**`, `scripts/**`,
-  `.agents/**`; `apps/system_interface` runs its own `uv run pytest` (and `npm run
-  lint && npm run test` when the frontend merged); `vendor/mngr` its own `uv run
+  (`uv run pytest` + `uv run ruff check`) covers `system/libs/**`, `creations/**`, `system/scripts/**`,
+  `.agents/**`; `system/libs/system_interface` runs its own `uv run pytest` (and `npm run
+  lint && npm run test` when the frontend merged); `system/vendor/mngr` its own `uv run
   pytest`.
 - **Isolated-service boots** for each impacted service (per 4a) -- boot against a
   scratch data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
@@ -313,7 +314,7 @@ tests, or exercise its scripts -- and called out in the report.
   can close.
 - **Playwright** for a web surface -- system interface *or* a user service -- only
   when the merge needed nontrivial merge work there (not a clean pull). For the
-  system interface, build it in your worktree (`cd apps/system_interface && uv
+  system interface, build it in your worktree (`cd system/libs/system_interface && uv
   sync && npm run build`) so your work_dir is a built instance the lead can
   preview, then drive it per
   `.agents/shared/worker/references/web-frontend-testing.md`.
@@ -330,15 +331,15 @@ and gate verdicts for your report.
 ## 5. Gather the "what's new" inputs
 
 ```bash
-python3 runtime/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     changelog-entries --base "$BASE" --target "$TARGET_REF"
 ```
 
 ## 6. Report back
 
 Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
-`runtime/update-self/task.md`; `<RUNTIME_REPORTS_DIR>` ->
-`runtime/update-self/reports`). Valid `name:` values:
+`data/.tasks/update-self/task.md`; `<RUNTIME_REPORTS_DIR>` ->
+`data/.tasks/update-self/reports`). Valid `name:` values:
 
 - `question` (`type: gate`) -- a genuine, unresolvable conflict; body: the file,
   what each side did, the options. Push and stop; resume on the lead's reply.

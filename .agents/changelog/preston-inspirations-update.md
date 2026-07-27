@@ -35,7 +35,7 @@
   never clobber the mind. A mind created directly FROM an inspiration is treated
   as already trusted (creating it was the trust decision).
 
-- The workspace version ledger is `VERSION_HISTORY.md`, with three
+- The workspace version ledger is `docs/VERSION_HISTORY.md`, with three
   sections: `## Workspace` (template version created-from + each `update-self`
   landing), `## Inspirations` (each inspiration this mind published, `v1`/`v2`...
   per slug), and `## Adopted inspirations` (each inspiration this mind adopted
@@ -110,7 +110,7 @@
   to the rule that the live workspace is untouched after assembly. An
   unpublished inspiration is never recorded.
 
-- A published inspiration never ships version history at all: `VERSION_HISTORY.md`
+- A published inspiration never ships version history at all: `docs/VERSION_HISTORY.md`
   is a workspace artifact, so the assembled snapshot drops it entirely (rather
   than shipping an empty copy). The slugs, repo URLs, and source commits of a
   mind's other inspirations therefore never appear inside one it publishes, and a
