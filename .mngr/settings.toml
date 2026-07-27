@@ -711,8 +711,8 @@ type = "claude"
 # creates -- absent until then, weekly and findings-gated via
 # system/scripts/caretaker_check.sh once enabled) via
 # system/scripts/run_schedule_agent.sh, and is labelled schedule_agent=caretaker so
-# it can be found as a singleton (the runner opens its chat tab via
-# system/scripts/layout.py).
+# it can be found as a singleton (the agent surfaces its own chat tab via
+# system/scripts/layout.py after its first message).
 [create_templates.caretaker]
 type = "claude"
 env = ["MNGR_AGENT_ROLE=caretaker"]
@@ -733,7 +733,7 @@ type = "claude"
 env = ["MNGR_AGENT_ROLE=schedule_agent"]
 agent_args = [
     "--append-system-prompt",
-    "You are a schedule agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"chat:$MNGR_AGENT_NAME\" (best-effort; continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it.",
+    "You are a schedule agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: for L in desktop mobile; do python3 system/scripts/layout.py open --layout \"$L\" \"chat:$MNGR_AGENT_NAME\"; done (--layout is required; the layout the user is not on fails fast and harmlessly; best-effort -- continue if both fail). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it.",
 ]
 
 # Worktree template: agent in a new git worktree, no services by default --

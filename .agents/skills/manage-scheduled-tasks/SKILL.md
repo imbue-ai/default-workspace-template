@@ -167,8 +167,8 @@ That is all -- no new agent template is required. `system/scripts/run_schedule_a
 <skill>` creates a persistent singleton agent (labelled `schedule_agent=<skill>`),
 keeps it alive across runs, and on each run clears its chat and re-sends
 `/<skill>`, so the skill runs fresh; the agent surfaces its own chat tab
-right after its first message via `system/scripts/layout.py open` (the same way web
-apps are surfaced). Pass `--template <t>` only when you want a custom agent
+right after its first message via `system/scripts/layout.py open --layout <desktop|mobile>`
+(the same way web apps are surfaced). Pass `--template <t>` only when you want a custom agent
 template; otherwise the generic `schedule_agent` template is used.
 
 ## How the Caretaker is wired (the built-in example)
