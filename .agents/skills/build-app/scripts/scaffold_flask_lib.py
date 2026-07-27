@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["tomlkit>=0.12"]
 # ///
-"""Stand up a new Flask web-service creation (and its supervisord program entry).
+"""Stand up a new Flask app (and its supervisord program entry).
 
 Creates `system/apps/<package>/` with a Flask starter (synchronous; flask-sock
 is available for WebSockets), updates the root pyproject.toml
@@ -33,7 +33,7 @@ from tomlkit import TOMLDocument
 from tomlkit.items import Array, Table
 
 # Both kebab and snake forms are reserved so a kebab name that converts to
-# a snake-cased existing service name is also rejected.
+# a snake-cased existing app or service name is also rejected.
 RESERVED_NAMES = frozenset(
     {
         "system-interface",
@@ -70,7 +70,7 @@ def _validate_name(name: str) -> None:
 
 
 def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
-    # Every service registers its localhost backend via a forward_port.py call in
+    # Every app registers its localhost backend via a forward_port.py call in
     # its [program:*] command, so scanning the whole config text for
     # http://localhost:<port> / http://127.0.0.1:<port> finds all in-use ports.
     if not supervisord_conf.exists():
@@ -99,7 +99,7 @@ def _pick_port(repo_root: Path, requested: int | None) -> int:
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
     if requested is not None:
         if requested in in_use:
-            sys.exit(f"error: --port {requested} is already in use by another service")
+            sys.exit(f"error: --port {requested} is already in use by another app or service")
         return requested
     port = LOWEST_AUTO_PORT
     while port in in_use:
@@ -159,7 +159,7 @@ Services run from /home/user/workspace (the repo root). Conventions:
   configs, bundled JSON): ``Path(__file__).parent / "assets/..."`` is
   fine and is the right pattern.
 - Listen port: bind ``PORT`` (defined below), which defaults to this
-  service's assigned port but honors the ``{port_env_var}`` env var, so
+  app's assigned port but honors the ``{port_env_var}`` env var, so
   an editing agent can boot a throwaway instance on a *spare* port
   alongside the live one (see the update-app skill). Never hardcode
   the port at the ``run_simple`` call.
@@ -177,7 +177,7 @@ from pathlib import Path
 from flask import Flask, Response
 from werkzeug.serving import run_simple
 
-# Persistent state for this service lives under DATA_DIR. It defaults to
+# Persistent state for this app lives under DATA_DIR. It defaults to
 # ``data/.apps/{name}/`` but is overridable via the ``{env_var}`` env var
 # so a throwaway instance can run against a *copy* of the data while editing --
 # see the update-app skill. Always read/write state through DATA_DIR;
@@ -186,7 +186,7 @@ from werkzeug.serving import run_simple
 # exist_ok=True)`` before writing.
 DATA_DIR = Path(os.environ.get("{env_var}", "data/.apps/{name}"))
 
-# Listen port. Defaults to this service's assigned port but is overridable via
+# Listen port. Defaults to this app's assigned port but is overridable via
 # the ``{port_env_var}`` env var so an editing agent can boot a throwaway
 # instance on a spare port next to the live one (see the update-app skill).
 # Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
@@ -393,11 +393,11 @@ def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
     # round-tripping through a parser. The command is wrapped in `bash -c "..."`
     # because supervisord exec's commands directly (no shell) and this one chains
     # forward_port.py with `&&`; the `oom_tag_service.py user` prefix tags the
-    # new (user-created) service so it is shed before any built-in service under
-    # memory pressure (see system/services/oom_priority/README.md).
+    # new (user-created) app so it is shed before any built-in app or service
+    # under memory pressure (see system/services/oom_priority/README.md).
     path = repo_root / "system/supervisord.conf"
     if not path.exists():
-        sys.exit(f"error: {path} not found (cannot register the new service)")
+        sys.exit(f"error: {path} not found (cannot register the new app)")
     existing = path.read_text()
     if f"[program:{name}]" in existing:
         sys.exit(f"error: system/supervisord.conf already has a [program:{name}] section")
@@ -430,7 +430,7 @@ def _find_repo_root(start: Path) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--name", required=True, help="kebab-case service name")
+    parser.add_argument("--name", required=True, help="kebab-case app name")
     parser.add_argument("--description", required=True, help="one-line description")
     parser.add_argument(
         "--port", type=int, default=None, help="explicit port (auto-picked if omitted)"
@@ -473,7 +473,7 @@ def main() -> None:
 
     print(
         f"Created lib at {lib_dir.relative_to(repo_root)} "
-        f"(service `{args.name}` on port {port}). "
+        f"(app `{args.name}` on port {port}). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
         f"references/verify.md (curl + Playwright against /service/{args.name}/)."
     )
