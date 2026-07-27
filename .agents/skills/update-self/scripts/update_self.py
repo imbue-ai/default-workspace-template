@@ -194,7 +194,7 @@ class PathClass(NamedTuple):
 
     ``reveal_class`` selects the go-live action; ``project`` is the pytest
     project whose suite covers the path (``.`` = the root workspace,
-    ``system/libs/system_interface`` and ``system/vendor/mngr`` run their own suites);
+    ``system/apps/system_interface`` and ``system/vendor/mngr`` run their own suites);
     ``is_manifest`` flags a dependency-manifest change that needs an env refresh.
     """
 
@@ -206,12 +206,12 @@ class PathClass(NamedTuple):
 def _project_for_path(path: str) -> str:
     """Return the pytest project root that owns ``path``.
 
-    Only ``system/libs/system_interface`` and ``system/vendor/mngr`` carry their own pytest
+    Only ``system/apps/system_interface`` and ``system/vendor/mngr`` carry their own pytest
     config (the root config ignores them); everything else -- libs, scripts,
     ``.agents`` -- is covered by the root suite, reported as ``.``.
     """
-    if path.startswith("system/libs/system_interface/"):
-        return "system/libs/system_interface"
+    if path.startswith("system/apps/system_interface/"):
+        return "system/apps/system_interface"
     if path.startswith("system/vendor/mngr/"):
         return "system/vendor/mngr"
     return "."
@@ -222,7 +222,7 @@ def classify_path(path: str) -> PathClass:
 
     The classes drive reveal-by-class in the skill:
 
-    - ``system_interface`` -- ``system/libs/system_interface/**``; revealed via
+    - ``system_interface`` -- ``system/apps/system_interface/**``; revealed via
       ``reveal_system_interface.py`` (which owns its own manifest refresh).
     - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``; applied by
       restarting the services agent (``mngr start --restart system-services``).
@@ -257,7 +257,7 @@ def classify_path(path: str) -> PathClass:
     # build/create-time impact.
     if _is_provisioner(path):
         return PathClass(CLASS_PROVISIONER, project, is_manifest)
-    if path.startswith("system/libs/system_interface/"):
+    if path.startswith("system/apps/system_interface/"):
         return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest)
     if path == "system/supervisord.conf" or path.startswith("system/libs/bootstrap/"):
         return PathClass(CLASS_SERVICE, project, is_manifest)
@@ -269,7 +269,8 @@ def classify_path(path: str) -> PathClass:
         path.startswith("system/scripts/")
         or path.startswith(".agents/")
         or path.startswith("system/libs/")
-        or path.startswith("creations/")
+        or path.startswith("system/services/")
+        or path.startswith("system/apps/")
     ):
         return PathClass(CLASS_SHARED_RUNTIME, project, is_manifest)
     if path == "CLAUDE.md" or "/changelog/" in path or path.endswith(".md"):

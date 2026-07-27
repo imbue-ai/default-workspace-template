@@ -335,7 +335,7 @@ it from inside that preview. Skip previews for services that came in clean.
 
 ### 5b. Land the merge
 
-**When the update touches `system/libs/system_interface/` at all** (merged *or* pulled
+**When the update touches `system/apps/system_interface/` at all** (merged *or* pulled
 in -- anything that makes 5c run the safe-reveal), first take the
 `editing service system_interface` lease and hold it through the end of 5c,
 exactly as `update-system-interface` Step 4 does: the reveal's auto-rollback

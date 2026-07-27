@@ -8,7 +8,7 @@ metadata:
 # Managing the workspace dockview layout
 
 The user interacts with you (and the services you create) through a
-tabbed dockview defined in `system/libs/system_interface`. Your chat is one
+tabbed dockview defined in `system/apps/system_interface`. Your chat is one
 such tab; everything else -- service iframes, terminals, ad-hoc URL
 tabs, other agents' chats -- lives alongside it.
 

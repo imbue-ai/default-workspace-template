@@ -296,10 +296,10 @@ marimo/_lsp/
 **/frontend-dist/
 
 # system_interface frontend build artifacts and binary assets
-# (built fresh on mind creation via `cd system/libs/system_interface/frontend && npm ci && npm run build`)
-system/libs/system_interface/imbue/system_interface/static/
-system/libs/system_interface/frontend/media/*.ico
-system/libs/system_interface/frontend/src/assets/*.png
+# (built fresh on mind creation via `cd system/apps/system_interface/frontend && npm ci && npm run build`)
+system/apps/system_interface/imbue/system_interface/static/
+system/apps/system_interface/frontend/media/*.ico
+system/apps/system_interface/frontend/src/assets/*.png
 
 # Claude Code local settings (session-specific permissions)
 .claude/settings.local.json
@@ -376,5 +376,5 @@ system/scripts/notify_user.local.sh
 
 # Dev-only visual mockup for the permission-request progress view (not part of
 # the app or its tests)
-system/libs/system_interface/frontend/permission-demo.html
-system/libs/system_interface/frontend/src/permission-demo.ts
+system/apps/system_interface/frontend/permission-demo.html
+system/apps/system_interface/frontend/src/permission-demo.ts

@@ -154,7 +154,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
     # git wiring fresh and re-verifies the sync repo stays private (the
     # post-commit hook does the pushing). See system/libs/github_sync/README.md.
     # The oom_tag_service.py prefix sets its OOM shed-priority band (see
-    # system/libs/oom_priority).
+    # system/services/oom_priority).
     [program:github-sync]
     command=python3 system/scripts/oom_tag_service.py github-sync uv run github-sync run
     directory=/home/user/workspace

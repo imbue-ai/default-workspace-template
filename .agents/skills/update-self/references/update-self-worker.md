@@ -249,7 +249,7 @@ dependent's code exists in upstream at the target ref -- e.g. `git cat-file -e
 template rather than added locally.
 
 - **Dependent is built-in code** (present in the upstream template at the target
-  ref -- e.g. `system/libs/system_interface`, a template-shipped `system/libs/*` service, a
+  ref -- e.g. `system/apps/system_interface`, a template-shipped `system/libs/*` service, a
   `.agents/shared/` script): **classify it live-applicable and report that** -- the
   upstream release tested that built-in code against the bumped dependency
   *together*, so it's safe to apply on the same "trust upstream's testing" basis
@@ -302,7 +302,7 @@ tests, or exercise its scripts -- and called out in the report.
   service in the workspace can start.
 - **Suites/lint/ratchets** for each project in `projects_to_validate`: root `.`
   (`uv run pytest` + `uv run ruff check`) covers `system/libs/**`, `creations/**`, `system/scripts/**`,
-  `.agents/**`; `system/libs/system_interface` runs its own `uv run pytest` (and `npm run
+  `.agents/**`; `system/apps/system_interface` runs its own `uv run pytest` (and `npm run
   lint && npm run test` when the frontend merged); `system/vendor/mngr` its own `uv run
   pytest`.
 - **Isolated-service boots** for each impacted service (per 4a) -- boot against a
@@ -314,7 +314,7 @@ tests, or exercise its scripts -- and called out in the report.
   can close.
 - **Playwright** for a web surface -- system interface *or* a user service -- only
   when the merge needed nontrivial merge work there (not a clean pull). For the
-  system interface, build it in your worktree (`cd system/libs/system_interface && uv
+  system interface, build it in your worktree (`cd system/apps/system_interface && uv
   sync && npm run build`) so your work_dir is a built instance the lead can
   preview, then drive it per
   `.agents/shared/worker/references/web-frontend-testing.md`.

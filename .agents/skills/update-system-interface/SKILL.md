@@ -1,11 +1,11 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at system/libs/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
 ---
 
 # Updating the system interface
 
-`system/libs/system_interface` is the live web UI the user is looking at right now
+`system/apps/system_interface` is the live web UI the user is looking at right now
 (the dockview shell, the chat panels, the progress view). A broken build here is
 served straight to the user, so you never edit the served copy directly: you
 make every change in an **isolated worktree clone**, verify it builds and passes
@@ -23,7 +23,7 @@ preview and reveal are owned here.
 ## The hard rule
 
 **Never edit the system-interface tree that is being served to the user.** Do
-not run `Edit`/`Write` on files under `system/libs/system_interface/` in this (the
+not run `Edit`/`Write` on files under `system/apps/system_interface/` in this (the
 served) checkout, and do not rebuild or restart the live UI from uncommitted
 edits here. Every change is made in a separate, isolated clone of the source,
 built and tested there, and merged back only after it passes. The only things
@@ -60,7 +60,7 @@ is just the mechanism for that safe, separate place to work.
 
 **Check for a concurrent system-interface pass first.** Passes here are named
 per-slug, so two can coexist without colliding on names -- but both edit
-`system/libs/system_interface`, so whichever merges second is guaranteed stale (see
+`system/apps/system_interface`, so whichever merges second is guaranteed stale (see
 the freshness check in Step 4). Look for another pass in flight:
 
 ```bash
@@ -214,12 +214,12 @@ If the user **approves** the preview:
    preview verdict (that wait happens *before* this step).
 
 2. **Freshness check** -- the branch is only mergeable if
-   `system/libs/system_interface/` has not changed since the worker branched (for
+   `system/apps/system_interface/` has not changed since the worker branched (for
    example, another pass merged in the meantime):
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only "$BASE" HEAD -- system/libs/system_interface/
+   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale --
@@ -263,7 +263,7 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 - **Classifies** what the merge changed (frontend source, frontend manifest,
   backend source, backend manifest).
 - **Refreshes dependencies only if a manifest changed** -- `npm ci` for the
-  frontend, `uv tool install -e system/libs/system_interface --reinstall` for the
+  frontend, `uv tool install -e system/apps/system_interface --reinstall` for the
   backend. This is essential: a plain restart does *not* re-resolve the
   editable-installed tool's dependencies, so a backend dependency addition would
   otherwise crash the service on restart.

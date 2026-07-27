@@ -22,7 +22,7 @@ refreshed. The live change loop below handles both.
 If you're doing something *other* than editing an existing service:
 
 - **Creating a new web view** -> `build-web-service`.
-- **Changing the workspace UI itself** (`system/libs/system_interface` -- the
+- **Changing the workspace UI itself** (`system/apps/system_interface` -- the
   dockview shell, chat panels, progress view) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
   reveals only when known-good).
@@ -301,7 +301,7 @@ exactly as `build-web-service`'s Step 5 gates on the working site.)
   gates, merges, and refreshes the tab on go-live.
 - **The service errored or produced a wrong result and you worked around
   it** -> invoke `heal-artifact` (artifact = service) at turn-end instead.
-- **The workspace UI (`system/libs/system_interface`)** -> `update-system-interface`
+- **The workspace UI (`system/apps/system_interface`)** -> `update-system-interface`
   owns its own preview-before-merge and safe-reveal go-live; use it rather
   than this flow.
 

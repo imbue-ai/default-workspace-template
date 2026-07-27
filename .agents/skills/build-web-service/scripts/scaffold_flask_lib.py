@@ -394,7 +394,7 @@ def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
     # because supervisord exec's commands directly (no shell) and this one chains
     # forward_port.py with `&&`; the `oom_tag_service.py user` prefix tags the
     # new (user-created) service so it is shed before any built-in service under
-    # memory pressure (see system/libs/oom_priority/README.md).
+    # memory pressure (see system/services/oom_priority/README.md).
     path = repo_root / "system/supervisord.conf"
     if not path.exists():
         sys.exit(f"error: {path} not found (cannot register the new service)")

@@ -48,7 +48,7 @@ To add, change, or remove a service, edit `system/supervisord.conf` and run
 
 ## Environment convergence (env-converge)
 
-Package deferral now lives in `system/libs/env_converge`: the one-shot `env-converge`
+Package deferral now lives in `system/services/env_converge`: the one-shot `env-converge`
 supervisord program runs every `system/scripts/env.d/<NNNN>-<name>.sh` unit (each
 idempotent with a fast satisfied-check -- no marker files) and converges the
 rootfs back to the environment record at the pinned apt snapshot timestamp.
@@ -62,5 +62,5 @@ tries to use one before its unit has finished, it fails loudly -- that is
 acceptable. Check `supervisorctl status env-converge`,
 `/var/log/supervisor/env-converge-stdout.log`, or the concrete satisfied
 condition (e.g. `test -x /opt/fortress/tilion-fortress/tilion`) before using
-browser automation in a fresh workspace. See `system/libs/env_converge/README.md`
+browser automation in a fresh workspace. See `system/services/env_converge/README.md`
 for the full contract.

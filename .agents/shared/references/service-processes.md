@@ -68,7 +68,7 @@ that launched supervisord -- you do not need a per-program `environment=`.
 ## OOM priority (memory-pressure shedding)
 
 A background `earlyoom` daemon sheds processes when the container runs low on
-memory, most-expendable first (see `system/libs/oom_priority/README.md`). Prefix every
+memory, most-expendable first (see `system/services/oom_priority/README.md`). Prefix every
 service `command` with `python3 system/scripts/oom_tag_service.py user` so a
 **user-created** service is shed *before* any built-in service (the UI, tunnel,
 terminal, backups) under memory pressure -- those are the workspace's lifelines

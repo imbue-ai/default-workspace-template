@@ -81,7 +81,7 @@ Adding a Python proxy in front of the third-party server adds a hop,
 costs an extra process, and complicates WebSocket and streaming
 behavior. Use the escape hatch instead.
 
-Do not extend `system/libs/system_interface/` to add a new view. That app runs
+Do not extend `system/apps/system_interface/` to add a new view. That app runs
 the top-level workspace UI; new web views go in their own scaffolded lib
 under `creations/<your-package>/` so they get an isolated tab and prefix.
 
@@ -175,7 +175,7 @@ What gets updated:
   directly (no shell) and this one chains `forward_port.py` with `&&`. The
   `oom_tag_service.py user` prefix tags this user-created service so it is
   shed before any built-in service under memory pressure (see
-  `system/libs/oom_priority/README.md`).
+  `system/services/oom_priority/README.md`).
 
 supervisord does not watch the config, so tell it to pick up the new
 program, then confirm it is running:
@@ -413,7 +413,7 @@ commands directly (no shell), so wrap any command that chains with `&&`
 in `bash -c "..."`, and prefix the whole thing with
 `python3 system/scripts/oom_tag_service.py user` so this user-created service is
 shed before any built-in service under memory pressure (see
-`system/libs/oom_priority/README.md`):
+`system/services/oom_priority/README.md`):
 
 ```ini
 [program:<name>]

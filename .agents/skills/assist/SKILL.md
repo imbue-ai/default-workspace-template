@@ -53,7 +53,7 @@ git log --grep="^update-self:" --oneline
 
 - **Fixable from here** -- you run inside this container, so you can change and use (*how* you apply each fix safely differs by artifact -- see step 5):
   - user code,
-  - template built-in code (e.g. `system/libs/system_interface`, skills, scripts), and
+  - template built-in code (e.g. `system/apps/system_interface`, skills, scripts), and
   - `system/vendor/mngr/` code, **but only** when the fix changes how mngr behaves *inside this container* (the container runs from this checkout).
 - **Not fixable from here (give up on the fix)** -- the fix would require a new build of the outer minds desktop app, which you cannot produce. This is anything in the *installed outer app*:
   - `system/vendor/mngr/apps/minds` (the desktop app itself),
@@ -77,7 +77,7 @@ If the issue is **not fixable from here** (per B -- it lives in the installed ou
 
 If it **is fixable from here**, unblock the user fast, then harden in the background. *How* you apply the fix depends on the artifact:
 
-- **`system/libs/system_interface`** (the workspace UI: dockview shell, chat panels, progress view): **never edit it directly here.** Because your checkout is the one being served, a hand-edit-and-rebuild can take the user's entire UI down with no surface left to show an error. Route the fix through the **`update-system-interface`** skill, whose preview lets the user approve the change and whose reveal step pre-flights on a throwaway port and auto-rolls-back on failure -- the only safe go-live for the UI. Since `/assist` shares the work dir and can spawn the worker, you drive that flow yourself.
+- **`system/apps/system_interface`** (the workspace UI: dockview shell, chat panels, progress view): **never edit it directly here.** Because your checkout is the one being served, a hand-edit-and-rebuild can take the user's entire UI down with no surface left to show an error. Route the fix through the **`update-system-interface`** skill, whose preview lets the user approve the change and whose reveal step pre-flights on a throwaway port and auto-rolls-back on failure -- the only safe go-live for the UI. Since `/assist` shares the work dir and can spawn the worker, you drive that flow yourself.
 - **A skill, or a web service whose code is broken:** make the quick fix live so the user is unblocked now, then at turn-end defer the hardening (tests, review gates, isolated verification) to the **`heal-artifact`** skill rather than treating your inline edit as the finished article. Use **`edit-services`** instead if the fix is to add/remove/reconfigure a service rather than repair its code.
 - **User-written code:** make the fix live and verify it actually resolves the problem (run it -- don't assume). This is the user's own code, so there is no lifecycle skill to defer to; just tell them what you changed.
 
@@ -126,7 +126,7 @@ Always confirm the diagnosis and plan with the user (step 4) before applying any
 | Cause is...                                   | How to fix it                                                                 | Report to imbue? |
 |-----------------------------------------------|-------------------------------------------------------------------------------|------------------|
 | User-created code                             | Fix live, verify it works                                                     | No               |
-| Template built-in: `system/libs/system_interface`    | Route through `update-system-interface` (never edit the served tree directly) | Yes              |
+| Template built-in: `system/apps/system_interface`    | Route through `update-system-interface` (never edit the served tree directly) | Yes              |
 | Template built-in: a skill or web service     | Quick live fix, then defer hardening to `heal-artifact` (`edit-services` for service config) | Yes |
 | Other template built-in (scripts, etc.)       | Fix live, verify it works                                                     | Yes              |
 | `system/vendor/mngr` affecting this container         | Fix live, verify it works                                                      | Yes              |
