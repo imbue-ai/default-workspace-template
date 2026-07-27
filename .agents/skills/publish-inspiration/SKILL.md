@@ -953,16 +953,21 @@ Interpret the trailing status code:
 - **200** -- the repo validated; report the publish as "published and
   validated" in your final message.
 - **422** -- the repo exists but failed validation; the JSON body's
-  `failures` list names each failed check with an explanation. This means
-  something slipped through the pre-push gates: fix the named files in `$WT`,
-  commit there, then re-run step 2's mint with a forced ref update -- the same
-  command with the refspec `"+${SNAPSHOT_COMMIT}:refs/heads/main"` -- and
-  re-run this validation. (This immediate fix-and-force-push is sanctioned
-  ONLY here, before the publish has been announced to the user: `main` still
-  carries exactly one snapshot commit on the base afterwards. A later fix to
-  an already-announced inspiration goes through
-  `update-published-inspiration` instead.) Do not report the publish as
-  complete while the validator still reports failures.
+  `failures` list names each failed check with an explanation. Route the fix
+  by the check id: a `github-topic` failure means step 3's topic `PUT` did not
+  stick -- re-run that call, not a file edit. Every file-level failure
+  (manifest front-matter, thumbnail, FILL-IN markers, missing template files)
+  means something slipped through the pre-push gates: fix the named files in
+  `$WT`, commit there, then re-run step 2's mint with a forced ref update --
+  the same command with the refspec `"+${SNAPSHOT_COMMIT}:refs/heads/main"`
+  -- and re-run this validation. (This immediate fix-and-force-push is
+  sanctioned ONLY here, before the publish has been announced to the user:
+  `main` still carries exactly one snapshot commit on the base afterwards. A
+  later fix to an already-announced inspiration goes through
+  `update-published-inspiration` instead.) A failure you cannot map to either
+  remedy is a validator/flow mismatch: report it plainly as a follow-up
+  rather than guessing. Do not report the publish as complete while the
+  validator still reports fixable failures.
 - **404** -- GitHub may not have propagated the fresh repo yet: wait ~30
   seconds, retry once, and if it still 404s report it as a minor follow-up
   (the publish itself already succeeded).
