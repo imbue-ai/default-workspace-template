@@ -95,7 +95,7 @@ cleanup_seed_source() {
 seed_home_skeleton() {
     # Shared with the lima/modal provisioning path so every provider produces
     # the same home layout; the workspace copy is in place by this point.
-    sh "$SEED_TARGET/scripts/seed_home_skeleton.sh"
+    sh "$SEED_TARGET/system/scripts/seed_home_skeleton.sh"
 }
 
 set -e
