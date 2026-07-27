@@ -87,9 +87,9 @@ manage-scheduled-tasks and check-app-errors skills.
 
 **Surfacing scheduled agents in the workspace** needs no UI changes at all:
 right after its first message of each run, the woken agent surfaces its own
-chat tab (focused) with one best-effort `system/scripts/layout.py open` call -- after
-the message, so the tab never pops up empty -- the same existing
-mechanism web apps are surfaced with. Doing it from inside the agent avoids
+chat tab (focused) with a best-effort `system/scripts/layout.py open --layout <name>`
+call per named layout -- after the message, so the tab never pops up empty -- the
+same existing mechanism web apps are surfaced with. Doing it from inside the agent avoids
 the create-time race where the browser has not yet learned a brand-new agent.
 
 Adds the recurring-job substrate for scheduled work: `system/scripts/run_job.sh`, a completion-tracked runner ticked every minute by cron -- any cadence (`--every 15m` to `7d`, `--at <hour>` for daily-or-coarser), catch-up after downtime, and retry of runs that failed or were killed mid-flight (only a completed run covers a window; state under `data/.state/jobs/`). Durable schedule entries live in `data/.state/cron.d/` and are reinstalled into `/etc/cron.d/` at each boot.
