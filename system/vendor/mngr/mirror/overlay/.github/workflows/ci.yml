@@ -1,0 +1,43 @@
+# Public-mirror CI: lint plus the infrastructure-free test subset.
+# GitHub-hosted runners only; no secrets, no self-hosted labels.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv run ruff check --force-exclude .
+      - run: uv run ruff format --check --force-exclude .
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: extractions/setup-just@v2
+      # Binaries the test subset shells out to (the private CI's offload
+      # image bundles these).
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq restic
+      # --locked also validates the committed public uv.lock against the tree.
+      - run: uv sync --locked --all-packages
+      # The three --deselect entries fail only in this runner environment;
+      # tracked as mngr-internal issues 84 (gcloud contract), 85 (gc chmod
+      # injection), 86 (plugin catalog vs installed set).
+      - run: just test-quick "-m 'not tmux and not modal and not docker and not docker_sdk and not unison and not acceptance and not release and not minds_deployment and not minds_services and not minds_snapshot_resume and not sdk_live' --deselect libs/mngr_gcp/imbue/mngr_gcp/config_test.py::test_get_gcloud_compute_zone_honors_contract --deselect libs/mngr/imbue/mngr/cli/test_gc.py::test_gc_exits_with_cause_specific_code_when_work_dir_cleanup_fails --deselect libs/mngr/imbue/mngr/plugins/plugin_isolation/no_plugins/no_plugins_test.py::test_all_cataloged_plugins_are_blocked"
+        env:
+          # Match the job timeout so the pytest global duration guard does not
+          # fail a passing-but-slow run.
+          PYTEST_MAX_DURATION_SECONDS: "2400"

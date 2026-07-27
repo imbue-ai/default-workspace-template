@@ -1,0 +1,1 @@
+The browser profile root's default moves with the layout cutover: `MNGR_HOST_DIR` now resolves to `/home/user/.mngr`, so profiles default to `/home/user/.mngr/browser-profiles` (still overridable via `BROWSER_PROFILE_ROOT`).

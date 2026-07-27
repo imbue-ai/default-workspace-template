@@ -1,0 +1,56 @@
+{#def is_mac, is_authenticated, mngr_forward_origin, initial_workspaces, accent="", crumb_workspace_name="", crumb_agent_id="" #}
+{#
+  Persistent chrome page (titlebar + sidebar + content iframe).
+
+  The titlebar + browser-mode switcher + accent / chrome.js wiring live in the
+  shared ChromeShell layout; this page fills ChromeShell's content slot with the
+  browser-mode content surface (the #content-frame iframe, backed by the white
+  mirror). In Electron mode the iframe and embedded browser-mode switcher are
+  hidden via JS; the content is a separate WebContentsView, and the switcher page
+  is loaded into the shared modal WebContentsView when opened.
+
+  is_mac controls macOS-specific styling (traffic-light padding, hidden window
+  controls). mngr_forward_origin is exposed to page-level JS via a data attribute
+  on the body so chrome.js can build workspace links that target the plugin's
+  port directly.
+#}
+{# Body background tracks --titlebar-bg (ChromeShell's agent-surface default) so
+   the iframe's rounded top corners (browser mode) and the chromeView's extension
+   strip (Electron mode) both reveal accent color through the curve. Falls back to
+   the neutral app surface (surface-primary -- white in light, black in dark) when
+   no workspace is active. #}
+<ChromeShell title="Minds"
+             :is_mac="is_mac"
+             :is_authenticated="is_authenticated"
+             :mngr_forward_origin="mngr_forward_origin"
+             :is_agent_content_surface="True"
+             :accent="accent"
+             :crumb_workspace_name="crumb_workspace_name"
+             :crumb_agent_id="crumb_agent_id"
+             :active_tab="'workspace' if crumb_agent_id else ''">
+  {# White "mirror" sized exactly like the Electron contentView (left:4
+     / top:38 / right:4 / bottom:4 / radius:12 -- matches CONTENT_INSET
+     and CONTENT_CORNER_RADIUS in electron/main.js). Sits behind the
+     iframe in browser mode (the iframe covers it completely so it's
+     invisible there) and shows through in Electron mode whenever the
+     WebContentsView's compositor surface goes briefly transparent --
+     which Chromium does on cross-origin history navigation
+     (goBack/goForward between Home and a workspace), between the old
+     frame tearing down and the new frame's first paint. Without this
+     mirror the chromeView body's accent color would flash through.
+     Pointer-events:none so it never intercepts clicks. #}
+  <div id="content-bg-mirror"
+       class="fixed left-[4px] top-[38px] rounded-[12px] bg-surface-primary pointer-events-none"
+       style="width: calc(100% - 8px); height: calc(100% - 42px);"></div>
+
+  {# No eager src: chrome.js arms it (data-content-src) in BROWSER mode only.
+     In Electron the iframe is hidden and must never load -- an eager src="/"
+     kicked off a hidden Landing load on every wrapper mount, whose subframe
+     load activity flipped the chrome webContents into a "loading" state that
+     demoted subsequent hub navigations from in-place swaps to full loads
+     (the titlebar flash), and wasted a Landing render + SSE stream. #}
+  <iframe id="content-frame"
+          data-content-src="/"
+          class="fixed left-[4px] top-[38px] border-0 rounded-[12px] bg-surface-primary"
+          style="width: calc(100% - 8px); height: calc(100% - 42px); box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset;"></iframe>
+</ChromeShell>

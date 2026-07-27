@@ -16,7 +16,7 @@ is not where worker bugs get fixed.
 - User rejected the worker's Gate 2 proposal and the worker stopped instead
   of iterating.
 - For harden workers (crystallize / update / heal): the pushed report at
-  `runtime/harden/<slug>/reports/report.md` has frontmatter
+  `data/.tasks/harden/<slug>/reports/report.md` has frontmatter
   `type: status, name: stuck`, or the 30m poll timeout tripped without
   any report arriving. The first case is the worker explicitly giving
   up (the report body names a reason); the second means the worker

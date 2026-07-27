@@ -1,0 +1,189 @@
+# Copybara configuration: one-way filtered export from imbue-ai/mngr-internal
+# (private source of truth) to imbue-ai/mngr (public mirror).
+#
+# Design: specs/private-repo-public-mirror/spec.md. Operation: mirror/README.md.
+
+SOT_REPO = "https://github.com/imbue-ai/mngr-internal.git"
+PUBLIC_REPO = "https://github.com/imbue-ai/mngr.git"
+
+# Allowlist of the public subset. Anything not matched here never leaves the
+# private repo, including paths that do not exist yet. Every lib is listed
+# individually so a newly created libs/* directory stays private until it is
+# deliberately added here.
+PUBLIC_FILES = glob(
+    include = [
+        "README.md",
+        "LICENSE",
+        "style_guide.md",
+        "conftest.py",
+        ".gitignore",
+        ".pre-commit-config.yaml",
+        "justfile",
+        "test_meta_ratchets.py",
+        # Public-only variants, moved onto the destination root by the
+        # overlay transform below.
+        "mirror/overlay/pyproject.toml",
+        "mirror/overlay/uv.lock",
+        "mirror/overlay/.github/workflows/ci.yml",
+        # All PyPI-published libs, plus skitwright (unpublished but imported
+        # by libs/mngr's e2e tests). Absent by design: mngr_tmr,
+        # mngr_mapreduce, mngr_claude_subagent_proxy (internal-only).
+        "libs/concurrency_group/**",
+        "libs/imbue_common/**",
+        "libs/mngr/**",
+        "libs/mngr_antigravity/**",
+        "libs/mngr_aws/**",
+        "libs/mngr_azure/**",
+        "libs/mngr_claude/**",
+        "libs/mngr_claude_usage/**",
+        "libs/mngr_codex/**",
+        "libs/mngr_codex_usage/**",
+        "libs/mngr_file/**",
+        "libs/mngr_forward/**",
+        "libs/mngr_gcp/**",
+        "libs/mngr_imbue_cloud/**",
+        "libs/mngr_kanpan/**",
+        "libs/mngr_latchkey/**",
+        "libs/mngr_lima/**",
+        "libs/mngr_modal/**",
+        "libs/mngr_notifications/**",
+        "libs/mngr_opencode/**",
+        "libs/mngr_opencode_usage/**",
+        "libs/mngr_ovh/**",
+        "libs/mngr_pair/**",
+        "libs/mngr_pi_coding/**",
+        "libs/mngr_pi_coding_usage/**",
+        "libs/mngr_recursive/**",
+        "libs/mngr_robinhood/**",
+        "libs/mngr_schedule/**",
+        "libs/mngr_ttyd/**",
+        "libs/mngr_tutor/**",
+        "libs/mngr_usage/**",
+        "libs/mngr_vps/**",
+        "libs/mngr_vultr/**",
+        "libs/mngr_wait/**",
+        "libs/modal_proxy/**",
+        "libs/overlay/**",
+        "libs/resource_guards/**",
+        "libs/skitwright/**",
+        # Product apps are public. Deployment/infra apps (modal_litellm,
+        # remote_service_connector) and internal tools (slack_exporter) are
+        # absent by design.
+        "apps/minds/**",
+        # scripts/ public subset: each entry is referenced by public code,
+        # docs, or the shipped wheel (see the spec's boundary table). The
+        # subset is import-self-contained: no file here imports a scripts/
+        # module outside this list.
+        "scripts/__init__.py",
+        "scripts/install.sh",
+        "scripts/post-source-setup.sh",
+        "scripts/make_tar_of_repo.sh",
+        "scripts/open_issue.py",
+        "scripts/open_issue_test.py",
+        "scripts/mngr",
+        "scripts/check_mngr_shim.sh",
+        "scripts/make_cli_docs.py",
+        "scripts/make_cli_docs_test.py",
+        "scripts/compile_style_guide.py",
+        "scripts/style_guide.py",
+        "scripts/make_agent_capabilities_doc.py",
+        "scripts/make_agent_capabilities_doc_test.py",
+        "scripts/current_branch.sh",
+        "scripts/check_changelog_entries.py",
+        "scripts/check_changelog_entries_test.py",
+        "scripts/changelog_projects.py",
+        "scripts/changelog_projects_test.py",
+    ],
+    exclude = [
+        # The runnable cloud deployment-test suite and internal agent
+        # instructions. The env/config packages (imbue/minds/envs,
+        # imbue/minds/config/envs) and the imbue/minds/deployment_tests
+        # helper package stay public: the app conftest and collectable
+        # tests import them.
+        "apps/minds/CLAUDE.md",
+        "apps/minds/deployment_tests/**",
+        "apps/minds/test_aws_workspace_release.py",
+    ],
+)
+
+# File-level transforms: map the overlay onto the destination root and strip
+# marked internal blocks from file contents.
+CODE_TRANSFORMS = [
+    core.move("mirror/overlay", "", overwrite = True),
+    # IGNORE_NOOP: a tree with no marked blocks is the normal case, not an
+    # error.
+    core.transform(
+        [
+            core.replace(
+                before = "${block}",
+                after = "",
+                multiline = True,
+                regex_groups = {"block": "(?m)^.*BEGIN-INTERNAL[\\w\\W]*?END-INTERNAL.*$\\n?"},
+            ),
+        ],
+        # The sync is one-way; block deletion has no meaningful reversal.
+        reversal = [],
+        noop_behavior = "IGNORE_NOOP",
+    ),
+    # Fail-closed backstop: any marker that survives the strip (unterminated
+    # or mismatched block) aborts the migration instead of leaking.
+    core.verify_match(
+        regex = "(BEGIN|END)-INTERNAL",
+        verify_no_match = True,
+    ),
+]
+
+# Message transforms: delete INTERNAL: sections (everything from the marker to
+# the end of the message; keep trailers ABOVE any INTERNAL: block), then
+# rewrite bare #N references so private numbering is inert on the public repo
+# (plain text, no autolink, no closing keyword). The left-context guard keeps
+# the rewrite idempotent and leaves qualified references (imbue-ai/mngr#N,
+# other-repo#N) untouched — writing "Fixes imbue-ai/mngr#N" is the deliberate
+# way to close a public issue from a private commit.
+MESSAGE_TRANSFORMS = [
+    metadata.scrubber("(^|\\n)INTERNAL:(.|\\n)*"),
+    metadata.scrubber("(^|[^\\w/-])#([0-9]+)", replacement = "$1mngr-internal#$2"),
+]
+
+core.workflow(
+    name = "push",
+    mode = "ITERATIVE",
+    origin = git.origin(
+        url = SOT_REPO,
+        ref = "main",
+    ),
+    destination = git.destination(
+        url = PUBLIC_REPO,
+        fetch = "main",
+        push = "main",
+        # Created only when a commit carries a RELEASE_TAG=v* trailer
+        # (written by scripts/release.py); best-effort otherwise.
+        tag_name = "${RELEASE_TAG}",
+        tag_msg = "${RELEASE_TAG}",
+    ),
+    origin_files = PUBLIC_FILES,
+    # The sync bot owns the entire public tree: any destination file the
+    # filtered origin does not produce is deleted on sync.
+    destination_files = glob(["**"]),
+    # Fail instead of silently overwriting if the destination moved since the
+    # last recorded GitOrigin-RevId.
+    check_last_rev_state = True,
+    authoring = authoring.pass_thru("Imbue <dev@imbue.com>"),
+    transformations = CODE_TRANSFORMS + MESSAGE_TRANSFORMS,
+)
+
+# Writes the filtered public tree to --folder-dir: used to regenerate the
+# overlay uv.lock and to run the public-buildability checks.
+core.workflow(
+    name = "materialize",
+    mode = "SQUASH",
+    origin = git.origin(
+        url = SOT_REPO,
+        ref = "main",
+    ),
+    destination = folder.destination(),
+    origin_files = PUBLIC_FILES,
+    destination_files = glob(["**"]),
+    authoring = authoring.pass_thru("Imbue <dev@imbue.com>"),
+    transformations = CODE_TRANSFORMS,
+)

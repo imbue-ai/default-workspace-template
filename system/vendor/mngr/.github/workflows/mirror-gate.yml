@@ -1,0 +1,40 @@
+# Private-repo gate for the public-mirror machinery: the filtered public tree
+# must stay buildable and the committed overlay artifacts fresh. This workflow
+# never syncs anywhere; it materializes into a scratch folder only.
+name: Mirror gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: mirror-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # copybara fetches from this checkout's gitdir; a shallow clone
+          # cannot serve that fetch.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Fetch pinned copybara
+        run: |
+          curl -sL -o /tmp/copybara_deploy.jar \
+            https://github.com/google/copybara/releases/download/v20260720/copybara_deploy.jar
+          echo "e94448c702addc17cfc45d4bbfc8509d458b9a25f4715e3e77207ad570e1075d  /tmp/copybara_deploy.jar" | shasum -a 256 -c -
+      - name: Materialize the public tree, verify lock freshness and buildability
+        run: |
+          # materialize works from a branch; actions/checkout leaves a detached HEAD
+          git checkout -B ci-materialize
+          mirror/materialize_public_tree.sh /tmp/copybara_deploy.jar /tmp/public-tree --lock --check
+          git diff --exit-code mirror/overlay/uv.lock

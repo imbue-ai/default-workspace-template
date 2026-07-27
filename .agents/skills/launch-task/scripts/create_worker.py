@@ -46,7 +46,7 @@ report without a code change.
 
 The caller is responsible for writing the task file (with whatever YAML
 frontmatter the worker template requires) and for placing it -- and any
-gitignored auxiliary state -- under ``runtime/<feature>/<slug>/`` before
+gitignored auxiliary state -- under ``data/.tasks/<feature>/<slug>/`` before
 calling ``launch``. This script orchestrates the lifecycle commands; it does
 not compose task content.
 
@@ -285,7 +285,7 @@ def rsync_dir(name: str, source_dir: Path, runner: Runner) -> None:
 
     - The local SOURCE is ``./``-prefixed when ``source_dir`` is relative.
       ``mngr rsync`` only treats a path starting with ``/``, ``./``, ``../`` or
-      ``~/`` as local; a bare ``runtime/foo/`` would be misparsed as an *agent
+      ``~/`` as local; a bare ``data/foo/`` would be misparsed as an *agent
       name* and the command would fail.
     - The agent DESTINATION keeps the bare repo-relative path. mngr resolves a
       relative agent ``:PATH`` against the worker's workdir (its worktree root),
@@ -306,6 +306,33 @@ def rsync_dir(name: str, source_dir: Path, runner: Runner) -> None:
     )
 
 
+def _worktree_is_clean(runner: Runner) -> bool:
+    """Whether the current git working tree has no uncommitted changes.
+
+    The worker is created from the lead's committed HEAD (``mngr create``
+    branches from the current commit and defaults to ``--ensure-clean``), so any
+    uncommitted change in the lead's tree is invisible to the worker *and* makes
+    the subsequent ``mngr create`` abort outright. We check up front through the
+    same ``git status --porcelain`` mngr uses, so a dirty tree surfaces as an
+    actionable message rather than an opaque ``CalledProcessError``.
+
+    Returns ``True`` (clean -- proceed) when git reports no changes, and also
+    when the command fails (not a git repo, or git unavailable): there is
+    nothing for us to gate on, and if ``mngr create`` later needs a repo it
+    surfaces its own error. Any porcelain output -- including untracked files,
+    which mngr also treats as dirty -- means dirty.
+    """
+    result = runner.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if getattr(result, "returncode", 0) != 0:
+        return True
+    return not (getattr(result, "stdout", "") or "").strip()
+
+
 def launch(
     name: str,
     template: str,
@@ -322,9 +349,13 @@ def launch(
     message, since those are caller-supplied paths. So does a leftover file at
     the task's ``finish_report_path`` -- a stale report from a previous run
     would satisfy ``await`` instantly, so launch refuses until the caller has
-    confirmed it was handled and moved it aside. Malformed task-file
-    frontmatter instead raises ``ValueError`` (full traceback) -- that's a bug
-    in how the task file was composed, not a bad CLI argument.
+    confirmed it was handled and moved it aside. So does a dirty working tree:
+    the worker branches from committed HEAD, so uncommitted changes never reach
+    it (and ``mngr create`` refuses a dirty tree anyway) -- launch stops with an
+    actionable "commit first" message rather than letting that surface as an
+    opaque ``mngr create`` failure. Malformed task-file frontmatter instead
+    raises ``ValueError`` (full traceback) -- that's a bug in how the task file
+    was composed, not a bad CLI argument.
 
     ``state_dir`` is the lead's ``MNGR_AGENT_STATE_DIR``; when set, the
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
@@ -374,6 +405,23 @@ def launch(
         )
         return 2
 
+    # A dirty working tree is fatal: the worker is created from committed HEAD,
+    # so uncommitted changes never reach it, and ``mngr create`` refuses a dirty
+    # tree regardless. Catch it here with an actionable message. Commit -- never
+    # stash: stashed work silently drops out of multi-agent coordination and
+    # gets lost.
+    if not _worktree_is_clean(runner):
+        print(
+            f"create_worker: refusing to launch {name}: the working tree has "
+            "uncommitted changes. The worker is created from your committed "
+            "HEAD, so uncommitted changes never reach it (and `mngr create` "
+            "refuses a dirty tree). Commit your changes -- do NOT stash "
+            "(stashed work gets lost during multi-agent coordination) -- then "
+            "relaunch.",
+            file=sys.stderr,
+        )
+        return 2
+
     runner.run(
         [
             "mngr",
@@ -419,18 +467,18 @@ def _oom_priority_src() -> Path:
     hooks reach by adding its ``src`` dir to ``sys.path`` (it is not a declared
     dependency anywhere); this script does the same. We locate ``src`` by
     walking up to the repo root -- the ancestor that contains
-    ``libs/oom_priority/src`` -- rather than counting a fixed number of parent
+    ``system/libs/oom_priority/src`` -- rather than counting a fixed number of parent
     directories, so the lookup keeps working if this script is ever relocated
     within the repo. Raises ``RuntimeError`` if it can't be found, since the
     package is always present in the repo and its absence is a real
     misconfiguration, not a condition to paper over.
     """
     for ancestor in Path(__file__).resolve().parents:
-        candidate = ancestor / "libs" / "oom_priority" / "src"
+        candidate = ancestor / "system" / "libs" / "oom_priority" / "src"
         if candidate.is_dir():
             return candidate
     raise RuntimeError(
-        f"could not locate libs/oom_priority/src above {Path(__file__).resolve()}"
+        f"could not locate system/libs/oom_priority/src above {Path(__file__).resolve()}"
         " -- the launch-task script must run from within the template repo"
     )
 
