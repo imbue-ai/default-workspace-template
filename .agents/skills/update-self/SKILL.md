@@ -591,7 +591,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
     is landed.)
 
 - **`shared_runtime` (`system/scripts/**` other than the provisioning scripts above,
-  `system/libs/**`, `system/apps/**`, `.agents/**`)** -- applies to
+  `system/libs/**`, `system/services/**`, `system/apps/**`, `.agents/**`)** -- applies to
   future agents automatically unless a live service depends on the file. The
   report's impact analysis names any live consumer; restart that service
   (usually `mngr start --restart system-services`). Only "nothing to reveal"

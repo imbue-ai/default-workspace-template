@@ -130,11 +130,12 @@ local question of who depends on the file.
 
 No script can enumerate what depends on a changed file -- this is exploration
 work, and you must do it for every changed `system/scripts/**`, `system/libs/**`,
-`system/apps/**`, and `.agents/**` path. Build the impact set like this:
+`system/services/**`, `system/apps/**`, and `.agents/**` path. Build the impact
+set like this:
 
 1. **Enumerate the consumer universe** up front, independent of the diff: every
    `system/supervisord.conf` program (and everything its `command` invokes, directly or
-   through a wrapper), every service under `system/libs/` and `system/apps/`, every workspace-added skill
+   through a wrapper), every app or service under `system/services/` and `system/apps/`, every workspace-added skill
    under `.agents/skills/` (e.g. a crystallized `fetch-process-show` pipeline
    whose scripts a daemon or scheduled job runs), and any cron/scheduled
    runners.
@@ -151,8 +152,9 @@ work, and you must do it for every changed `system/scripts/**`, `system/libs/**`
    you checked and how, so the lead sees the coverage instead of trusting an
    unstated search.
 5. **When you label a lib or skill "workspace-added," verify it -- do not infer
-   it from the directory.** The layout is a strong hint (`system/libs/` holds
-   built-in template services, `system/apps/` holds workspace-built ones), but
+   it from the directory.** The layout is a strong hint (`system/libs/` and
+   `system/services/` hold only built-in template packages; workspace-built
+   apps land in `system/apps/` next to the built-in ones), but
    the check is provenance: a path is built-in if it exists at the target ref;
    check before labeling: `git ls-tree -r --name-only "$TARGET_REF" -- <dir>`
    (empty output = genuinely workspace-added). This matters because only
@@ -242,14 +244,14 @@ workspace and other agents run on. So decide by the **provenance** of the
 dependent -- does its code come from the upstream template, or was it built in
 this workspace? Decide this by *origin, not directory*: the layout is only a
 hint (a workspace's own `build-app` app lands under `system/apps/`, and
-the template's built-in services under `system/libs/`, but an adapted
+the template's built-in services under `system/services/`, but an adapted
 inspiration can bring third-party creations along). The check is whether the
 dependent's code exists in upstream at the target ref -- e.g. `git cat-file -e
 "$TARGET_REF":<path>` for its files, or whether it's part of the merge base's
 template rather than added locally.
 
 - **Dependent is built-in code** (present in the upstream template at the target
-  ref -- e.g. `system/apps/system_interface`, a template-shipped `system/libs/*` service, a
+  ref -- e.g. `system/apps/system_interface`, a template-shipped `system/services/*` service, a
   `.agents/shared/` script): **classify it live-applicable and report that** -- the
   upstream release tested that built-in code against the bumped dependency
   *together*, so it's safe to apply on the same "trust upstream's testing" basis
@@ -301,7 +303,7 @@ tests, or exercise its scripts -- and called out in the report.
   mode: `bootstrap` is `uv run`-launched, so an unparseable root lock means no
   service in the workspace can start.
 - **Suites/lint/ratchets** for each project in `projects_to_validate`: root `.`
-  (`uv run pytest` + `uv run ruff check`) covers `system/libs/**`, `system/apps/**`, `system/scripts/**`,
+  (`uv run pytest` + `uv run ruff check`) covers `system/libs/**`, `system/services/**`, `system/apps/**`, `system/scripts/**`,
   `.agents/**`; `system/apps/system_interface` runs its own `uv run pytest` (and `npm run
   lint && npm run test` when the frontend merged); `system/vendor/mngr` its own `uv run
   pytest`.
