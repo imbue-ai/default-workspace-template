@@ -742,14 +742,9 @@ propagate-changes agent_name:
     fi
     agent_name="{{agent_name}}"
     mngr_host_dir="${MNGR_HOST_DIR}"
-    # Hosts named by the minds app use the workspace name verbatim; older
-    # (pre-declutter) workspaces carried a `-host` suffix. Accept either.
-    container_name="${MNGR_PREFIX:-mngr-}${agent_name}"
+    container_name="${MNGR_PREFIX:-mngr-}${agent_name}-host"
     if ! docker inspect "$container_name" >/dev/null 2>&1; then
-        container_name="${MNGR_PREFIX:-mngr-}${agent_name}-host"
-    fi
-    if ! docker inspect "$container_name" >/dev/null 2>&1; then
-        echo "error: no docker container named '${MNGR_PREFIX:-mngr-}${agent_name}' (or with a '-host' suffix)" >&2
+        echo "error: no docker container named '$container_name'" >&2
         echo "       run \`docker ps\` to see running containers" >&2
         exit 2
     fi
