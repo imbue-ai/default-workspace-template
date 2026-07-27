@@ -931,6 +931,46 @@ this call fails, the publish itself already succeeded -- retry once, and if
 it still fails, report it as a minor follow-up rather than treating the
 publish as failed.)
 
+**Step 3b -- validate the published repo (PUBLIC repos only, right after the
+topic call).** The minds API has a validator that checks a published repo
+against the inspiration contract -- the bootable-template markers, the
+`minds-inspiration` topic, the manifest front-matter, the thumbnail gates, and
+leftover FILL-IN blocks -- exactly as an adopting mind will see it. It reads
+GitHub anonymously, so it can only see PUBLIC repos: when the user chose the
+default private visibility, SKIP this step entirely (a private repo is
+indistinguishable from a missing one to the validator; note in your final
+message that validation is skipped for private repos). Every workspace may
+call it by default (the `minds-inspirations-validate` baseline grant; no
+permission request needed):
+
+```bash
+latchkey curl -s -w '\n%{http_code}' \
+    "http://latchkey-self.invalid/minds-api-proxy/api/v1/inspirations/validate?repo=<owner>/<repo_name>"
+```
+
+Interpret the trailing status code:
+
+- **200** -- the repo validated; report the publish as "published and
+  validated" in your final message.
+- **422** -- the repo exists but failed validation; the JSON body's
+  `failures` list names each failed check with an explanation. This means
+  something slipped through the pre-push gates: fix the named files in `$WT`,
+  commit there, then re-run step 2's mint with a forced ref update -- the same
+  command with the refspec `"+${SNAPSHOT_COMMIT}:refs/heads/main"` -- and
+  re-run this validation. (This immediate fix-and-force-push is sanctioned
+  ONLY here, before the publish has been announced to the user: `main` still
+  carries exactly one snapshot commit on the base afterwards. A later fix to
+  an already-announced inspiration goes through
+  `update-published-inspiration` instead.) Do not report the publish as
+  complete while the validator still reports failures.
+- **404** -- GitHub may not have propagated the fresh repo yet: wait ~30
+  seconds, retry once, and if it still 404s report it as a minor follow-up
+  (the publish itself already succeeded).
+- **Anything else (403, 502, 500, connection failure)** -- the minds app is
+  too old to have the validator or its grant, or GitHub/minds hiccuped: retry
+  once, then report it as a minor follow-up rather than treating the publish
+  as failed.
+
 **Step 4 -- record the version entry in the source workspace (ONLY after the
 push succeeded).** This is the single sanctioned write back to `/home/user/workspace` -- read
 the exception in the CWD-INVARIANT callout at the top of this skill before
