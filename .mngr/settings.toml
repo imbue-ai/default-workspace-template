@@ -788,6 +788,11 @@ extra_window = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $
 # the stop hook must never auto-create PRs or push to origin (the repo-level
 # .reviewer/settings.json likewise disables ci + stop_hook.fetch_and_merge).
 env = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
+# Workers land in a fresh git worktree of the workspace repo (no .venv), so
+# converge it at create like the worktree template does -- otherwise the
+# worker's first `uv run` cold-builds the venv mid-task with root-closure
+# scope. Runs with cwd = the worker's worktree, before the agent launches.
+extra_provision_command = ["uv sync --all-packages"]
 agent_args = [
     "--dangerously-skip-permissions",
     "--append-system-prompt",
@@ -810,6 +815,10 @@ extra_window = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $
 # only, autofix + architecture gates off (handled by skill prompting), CI off.
 env = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
 extra_provision_command = [
+    # Fresh worktree, no .venv -- converge before the agent launches (same
+    # rationale as the worker/worktree templates). First so the venv is ready
+    # before anything else in this list could want it.
+    "uv sync --all-packages",
     "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills",
 ]
 agent_args = [
