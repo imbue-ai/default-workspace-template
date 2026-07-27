@@ -75,7 +75,7 @@ CLEAR_SETTLE_SECONDS=2
 log() { printf '%s run_schedule_agent[%s]: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SKILL" "$*"; }
 
 # Resolve the workspace label so the agent's tab groups with the user's other
-# agents in the minds UI (mirrors libs/bootstrap's create-chat workspace logic:
+# agents in the minds UI (mirrors system/libs/bootstrap's create-chat workspace logic:
 # prefer the services agent's `workspace` label, fall back to the host_name).
 resolve_workspace() {
   python3 - <<'PY'

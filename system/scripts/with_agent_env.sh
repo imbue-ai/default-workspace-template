@@ -9,7 +9,7 @@
 # maintains on the host dir, so this wrapper rebuilds it the same way mngr
 # itself does for agent operations (build_source_env_prefix): source the host
 # env file, then the services agent's own env file on top (agent overrides
-# host), exactly like scripts/minds_start_services_agent.sh. It then puts
+# host), exactly like system/scripts/minds_start_services_agent.sh. It then puts
 # /root/.local/bin (uv, mngr) on PATH, cds to the repo root, and execs the
 # given command.
 #
@@ -22,7 +22,7 @@
 # Every cron job -- the built-in Caretaker entry and any user-added job alike
 # -- should be prefixed with it:
 #
-#   17 3 * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh bash scripts/my_job.sh >> /var/log/supervisor/my-job.log 2>&1
+#   17 3 * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh bash system/scripts/my_job.sh >> /var/log/supervisor/my-job.log 2>&1
 set -euo pipefail
 
 if [ ! -f /home/user/.mngr/env ]; then
@@ -33,7 +33,7 @@ fi
 set -a
 # shellcheck source=/dev/null
 . /home/user/.mngr/env
-host_dir="${MNGR_HOST_DIR:-/mngr}"
+host_dir="${MNGR_HOST_DIR:-/home/user/.mngr}"
 # The services agent (labelled is_primary=true) is the one whose environment
 # background jobs run under; its env file carries the per-agent vars
 # (MNGR_AGENT_ID, MNGR_AGENT_STATE_DIR, ...).

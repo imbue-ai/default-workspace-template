@@ -13,8 +13,8 @@
 #   --every 15m           every 15 minutes, no due-hour concept
 #   --retry-after 2m      gap before retrying a failed run (default 2m)
 #
-# State (two timestamps and a counter, under runtime/ so it survives container
-# recreation and rides the opt-in GitHub sync):
+# State (two timestamps and a counter, under data/.state/ so it survives
+# container recreation and is captured by the restic host backup):
 #   data/.state/jobs/<job-id>/last_attempt   epoch when a run last STARTED
 #   data/.state/jobs/<job-id>/last_success   epoch when a run last COMPLETED (exit 0)
 #   data/.state/jobs/<job-id>/failures       consecutive failed attempts
