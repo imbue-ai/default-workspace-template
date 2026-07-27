@@ -248,6 +248,18 @@ host_dir = "/home/user/.mngr"
 volume_home_path = "/home/user"
 host_log_dir = "/var/log/mngr"
 
+# imbue-cloud bare-metal slice provider (the lima-VM analog of the ovh pool
+# path; the slice bake selects it by create address and passes carve sizing via
+# `-S providers.imbue_cloud_slice.*`). It needs the same user-data-layout knobs
+# as the ovh/vultr blocks: the pool bake creates the services agent with
+# MNGR_HOST_DIR=/home/user/.mngr, so without these the outer provider writes
+# agent state at the legacy /mngr while the workspace (and the bake's finalize
+# `mngr stop`) look in /home/user/.mngr.
+[providers.imbue_cloud_slice]
+host_dir = "/home/user/.mngr"
+volume_home_path = "/home/user"
+host_log_dir = "/var/log/mngr"
+
 # --- Create templates ---
 
 ## these are all for launching the original agent (from outside the sandbox, in the first place)

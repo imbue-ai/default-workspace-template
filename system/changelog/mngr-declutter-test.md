@@ -7,3 +7,5 @@ Fix `system/scripts/write_apt_sources.sh` to resolve the committed `.mngr/apt-sn
 Fix `system/scripts/run_ttyd.sh` the same way: its `REPO_ROOT` also stopped at `system/` after the declutter, so the vendored OSC-52-patched ttyd web client was looked up at a nonexistent `system/system/vendor/...` path and the terminal silently fell back to the stock client (dropping clipboard integration).
 
 Fix `system/scripts/default_workspace_template_seed.sh` to invoke `seed_home_skeleton.sh` at its decluttered `system/scripts/` location: the docker-provider seed step still used the pre-declutter `scripts/` path, so post-create seeding (and with it workspace creation) failed on decluttered images.
+
+Add the missing `[providers.imbue_cloud_slice]` block to `.mngr/settings.toml` with the user-data-layout knobs (`host_dir=/home/user/.mngr`, `volume_home_path=/home/user`, `host_log_dir=/var/log/mngr`): the slice pool bake creates the services agent with `MNGR_HOST_DIR=/home/user/.mngr`, but the slice provider still carved with the legacy `/mngr` layout, so the bake finalize (and any later lease) could not find the baked agent.
