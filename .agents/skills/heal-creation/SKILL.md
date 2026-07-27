@@ -12,10 +12,10 @@ fix, re-run scenarios, and present a single approval gate. Heal is a turn-end
 action -- do not interrupt in-flight work to invoke it; the user's original
 request is already delivered.
 
-## The creation parameter
+## The type parameter
 
-`type` is `skill` (the default) or `service`. The worker reads it and loads
-`creation-<creation>.md`. (A system-interface regression is a heal *operation*
+`type` is `skill` (the default), `app`, or `service`. The worker reads it and loads
+`type-<TYPE>.md`. (A system-interface regression is a heal *operation*
 too, but it is driven through `update-system-interface`, which owns the
 `safe-reveal` preview/reveal/rollback go-live -- do not drive a system-interface
 heal from here.)
@@ -30,8 +30,8 @@ heal from here.)
 
 ## Conventions
 
-Use `$TARGET` for the creation you are healing (e.g. `migrate-config`, a service
-name). Then:
+Use `$TARGET` for the creation you are healing (e.g. `migrate-config`, an app
+or service name). Then:
 
 - Worker agent name and branch: `heal-$TARGET` / `mngr/heal-$TARGET`
 - Runtime dir / task file: `data/.tasks/harden/heal-$TARGET/` /

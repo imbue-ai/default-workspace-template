@@ -57,8 +57,8 @@ states; the newest pass always covers the union instead.
 
 Run these in order before `git merge`:
 
-1. **Wait out the foreground lease (services only).** If the creation is a
-   service and another agent holds its editing lease (an open/in-progress
+1. **Wait out the foreground lease (apps and services only).** If the creation is
+   an app or service and another agent holds its editing lease (an open/in-progress
    `editing service <name>` ticket in `tk ready` -- see `update-app`'s
    "One editor at a time"), do not merge or refresh mid-edit. Re-check about
    once a minute until the lease is released, then continue -- their edit
@@ -73,7 +73,8 @@ Run these in order before `git merge`:
    ```
 
    `<CREATION_PATHS>` is the creation's whole footprint, not just the files
-   the worker touched: for a service, `system/apps/<package>/ system/supervisord.conf`;
+   the worker touched: for an app, `system/apps/<package>/ system/supervisord.conf`
+   (a standalone service likewise, under `system/services/<package>/`);
    for a skill, `.agents/skills/<name>/`; for a shared script or reference,
    its path; for the system interface, `system/apps/system_interface/` (that
    creation's merge lives in `update-system-interface` Step 4, which applies

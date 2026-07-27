@@ -10,11 +10,11 @@ There are two shapes, selected by which creation you are crystallizing:
 | Creation | Shape | Gates |
 |---|---|---|
 | skill | **Reconstruct** -- does not yet exist on disk; build it from the lead's transcript and/or a handed-off sample | outline gate (Stage 2) + final gate (Stage 6) |
-| service | **Pre-existing, confirmed-live** -- already on disk; the user signed off on its shape live | none -- the live confirmation stands in for the final gate |
+| app | **Pre-existing, confirmed-live** -- already on disk; the user signed off on its shape live | none -- the live confirmation stands in for the final gate |
 
 - **Reconstruct** (skill): you build the creation from scratch, so both the
   outline gate and the final gate apply.
-- **Pre-existing, confirmed-live** (service): nothing is reconstructed and there
+- **Pre-existing, confirmed-live** (app): nothing is reconstructed and there
   is no outline gate; harden it and report `done`.
 
 ## Valid report `name:` values

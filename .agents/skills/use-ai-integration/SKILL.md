@@ -1,13 +1,13 @@
 ---
 name: use-ai-integration
-description: Use when writing or reasoning about code that calls Claude -- an AI-driven service, an AI integration, or a skill's scripted model step. Covers the three scenarios (one-shot completion, one-shot agentic task, full agent) and the cost / credentialing model.
+description: Use when writing or reasoning about code that calls Claude -- an AI-driven app or service, an AI integration, or a skill's scripted model step. Covers the three scenarios (one-shot completion, one-shot agentic task, full agent) and the cost / credentialing model.
 ---
 
 # Calling Claude from code
 
 This is the shared reference for the mechanics of calling Claude from code:
 which path to use, the call surface, and the cost model. Whatever sent you here
--- building an AI-driven service, scripting a skill's `[ai-script]` step, or
+-- building an AI-driven app or service, scripting a skill's `[ai-script]` step, or
 adding an AI integration elsewhere -- supplies the framing; this skill is the
 how.
 

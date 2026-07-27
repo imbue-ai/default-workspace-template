@@ -45,7 +45,7 @@ Updated the system interface on branch `<branch>`. Ready to preview.
 - Screenshots reviewed: <pages/states you eyeballed>
 ```
 
-The committed/emergent paths and gates below apply only to skill and service
+The committed/emergent paths and gates below apply only to skill, app, and service
 creations.
 
 ## Emergent path
@@ -67,7 +67,7 @@ update in place.
 
 Propose an outline. For a **skill**, the outline contents are defined in
 `.agents/shared/worker/references/skill-outline-fields.md`; add the update decision
-(update-in-place vs. new sibling). For a **service**, the
+(update-in-place vs. new sibling). For an **app** (or a service), the
 outline is the decision, what changes, and the routes/scenarios affected. Write a
 `type: gate`, `name: outline-approval` report with the outline plus "Approve this
 outline? (yes / no with notes)". Push it and stop. Wait for an explicit yes
@@ -142,7 +142,7 @@ Write a `type: gate`, `name: final-creation` report plus "Approve and save? (yes
 **Service:**
 
 ```
-Updated service `<name>`:
+Updated app `<name>`:
 - Change: <one-sentence>
 - Routes affected: <list>
 - Scenarios / tests run: <list, all pass>

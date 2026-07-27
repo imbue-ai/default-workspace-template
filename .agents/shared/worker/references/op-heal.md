@@ -83,7 +83,7 @@ Fixed `<name>`:
 **Service:**
 
 ```
-Fixed service `<name>`:
+Fixed app `<name>`:
 - Change: <one-sentence (root cause + fix)>
 - Routes affected: <list>
 - Scenarios / tests run: <list, all pass>

@@ -1,6 +1,6 @@
 ---
 name: update-creation
-description: "Change an existing skill, service, or shared script/reference (under .agents/shared/) -- extend it, refactor it, or just verify it still works. Invoke at turn-end when a skill ran but you had to do extra repeatable work by hand, or when you and the user discussed a change to it and applied it live."
+description: "Change an existing skill, app, service, or shared script/reference (under .agents/shared/) -- extend it, refactor it, or just verify it still works. Invoke at turn-end when a skill ran but you had to do extra repeatable work by hand, or when you and the user discussed a change to it and applied it live."
 ---
 
 # Updating an existing creation
@@ -41,18 +41,19 @@ format), model-judgement extensions (an additional judgement step with a stable
 recipe, scripted as `[ai-script]`), and executor meta-work. One-off creative or
 exploratory work is NOT an update candidate.
 
-## The creation parameter
+## The type parameter
 
-`type` is `skill`, `service`, or `system-interface`. It drives where the
-worker looks (`creation-<creation>.md`) and the **go-live** strategy (Step 4):
-skill → cross-reference sweep is part of the edit, nothing else; service →
-refresh the tab; system-interface → the `update-system-interface` wrapper owns a
+`type` is `skill`, `app`, `service`, or `system-interface`. It drives where the
+worker looks (`type-<TYPE>.md`) and the **go-live** strategy (Step 4):
+skill → cross-reference sweep is part of the edit, nothing else; app →
+refresh the tab (a background service has no tab -- restart it instead);
+system-interface → the `update-system-interface` wrapper owns a
 preview-before-merge and a `safe-reveal` go-live and calls into this flow for
 the orchestration core only (see that skill).
 
 ## Conventions
 
-Use `$TARGET` for the creation (e.g. `migrate-config`, a service name). Then:
+Use `$TARGET` for the creation (e.g. `migrate-config`, an app or service name). Then:
 
 - Worker agent name and branch: `update-$TARGET` / `mngr/update-$TARGET`
 - Runtime dir / task file: `data/.tasks/harden/update-$TARGET/` /

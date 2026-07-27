@@ -19,7 +19,7 @@ enabled, three pieces work together (see `system/libs/github_sync/README.md`):
    stays private, halting the hook's pushes if it ever isn't.
 
 What is synced is exactly what is committed to git. Workspace data under
-`data/` (memories, tickets, uploads, per-creation data) is gitignored and is
+`data/` (memories, tickets, uploads, per-app data) is gitignored and is
 NOT shipped to GitHub -- the restic `host-backup` service covers it.
 
 ## Hard rules

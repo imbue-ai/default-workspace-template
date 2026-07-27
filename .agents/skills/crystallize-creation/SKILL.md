@@ -12,7 +12,7 @@ pass that turns it into a hardened, committed, reviewed creation, in the
 background. You dispatch the build to a generic worker; your role is to package
 context, launch, proxy gates, merge, and go live.
 
-## The creation parameter
+## The type parameter
 
 Crystallize creates one of:
 
@@ -25,11 +25,11 @@ Crystallize creates one of:
   lead with `type=skill` and a `source_artifacts_dir` of staged scripts +
   `sample.json`.
 
-The creation drives two things: which **gates** the worker emits (skill →
-`outline-approval` then `final-creation`; service → none, since the user
+The type drives two things: which **gates** the worker emits (skill →
+`outline-approval` then `final-creation`; app → none, since the user
 confirmed the live site already) and the **go-live** step after merge (skill →
-post-crystallize migration; service → refresh the tab). The worker reads the
-creation from the task file and loads `creation-<creation>.md`; you proxy
+post-crystallize migration; app → refresh the tab). The worker reads the
+type from the task file and loads `type-<TYPE>.md`; you proxy
 whatever gates it emits.
 
 ## When to invoke (skill, standalone)
