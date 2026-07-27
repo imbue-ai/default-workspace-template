@@ -1,6 +1,6 @@
 # Operation: update
 
-The **change-an-existing-creation** operation: extend, refactor, or verify an
+The **change-an-existing-creation** operation: extend, refactor, or verify a
 creation that already exists. Load this alongside `harden-creation.md` (the
 universal contract) and your creation reference (where it lives, how to test it,
 what not to touch).
