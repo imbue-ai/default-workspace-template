@@ -176,7 +176,7 @@ see `manage-layout`. Background daemons have no tab -- skip this step.
 Confirm the change actually does the right thing, exercised as the user
 would (not just "the process is up"):
 
-- **Web service**: `curl` against
+- **App**: `curl` against
   `http://127.0.0.1:8000/service/<name>/` then a Playwright assertion on a
   marker unique to your change. The recipe is in
   `build-app`'s [verify reference](../build-app/references/verify.md);

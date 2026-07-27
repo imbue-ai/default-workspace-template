@@ -26,9 +26,13 @@ _META_EXEMPT_PROJECTS = frozenset({"system_interface"})
 
 
 def _get_all_project_dirs() -> list[Path]:
-    """Return all project directories (system/libs/* and creations/*) excluding vendored code."""
+    """Return all project directories (system/{libs,services,apps}/*) excluding vendored code."""
     project_dirs: list[Path] = []
-    for parent in (_REPO_ROOT / "system" / "libs", _REPO_ROOT / "creations"):
+    for parent in (
+        _REPO_ROOT / "system" / "libs",
+        _REPO_ROOT / "system" / "services",
+        _REPO_ROOT / "system" / "apps",
+    ):
         if not parent.is_dir():
             continue
         for child in sorted(parent.iterdir()):
@@ -250,4 +254,81 @@ def test_dockerignore_is_symlink_to_gitignore() -> None:
     target = dockerignore.readlink()
     assert str(target) == ".gitignore", (
         f"{dockerignore} symlink target is {target!r}, expected '.gitignore'"
+    )
+
+
+# --- Retired-terminology ratchets (the creation rename) ---
+#
+# The workspace vocabulary is: users make "creations" -- apps (opened as
+# tabs), skills (an automation is a skill run on a schedule), data, and
+# customizations of any of them; "service" means a background supervisord
+# program only. The terms below were retired by the rename and must not
+# creep back into live agent-facing prose. Historical records (changelog
+# entries, blueprint plans, spec archives) are exempt, as is the vendored
+# code and the launch-task file-staging key ``source_artifacts_dir``.
+
+_LIVE_PROSE_EXEMPT_PARTS = frozenset({"changelog", "blueprint", "specs", "vendor"})
+
+
+def _live_prose_files() -> list[Path]:
+    """The agent-facing markdown whose vocabulary the rename governs."""
+    files: list[Path] = [_REPO_ROOT / "README.md", _REPO_ROOT / "CLAUDE.md"]
+    for root in (_REPO_ROOT / ".agents", _REPO_ROOT / "docs", _REPO_ROOT / "data"):
+        for path in sorted(root.rglob("*.md")):
+            if _LIVE_PROSE_EXEMPT_PARTS.intersection(path.parts):
+                continue
+            # Skip symlinks whose targets live outside the live tree (e.g. the
+            # docs/system/style_guide.md link into system/vendor/).
+            if not path.is_file():
+                continue
+            files.append(path)
+    return files
+
+
+def _count_pattern_in_live_prose(pattern: re.Pattern[str]) -> list[str]:
+    violations: list[str] = []
+    for path in _live_prose_files():
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            if pattern.search(line):
+                violations.append(f"{path.relative_to(_REPO_ROOT)}:{lineno}: {line.strip()}")
+    return violations
+
+
+def test_prevent_old_creations_folder_references() -> None:
+    """The creations/ folder is gone: apps live in system/apps/, per-app data in data/.apps/."""
+    pattern = re.compile(r"\bcreations/")
+    violations = _count_pattern_in_live_prose(pattern)
+    assert len(violations) <= snapshot(0), (
+        "References to the removed creations/ folder:\n" + "\n".join(f"  - {v}" for v in violations)
+    )
+
+
+def test_prevent_artifact_terminology() -> None:
+    """'artifact' was retired: the lifecycle hardens 'creations', parameterized by 'type'."""
+    pattern = re.compile(r"(?i)\bartifacts?\b")
+    violations = [
+        v
+        for v in _count_pattern_in_live_prose(pattern)
+        if "source_artifacts_dir" not in v and "ARTIFACTS_DIR" not in v
+    ]
+    assert len(violations) <= snapshot(0), (
+        "Retired 'artifact' terminology in live prose:\n" + "\n".join(f"  - {v}" for v in violations)
+    )
+
+
+def test_prevent_web_service_terminology() -> None:
+    """'web service' was retired: a tab-openable thing is an 'app'."""
+    pattern = re.compile(r"(?i)\bweb[ -]services?\b")
+    violations = _count_pattern_in_live_prose(pattern)
+    assert len(violations) <= snapshot(0), (
+        "Retired 'web service' terminology in live prose:\n" + "\n".join(f"  - {v}" for v in violations)
+    )
+
+
+def test_prevent_application_terminology() -> None:
+    """'application(s)' was retired in prose: always 'app(s)' (MIME types are code, not prose)."""
+    pattern = re.compile(r"(?i)\bapplications?\b")
+    violations = [v for v in _count_pattern_in_live_prose(pattern) if "application/" not in v]
+    assert len(violations) <= snapshot(0), (
+        "Retired 'application' terminology in live prose:\n" + "\n".join(f"  - {v}" for v in violations)
     )

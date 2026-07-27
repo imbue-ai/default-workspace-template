@@ -263,7 +263,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     _write("system/changelog/my-branch.md")
     _write("system/apps/browser/changelog/my-branch.md")
     _write("system/apps/system_interface/changelog/my-branch.md")
-    _write("creations/beta/changelog/my-branch.md")
+    _write("system/services/gamma/changelog/my-branch.md")
     _write("system/vendor/mngr/libs/mngr/changelog/upstream-entry.md")
     _write("system/apps/browser/src/browser/session.py", "print('bye')\n")
     _git("add", "-A")
@@ -287,10 +287,10 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     added = json.loads(capsys.readouterr().out)["added"]
     assert sorted(added) == [
         ".agents/changelog/my-branch.md",
-        "creations/beta/changelog/my-branch.md",
-        "system/changelog/my-branch.md",
         "system/apps/browser/changelog/my-branch.md",
         "system/apps/system_interface/changelog/my-branch.md",
+        "system/changelog/my-branch.md",
+        "system/services/gamma/changelog/my-branch.md",
     ]
 
 

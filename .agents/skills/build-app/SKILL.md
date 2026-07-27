@@ -477,7 +477,7 @@ python3 system/scripts/forward_port.py --name NAME --remove
 
 Flags:
 
-- `--name`: application name (must match the URL segment a user
+- `--name`: app name (must match the URL segment a user
   clicks: `/service/<name>/`).
 - `--url`: full URL where the app is reachable from inside the
   container (e.g. `http://localhost:8090`).

@@ -1,4 +1,4 @@
-# Web service gotchas
+# App gotchas
 
 The system_interface proxies HTTP and WebSocket traffic from
 `/service/<name>/...` to the backend URL you registered. Most apps
@@ -55,7 +55,7 @@ fetches. So a Flask app written against `/` works behind the proxy
 unchanged.
 
 The one thing to watch: if you generate prefix-aware links yourself
-in application code (e.g. building an absolute URL to share or embed),
+in app code (e.g. building an absolute URL to share or embed),
 account for the `/service/<name>/` prefix in that code. There is no
 `root_path`/`ROOT_PATH` mechanism in the generated runner -- don't
 add one.
