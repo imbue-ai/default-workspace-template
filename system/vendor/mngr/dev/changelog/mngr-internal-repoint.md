@@ -1,0 +1,1 @@
+Re-point internal development tooling at the private source-of-truth repo `imbue-ai/mngr-internal`: the four remote agent-create templates in `.mngr/settings.toml` no longer reset agent origins to the public repo (which would have silently routed agent branches and PRs there), and the release scripts' printed workflow/run URLs now reference the private repo where publishing runs.

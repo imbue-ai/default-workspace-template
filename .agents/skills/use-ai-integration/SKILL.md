@@ -13,13 +13,13 @@ how.
 
 Code reaches Claude in one of two ways, depending on whether an
 `ANTHROPIC_API_KEY` is configured for the workspace: with a key, call `litellm`
-directly; without one, use the `claude -p` helper in `scripts/claude_p.py`.
+directly; without one, use the `claude -p` helper in `system/scripts/claude_p.py`.
 
 Credentials live in the `env` block of the shared `$CLAUDE_CONFIG_DIR/settings.json`
 (written by the in-UI Claude sign-in modal), NOT in the process environment --
 services inherit a frozen env from supervisord, so an env-var check goes stale
 when the user changes auth. Check which path applies with the resolver in
-`scripts/claude_p.py`:
+`system/scripts/claude_p.py`:
 
 ```bash
 uv run python -c "from claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
@@ -27,7 +27,7 @@ uv run python -c "from claude_p import read_workspace_ai_credentials; print('key
 
 **Keyed setups snapshot the key at setup time.** When the check says `keyed`,
 copy the API key (and the proxy base URL that goes with it) into
-`runtime/secrets/anthropic.env` as part of setting up the integration, and have
+`data/.secrets/anthropic.env` as part of setting up the integration, and have
 the service load its credentials from there -- `read_workspace_ai_credentials()`
 already resolves that file first, so callers using it get this for free. Run
 once while setting up:
@@ -41,7 +41,7 @@ Only the key + base URL go in the snapshot -- NEVER `CLAUDE_CODE_OAUTH_TOKEN`
 refuses it). The snapshot pins the integration: if the user later switches the
 workspace's sign-in (e.g. to a subscription), built services keep billing
 against the key they were set up with. To re-key or retire an integration,
-rewrite or delete `runtime/secrets/anthropic.env` when the user asks.
+rewrite or delete `data/.secrets/anthropic.env` when the user asks.
 
 Which path applies rarely changes for a deployment, so **do not branch on it at
 call time in simple flows** -- but keyed callers must still resolve the
@@ -88,7 +88,7 @@ from litellm import completion, completion_cost
 
 from claude_p import read_workspace_ai_credentials  # the file you copied in
 
-# Resolve credentials at call time: the runtime/secrets/anthropic.env snapshot
+# Resolve credentials at call time: the data/.secrets/anthropic.env snapshot
 # first (see setup above), then the shared Claude settings, then the process
 # env. litellm reads differently-named vars and is picky about a trailing
 # slash, so pass both explicitly.
@@ -108,7 +108,7 @@ text = resp.choices[0].message.content
 cost = completion_cost(completion_response=resp)  # USD for this call
 ```
 
-**Keyless (no key): copy `scripts/claude_p.py` and call `claude_p_completion`.**
+**Keyless (no key): copy `system/scripts/claude_p.py` and call `claude_p_completion`.**
 It disables tools and runs from an isolated working directory so the repo's
 `CLAUDE.md` / `.claude` hooks can't hijack the answer; `system` is required.
 
@@ -136,7 +136,7 @@ provider's own JSON / structured-output mode over parsing free text and retrying
 ## Scenario 2 -- one-shot agentic task
 
 Always `claude -p` (it has tools and file access; a plain API call does not), so
-this path is the same whether or not a key is set. Copy `scripts/claude_p.py` and
+this path is the same whether or not a key is set. Copy `system/scripts/claude_p.py` and
 call `claude_p_task`: tools stay enabled, it runs in the repo working directory,
 and it defaults `permission_mode="bypassPermissions"` (load-bearing -- a headless
 run has no human to approve tool use).
@@ -145,8 +145,8 @@ run has no human to approve tool use).
 from claude_p import claude_p_task
 
 result = claude_p_task(
-    "Read runtime/email-triage/latest.json and draft a reply using templates/.",
-    append_system="Only touch files under runtime/email-triage/.",
+    "Read data/creations/email-triage/latest.json and draft a reply using templates/.",
+    append_system="Only touch files under data/creations/email-triage/.",
 )
 ```
 
@@ -170,9 +170,9 @@ it; call the script directly:
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch-sync \
   --name email-triage-fix-123 --template worker \
-  --runtime-dir runtime/email-triage/fix-123 \
-  --task-file  runtime/email-triage/fix-123/task.md \
-  --timeout 30m --result-json runtime/email-triage/fix-123/result.json
+  --runtime-dir data/creations/email-triage/fix-123 \
+  --task-file  data/creations/email-triage/fix-123/task.md \
+  --timeout 30m --result-json data/creations/email-triage/fix-123/result.json
 ```
 
 It launches, waits for the worker's finish report in the foreground, writes a JSON

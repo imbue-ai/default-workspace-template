@@ -1,0 +1,1 @@
+Public-mirror CI: deselect three tests that fail only in the mirror's runner environment, tracked as issues 84-86 (gcloud never-raise contract, gc chmod failure injection, plugin catalog vs installed set).

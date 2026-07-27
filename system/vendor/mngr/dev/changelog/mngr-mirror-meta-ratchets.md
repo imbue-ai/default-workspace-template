@@ -1,0 +1,1 @@
+Guard two meta-ratchet tests (dev changelog layout, offload coverage-report invariant) to run only in the source-of-truth repo: they inspect private ops assets that are deliberately absent on the public mirror.

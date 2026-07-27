@@ -11,15 +11,15 @@ Claude Code's built-in `TodoWrite` is disabled, use tk instead. Step records (`t
 - This is a monorepo.
 - Run commands by calling "uv run" from the root of the git checkout (ex: "uv run mngr create ...").
 - NEVER amend commits or rebase--always create new commits.
-- If you ever need to work with another *git* repo that is *outside* of this monorepo as a read-only dependency, you should do so by adding a git subtree under `vendor/`.
+- If you ever need to work with another *git* repo that is *outside* of this monorepo as a read-only dependency, you should do so by adding a git subtree under `system/vendor/`.
 - If you need to *actively develop* against an external repo (e.g. `mngr`), check out a standalone clone of it under `.external_worktrees/<repo-name>/`. This directory is gitignored so the external clones don't pollute the monorepo. The branch in the external clone should mirror the branch you're on in this monorepo.
-- This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `runtime/tickets/` (the path is set via the `TICKETS_DIR` env var so tickets sit with the rest of the workspace's runtime state).
-- All relative paths in this repo assume cwd = repo root (`/code`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. State directories live under `runtime/<feature>/`.
-- When adding a new web app, use the `build-web-service` skill, which sets up a new lib + service entry + `forward_port.py` registration on its own port. Do NOT edit `apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new views.
+- This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `data/.tickets/` (the path is set via the `TICKETS_DIR` env var so tickets sit with the rest of the workspace's data).
+- All relative paths in this repo assume cwd = repo root (`/home/user/workspace`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (e.g. `data/creations/<name>/` for a creation's data); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state under `data/.state/`.
+- When adding a new web app, use the `build-web-service` skill, which sets up a new package under `creations/` + a service entry + `forward_port.py` registration on its own port. Do NOT edit `system/libs/system_interface/` for this -- that's the top-level workspace UI, not a template for new views.
 
 # Task management (CRITICAL — read this before doing real work)
 
-You manage your work using `tk`, the vendored ticket tracker at `vendor/tk/`. It is the **only** task tracker available — Claude Code's built-in `TodoWrite` is disabled. `tk` stores two kinds of records, distinguished by the `--step` flag at creation:
+You manage your work using `tk`, the vendored ticket tracker at `system/vendor/tk/`. It is the **only** task tracker available — Claude Code's built-in `TodoWrite` is disabled. `tk` stores two kinds of records, distinguished by the `--step` flag at creation:
 
 - **Step records** (`tk create --step "..."`) are the replacement for `TodoWrite`: turn-bound, creator-private progress markers that render as nodes on the user-facing chat progress view (a vertical timeline with a status icon and a one-line summary per step). Most turns use only these.
 - **Regular tickets** (`tk create "..."`, no flag) are substantive, cross-agent work units other agents can see and pick up. They do **not** render in the chat progress view. They matter only when work spans turns or is handed between agents.
@@ -85,7 +85,7 @@ Only after doing all of the above should you begin writing code.
 # Important commands and conventions:
 
 - Never run `uv sync`, always run `uv sync --all-packages` instead
-- For browser automation, Playwright's Python API is in the root venv (`from playwright.sync_api import sync_playwright`, run via `uv run python`). The engine is Fortress (a stealth-patched Chromium fork), not Playwright's own managed Chromium -- pass `executable_path="/opt/fortress/tilion-fortress/tilion"` explicitly to `chromium.launch(...)`, since Playwright's own browser-cache lookup only auto-discovers builds it downloaded itself. It installs asynchronously on first container boot (the one-shot `deferred-install` program), so in a fresh workspace confirm it finished -- `supervisorctl status deferred-install` or the marker `/var/lib/minds/deferred-install/done.fortress` -- before launching, or the launch fails with a clear error. It runs as-is under the docker provider's gVisor runtime; if you hit a "No usable sandbox!" error on a runtime without unprivileged user namespaces, pass `chromium.launch(executable_path="/opt/fortress/tilion-fortress/tilion", args=["--no-sandbox"])`. See `libs/bootstrap/README.md` for the full deferral contract.
+- For browser automation, Playwright's Python API is in the root venv (`from playwright.sync_api import sync_playwright`, run via `uv run python`). The engine is Fortress (a stealth-patched Chromium fork), not Playwright's own managed Chromium -- pass `executable_path="/opt/fortress/tilion-fortress/tilion"` explicitly to `chromium.launch(...)`, since Playwright's own browser-cache lookup only auto-discovers builds it downloaded itself. It installs asynchronously on first container boot (the one-shot `env-converge` program's env.d units), so in a fresh workspace confirm it finished -- `supervisorctl status env-converge` or `test -x /opt/fortress/tilion-fortress/tilion` -- before launching, or the launch fails with a clear error. It runs as-is under the docker provider's gVisor runtime; if you hit a "No usable sandbox!" error on a runtime without unprivileged user namespaces, pass `chromium.launch(executable_path="/opt/fortress/tilion-fortress/tilion", args=["--no-sandbox"])`. See `system/libs/bootstrap/README.md` for the full deferral contract.
 
 # Always remember these guidelines:
 
@@ -114,7 +114,7 @@ Only after doing all of the above should you begin writing code.
 - Do NOT write code in `__init__.py`--leave them completely blank (the only exception is for a line like "hookimpl = pluggy.HookimplMarker("mngr")", which should go at the very root __init__.py of a library).
 - Do NOT make constructs like module-level usage of `__all__`
 - Before finishing your response, if you have made any changes, then you must ensure that you have run ALL tests in the project(s) you modified, and that they all pass. DO NOT just run a subset of the tests! However, while iterating (e.g. fixing a failing test, developing a feature), run only the relevant tests for rapid feedback -- save the full suite for the final check.
-- To run tests for a single project: "cd vendor/mngr && uv run pytest" or "cd apps/minds && uv run pytest". Each project has its own pytest and coverage configuration in its pyproject.toml.
+- To run tests for a single project: "cd system/vendor/mngr && uv run pytest" or "cd system/libs/system_interface && uv run pytest". Each project has its own pytest and coverage configuration in its pyproject.toml.
 - While you're iterating, you can pass "--no-cov --cov-fail-under=0" to disable coverge (slightly faster), but during your final check, you *MUST NOT* pass those flags (it will fail in CI anyway)
 - For faster iteration, add "-m 'not tmux and not modal and not docker and not docker_sdk and not acceptance and not release'" to skip slow infrastructure tests (~30s instead of ~95s). These still run in CI. Note that you *MUST* also pass "--no-cov --cov-fail-under=0" when doing this, otherwise it will complain about a lack of coverage.
 - When running pytest with a Bash tool timeout, always set `PYTEST_MAX_DURATION_SECONDS` to match the timeout (in seconds). For example, if using a 2-minute timeout: `PYTEST_MAX_DURATION_SECONDS=120 uv run pytest ...`. This ensures the pytest global lock file records a deadline, allowing other pytest processes to break a stale lock if this one gets killed by the timeout.
@@ -201,8 +201,8 @@ You can (and should) modify your own configuration to improve yourself:
 
 - **CLAUDE.md**: (this file) update these instructions if you discover better ways to operate.
 - **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file. (Also symlinked from `.claude/skills/`.)
-- **supervisord.conf**: Add, modify, or remove background services. See the `update-service` skill.
-- **scripts/**: Add utility scripts that help you accomplish your purpose.
+- **system/supervisord.conf**: Add, modify, or remove background services. See the `update-service` skill.
+- **system/scripts/**: Add utility scripts that help you accomplish your purpose.
 
 Commit your changes to git after making modifications.
 
@@ -211,7 +211,7 @@ Inspirations are a publishable, reusable, bootable snapshot of the apps and feat
 # Updates
 
 Use the `update-self` skill to pull improvements from the upstream template repo, and the `submit-upstream-changes` skill to push shared changes (skills, scripts, config) back upstream.
-The upstream is defined in `parent.toml`.
+The upstream is defined in `system/config/parent.toml`.
 
 # Using crystallized skills
 
@@ -229,4 +229,5 @@ The upstream is defined in `parent.toml`.
 
 # Memory
 
-Use Claude's built-in memory system. Your memory directory is `runtime/memory/` (configured via `autoMemoryDirectory` in `.claude/settings.json`). Memory is gitignored from the main branch.
+Use Claude's built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
+Memory is gitignored (everything under `data/` is). It survives container loss via the restic `host-backup` service, which snapshots the whole home tree.

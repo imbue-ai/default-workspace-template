@@ -55,8 +55,8 @@ the orchestration core only (see that skill).
 Use `$TARGET` for the artifact (e.g. `migrate-config`, a service name). Then:
 
 - Worker agent name and branch: `update-$TARGET` / `mngr/update-$TARGET`
-- Runtime dir / task file: `runtime/harden/update-$TARGET/` /
-  `runtime/harden/update-$TARGET/task.md`
+- Runtime dir / task file: `data/.tasks/harden/update-$TARGET/` /
+  `data/.tasks/harden/update-$TARGET/task.md`
 
 ## Step 1: Open a tracking ticket
 
@@ -68,7 +68,7 @@ and stop -- the superseding pass forced at their merge time covers your change.
 Only dispatch if no pass is live (or you took over an abandoned one).
 
 ```bash
-mkdir -p runtime/harden/update-$TARGET
+mkdir -p data/.tasks/harden/update-$TARGET
 TICKET_ID=$(tk create "update $TARGET" -t task \
     --acceptance "task file written; worker launched; worker DONE; branch merged")
 tk start "$TICKET_ID"
@@ -81,8 +81,8 @@ worker has a convenience index (the change is also on its branch on disk):
 
 ```bash
 COMMIT_RANGE="HEAD~1..HEAD"   # widen to cover all commits implementing the change
-git log --format='%H %s' "$COMMIT_RANGE" > runtime/harden/update-$TARGET/commit.log
-git log -p "$COMMIT_RANGE"    > runtime/harden/update-$TARGET/commit.diff
+git log --format='%H %s' "$COMMIT_RANGE" > data/.tasks/harden/update-$TARGET/commit.log
+git log -p "$COMMIT_RANGE"    > data/.tasks/harden/update-$TARGET/commit.diff
 ```
 
 Write the task file. Frontmatter carries `operation: update`, the `artifact`,
@@ -91,10 +91,10 @@ and the worker reporting fields (per
 `## Change origin` marker the worker dispatches on, plus origin-specific content:
 
 ```bash
-cat > runtime/harden/update-$TARGET/task.md << TASK_EOF
+cat > data/.tasks/harden/update-$TARGET/task.md << TASK_EOF
 ---
 lead_agent: $MNGR_AGENT_NAME
-finish_report_path: runtime/harden/update-$TARGET/reports/report.md
+finish_report_path: data/.tasks/harden/update-$TARGET/reports/report.md
 operation: update
 artifact: skill
 ---
@@ -151,8 +151,8 @@ worker.
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-$TARGET \
     --template subskill-worker \
-    --runtime-dir runtime/harden/update-$TARGET/ \
-    --task-file runtime/harden/update-$TARGET/task.md
+    --runtime-dir data/.tasks/harden/update-$TARGET/ \
+    --task-file data/.tasks/harden/update-$TARGET/task.md
 ```
 
 Then background-poll (`create_worker.py await --task-file ... --timeout 90m`,
@@ -160,9 +160,9 @@ Then background-poll (`create_worker.py await --task-file ... --timeout 90m`,
 Flow-specific substitutions:
 
 - Worker name: `update-$TARGET`; branch: `mngr/update-$TARGET`
-- Poll path: `runtime/harden/update-$TARGET/reports/report.md`; reports dir
-  `runtime/harden/update-$TARGET/reports/`; consumed
-  `runtime/harden/update-$TARGET/reports/consumed/`
+- Poll path: `data/.tasks/harden/update-$TARGET/reports/report.md`; reports dir
+  `data/.tasks/harden/update-$TARGET/reports/`; consumed
+  `data/.tasks/harden/update-$TARGET/reports/consumed/`
 - Gates: `outline-approval` (emergent only -- the design gate) and
   `final-artifact` (both).
 - Terminal statuses: `done` (go live, Step 4); `no-update-needed` (no change --
@@ -184,7 +184,7 @@ Then merge `mngr/update-$TARGET` and go live by artifact:
 - **skill**: nothing beyond the merge (the worker's cross-reference sweep is part
   of the change). If the target is a built-in upstream skill, note the local
   drift to reconcile later via `update-self` / `submit-upstream-changes`.
-- **service**: refresh the tab (`python3 scripts/layout.py refresh
+- **service**: refresh the tab (`python3 system/scripts/layout.py refresh
   <service-name>`).
 - **system-interface**: do **not** merge or reveal here -- the
   `update-system-interface` wrapper drives preview-before-merge and the
