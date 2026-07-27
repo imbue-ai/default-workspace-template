@@ -1,6 +1,6 @@
 # Write plan
 
-Write the plan to `blueprint/<slug>/plan-<slug>.md`.
+Write the plan to `docs/system/blueprint/<slug>/plan-<slug>.md`.
 
 Use the refined prompt as your primary input — it contains both the original feature description and all clarifications from the Q&A. Before writing:
 - Explore the existing codebase as needed

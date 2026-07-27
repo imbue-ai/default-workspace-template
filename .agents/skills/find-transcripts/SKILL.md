@@ -16,13 +16,13 @@ An agent's conversation is stored under its state dir as
 whether the agent still exists:
 
 - **Still present** (running, or **STOPPED** but not destroyed):
-  `/mngr/agents/<agent_id>/events/*/common_transcript/events.jsonl`.
+  `/home/user/.mngr/agents/<agent_id>/events/*/common_transcript/events.jsonl`.
   A finished `launch-task` worker is usually left STOPPED here -- it is **not**
-  in `/mngr/preserved/` until it is actually destroyed.
+  in `/home/user/.mngr/preserved/` until it is actually destroyed.
 - **Destroyed:**
-  `/mngr/preserved/<agent_name>--<agent_id>/events/*/common_transcript/events.jsonl`.
+  `/home/user/.mngr/preserved/<agent_name>--<agent_id>/events/*/common_transcript/events.jsonl`.
 
-(Use `$MNGR_HOST_DIR` in place of `/mngr` if this host's mngr root is elsewhere.)
+(Use `$MNGR_HOST_DIR` in place of `/home/user/.mngr` if this host's mngr root is elsewhere.)
 **Always check both** -- a past agent could be in either.
 
 **Note on agent types:** transcripts here include the user-facing chat agent
@@ -37,7 +37,7 @@ help you identify which is which.
   via their own export features.
 
 - **Other Minds workspaces**: each workspace is a separate host with its own
-  `/mngr/`. Transcripts from agents in another workspace live there, not here.
+  `/home/user/.mngr/`. Transcripts from agents in another workspace live there, not here.
   To read them, SSH into that workspace via the Minds API: use the `minds-api`
   skill to request the `minds-workspaces-ssh` latchkey permission, then run this
   skill's read commands over SSH on that host.
@@ -46,16 +46,16 @@ help you identify which is which.
 
 ```bash
 mngr list                        # agents still present (running / stopped), with names + ids
-ls -1t /mngr/preserved 2>/dev/null   # destroyed agents (<agent_name>--<agent_id>), newest first
+ls -1t /home/user/.mngr/preserved 2>/dev/null   # destroyed agents (<agent_name>--<agent_id>), newest first
 ```
 
 Match the user's description to an agent by its name (and, for preserved dirs,
-the mtime -- roughly when it was destroyed: `ls -lt /mngr/preserved`).
+the mtime -- roughly when it was destroyed: `ls -lt /home/user/.mngr/preserved`).
 
 ## 2. Find every transcript on this host (present OR destroyed)
 
 ```bash
-find /mngr/agents /mngr/preserved -path '*/common_transcript/events.jsonl' 2>/dev/null
+find /home/user/.mngr/agents /home/user/.mngr/preserved -path '*/common_transcript/events.jsonl' 2>/dev/null
 ```
 
 ## 3. Read one
@@ -70,9 +70,9 @@ For any agent (present or destroyed), read the file directly (pick a path from
 step 2):
 
 ```bash
-cat "/mngr/agents/<agent_id>/events/claude/common_transcript/events.jsonl"
+cat "/home/user/.mngr/agents/<agent_id>/events/claude/common_transcript/events.jsonl"
 # or, if destroyed:
-cat "/mngr/preserved/<agent_name>--<agent_id>/events/claude/common_transcript/events.jsonl"
+cat "/home/user/.mngr/preserved/<agent_name>--<agent_id>/events/claude/common_transcript/events.jsonl"
 ```
 
 ## 4. Render a raw file readably
