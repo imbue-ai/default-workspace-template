@@ -90,7 +90,7 @@ what outputs are correct. Describe success; the incident itself is above.>
 
 ## What to do
 Use the installed \`harden-worker\` sub-skill. It reads \`operation\` and
-\`creation\` from this frontmatter and follows the matching references:
+\`type\` from this frontmatter and follows the matching references:
 reproduce the failure, find the root cause, apply a minimal fix, re-run 2-3
 fresh scenarios, and push through the single final-creation gate. Push reports
 to the lead per its reporting protocol.
@@ -103,7 +103,7 @@ to the lead per its reporting protocol.
 TASK_EOF
 ```
 
-Set `creation:` as appropriate and fill in the real content; do not leave
+Set `type:` as appropriate and fill in the real content; do not leave
 placeholders.
 
 ## Step 3: Launch the worker and poll

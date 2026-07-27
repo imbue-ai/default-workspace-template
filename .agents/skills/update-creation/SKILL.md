@@ -123,7 +123,7 @@ the incident is captured above.>
 
 ## What to do
 Use the installed \`harden-worker\` sub-skill. It reads \`operation\`,
-\`creation\`, and the \`## Change origin\` marker, then follows the matching
+\`type\`, and the \`## Change origin\` marker, then follows the matching
 references. Push reports to the lead per its reporting protocol.
 
 ## Success criteria
@@ -133,7 +133,7 @@ references. Push reports to the lead per its reporting protocol.
 TASK_EOF
 ```
 
-Set `ORIGIN: committed` and `creation:` as appropriate. Fill in the real
+Set `ORIGIN: committed` and `type:` as appropriate. Fill in the real
 content; do not leave placeholders. The `## Change origin` marker is required --
 the worker fails loudly if it is missing.
 
