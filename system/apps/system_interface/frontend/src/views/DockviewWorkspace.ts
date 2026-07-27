@@ -356,7 +356,7 @@ function createCustomTab(options: { id: string; name: string }): {
       // + Close, no Share/Refresh).
       const isTerminal = isTerminalPanelParams(pp);
 
-      // Share and Refresh buttons -- only on iframe/application tabs.
+      // Share and Refresh buttons -- only on iframe/app tabs.
       // The Refresh button matches open iframes by their data-service-name
       // attribute, which is populated only when the tab is tied to a real
       // workspace service. For tabs without an explicit serviceName
@@ -540,7 +540,7 @@ function getOpenChatAgentIds(): Set<string> {
   return ids;
 }
 
-/** Get the set of application names that currently have open iframe panels. */
+/** Get the set of app names that currently have open iframe panels. */
 function getOpenAppNames(): Set<string> {
   const names = new Set<string>();
   for (const [, pp] of panelParams) {
@@ -1753,7 +1753,7 @@ function applyLayoutContent(saved: SavedLayout | null): void {
     // apps, custom URLs) opened via openIframeTab() set
     // `agentId` to the primary agent id as a placeholder owner, so a
     // bare `agentId === primaryId` check would wrongly strip every
-    // terminal/application/URL tab on each restore.
+    // terminal/app/URL tab on each restore.
     const primaryId = getPrimaryAgentId();
     if (primaryId) {
       for (const panel of dv.panels.slice()) {
