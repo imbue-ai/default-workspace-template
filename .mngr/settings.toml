@@ -110,6 +110,19 @@ version = "2.1.207"
 # the per-agent config dir that everyone else points at.
 isolate_local_config_dir = false
 
+# User-facing chat agents run this type -- the initial /welcome agent and every
+# "New Agent" chat both launch with `--template chat` (system/libs/bootstrap's
+# manager.py and system/libs/system_interface/.../agent_manager.py). parent_type = "claude" inherits
+# all launch config (the oom wrapper command, cli_args, pinned version,
+# model/fastMode); we only add the Engineering Subordinate output style on top.
+# Scoping it here rather than on `claude` keeps worktree/worker/main agents
+# unstyled -- only user-facing chat should talk like a subordinate. The style
+# file lives at .claude/output-styles/engineering-subordinate.md; its `name:`
+# frontmatter must match the outputStyle value below exactly.
+[agent_types.chat]
+parent_type = "claude"
+settings_overrides__extend = { outputStyle = "Engineering Subordinate" }
+
 # The "main" (services) agent type -- inherits everything from claude, then
 # disables every path that pulls user-local content into the workspace. The
 # repo at the requested git ref is the canonical workspace definition;
@@ -700,7 +713,7 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 
 # Chat template: minimal agent for additional chat sessions in the same work directory
 [create_templates.chat]
-type = "claude"
+type = "chat"
 
 # Worktree template: agent in a new git worktree, no services by default --
 # creates its own as needed. Uses the plain `claude` type (not `main`), so
