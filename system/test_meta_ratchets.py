@@ -271,17 +271,33 @@ _LIVE_PROSE_EXEMPT_PARTS = frozenset({"changelog", "blueprint", "specs", "vendor
 
 
 def _live_prose_files() -> list[Path]:
-    """The agent-facing markdown whose vocabulary the rename governs."""
-    files: list[Path] = [_REPO_ROOT / "README.md", _REPO_ROOT / "CLAUDE.md"]
-    for root in (_REPO_ROOT / ".agents", _REPO_ROOT / "docs", _REPO_ROOT / "data"):
-        for path in sorted(root.rglob("*.md")):
-            if _LIVE_PROSE_EXEMPT_PARTS.intersection(path.parts):
-                continue
-            # Skip symlinks whose targets live outside the live tree (e.g. the
-            # docs/system/style_guide.md link into system/vendor/).
-            if not path.is_file():
-                continue
-            files.append(path)
+    """The agent-facing markdown whose vocabulary the rename governs.
+
+    Only git-tracked files count: in a live workspace, ``data/`` (and to a
+    lesser degree ``.agents/``) accumulates gitignored user content -- memories,
+    documents, notes -- whose wording is the user's own business, not template
+    prose. Enumerating via ``git ls-files`` keeps the ratchet pinned to the
+    committed tree, which is identical to a filesystem walk in CI checkouts.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", "README.md", "CLAUDE.md", ".agents", "docs", "data"],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    files: list[Path] = []
+    for rel in sorted(tracked.stdout.splitlines()):
+        if not rel.endswith(".md"):
+            continue
+        path = _REPO_ROOT / rel
+        if _LIVE_PROSE_EXEMPT_PARTS.intersection(Path(rel).parts):
+            continue
+        # Skip symlinks whose targets live outside the live tree (e.g. the
+        # docs/system/style_guide.md link into system/vendor/).
+        if not path.is_file():
+            continue
+        files.append(path)
     return files
 
 
