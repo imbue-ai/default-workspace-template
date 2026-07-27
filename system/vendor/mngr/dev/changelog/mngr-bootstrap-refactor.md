@@ -1,0 +1,3 @@
+Added two import-linter contracts enforcing the minds bootstrap ordering invariant: `imbue.minds.bootstrap` must stay free of `imbue.mngr*`, pydantic, and click, and the new `imbue.minds.mngr_settings` package must stay free of `imbue.mngr*` and click, since both must run before any mngr import (mngr reads `MNGR_HOST_DIR`/`MNGR_PREFIX` and the profile settings.toml at import time). Enabled `include_external_packages` for import-linter so the contracts can name external packages.
+
+Committed the blueprint plan for the minds bootstrap refactor at `blueprint/minds-bootstrap-refactor/plan-minds-bootstrap-refactor.md`.

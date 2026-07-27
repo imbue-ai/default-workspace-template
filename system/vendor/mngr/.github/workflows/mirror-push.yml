@@ -1,0 +1,73 @@
+# Runs the private-to-public export to imbue-ai/mngr on every push to main;
+# manual dispatch (confirmation phrase, --dry-run default) remains for repair.
+# Requires vars.MIRROR_SYNC_APP_ID and secrets.MIRROR_SYNC_APP_PRIVATE_KEY
+# (the sync GitHub App; see mirror/README.md).
+name: Mirror push
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type push-to-public to confirm targeting imbue-ai/mngr
+        required: true
+      extra_args:
+        description: Extra copybara args (drop --dry-run to actually push)
+        default: "--dry-run"
+
+concurrency:
+  group: mirror-push
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check confirmation phrase
+        if: github.event_name == 'workflow_dispatch' && inputs.confirm != 'push-to-public'
+        run: |
+          echo "confirmation phrase mismatch; refusing to run" >&2
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          # copybara fetches the origin from this checkout's gitdir; a
+          # shallow clone cannot serve that fetch.
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Fetch pinned copybara
+        run: |
+          curl -sL -o /tmp/copybara_deploy.jar \
+            https://github.com/google/copybara/releases/download/v20260720/copybara_deploy.jar
+          echo "e94448c702addc17cfc45d4bbfc8509d458b9a25f4715e3e77207ad570e1075d  /tmp/copybara_deploy.jar" | shasum -a 256 -c -
+      - name: Mint sync-app token
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.MIRROR_SYNC_APP_ID }}
+          private-key: ${{ secrets.MIRROR_SYNC_APP_PRIVATE_KEY }}
+          owner: imbue-ai
+          repositories: mngr
+      - name: Run the export
+        run: |
+          # Copybara's destination commits need a committer identity; commits
+          # attribute to the sync bot (the id-plus-login noreply form is what
+          # links the committer to the bot account).
+          git config --global user.name "imbue-codesync[bot]"
+          git config --global user.email "308188143+imbue-codesync[bot]@users.noreply.github.com"
+          sed -e "s|https://github.com/imbue-ai/mngr-internal.git|file://$GITHUB_WORKSPACE|" \
+              -e "s|https://github.com/imbue-ai/mngr.git|https://x-access-token:${{ steps.app.outputs.token }}@github.com/imbue-ai/mngr.git|" \
+              mirror/copy.bara.sky > /tmp/copy.bara.sky
+          grep -q "file://$GITHUB_WORKSPACE" /tmp/copy.bara.sky
+          grep -q "x-access-token" /tmp/copy.bara.sky
+          # copybara exit 4 = nothing to migrate (private-only push), a success
+          set +e
+          java -jar /tmp/copybara_deploy.jar migrate /tmp/copy.bara.sky push ${{ inputs.extra_args }}
+          code=$?
+          set -e
+          if [ "$code" -eq 4 ]; then echo "no-op: nothing to migrate"; exit 0; fi
+          exit "$code"

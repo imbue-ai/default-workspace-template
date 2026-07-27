@@ -1,0 +1,3 @@
+New blueprint `blueprint/destroyed-workspace-backup-retention/plan-destroyed-workspace-backup-retention.md`: the design for the 30-day destroyed-workspace backup retention policy (client-side and connector reapers, quota-pressure eviction, the Recently destroyed workspaces page) implemented across apps/minds, apps/remote_service_connector, and libs/mngr_imbue_cloud on this branch.
+
+`uv.lock` refreshed for the same feature: libs/mngr_imbue_cloud gains a boto3 dependency (the shared S3 bucket-emptying moved there), and apps/minds now depends on imbue-mngr-imbue-cloud (it imports the shared emptying helpers back).

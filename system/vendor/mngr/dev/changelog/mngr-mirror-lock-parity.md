@@ -1,0 +1,1 @@
+Public-mirror lock parity: the overlay `uv.lock` is now seeded from the private lock during regeneration, so the mirror ships exactly the dependency versions private CI tests (a fresh resolve had drifted urwid to 4.0.2 while private pins 4.0.0, tripping the mirror's type-check gate).

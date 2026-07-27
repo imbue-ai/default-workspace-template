@@ -1,0 +1,68 @@
+# Packages the default-workspace-template installs into every workspace.
+#
+# Seed list, hand-derived from dwt's scripts/setup_system.sh apt installs and
+# the env.d units' Chromium/Fortress system libraries (what `playwright
+# install-deps chromium` pulls on trixie). Names are the explicitly-installed
+# top level only: dependencies are NOT resolved here, and the mirror's
+# read-through covers anything a list misses, so gaps degrade to slower first
+# fetches, never to missing packages. Verify and extend this list against a
+# freshly created workspace (see README).
+#
+# Format: one package name per line; `#` starts a comment; blank lines ignored.
+
+# --- setup_system.sh system toolchain ---
+bash
+build-essential
+ca-certificates
+curl
+earlyoom
+fd-find
+git
+git-lfs
+jq
+less
+nano
+nodejs
+npm
+openssh-client
+openssh-server
+procps
+restic
+ripgrep
+rsync
+sqlite3
+supervisor
+tini
+tmux
+unison
+util-linux
+wget
+xmlstarlet
+xxd
+
+# --- Chromium/Fortress shared libraries (playwright install-deps chromium) ---
+fonts-liberation
+fonts-noto-color-emoji
+fonts-unifont
+libasound2t64
+libatk-bridge2.0-0t64
+libatk1.0-0t64
+libatspi2.0-0t64
+libcairo2
+libcups2t64
+libdbus-1-3
+libdrm2
+libgbm1
+libglib2.0-0t64
+libnspr4
+libnss3
+libpango-1.0-0
+libx11-6
+libxcb1
+libxcomposite1
+libxdamage1
+libxext6
+libxfixes3
+libxkbcommon0
+libxrandr2
+xvfb
