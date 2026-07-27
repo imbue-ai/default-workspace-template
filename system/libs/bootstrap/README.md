@@ -43,7 +43,7 @@ writes separate, rotated, container-local logs under
 
 To add, change, or remove a service, edit `system/supervisord.conf` and run
 `supervisorctl reread && supervisorctl update` (and `supervisorctl restart
-<name>` to bounce one). See the `update-service` skill, or
+<name>` to bounce one). See the `update-app` skill, or
 `.agents/shared/references/service-processes.md`, for details.
 
 ## Environment convergence (env-converge)

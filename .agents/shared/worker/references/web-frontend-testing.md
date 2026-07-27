@@ -1,9 +1,9 @@
 # Testing a web frontend
 
-Shared testing guidance for any artifact that serves a web UI -- a scaffolded
-service (`artifact-service.md`) or the system interface
-(`artifact-system-interface.md`). Apply it alongside the universal contract in
-`harden-artifact.md`; your artifact reference adds the specifics (where the app
+Shared testing guidance for any creation that serves a web UI -- a scaffolded
+service (`type-app.md`) or the system interface
+(`type-system-interface.md`). Apply it alongside the universal contract in
+`harden-creation.md`; your creation reference adds the specifics (where the app
 lives, its stack, its test entry points).
 
 ## Drive an isolated instance, never the live one
@@ -25,7 +25,7 @@ it against the isolated instance.
 
 ## Look at the rendered page
 
-**If your artifact renders a frontend, you MUST look at the actual rendered page
+**If your creation renders a frontend, you MUST look at the actual rendered page
 -- not just assert on the DOM.** A clean build and passing Playwright assertions
 prove the markup and wiring exist; they do NOT prove the page *looks* right --
 layout, spacing, alignment, overflow/truncation, color/contrast, z-order, and

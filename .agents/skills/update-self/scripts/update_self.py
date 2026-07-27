@@ -229,8 +229,8 @@ def classify_path(path: str) -> PathClass:
     - ``editable_tool`` -- ``system/vendor/mngr/**``; ``.py`` picked up live, a manifest
       change needs ``uv sync --all-packages`` / an editable reinstall.
     - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,
-      ``creations/**``, and ``.agents/**``: may be a live runtime dependency of
-      a service or a workspace-added skill/creation, so it needs the worker's
+      ``system/services/**``, ``system/apps/**``, and ``.agents/**``: may be a live runtime dependency of
+      a service or a workspace-added skill or app, so it needs the worker's
       impact analysis before it can be called a silent merge.
     - ``provisioner`` -- the pinned-toolchain scripts and the ``.mngr/`` create
       config (see :func:`_is_provisioner`); shapes image-build / create-time
@@ -411,8 +411,8 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
     # Per-PR changelog entries live in a ``changelog/`` dir under each project
-    # bucket -- ``system/changelog/``, ``.agents/changelog/``,
-    # ``system/libs/<name>/changelog/``, ``creations/<name>/changelog/`` (see
+    # bucket -- ``system/changelog/``, ``.agents/changelog/``, and
+    # ``system/{libs,services,apps}/<name>/changelog/`` (see
     # system/scripts/check_changelog_entries.py for the bucket definition).
     # Match every one of them at any depth with a single glob rather than one
     # dir alone, or the "what's new" digest silently drops everything landed
@@ -461,7 +461,7 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
         # The target ref predates the skill, so there is no target copy to hand
         # off to: stage the *local* copy at the fixed path (so the worker still
         # finds the flow there) and report ``differs=False`` -- the caller stays
-        # on the local flow. Skip ``__pycache__`` so an imported-script artifact
+        # on the local flow. Skip ``__pycache__`` so an imported-script creation
         # never rides along.
         shutil.copytree(
             repo_root / SKILL_DIR_REL,

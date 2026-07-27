@@ -222,7 +222,7 @@ steps (mirroring `build_inspiration.sh`'s mechanics -- stage-before-reset,
 must assemble from the published tip's tree, but -- like `build_inspiration.sh` --
 it does no network fetch itself. Bundle the tip you already fetched in §2 and
 stage it into the worker via `launch-task`'s `source_artifacts_dir` mechanism (a
-gitignored artifact pushed into the worker's worktree):
+gitignored creation pushed into the worker's worktree):
 
 ```bash
 mkdir -p data/.tasks/launch-task/<slug>
@@ -470,7 +470,7 @@ entry rather than re-pushing anything.
 On a successful push, clean up per `launch-task`: the worker can be destroyed now
 (`create_worker.py destroy --name <slug>`), and the local `mngr/<slug>` branch can
 go (the snapshot commit lives on the remote; the branch's intermediate commits
-were never pushed). Remove the bundle artifact
+were never pushed). Remove the bundle creation
 (`data/.tasks/launch-task/<slug>/published-tip.bundle`). No git remote cleanup is
 needed -- §2a/§7 fetch and push explicit URLs and add no named remote.
 

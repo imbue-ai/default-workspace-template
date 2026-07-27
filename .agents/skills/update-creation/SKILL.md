@@ -1,11 +1,11 @@
 ---
-name: update-artifact
+name: update-creation
 description: "Change an existing skill, service, or shared script/reference (under .agents/shared/) -- extend it, refactor it, or just verify it still works. Invoke at turn-end when a skill ran but you had to do extra repeatable work by hand, or when you and the user discussed a change to it and applied it live."
 ---
 
-# Updating an existing artifact
+# Updating an existing creation
 
-This is the **change** lead of the generic artifact lifecycle. The artifact
+This is the **change** lead of the generic creation lifecycle. The creation
 already exists; you dispatch a generic worker to harden the change in the
 background, proxy its gates, merge, and go live. There is one flow with a
 **design-gate toggle** keyed on whether the change is already committed.
@@ -41,10 +41,10 @@ format), model-judgement extensions (an additional judgement step with a stable
 recipe, scripted as `[ai-script]`), and executor meta-work. One-off creative or
 exploratory work is NOT an update candidate.
 
-## The artifact parameter
+## The creation parameter
 
-`artifact` is `skill`, `service`, or `system-interface`. It drives where the
-worker looks (`artifact-<artifact>.md`) and the **go-live** strategy (Step 4):
+`type` is `skill`, `service`, or `system-interface`. It drives where the
+worker looks (`creation-<creation>.md`) and the **go-live** strategy (Step 4):
 skill → cross-reference sweep is part of the edit, nothing else; service →
 refresh the tab; system-interface → the `update-system-interface` wrapper owns a
 preview-before-merge and a `safe-reveal` go-live and calls into this flow for
@@ -52,7 +52,7 @@ the orchestration core only (see that skill).
 
 ## Conventions
 
-Use `$TARGET` for the artifact (e.g. `migrate-config`, a service name). Then:
+Use `$TARGET` for the creation (e.g. `migrate-config`, a service name). Then:
 
 - Worker agent name and branch: `update-$TARGET` / `mngr/update-$TARGET`
 - Runtime dir / task file: `data/.tasks/harden/update-$TARGET/` /
@@ -60,7 +60,7 @@ Use `$TARGET` for the artifact (e.g. `migrate-config`, a service name). Then:
 
 ## Step 1: Open a tracking ticket
 
-**Single-flight check first.** At most one harden pass per artifact may be in
+**Single-flight check first.** At most one harden pass per creation may be in
 flight (counting `heal` passes on the same target). Run the pre-dispatch check
 in [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md);
 if another agent's pass is live, leave the note it describes on their ticket
@@ -74,7 +74,7 @@ TICKET_ID=$(tk create "update $TARGET" -t task \
 tk start "$TICKET_ID"
 ```
 
-## Step 2: Capture artifacts and write the task file
+## Step 2: Capture creations and write the task file
 
 For the **committed** origin, capture the commit metadata and full diff so the
 worker has a convenience index (the change is also on its branch on disk):
@@ -85,7 +85,7 @@ git log --format='%H %s' "$COMMIT_RANGE" > data/.tasks/harden/update-$TARGET/com
 git log -p "$COMMIT_RANGE"    > data/.tasks/harden/update-$TARGET/commit.diff
 ```
 
-Write the task file. Frontmatter carries `operation: update`, the `artifact`,
+Write the task file. Frontmatter carries `operation: update`, the `type`,
 and the worker reporting fields (per
 `.agents/shared/references/worker-reporting.md`). The body carries the
 `## Change origin` marker the worker dispatches on, plus origin-specific content:
@@ -96,7 +96,7 @@ cat > data/.tasks/harden/update-$TARGET/task.md << TASK_EOF
 lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/harden/update-$TARGET/reports/report.md
 operation: update
-artifact: skill
+type: skill
 ---
 
 # Task: update \`$TARGET\`
@@ -115,24 +115,24 @@ The worker uses these with \`mngr transcript\` to locate the relevant turns.
 <emergent: the user's request, the insufficient \`$TARGET\` output, and a quote
 showing the manual follow-up. committed: 1-3 quotes that pinned the design.>
 
-## What the updated artifact must do
-<emergent only: the contract the artifact must honor after the change -- inputs
+## What the updated creation must do
+<emergent only: the contract the creation must honor after the change -- inputs
 it should now accept, outputs it should now produce. Describe the new contract;
 the incident is captured above.>
 
 ## What to do
 Use the installed \`harden-worker\` sub-skill. It reads \`operation\`,
-\`artifact\`, and the \`## Change origin\` marker, then follows the matching
+\`creation\`, and the \`## Change origin\` marker, then follows the matching
 references. Push reports to the lead per its reporting protocol.
 
 ## Success criteria
 - The change is hardened, tested, and passes the review gates on your branch.
-- The user approved the final artifact (Gate 2); for the emergent origin, also
+- The user approved the final creation (Gate 2); for the emergent origin, also
   the outline (Gate 1).
 TASK_EOF
 ```
 
-Set `ORIGIN: committed` and `artifact:` as appropriate. Fill in the real
+Set `ORIGIN: committed` and `creation:` as appropriate. Fill in the real
 content; do not leave placeholders. The `## Change origin` marker is required --
 the worker fails loudly if it is missing.
 
@@ -164,7 +164,7 @@ Flow-specific substitutions:
   `data/.tasks/harden/update-$TARGET/reports/`; consumed
   `data/.tasks/harden/update-$TARGET/reports/consumed/`
 - Gates: `outline-approval` (emergent only -- the design gate) and
-  `final-artifact` (both).
+  `final-creation` (both).
 - Terminal statuses: `done` (go live, Step 4); `no-update-needed` (no change --
   close the ticket, no merge); `stuck` (failure flow per
   `.agents/skills/launch-task/references/worker-failure.md`).
@@ -174,12 +174,12 @@ Flow-specific substitutions:
 On `done`, first run the merge-time checks in
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md):
 wait out any foreground editing lease on the service, confirm the branch is
-still fresh (the artifact's footprint has not changed since the worker
+still fresh (the creation's footprint has not changed since the worker
 branched), and never hand-resolve a conflicted merge -- a stale or conflicted
 pass is discarded and superseded by one new pass covering everything since the
 last hardened merge.
 
-Then merge `mngr/update-$TARGET` and go live by artifact:
+Then merge `mngr/update-$TARGET` and go live by creation:
 
 - **skill**: nothing beyond the merge (the worker's cross-reference sweep is part
   of the change). If the target is a built-in upstream skill, note the local

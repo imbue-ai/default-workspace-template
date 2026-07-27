@@ -110,14 +110,14 @@ describe("buildToolResultsWithSkillExpansions", () => {
     const events = [
       skillToolCall("2026-04-28T01:00:00Z", "tc-skill"),
       toolResult("2026-04-28T01:00:01Z", "tc-skill", "Loading skill..."),
-      skillExpansion("2026-04-28T01:00:02Z", "build-web-service", "u-exp"),
+      skillExpansion("2026-04-28T01:00:02Z", "build-app", "u-exp"),
     ];
     const results = buildToolResultsWithSkillExpansions(events);
     const skillResult = results.get("tc-skill");
     expect(skillResult).toBeDefined();
     expect(skillResult?.output).toContain("Loading skill...");
     expect(skillResult?.output).toContain("Base directory for this skill:");
-    expect(skillResult?.output).toContain("# build-web-service");
+    expect(skillResult?.output).toContain("# build-app");
   });
 
   it("creates a synthetic tool_result if the Skill tool call has no explicit result", () => {

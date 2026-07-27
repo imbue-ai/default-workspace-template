@@ -45,10 +45,10 @@ mngr create my-workspace main -t local \
 
 The main agent can promote ad-hoc work into reusable artifacts, fix artifacts that fail, and extend artifacts that came up short -- across skills, web services, and the system interface. The user-invokable surface is three generic operation leads (main agent side), each parameterized by the artifact:
 
-- `crystallize-artifact` - Create a new artifact (default: a skill reconstructed from the just-finished turn). Invoked directly post-turn, or by the live-half wrappers (`build-web-service`, `fetch-process-show`) once a prototype is confirmed.
-- `heal-artifact` - Fix a skill or service that errored or produced wrong results.
-- `update-artifact` - Extend / refactor / verify a skill, service, or shared reference; one flow with a committed-vs-emergent design-gate toggle.
+- `crystallize-creation` - Create a new artifact (default: a skill reconstructed from the just-finished turn). Invoked directly post-turn, or by the live-half wrappers (`build-app`, `fetch-process-show`) once a prototype is confirmed.
+- `heal-creation` - Fix a skill or service that errored or produced wrong results.
+- `update-creation` - Extend / refactor / verify a skill, service, or shared reference; one flow with a committed-vs-emergent design-gate toggle.
 
-Each lead spawns a `subskill-worker` sub-agent that runs the single generic `harden-worker` sub-skill. The worker reads the operation and artifact from its task file and composes the universal `harden-artifact.md` contract with one `op-*.md` and one `artifact-*.md` reference under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs the `update-system-interface` flow, which wraps `update-artifact` with `artifact=system-interface` and adds its preview / safe-reveal go-live.)
+Each lead spawns a `subskill-worker` sub-agent that runs the single generic `harden-worker` sub-skill. The worker reads the operation and artifact from its task file and composes the universal `harden-creation.md` contract with one `op-*.md` and one `artifact-*.md` reference under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs the `update-system-interface` flow, which wraps `update-creation` with `artifact=system-interface` and adds its preview / safe-reveal go-live.)
 
 Crystallized skills are marked with `metadata.crystallized: true` in their SKILL.md frontmatter and follow the [agentskills.io](https://agentskills.io/specification) layout (`scripts/run.py` as a PEP 723 script, companion SKILL.md, optional `references/` and `assets/`).

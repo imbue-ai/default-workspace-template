@@ -1,4 +1,4 @@
-# Verifying a web service
+# Verifying an app
 
 Run both checks. `curl` confirms the proxy reaches your backend;
 Playwright catches iframe-rendering bugs that `curl` misses (the

@@ -145,8 +145,8 @@ run has no human to approve tool use).
 from claude_p import claude_p_task
 
 result = claude_p_task(
-    "Read data/creations/email-triage/latest.json and draft a reply using templates/.",
-    append_system="Only touch files under data/creations/email-triage/.",
+    "Read data/.apps/email-triage/latest.json and draft a reply using templates/.",
+    append_system="Only touch files under data/.apps/email-triage/.",
 )
 ```
 
@@ -170,9 +170,9 @@ it; call the script directly:
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch-sync \
   --name email-triage-fix-123 --template worker \
-  --runtime-dir data/creations/email-triage/fix-123 \
-  --task-file  data/creations/email-triage/fix-123/task.md \
-  --timeout 30m --result-json data/creations/email-triage/fix-123/result.json
+  --runtime-dir data/.apps/email-triage/fix-123 \
+  --task-file  data/.apps/email-triage/fix-123/task.md \
+  --timeout 30m --result-json data/.apps/email-triage/fix-123/result.json
 ```
 
 It launches, waits for the worker's finish report in the foreground, writes a JSON

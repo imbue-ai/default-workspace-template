@@ -36,11 +36,11 @@ Pick the flow that fits the ask:
   the result." Route to **`fetch-process-show`**.
 
 - **Build a web view** -- the ask is "build me a page / dashboard / app I can
-  look at." Route to **`build-web-service`**. It owns the interactive
+  look at." Route to **`build-app`**. It owns the interactive
   mock-confirmation flow for web work.
 
 - **A hybrid: a web view over fetched data** -- start with `fetch-process-show`
-  to confirm the data sample, then it hands the surface to `build-web-service`
+  to confirm the data sample, then it hands the surface to `build-app`
   (which runs its own UI-mock confirmation on top of the confirmed data). Begin
   with `fetch-process-show`.
 
@@ -48,7 +48,7 @@ Pick the flow that fits the ask:
   fetch or a web view. Apply the interactive-delivery skeleton directly from
   `.agents/shared/references/interactive-delivery.md`: clarify only what blocks,
   a fast feasibility pass, a small plan, validate the risky dependency first, a
-  cheap throwaway artifact looped to explicit confirmation, then hardening in the
+  cheap throwaway creation looped to explicit confirmation, then hardening in the
   background. Fill in the skeleton's phases with the specifics of the task at hand.
 
 Load the routed skill and proceed; do not re-implement its flow here.

@@ -1,7 +1,7 @@
 # When to crystallize
 
 You are deciding whether the just-finished turn is worth crystallizing into a
-reusable skill via `crystallize-artifact` (artifact = skill) -- and the
+reusable skill via `crystallize-creation` (creation = skill) -- and the
 **default is to ask the user**, not to decide silently.
 
 ## The rule
@@ -57,7 +57,7 @@ Before you decline, check whether your reasoning matches any of these:
 
 - **"This was one-off."** This turn may have involved one-off work (e.g. identifying data sources); that does not mean that the whole task was one-off. Consider the output that you generated - is it possible the user may want this output regenerated based on updated data or using different parameter values?
 - **"The data sources change too fast."** Fragility is manageable via
-  `heal-artifact` when the skill is used often. You can flag to the user if you
+  `heal-creation` when the skill is used often. You can flag to the user if you
   think this is a serious concern, but it shouldn't by itself be a reason not to
   crystallize.
 - **"The hard part was judgement."** Setup judgement (which sites, which

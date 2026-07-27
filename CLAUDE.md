@@ -14,7 +14,7 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 - If you need to *actively develop* against an external repo (e.g. `mngr`), check out a standalone clone of it under `.external_worktrees/<repo-name>/`. This directory is gitignored so the external clones don't pollute the monorepo. The branch in the external clone should mirror the branch you're on in this monorepo.
 - This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `data/.tickets/` (the path is set via the `TICKETS_DIR` env var so tickets sit with the rest of the workspace's data).
 - All relative paths in this repo assume cwd = repo root (`/home/user/workspace`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (e.g. `data/creations/<name>/` for a creation's data); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state under `data/.state/`.
-- When adding a new web app, use the `build-web-service` skill, which sets up a new package under `creations/` + a service entry + `forward_port.py` registration on its own port. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new views.
+- When adding a new web app, use the `build-app` skill, which sets up a new package under `creations/` + a service entry + `forward_port.py` registration on its own port. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new views.
 
 # Task management (CRITICAL — read this before doing real work)
 
@@ -200,7 +200,7 @@ You can (and should) modify your own configuration to improve yourself:
 
 - **CLAUDE.md**: (this file) update these instructions if you discover better ways to operate.
 - **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file. (Also symlinked from `.claude/skills/`.)
-- **system/supervisord.conf**: Add, modify, or remove background services. See the `update-service` skill.
+- **system/supervisord.conf**: Add, modify, or remove background services. See the `update-app` skill.
 - **system/scripts/**: Add utility scripts that help you accomplish your purpose.
 
 Commit your changes to git after making modifications.
@@ -219,10 +219,10 @@ The upstream is defined in `system/config/parent.toml`.
 - **Run a skill's steps one at a time in chat.** When a skill exposes per-step subcommands (plus a `run all`), drive the subcommands individually -- mirror each as a `tk` step and surface its output -- so the user gets a rich progress view, pausing only at the skill's declared `[prose]` steps. Reserve `run all` for headless or scheduled runs where there's no chat to show progress in.
 
 - **Live first, ratify at turn-end.** Handle the user's immediate request *live* in the current chat to keep it interactive; at turn-end, formalize the work through the relevant lifecycle skill, which runs its hardening pass in a background worker (never inline in the main agent). Route by situation:
-  - Net-new task needing research or experimentation -> `do-something-new` (it routes to `fetch-process-show` for data or `build-web-service` for a web view).
-  - Just-finished work that's cohesive, likely to recur, and mostly deterministic -> `crystallize-artifact` to promote it into a committed, tested skill.
-  - A skill errored or gave a wrong result -> work around it live, then `heal-artifact` at turn-end. Never patch the skill inline.
-  - You changed an existing skill, or a skill ran but needed manual post-processing -> `update-artifact` at turn-end so the change is verified and the skill swallows the gap.
+  - Net-new task needing research or experimentation -> `do-something-new` (it routes to `fetch-process-show` for data or `build-app` for a web view).
+  - Just-finished work that's cohesive, likely to recur, and mostly deterministic -> `crystallize-creation` to promote it into a committed, tested skill.
+  - A skill errored or gave a wrong result -> work around it live, then `heal-creation` at turn-end. Never patch the skill inline.
+  - You changed an existing skill, or a skill ran but needed manual post-processing -> `update-creation` at turn-end so the change is verified and the skill swallows the gap.
 
   For non-skill contract-bearing files (hook scripts, this file) there is no worker pipeline -- apply the live change carefully and add manual rigor at turn-end (real fixtures, end-to-end exercise of new code paths).
 
@@ -233,12 +233,12 @@ Memory is gitignored (everything under `data/` is). It survives container loss v
 
 # Services
 
-**Before editing any code that belongs to a supervisord service -- a user-facing web service or a background daemon -- load the `update-service` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit a service's code or `system/supervisord.conf` without it.
+**Before editing any code that belongs to a supervisord service -- a user-facing web service or a background daemon -- load the `update-app` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit a service's code or `system/supervisord.conf` without it.
 
 You can define background services as supervisord programs in `system/supervisord.conf`.
 Supervisord (launched by `bootstrap` after first-boot setup) supervises them; each program writes its own rotated logs under `/var/log/supervisor/<name>-stdout.log` and `/var/log/supervisor/<name>-stderr.log`.
 To add, change, or remove a service, edit `system/supervisord.conf` and run `supervisorctl reread && supervisorctl update` (and `supervisorctl restart <name>` to bounce one). Inspect with `supervisorctl status` / `supervisorctl tail -f <name> stderr`.
-See the `update-service` skill for details.
+See the `update-app` skill for details.
 
 # Git
 

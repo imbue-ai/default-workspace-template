@@ -1,11 +1,11 @@
-# Artifact: skill
+# Creation: skill
 
 A reusable skill under `.agents/skills/<name>/` -- a SKILL.md process recipe plus
 the scripts its steps call. `.agents/shared/references/spec-summary.md` is the
 authority on the agentskills.io spec: directory layout, frontmatter, the
 `[script]` / `[ai-script]` / `[prose]` step kinds, `run.py` packaging,
 validation, and the scenario template. This reference adds only what that spec
-cheat-sheet and the universal `harden-artifact.md` contract don't already cover.
+cheat-sheet and the universal `harden-creation.md` contract don't already cover.
 
 **Design judgement.** Reliability is the floor; simplicity is the target. Default
 to a subcommand per cleanly-separable step plus a `run all` that chains them; add
@@ -38,15 +38,15 @@ pure-prose skill (no scripts) has all of its behavior in SKILL.md.
   inspect the output (an `[ai-script]` step makes a real Claude call -- run it on
   a small input to note cost). For a `[prose]` step, walk the SKILL.md
   instructions as the executing agent.
-- The universal fixture-test rule (`harden-artifact.md`), for a skill: save 1-3
+- The universal fixture-test rule (`harden-creation.md`), for a skill: save 1-3
   samples under `.agents/skills/<name>/tests/fixtures/` and add a
   `system/scripts/<name>_test.py` that feeds each through the parser and asserts the
   exact output shape.
 
 ## Data capture
 
-Beyond the universal preserve-and-surface rule (`harden-artifact.md`), persist
-each record under `data/creations/<name>/`, capture *all reasonable fields per record*
+Beyond the universal preserve-and-surface rule (`harden-creation.md`), persist
+each record under `data/.apps/<name>/`, capture *all reasonable fields per record*
 in the calls you already make (not just the fields the original turn displayed),
 and treat pagination as normal when the ask requires it -- but do NOT make extra
 un-asked-for API calls just to gather more data.

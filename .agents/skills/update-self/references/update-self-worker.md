@@ -130,11 +130,11 @@ local question of who depends on the file.
 
 No script can enumerate what depends on a changed file -- this is exploration
 work, and you must do it for every changed `system/scripts/**`, `system/libs/**`,
-`creations/**`, and `.agents/**` path. Build the impact set like this:
+`system/apps/**`, and `.agents/**` path. Build the impact set like this:
 
 1. **Enumerate the consumer universe** up front, independent of the diff: every
    `system/supervisord.conf` program (and everything its `command` invokes, directly or
-   through a wrapper), every service under `system/libs/` and `creations/`, every workspace-added skill
+   through a wrapper), every service under `system/libs/` and `system/apps/`, every workspace-added skill
    under `.agents/skills/` (e.g. a crystallized `fetch-process-show` pipeline
    whose scripts a daemon or scheduled job runs), and any cron/scheduled
    runners.
@@ -152,7 +152,7 @@ work, and you must do it for every changed `system/scripts/**`, `system/libs/**`
    unstated search.
 5. **When you label a lib or skill "workspace-added," verify it -- do not infer
    it from the directory.** The layout is a strong hint (`system/libs/` holds
-   built-in template services, `creations/` holds workspace-built ones), but
+   built-in template services, `system/apps/` holds workspace-built ones), but
    the check is provenance: a path is built-in if it exists at the target ref;
    check before labeling: `git ls-tree -r --name-only "$TARGET_REF" -- <dir>`
    (empty output = genuinely workspace-added). This matters because only
@@ -241,7 +241,7 @@ globally install the new one to test, that mutates the shared toolchain the live
 workspace and other agents run on. So decide by the **provenance** of the
 dependent -- does its code come from the upstream template, or was it built in
 this workspace? Decide this by *origin, not directory*: the layout is only a
-hint (a workspace's own `build-web-service` app lands under `creations/`, and
+hint (a workspace's own `build-app` app lands under `system/apps/`, and
 the template's built-in services under `system/libs/`, but an adapted
 inspiration can bring third-party creations along). The check is whether the
 dependent's code exists in upstream at the target ref -- e.g. `git cat-file -e
@@ -261,7 +261,7 @@ template rather than added locally.
   don't validate the built-in against the new dep either, because you're trusting
   upstream's testing rather than re-doing it.
 - **Dependent is user-created** (absent from upstream -- built in this workspace:
-  a `build-web-service` app in its own `creations/` package, a crystallized skill's scripts
+  a `build-app` app in its own `system/apps/` package, a crystallized skill's scripts
   under `.agents/skills/<skill>/`, a local script): **unsafe to hot-apply.**
   Upstream never saw that code, so it never tested it against the new dependency,
   and you can't either (shared toolchain). Classify it **rebuild-only** -- the safe
@@ -301,13 +301,13 @@ tests, or exercise its scripts -- and called out in the report.
   mode: `bootstrap` is `uv run`-launched, so an unparseable root lock means no
   service in the workspace can start.
 - **Suites/lint/ratchets** for each project in `projects_to_validate`: root `.`
-  (`uv run pytest` + `uv run ruff check`) covers `system/libs/**`, `creations/**`, `system/scripts/**`,
+  (`uv run pytest` + `uv run ruff check`) covers `system/libs/**`, `system/apps/**`, `system/scripts/**`,
   `.agents/**`; `system/apps/system_interface` runs its own `uv run pytest` (and `npm run
   lint && npm run test` when the frontend merged); `system/vendor/mngr` its own `uv run
   pytest`.
 - **Isolated-service boots** for each impacted service (per 4a) -- boot against a
   scratch data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
-  `update-service`), never the live store; a service that won't boot on the merged
+  `update-app`), never the live store; a service that won't boot on the merged
   code is a blocker. Note this boot runs on the **host's global toolchain**, so it
   does *not* exercise a global-dependency bump -- a service coupled to one is the
   gap covered by the coupled-change note in 4a, not something an isolated boot
@@ -323,7 +323,7 @@ tests, or exercise its scripts -- and called out in the report.
 
 Run the repo's review gates on the merged result, like every other harden pass:
 follow the "Review gates" section of
-`.agents/shared/worker/references/harden-artifact.md` (unattended `/autofix`,
+`.agents/shared/worker/references/harden-creation.md` (unattended `/autofix`,
 then judge each fix commit yourself -- keep by default, revert only what undoes
 intended behavior -- plus the architecture gates). Record kept/reverted fixes
 and gate verdicts for your report.

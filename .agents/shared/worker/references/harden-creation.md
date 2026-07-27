@@ -1,17 +1,17 @@
-# Hardening an artifact
+# Hardening a creation
 
 The universal contract for the **background harden pass**: once the user has
 signed off on a shape in the foreground, put in the thorough, expensive effort
-to turn it into a hardened, committed, reviewed artifact -- in the background,
+to turn it into a hardened, committed, reviewed creation -- in the background,
 off the interactive path. This contract is the part that is identical across
-every operation (crystallize, update, heal) and every artifact (a reusable
-skill, a web service, the system interface).
+every operation (crystallize, update, heal) and every creation (a reusable
+a skill, an app, the system interface).
 
 ## The premise and the bar
 
 The user has already signed off on work in the foreground; the thorough pass has been **deliberately deferred**.
-The task now is to prove the artifact actually works under test, harden it, and pass the review
-gates. The bar is that the artifact is **genuinely well-tested and clean** -- not "it ran once."
+The task now is to prove the creation actually works under test, harden it, and pass the review
+gates. The bar is that the creation is **genuinely well-tested and clean** -- not "it ran once."
 
 ## Isolation
 
@@ -24,7 +24,7 @@ it the normal way and commit the manifest changes so they appear in the merge.
 
 Follow `.agents/shared/references/worker-reporting.md` for the report-file
 procedure and the task-file frontmatter schema, and substitute the runtime
-paths your operation/artifact references specify. Surface decisions the user
+paths your operation/creation references specify. Surface decisions the user
 must make as `gate` reports and stop; end the run with a terminal `done` or
 `stuck` status. The operation reference names the exact gate and
 status values its flow uses.
@@ -32,7 +32,7 @@ status values its flow uses.
 ## Testing and hardening contract
 
 - **Write or extend thorough tests** that assert on markers which are true if
-  and only if the artifact behaves correctly -- not just that it ran. Cover the
+  and only if the creation behaves correctly -- not just that it ran. Cover the
   real behavior, including empty and overflow states.
 - **Add fixture-based tests for anything that parses external data** (HTML, JSON
   from third-party APIs, scraped pages, uploaded files). Live-data checks alone
@@ -48,8 +48,8 @@ status values its flow uses.
 
 The foreground pass optimizes for getting *something* working, so it tends to
 leave independent operations running one after another. The harden pass is where
-you make the artifact fast, since the expensive rethink is deliberately deferred
-to here. **When the artifact performs multiple independent I/O-bound operations
+you make the creation fast, since the expensive rethink is deliberately deferred
+to here. **When the creation performs multiple independent I/O-bound operations
 -- data fetches, API calls, subprocess invocations -- that do not depend on each
 other's results, run them concurrently rather than in a serial loop.** This is
 most impactful for fetch-heavy pipelines (the fetch-process-show shape), where a
@@ -72,7 +72,7 @@ Guardrails:
 
 A pipeline that touches many external sources will eventually hit a failure on
 one of them -- a timeout, a rate-limit, a malformed record. The harden pass is
-where you make the artifact survive that gracefully instead of crashing. This
+where you make the creation survive that gracefully instead of crashing. This
 applies to any multi-item pipeline, but parallel fan-out makes it urgent, since
 more operations in flight means more failure surface.
 
@@ -114,7 +114,7 @@ newest first). Record which you kept and which you reverted in your gate report.
 
 ## Preserve and surface captured data
 
-If the artifact captures data, persist each record's **raw payload and a
+If the creation captures data, persist each record's **raw payload and a
 reference to its source, durably** -- not just the extracted/processed fields
 (see the preserve-and-surface principle in CLAUDE.md). A pipeline that fetches,
 transforms, and discards the raw payload cannot satisfy that principle no matter
@@ -123,25 +123,25 @@ re-derive new fields with no refetch, and what lets surfaces show the raw record
 or link out to its source. Retain whatever a consumer needs to render the record
 faithfully later.
 
-## Bound disk growth -- evict what the artifact no longer needs
+## Bound disk growth -- evict what the creation no longer needs
 
 This is an always-applies invariant, not a creation-time step. It holds
-**whenever** the artifact persists anything across runs -- when you first build
+**whenever** the creation persists anything across runs -- when you first build
 it, and equally when an `update` teaches a previously stateless skill or service
 to fetch or store, or enlarges a store it already had. The persist-and-preserve
 contracts above tell you to write records durably and incrementally. Left
-unqualified, that turns any artifact you run more than once -- a recurring
+unqualified, that turns any creation you run more than once -- a recurring
 pipeline, a service that polls on a schedule, anything that appends results, raw
 payloads, logs, caches, or fixtures -- into an ever-growing store that
 eventually fills the disk. The harden pass is where you give every growing store
-a **bounded retention policy**; an artifact that can only accrete and never
+a **bounded retention policy**; a creation that can only accrete and never
 evicts is not hardened, no matter how well-tested its happy path is.
 
-- **Find every store the artifact writes to and decide, explicitly, what bounds
+- **Find every store the creation writes to and decide, explicitly, what bounds
   each one.** Persisted results, raw-payload archives, on-disk caches, log
   files, generated fixtures, temp/scratch directories -- for each, pick a bound
   (a max age, a max count, a max total size, or "keep only the latest N runs")
-  and enforce it as part of the artifact's own flow, not as a chore you hope
+  and enforce it as part of the creation's own flow, not as a chore you hope
   someone remembers.
 - **Evict as part of the same run that writes.** Prune on write (or on a step
   the run always reaches) so the bound holds without a separate cleanup process.
@@ -154,7 +154,7 @@ evicts is not hardened, no matter how well-tested its happy path is.
 - **Prefer existing rotation/TTL machinery over hand-rolled deletion.** Use log
   rotation, a store's built-in TTL/size cap, or the repo's existing retention
   helpers before writing your own prune loop -- and never delete by a fragile
-  heuristic (glob-and-`rm`) that could take out data the artifact still needs.
+  heuristic (glob-and-`rm`) that could take out data the creation still needs.
 - **Cover the bound with a test.** Assert that after writing past the limit the
   store holds only what the policy allows and that the oldest entries are gone --
   the eviction path is exactly the kind of behavior that silently rots if
@@ -165,7 +165,7 @@ evicts is not hardened, no matter how well-tested its happy path is.
 If you cannot reach a tested, clean state (a dependency you cannot resolve, an
 intended behavior you cannot pin down from the task file), emit a `stuck`
 terminal report stating what blocked you and where the work stands. Do not
-report `done` on an artifact whose tests or gates do not pass. "Too
+report `done` on a creation whose tests or gates do not pass. "Too
 judgement-heavy" is never a valid reason to give up -- model judgement that is a
 fixed part of the flow is scripted, not abandoned; only give up if the process
 itself is unstable.

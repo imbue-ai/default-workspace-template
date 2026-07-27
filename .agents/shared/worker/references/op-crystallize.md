@@ -1,18 +1,18 @@
 # Operation: crystallize
 
-The **create** operation. The artifact is coming into existence for the first
+The **create** operation. The creation is coming into existence for the first
 time and you are putting in the thorough pass that makes it real. Load this
-alongside `harden-artifact.md` (the universal contract) and your artifact
+alongside `harden-creation.md` (the universal contract) and your creation
 reference (where it lives, how to test it, what not to touch).
 
-There are two shapes, selected by which artifact you are crystallizing:
+There are two shapes, selected by which creation you are crystallizing:
 
-| Artifact | Shape | Gates |
+| Creation | Shape | Gates |
 |---|---|---|
 | skill | **Reconstruct** -- does not yet exist on disk; build it from the lead's transcript and/or a handed-off sample | outline gate (Stage 2) + final gate (Stage 6) |
 | service | **Pre-existing, confirmed-live** -- already on disk; the user signed off on its shape live | none -- the live confirmation stands in for the final gate |
 
-- **Reconstruct** (skill): you build the artifact from scratch, so both the
+- **Reconstruct** (skill): you build the creation from scratch, so both the
   outline gate and the final gate apply.
 - **Pre-existing, confirmed-live** (service): nothing is reconstructed and there
   is no outline gate; harden it and report `done`.
@@ -20,11 +20,11 @@ There are two shapes, selected by which artifact you are crystallizing:
 ## Valid report `name:` values
 
 - Gates (reconstruct shape only): `outline-approval` (Stage 2),
-  `final-artifact` (Stage 6).
+  `final-creation` (Stage 6).
 - Terminal statuses: `done`, `stuck`.
 
 In the pre-existing/confirmed-live shape, emit no gates; you may emit a
-mid-flight `question` only if your artifact reference allows it, and you finish
+mid-flight `question` only if your creation reference allows it, and you finish
 with `done` or `stuck`.
 
 ## Stage 1: Reconstruct (reconstruct shape only)
@@ -61,28 +61,28 @@ plus an explicit "Approve this outline? (yes / no with notes)" prompt. Push it
 and stop. If the user asks for changes, iterate and emit a fresh
 `outline-approval` report. Do not proceed without an explicit yes.
 
-## Stage 3: Build / harden the artifact
+## Stage 3: Build / harden the creation
 
 Build (reconstruct shape) or harden in place (pre-existing shape) per your
-artifact reference's layout and validation steps. Apply the universal
-testing/hardening and preserve-and-surface contract from `harden-artifact.md`.
+creation reference's layout and validation steps. Apply the universal
+testing/hardening and preserve-and-surface contract from `harden-creation.md`.
 
 ## Stage 4: Scenarios
 
-Hand-craft and run scenarios that exercise the artifact end-to-end (happy path
-plus realistic edge cases). Your artifact reference gives the scenario specifics
+Hand-craft and run scenarios that exercise the creation end-to-end (happy path
+plus realistic edge cases). Your creation reference gives the scenario specifics
 (for a skill, the scenario template and the fixture-based tests for any external
-data parsing). Fix the artifact when a scenario fails; fix the scenario when the
-artifact is right but the scenario was wrong.
+data parsing). Fix the creation when a scenario fails; fix the scenario when the
+creation is right but the scenario was wrong.
 
 ## Stage 5: Review gates
 
-Run the review gates per `harden-artifact.md`, before the final gate report, so
+Run the review gates per `harden-creation.md`, before the final gate report, so
 the user sees a single report that already reflects the verdicts.
 
 ## Stage 6: Final gate, then commit and hand off
 
-In the **reconstruct shape** (skill), write a `type: gate`, `name: final-artifact`
+In the **reconstruct shape** (skill), write a `type: gate`, `name: final-creation`
 report with this body plus an "Approve and save? (yes / no with notes)" prompt:
 
 ```
@@ -103,7 +103,7 @@ shape live, and the lead reveals/refreshes after merge.
 
 ## If you need to give up
 
-Emit a `stuck` terminal report per `harden-artifact.md`. For the reconstruct
+Emit a `stuck` terminal report per `harden-creation.md`. For the reconstruct
 shape, valid reasons include: the work had no stable process across hypothetical
 re-runs (each re-run would need entirely different steps, not just different
 data), or a dependency you cannot resolve. "Too judgement-heavy to script" is

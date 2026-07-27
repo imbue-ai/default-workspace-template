@@ -2,7 +2,7 @@
 
 Run this after you have merged the worker's `mngr/crystallize-$NAME`
 branch into your branch. The new skill is now installed
-at `.agents/skills/<name>/`, but the calling-skill's runtime artifacts
+at `.agents/skills/<name>/`, but the calling-skill's runtime creations
 (under `data/.tasks/<calling-skill>/<slug>/`) and any code that referred
 to them are still pointing at the temporary scratch shape. This doc
 walks through the cleanup so nothing is left dangling.
@@ -40,7 +40,7 @@ installed, else use the runtime path"), that fallback can stay until
 the next refactor pass -- it's defensive code, not a bug. Note in the
 PR description that the fallback is now dead code.
 
-## 2. Decide whether to delete the runtime artifact directory
+## 2. Decide whether to delete the runtime creation directory
 
 Default: delete `data/.tasks/<calling-skill>/<slug>/`. The skill is the
 canonical source going forward; if the user wants fresh sample data,
@@ -113,7 +113,7 @@ it so the new path takes effect:
 
 ## 5. Close the tracking ticket
 
-`crystallize-artifact` Step 2 wrote the ticket ID to
+`crystallize-creation` Step 2 wrote the ticket ID to
 `data/.tasks/harden/crystallize-<name>/ticket_id.txt` at launch time. Read it and
 close:
 
@@ -131,7 +131,7 @@ have a list command in this build -- look for the ticket in
 
 ## 6. Commit the migration changes
 
-The migration touches consumer code and removes runtime artifacts;
+The migration touches consumer code and removes runtime creations;
 those should be a separate commit from the merge so the migration is
 reviewable on its own. Now that section 5 has read `ticket_id.txt`,
 also delete `data/.tasks/harden/crystallize-<name>/` (unless the user asked to

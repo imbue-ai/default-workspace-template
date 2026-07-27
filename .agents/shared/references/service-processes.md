@@ -2,8 +2,8 @@
 
 Shared reference for the supervisord layer beneath a service -- its
 `[program:<name>]` definition, and how to add, remove, modify, or inspect a
-program. Reach for this from any service flow (`update-service`,
-`build-web-service`) when a change touches *how a service runs* (its port,
+program. Reach for this from any service flow (`update-app`,
+`build-app`) when a change touches *how a service runs* (its port,
 command, logs) or adds/removes a program, rather than only its code.
 
 Background services are defined as `[program:<name>]` sections in
@@ -103,9 +103,9 @@ than ~1s later, and it keeps the command self-documenting.
 2. `supervisorctl reread && supervisorctl update` -- supervisord stops and
    forgets the removed program.
 
-For a web service, also drop its `data/.state/apps.toml` entry with
+For an app, also drop its `data/.state/apps.toml` entry with
 `python3 system/scripts/forward_port.py --name <name> --remove`; for a scaffolded
-web lib, `build-web-service`'s `cleanup.md` reference covers the full
+web lib, `build-app`'s `cleanup.md` reference covers the full
 teardown (reverting the lib and the root `pyproject.toml` edits).
 
 ## Modifying a service
@@ -132,6 +132,6 @@ Or read the log files directly under `/var/log/supervisor/`.
   the main agent window or other tmux windows.
 - If you need a one-off command, just run it directly rather than adding a
   program.
-- For standing up a new web service (Flask lib or wrapping a third-party
-  server), use the `build-web-service` skill -- it generates the `[program:*]`
+- For standing up a new app (Flask lib or wrapping a third-party
+  server), use the `build-app` skill -- it generates the `[program:*]`
   block and `forward_port.py` wiring for you.

@@ -146,7 +146,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
    ```
 
 9. **Add the service** by appending this block to `system/supervisord.conf`, then
-    `supervisorctl reread && supervisorctl update` (see the edit-services
+    `supervisorctl reread && supervisorctl update` (see the update-app
     skill):
 
     ```ini

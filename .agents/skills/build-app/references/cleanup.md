@@ -1,4 +1,4 @@
-# Removing a web service
+# Removing an app
 
 1. `python3 system/scripts/forward_port.py --name <name> --remove` (drops the
    entry from `data/.state/apps.toml`).
@@ -13,7 +13,7 @@
 
    (See `.agents/shared/references/service-processes.md` for the
    mechanics.)
-3. If you scaffolded a lib, also: `rm -rf creations/<package>/` and revert
+3. If you scaffolded a lib, also: `rm -rf system/apps/<package>/` and revert
    the matching diff in the root `pyproject.toml` (drop from
    `[project].dependencies`, `[tool.uv.workspace].members`, and
    `[tool.uv.sources]`).

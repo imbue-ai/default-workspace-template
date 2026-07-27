@@ -91,7 +91,7 @@ ENV_NO_WAIT_STABLE = "MINDS_LAYOUT_NO_WAIT_STABLE"
 
 # How long ``open`` / ``split`` wait for a freshly-registered service to
 # appear before giving up. The supervisord-managed forward_port.py call races
-# with the agent invoking this script right after build-web-service, so we
+# with the agent invoking this script right after build-app, so we
 # tolerate a brief window where the entry is not yet visible.
 _REGISTRATION_TIMEOUT_SECONDS = 5.0
 _REGISTRATION_POLL_INTERVAL_SECONDS = 0.25

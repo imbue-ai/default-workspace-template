@@ -1,4 +1,4 @@
-# Artifact: system interface
+# Creation: system interface
 
 `system/apps/system_interface` -- the live web workspace UI (dockview shell, chat
 panels, progress view) and its Flask backend. This reference describes what the

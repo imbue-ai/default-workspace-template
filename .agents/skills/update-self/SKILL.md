@@ -327,8 +327,8 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 python3 system/scripts/layout.py open si-preview
 ```
 
-**Other web services are optional previews.** When the report says another user
-web service took meaningful merge work, use your judgment: serve it from the
+**Other user apps are optional previews.** When the report says another user
+app took meaningful merge work, use your judgment: serve it from the
 worker's worktree via `.agents/shared/scripts/serve_isolated_instance.py` as its
 own preview tab -- or, when the system interface is also being previewed, link
 it from inside that preview. Skip previews for services that came in clean.
@@ -407,9 +407,9 @@ Each inspiration this mind has adopted and the version it is on;
 VERSION_HISTORY_EOF
 ```
 
-**Part 2 -- seed the `## Workspace` creation line if it is absent** -- exactly
+**Part 2 -- seed the `## Workspace` origin line if it is absent** -- exactly
 once per workspace, inserted as the FIRST line under `## Workspace` (the oldest
-event, so it never appends at the end). Resolve the creation snapshot as the
+event, so it never appends at the end). Resolve the template base as the
 **OLDEST** first-parent template-state marker (`^update-self:` or `Initial
 workspace commit`), and resolve its date/version/sha **from that commit itself**
 so seeding late still records when the workspace was actually created:
@@ -431,10 +431,10 @@ fi
 ```
 
 **Use `git describe` (reachability), NEVER `git tag --points-at`.** No tag is ever
-*on* a creation snapshot: `Initial workspace commit` is an `--allow-empty` commit
+*on* a template base: `Initial workspace commit` is an `--allow-empty` commit
 bootstrap writes ON TOP of the cloned template commit, and an `update-self:`
 marker is a merge commit -- in both cases the `minds-v*` tag is on an ancestor, so
-a pointing-at lookup always comes up empty and every creation line would silently
+a pointing-at lookup always comes up empty and every origin line would silently
 degrade to the unnamed `created from the workspace template` fallback. (This walk
 takes the **OLDEST** marker -- where the mind *started*. `publish-inspiration`
 §2's `BASE_REF` walk uses the same markers but takes the **NEWEST**; the
@@ -553,7 +553,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
     upstream template -- the same release tested it against the new dep),
     hot-running the provisioner is safe; apply it live as above. If the dependent
     is **user-created** (built in this workspace, absent from upstream -- e.g. a
-    `build-web-service` app under `creations/`), do **not** hot-run
+    `build-app` app under `system/apps/`), do **not** hot-run
     the provisioner: upstream never tested that code against the new dep and the
     worker couldn't validate it either, so treat it as **rebuild-only** -- surface
     it to the user for a workspace recreate (which provisions the new substrate and
@@ -591,7 +591,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
     is landed.)
 
 - **`shared_runtime` (`system/scripts/**` other than the provisioning scripts above,
-  `system/libs/**`, `creations/**`, `.agents/**`)** -- applies to
+  `system/libs/**`, `system/apps/**`, `.agents/**`)** -- applies to
   future agents automatically unless a live service depends on the file. The
   report's impact analysis names any live consumer; restart that service
   (usually `mngr start --restart system-services`). Only "nothing to reveal"

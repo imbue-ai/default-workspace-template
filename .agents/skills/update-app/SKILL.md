@@ -1,27 +1,28 @@
 ---
-name: update-service
-description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing service -- load this BEFORE touching the service's code. Applies to any change to a service's backend or frontend logic, or how it runs. Covers both user-facing web services (a tab the user can open) and background daemons (runtime-backup, cloudflared, and other supervisord programs with no tab). This is the front door for service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new web view use build-web-service; for the workspace UI itself use update-system-interface."
+name: update-app
+description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, cloudflared, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
 ---
 
-# Changing an existing service
+# Changing an existing app or service
 
-A "service" here is a `[program:<name>]` under supervisord (see
-`system/supervisord.conf`). Two kinds, differing only in whether there's a tab to
-refresh:
+Both apps and background services run as a `[program:<name>]` under
+supervisord (see `system/supervisord.conf`). They differ only in whether
+there's a tab to refresh:
 
-- **User-facing web service** -- the user opens it as a tab rendering at
-  `/service/<name>/` (scaffolded via `build-web-service`).
-- **Background daemon** -- a supervisord program with no tab
-  (`runtime-backup`, `cloudflared`, forwarders, cron-like jobs).
+- **App** -- the user opens it as a tab rendering at `/service/<name>/`
+  (scaffolded via `build-app`). Lives under `system/apps/<package>/`.
+- **Background service** -- a supervisord program with no tab (`host-backup`,
+  `cloudflared`, forwarders), standalone under `system/services/` or co-owned
+  by an app (named `<app>-<role>`, code in the app's folder).
 
 Two things are easy to forget when editing either, and both leave the user
 looking at stale state: a code change doesn't take effect until the process
-is reloaded, and an open web tab keeps showing the old page until it's
+is reloaded, and an open app tab keeps showing the old page until it's
 refreshed. The live change loop below handles both.
 
-If you're doing something *other* than editing an existing service:
+If you're doing something *other* than editing an existing app or service:
 
-- **Creating a new web view** -> `build-web-service`.
+- **Creating a new app** -> `build-app`.
 - **Changing the workspace UI itself** (`system/apps/system_interface` -- the
   dockview shell, chat panels, progress view) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
@@ -39,7 +40,7 @@ the request is -- it changes what you do *before* touching code:
 
 - **Larger-scope change** -- a redesign, a new page or view, a meaningful
   shift in look-and-feel, or a new user-facing capability. Run the *same*
-  mock-confirm flow `build-web-service` used to create the service: **read
+  mock-confirm flow `build-app` used to create the service: **read
   `.agents/shared/references/interactive-delivery.md`**, put a cheap,
   throwaway version of the *proposed* change in front of the user, loop until
   they **explicitly confirm** the shape, and only then build the real thing
@@ -118,7 +119,7 @@ Make the change interactive and keep the user's view in sync as you go.
 
 ### 1. Make the change
 
-Edit the service's code under `creations/<package>/` (or wherever the program's
+Edit the service's code under `system/apps/<package>/` (or wherever the program's
 command points). If the change renders HTML a person looks at, invoke the
 `frontend-design` skill before writing markup, and if it calls Claude,
 follow `use-ai-integration` -- the same rules as when the service was
@@ -130,7 +131,7 @@ The scaffolded web runner runs with `use_reloader=False`, and daemons
 don't watch their own source, so a code change is **not** live until the
 process restarts:
 
-- **Backend change** (Python / server logic, for a web service or a
+- **Backend change** (Python / server logic, for an app or a
   daemon): restart the program.
 
   ```bash
@@ -155,7 +156,7 @@ If it doesn't come back `RUNNING`, read
 `/var/log/supervisor/<name>-stderr.log` or
 `supervisorctl tail <name> stderr`.
 
-### 3. Refresh the user's view (web services only)
+### 3. Refresh the user's view (apps only)
 
 If the service has a user-facing tab, the open iframe is still showing the
 pre-change page. Refresh it so the user sees the update without being told
@@ -178,7 +179,7 @@ would (not just "the process is up"):
 - **Web service**: `curl` against
   `http://127.0.0.1:8000/service/<name>/` then a Playwright assertion on a
   marker unique to your change. The recipe is in
-  `build-web-service`'s [verify reference](../build-web-service/references/verify.md);
+  `build-app`'s [verify reference](../build-app/references/verify.md);
   the symptom-indexed gotchas (502, duplicated tab bar, redirect loop,
   broken WebSockets) are in that skill's `cross-flow-gotchas.md`.
 - **Daemon**: watch its log (`supervisorctl tail -f <name> stderr`) and
@@ -186,7 +187,7 @@ would (not just "the process is up"):
 
 ### Protect the user's data while you verify
 
-The service's persistent store -- `data/creations/<name>/` (whatever `DATA_DIR`
+The service's persistent store -- `data/.apps/<name>/` (whatever `DATA_DIR`
 resolves to) -- **is the user's real data**. The recurring, expensive
 failure mode is not the code edit: it is *verifying* a change by writing
 test data into the live store and then "cleaning up" with a delete/reset
@@ -209,7 +210,7 @@ where the data dies. Encode these, cheapest first:
   instance to answer, and prints its URL:
 
   ```bash
-  cp -r data/creations/<name> /tmp/<name>-scratch
+  cp -r data/.apps/<name> /tmp/<name>-scratch
   URL=$(python3 .agents/shared/scripts/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
@@ -240,7 +241,7 @@ where the data dies. Encode these, cheapest first:
 
 - **Snapshot before any genuinely in-place change to the real store.** If a
   change truly must rewrite the live store (a data migration you can't run
-  on a copy), `cp -r data/creations/<name> /tmp/<name>-pre-<change>` first, run the
+  on a copy), `cp -r data/.apps/<name> /tmp/<name>-pre-<change>` first, run the
   change, confirm the real data survived, and only then remove the snapshot.
   The snapshot is a *recovery net* -- do **not** turn it into a routine
   "wipe live and restore backup" step: overwriting a running service's store
@@ -248,10 +249,10 @@ where the data dies. Encode these, cheapest first:
   are silently lost on restore.
 
 - **Retrofit older services when you touch them.** A service that predates
-  this convention hardcodes `data/creations/<name>/` and its listen port at its call
+  this convention hardcodes `data/.apps/<name>/` and its listen port at its call
   sites. Add both overrides the scaffold now emits, as part of your change, so
   the throwaway instance above works: the data-dir override
-  `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "data/creations/<name>"))`
+  `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "data/.apps/<name>"))`
   (route reads/writes through it), and the port override
   `PORT = int(os.environ.get("<PACKAGE_UPPER>_PORT", "<assigned-port>"))`
   (bind `PORT` in `run_simple`, never a hardcoded literal). If you genuinely
@@ -266,14 +267,14 @@ where the data dies. Encode these, cheapest first:
 
 Dropping a service is the definition-level case of step 2: remove its
 `[program:<name>]` block, `supervisorctl reread && supervisorctl update`,
-and (for a web service) `python3 system/scripts/forward_port.py --name <name>
+and (for an app) `python3 system/scripts/forward_port.py --name <name>
 --remove` plus reverting the scaffolded lib. The mechanics are in
 [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md); for a
-scaffolded web lib, `build-web-service`'s `cleanup.md` reference has the
+scaffolded web lib, `build-app`'s `cleanup.md` reference has the
 full teardown.
 
 Teardown stops at the code and the process. **Leave the service's data
-(`data/creations/<name>/`) in place** -- removing a service is not license to
+(`data/.apps/<name>/`) in place** -- removing a service is not license to
 delete the user's records. Delete the data dir only if the user explicitly
 asks, and confirm before you do.
 
@@ -292,24 +293,24 @@ response as another live iteration -- make the change, show it, ask again --
 and hold the harden pass until you are sure the user is satisfied. A single
 "looks fine" mid-thread while they're still tweaking isn't done. (For a
 larger-scope change this gate is the *working* result, not just the mock,
-exactly as `build-web-service`'s Step 5 gates on the working site.)
+exactly as `build-app`'s Step 5 gates on the working site.)
 
 - **A change you and the user discussed and applied live, or repeatable
-  work you did by hand** -> invoke `update-artifact` with
-  `artifact=service`. It opens a tracking ticket, dispatches the generic
+  work you did by hand** -> invoke `update-creation` with
+  `type=app`. It opens a tracking ticket, dispatches the generic
   harden worker to verify/test the change on its own branch, proxies the
   gates, merges, and refreshes the tab on go-live.
 - **The service errored or produced a wrong result and you worked around
-  it** -> invoke `heal-artifact` (artifact = service) at turn-end instead.
+  it** -> invoke `heal-creation` (creation = service) at turn-end instead.
 - **The workspace UI (`system/apps/system_interface`)** -> `update-system-interface`
   owns its own preview-before-merge and safe-reveal go-live; use it rather
   than this flow.
 
-`update-artifact` and `heal-artifact` also stand on their own as turn-end
+`update-creation` and `heal-creation` also stand on their own as turn-end
 skills; this skill's turn-end step is just the service-shaped entry into
 them.
 
-Both flows enforce single-flight per artifact: if another chat already has a
+Both flows enforce single-flight per creation: if another chat already has a
 harden pass in flight for this service, they leave a note on its ticket
 instead of dispatching a sibling, and the eventual superseding pass covers
 both changes. See

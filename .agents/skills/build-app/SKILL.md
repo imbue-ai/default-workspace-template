@@ -1,19 +1,19 @@
 ---
-name: build-web-service
-description: "Use when you want to create a new web view for the user -- a page, dashboard, or app they can open as a tab. Runs an interactive flow: confirm the look and feel on a cheap throwaway mock first, then build the real site to a usable state, then harden it in the background. Covers scaffolding a new Flask service (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
+name: build-app
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a tab. Runs an interactive flow: confirm the look and feel on a cheap throwaway mock first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
 metadata:
   crystallized: true
 ---
 
-# How to build a web service
+# How to build an app
 
-A "web service" here is something the user can click on as a tab in
+An "app" here is something the user can click on as a tab in
 the desktop client and see render at `/service/<name>/`, proxied
 through the system_interface.
 
 There is one canonical path (scaffold a new Flask lib) and one
 escape hatch (wrap a pre-existing third-party server). Modify/remove
-flows go through the `update-service` skill.
+flows go through the `update-app` skill.
 
 ## This is the web specialization of the interactive-delivery shape
 
@@ -39,7 +39,7 @@ Map of the flow:
   confirms the *working* site looks right, hand thorough testing + the review
   gates to a background worker. The main agent never runs those itself.
 
-If you were sent here by `fetch-process-show` for a web view over fetched data,
+If you were sent here by `fetch-process-show` for an app over fetched data,
 the data sample is already confirmed -- but you still run your own mock
 confirmation here, because the data sample confirms the data *shape*, not the UI
 shape. Render the handed-off `sample.json` in the mock so the user judges the UI
@@ -48,7 +48,7 @@ against real data.
 ## Step 0: Clarify and plan (business terms only)
 
 Ask only the questions that genuinely *block* -- a fork that is both genuinely
-uncertain *and* expensive to reverse later. Most web views have none: default to
+uncertain *and* expensive to reverse later. Most apps have none: default to
 the simplest conventional choice and to a **single user**, state each default in
 one line, and move on. Cheap-to-reverse choices (persistence, auto-reload vs.
 reload-to-refresh, latest-only vs. history) are not P0 -- pick the obvious
@@ -82,12 +82,12 @@ costs an extra process, and complicates WebSocket and streaming
 behavior. Use the escape hatch instead.
 
 Do not extend `system/apps/system_interface/` to add a new view. That app runs
-the top-level workspace UI; new web views go in their own scaffolded lib
-under `creations/<your-package>/` so they get an isolated tab and prefix.
+the top-level workspace UI; new apps go in their own scaffolded lib
+under `system/apps/<your-package>/` so they get an isolated tab and prefix.
 
 ## Pre-flight (both paths)
 
-- **Pick a kebab-case service name.** Becomes the URL segment
+- **Pick a kebab-case app name.** Becomes the URL segment
   `/service/<name>/`. Short and descriptive (`news`, `docs-viewer`)
   beats clever. Avoid names already used in `system/supervisord.conf`
   (`system_interface`, `browser`, etc. are reserved by the scaffolder).
@@ -107,7 +107,7 @@ under `creations/<your-package>/` so they get an isolated tab and prefix.
 ## Step 1: Run the scaffolder (canonical path)
 
 ```bash
-uv run .agents/skills/build-web-service/scripts/scaffold_flask_lib.py \
+uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
     [--port <int>] \
@@ -131,30 +131,30 @@ is taken, or `uv sync` fails.
 
 What gets generated:
 
-- `creations/<package>/pyproject.toml` -- declares
+- `system/apps/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`.
-- `creations/<package>/src/<package>/__init__.py` -- empty.
-- `creations/<package>/src/<package>/runner.py` -- sync Flask starter.
+- `system/apps/<package>/src/<package>/__init__.py` -- empty.
+- `system/apps/<package>/src/<package>/runner.py` -- sync Flask starter.
   Builds a `Flask` app and serves it with
   `werkzeug.serving.run_simple(..., threaded=True)`. It serves at `/`;
   the system_interface proxy handles the `/service/<name>/` prefixing,
   so no `root_path`/`ROOT_PATH` is needed. It also defines a `DATA_DIR`
-  constant (defaults to `data/creations/<name>/`, overridable via the
+  constant (defaults to `data/.apps/<name>/`, overridable via the
   `<PACKAGE_UPPER>_DATA_DIR` env var) -- route all persistent state
   through it (see File-path conventions below) -- and a `PORT` constant
   (defaults to this service's assigned port, overridable via the
   `<PACKAGE_UPPER>_PORT` env var) bound in `run_simple`. Both overrides
   are what let a future edit boot a throwaway instance on a spare port
-  against a data copy (see `update-service`).
-- `creations/<package>/test_<package>_ratchets.py` -- standard ratchets at
+  against a data copy (see `update-app`).
+- `system/apps/<package>/test_<package>_ratchets.py` -- standard ratchets at
   zero.
-- `creations/<package>/README.md` -- one-line description.
+- `system/apps/<package>/README.md` -- one-line description.
 
 What gets updated:
 
 - Root `pyproject.toml` -- adds `<service-name>` to
   `[project].dependencies` and `<service-name> = { workspace = true }` to
-  `[tool.uv.sources]` (the `creations/*` member glob picks the package up
+  `[tool.uv.sources]` (the `system/apps/*` member glob picks the package up
   without a members edit).
 - `system/supervisord.conf` -- appends a program block:
 
@@ -173,7 +173,7 @@ What gets updated:
   worker that prepends the prefix to the page's own fetches). The
   `bash -c "..."` wrapper is required because supervisord runs commands
   directly (no shell) and this one chains `forward_port.py` with `&&`. The
-  `oom_tag_service.py user` prefix tags this user-created service so it is
+  `oom_tag_service.py user` prefix tags this user-created app so it is
   shed before any built-in service under memory pressure (see
   `system/services/oom_priority/README.md`).
 
@@ -197,7 +197,7 @@ look-and-feel is the tripwire: do not.** Instead, serve a *throwaway mock* of th
 proposed UI as a route inside the scaffolded service, so the user sees it as a
 real tab and reacts to the actual look-and-feel.
 
-This is skeleton phase 5 (the cheap throwaway artifact). Keep it disposable:
+This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 
 - The mock renders **static / hard-coded content** that demonstrates the proposed
   layout and interactions -- no real fetching, no persistence, no backend logic.
@@ -296,14 +296,14 @@ Two cases, two patterns:
 - **Persistent state** (caches, cursors, last-visit timestamps, JSON
   snapshots, user records -- anything written and read across runs):
   read and write it under the generated `DATA_DIR` constant, never a
-  hardcoded `data/creations/<name>/` at the call site. `DATA_DIR` defaults to
-  `data/creations/<name>/` (cwd-relative, resolved from `/home/user/workspace` where the
+  hardcoded `data/.apps/<name>/` at the call site. `DATA_DIR` defaults to
+  `data/.apps/<name>/` (cwd-relative, resolved from `/home/user/workspace` where the
   supervisord-managed service runs) but honors the
   `<PACKAGE_UPPER>_DATA_DIR` env var. That override is what makes a
   future edit safe: an agent changing the service can run a throwaway
   instance against a *copy* of the data instead of the live store (see
-  `update-service`), so keep every read/write going through `DATA_DIR`
-  -- a hardcoded `data/creations/<name>/` silently bypasses the override and
+  `update-app`), so keep every read/write going through `DATA_DIR`
+  -- a hardcoded `data/.apps/<name>/` silently bypasses the override and
   re-exposes the live data. Do NOT use `Path(__file__)`-based paths for
   state.
 - **Static assets shipped alongside the .py file** (templates,
@@ -364,8 +364,8 @@ The foreground work stops at a usable, surfaced site. The thorough pass --
 extending Playwright coverage, the full test suite and ratchets, `/autofix`, and
 the code-guardian gates -- runs in a **background harden worker**, never in the
 main agent. This is skeleton phase 7: the harden pass
-(`.agents/shared/worker/references/harden-artifact.md`), here the **crystallize**
-operation with the **service** artifact -- the scaffolded service is already on
+(`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
+operation with the **service** creation -- the scaffolded service is already on
 disk and the user confirmed it live, so nothing needs reconstructing and there
 are no worker gates.
 
@@ -390,13 +390,13 @@ Reading the confirmation signal:
 - Wait for an explicit confirmation rather than firing on a timeout or silence.
   The user is never blocked: they already hold the usable site.
 
-On confirmation, **hand the confirmed service to the `crystallize-artifact`
-skill with `artifact=service`.** It owns the rest -- the tracking ticket, the
-task file (set `artifact: service`), launching the generic `harden-worker`,
+On confirmation, **hand the confirmed app to the `crystallize-creation`
+skill with `type=app`.** It owns the rest -- the tracking ticket, the
+task file (set `type: app`), launching the generic `harden-worker`,
 polling, merging on `done`, and refreshing the tab after merge. Give it only:
-the slug (the service name), and a task body naming the built lib path, the
-service name, the URL segment, and what the service does. The generic worker
-loads `harden-artifact.md` + `op-crystallize.md` + `artifact-service.md` and
+the slug (the app name), and a task body naming the built lib path, the
+app name, the URL segment, and what the app does. The generic worker
+loads `harden-creation.md` + `op-crystallize.md` + `type-app.md` and
 reports `done` once its testing contract and the review gates pass; there is no
 worker gate because the user already confirmed the live site.
 
@@ -411,7 +411,7 @@ For pre-existing third-party tools, do not scaffold a lib. Add a
 `forward_port.py` and then your existing start command. supervisord runs
 commands directly (no shell), so wrap any command that chains with `&&`
 in `bash -c "..."`, and prefix the whole thing with
-`python3 system/scripts/oom_tag_service.py user` so this user-created service is
+`python3 system/scripts/oom_tag_service.py user` so this user-created app is
 shed before any built-in service under memory pressure (see
 `system/services/oom_priority/README.md`):
 
@@ -493,6 +493,6 @@ why it isn't in `data/.state/apps.toml`. See
 
 ## Cleanup
 
-To remove a web service (drop the `apps.toml` entry, stop and unregister
+To remove an app (drop the `apps.toml` entry, stop and unregister
 the supervisord program, and revert the scaffolded lib), see
 [references/cleanup.md](references/cleanup.md).
