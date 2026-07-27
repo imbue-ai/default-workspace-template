@@ -1,5 +1,5 @@
 /**
- * Unified WebSocket-based agent and application state manager.
+ * Unified WebSocket-based agent and app state manager.
  * Receives real-time updates for agents, apps, and proto-agents.
  */
 
@@ -377,7 +377,7 @@ export function removeAgentLocally(agentId: string): void {
   agents = agents.filter((a) => a.id !== agentId);
 }
 
-export function getApplications(): AppEntry[] {
+export function getApps(): AppEntry[] {
   return apps;
 }
 

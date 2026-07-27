@@ -44,7 +44,7 @@ import {
   fetchTerminalSessions,
   getAgentById,
   getAgents,
-  getApplications,
+  getApps,
   getProtoAgents,
   removeAgentLocally,
   removeAgentsUpdatedListener,
@@ -689,7 +689,7 @@ function buildDropdownItems(
   // ``/service/browser/`` app entry would open a session-less viewer that
   // doesn't dedup against the fleet panes), and "web" (the placeholder example
   // server -- the browser fleet is the real web surface, so it's just noise).
-  const apps = getApplications().filter(
+  const apps = getApps().filter(
     (app) =>
       app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser" && app.name !== "web",
   );
@@ -2074,7 +2074,7 @@ async function handleOpen(args: Record<string, unknown>, requesterAgentId: strin
     // Strip any ``?session=`` suffix (browser fleet) before the lookup:
     // registration is per-service, not per-session.
     const serviceName = parseServiceRefBody(ref.substring("service:".length)).name;
-    if (!getApplications().find((a) => a.name === serviceName)) return;
+    if (!getApps().find((a) => a.name === serviceName)) return;
     handleOpenPanelRequest(ref, requesterAgentId, args.new_group === true);
     return;
   }

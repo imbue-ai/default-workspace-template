@@ -115,17 +115,17 @@ def main() -> None:
     if not args.remove and not args.url:
         parser.error("--url is required when not using --remove")
 
-    applications_file = _apps_file()
-    lock_path = applications_file.parent / ".apps.lock"
+    apps_file = _apps_file()
+    lock_path = apps_file.parent / ".apps.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(lock_path, "w") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
         try:
             if args.remove:
-                _remove(applications_file, args.name)
+                _remove(apps_file, args.name)
             else:
-                _upsert(applications_file, args.name, args.url)
+                _upsert(apps_file, args.name, args.url)
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 

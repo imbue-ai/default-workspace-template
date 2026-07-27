@@ -229,7 +229,7 @@ class _LogQueueCallback(MutableModel):
         _safe_log_put(self.log_queue, json.dumps({"line": line.rstrip("\n")}))
 
 
-class _ApplicationsFileHandler(FileSystemEventHandler):
+class _AppsFileHandler(FileSystemEventHandler):
     """Watchdog handler that triggers on mutating changes to apps.toml.
 
     Subscribes to mutation events (modified/created/deleted/moved/closed)
@@ -273,9 +273,9 @@ class _ApplicationsFileHandler(FileSystemEventHandler):
 def _make_apps_file_handler(
     agent_id: str,
     on_change: Any,
-) -> _ApplicationsFileHandler:
+) -> _AppsFileHandler:
     """Create an apps-registry file handler for the given agent."""
-    handler = _ApplicationsFileHandler()
+    handler = _AppsFileHandler()
     handler.agent_id = agent_id
     handler.on_change = on_change
     return handler

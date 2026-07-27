@@ -1,4 +1,4 @@
-"""Application watcher service.
+"""App-registry watcher service.
 
 Watches data/.state/apps.toml for changes. On startup and on every change,
 writes service_registered / service_deregistered events to
@@ -28,7 +28,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
 
-APPLICATIONS_FILE = Path("data/.state/apps.toml")
+APPS_FILE = Path("data/.state/apps.toml")
 # mtime-polling fallback interval. Kept low (5s) because under the gVisor (runsc)
 # runtime, and on the lima/vps providers, file changes made outside the sandbox
 # do not raise in-sandbox inotify events -- polling is then the only signal, so a
@@ -73,9 +73,9 @@ def _get_events_dir() -> Path | None:
 
 def _load_apps() -> list[dict[str, object]]:
     """Load apps from the TOML file."""
-    if not APPLICATIONS_FILE.exists():
+    if not APPS_FILE.exists():
         return []
-    with open(APPLICATIONS_FILE, "rb") as f:
+    with open(APPS_FILE, "rb") as f:
         data = tomllib.load(f)
     return data.get("apps", [])
 
@@ -159,7 +159,7 @@ def main() -> None:
     """Main loop: watch apps.toml and write service events."""
     print("[app-watcher] Starting app watcher", file=sys.stderr, flush=True)
 
-    APPLICATIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    APPS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     events_dir = _get_events_dir()
     if events_dir is None:
@@ -169,7 +169,7 @@ def main() -> None:
             flush=True,
         )
 
-    inotify_fd = _try_setup_inotify(APPLICATIONS_FILE)
+    inotify_fd = _try_setup_inotify(APPS_FILE)
     if inotify_fd is not None:
         print(
             "[app-watcher] Using inotify for file watching", file=sys.stderr, flush=True
@@ -193,7 +193,7 @@ def main() -> None:
     while True:
         try:
             new_mtime = (
-                APPLICATIONS_FILE.stat().st_mtime if APPLICATIONS_FILE.exists() else 0.0
+                APPS_FILE.stat().st_mtime if APPS_FILE.exists() else 0.0
             )
         except OSError:
             new_mtime = 0.0

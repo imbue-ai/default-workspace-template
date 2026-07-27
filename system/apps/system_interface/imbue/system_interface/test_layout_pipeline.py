@@ -255,9 +255,9 @@ def test_open_terminal_returns_ref_via_stdout_and_broadcasts_panel_id(
     # The script polls data/.state/apps.toml for the named service;
     # seed ``terminal`` so registration succeeds without the real
     # forward_port pipeline.
-    applications_dir = sandbox / "data" / ".state"
-    applications_dir.mkdir(parents=True)
-    (applications_dir / "apps.toml").write_text(
+    state_dir = sandbox / "data" / ".state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "apps.toml").write_text(
         '[[apps]]\nname = "terminal"\nurl = "http://localhost:9000/terminal"\n'
     )
 
