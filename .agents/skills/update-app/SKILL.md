@@ -301,7 +301,8 @@ exactly as `build-app`'s Step 5 gates on the working site.)
   harden worker to verify/test the change on its own branch, proxies the
   gates, merges, and refreshes the tab on go-live.
 - **The service errored or produced a wrong result and you worked around
-  it** -> invoke `heal-creation` (creation = service) at turn-end instead.
+  it** -> invoke `heal-creation` with `type=app` (or `type=service` for a
+  background service) at turn-end instead.
 - **The workspace UI (`system/apps/system_interface`)** -> `update-system-interface`
   owns its own preview-before-merge and safe-reveal go-live; use it rather
   than this flow.

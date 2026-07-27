@@ -5,7 +5,7 @@ signed off on a shape in the foreground, put in the thorough, expensive effort
 to turn it into a hardened, committed, reviewed creation -- in the background,
 off the interactive path. This contract is the part that is identical across
 every operation (crystallize, update, heal) and every creation (a reusable
-a skill, an app, the system interface).
+skill, an app, a service, the system interface).
 
 ## The premise and the bar
 

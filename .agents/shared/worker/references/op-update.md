@@ -139,10 +139,10 @@ Write a `type: gate`, `name: final-creation` report plus "Approve and save? (yes
   consumer or surface would need to adapt to>
 ```
 
-**Service:**
+**App or service:**
 
 ```
-Updated app `<name>`:
+Updated app or service `<name>`:
 - Change: <one-sentence>
 - Routes affected: <list>
 - Scenarios / tests run: <list, all pass>

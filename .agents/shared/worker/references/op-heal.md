@@ -80,10 +80,10 @@ Fixed `<name>`:
 - Scenarios run: <list, all pass>
 ```
 
-**Service:**
+**App or service:**
 
 ```
-Fixed app `<name>`:
+Fixed app or service `<name>`:
 - Change: <one-sentence (root cause + fix)>
 - Routes affected: <list>
 - Scenarios / tests run: <list, all pass>

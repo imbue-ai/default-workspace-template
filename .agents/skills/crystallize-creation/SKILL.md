@@ -189,7 +189,7 @@ Flow-specific substitutions:
 - Reports dir: `data/.tasks/harden/crystallize-$NAME/reports/`;
   consumed: `data/.tasks/harden/crystallize-$NAME/reports/consumed/`
 - Gates: **skill** → `outline-approval` (Gate 1) and `final-creation` (Gate 2);
-  **service** → none (the worker merges straight to `done`).
+  **app** → none (the worker merges straight to `done`).
 - Terminal statuses: `done` (merge, then Step 6); `stuck` (failure flow per
   `launch-task/references/worker-failure.md`).
 
