@@ -1,0 +1,117 @@
+- New **`update-published-inspiration`** skill: the pathway for a publisher to create a new
+  version of an inspiration they already published (v2, v3, ...). It locates the
+  inspiration from the version ledger, shows what changed in the workspace since
+  the last publish, and ASKS the user which of those changes they want in the
+  update. It then launches a background worker to implement it -- and the core
+  safety rule is that it **re-assembles from the published tip, never from the
+  raw template base**, so the user's own customizations (the finished manifest
+  prose, the recipe, the bespoke thumbnail, the welcome, and adopters' adaptation
+  history) are preserved and only the approved changes are overlaid. The recipe's
+  exclusions and modification rules are re-applied, secrets are re-scanned, the
+  result is boot-checked, a `### v(n+1)` Publication-history entry is appended,
+  and exactly one clean commit is fast-forwarded onto the published repo (no
+  force). The workspace ledger records the new version only after the push
+  succeeds.
+
+- New **`update-installed-inspiration`** skill: the ADOPTER pathway to pull a newer
+  version of an already-adopted inspiration from its remote into the current
+  mind. It reuses `use-inspiration`'s safeguards -- the same trust gate (Imbue
+  has not verified it, it could be malicious; confirm before fetching), and a
+  merge done in an isolated worktree with a boot smoke-check that lands into the
+  live tree only when clean. Its central rule is to **preserve this mind's own
+  adaptations**: merge conflicts are surfaced as holes and resolved
+  interactively with the user, never mechanically or with a blanket "take
+  theirs", so the customizations that make it the user's mind are never thrown
+  away. It records the version it moved to under a new `## Adopted inspirations`
+  section of the ledger.
+
+- **Adopting an inspiration is now gated and verified.** Before the merge path
+  pulls a third-party inspiration into a mind, `use-inspiration` requires the
+  user to confirm they trust the source -- stating plainly that Imbue has not
+  verified it and it could contain malicious code -- and does nothing (no fetch,
+  merge, or execution) until they agree. The merge itself now happens in an
+  isolated worktree with a boot smoke-check, and only a clean, bootable result
+  is fast-forwarded into the live tree, so a broken or hostile inspiration can
+  never clobber the mind. A mind created directly FROM an inspiration is treated
+  as already trusted (creating it was the trust decision).
+
+- The workspace version ledger is `docs/VERSION_HISTORY.md`, with three
+  sections: `## Workspace` (template version created-from + each `update-self`
+  landing), `## Inspirations` (each inspiration this mind published, `v1`/`v2`...
+  per slug), and `## Adopted inspirations` (each inspiration this mind adopted
+  and the version it is on). Instead of a separate helper skill, each writer --
+  `update-self`, `publish-inspiration`, `update-published-inspiration`, and
+  `update-installed-inspiration` -- carries its own self-contained instructions
+  telling the agent exactly which line to append and how (section, format, how
+  the version number is computed, the idempotence check, and that it is one file
+  staged by name and committed, never `git add -A`). The two subtle rules are
+  spelled out where they apply: record the `update-self` MERGE commit, not
+  `HEAD` (committing the ledger moves `HEAD`), and resolve the template version
+  by reachability (`git describe`), not `git tag --points-at`.
+
+- **`update-self`** now records the version it moved to as part of landing an
+  update, so a workspace's template lineage is visible in its own git tree.
+
+- The publish skill now confirms the **adopter's required permissions with the
+  publisher**. The manifest's "Prerequisites" -- what the inspiration's user must
+  grant for the app to work -- are surfaced back in the chat confirmation in
+  plain language, and the publisher's answer is part of the go-ahead. A missing
+  or wrong line is fixed before the push, since a gap there silently breaks
+  adoption.
+
+- **An inspiration can be anything committable**, not just an app: a skill, a
+  chat customization or behavior, a workflow, a service, config, or seed data.
+  If the user wants to snapshot something that is not committed to git -- an
+  ephemeral chat behavior, conversation history, runtime-only state -- the skill
+  recognizes this and suggests turning it into something committable first (most
+  often by crystallizing it into a skill), since an inspiration must be
+  reconstructable from the committed tree.
+
+- **LLM access is now a first-class prerequisite.** Any inspiration whose code
+  calls Claude records how it reaches it, because that differs per environment:
+  the keyed path (`ANTHROPIC_API_KEY` set -> litellm, pay-per-token) or the
+  keyless path (`claude -p` -> the subscription credit pool). The manifest gains
+  a `requires_llm:` line naming the method the code was built against, so an
+  adopter on the other method knows to switch the model calls, and a hardcoded
+  path is also listed as a Hole.
+
+- **Published inspiration repos are locked down on creation** -- unconditionally
+  (public or private) and without asking, using GitHub's 2026 pull-request-access
+  setting. Right after the repo is created, one PATCH restricts pull requests to
+  collaborators (`pull_request_creation_policy: collaborators_only`, so arbitrary
+  outsiders cannot open a PR) and disables issues, wiki, projects, and
+  discussions outright. This closes every surface where a non-collaborator could
+  open or inject content. Two residual limits remain, surfaced only if the user
+  chooses public visibility: the REST API can only RESTRICT pull requests to
+  collaborators, not fully disable them (the disable toggle is UI-only), and
+  forking cannot be disabled on a personal public repo (GitHub allows that only
+  on org-owned repos). On a private inspiration neither matters, since outsiders
+  have no access at all.
+
+- **Published manifests now carry a changelog.** Each `inspiration-<slug>.md`
+  has a "Publication history" section -- the inspiration's own changelog of what
+  each published version changed, seeded at v1 with `### v1 (date) -- what this
+  first version publishes`. It is the publisher's log (a later update appends
+  `### v2 (date) -- what changed`), kept distinct from the adopters'
+  "Adaptation history". The section is FILL-IN-gated like the rest of the
+  manifest, so a publish cannot complete with it left as a placeholder.
+
+- **Published manifests now carry a version and a recipe.** Each
+  `inspiration-<slug>.md` records `version: v1` and a "Recipe" section: the
+  include paths, the deliberate exclusions, and the published-version
+  modification RULES (rules only -- never the removed values). An inspiration is
+  derived from its workspace by that recipe rather than being a fork of it, so a
+  later update re-runs the recipe against the current workspace instead of
+  diffing two repos -- which is what keeps anything deliberately excluded
+  excluded, even though it still exists in the source workspace.
+
+- A publish records its entry in the workspace's ledger only **after the push
+  succeeds** -- one single-file commit, documented as the one explicit exception
+  to the rule that the live workspace is untouched after assembly. An
+  unpublished inspiration is never recorded.
+
+- A published inspiration never ships version history at all: `docs/VERSION_HISTORY.md`
+  is a workspace artifact, so the assembled snapshot drops it entirely (rather
+  than shipping an empty copy). The slugs, repo URLs, and source commits of a
+  mind's other inspirations therefore never appear inside one it publishes, and a
+  mind created from the inspiration grows its own ledger on demand.

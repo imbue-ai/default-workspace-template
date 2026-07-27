@@ -1,22 +1,26 @@
 ---
 name: github-sync
-description: Enable, check, or disable GitHub sync for this workspace. Enabling creates a dedicated PRIVATE GitHub repo via latchkey, points origin at it, auto-pushes every commit from every checkout, and continuously syncs runtime/ state (memory, tickets, transcripts). Use when the user asks to back up / sync the workspace to GitHub, enable auto-push, restore a previous workspace's state, or asks about GitHub sync status.
+description: Enable, check, or disable GitHub sync for this workspace. Enabling creates a dedicated PRIVATE GitHub repo via latchkey, points origin at it, and auto-pushes every commit from every checkout. Workspace data under data/ is NOT synced to GitHub (the restic host backup covers it). Use when the user asks to back up / sync the workspace to GitHub, enable auto-push, or asks about GitHub sync status.
 compatibility: Requires latchkey (see the latchkey skill) and the user approving GitHub permissions in the Minds app.
 ---
 
 # GitHub sync
 
 GitHub sync is opt-in. Nothing syncs until this skill enables it. Once
-enabled, three pieces work together (see `libs/github_sync/README.md`):
+enabled, three pieces work together (see `system/libs/github_sync/README.md`):
 
 1. `origin` points at a dedicated **private** GitHub repo for this workspace.
 2. Global git wiring routes all `https://github.com/...` traffic through the
    latchkey gateway (credential injected server-side; no token in the
    container) and activates the `post-commit` hook, so every commit on any
    checkout -- main repo and worker worktrees -- auto-pushes its branch.
-3. The `[program:github-sync]` service commits + pushes `runtime/` to the
-   `runtime-sync` orphan branch every 60s and re-verifies the repo stays
-   private, halting pushes if it ever isn't.
+3. The `[program:github-sync]` service is a watchdog: every 60s it re-applies
+   the git wiring (self-healing gateway port changes) and re-verifies the repo
+   stays private, halting the hook's pushes if it ever isn't.
+
+What is synced is exactly what is committed to git. Workspace data under
+`data/` (memories, tickets, uploads, per-creation data) is gitignored and is
+NOT shipped to GitHub -- the restic `host-backup` service covers it.
 
 ## Hard rules
 
@@ -27,7 +31,7 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
 - **Everything flows through latchkey.** Never ask the user for a GitHub
   token and never embed credentials in URLs or git config.
 - `origin` is reserved for the sync repo. Upstream-template operations keep
-  using `parent.toml` (see the update-self skill) and are unaffected.
+  using `system/config/parent.toml` (see the update-self skill) and are unaffected.
 
 ## Enable
 
@@ -46,7 +50,7 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
    ```bash
    latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
      -H 'Content-Type: application/json' \
-     -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-read", "github-git-write"]}, "rationale": "GitHub sync: push this workspace'"'"'s branches and runtime state to your private sync repo."}'
+     -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-read", "github-git-write"]}, "rationale": "GitHub sync: push this workspace'"'"'s branches to your private sync repo."}'
    latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
      -H 'Content-Type: application/json' \
      -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-read-repos", "github-write-all"]}, "rationale": "GitHub sync: create the private sync repo (needs github-write-all), confirm which GitHub account it lands under (github-read-user), and verify it stays private (github-read-repos)."}'
@@ -116,8 +120,9 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
      || git remote add origin https://github.com/<owner>/<repo>.git
    ```
 
-   Write `github_sync.toml` at the repo root (this file is the "sync is
-   enabled" marker for the service and the post-commit hook):
+   Write `data/system/github_sync.toml` (this file is the "sync is
+   enabled" marker for the service and the post-commit hook; it lives under
+   the gitignored `data/system/` with the other runtime-written config):
 
    ```toml
    # Written by the github-sync skill. Presence of this file enables GitHub
@@ -129,38 +134,30 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
    on plain `git push`/`git fetch` against github.com works in every
    checkout, and the post-commit auto-push hook is active.
 
-7. **Create (or restore) the runtime worktree**:
-   `uv run github-sync setup-worktree`. If origin already has a
-   `runtime-sync` branch (re-enabling for a workspace recreated from a
-   previously-synced repo), this restores the prior runtime/ state instead of
-   starting fresh -- tell the user their memory/tickets/transcripts are back.
-
-8. **Verify private before any push**: `uv run github-sync check-visibility`
+7. **Verify private before any push**: `uv run github-sync check-visibility`
    must print `private` (exit 0). If not, stop and surface the problem.
 
-9. **Initial sync**: push the current branch, the runtime-sync branch, and
-   any existing worker branches:
+8. **Initial sync**: push the current branch and any existing worker
+   branches:
 
    ```bash
    git push --set-upstream origin "$(git branch --show-current)"
-   git -C runtime push --set-upstream origin runtime-sync
-   for b in $(git for-each-ref --format='%(refname:short)' refs/heads/ | grep -v -x -e "$(git branch --show-current)" -e runtime-sync); do git push origin "$b"; done
+   for b in $(git for-each-ref --format='%(refname:short)' refs/heads/ | grep -v -x -e "$(git branch --show-current)"); do git push origin "$b"; done
    ```
 
-10. **Add the service** by appending this block to `supervisord.conf`, then
+9. **Add the service** by appending this block to `system/supervisord.conf`, then
     `supervisorctl reread && supervisorctl update` (see the edit-services
     skill):
 
     ```ini
-    # Opt-in GitHub sync (added by the github-sync skill): commits + pushes
-    # runtime/ to the runtime-sync branch of the private sync repo and
-    # re-verifies the repo stays private. See libs/github_sync/README.md.
+    # Opt-in GitHub sync (added by the github-sync skill): keeps the gateway
+    # git wiring fresh and re-verifies the sync repo stays private (the
+    # post-commit hook does the pushing). See system/libs/github_sync/README.md.
     # The oom_tag_service.py prefix sets its OOM shed-priority band (see
-    # libs/oom_priority): a runtime-state backup is shed after the UI/tunnel/
-    # terminal but before host-backup, matching what runtime-backup used to get.
+    # system/libs/oom_priority).
     [program:github-sync]
-    command=python3 scripts/oom_tag_service.py github-sync uv run github-sync run
-    directory=/mngr/code
+    command=python3 system/scripts/oom_tag_service.py github-sync uv run github-sync run
+    directory=/home/user/workspace
     autostart=true
     autorestart=true
     startretries=1000000
@@ -174,19 +171,19 @@ enabled, three pieces work together (see `libs/github_sync/README.md`):
     stderr_logfile_backups=3
     ```
 
-11. **Commit the enablement** (`github_sync.toml` + `supervisord.conf`). The
-    now-active hook pushes the commit; this also makes sync sticky if the
-    repo is later used to recreate the workspace.
+10. **Commit the enablement** (`system/supervisord.conf`; the config file is
+    gitignored under `data/system/`). The now-active hook pushes the commit.
 
-12. **Report**: the repo URL, that every commit now auto-pushes, that
-    runtime/ syncs every minute, and that pushes queue while their machine
-    (the latchkey gateway) is offline (on remote hosts the per-VPS secondary
-    gateway usually covers that).
+11. **Report**: the repo URL, that every commit now auto-pushes, that
+    workspace data under `data/` stays out of GitHub (the restic host backup
+    covers it), and that pushes queue while their machine (the latchkey
+    gateway) is offline (on remote hosts the per-VPS secondary gateway
+    usually covers that).
 
 ## Status
 
 `uv run github-sync status` prints config + the service's latest status
-(visibility, last push, errors); `supervisorctl status github-sync` shows the
+(visibility, errors); `supervisorctl status github-sync` shows the
 process; logs are at `/var/log/supervisor/github-sync-*.log` and
 `/tmp/github-sync.log`, hook output at `/tmp/post-commit-push.log`. Explain
 findings in plain language. If `is_push_allowed` is false, the repo is public
@@ -195,13 +192,13 @@ automatically.
 
 ## Repair (workspace recreated from a synced repo)
 
-A workspace created from a previously-synced private repo inherits
-`github_sync.toml` and the service block, but not the latchkey permissions or
-the container-local wiring/worktree. The service idles until it can reach
-origin. To repair: run step 2 (permission requests); the service self-heals
-within a tick (re-wires git, restores runtime/ from origin). Verify with
-"Status", or accelerate with `uv run github-sync wire-git` +
-`uv run github-sync setup-worktree`.
+A workspace created from a previously-synced private repo inherits the
+service block, but not the gitignored `data/system/github_sync.toml`, the
+latchkey permissions, or the container-local wiring. To repair: re-write the
+config file (step 5), then run step 2 (permission requests); the service
+self-heals within a tick (re-wires git). Verify with "Status", or accelerate
+with `uv run github-sync wire-git`. Workspace data under `data/` comes back
+via a restic backup restore, not via GitHub.
 
 ## Disable
 
@@ -209,16 +206,14 @@ Confirm with the user first, and ask separately whether to keep the remote
 repo (recommend keeping it -- it costs nothing and preserves history).
 
 1. `supervisorctl stop github-sync`, remove the `[program:github-sync]` block
-   from `supervisord.conf`, then `supervisorctl reread && supervisorctl update`.
+   from `system/supervisord.conf`, then `supervisorctl reread && supervisorctl update`.
 2. `uv run github-sync unwire-git` (removes the gateway git config and the
    hooks path -- auto-push stops).
-3. Delete `github_sync.toml`.
-4. Leave the local `runtime/` worktree and its history intact (harmless, and
-   re-enabling picks it right back up).
-5. If the user chose to delete the remote repo:
+3. Delete `data/system/github_sync.toml`.
+4. If the user chose to delete the remote repo:
    `latchkey curl -s -X DELETE https://api.github.com/repos/<owner>/<repo>`
    (covered by the `github-write-all` granted at enable). If the grant has
    since been revoked, do not re-request it just for this -- point them at
    the repo's GitHub settings page to delete it themselves.
-6. Commit the removal. Note that this commit is NOT auto-pushed (the hook is
+5. Commit the removal. Note that this commit is NOT auto-pushed (the hook is
    inert again).
