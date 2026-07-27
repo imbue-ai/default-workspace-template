@@ -474,7 +474,7 @@ def _oom_priority_src() -> Path:
     misconfiguration, not a condition to paper over.
     """
     for ancestor in Path(__file__).resolve().parents:
-        candidate = ancestor / "system" / "libs" / "oom_priority" / "src"
+        candidate = ancestor / "system" / "services" / "oom_priority" / "src"
         if candidate.is_dir():
             return candidate
     raise RuntimeError(

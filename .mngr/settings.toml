@@ -735,12 +735,13 @@ agent_args = [
 
 # Subskill-worker template: sub-agent for any flow that hands its worker the
 # generic harden worker -- the crystallize-creation / update-creation /
-# heal-creation lifecycle (across skills, services, and the system interface).
+# heal-creation lifecycle (across skills, apps, services, and the system
+# interface).
 # Inherits from `worker`, adds:
 #  - MNGR_AGENT_ROLE=worker so the harden Stop hook skips in-worker.
 #  - A pre-provision step that installs the single generic worker sub-skill from
 #    .agents/shared/worker/ into the worker's .agents/skills/ tree as
-#    `harden-worker`. The worker reads the operation + creation from its task
+#    `harden-worker`. The worker reads the operation + type from its task
 #    file and composes the matching references.
 [create_templates.subskill-worker]
 type = "worker"
