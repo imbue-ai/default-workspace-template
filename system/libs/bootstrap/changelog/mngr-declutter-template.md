@@ -1,0 +1,1 @@
+The bootstrap execs `system/supervisord.conf` and gates the initial chat on `data/.state/initial_chat_created`, following the workspace-root declutter (the package itself moves to `system/libs/bootstrap`).

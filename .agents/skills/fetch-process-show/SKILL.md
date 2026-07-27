@@ -27,8 +27,8 @@ invent a second, different way of producing the data.
 Pick a short kebab-case slug `$SLUG` for the task (e.g. `fetch-emails`,
 `email-slack-connections`). It is used for:
 
-- Runtime path: `runtime/fetch-process-show/$SLUG/`
-- Sample data path: `runtime/fetch-process-show/$SLUG/sample.json`
+- Runtime path: `data/.tasks/fetch-process-show/$SLUG/`
+- Sample data path: `data/.tasks/fetch-process-show/$SLUG/sample.json`
 - Slug passed to `crystallize-artifact` at the end (reused as its `$NAME`)
 
 ## Clarify and scope (skeleton phases 1-3)
@@ -92,7 +92,7 @@ combined operation.
   asking the user to choose.
 
 Keep validation code simple -- inline bash, `uv run python -c`, or short scripts
-under `runtime/fetch-process-show/$SLUG/` if substantive.
+under `data/.tasks/fetch-process-show/$SLUG/` if substantive.
 
 ## The sample loop (skeleton phase 5)
 
@@ -133,7 +133,7 @@ sample looks right across all shapes. Only that confirmation unlocks the next
 phase. If the user rejects the sample outright, go back to the plan and
 re-propose (re-run research only if the new ask needs it).
 
-Save the raw sample to `runtime/fetch-process-show/$SLUG/sample.json` so the user
+Save the raw sample to `data/.tasks/fetch-process-show/$SLUG/sample.json` so the user
 can ask to see it and so it can **seed the first surface**. Include in each
 sampled record its **raw payload and a source reference**, not only the processed
 fields -- the first surface renders this sample, and per the preserve-and-surface
@@ -151,7 +151,12 @@ runtime on the small sample and report an extrapolation to the full set before
 scaling ("classifying 5 items took 12s and cost $0.013 -- extrapolated to 150
 items, ~$0.40 and ~6 min"). Only scale after a thumbs-up. Apply by default to any
 metered batch step, whether it comes up here or later in a surface -- don't
-pre-judge whether it's "long enough" to need this.
+pre-judge whether it's "long enough" to need this. When the work later
+crystallizes into a pipeline, make sure the worker included this cost/time
+estimate in its Gate 1 outline **and surface that estimate to the user** -- a
+metered pipeline is a spend the user is signing up for, so a crystallize run with
+a metered AI step should generally *not* have an auto-approved Gate 1; escalate
+it for their approval rather than answering the gate yourself.
 
 ## After confirmation: crystallize (background) and start surfaces (foreground)
 
@@ -165,7 +170,7 @@ a **`crystallize-artifact` worker** (the crystallize operation, artifact = a
 script-centric **skill**):
 
 1. **Kick off `crystallize-artifact`** with `artifact=skill` and
-   `source_artifacts_dir: runtime/fetch-process-show/$SLUG/` in the task
+   `source_artifacts_dir: data/.tasks/fetch-process-show/$SLUG/` in the task
    frontmatter, reusing `$SLUG` as its `$NAME`.
 2. **Launch the lead-proxy poll** (`run_in_background: true`) for worker reports,
    per `crystallize-artifact` Step 5 / `.agents/shared/references/lead-proxy.md`.

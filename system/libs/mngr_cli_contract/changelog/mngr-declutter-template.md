@@ -1,0 +1,1 @@
+The workspace tree is restructured for user clarity: this package moves from `libs/` (or `apps/`) to `system/libs/`, and all runtime state moves from `runtime/` into the new gitignored `data/` tree. Path references updated accordingly.

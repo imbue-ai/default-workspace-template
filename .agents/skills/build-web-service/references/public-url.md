@@ -7,7 +7,7 @@ caveats:
 - **The public hostname is owned server-side**, not by the
   cloudflared process running in this container. Skimming the
   `cloudflared` service's logs will not surface a URL.
-- **The public URL is *not* written into `runtime/applications.toml`.**
+- **The public URL is *not* written into `data/.state/applications.toml`.**
   `forward_port.py` only stores `name` and `url` (the local
   `http://localhost:<port>` backend address). Do not grep that file
   for a public URL.

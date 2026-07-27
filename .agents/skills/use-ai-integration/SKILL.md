@@ -1,6 +1,6 @@
 ---
 name: use-ai-integration
-description: Use when code needs to call Claude -- an AI-driven service, an AI integration, or a skill's scripted model step. Covers the three scenarios (one-shot completion, one-shot agentic task, full agent), choosing between a keyed litellm call and the keyless claude -p helper, and the cost / credentialing model.
+description: Use when writing or reasoning about code that calls Claude -- an AI-driven service, an AI integration, or a skill's scripted model step. Covers the three scenarios (one-shot completion, one-shot agentic task, full agent) and the cost / credentialing model.
 ---
 
 # Calling Claude from code
@@ -11,21 +11,47 @@ which path to use, the call surface, and the cost model. Whatever sent you here
 adding an AI integration elsewhere -- supplies the framing; this skill is the
 how.
 
-Code reaches Claude in one of two ways, depending on whether `ANTHROPIC_API_KEY`
-is set in the environment: with a key, call `litellm` directly; without one, use
-the `claude -p` helper in `scripts/claude_p.py`.
+Code reaches Claude in one of two ways, depending on whether an
+`ANTHROPIC_API_KEY` is configured for the workspace: with a key, call `litellm`
+directly; without one, use the `claude -p` helper in `system/scripts/claude_p.py`.
 
-Which path applies is fixed for a deployment -- it does not change at runtime, so
-**do not handle both.** Check once, up front, with a shell command, and
-implement only the path that applies:
+Credentials live in the `env` block of the shared `$CLAUDE_CONFIG_DIR/settings.json`
+(written by the in-UI Claude sign-in modal), NOT in the process environment --
+services inherit a frozen env from supervisord, so an env-var check goes stale
+when the user changes auth. Check which path applies with the resolver in
+`system/scripts/claude_p.py`:
 
 ```bash
-[ -n "$ANTHROPIC_API_KEY" ] && echo keyed || echo keyless
+uv run python -c "from claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"
 ```
 
-If keyed, write only the litellm path; if keyless, write only the `claude -p`
-path. Branching on the key at call time is dead weight. If the user decides to
-add an API key, you can do a simple migration.
+**Keyed setups snapshot the key at setup time.** When the check says `keyed`,
+copy the API key (and the proxy base URL that goes with it) into
+`data/.secrets/anthropic.env` as part of setting up the integration, and have
+the service load its credentials from there -- `read_workspace_ai_credentials()`
+already resolves that file first, so callers using it get this for free. Run
+once while setting up:
+
+```bash
+uv run python -c "from claude_p import write_anthropic_env_snapshot; print(write_anthropic_env_snapshot())"
+```
+
+Only the key + base URL go in the snapshot -- NEVER `CLAUDE_CODE_OAUTH_TOKEN`
+(a subscription token cannot authenticate direct API calls, and the writer
+refuses it). The snapshot pins the integration: if the user later switches the
+workspace's sign-in (e.g. to a subscription), built services keep billing
+against the key they were set up with. To re-key or retire an integration,
+rewrite or delete `data/.secrets/anthropic.env` when the user asks.
+
+Which path applies rarely changes for a deployment, so **do not branch on it at
+call time in simple flows** -- but keyed callers must still resolve the
+key/base URL via `read_workspace_ai_credentials()` at each call (not once at
+import), so a deliberate re-snapshot takes effect without a service restart.
+
+A caller's model is set **in the code** -- expose it as a top-of-file constant
+plus a `--model` override (e.g. `WRITE_MODEL = "claude-haiku-4-5"`), so switching
+it is a one-line change. It is independent of the chat's `/model`, which changes
+only the conversation.
 
 ## Pick the scenario (weakest that does the job)
 
@@ -36,7 +62,8 @@ needs. Pick the weakest -- it is cheaper, faster, and simpler.
    answer-from-context. One prompt, one response, no tools. The common case.
 2. **One-shot agentic task** -- a single self-contained job that needs tools or
    file access ("read this file and act", "summarize the diff with the repo
-   open").
+   open"). This is also how you **search the web** -- `claude -p` has a built-in
+   `WebSearch` tool.
 3. **Full agent** -- a full, possibly long-running agent that runs in its **own
    git worktree** (a `launch-task` worker). Reach for this over scenario 2 when
    Claude edits code that must be tested and validated, or when several agents
@@ -44,6 +71,12 @@ needs. Pick the weakest -- it is cheaper, faster, and simpler.
    error-triggered only, never an autonomous loop**, with a tightly-scoped task.
 
 ## Scenario 1 -- one-shot completion
+
+For a plain completion with **no tools**. If the step needs a tool at all --
+web search or otherwise -- reach for an agent (scenario 2), not a server-side
+provider tool bolted onto a completion. A server-side tool runs on the provider
+that hosts it, welding the step to one vendor, and drags a plain completion onto
+a fragile tool code path; an agent's built-in tools have neither problem.
 
 **Keyed (`ANTHROPIC_API_KEY` set): call litellm directly.** It is cheaper than
 `claude -p` for non-agentic work, and it gives you structured output, tools,
@@ -53,8 +86,19 @@ temperature, etc. with no wrapper of ours in the way. `litellm` is in the root
 ```python
 from litellm import completion, completion_cost
 
+from claude_p import read_workspace_ai_credentials  # the file you copied in
+
+# Resolve credentials at call time: the data/.secrets/anthropic.env snapshot
+# first (see setup above), then the shared Claude settings, then the process
+# env. litellm reads differently-named vars and is picky about a trailing
+# slash, so pass both explicitly.
+creds = read_workspace_ai_credentials()
+api_base = (creds.base_url or "").rstrip("/") or None
+
 resp = completion(
     model="claude-haiku-4-5",
+    api_key=creds.api_key,
+    api_base=api_base,
     messages=[
         {"role": "system", "content": "You are an email triage classifier."},
         {"role": "user", "content": email_body},
@@ -64,7 +108,7 @@ text = resp.choices[0].message.content
 cost = completion_cost(completion_response=resp)  # USD for this call
 ```
 
-**Keyless (no key): copy `scripts/claude_p.py` and call `claude_p_completion`.**
+**Keyless (no key): copy `system/scripts/claude_p.py` and call `claude_p_completion`.**
 It disables tools and runs from an isolated working directory so the repo's
 `CLAUDE.md` / `.claude` hooks can't hijack the answer; `system` is required.
 
@@ -83,12 +127,16 @@ Both `completion` and `claude_p_completion` are synchronous (no asyncio). Once
 you have confirmed the prompt + model combination works and produces good
 results on a few items, run a batch concurrently with a thread pool
 (`concurrent.futures.ThreadPoolExecutor`) rather than one at a time -- the
-throughput difference is large.
+throughput difference is large. Use enough workers to actually saturate the work
+(the calls are I/O-bound, so this can be well into the dozens); back off only if
+you hit provider rate limits. When you need structured output, prefer the
+provider's own JSON / structured-output mode over parsing free text and retrying
+-- it is what keeps the response well-formed.
 
 ## Scenario 2 -- one-shot agentic task
 
 Always `claude -p` (it has tools and file access; a plain API call does not), so
-this path is the same whether or not a key is set. Copy `scripts/claude_p.py` and
+this path is the same whether or not a key is set. Copy `system/scripts/claude_p.py` and
 call `claude_p_task`: tools stay enabled, it runs in the repo working directory,
 and it defaults `permission_mode="bypassPermissions"` (load-bearing -- a headless
 run has no human to approve tool use).
@@ -97,8 +145,8 @@ run has no human to approve tool use).
 from claude_p import claude_p_task
 
 result = claude_p_task(
-    "Read runtime/email-triage/latest.json and draft a reply using templates/.",
-    append_system="Only touch files under runtime/email-triage/.",
+    "Read data/creations/email-triage/latest.json and draft a reply using templates/.",
+    append_system="Only touch files under data/creations/email-triage/.",
 )
 ```
 
@@ -122,9 +170,9 @@ it; call the script directly:
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch-sync \
   --name email-triage-fix-123 --template worker \
-  --runtime-dir runtime/email-triage/fix-123 \
-  --task-file  runtime/email-triage/fix-123/task.md \
-  --timeout 30m --result-json runtime/email-triage/fix-123/result.json
+  --runtime-dir data/creations/email-triage/fix-123 \
+  --task-file  data/creations/email-triage/fix-123/task.md \
+  --timeout 30m --result-json data/creations/email-triage/fix-123/result.json
 ```
 
 It launches, waits for the worker's finish report in the foreground, writes a JSON
@@ -157,9 +205,12 @@ so they can decide when volume justifies setting `ANTHROPIC_API_KEY`:
   savings = result.cost_usd - keyed_estimate   # surface this to suggest a key
   ```
 
-- **Measure on a small sample before scaling.** Run the scenario on a handful of
-  items, check the cost, and tell the user the projected cost before turning on a
-  volume flow.
+- **Measure before scaling, don't guess.** Run **one real unit** of the work,
+  read its **actual** cost and wall-clock off the response (`completion_cost(...)`
+  or `result.cost_usd`, not a token estimate), and extrapolate to the full run
+  (`N x per-unit`, plus any retries and per-tool/search fees, divided by your pool
+  size for wall-clock). Tell the user that projected cost/time before you turn on
+  a volume flow.
 
 See [references/billing-and-credentialing.md](references/billing-and-credentialing.md)
 for the billing buckets, why `claude -p` costs more than the direct API, the
