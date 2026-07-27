@@ -940,18 +940,27 @@ GitHub anonymously, so it can only see PUBLIC repos: when the user chose the
 default private visibility, SKIP this step entirely (a private repo is
 indistinguishable from a missing one to the validator; note in your final
 message that validation is skipped for private repos). Every workspace may
-call it by default (the `minds-inspirations-validate` baseline grant; no
+call it by default (the `minds-workspace-validation` baseline grant; no
 permission request needed):
 
 ```bash
 latchkey curl -s -w '\n%{http_code}' \
-    "http://latchkey-self.invalid/minds-api-proxy/api/v1/inspirations/validate?repo=<owner>/<repo_name>"
+    "http://latchkey-self.invalid/minds-api-proxy/api/v1/workspaces/validate-inspiration?repo=<owner>/<repo_name>"
 ```
+
+(There is a sibling route, `/api/v1/workspaces/validate`, that checks only the
+bootable-workspace markers. `validate-inspiration` already runs those checks
+first, so this flow always uses `validate-inspiration`.)
 
 Interpret the trailing status code:
 
 - **200** -- the repo validated; report the publish as "published and
-  validated" in your final message.
+  validated" in your final message. The body also carries the inspiration's
+  metadata (`metadata` for the repo-level facts, `manifests[]` for each
+  inspiration's title, description, URLs, and `prerequisites` lines). Use the
+  returned prerequisites as a final cross-check that what an adopter must
+  grant matches what you told the user in §6; if they disagree, say so rather
+  than silently trusting either.
 - **422** -- the repo exists but failed validation; the JSON body's
   `failures` list names each failed check with an explanation. Route the fix
   by the check id: a `github-topic` failure means step 3's topic `PUT` did not
