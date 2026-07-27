@@ -10,7 +10,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# The script lives at system/scripts/, so the repo root is two levels up.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 TTYD_PORT=7681
 
@@ -146,7 +147,7 @@ if [ -n "${MNGR_AGENT_STATE_DIR:-}" ] && [ -f "$TTYD_CLIENT_GZ" ]; then
 fi
 
 # Register the terminal port before starting ttyd (port is known ahead of time)
-uv run python3 "$REPO_ROOT/scripts/forward_port.py" --name terminal --url "http://localhost:$TTYD_PORT"
+uv run python3 "$REPO_ROOT/system/scripts/forward_port.py" --name terminal --url "http://localhost:$TTYD_PORT"
 
 # Write server events for discovery. The "agent" sub-URL is intentionally not
 # registered as its own application: the chat UI exposes it via an inline link
