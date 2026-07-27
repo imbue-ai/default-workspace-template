@@ -1,0 +1,1 @@
+Plan for the user-data-layout effort (`blueprint/user-data-layout/`): move workspaces to a single persistent `/home/user` tree, pin apt to per-environment snapshot timestamps served from a self-hosted mirror, and capture/converge the full environment. Adds the `apt-mirror` connector secret template (`.minds/template/apt-mirror.sh`, not yet wired into any tier's deploy.toml).

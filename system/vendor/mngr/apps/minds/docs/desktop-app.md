@@ -1,0 +1,339 @@
+# Desktop App
+
+Minds ships as a standalone desktop application built with Electron and distributed via [ToDesktop](https://www.todesktop.com/). The desktop app wraps the existing Python backend -- no code changes are needed to the web UI or agent system.
+
+## How it works
+
+The Electron shell is deliberately thin. It handles four things:
+
+1. **Environment setup**: Runs `uv sync` on launch to install/update the Python environment
+2. **Backend lifecycle**: Spawns and monitors the `minds run` process
+3. **Auth handshake**: Parses the login URL from stdout and navigates to it
+4. **Window management**: Displays the backend's web UI in a native window
+
+Everything else -- agent creation, discovery, proxying, authentication, the web UI -- remains in the Python backend, unchanged. See [overview.md](./overview.md) for details on the desktop client architecture.
+
+### App shell
+
+The Electron window uses a frameless window (`frame: false` on Linux/Windows, `titleBarStyle: 'hiddenInset'` with `trafficLightPosition` on macOS). A custom title bar is injected into every backend page via `webContents.insertCSS()` and `webContents.executeJavaScript()` on the `dom-ready` event. The title bar uses `-webkit-app-region: drag` so the entire bar acts as a window drag handle, with buttons opted out via `no-drag`. The title bar provides:
+
+- **Navigation**: Back/forward buttons using `history.back()`/`history.forward()`
+- **Page title**: Tracks `document.title` via MutationObserver
+- **Open in browser**: Opens the current URL in the system browser
+- **Window controls**: Minimize/maximize/close buttons (on Linux/Windows; macOS uses native traffic lights)
+
+A separate `shell.html` page handles the loading spinner and error screen during startup.
+
+When accessing an agent URL in a regular browser (not the Electron app), the Python backend wraps the content in a lightweight info bar showing the agent name, host, and application name.
+
+### Startup sequence
+
+1. Electron creates a frameless window showing a loading screen (`shell.html`)
+2. `uv sync` runs using the bundled `uv` binary and the packaged `pyproject.toml` + lockfile
+3. Electron finds an available port and spawns: `uv run minds -v --format jsonl --log-file <path> run --host 127.0.0.1 --port <port> --no-browser --config-file <path>` (the packaged build always passes `--config-file` from the bundled `client.toml`)
+4. The backend emits a JSONL event `{"event": "login_url", "login_url": "..."}` on stdout
+5. Electron waits for the port to accept TCP connections, then navigates directly to the login URL
+6. Auth completes (one-time code consumed, session cookie set), the custom title bar is injected, user sees the web UI
+
+### Shutdown
+
+Closing an individual window just tears down that window's views -- the backend keeps running while any window is open. When the last window closes (or the user issues `Cmd+Q` / `Ctrl+Q`), Electron sends SIGTERM to the backend process and waits up to 5 seconds. If the process doesn't exit, SIGKILL is sent.
+
+#### Quitting page
+
+Backend teardown (and, when applicable, stopping running local minds) takes a moment, during which the UI would otherwise sit there looking frozen. To make the state obvious, once a quit is *committed* every open window flips to a full-window "quitting" screen: the same animated wordmark as the startup loading screen (`shell.html`, loaded with a `#quitting` hash so it reveals a status line), with the chrome view expanded to fill the window (content/sidebar/modal views collapse to zero, the same takeover `updateBundleBounds` uses for the loading and error screens). Progress text -- `Quitting…`, `Stopping N minds…`, `Closing…` -- is pushed to it through the existing `status-update` IPC channel.
+
+The flip happens *after* the mind shutdown prompt below (it is gated on the same `isShuttingDown` commit), so cancelling that prompt leaves the app fully intact with no visual change. Headless quits (SIGTERM / SIGINT) skip the flip -- they have no interactive UI to update.
+
+#### Mind shutdown prompt
+
+Agent containers run independently of the backend, so quitting the app would otherwise leave any **shutdown-capable** minds (those on a provider whose host minds can stop/start -- the local `docker` / `lima` backends today; the single `provider_backend_supports_shutdown` predicate is the one place that gate lives) running and consuming machine resources. Before tearing the backend down, Electron asks the backend which such minds are still running (`GET /api/minds/running`, which reads each mind's container state straight from the discovery snapshot the single discovery observer keeps fresh -- the same `host.state` that drives the landing-page Start/Stop controls -- so the dialog appears instantly without shelling out). When the last window is closed via the macOS close button, the close is intercepted so this prompt appears *before* the window disappears. If the running-minds check itself fails, the user is asked to **Quit anyway** or **Cancel** rather than silently quitting. If any minds are running:
+
+- A dialog lists how many and which minds are running, with three choices: **Cancel** (stay open), **Leave running** (quit now; containers keep running), or **Shut down all**. This prompt runs *first*, before any window flips to the quitting page; **Cancel** leaves the app untouched.
+- **Leave running** and **Shut down all** both commit the quit, flipping every window to the quitting page (above).
+- **Shut down all** stops all the running minds with a single synchronous `POST /api/minds/stop-hosts` (the ids passed as repeated `agent_id` query params), which runs one `mngr stop <ids…> --stop-host` server-side -- mngr stops every named host concurrently via its own executor, so it is one subprocess, not one per mind. Progress shows *in-page on the quitting screen* (`Stopping N minds…`). The endpoint returns the minds still running after the attempt; if any remain (or the request failed), it offers **Retry** / **Quit anyway** / **Cancel quit** via a native dialog (choosing **Cancel quit** reverses the flip and returns the app to its normal running state). Once every mind is down it also stops this env's mngr docker **state container** (`<MNGR_PREFIX>docker-state-<user_id>`, the provider's bookkeeping container that `mngr stop --stop-host` leaves running) via `POST /api/minds/stop-state-container`, so no minds-related container is left running. The state container is stopped, not removed -- its volume (host records) is preserved and it restarts on next use. Only this env's prefix is targeted, so a differently-prefixed state container (e.g. your own `mngr-` docker usage) is never touched.
+
+Programmatic shutdowns (SIGTERM / SIGINT, e.g. `just minds-stop`) skip the prompt and shut down directly. Minds on providers that don't support host shutdown are never counted or stopped -- they don't use local resources.
+
+### Crash recovery
+
+If the backend exits unexpectedly, every open window switches to the error screen (chrome view expanded to fill the window, content/sidebar/modal views torn down) with the last lines from the log file. Clicking "Retry" from any window restarts the backend once; on success every window reloads to its pre-error URL.
+
+### Keyboard shortcuts
+
+- **Open DevTools**: `Ctrl+Shift+C` (Windows/Linux) or `Cmd+Option+I` (macOS)
+- **New Window**: `Ctrl+N` / `Cmd+N` -- opens a fresh window on the home page. Also available on macOS via `File > New Window` and the dock icon's right-click menu.
+- **Close Window**: `Ctrl+W` / `Cmd+W` -- closes the focused window; the backend keeps running until the last window closes.
+- **Quit**: `Ctrl+Q` / `Cmd+Q` -- closes every window and shuts the backend down.
+
+### Multi-window behavior
+
+Each workspace (`/forwarding/{agent-id}/...`) can live in its own window. Uniqueness is enforced across the app: at most one window per workspace.
+
+- **Open in a new window** (from the workspace switcher): right-click a workspace entry for a native `Open in new window` context menu, or click the always-visible arrow icon on the right of the row. Both are suppressed on the entry matching the window's current workspace.
+- **Open a blank window**: cmd+N / ctrl+N, `File > New Window`, or the macOS dock menu. Opens a window on the backend's home page (`/`).
+- **Plain sidebar click**: navigates the current window to that workspace -- unless some other window is already on it, in which case that window is focused and the sender is untouched.
+- **Notifications** pointing at `/forwarding/{X}/...` focus the existing window for workspace `X`, or open a new one. Non-workspace notification URLs and `auth_required` events navigate the most-recently-focused window.
+- **Session restore**: on quit, every open window's content URL is recorded to `~/.<MINDS_ROOT_NAME>/window-state.json` (as `{ windows: [{ url, x, y, width, height, displayId }, ...] }`). On next launch (after the backend is ready) one window is reopened per recorded URL, and each window's titlebar accent is re-derived from that restored URL (see below) -- the accent is not separately persisted. URLs pointing at workspaces that no longer exist are silently dropped. (Older files that still carry a per-window `lastWorkspaceAgentId` field are accepted and the field ignored.)
+
+### Deeplinks (minds://)
+
+The app registers the `minds://` URL scheme. Packaged macOS builds get the OS registration from `appProtocolScheme` in `todesktop.js` (ToDesktop emits the `CFBundleURLTypes` Info.plist entry); `app.setAsDefaultProtocolClient` is also called at every startup, using the dev-mode form (electron binary + app path) under `electron .`. Dev-mode registration is a no-op on macOS -- LaunchServices only honors schemes declared in a bundle's Info.plist -- so to exercise deeplinks against a dev app, pass the URL as an argument instead: `electron . 'minds://create?git_url=...'` (the same code path Windows/Linux cold starts use).
+
+To test real OS-level delivery (browser link clicks, `open 'minds://...'`) against a dev app on macOS, patch the checkout's dev Electron bundle once so LaunchServices knows about it. The bundle id must also be made unique: every worktree's dev Electron ships as `com.github.Electron`, and LaunchServices resolves the scheme's handler by bundle id, so a shared id can route the URL to some other checkout's copy.
+
+```bash
+PLIST=apps/minds/node_modules/electron/dist/Electron.app/Contents/Info.plist
+plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"Minds Deeplink","CFBundleURLSchemes":["minds"]}]' "$PLIST"
+plutil -replace CFBundleIdentifier -string com.imbue.minds.dev "$PLIST"
+mv apps/minds/node_modules/electron/dist/Electron.app apps/minds/node_modules/electron/dist/Minds.app
+printf 'Minds.app/Contents/MacOS/Electron' > apps/minds/node_modules/electron/path.txt
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+  -f apps/minds/node_modules/electron/dist/Minds.app
+```
+
+The rename makes the browser's external-protocol prompt say "open the minds link with Minds" instead of naming the handler "Electron": macOS derives the shown app name from the bundle's on-disk name, so plist-level CFBundleDisplayName overrides alone do not change it. `path.txt` is how the `electron` npm launcher finds the binary, so it must track the rename. The prompt itself is browser UI and can't be customized further; packaged builds are already named Minds.app.
+
+Then start the dev app (its `setAsDefaultProtocolClient` call points the scheme at the patched bundle) and click minds:// links while it is running. The patch lives in `node_modules` (wiped on reinstall, never committed), and a link clicked while the dev app is *not* running launches bare Electron without the app code -- keep the dev app running. Packaged builds need none of this.
+
+Every OS delivery channel -- macOS `open-url` events, Windows/Linux second-instance argv, and cold-start argv -- routes to a single `handleDeeplink` in `main.js`, which parses the URL with the pure `electron/deeplink.js` helpers (unit-tested in `test/unit/deeplink.test.js`). The URL's host names the action:
+
+- `minds://create?git_url=<repo>&branch=<ref>` focuses the most recent window and navigates it to the create-workspace page with the repository pre-filled under advanced settings. `branch` accepts anything the form's Branch input accepts (branch, tag, or commit); when absent, the field stays blank -- submit then resolves the linked repo's latest version (the default-template branch fallback only applies when no repository was supplied). Values must be percent-encoded by the sender.
+- `minds://` bare, or any unrecognized or malformed URL, just opens/focuses the app. The browser OAuth sign-in flow relies on this: the desktop client passes `--success-redirect-url minds://` to the plugin's `auth oauth` subcommand, whose sign-in success page then offers an "Open app" link back to the app (a deliberate click, so the browser's open-external-app prompt appears on a user gesture rather than unprompted).
+
+Deeplinks never force a sign-in: `/create` loads regardless of account state and the page's own remote-vs-local flow prompts for sign-in only when needed. A deeplink that arrives before startup navigation has settled (backend still starting, or an error takeover showing) is queued last-writer-wins and applied once startup succeeds. This holds on a genuine first run too: an explicit deeplink wins over the welcome screen, landing the new user directly on the pre-filled create page. The navigated path is built from a fixed allowlist (`/create` plus re-encoded query params); raw deeplink text is never handed to `loadURL`.
+
+### Titlebar accent and the neutral chrome
+
+The full-width titlebar (and the thin shell around the content view) adopt the active workspace's accent color while you're on a workspace-scoped screen, and fall back to a **neutral** chrome on every other minds screen. The neutral chrome background comes from the `--titlebar-bg` fallback in `Chrome.jinja` (`var(--c-surface-primary)`: white in light mode, black in dark); its foreground is not a stored value but is derived from the background in pure CSS by the `.titlebar-surface` recipe in `app.css` (an `lch(from …)` relative-color contrast), the same recipe that re-bases the foreground tokens under an active workspace accent. The same neutral surface is used by the startup/quitting/error loading screen (`shell.html`). Workspace accent swatches deliberately exclude pure black and white so a workspace's color can never collide with this neutral chrome (users can still type either into the settings hex input).
+
+The accent is a **pure function of the window's current screen**, not a remembered value. The titlebar is its own `WebContentsView` and can't read the content URL, so the main process derives the accent source from each content navigation (`parseAccentSourceAgentId`: the workspace id on the workspace itself plus its settings / sharing / destroying / recovery screens, `null` on a general screen) and pushes it to the titlebar over a single `accent-changed` IPC; the chrome renderer applies it unconditionally. Main also re-pushes the current value whenever a chrome view (re)loads (via `primeViewWithCachedChromeState`), which covers cold start, new windows, and crash-recovery rebuilds. The narrower "which workspace is actually being *displayed*" signal (`current-workspace-changed`) is separate and drives only the OS window title and the recovery-page auto-redirect. Browser mode derives the same accent directly from the iframe URL in its poll loop.
+
+### Environment variables
+
+- `MINDS_HIDE_MENU=1`: Hides the application menu bar (macOS only; Linux/Windows frameless windows have no menu bar).
+- `MINDS_ROOT_NAME`: Selects the data root for the running backend. Default `minds` (i.e. production at `~/.minds/`). Must match `minds(-<env-name>)?`. Activated by `minds env activate <name>`; legacy values like `devminds` are silently treated as unset with a warning.
+- `MINDS_CLIENT_CONFIG_PATH`: Path to the per-env `client.toml` the backend should load. Set by `minds env activate`; passing `--config-file` to `minds run` overrides it. The backend refuses to start when neither is set.
+
+## Output and logging conventions
+
+The CLI separates two channels, following the same conventions as mngr:
+
+- **stdout**: Command output in the format specified by `--format` (human, json, or jsonl). Machine consumers like the Electron shell use `--format jsonl` to parse structured events.
+- **stderr**: Diagnostic logging, always human-readable colored text. Controlled by `-v` (DEBUG), `-vv` (TRACE), and `-q` (suppress).
+- **File logging**: `--log-file <path>` adds a persistent JSONL event log using the same envelope format as mngr.
+
+## Bundled binaries
+
+The desktop app bundles platform-specific binaries so users need zero prerequisites:
+
+- **uv**: Downloads Python, creates venvs, installs packages. Downloaded from GitHub releases during `pnpm build`.
+- **git**: Required for agent creation (cloning repos). A pinned, SHA256-verified [dugite-native](https://github.com/desktop/dugite-native) payload -- the relocatable git distribution GitHub Desktop builds for embedding in Electron apps -- downloaded during `pnpm build` (and re-run by ToDesktop's `beforeInstall` hook on the build server) per `apps/minds/scripts/git-manifest.json`. It is self-contained: the `git` binary plus its `libexec/git-core/` helpers, `share/git-core/templates/`, a system `etc/gitconfig`, and (on Linux) an `ssl/cacert.pem` CA bundle. Because the payload binaries bake in an empty prefix, the backend child environment must -- and does -- set `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, and `GIT_CONFIG_SYSTEM` (plus `GIT_SSL_CAINFO` on Linux); a bare `PATH` prepend is not sufficient. See [specs/minds-managed-git/concise.md](../../../specs/minds-managed-git/concise.md).
+- **lima**: Required for the Lima launch mode (running agents in Linux VMs). Downloaded from GitHub releases during `pnpm build`. Self-contained on macOS Apple Silicon via Lima's `vz` backend; macOS Intel and Linux still run the VM itself via host QEMU.
+- **restic**: Per-workspace backup repositories. Downloaded from GitHub releases.
+- **desync**: Content-defined-chunking client that fetches the pre-baked Lima image. Downloaded from GitHub releases. macOS/Linux only.
+
+Each is placed in the `resources/` directory (outside the asar archive). The packaged app prepends the `uv`, `git`, `lima`, and `desync` directories to the backend child process's `PATH`. `restic` and `desync` are also named by explicit absolute path (`MINDS_RESTIC_BINARY`, `MINDS_DESYNC_BINARY`), so their resolution never depends on `PATH` ordering; `restic` is reached *only* that way, its directory never being on `PATH`. Dev mode inherits the developer's `PATH` untouched and prepends nothing, so the only bundled binary it reaches is the one named by absolute path: it sets `MINDS_DESYNC_BINARY` (without which the fast-create path would need a system-wide `desync`), and resolves everything else, `restic` included, from `PATH`.
+
+There is deliberately no bundled `qemu-img`. The pre-baked image is published, downloaded, and consumed as a **raw** image end to end, so nothing converts it. See [lima-image.md](./lima-image.md) for the whole pipeline, and "Why the image is raw" below.
+
+### How the shipped binaries are chosen
+
+`scripts/build.js` (`pnpm build`, the first half of `pnpm dist`) is the only stage whose output reaches the app. It runs on whichever machine invokes `pnpm dist` -- in CI, the arm64 `minds-runner` -- and downloads for its own `process.arch`. ToDesktop then packages the uploaded `resources/` into `Contents/Resources` via `extraResources`, which is what `paths.getResourcesDir()` resolves to (`process.resourcesPath`) in a packaged app.
+
+The `todesktop:beforeInstall` hook (`scripts/download-binaries.js`) also downloads binaries, but its output never reaches the app. ToDesktop runs it against `app-wrapper/app/`, so the packager folds those files into `app.asar`, which nothing reads at runtime; a packaged app therefore carries a second, dead copy of `resources/`. The hook still gates the build: a download failure inside it aborts `pnpm dist`. Its only remaining purpose is that failure mode, and the `resources/` tree it writes is dead weight.
+
+### Why the image is raw
+
+Lima consumes the pre-baked image directly as raw, so the app ships no image-conversion tool.
+
+`limactl` embeds `go-qcow2reader` and a pure-Go `nativeimgutil`. Its `proxyimgutil` prefers the `qemu-img` binary but falls back to the Go implementation when it is absent (`exec.ErrNotFound`), and `EnsureDisk` auto-detects the base disk's format (raw, qcow2, or asif). The `vz` driver's `diskImageFormat` defaults to **raw**, with a `convertRawToRaw` fast path. Verified by booting a Lima VM from a raw base disk with `qemu-img` absent from `PATH`: it reached `READY` with a working guest.
+
+Raw is also what `desync` chunks, so publishing raw means the assembled bytes are the bytes Lima boots -- the manifest's SHA-256 covers exactly the image that runs. An earlier design converted the assembled raw to qcow2, which Lima then converted straight back to raw.
+
+Raw costs no extra disk. On the real 20 GiB image the sparse raw occupies **4.9 GiB** on disk versus **5.1 GiB** for the qcow2: qcow2's L1/L2 and refcount tables, plus its 64 KiB cluster granularity, cost more than the filesystem's 4 KiB-granular holes. Only the apparent size differs (`ls` reports 20 GiB, `du` reports what is allocated), so tools that do not understand sparse files will inflate it.
+
+### macOS Intel (x86_64) is not supported
+
+ToDesktop publishes `arm64`, `x64`, and `universal` mac artifacts, but only arm64 works, and only it is fetched and verified by `.github/workflows/minds-launch-to-msg.yml`. In the published x64 app, `Contents/MacOS/Minds` is x86_64 while the bundled `uv`, `restic`, and `limactl` are arm64, so it cannot launch a VM.
+
+The cause is structural. `build.js` stages binaries for the arch of the machine it runs on, and all three mac artifacts are packaged from that one upload. The `beforeInstall` hook is the only stage that runs per-agent, and it is useless for this: its output lands in `app.asar`, and its agent is x86_64 anyway, so honoring it would put Intel binaries in the arm64 app.
+
+ToDesktop exposes no arch selection -- its config schema has no `mac.target`/`mac.arch`, and the CLI has no `--arch` -- so the x64 and universal artifacts cannot be turned off from this repo. Supporting Intel would need `build.js` to stage both arches (it already downloads per-arch; nothing forces it to fetch only its own) and either a per-arch `extraResources` mapping or `lipo`-merged universal binaries, plus a pre-baked x86_64 Lima image, without which an Intel app's prefetch reports `VERSION_UNAVAILABLE` and builds in-VM anyway. `git` is already universal, since `xcrun --find git` returns Apple's fat binary.
+
+### Updating the bundled git
+
+git tracks upstream security releases, so the pinned dugite-native payload needs periodic bumping. A weekly CI workflow (`.github/workflows/minds-git-freshness.yml`) opens (or updates) a tracking issue when a dugite-native release carrying a **newer upstream git version** has cleared the repo's 14-day dependency cooldown (the same minimum-release-age posture as `pnpm-workspace.yaml` and the packaged pyproject). It deliberately does not nag on same-git-version dugite rebuilds, and ignores releases still inside the cooldown window. To update:
+
+1. Pick the new dugite-native tag from the freshness tracking issue (or, for an urgent CVE, directly -- you may bump before the cooldown window at your discretion; the automated nag waits it out).
+2. Update `apps/minds/scripts/git-manifest.json`: the `dugiteNativeTag`, the `gitVersion`, all five asset names (each embeds a dugite-native commit short-SHA, so record them verbatim), and each target's hash taken from the release's `.sha256` companion asset.
+3. Independently download each tarball and recompute its SHA256, then compare against the values you just recorded (pinning defends against future substitution, not against copying a wrong value in).
+4. CI runs the bundled-git acceptance test on both shipped targets -- linux-x64 via offload and darwin-arm64 via a GitHub-hosted macOS runner (`test-minds-bundled-git-macos` in `ci.yml`) -- so a green PR proves the bump. Run it locally on a mac as well if you touch any of the unshipped manifest targets (darwin-x64, linux-arm64).
+5. Ship through the normal release process; the freshness workflow closes the tracking issue on its next run.
+
+## Data directory
+
+Every minds env owns one data root. Production lives at `~/.minds/`;
+every other env lives at `~/.minds-<env-name>/`. The contents are the
+same shape:
+
+```
+~/.minds-<env-name>/
+  .venv/                  # uv-managed Python virtual environment
+  .uv-cache/              # uv package cache
+  .uv-python/             # uv-managed Python installations
+  logs/
+    minds.log             # Combined stdout/stderr log from the backend
+    minds-events.jsonl    # Structured JSONL event log
+  auth/                   # Cookie signing key, one-time codes
+  config.toml             # Optional minds user preferences (default account, etc.)
+  client.toml             # Per-env public config (URLs only; dev envs only -- staging/production source from in-repo)
+  secrets.toml            # Per-env chmod-0600 secrets (Neon DSN, SuperTokens API key; dev envs only)
+  window-state.json       # Per-window content URLs + bounds, restored on next launch
+  mngr/                   # mngr host directory (MNGR_HOST_DIR)
+    agents/               # per-agent state managed by mngr
+  <agent-id>/             # Per-agent workspace directories
+```
+
+`MINDS_ROOT_NAME` selects which data root the backend uses. Activation
+(`minds env activate <name>`) sets it to `minds-<env-name>` (or just
+`minds` for production) and exports the derived `MNGR_HOST_DIR` /
+`MNGR_PREFIX` / `MINDS_CLIENT_CONFIG_PATH` alongside. Two envs
+activated in parallel shells (or by two Electron instances pointed at
+two different bundled configs) never share state. Standalone `mngr`
+invocations ignore `MINDS_ROOT_NAME`.
+
+### Environment selection
+
+The desktop client picks the env it talks to via shell activation:
+
+```bash
+eval "$(uv run minds env activate <name>)"
+minds run                                  # or `just minds-start`
+```
+
+`minds run` reads `MINDS_CLIENT_CONFIG_PATH` (set by activation) for
+the per-env `client.toml`. Passing `--config-file <path>` overrides
+the env var. There is no implicit fallback: the backend refuses to
+start when neither is set.
+
+The packaged Electron app embeds a `client.toml` + `MINDS_ROOT_NAME`
+pair at build time via `MINDS_CLIENT_CONFIG_BUNDLE` and
+`MINDS_ROOT_NAME_BUNDLE`, and the Electron startup exports the env
+vars + passes `--config-file` explicitly -- end users never have to
+activate anything. See `apps/minds/docs/environments.md` for the full
+operator workflow and `apps/minds/docs/vault-setup.md` for how
+deploy-time secrets flow through HCP Vault.
+
+### Configuration file
+
+`~/.<root>/config.toml` is optional and holds user-personal
+preferences only (the default account for new workspaces, the
+auto-open behavior for the inbox). It carries no tier-bound
+URL -- env selection happens via `MINDS_CLIENT_CONFIG_PATH` /
+`--config-file` as described above.
+
+## Development
+
+### Prerequisites
+
+- Node.js 24.15.0 (pinned via `.nvmrc` and `engines.node`)
+- pnpm 10.33.4 (pinned via `engines.pnpm`)
+- Python 3.12, uv, git (for the Python backend)
+
+`apps/minds/.npmrc` sets `engine-strict=true`, so `pnpm install` refuses to run on any other Node or pnpm version instead of silently producing a broken install.
+
+### Installing the pinned toolchain
+
+The pins are exact patches (`24.15.0`, `10.33.4`) and `engine-strict=true` will reject anything else. Use the recipes below -- they're the paths that reliably hit the exact versions on any given day.
+
+**Node.js 24.15.0** -- via a version manager:
+
+```bash
+# nvm (https://github.com/nvm-sh/nvm)
+nvm install         # reads apps/minds/.nvmrc
+nvm use             # also reads .nvmrc
+
+# fnm (https://github.com/Schniz/fnm)
+fnm install         # reads .nvmrc
+fnm use             # reads .nvmrc
+```
+
+Run `node --version` from inside `apps/minds/` -- it must print `v24.15.0`.
+
+**pnpm 10.33.4** -- via npm:
+
+```bash
+npm install --global pnpm@10.33.4
+```
+
+Run `pnpm --version` -- it must print `10.33.4`. To swap back to a newer pnpm after working on minds: `npm install --global pnpm@latest`.
+
+**A note on Homebrew**: `brew install node@24` and `brew install pnpm@10` work *if* the kegs currently happen to point at `24.15.0` / `10.33.4`, but Homebrew's `@<major>` formulae move forward through patch releases and there's no clean way to ask for an exact historical patch. Once a keg drifts past the pin, `engine-strict` will reject `pnpm install` and you'll need to switch to the version-manager / npm paths above anyway. If you already have these installed via brew and they still match, great -- just verify with `node --version` / `pnpm --version` before running `pnpm install`.
+
+### Dependency cooldown (minimum release age)
+
+Both package managers are configured to refuse any distribution published less than **14 days** ago, so a freshly-compromised release cannot be pulled into a build (or an end-user install) before it has had time to be noticed and yanked. This applies to transitive dependencies too.
+
+- **JS (pnpm)**: `minimumReleaseAge: 20160` (minutes) in `apps/minds/pnpm-workspace.yaml`. Requires pnpm >= 10.16.0 (we pin 10.33.4).
+- **Python (uv)**: `exclude-newer = "14 days"` under `[tool.uv]` in `apps/minds/electron/pyproject/pyproject.toml` (the packaged end-user app).
+
+The cooldown only bites during **resolution** -- `pnpm install` without `--frozen-lockfile`, `pnpm add`/`update`, and `uv lock`/`uv add` or a re-resolve. Frozen installs (CI's `pnpm install --frozen-lockfile`, and `uv sync` replaying an up-to-date lockfile) replay the committed lockfile and are unaffected. If you add or update a dependency and pnpm/uv refuses a version that is too new, either wait out the window or, for pnpm, add a targeted exception via `minimumReleaseAgeExclude`.
+
+### Running locally
+
+```bash
+cd apps/minds
+pnpm install        # Install Electron and ToDesktop CLI
+pnpm start          # Launch the Electron app in dev mode
+```
+
+In dev mode, the Electron app skips `uv sync` and uses the monorepo's workspace venv directly (via `uv run --package minds` from the repo root). This means all mngr plugins (claude, modal, etc.) are available without any extra setup, and changes to the Python code are picked up immediately on restart.
+
+### Building for distribution
+
+```bash
+pnpm build                        # Prepare resources
+pnpm exec todesktop build         # Upload to ToDesktop for native builds
+```
+
+ToDesktop builds the macOS arm64 native installer (.zip / .dmg), handles code signing, notarization, and auto-update infrastructure. Linux + Windows targets are not currently wired up: `todesktop.js` ships only a `mac:` block, and the release pipeline (`minds-launch-to-msg.yml`) builds and verifies macOS only. The host scripts (`download-binaries.js`, `build.js`) have skeletons for Linux x86_64 and a few Linux native modules ship prebuilds via pnpm; git for Linux is already the complete dugite-native manifest payload (continuously proven by the bundled-git acceptance test on Linux in CI), so the only remaining gap for a packaged Linux install is a `linux:` ToDesktop block.
+
+The build script (`scripts/build.js`) builds a wheel for every workspace package into `resources/wheels/`, rewrites `[tool.uv.sources]` in the staged `resources/pyproject/pyproject.toml` to point each workspace package at its bundled wheel, then runs `uv lock` in-place to regenerate `resources/pyproject/uv.lock` against the rewritten pyproject. The regenerated lockfile is what ships in the app bundle; the dev-time `electron/pyproject/uv.lock` is not committed.
+
+### Updating the Python package
+
+All workspace packages must be listed as direct dependencies in `electron/pyproject/pyproject.toml` — uv ignores `[tool.uv.sources]` path overrides for transitive-only packages and will silently fall back to stale PyPI versions. Keep the dependencies list in sync with `WORKSPACE_PACKAGES` in `scripts/build.js`.
+
+To ship a change:
+
+1. Edit the Python source in the monorepo as usual
+2. If adding a new workspace package, add it to both `electron/pyproject/pyproject.toml` (as a direct dep + `[tool.uv.sources]` entry) and `WORKSPACE_PACKAGES` in `scripts/build.js`
+3. Run `pnpm exec todesktop build` to publish — `build.js` rebuilds all wheels and regenerates the lockfile automatically
+
+## File structure
+
+```
+apps/minds/
+  package.json              # pnpm + Electron + ToDesktop config
+  todesktop.js              # ToDesktop build settings
+  electron/
+    main.js                 # Electron main process entry point
+    preload.js              # Context bridge for renderer IPC
+    deeplink.js             # Pure minds:// URL parsing (electron-free, unit-tested)
+    paths.js                # Platform-aware path resolution
+    env-setup.js            # uv sync runner with progress reporting
+    backend.js              # Python backend process manager
+    shell.html              # Loading and error screens (title bar is injected at runtime)
+    assets/
+      icon.svg              # App icon (SVG source)
+      icon.png              # App icon (PNG for Electron)
+    pyproject/
+      pyproject.toml        # Standalone: declares minds dependency
+      uv.lock               # Pinned lockfile for reproducible installs
+  scripts/
+    build.js                # Build orchestrator: downloads binaries, builds wheels, stages resources/
+    download-binaries.js    # Pinned, hash-verified binary downloads (uv, git, restic, desync)
+    git-manifest.json       # Pinned dugite-native git payload: tag, version, per-target hashes
+  resources/                # (gitignored) Built artifacts for packaging
+```
