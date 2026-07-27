@@ -1768,7 +1768,7 @@ def test_ignores_requested_at_cache_busting_query(client: FlaskClient, tmp_path:
 
 def test_serves_image_in_nested_subdirectory(client: FlaskClient, tmp_path: Path) -> None:
     """Nested paths under the write directory are served (agents may organize per run)."""
-    nested_dir = tmp_path / "chat-images" / "run-3"
+    nested_dir = tmp_path / "images" / "run-3"
     nested_dir.mkdir(parents=True)
     image_path = nested_dir / "diagram.webp"
     image_path.write_bytes(b"fake-webp-bytes")

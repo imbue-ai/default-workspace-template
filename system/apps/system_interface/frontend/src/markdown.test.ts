@@ -7,14 +7,14 @@ import { requestedAtUrl } from "./markdown";
 
 describe("requestedAtUrl", () => {
   it("appends the per-message post time to an absolute on-disk path", () => {
-    expect(requestedAtUrl("/home/user/workspace/data/chat-images/chart.png", "2026-07-24T00:00:00Z")).toBe(
-      "/home/user/workspace/data/chat-images/chart.png?requested_at=2026-07-24T00%3A00%3A00Z",
+    expect(requestedAtUrl("/home/user/workspace/data/images/chart.png", "2026-07-24T00:00:00Z")).toBe(
+      "/home/user/workspace/data/images/chart.png?requested_at=2026-07-24T00%3A00%3A00Z",
     );
   });
 
   it("works for download-link paths too", () => {
-    expect(requestedAtUrl("/home/user/workspace/data/chat-files/report.pdf", "ts-1")).toBe(
-      "/home/user/workspace/data/chat-files/report.pdf?requested_at=ts-1",
+    expect(requestedAtUrl("/home/user/workspace/data/documents/report.pdf", "ts-1")).toBe(
+      "/home/user/workspace/data/documents/report.pdf?requested_at=ts-1",
     );
   });
 
