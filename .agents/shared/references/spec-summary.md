@@ -116,7 +116,7 @@ functions (one per step) and expose them two ways:
   splitting it is not reasonable.) Once the steps are already helper functions
   the split is cheap, and it pays off twice: an agent running the skill in a
   chat turn can drive the steps one at a time for a rich per-step progress
-  view, and each boundary leaves an inspectable intermediate creation.
+  view, and each boundary leaves an inspectable intermediate output.
 - **A `run all` subcommand** that chains the steps in-process -- just function
   calls, no serialization cost -- for headless and scheduled runs.
 

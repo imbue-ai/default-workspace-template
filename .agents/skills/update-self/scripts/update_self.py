@@ -461,8 +461,8 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
         # The target ref predates the skill, so there is no target copy to hand
         # off to: stage the *local* copy at the fixed path (so the worker still
         # finds the flow there) and report ``differs=False`` -- the caller stays
-        # on the local flow. Skip ``__pycache__`` so an imported-script creation
-        # never rides along.
+        # on the local flow. Skip ``__pycache__`` so stale bytecode caches
+        # never ride along.
         shutil.copytree(
             repo_root / SKILL_DIR_REL,
             staged_skill,

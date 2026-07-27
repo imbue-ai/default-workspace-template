@@ -1132,8 +1132,8 @@ What it does, in order (see the script for the exact commands):
 9. Overwrites the snapshot's `welcome/SKILL.md` with a generated
    inspiration-specific welcome describing the
    newly-published inspiration.
-10. Removes `docs/VERSION_HISTORY.md` from the snapshot entirely: that ledger is a
-    WORKSPACE creation -- the SOURCE mind's own record of what it came from and
+10. Removes `docs/VERSION_HISTORY.md` from the snapshot entirely: that ledger is
+    WORKSPACE-only -- the SOURCE mind's own record of what it came from and
     everything it has published -- and never belongs in a published inspiration.
     A mind created from this inspiration grows its own ledger on demand (this
     skill's §8 step 4 and `update-self` §5b write the starter the first time it

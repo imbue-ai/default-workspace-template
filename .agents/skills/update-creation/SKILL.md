@@ -75,7 +75,7 @@ TICKET_ID=$(tk create "update $TARGET" -t task \
 tk start "$TICKET_ID"
 ```
 
-## Step 2: Capture creations and write the task file
+## Step 2: Capture the change and write the task file
 
 For the **committed** origin, capture the commit metadata and full diff so the
 worker has a convenience index (the change is also on its branch on disk):

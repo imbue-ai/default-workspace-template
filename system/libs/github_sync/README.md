@@ -27,7 +27,7 @@ Once enabled, three pieces work together:
    commits land on the GitHub remote without manual pushes.
 
 What is synced is exactly what is committed to git. Workspace data under
-`data/` (memories, tickets, uploads, per-creation data) is gitignored and is
+`data/` (memories, tickets, uploads, per-app data) is gitignored and is
 NOT shipped to GitHub -- it is covered by the restic `host-backup` service
 (see `system/services/host_backup/README.md`), which snapshots the whole home
 tree to encrypted object storage.

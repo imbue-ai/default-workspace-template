@@ -591,7 +591,7 @@ README_EOF
 
 # --- 8.6 remove the version history so it never ships in an inspiration ------
 
-# docs/VERSION_HISTORY.md is a WORKSPACE creation, not an inspiration one: it records
+# docs/VERSION_HISTORY.md is WORKSPACE-only, never part of an inspiration: it records
 # where a mind came from and every inspiration it has published (slugs, repo
 # URLs, source commits). None of that belongs in a published inspiration -- and
 # after an update-self, BASE_REF's tree can carry an accumulated copy of it --

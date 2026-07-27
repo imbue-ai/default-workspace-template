@@ -97,7 +97,7 @@ finish_report_path: data/.tasks/harden/crystallize-$NAME/reports/report.md
 operation: crystallize
 type: skill
 FRONTMATTER_EOF
-# If a wrapper staged creations, add this line inside the frontmatter:
+# If a wrapper staged input files, add this line inside the frontmatter:
 #   source_artifacts_dir: data/.tasks/<calling-skill>/$NAME/
 cat << FRONTMATTER_CLOSE
 ---
@@ -199,7 +199,7 @@ On `done`, after merging the worker's branch:
 
 - **skill**: read and follow `references/post-crystallize-migration.md` before
   declaring crystallize done -- point consumers at the installed skill path,
-  delete the stale runtime creation dir, pick up any breaking renames the worker
+  delete the stale runtime dir, pick up any breaking renames the worker
   introduced, restart any caching service, and close the ticket recorded in
   `data/.tasks/harden/crystallize-$NAME/ticket_id.txt`. Commit consumer changes as a
   separate commit.
