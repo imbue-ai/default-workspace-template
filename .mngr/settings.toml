@@ -760,6 +760,15 @@ type = "codex"
 # CLAUDE_CONFIG_DIR via the inherited host env var.
 [create_templates.worktree]
 type = "claude"
+# A fresh worktree checkout carries no .venv (gitignored), so the agent's
+# first `uv run` would otherwise cold-build one mid-task -- lazily, with
+# root-closure scope rather than --all-packages, racing whatever the agent
+# is already doing (intermittent ModuleNotFoundError, e.g. imbue_common).
+# Converge it synchronously at create instead: extra provision commands run
+# with cwd = the new worktree, before the agent launches, and uv's baked
+# warm cache makes this a hardlink-fast install. Mirrors the boot-time
+# `uv sync --all-packages` the bootstrap performs for the shared work_dir.
+extra_provision_command = ["uv sync --all-packages"]
 
 # Worker template: general purpose sub agent for doing tasks reliably (and ensuring that they are verified)
 [create_templates.worker]
