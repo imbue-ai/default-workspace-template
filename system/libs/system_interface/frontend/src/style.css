@@ -94,11 +94,6 @@ body {
   /* The chat transcript area is pure white, distinct from the shared off-white
      --color-bg used by the surrounding shell (footer, tabs, other panels). */
   background: var(--color-bg-chat);
-  /* Inset the native scrollbar slightly from the panel's right edge (tuned by
-     eye against the minds settings page's scrollbar). The scrollbar renders
-     inside the border edge, and the panel's own background (border-box clip)
-     paints beneath the gap. */
-  border-right: 1px solid transparent;
   /* Native scroll anchoring stays ON (the browser default) so the viewport holds
      steady when rows above it load or measure to their real height, with no
      per-frame JS scrollTop writes. The virtualization spacers opt out of anchoring
