@@ -135,10 +135,10 @@ class AgentStateItem(FrozenModel):
 
 
 class AppEntry(FrozenModel):
-    """An application registered in data/.state/apps.toml."""
+    """An app registered in data/.state/apps.toml."""
 
-    name: str = Field(description="Application name (e.g., 'web', 'terminal')")
-    url: str = Field(description="Local URL where the application is accessible")
+    name: str = Field(description="App name (e.g., 'web', 'terminal')")
+    url: str = Field(description="Local URL where the app is accessible")
 
 
 class TerminalSessionInfo(FrozenModel):
