@@ -187,9 +187,13 @@ class Capture:
         # Paint-over: after a region goes static, re-encode it at higher quality (sharper
         # text, the common browser content) at ~zero steady cost. Also supplies IDR refresh.
         settings.use_paint_over_quality = True
-        # Cap the encoder's rate variability so a full-frame IDR burst (tens of KB) doesn't
-        # spike a thin link; smooths WAN delivery at negligible LAN cost.
-        settings.video_vbv_multiplier = 1.5
+        # NOTE: there is deliberately no ``video_vbv_multiplier`` here. pixelflux only wires
+        # VBV into x264 on its CBR branch (``cbr_mode`` -> ``i_vbv_max_bitrate`` /
+        # ``i_vbv_buffer_size``); the CRF branch we use sets ``f_rf_constant`` alone and
+        # ignores the multiplier entirely. Setting it read as rate-capping the IDR bursts but
+        # did nothing, so IDR bytes reach the socket unshaped. Actually bounding them means
+        # opting into ``video_cbr_mode`` + ``video_bitrate_kbps``, which is a real
+        # quality-vs-latency tradeoff and needs measuring before it is turned on.
         cap = screen_capture_cls()
         # NOTE: we deliberately do NOT enable pixelflux's server-side cursor compositing.
         # Its cursor monitor spawns a thread that reads $DISPLAY LATER (after we restore

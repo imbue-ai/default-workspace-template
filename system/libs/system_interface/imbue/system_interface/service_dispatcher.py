@@ -47,6 +47,15 @@ from imbue.system_interface.proxy import rewrite_proxied_html
 
 _PROXY_TIMEOUT_SECONDS: Final[float] = 30.0
 
+# Receive-buffer size for the backend WebSocket, overriding simple_websocket's 4096-byte
+# default. The buffer is used as ``sock.recv(receive_bytes)``, which returns whatever is
+# already available rather than blocking to fill it, so a larger buffer costs a little
+# memory per connection and never adds latency. The browser fleet's live-view video pushes
+# H.264 stripes tens of KB at a time, so at 4 KB each one cost ~8-16 recv syscalls plus the
+# bytearray reassembly -- and this proxy runs inside the workspace, where a gVisor runtime
+# (the docker/cloud providers) makes every syscall several times more expensive.
+_BACKEND_WS_RECEIVE_BYTES: Final[int] = 65536
+
 _EXCLUDED_RESPONSE_HEADERS: Final[frozenset[str]] = frozenset(
     {
         "transfer-encoding",
@@ -352,7 +361,9 @@ def _connect_backend_websocket(ws_url: str, subprotocols: list[str] | None) -> s
             (parsed.scheme, f"{host_for_url}:{port}", parsed.path, parsed.query, parsed.fragment)
         )
         try:
-            return simple_websocket.Client(candidate_url, subprotocols=subprotocols)
+            return simple_websocket.Client(
+                candidate_url, subprotocols=subprotocols, receive_bytes=_BACKEND_WS_RECEIVE_BYTES
+            )
         except (ConnectionRefusedError, ConnectionError, OSError, TimeoutError, ConnectionClosed) as error:
             last_error = error
             logger.trace("Backend WebSocket connect to {} failed, trying next address: {}", address, error)
