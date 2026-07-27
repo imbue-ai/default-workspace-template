@@ -1,11 +1,11 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/libs/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
 ---
 
 # Updating the system interface
 
-`apps/system_interface` is the live web UI the user is looking at right now
+`system/libs/system_interface` is the live web UI the user is looking at right now
 (the dockview shell, the chat panels, the progress view) -- **the service that
 *is* the workspace UI**. This skill is the system-interface *specialization* of
 `update-service`'s "live loop first, ratify at turn-end" shape: everything
@@ -35,7 +35,7 @@ background worker, only after the user approves the shape.
 ## The hard rule
 
 **Never edit the system-interface tree that is being served to the user.** Do
-not run `Edit`/`Write` on files under `apps/system_interface/` in this (the
+not run `Edit`/`Write` on files under `system/libs/system_interface/` in this (the
 served) checkout, and do not rebuild or restart the live UI from uncommitted
 edits here. Every change is made in a separate, isolated worktree, built and
 previewed there, and revealed to the live tree only through the safe-reveal
@@ -94,9 +94,9 @@ the user's feedback -- and is released only at final teardown (Step 4) or on
 explicit abandonment.
 
 **Pick a slug** `$SLUG` for the change. The branch is `mngr/update-$SLUG`; the
-lead's editing worktree lives at `runtime/si-live/update-$SLUG/` (gitignored,
+lead's editing worktree lives at `data/.tasks/si-live/update-$SLUG/` (gitignored,
 and *separate* from the worker's runtime dir so it is never rsynced into the
-worker); the worker's runtime dir is `runtime/harden/update-$SLUG/`.
+worker); the worker's runtime dir is `data/.tasks/harden/update-$SLUG/`.
 
 **Kick off provisioning in the background, then start exploring.** The one real
 up-front cost is standing up a built worktree; hide it behind the exploration you
@@ -104,9 +104,9 @@ were going to do anyway. Launch this as a background task and immediately start
 reading the relevant code and clarifying the change's shape with the user:
 
 ```bash
-git worktree add -b "mngr/update-$SLUG" "runtime/si-live/update-$SLUG" HEAD
-cd "runtime/si-live/update-$SLUG" && uv sync --all-packages \
-  && (cd apps/system_interface/frontend && npm ci && npm run build)
+git worktree add -b "mngr/update-$SLUG" "data/.tasks/si-live/update-$SLUG" HEAD
+cd "data/.tasks/si-live/update-$SLUG" && uv sync --all-packages \
+  && (cd system/libs/system_interface/frontend && npm ci && npm run build)
 ```
 
 By the time you have an edit to show, the worktree is warm. **How rough the
@@ -123,7 +123,7 @@ costly and a fake conveys the idea.
 
 ## 2. The live loop: edit the worktree, refresh the preview in place
 
-Work entirely inside `runtime/si-live/update-$SLUG/`. If the change renders
+Work entirely inside `data/.tasks/si-live/update-$SLUG/`. If the change renders
 markup a person looks at, invoke `frontend-design` before writing it; if it
 calls Claude, follow `use-ai-integration` -- same as when the UI was built. The
 build/test mechanics for the system interface (in-process backend tests, the
@@ -141,8 +141,8 @@ a labeled preview tab and open it:
 
 ```bash
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
-    --slug "update-$SLUG" --work-dir "runtime/si-live/update-$SLUG"
-python3 scripts/layout.py open si-preview
+    --slug "update-$SLUG" --work-dir "data/.tasks/si-live/update-$SLUG"
+python3 system/scripts/layout.py open si-preview
 ```
 
 `preview` boots `uv run system-interface` from the worktree's already-built app
@@ -162,8 +162,8 @@ points at the wrapper page, which never moves. After editing:
   (the inner app serves the rebuilt `static/` bundle straight from disk):
 
   ```bash
-  (cd runtime/si-live/update-$SLUG/apps/system_interface/frontend && npm run build)
-  python3 scripts/layout.py refresh si-preview
+  (cd data/.tasks/si-live/update-$SLUG/system/libs/system_interface/frontend && npm run build)
+  python3 system/scripts/layout.py refresh si-preview
   ```
 
 - **Backend round (Python / server logic):** additionally bounce the inner app
@@ -173,7 +173,7 @@ points at the wrapper page, which never moves. After editing:
   # (rebuild first if the frontend also changed)
   python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview-refresh \
       --slug "update-$SLUG"
-  python3 scripts/layout.py refresh si-preview
+  python3 system/scripts/layout.py refresh si-preview
   ```
 
   `preview-refresh` restarts only the inner app on the same port and re-runs the
@@ -185,8 +185,8 @@ points at the wrapper page, which never moves. After editing:
 worktree so branch `HEAD` always equals what they are looking at:
 
 ```bash
-git -C runtime/si-live/update-$SLUG add -A
-git -C runtime/si-live/update-$SLUG commit -m "wip: <what this round changed>"
+git -C data/.tasks/si-live/update-$SLUG add -A
+git -C data/.tasks/si-live/update-$SLUG commit -m "wip: <what this round changed>"
 ```
 
 Then get the user's reaction -- a binary keep/keep-iterating plus room for
@@ -218,9 +218,9 @@ worktrees, so before creating the worker you must release the lead's hold on
 ```bash
 # tear the live preview down and close its tab (it boots from the worktree)
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug "update-$SLUG"
-python3 scripts/layout.py close si-preview
+python3 system/scripts/layout.py close si-preview
 # then remove the lead's worktree, freeing the branch for the worker
-git worktree remove --force runtime/si-live/update-$SLUG
+git worktree remove --force data/.tasks/si-live/update-$SLUG
 ```
 
 **Create the worker on the branch.** Follow `update-artifact` Steps 1-3 (open the
@@ -235,8 +235,8 @@ specifics:
   ```bash
   uv run .agents/skills/launch-task/scripts/create_worker.py launch \
       --name "update-$SLUG" --template subskill-worker \
-      --runtime-dir "runtime/harden/update-$SLUG/" \
-      --task-file "runtime/harden/update-$SLUG/task.md" \
+      --runtime-dir "data/.tasks/harden/update-$SLUG/" \
+      --task-file "data/.tasks/harden/update-$SLUG/task.md" \
       --branch "mngr/update-$SLUG"
   ```
 
@@ -276,7 +276,7 @@ WORK_DIR=$(mngr ls --include 'name == "update-'"$SLUG"'"' --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
     --slug "update-$SLUG" --work-dir "$WORK_DIR"
-python3 scripts/layout.py open si-preview
+python3 system/scripts/layout.py open si-preview
 ```
 
 Because the system interface *is* the user's workspace, a final preview is
@@ -292,12 +292,12 @@ With the worker `done` (and any final preview approved), merge and reveal. You
 already hold the editing lease from Step 1, so no other chat's merge can
 interleave.
 
-1. **Freshness check** -- the branch is mergeable only if `apps/system_interface/`
+1. **Freshness check** -- the branch is mergeable only if `system/libs/system_interface/`
    has not changed on the served branch since the worker branched:
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only "$BASE" HEAD -- apps/system_interface/
+   git diff --name-only "$BASE" HEAD -- system/libs/system_interface/
    ```
 
    Empty output means fresh -- continue. Any output means the pass is stale (some
@@ -328,7 +328,7 @@ interleave.
    That single command owns the whole reveal as one deterministic, self-healing
    motion (you do not run `npm`/`uv`/`mngr` by hand). It classifies what changed;
    refreshes dependencies only if a manifest changed (`npm ci` / `uv tool install
-   -e apps/system_interface --reinstall`); pre-flights a backend change on a
+   -e system/libs/system_interface --reinstall`); pre-flights a backend change on a
    throwaway port before touching the live service; rebuilds `static/` and
    broadcasts a reload (frontend) and/or restarts the services agent (backend);
    health-checks the live service; and auto-rolls-back to `--rollback-to` on any
@@ -353,7 +353,7 @@ interleave.
 
    ```bash
    python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug "update-$SLUG"
-   python3 scripts/layout.py close si-preview
+   python3 system/scripts/layout.py close si-preview
    ```
 
    `unpreview` only handles the *service*; the `si-preview` tab is a layout panel
@@ -362,7 +362,7 @@ interleave.
    `update-$SLUG` ticket, and release the editing lease with
    `tk close "$LEASE_ID" "Live edit hardened, revealed, and torn down."`. Also
    remove the lead's worktree if it still exists (`git worktree remove --force
-   runtime/si-live/update-$SLUG`).
+   data/.tasks/si-live/update-$SLUG`).
 
 ## Why this shape
 

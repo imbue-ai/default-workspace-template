@@ -8,13 +8,23 @@ metadata:
 # Managing the workspace dockview layout
 
 The user interacts with you (and the services you create) through a
-tabbed dockview defined in `apps/system_interface`. Your chat is one
+tabbed dockview defined in `system/libs/system_interface`. Your chat is one
 such tab; everything else -- service iframes, terminals, ad-hoc URL
 tabs, other agents' chats -- lives alongside it.
 
-`scripts/layout.py` is the agent-facing helper. Use it whenever you
+`system/scripts/layout.py` is the agent-facing helper. Use it whenever you
 want to surface, inspect, or rearrange tabs. Do not hand-edit the
 dockview layout config.
+
+> **Where the script lives:** `layout.py` is at the **repo root**, at
+> `system/scripts/layout.py` (i.e. `/home/user/workspace/system/scripts/layout.py`, the
+> container WORKDIR). It is **NOT** inside this skill's folder -- there
+> is no `.agents/skills/manage-layout/scripts/layout.py`. Every command
+> below is written as `python3 system/scripts/layout.py ...`, a path relative
+> to the **repo root** (`/home/user/workspace`), which is the cwd for all commands
+> in this repo. Run these from the repo root (or use the absolute path
+> `/home/user/workspace/system/scripts/layout.py`); do not prefix them with the skill
+> directory.
 
 ## Named layouts (read this first)
 
@@ -50,14 +60,14 @@ Consequences for you:
 
 | Goal | Command |
 |---|---|
-| See which client/layout asked for something | `python3 scripts/layout.py context` |
-| See what's currently open and how it's laid out | `python3 scripts/layout.py inspect [--layout <name>]` |
-| Locate one panel + its tab-mates + cardinal neighbors | `python3 scripts/layout.py where <ref> [--layout <name>]` |
-| List everything addressable (services + agents) with open/running flags | `python3 scripts/layout.py list` |
-| Switch a client onto a named layout | `python3 scripts/layout.py load <layout> [--client <id>]` |
-| Surface a service / URL / terminal / chat alongside your chat | `python3 scripts/layout.py open <target> --layout <name>` |
-| Put a new terminal in the same tab group as your chat | `python3 scripts/layout.py split terminal --relative-to=self --direction=within --layout <name>` |
-| Close a tab | `python3 scripts/layout.py close <ref> --layout <name>` |
+| See which client/layout asked for something | `python3 system/scripts/layout.py context` |
+| See what's currently open and how it's laid out | `python3 system/scripts/layout.py inspect [--layout <name>]` |
+| Locate one panel + its tab-mates + cardinal neighbors | `python3 system/scripts/layout.py where <ref> [--layout <name>]` |
+| List everything addressable (services + agents) with open/running flags | `python3 system/scripts/layout.py list` |
+| Switch a client onto a named layout | `python3 system/scripts/layout.py load <layout> [--client <id>]` |
+| Surface a service / URL / terminal / chat alongside your chat | `python3 system/scripts/layout.py open <target> --layout <name>` |
+| Put a new terminal in the same tab group as your chat | `python3 system/scripts/layout.py split terminal --relative-to=self --direction=within --layout <name>` |
+| Close a tab | `python3 system/scripts/layout.py close <ref> --layout <name>` |
 
 `open` is the opinionated default. It puts the new tab to the right
 of your chat, joining whatever group already lives there if one is
@@ -129,13 +139,13 @@ All of these take the same required `--layout <name>` as `open`
 
 | Goal | Command |
 |---|---|
-| Place a new panel with explicit positioning | `python3 scripts/layout.py split <target> --relative-to=<ref> --direction=<left\|right\|above\|below\|within> [--ratio=0.4] [--new-group] --layout <name>` |
-| Focus an existing tab | `python3 scripts/layout.py focus <ref> --layout <name>` |
-| Move an open tab next to / into another's group | `python3 scripts/layout.py move <ref> --relative-to=<ref> --direction=<dir> [--new-group] --layout <name>` |
-| Rename a tab's label | `python3 scripts/layout.py rename <ref> "<title>" --layout <name>` |
-| Maximize / restore a group | `python3 scripts/layout.py maximize <ref> --layout <name>` / `python3 scripts/layout.py restore --layout <name>` |
-| Point an iframe at a new URL | `python3 scripts/layout.py replace-url <ref> service:<name>[/path] --layout <name>` |
-| Reload one tab (or every iframe for a service) | `python3 scripts/layout.py refresh <ref>` |
+| Place a new panel with explicit positioning | `python3 system/scripts/layout.py split <target> --relative-to=<ref> --direction=<left\|right\|above\|below\|within> [--ratio=0.4] [--new-group] --layout <name>` |
+| Focus an existing tab | `python3 system/scripts/layout.py focus <ref> --layout <name>` |
+| Move an open tab next to / into another's group | `python3 system/scripts/layout.py move <ref> --relative-to=<ref> --direction=<dir> [--new-group] --layout <name>` |
+| Rename a tab's label | `python3 system/scripts/layout.py rename <ref> "<title>" --layout <name>` |
+| Maximize / restore a group | `python3 system/scripts/layout.py maximize <ref> --layout <name>` / `python3 system/scripts/layout.py restore --layout <name>` |
+| Point an iframe at a new URL | `python3 system/scripts/layout.py replace-url <ref> service:<name>[/path] --layout <name>` |
+| Reload one tab (or every iframe for a service) | `python3 system/scripts/layout.py refresh <ref>` |
 
 `split` is the customization escape hatch: it accepts the same
 targets as `open` plus full control over the anchor (`--relative-to`),
@@ -162,7 +172,7 @@ tab group as my chat" -- is (targeting the requester's layout, here
 `desktop`):
 
 ```bash
-python3 scripts/layout.py split terminal --relative-to=self --direction=within --layout desktop
+python3 system/scripts/layout.py split terminal --relative-to=self --direction=within --layout desktop
 ```
 
 This creates the terminal and drops it as a tab inside the chat's
@@ -204,7 +214,7 @@ below   -
 `list` outputs YAML by default; pass `--json` for programmatic
 consumption.
 
-Run `python3 scripts/layout.py --help` (or `<subcommand> --help`) for
+Run `python3 system/scripts/layout.py --help` (or `<subcommand> --help`) for
 the full surface.
 
 ## Mutating ops are synchronous
