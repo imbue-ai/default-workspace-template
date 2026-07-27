@@ -13,8 +13,8 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 - If you ever need to work with another *git* repo that is *outside* of this monorepo as a read-only dependency, you should do so by adding a git subtree under `system/vendor/`.
 - If you need to *actively develop* against an external repo (e.g. `mngr`), check out a standalone clone of it under `.external_worktrees/<repo-name>/`. This directory is gitignored so the external clones don't pollute the monorepo. The branch in the external clone should mirror the branch you're on in this monorepo.
 - This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `data/.tickets/` (the path is set via the `TICKETS_DIR` env var so tickets sit with the rest of the workspace's data).
-- All relative paths in this repo assume cwd = repo root (`/home/user/workspace`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (e.g. `data/creations/<name>/` for a creation's data); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state under `data/.state/`.
-- When adding a new web app, use the `build-app` skill, which sets up a new package under `creations/` + a service entry + `forward_port.py` registration on its own port. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new views.
+- All relative paths in this repo assume cwd = repo root (`/home/user/workspace`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (visible folders are the user's to organize; e.g. `data/.apps/<name>/` holds an app's stored data and `data/.skills/<name>/` a skill's own state); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state under `data/.state/`.
+- When adding a new app, use the `build-app` skill, which sets up a new package under `system/apps/` + a supervisord program entry + `forward_port.py` registration on its own port. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new apps.
 
 # Task management (CRITICAL — read this before doing real work)
 
@@ -205,7 +205,7 @@ You can (and should) modify your own configuration to improve yourself:
 
 Commit your changes to git after making modifications.
 
-Inspirations are a publishable, reusable, bootable snapshot of the apps and features a mind has built (one repo can accumulate several); another mind can adapt one into itself.
+Users make "creations": apps (opened as tabs), skills (a skill run automatically on a schedule is an "automation"), data (documents, images, notes), and customizations of any of them. Inspirations are a publishable, reusable, bootable snapshot of the creations a mind has built (one repo can accumulate several); another mind can adapt one into itself.
 
 # Updates
 
@@ -231,11 +231,11 @@ The upstream is defined in `system/config/parent.toml`.
 Use Claude's built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
 Memory is gitignored (everything under `data/` is). It survives container loss via the restic `host-backup` service, which snapshots the whole home tree.
 
-# Services
+# Apps and services
 
-**Before editing any code that belongs to a supervisord service -- a user-facing web service or a background daemon -- load the `update-app` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit a service's code or `system/supervisord.conf` without it.
+**Before editing any code that belongs to a supervisord program -- an app (a tab the user can open) or a background service -- load the `update-app` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit an app's or service's code or `system/supervisord.conf` without it.
 
-You can define background services as supervisord programs in `system/supervisord.conf`.
+Apps and background services both run as supervisord programs in `system/supervisord.conf`.
 Supervisord (launched by `bootstrap` after first-boot setup) supervises them; each program writes its own rotated logs under `/var/log/supervisor/<name>-stdout.log` and `/var/log/supervisor/<name>-stderr.log`.
 To add, change, or remove a service, edit `system/supervisord.conf` and run `supervisorctl reread && supervisorctl update` (and `supervisorctl restart <name>` to bounce one). Inspect with `supervisorctl status` / `supervisorctl tail -f <name> stderr`.
 See the `update-app` skill for details.
@@ -243,7 +243,7 @@ See the `update-app` skill for details.
 # Git
 
 Commit your changes locally.
-`data/` is gitignored (it holds all workspace data: `data/memories/` for Claude memory, `data/.tickets/`, per-creation data, uploads, and machine state).
+`data/` is gitignored (it holds all workspace data: `data/memories/` for Claude memory, `data/.tickets/`, per-app data, uploads, and machine state).
 
 Chat file uploads (files a user attaches to a message) are stored under `data/uploads/`. Uploads can be arbitrarily large and any format, so they don't belong in version-controllable content; like the rest of `data/` they are gitignored and never pushed to GitHub, but the host-level `host-backup` service (a restic snapshot of the whole home tree) captures them, so uploads survive container loss. See `system/services/host_backup/README.md`.
 
