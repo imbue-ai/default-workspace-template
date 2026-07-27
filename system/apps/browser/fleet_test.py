@@ -8,20 +8,20 @@ def test_daemon_url_prefers_env_override(monkeypatch: pytest.MonkeyPatch) -> Non
     assert fleet._daemon_url() == "http://example:9000"
 
 
-def test_daemon_url_reads_applications_registry(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_daemon_url_reads_apps_registry(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.delenv("MINDS_BROWSER_SERVICE_URL", raising=False)
-    registry = tmp_path / "applications.toml"
+    registry = tmp_path / "apps.toml"
     registry.write_text(
-        '[[applications]]\nname = "web"\nurl = "http://localhost:8080"\n'
-        '[[applications]]\nname = "browser"\nurl = "http://localhost:8081"\n'
+        '[[apps]]\nname = "web"\nurl = "http://localhost:8080"\n'
+        '[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\n'
     )
-    monkeypatch.setenv("MINDS_APPLICATIONS_FILE", str(registry))
+    monkeypatch.setenv("MINDS_APPS_FILE", str(registry))
     assert fleet._daemon_url() == "http://localhost:8081"
 
 
 def test_daemon_url_falls_back_to_localhost(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.delenv("MINDS_BROWSER_SERVICE_URL", raising=False)
-    monkeypatch.setenv("MINDS_APPLICATIONS_FILE", str(tmp_path / "missing.toml"))
+    monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path / "missing.toml"))
     assert fleet._daemon_url() == "http://127.0.0.1:8081"
 
 

@@ -11,7 +11,7 @@ curl -sf http://127.0.0.1:8000/service/<name>/ -o /dev/null -w "%{http_code}\n"
 ```
 
 Port 8000 is the system_interface; it proxies `/service/<name>/...`
-to the URL registered in `data/.state/applications.toml`. Expected: `200`.
+to the URL registered in `data/.state/apps.toml`. Expected: `200`.
 
 Common failures:
 
@@ -19,7 +19,7 @@ Common failures:
   `supervisorctl status <name>` and `/var/log/supervisor/<name>-stderr.log`)
   or it's bound to the wrong host. See cross-flow-gotchas.md.
 - **404 from system_interface** -- the service name is not in
-  `data/.state/applications.toml`. Either `forward_port.py` was not run,
+  `data/.state/apps.toml`. Either `forward_port.py` was not run,
   or it was passed the wrong `--name`.
 - **200 but the rendered page is the agent chat with a duplicated
   dockview tab bar** -- the system_interface could not reach your

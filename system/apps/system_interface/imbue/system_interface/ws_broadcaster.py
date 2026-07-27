@@ -165,9 +165,9 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast an agents_updated event."""
         self.broadcast({"type": "agents_updated", "agents": agents})
 
-    def broadcast_applications_updated(self, applications: list[dict[str, str]]) -> None:
-        """Broadcast an applications_updated event."""
-        self.broadcast({"type": "applications_updated", "applications": applications})
+    def broadcast_apps_updated(self, apps: list[dict[str, str]]) -> None:
+        """Broadcast an apps_updated event."""
+        self.broadcast({"type": "apps_updated", "apps": apps})
 
     def broadcast_proto_agent_created(
         self,

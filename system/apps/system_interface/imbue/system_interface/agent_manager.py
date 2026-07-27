@@ -51,12 +51,12 @@ from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
-from imbue.system_interface.models import ApplicationEntry
+from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
-_APPLICATIONS_TOML_FILENAME = "data/.state/applications.toml"
-_APPLICATIONS_TOML_BASENAME = "applications.toml"
+_APPS_TOML_FILENAME = "data/.state/apps.toml"
+_APPS_TOML_BASENAME = "apps.toml"
 _DEFAULT_MNGR_BINARY = "mngr"
 # The production messenger: a stateless, frozen value whose discover/send are the
 # real mngr calls, so one shared instance is the default for every built manager.
@@ -230,7 +230,7 @@ class _LogQueueCallback(MutableModel):
 
 
 class _ApplicationsFileHandler(FileSystemEventHandler):
-    """Watchdog handler that triggers on mutating changes to applications.toml.
+    """Watchdog handler that triggers on mutating changes to apps.toml.
 
     Subscribes to mutation events (modified/created/deleted/moved/closed)
     rather than ``on_any_event`` because watchdog's default inotify mask also
@@ -245,8 +245,8 @@ class _ApplicationsFileHandler(FileSystemEventHandler):
     through an atomic rename still trigger a re-read on close.
 
     Events are filtered to only those whose src or dest path basename is
-    ``applications.toml``. Without this filter we'd also fire on every write
-    to forward_port.py's ``applications.toml.*.tmp`` scratch files, which is
+    ``apps.toml``. Without this filter we'd also fire on every write
+    to forward_port.py's ``apps.toml.*.tmp`` scratch files, which is
     correctness-neutral (the re-read is idempotent) but produces a broadcast
     storm per upsert.
     """
@@ -260,7 +260,7 @@ class _ApplicationsFileHandler(FileSystemEventHandler):
         paths = [event.src_path]
         if isinstance(event, FileMovedEvent):
             paths.append(event.dest_path)
-        if any(os.path.basename(p) == _APPLICATIONS_TOML_BASENAME for p in paths):
+        if any(os.path.basename(p) == _APPS_TOML_BASENAME for p in paths):
             self.on_change(self.agent_id)
 
     on_modified = _maybe_fire
@@ -270,11 +270,11 @@ class _ApplicationsFileHandler(FileSystemEventHandler):
     on_closed = _maybe_fire
 
 
-def _make_applications_file_handler(
+def _make_apps_file_handler(
     agent_id: str,
     on_change: Any,
 ) -> _ApplicationsFileHandler:
-    """Create an applications file handler for the given agent."""
+    """Create an apps-registry file handler for the given agent."""
     handler = _ApplicationsFileHandler()
     handler.agent_id = agent_id
     handler.on_change = on_change
@@ -282,10 +282,10 @@ def _make_applications_file_handler(
 
 
 class AgentManager:
-    """Manages agent lifecycle detection, application watching, and agent creation.
+    """Manages agent lifecycle detection, app-registry watching, and agent creation.
 
     Runs mngr observe as a subprocess for event-driven agent lifecycle detection.
-    Watches data/.state/applications.toml for each agent.
+    Watches data/.state/apps.toml for each agent.
     Handles agent creation via local mngr create calls.
     """
 
@@ -305,7 +305,7 @@ class AgentManager:
     # paths that mutate _agents without a discovery event (creation/refresh) skip
     # it, and a miss in get_agent_matches_by_id just falls back to discovery.
     _match_by_agent_id: dict[str, AgentMatch]
-    _applications: list[ApplicationEntry]
+    _apps: list[AppEntry]
     _app_observers: dict[str, Any]
     _proto_agents: dict[str, dict[str, Any]]
     _log_queues: dict[str, queue.Queue[str | None]]
@@ -358,7 +358,7 @@ class AgentManager:
         manager._agent_details_by_id = {}
         manager._agents = {}
         manager._match_by_agent_id = {}
-        manager._applications = []
+        manager._apps = []
         manager._app_observers = {}
         manager._proto_agents = {}
         manager._log_queues = {}
@@ -517,20 +517,20 @@ class AgentManager:
         self._stop_activity_tracking(agent_id)
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
-    def get_applications(self) -> list[ApplicationEntry]:
-        """Return the primary agent's application list."""
+    def get_apps(self) -> list[AppEntry]:
+        """Return the primary agent's app list."""
         with self._lock:
-            return list(self._applications)
+            return list(self._apps)
 
-    def get_applications_serialized(self) -> list[dict[str, str]]:
-        """Return the primary agent's application list serialized for JSON."""
+    def get_apps_serialized(self) -> list[dict[str, str]]:
+        """Return the primary agent's app list serialized for JSON."""
         with self._lock:
-            return [{"name": app.name, "url": app.url} for app in self._applications]
+            return [{"name": app.name, "url": app.url} for app in self._apps]
 
     def get_service_url(self, service_name: str) -> str | None:
         """Return the local backend URL for a service, or None if it isn't registered."""
         with self._lock:
-            for app in self._applications:
+            for app in self._apps:
                 if app.name == service_name:
                     return app.url
             return None
@@ -538,7 +538,7 @@ class AgentManager:
     def list_service_names(self) -> tuple[str, ...]:
         """Return the names of all currently registered services, sorted alphabetically."""
         with self._lock:
-            return tuple(sorted(app.name for app in self._applications))
+            return tuple(sorted(app.name for app in self._apps))
 
     def get_agents_serialized(self) -> list[dict[str, Any]]:
         """Return agent list serialized for JSON."""
@@ -785,7 +785,7 @@ class AgentManager:
         self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=success, error=error)
 
     def _initial_discover(self) -> None:
-        """Perform initial agent discovery and start application watchers."""
+        """Perform initial agent discovery and start app-registry watchers."""
         try:
             agents = discover_agents()
             with self._lock:
@@ -1080,20 +1080,20 @@ class AgentManager:
         )
 
     def _start_app_watcher(self, agent_id: str, work_dir: Path) -> None:
-        """Start watching data/.state/applications.toml for an agent."""
+        """Start watching data/.state/apps.toml for an agent."""
         with self._lock:
             if agent_id in self._app_observers:
                 return
 
-        toml_path = work_dir / _APPLICATIONS_TOML_FILENAME
+        toml_path = work_dir / _APPS_TOML_FILENAME
         watch_dir = toml_path.parent
 
         if not watch_dir.exists():
             watch_dir.mkdir(parents=True, exist_ok=True)
 
-        self._read_applications(toml_path)
+        self._read_apps(toml_path)
 
-        handler = _make_applications_file_handler(agent_id, self._on_applications_changed)
+        handler = _make_apps_file_handler(agent_id, self._on_apps_changed)
         observer = _Observer()
         observer.schedule(handler, str(watch_dir), recursive=False)
         observer.daemon = True
@@ -1105,17 +1105,17 @@ class AgentManager:
                     return
                 self._app_observers[agent_id] = observer
         except OSError as e:
-            _loguru_logger.opt(exception=e).error("Failed to start application watcher for agent {}", agent_id)
+            _loguru_logger.opt(exception=e).error("Failed to start app-registry watcher for agent {}", agent_id)
 
     def _stop_app_watcher(self, agent_id: str) -> None:
-        """Stop watching applications.toml for an agent."""
+        """Stop watching apps.toml for an agent."""
         with self._lock:
             observer = self._app_observers.pop(agent_id, None)
         if observer is not None:
             observer.stop()
 
-    def _on_applications_changed(self, agent_id: str) -> None:
-        """Called when the primary agent's applications.toml changes."""
+    def _on_apps_changed(self, agent_id: str) -> None:
+        """Called when the primary agent's apps.toml changes."""
         with self._lock:
             agent = self._agents.get(agent_id)
             work_dir = agent.work_dir if agent is not None else None
@@ -1123,9 +1123,9 @@ class AgentManager:
         if work_dir is None:
             return
 
-        toml_path = Path(work_dir) / _APPLICATIONS_TOML_FILENAME
-        self._read_applications(toml_path)
-        self._broadcaster.broadcast_applications_updated(self.get_applications_serialized())
+        toml_path = Path(work_dir) / _APPS_TOML_FILENAME
+        self._read_apps(toml_path)
+        self._broadcaster.broadcast_apps_updated(self.get_apps_serialized())
 
     def _get_agent_state_dir(self, agent_id: str) -> Path:
         """Return the per-agent state directory under the local mngr host dir.
@@ -1282,19 +1282,19 @@ class AgentManager:
             self._last_event_timestamp_by_agent[agent_id] = None
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
-    def _read_applications(self, toml_path: Path) -> None:
-        """Read and parse data/.state/applications.toml for the primary agent."""
-        apps: list[ApplicationEntry] = []
+    def _read_apps(self, toml_path: Path) -> None:
+        """Read and parse data/.state/apps.toml for the primary agent."""
+        apps: list[AppEntry] = []
         if toml_path.exists():
             try:
                 data = tomllib.loads(toml_path.read_text())
-                for entry in data.get("applications", []):
+                for entry in data.get("apps", []):
                     name = entry.get("name", "")
                     url = entry.get("url", "")
                     if name and url:
-                        apps.append(ApplicationEntry(name=name, url=url))
+                        apps.append(AppEntry(name=name, url=url))
             except (OSError, tomllib.TOMLDecodeError, KeyError, ValueError) as e:
                 _loguru_logger.opt(exception=e).error("Failed to parse {}", toml_path)
 
         with self._lock:
-            self._applications = apps
+            self._apps = apps

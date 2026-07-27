@@ -1,6 +1,6 @@
 """Application watcher service.
 
-Watches data/.state/applications.toml for changes. On startup and on every change,
+Watches data/.state/apps.toml for changes. On startup and on every change,
 writes service_registered / service_deregistered events to
 events/services/events.jsonl so the desktop client can discover available services.
 
@@ -28,7 +28,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
 
-APPLICATIONS_FILE = Path("data/.state/applications.toml")
+APPLICATIONS_FILE = Path("data/.state/apps.toml")
 # mtime-polling fallback interval. Kept low (5s) because under the gVisor (runsc)
 # runtime, and on the lima/vps providers, file changes made outside the sandbox
 # do not raise in-sandbox inotify events -- polling is then the only signal, so a
@@ -71,13 +71,13 @@ def _get_events_dir() -> Path | None:
     return Path(state_dir) / "events" / "services"
 
 
-def _load_applications() -> list[dict[str, object]]:
-    """Load applications from the TOML file."""
+def _load_apps() -> list[dict[str, object]]:
+    """Load apps from the TOML file."""
     if not APPLICATIONS_FILE.exists():
         return []
     with open(APPLICATIONS_FILE, "rb") as f:
         data = tomllib.load(f)
-    return data.get("applications", [])
+    return data.get("apps", [])
 
 
 def _write_events(
@@ -85,7 +85,7 @@ def _write_events(
     current_apps: list[dict[str, object]],
     previous_app_names: set[str],
 ) -> None:
-    """Write service events for all current applications and deregistration events for removed ones."""
+    """Write service events for all current apps and deregistration events for removed ones."""
     events_dir.mkdir(parents=True, exist_ok=True)
     events_path = events_dir / "events.jsonl"
 
@@ -120,7 +120,7 @@ def _write_events(
 
 
 def _try_setup_inotify(path: Path) -> object | None:
-    """Try to set up inotify on the applications file's parent directory.
+    """Try to set up inotify on the apps file's parent directory.
 
     Uses inotify_simple (pure Python, Linux only). Returns the INotify
     instance on success, or None on non-Linux platforms or errors.
@@ -156,8 +156,8 @@ def _wait_for_change_inotify(inotify: object, timeout_seconds: float) -> bool:
 
 
 def main() -> None:
-    """Main loop: watch applications.toml and write service events."""
-    print("[app-watcher] Starting application watcher", file=sys.stderr, flush=True)
+    """Main loop: watch apps.toml and write service events."""
+    print("[app-watcher] Starting app watcher", file=sys.stderr, flush=True)
 
     APPLICATIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
@@ -200,10 +200,10 @@ def main() -> None:
 
         if new_mtime != last_mtime:
             last_mtime = new_mtime
-            apps = _load_applications()
+            apps = _load_apps()
 
             print(
-                f"[app-watcher] Applications changed: {[a.get('name') for a in apps]}",
+                f"[app-watcher] Apps changed: {[a.get('name') for a in apps]}",
                 file=sys.stderr,
                 flush=True,
             )

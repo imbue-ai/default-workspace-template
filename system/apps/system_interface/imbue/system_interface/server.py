@@ -1057,7 +1057,7 @@ def _create_chat_agent() -> Response:
 
 
 def _ws_endpoint(websocket: Any) -> None:
-    """Unified WebSocket for agent state and application updates."""
+    """Unified WebSocket for agent state and app updates."""
     state = get_state()
     # Resolve the primary agent's layout dir once, at connect, and bind it to
     # this connection for the lifetime of the loop. The resolver reads
@@ -1156,8 +1156,8 @@ def _run_ws_broadcast_loop(
         websocket.send(
             json.dumps(
                 {
-                    "type": "applications_updated",
-                    "applications": agent_manager.get_applications_serialized(),
+                    "type": "apps_updated",
+                    "apps": agent_manager.get_apps_serialized(),
                 }
             )
         )
@@ -1661,7 +1661,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
         application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
 
     # Service forwarding routes: /service/<name>/... forwards to the service's
-    # local backend (from data/.state/applications.toml) with path rewriting,
+    # local backend (from data/.state/apps.toml) with path rewriting,
     # cookie scoping, WS shim, and a scoped service worker.
     register_service_routes(application, sock)
 

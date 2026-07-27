@@ -79,11 +79,11 @@ def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
     return {int(match.group(1)) for match in LOCALHOST_PORT_RE.finditer(text)}
 
 
-def _applications_toml_ports(applications_toml: Path) -> set[int]:
-    if not applications_toml.exists():
+def _apps_toml_ports(apps_toml: Path) -> set[int]:
+    if not apps_toml.exists():
         return set()
-    doc = tomlkit.parse(applications_toml.read_text())
-    apps = doc.get("applications", [])
+    doc = tomlkit.parse(apps_toml.read_text())
+    apps = doc.get("apps", [])
     ports: set[int] = set()
     for app in apps:
         url = app.get("url", "")
@@ -96,7 +96,7 @@ def _applications_toml_ports(applications_toml: Path) -> set[int]:
 def _pick_port(repo_root: Path, requested: int | None) -> int:
     in_use = _supervisord_conf_ports(
         repo_root / "system/supervisord.conf"
-    ) | _applications_toml_ports(repo_root / "data" / ".state" / "applications.toml")
+    ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
     if requested is not None:
         if requested in in_use:
             sys.exit(f"error: --port {requested} is already in use by another service")

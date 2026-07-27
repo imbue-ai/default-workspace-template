@@ -978,7 +978,7 @@ def test_create_worktree_agent_missing_agent(client: FlaskClient) -> None:
 
 @pytest.mark.timeout(15)
 def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
-    """The WebSocket endpoint sends agents_updated and applications_updated on connect."""
+    """The WebSocket endpoint sends agents_updated and apps_updated on connect."""
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
         try:
@@ -989,7 +989,7 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
 
     types = {msg1["type"], msg2["type"]}
     assert "agents_updated" in types
-    assert "applications_updated" in types
+    assert "apps_updated" in types
 
 
 def _next_broadcast_message(client_queue: "queue.Queue[str | None]") -> dict[str, Any]:

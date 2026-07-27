@@ -1,6 +1,6 @@
 /**
  * Single shared dockview workspace. All agents, chats, terminals, and
- * applications coexist as tabs in one DockviewComponent.
+ * apps coexist as tabs in one DockviewComponent.
  */
 
 import m from "mithril";
@@ -682,7 +682,7 @@ function buildDropdownItems(
 
   // --- Existing items section ---
 
-  // Applications that don't have open tabs. Exclude "system_interface"
+  // Apps that do not have open tabs. Exclude "system_interface"
   // (that's the surrounding chrome UI, not a tab-able app), "terminal"
   // (reachable via the "New terminal" menu item further down), "browser"
   // (the fleet has its own per-session items + "New browser" below; the bare
@@ -1197,7 +1197,7 @@ function refreshTerminalFleet(onUpdate?: () => void): void {
 }
 
 /** Session names of terminals currently open in a tab, so the "+" menu can
- *  exclude them (mirrors ``getOpenAppNames`` for applications). */
+ *  exclude them (mirrors ``getOpenAppNames`` for apps). */
 function getOpenTerminalSessionNames(): Set<string> {
   const names = new Set<string>();
   for (const [, pp] of panelParams) {
@@ -1750,7 +1750,7 @@ function applyLayoutContent(saved: SavedLayout | null): void {
     // <services-agent-id> panel; we don't want to surface that ever.
     //
     // This MUST be limited to chat panels. Iframe tabs (terminals,
-    // applications, custom URLs) opened via openIframeTab() set
+    // apps, custom URLs) opened via openIframeTab() set
     // `agentId` to the primary agent id as a placeholder owner, so a
     // bare `agentId === primaryId` check would wrongly strip every
     // terminal/application/URL tab on each restore.
@@ -2069,7 +2069,7 @@ async function handleOpen(args: Record<string, unknown>, requesterAgentId: strin
     return;
   }
   if (ref.startsWith("service:")) {
-    // Drop silently if the service isn't registered in ``applications``
+    // Drop silently if the service isn't registered in ``apps``
     // yet -- the script polls registration, but the broadcast races it.
     // Strip any ``?session=`` suffix (browser fleet) before the lookup:
     // registration is per-service, not per-session.

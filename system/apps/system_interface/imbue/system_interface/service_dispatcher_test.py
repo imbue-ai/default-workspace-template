@@ -2,7 +2,7 @@
 
 Spins up a small stub Flask app on an ephemeral port as the "backend"
 service, registers it with the system_interface's AgentManager via a
-controlled applications.toml, and exercises the proxy end-to-end.
+controlled apps.toml, and exercises the proxy end-to-end.
 """
 
 from collections.abc import Iterator
@@ -17,7 +17,7 @@ from flask_sock import Sock
 
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
-from imbue.system_interface.models import ApplicationEntry
+from imbue.system_interface.models import AppEntry
 from imbue.system_interface.server import create_application
 from imbue.system_interface.service_dispatcher import _connect_backend_websocket
 from imbue.system_interface.testing import ServedApp
@@ -107,13 +107,13 @@ def workspace_app_with_stub(stub_backend: ServedApp, monkeypatch: pytest.MonkeyP
     Injects a pre-built ``AgentManager`` seeded with the stub's URL as the
     'web' service. The real ``mngr observe`` pipeline is not started, so the
     test doesn't need a live mngr host; service discovery is whatever we
-    put in ``_applications``.
+    put in ``_apps``.
     """
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-test")
 
     broadcaster = WebSocketBroadcaster()
     agent_manager = AgentManager.build(broadcaster)
-    agent_manager._applications = [ApplicationEntry(name="web", url=stub_backend.http_url)]
+    agent_manager._apps = [AppEntry(name="web", url=stub_backend.http_url)]
 
     return create_application(build_test_state(config=Config(), agent_manager=agent_manager))
 

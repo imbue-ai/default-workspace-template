@@ -122,7 +122,7 @@ def _run_layout_script(
     """Invoke ``system/scripts/layout.py`` as a subprocess against the test server.
 
     ``cwd`` is set to a sandbox tmp path so the script's relative
-    ``data/.state/applications.toml`` lookup does not pick up the real one
+    ``data/.state/apps.toml`` lookup does not pick up the real one
     from the repo. ``MINDS_WORKSPACE_SERVER_URL`` points at the test
     server.
     """
@@ -252,13 +252,13 @@ def test_open_terminal_returns_ref_via_stdout_and_broadcasts_panel_id(
     base_url, broadcaster = layout_server
     sandbox = tmp_path / "cwd"
     sandbox.mkdir()
-    # The script polls data/.state/applications.toml for the named service;
+    # The script polls data/.state/apps.toml for the named service;
     # seed ``terminal`` so registration succeeds without the real
     # forward_port pipeline.
     applications_dir = sandbox / "data" / ".state"
     applications_dir.mkdir(parents=True)
-    (applications_dir / "applications.toml").write_text(
-        '[[applications]]\nname = "terminal"\nurl = "http://localhost:9000/terminal"\n'
+    (applications_dir / "apps.toml").write_text(
+        '[[apps]]\nname = "terminal"\nurl = "http://localhost:9000/terminal"\n'
     )
 
     client_queue = broadcaster.register()

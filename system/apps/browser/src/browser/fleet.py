@@ -29,7 +29,7 @@ Commands::
     agentic-browser-fleet unlock <name>                             # alias: release
     agentic-browser-fleet release <name>
 
-The daemon address is discovered from ``data/.state/applications.toml`` (the same
+The daemon address is discovered from ``data/.state/apps.toml`` (the same
 registry ``layout.py`` reads), overridable via ``MINDS_BROWSER_SERVICE_URL``,
 falling back to ``http://127.0.0.1:8081``. Browser panes are pulled into the
 agent's view via ``system/scripts/layout.py`` (anchored at ``$BROWSER_FLEET_ANCHOR`` if
@@ -52,7 +52,7 @@ from imbue.mngr.cli.output_helpers import write_human_line, write_stderr_line
 _DEFAULT_URL = "http://127.0.0.1:8081"
 _ENV_URL = "MINDS_BROWSER_SERVICE_URL"
 _ENV_ANCHOR = "BROWSER_FLEET_ANCHOR"
-_APPLICATIONS_FILE = "data/.state/applications.toml"
+_APPS_FILE = "data/.state/apps.toml"
 
 # Exit codes the orchestrating agent can branch on.
 _EXIT_OK = 0
@@ -86,14 +86,14 @@ def _daemon_url() -> str:
     override = os.environ.get(_ENV_URL)
     if override:
         return override.rstrip("/")
-    registry = Path(os.environ.get("MINDS_APPLICATIONS_FILE", _APPLICATIONS_FILE))
+    registry = Path(os.environ.get("MINDS_APPS_FILE", _APPS_FILE))
     if not registry.is_absolute():
         registry = _repo_root() / registry
     try:
         doc = tomllib.loads(registry.read_text())
     except (OSError, tomllib.TOMLDecodeError):
         return _DEFAULT_URL
-    for app in doc.get("applications", []):
+    for app in doc.get("apps", []):
         if app.get("name") == "browser" and app.get("url"):
             return str(app["url"]).rstrip("/")
     return _DEFAULT_URL

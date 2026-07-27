@@ -103,7 +103,7 @@ than ~1s later, and it keeps the command self-documenting.
 2. `supervisorctl reread && supervisorctl update` -- supervisord stops and
    forgets the removed program.
 
-For a web service, also drop its `data/.state/applications.toml` entry with
+For a web service, also drop its `data/.state/apps.toml` entry with
 `python3 system/scripts/forward_port.py --name <name> --remove`; for a scaffolded
 web lib, `build-web-service`'s `cleanup.md` reference covers the full
 teardown (reverting the lib and the root `pyproject.toml` edits).

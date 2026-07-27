@@ -93,7 +93,7 @@ under `creations/<your-package>/` so they get an isolated tab and prefix.
   (`system_interface`, `browser`, etc. are reserved by the scaffolder).
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
-  `system/supervisord.conf` and `data/.state/applications.toml`; if you're choosing
+  `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
   manually, avoid `8000` (system_interface) and `8081` (the browser
   service).
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
@@ -338,7 +338,7 @@ broadcasts a `layout_op` message over its WebSocket. The frontend
 focuses the panel if a tab for `<name>` is already open, otherwise
 splits a new iframe alongside the primary chat (60% web / 40% chat).
 The script briefly waits for the service to appear in
-`data/.state/applications.toml` so it's safe to run immediately after the
+`data/.state/apps.toml` so it's safe to run immediately after the
 `forward_port.py` call.
 
 To force a reload of an already-open tab (e.g. after redeploying the
@@ -482,17 +482,17 @@ Flags:
 - `--url`: full URL where the app is reachable from inside the
   container (e.g. `http://localhost:8090`).
 - `--remove`: remove the named entry from
-  `data/.state/applications.toml`. Use this when tearing down a service.
+  `data/.state/apps.toml`. Use this when tearing down a service.
 
 ## The global (Cloudflare) URL
 
 If the workspace has Cloudflare tunneling configured, the service is also
 reachable at a public URL -- with caveats about where that hostname lives and
-why it isn't in `data/.state/applications.toml`. See
+why it isn't in `data/.state/apps.toml`. See
 [references/public-url.md](references/public-url.md).
 
 ## Cleanup
 
-To remove a web service (drop the `applications.toml` entry, stop and unregister
+To remove a web service (drop the `apps.toml` entry, stop and unregister
 the supervisord program, and revert the scaffolded lib), see
 [references/cleanup.md](references/cleanup.md).

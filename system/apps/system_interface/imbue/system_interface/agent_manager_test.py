@@ -35,10 +35,10 @@ from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _build_worktree_create_command
-from imbue.system_interface.agent_manager import _make_applications_file_handler
+from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
-from imbue.system_interface.models import ApplicationEntry
+from imbue.system_interface.models import AppEntry
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -128,8 +128,8 @@ def test_get_agents_initially_empty(agent_manager: AgentManager) -> None:
     assert agents == []
 
 
-def test_get_applications_initially_empty(agent_manager: AgentManager) -> None:
-    apps = agent_manager.get_applications()
+def test_get_apps_initially_empty(agent_manager: AgentManager) -> None:
+    apps = agent_manager.get_apps()
     assert apps == []
 
 
@@ -138,22 +138,22 @@ def test_get_proto_agents_initially_empty(agent_manager: AgentManager) -> None:
     assert protos == []
 
 
-def test_read_applications_parses_toml(agent_manager: AgentManager, tmp_path: Path) -> None:
+def test_read_apps_parses_toml(agent_manager: AgentManager, tmp_path: Path) -> None:
     toml_content = """
-[[applications]]
+[[apps]]
 name = "web"
 url = "http://localhost:8000"
 
-[[applications]]
+[[apps]]
 name = "terminal"
 url = "http://localhost:7681"
 """
-    toml_file = tmp_path / "applications.toml"
+    toml_file = tmp_path / "apps.toml"
     toml_file.write_text(toml_content)
 
-    agent_manager._read_applications(toml_file)
+    agent_manager._read_apps(toml_file)
 
-    apps = agent_manager.get_applications()
+    apps = agent_manager.get_apps()
     assert len(apps) == 2
     assert apps[0].name == "web"
     assert apps[0].url == "http://localhost:8000"
@@ -161,34 +161,34 @@ url = "http://localhost:7681"
     assert apps[1].url == "http://localhost:7681"
 
 
-def test_read_applications_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
+def test_read_apps_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
     toml_file = tmp_path / "nonexistent.toml"
-    agent_manager._read_applications(toml_file)
+    agent_manager._read_apps(toml_file)
 
-    apps = agent_manager.get_applications()
+    apps = agent_manager.get_apps()
     assert apps == []
 
 
-def test_read_applications_handles_empty_file(agent_manager: AgentManager, tmp_path: Path) -> None:
+def test_read_apps_handles_empty_file(agent_manager: AgentManager, tmp_path: Path) -> None:
     toml_file = tmp_path / "empty.toml"
     toml_file.write_text("")
-    agent_manager._read_applications(toml_file)
+    agent_manager._read_apps(toml_file)
 
-    apps = agent_manager.get_applications()
+    apps = agent_manager.get_apps()
     assert apps == []
 
 
-def test_read_applications_ignores_entries_without_name(agent_manager: AgentManager, tmp_path: Path) -> None:
+def test_read_apps_ignores_entries_without_name(agent_manager: AgentManager, tmp_path: Path) -> None:
     toml_content = """
-[[applications]]
+[[apps]]
 url = "http://localhost:8000"
 """
-    toml_file = tmp_path / "applications.toml"
+    toml_file = tmp_path / "apps.toml"
     toml_file.write_text(toml_content)
 
-    agent_manager._read_applications(toml_file)
+    agent_manager._read_apps(toml_file)
 
-    apps = agent_manager.get_applications()
+    apps = agent_manager.get_apps()
     assert apps == []
 
 
@@ -210,13 +210,13 @@ def test_get_agents_serialized(agent_manager: AgentManager) -> None:
     assert serialized[0]["activity_state"] is None
 
 
-def test_get_applications_serialized(agent_manager: AgentManager) -> None:
+def test_get_apps_serialized(agent_manager: AgentManager) -> None:
     with agent_manager._lock:
-        agent_manager._applications = [
-            ApplicationEntry(name="web", url="http://localhost:8000"),
+        agent_manager._apps = [
+            AppEntry(name="web", url="http://localhost:8000"),
         ]
 
-    serialized = agent_manager.get_applications_serialized()
+    serialized = agent_manager.get_apps_serialized()
     assert serialized == [{"name": "web", "url": "http://localhost:8000"}]
 
 
@@ -560,15 +560,15 @@ def test_agent_state_event_locates_agent_immediately(agent_manager: AgentManager
     assert str(matches[0].provider_name) == "local"
 
 
-def test_on_applications_changed(
+def test_on_apps_changed(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """Application changes are detected and broadcast."""
     q = broadcaster.register()
 
-    toml_path = tmp_path / "data" / ".state" / "applications.toml"
+    toml_path = tmp_path / "data" / ".state" / "apps.toml"
     toml_path.parent.mkdir(parents=True, exist_ok=True)
-    toml_path.write_text('[[applications]]\nname = "web"\nurl = "http://localhost:8000"\n')
+    toml_path.write_text('[[apps]]\nname = "web"\nurl = "http://localhost:8000"\n')
 
     with agent_manager._lock:
         agent_manager._agents["app-agent"] = AgentStateItem(
@@ -579,26 +579,26 @@ def test_on_applications_changed(
             work_dir=str(tmp_path),
         )
 
-    agent_manager._on_applications_changed("app-agent")
+    agent_manager._on_apps_changed("app-agent")
 
-    apps = agent_manager.get_applications()
+    apps = agent_manager.get_apps()
     assert len(apps) == 1
     assert apps[0].name == "web"
 
     raw = q.get_nowait()
     assert raw is not None
     msg = json.loads(raw)
-    assert msg["type"] == "applications_updated"
+    assert msg["type"] == "apps_updated"
 
 
-def test_read_applications_handles_invalid_toml(agent_manager: AgentManager, tmp_path: Path) -> None:
+def test_read_apps_handles_invalid_toml(agent_manager: AgentManager, tmp_path: Path) -> None:
     """Invalid TOML files are handled gracefully."""
     toml_file = tmp_path / "bad.toml"
     toml_file.write_text("this is [[ not valid toml {{")
 
-    agent_manager._read_applications(toml_file)
+    agent_manager._read_apps(toml_file)
 
-    apps = agent_manager.get_applications()
+    apps = agent_manager.get_apps()
     assert apps == []
 
 
@@ -636,67 +636,67 @@ def test_start_app_watcher(agent_manager: AgentManager, tmp_path: Path) -> None:
     agent_manager._stop_app_watcher("watcher-test")
 
 
-def test_applications_file_handler_fires_on_move(tmp_path: Path) -> None:
-    """The applications watcher must react to move/rename events, not just
-    modify events. system/scripts/forward_port.py writes applications.toml atomically
+def test_apps_file_handler_fires_on_move(tmp_path: Path) -> None:
+    """The apps-registry watcher must react to move/rename events, not just
+    modify events. system/scripts/forward_port.py writes apps.toml atomically
     via ``tempfile.mkstemp`` + ``os.replace``, which surfaces as an
     ``IN_MOVED_TO`` / ``FileMovedEvent`` in watchdog -- if the handler only
     listened on ``on_modified`` every service registration after startup
     would be silently dropped.
     """
     seen: list[str] = []
-    handler = _make_applications_file_handler("agent-x", lambda aid: seen.append(aid))
+    handler = _make_apps_file_handler("agent-x", lambda aid: seen.append(aid))
 
-    # Simulate what os.replace(tmp, applications.toml) surfaces as.
+    # Simulate what os.replace(tmp, apps.toml) surfaces as.
     handler.dispatch(
         FileMovedEvent(
-            src_path=str(tmp_path / "applications.toml.tmp"),
-            dest_path=str(tmp_path / "applications.toml"),
+            src_path=str(tmp_path / "apps.toml.tmp"),
+            dest_path=str(tmp_path / "apps.toml"),
         )
     )
 
     assert seen == ["agent-x"]
 
 
-def test_applications_file_handler_ignores_unrelated_paths(tmp_path: Path) -> None:
+def test_apps_file_handler_ignores_unrelated_paths(tmp_path: Path) -> None:
     """The handler must not fire for writes to forward_port.py's scratch
-    ``applications.toml.*.tmp`` files. Every upsert creates and modifies one
+    ``apps.toml.*.tmp`` files. Every upsert creates and modifies one
     of those before the atomic rename, and firing on each would produce a
     broadcast storm with no useful information (the scratch file is never
     the source of truth we read).
     """
     seen: list[str] = []
-    handler = _make_applications_file_handler("agent-x", lambda aid: seen.append(aid))
+    handler = _make_apps_file_handler("agent-x", lambda aid: seen.append(aid))
 
-    handler.dispatch(FileModifiedEvent(src_path=str(tmp_path / "applications.toml.abc123.tmp")))
+    handler.dispatch(FileModifiedEvent(src_path=str(tmp_path / "apps.toml.abc123.tmp")))
 
     assert seen == []
 
 
-def test_applications_file_handler_ignores_open_and_close_no_write(tmp_path: Path) -> None:
+def test_apps_file_handler_ignores_open_and_close_no_write(tmp_path: Path) -> None:
     """The handler must not fire on read-only events (FileOpenedEvent /
     FileClosedNoWriteEvent). Watchdog 3+ emits these on Linux for any open()
     / close() of the watched file -- including the read() inside
-    _read_applications itself. If the handler reacts to them it triggers an
+    _read_apps itself. If the handler reacts to them it triggers an
     inotify feedback loop that pins one CPU core per agent watcher.
     """
     seen: list[str] = []
-    handler = _make_applications_file_handler("agent-x", lambda aid: seen.append(aid))
+    handler = _make_apps_file_handler("agent-x", lambda aid: seen.append(aid))
 
-    handler.dispatch(FileOpenedEvent(src_path=str(tmp_path / "applications.toml")))
-    handler.dispatch(FileClosedNoWriteEvent(src_path=str(tmp_path / "applications.toml")))
+    handler.dispatch(FileOpenedEvent(src_path=str(tmp_path / "apps.toml")))
+    handler.dispatch(FileClosedNoWriteEvent(src_path=str(tmp_path / "apps.toml")))
 
     assert seen == []
 
 
-def test_applications_file_handler_fires_on_modify(tmp_path: Path) -> None:
-    """A direct write (e.g. ``echo ... > applications.toml``) surfaces as a
+def test_apps_file_handler_fires_on_modify(tmp_path: Path) -> None:
+    """A direct write (e.g. ``echo ... > apps.toml``) surfaces as a
     FileModifiedEvent and must still trigger the change callback.
     """
     seen: list[str] = []
-    handler = _make_applications_file_handler("agent-x", lambda aid: seen.append(aid))
+    handler = _make_apps_file_handler("agent-x", lambda aid: seen.append(aid))
 
-    handler.dispatch(FileModifiedEvent(src_path=str(tmp_path / "applications.toml")))
+    handler.dispatch(FileModifiedEvent(src_path=str(tmp_path / "apps.toml")))
 
     assert seen == ["agent-x"]
 

@@ -66,16 +66,16 @@ def test_broadcast_agents_updated() -> None:
     assert msg["agents"] == agents
 
 
-def test_broadcast_applications_updated() -> None:
+def test_broadcast_apps_updated() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
     apps = [{"name": "web", "url": "http://localhost:8000"}]
-    broadcaster.broadcast_applications_updated(apps)
+    broadcaster.broadcast_apps_updated(apps)
 
     msg = json.loads(_get_message(q))
-    assert msg["type"] == "applications_updated"
-    assert msg["applications"] == apps
+    assert msg["type"] == "apps_updated"
+    assert msg["apps"] == apps
 
 
 def test_broadcast_proto_agent_created() -> None:

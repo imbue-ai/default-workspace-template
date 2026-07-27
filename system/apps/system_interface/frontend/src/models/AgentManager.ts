@@ -1,6 +1,6 @@
 /**
  * Unified WebSocket-based agent and application state manager.
- * Receives real-time updates for agents, applications, and proto-agents.
+ * Receives real-time updates for agents, apps, and proto-agents.
  */
 
 import m from "mithril";
@@ -22,7 +22,7 @@ export interface AgentState {
   activity_state?: string | null;
 }
 
-export interface ApplicationEntry {
+export interface AppEntry {
   name: string;
   url: string;
 }
@@ -77,7 +77,7 @@ export interface LayoutOpEvent {
 
 type WsEvent =
   | { type: "agents_updated"; agents: AgentState[] }
-  | { type: "applications_updated"; applications: ApplicationEntry[] }
+  | { type: "apps_updated"; apps: AppEntry[] }
   | {
       type: "proto_agent_created";
       agent_id: string;
@@ -155,7 +155,7 @@ export type TerminalSessionListener = (terminalId: string | null, sessionId: str
 export type AgentActivityListener = (agentId: string, previous: string | null, current: string | null) => void;
 
 let agents: AgentState[] = [];
-let applications: ApplicationEntry[] = [];
+let apps: AppEntry[] = [];
 let protoAgents: ProtoAgent[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
 let layoutSyncListeners: LayoutSyncListener[] = [];
@@ -252,8 +252,8 @@ function handleEvent(event: WsEvent): void {
       break;
     }
 
-    case "applications_updated":
-      applications = event.applications;
+    case "apps_updated":
+      apps = event.apps;
       break;
 
     case "proto_agent_created":
@@ -377,8 +377,8 @@ export function removeAgentLocally(agentId: string): void {
   agents = agents.filter((a) => a.id !== agentId);
 }
 
-export function getApplications(): ApplicationEntry[] {
-  return applications;
+export function getApplications(): AppEntry[] {
+  return apps;
 }
 
 export function getProtoAgents(): ProtoAgent[] {
