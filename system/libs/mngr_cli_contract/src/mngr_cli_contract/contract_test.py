@@ -8,6 +8,8 @@ flag, or a bogus flag.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from mngr_cli_contract.contract import (
@@ -26,8 +28,9 @@ from mngr_cli_contract.contract import (
         ["mngr", "message", "demo", "-m", "hello"],
         ["mngr", "rsync", "/x/", "demo:/x/", "--uncommitted-changes=merge"],
         ["mngr", "observe", "--discovery-only", "--events-dir", "/tmp/e"],
-        # The chat-create fast-mode override, in both -S spellings.
+        # The chat-create fast-mode override, in every -S spelling.
         ["mngr", "create", "demo", "-S", "agent_types.claude.settings_overrides.fastMode=false"],
+        ["mngr", "create", "demo", "-Sagent_types.claude.settings_overrides.fastMode=true"],
         ["mngr", "create", "demo", "--setting=agent_types.claude.settings_overrides.fastMode=true"],
         # A non-"mngr" binary path in argv[0] is ignored (only argv[1:] matters).
         ["/path/to/custom-mngr", "message", "demo", "-m", "hi"],
@@ -74,9 +77,21 @@ def test_rejects_bogus_flag() -> None:
         "no_such_section.key=1",
     ],
 )
-def test_rejects_setting_that_does_not_resolve(setting: str) -> None:
+@pytest.mark.parametrize(
+    "spell",
+    [
+        lambda setting: ["-S", setting],
+        lambda setting: [f"-S{setting}"],
+        lambda setting: [f"--setting={setting}"],
+    ],
+    ids=["separate", "attached", "long"],
+)
+def test_rejects_setting_that_does_not_resolve(
+    setting: str, spell: Callable[[str], list[str]]
+) -> None:
     """click treats a ``-S`` value as an opaque string, so an unresolvable key
     path reaches mngr and takes the whole command down at runtime. It must fail
-    here instead."""
+    here instead -- however the override was spelled, since the overrides are
+    read back off click's own parse rather than re-scanned out of the argv."""
     with pytest.raises(MngrSettingContractError, match="not accepted"):
-        assert_mngr_argv_valid(["mngr", "create", "demo", "-S", setting])
+        assert_mngr_argv_valid(["mngr", "create", "demo", *spell(setting)])

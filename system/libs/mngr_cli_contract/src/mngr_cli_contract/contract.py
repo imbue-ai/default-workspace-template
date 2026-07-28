@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import click
 from imbue.mngr.cli.common_opts import apply_settings_to_config
@@ -42,7 +43,9 @@ from imbue.mngr.errors import MngrError
 from imbue.mngr.main import cli
 from imbue.mngr.utils.logging import LoggingConfig
 
-_SETTING_OPTION_NAMES = ("-S", "--setting")
+# click parameter name of mngr's ``-S`` / ``--setting`` option, i.e. the key its
+# values arrive under in a parsed option dict.
+_SETTING_PARAM_NAME = "setting"
 
 
 class MngrArgvContractError(AssertionError):
@@ -70,17 +73,19 @@ def assert_mngr_argv_valid(argv: Sequence[str]) -> None:
     brittle.
     """
     try:
-        _resolve_against_cli(cli, click.Context(cli, info_name="mngr"), list(argv[1:]))
+        options = _resolve_against_cli(
+            cli, click.Context(cli, info_name="mngr"), list(argv[1:])
+        )
     except click.exceptions.ClickException as exc:
         raise MngrArgvContractError(
             f"mngr argv not accepted by the live CLI: {list(argv)!r}\n"
             f"  {type(exc).__name__}: {exc.format_message()}"
         ) from exc
-    assert_mngr_settings_valid(argv)
+    assert_mngr_settings_valid(options.get(_SETTING_PARAM_NAME, ()))
 
 
-def assert_mngr_settings_valid(argv: Sequence[str]) -> None:
-    """Assert that every ``-S KEY=VALUE`` in ``argv`` resolves against mngr's config.
+def assert_mngr_settings_valid(settings: Sequence[str]) -> None:
+    """Assert that every ``KEY=VALUE`` in ``settings`` resolves against mngr's config.
 
     Each override is applied through mngr's own ``apply_settings_to_config`` --
     the call ``setup_command_context`` makes for the CLI flags -- so the key
@@ -89,11 +94,14 @@ def assert_mngr_settings_valid(argv: Sequence[str]) -> None:
     check: to it a ``-S`` value is an opaque string, while mngr rejects an
     unresolvable key path outright and fails the whole command.
 
+    ``settings`` is the ``-S`` / ``--setting`` payload list as click's own parser
+    reported it, so every spelling click accepts (``-S K=V``, ``-SK=V``,
+    ``--setting=K=V``) is covered without this module re-deriving any of them.
+
     The overrides are applied to a bare constructed config rather than the
     repo's loaded settings, so an ``__extend`` suffix extends from nothing. That
     does not affect whether the key path resolves, which is what is pinned here.
     """
-    settings = _extract_settings(argv)
     if not settings:
         return
     base_config = MngrConfig.model_construct(
@@ -116,40 +124,26 @@ def assert_mngr_settings_valid(argv: Sequence[str]) -> None:
             ) from exc
 
 
-def _extract_settings(argv: Sequence[str]) -> list[str]:
-    """Collect the ``KEY=VALUE`` payload of every ``-S`` / ``--setting`` in ``argv``."""
-    settings: list[str] = []
-    tokens = list(argv)
-    index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        if token in _SETTING_OPTION_NAMES:
-            if index + 1 < len(tokens):
-                settings.append(tokens[index + 1])
-            index += 2
-            continue
-        for name in _SETTING_OPTION_NAMES:
-            if token.startswith(f"{name}="):
-                settings.append(token[len(name) + 1 :])
-                break
-        index += 1
-    return settings
-
-
 def _resolve_against_cli(
     command: click.Command, ctx: click.Context, tokens: list[str]
-) -> None:
+) -> dict[str, Any]:
     """Descend the click tree for ``tokens``, raising on an unknown subcommand
-    or option. Recurses through nested groups (mngr's tree is shallow); a leaf
-    command's low-level parser recognizes/rejects option tokens and handles
-    arity without running click's value converters (which would, e.g., reject a
-    not-yet-created file)."""
+    or option, and return the leaf command's parsed options.
+
+    Recurses through nested groups (mngr's tree is shallow); a leaf command's
+    low-level parser recognizes/rejects option tokens and handles arity without
+    running click's value converters (which would, e.g., reject a
+    not-yet-created file). The returned dict is keyed by click parameter name --
+    it is how the ``-S`` payloads reach ``assert_mngr_settings_valid`` already
+    split out of the argv, in every spelling click accepts."""
     if isinstance(command, click.Group):
         name, subcommand, rest = command.resolve_command(ctx, tokens)
         if subcommand is None:
             raise click.exceptions.UsageError(f"No such command {name!r}.")
-        _resolve_against_cli(
+        return _resolve_against_cli(
             subcommand, click.Context(subcommand, info_name=name, parent=ctx), rest
         )
-    else:
-        command.make_parser(ctx).parse_args(args=list(tokens))
+    options, _arguments, _param_order = command.make_parser(ctx).parse_args(
+        args=list(tokens)
+    )
+    return options
