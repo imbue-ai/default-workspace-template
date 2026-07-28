@@ -1,6 +1,6 @@
 # Engineering Report: Chat UI Scroll and Text-Selection Bugs
 
-All paths are relative to `/Users/prestonseay/Desktop/mngr-scroll-and-text-bugs/.external_worktrees/forever-claude-template/system/libs/system_interface/frontend/src/`. All three diagnoses were adversarially verified; refuted claims are dropped below and disputed points are flagged. Where the verifiers disagreed with each other (bug 3, clamp-vs-follow interaction), I re-read `views/ChatPanel.ts`, `models/scrollFollow.ts`, and `markdown.ts` in full to resolve; resolutions are noted inline.
+All paths are relative to `/Users/prestonseay/Desktop/mngr-scroll-and-text-bugs/.external_worktrees/forever-claude-template/system/apps/system_interface/frontend/src/`. All three diagnoses were adversarially verified; refuted claims are dropped below and disputed points are flagged. Where the verifiers disagreed with each other (bug 3, clamp-vs-follow interaction), I re-read `views/ChatPanel.ts`, `models/scrollFollow.ts`, and `markdown.ts` in full to resolve; resolutions are noted inline.
 
 ---
 

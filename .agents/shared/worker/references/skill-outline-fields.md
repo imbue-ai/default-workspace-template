@@ -1,7 +1,7 @@
 # Skill outline fields
 
 The contents of the outline you present at the `outline-approval` gate when the
-artifact is a **skill**. (Your operation reference says when this gate fires and
+creation is a **skill**. (Your operation reference says when this gate fires and
 how to write the gate report; this reference only defines what goes inside it.)
 
 The outline contains:
@@ -32,7 +32,7 @@ The outline contains:
   guess: run one real unit, measure its actual cost and wall-clock, and
   extrapolate to a full run (`N x per-unit`, plus expected retries and any
   per-call fees). This lets the user approve the run cost at the outline gate
-  rather than discovering it after the artifact is built. For a step that calls
+  rather than discovering it after the creation is built. For a step that calls
   Claude, the AI-specific measurement technique is in the `use-ai-integration`
   skill.
 

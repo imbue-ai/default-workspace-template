@@ -194,7 +194,7 @@ class PathClass(NamedTuple):
 
     ``reveal_class`` selects the go-live action; ``project`` is the pytest
     project whose suite covers the path (``.`` = the root workspace,
-    ``system/libs/system_interface`` and ``system/vendor/mngr`` run their own suites);
+    ``system/apps/system_interface`` and ``system/vendor/mngr`` run their own suites);
     ``is_manifest`` flags a dependency-manifest change that needs an env refresh.
     """
 
@@ -206,12 +206,12 @@ class PathClass(NamedTuple):
 def _project_for_path(path: str) -> str:
     """Return the pytest project root that owns ``path``.
 
-    Only ``system/libs/system_interface`` and ``system/vendor/mngr`` carry their own pytest
+    Only ``system/apps/system_interface`` and ``system/vendor/mngr`` carry their own pytest
     config (the root config ignores them); everything else -- libs, scripts,
     ``.agents`` -- is covered by the root suite, reported as ``.``.
     """
-    if path.startswith("system/libs/system_interface/"):
-        return "system/libs/system_interface"
+    if path.startswith("system/apps/system_interface/"):
+        return "system/apps/system_interface"
     if path.startswith("system/vendor/mngr/"):
         return "system/vendor/mngr"
     return "."
@@ -222,15 +222,15 @@ def classify_path(path: str) -> PathClass:
 
     The classes drive reveal-by-class in the skill:
 
-    - ``system_interface`` -- ``system/libs/system_interface/**``; revealed via
+    - ``system_interface`` -- ``system/apps/system_interface/**``; revealed via
       ``reveal_system_interface.py`` (which owns its own manifest refresh).
     - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``; applied by
       restarting the services agent (``mngr start --restart system-services``).
     - ``editable_tool`` -- ``system/vendor/mngr/**``; ``.py`` picked up live, a manifest
       change needs ``uv sync --all-packages`` / an editable reinstall.
     - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,
-      ``creations/**``, and ``.agents/**``: may be a live runtime dependency of
-      a service or a workspace-added skill/creation, so it needs the worker's
+      ``system/services/**``, ``system/apps/**``, and ``.agents/**``: may be a live runtime dependency of
+      a service or a workspace-added skill or app, so it needs the worker's
       impact analysis before it can be called a silent merge.
     - ``provisioner`` -- the pinned-toolchain scripts and the ``.mngr/`` create
       config (see :func:`_is_provisioner`); shapes image-build / create-time
@@ -257,7 +257,7 @@ def classify_path(path: str) -> PathClass:
     # build/create-time impact.
     if _is_provisioner(path):
         return PathClass(CLASS_PROVISIONER, project, is_manifest)
-    if path.startswith("system/libs/system_interface/"):
+    if path.startswith("system/apps/system_interface/"):
         return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest)
     if path == "system/supervisord.conf" or path.startswith("system/libs/bootstrap/"):
         return PathClass(CLASS_SERVICE, project, is_manifest)
@@ -269,7 +269,8 @@ def classify_path(path: str) -> PathClass:
         path.startswith("system/scripts/")
         or path.startswith(".agents/")
         or path.startswith("system/libs/")
-        or path.startswith("creations/")
+        or path.startswith("system/services/")
+        or path.startswith("system/apps/")
     ):
         return PathClass(CLASS_SHARED_RUNTIME, project, is_manifest)
     if path == "CLAUDE.md" or "/changelog/" in path or path.endswith(".md"):
@@ -410,8 +411,8 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
     # Per-PR changelog entries live in a ``changelog/`` dir under each project
-    # bucket -- ``system/changelog/``, ``.agents/changelog/``,
-    # ``system/libs/<name>/changelog/``, ``creations/<name>/changelog/`` (see
+    # bucket -- ``system/changelog/``, ``.agents/changelog/``, and
+    # ``system/{libs,services,apps}/<name>/changelog/`` (see
     # system/scripts/check_changelog_entries.py for the bucket definition).
     # Match every one of them at any depth with a single glob rather than one
     # dir alone, or the "what's new" digest silently drops everything landed
@@ -460,8 +461,8 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
         # The target ref predates the skill, so there is no target copy to hand
         # off to: stage the *local* copy at the fixed path (so the worker still
         # finds the flow there) and report ``differs=False`` -- the caller stays
-        # on the local flow. Skip ``__pycache__`` so an imported-script artifact
-        # never rides along.
+        # on the local flow. Skip ``__pycache__`` so stale bytecode caches
+        # never ride along.
         shutil.copytree(
             repo_root / SKILL_DIR_REL,
             staged_skill,

@@ -1,17 +1,17 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at system/libs/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
 ---
 
 # Updating the system interface
 
-`system/libs/system_interface` is the live web UI the user is looking at right now
-(the dockview shell, the chat panels, the progress view) -- **the service that
+`system/apps/system_interface` is the live web UI the user is looking at right now
+(the dockview shell, the chat panels, the progress view) -- **the app that
 *is* the workspace UI**. This skill is the system-interface *specialization* of
-`update-service`'s "live loop first, ratify at turn-end" shape: everything
-shared -- the editing lease, the demonstrative-artifact (mock) taxonomy, the
+`update-app`'s "live loop first, ratify at turn-end" shape: everything
+shared -- the editing lease, the demonstrative-prototype (mock) taxonomy, the
 turn-end harden handoff -- lives in
-[`update-service`](../update-service/SKILL.md) and the references it points at,
+[`update-app`](../update-app/SKILL.md) and the references it points at,
 and this skill carries only what the system interface does *differently*.
 
 Everything different traces to one fact: **a broken build here is served
@@ -21,7 +21,7 @@ to the ordinary live loop:
 1. **Code isolation.** You edit an *isolated git worktree*, never the served
    tree -- a half-broken build can never reach the served UI.
 2. **The isolated preview instance *is* the user's view.** For an ordinary
-   service the user watches the live tab and a preview is the exception; here the
+   app the user watches the live tab and a preview is the exception; here the
    live tab is off-limits, so a labeled preview tab is the normal, always-on way
    the user sees the change as you iterate.
 3. **Safe-reveal go-live.** Merging is not enough: going live runs a
@@ -35,7 +35,7 @@ background worker, only after the user approves the shape.
 ## The hard rule
 
 **Never edit the system-interface tree that is being served to the user.** Do
-not run `Edit`/`Write` on files under `system/libs/system_interface/` in this (the
+not run `Edit`/`Write` on files under `system/apps/system_interface/` in this (the
 served) checkout, and do not rebuild or restart the live UI from uncommitted
 edits here. Every change is made in a separate, isolated worktree, built and
 previewed there, and revealed to the live tree only through the safe-reveal
@@ -55,17 +55,17 @@ script once the user has approved and a background worker has hardened it.
    safe-reveal script, then tear everything down and release the lease.
 
 The lease is held across the **whole** pass (entry through reveal or
-abandonment) -- a deliberate divergence from `update-service`'s per-turn release,
+abandonment) -- a deliberate divergence from `update-app`'s per-turn release,
 because there is one served UI and one preview tab, so only one system-interface
 edit may be in flight at a time.
 
 ## 1. On entry: take the lease, provision in the background, clarify the shape
 
 **Take the editing lease first.** It is the *same* advisory lease
-`update-service` uses ("One editor at a time"). Its title is per-service
+`update-app` uses ("One editor at a time"). Its title is per-service
 (`editing service <name>`), so a system-interface pass never collides with an
-ordinary edit of some other service -- here the name is fixed as `editing
-service system_interface`. Pre-flight exactly as `update-service` describes:
+ordinary edit of some other app -- here the name is fixed as `editing
+service system_interface`. Pre-flight exactly as `update-app` describes:
 
 ```bash
 tk ready > /tmp/service-leases.txt
@@ -106,7 +106,7 @@ reading the relevant code and clarifying the change's shape with the user:
 ```bash
 git worktree add -b "mngr/update-$SLUG" "data/.tasks/si-live/update-$SLUG" HEAD
 cd "data/.tasks/si-live/update-$SLUG" && uv sync --all-packages \
-  && (cd system/libs/system_interface/frontend && npm ci && npm run build)
+  && (cd system/apps/system_interface/frontend && npm ci && npm run build)
 ```
 
 **If `git worktree add -b` fails because `mngr/update-$SLUG` already exists**, an
@@ -130,7 +130,7 @@ first previewed pass should be scales with shape-uncertainty, not with "does it
 change what the user sees":** an obvious contained change (font, color,
 reposition, copy) you implement directly; a redesign / new view / non-obvious
 layout starts as a deliberately rough pass for fast signal. Which
-demonstrative-artifact *type* to use is the shared taxonomy in
+demonstrative-prototype *type* to use is the shared taxonomy in
 [`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
 (phase 5): the embedded workspace UI **defaults to Type 1 (a janky real edit in
 the worktree, shown through the real preview)**; reserve Type 2 (a detached
@@ -145,7 +145,7 @@ calls Claude, follow `use-ai-integration` -- same as when the UI was built. The
 build/test mechanics for the system interface (in-process backend tests, the
 `test_e2e.py` Playwright harness, `npm run build`/`lint`/`test`) are the worker's
 job at harden time and are documented in
-[`artifact-system-interface.md`](../../shared/worker/references/artifact-system-interface.md);
+[`type-system-interface.md`](../../shared/worker/references/type-system-interface.md);
 in the live loop you only need a clean build, not the full gate. If you do run
 the Python suite while iterating, run the fast subset -- skip the CI-only slow
 markers with `-m 'not tmux and not modal and not docker and not docker_sdk and
@@ -198,7 +198,7 @@ points at the wrapper page, which never moves. After editing:
   (the inner app serves the rebuilt `static/` bundle straight from disk):
 
   ```bash
-  (cd data/.tasks/si-live/update-$SLUG/system/libs/system_interface/frontend && npm run build)
+  (cd data/.tasks/si-live/update-$SLUG/system/apps/system_interface/frontend && npm run build)
   python3 system/scripts/layout.py refresh si-preview
   ```
 
@@ -242,8 +242,8 @@ abandonment tears everything down (Step 4 teardown) and releases the lease.
 ## 3. On approval: hand off to a background harden worker on the same branch
 
 Once the user approves the shape, hand the branch to a background worker that
-runs the full test + review gate. This reuses the `update-artifact` orchestration
-core (`artifact=system-interface`), with two system-interface deviations: the
+runs the full test + review gate. This reuses the `update-creation` orchestration
+core (`type=system-interface`), with two system-interface deviations: the
 worker is created **at approval, on the existing branch**, and the task frames
 one of two handoff shapes.
 
@@ -259,16 +259,16 @@ for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L"
 git worktree remove data/.tasks/si-live/update-$SLUG
 ```
 
-Deliberately no `--force`: every build artifact in that worktree (`.venv/`,
+Deliberately no `--force`: every build output in that worktree (`.venv/`,
 `node_modules/`, `static/`, `.test_output/`) is gitignored, so a worktree whose
 rounds you committed removes cleanly. If git refuses, the worktree still holds
 uncommitted work -- commit it (which also restores the branch-`HEAD`-equals-what-
 the-user-saw invariant) and retry. Never discard it to get past the refusal; the
 branch you are about to hand the worker is the only copy.
 
-**Create the worker on the branch.** Follow `update-artifact` Steps 1-3 (open the
+**Create the worker on the branch.** Follow `update-creation` Steps 1-3 (open the
 `update-$SLUG` tracking ticket, write the task file with `operation: update` /
-`artifact: system-interface` frontmatter, launch, background-poll) with these
+`type: system-interface` frontmatter, launch, background-poll) with these
 specifics:
 
 - Launch with the **branch passthrough** so the worker checks out and *extends*
@@ -297,7 +297,7 @@ specifics:
   [`op-update.md`](../../shared/worker/references/op-update.md), there is **no
   `## Change origin` marker and no worker gate**: user approval already happened
   through your live loop. The worker implements/verifies per
-  `artifact-system-interface.md`, runs the tests and review gates, and reports a
+  `type-system-interface.md`, runs the tests and review gates, and reports a
   plain `done` (or `question` / `stuck`). Include a `## Real scenario` section
   when a real conversation motivated the change -- name the motivating agent
   (usually your `$MNGR_AGENT_ID`) and describe in plain words what looked wrong,
@@ -335,12 +335,12 @@ With the worker `done` (and any final preview approved), merge and reveal. You
 already hold the editing lease from Step 1, so no other chat's merge can
 interleave.
 
-1. **Freshness check** -- the branch is mergeable only if `system/libs/system_interface/`
+1. **Freshness check** -- the branch is mergeable only if `system/apps/system_interface/`
    has not changed on the served branch since the worker branched:
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only "$BASE" HEAD -- system/libs/system_interface/
+   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/
    ```
 
    Empty output means fresh -- continue. Any output means the pass is stale (some
@@ -371,7 +371,7 @@ interleave.
    That single command owns the whole reveal as one deterministic, self-healing
    motion (you do not run `npm`/`uv`/`mngr` by hand). It classifies what changed;
    refreshes dependencies only if a manifest changed (`npm ci` / `uv tool install
-   -e system/libs/system_interface --reinstall`); pre-flights a backend change on a
+   -e system/apps/system_interface --reinstall`); pre-flights a backend change on a
    throwaway port before touching the live service; rebuilds `static/` and
    broadcasts a reload (frontend) and/or restarts the services agent (backend);
    health-checks the live service; and auto-rolls-back to `--rollback-to` on any

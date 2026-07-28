@@ -16,12 +16,14 @@ import hashlib
 import stat
 from pathlib import Path
 
-from bootstrap.testing import REPO_ROOT
-from bootstrap.testing import FAKE_BINARY_CONTENT
-from bootstrap.testing import install_fake_pinned_scanner
-from bootstrap.testing import make_scanner_tarball
-from bootstrap.testing import make_stub_bin
-from bootstrap.testing import run_sourced
+from bootstrap.testing import (
+    FAKE_BINARY_CONTENT,
+    REPO_ROOT,
+    install_fake_pinned_scanner,
+    make_scanner_tarball,
+    make_stub_bin,
+    run_sourced,
+)
 
 _SCRIPT = REPO_ROOT / "scripts" / "install_secret_scanners.sh"
 
