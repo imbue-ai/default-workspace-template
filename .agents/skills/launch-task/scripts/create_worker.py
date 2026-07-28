@@ -910,7 +910,10 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         "launch", help="Create the worker and hand it the task (synchronous)."
     )
     launch_parser.add_argument(
-        "--name", required=True, help="Worker name; becomes the mngr/<name> branch."
+        "--name",
+        required=True,
+        help="Worker name; also names the default branch (mngr/<name>) unless "
+        "--branch says otherwise.",
     )
     launch_parser.add_argument(
         "--template",
@@ -978,7 +981,10 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         "destroy, in one call. For non-interactive callers (services).",
     )
     launch_sync_parser.add_argument(
-        "--name", required=True, help="Worker name; becomes the mngr/<name> branch."
+        "--name",
+        required=True,
+        help="Worker name; also names the default branch (mngr/<name>) unless "
+        "--branch says otherwise.",
     )
     launch_sync_parser.add_argument(
         "--template",
@@ -1032,8 +1038,8 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
 
     destroy_parser = subparsers.add_parser(
         "destroy",
-        help="Destroy a worker agent (mngr destroy --force). The mngr/<name> "
-        "branch survives.",
+        help="Destroy a worker agent (mngr destroy --force). The worker's branch "
+        "(mngr/<name> by default, or whatever --branch resolved to) survives.",
     )
     destroy_parser.add_argument("--name", required=True, help="Worker name to destroy.")
 
