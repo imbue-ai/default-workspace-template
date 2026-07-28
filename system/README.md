@@ -13,8 +13,8 @@ day-to-day, but every part is inspectable and the mind maintains it.
   template pointer). Runtime-written config lives in `data/system/` instead.
 - `changelog/` - Per-change entries for template development.
 - `Dockerfile` - Builds the workspace image.
-- `supervisord.conf` - Daemon config, the `system_interface` program, and an
-  `[include]` of `supervisord.conf.d/*.conf` (also reachable at
+- `supervisord.conf` - Daemon config plus an `[include]` of
+  `supervisord.conf.d/*.conf`; it declares no programs itself (also reachable at
   `/etc/supervisord.conf`, so `supervisorctl` works from any directory).
 - `supervisord.conf.d/` - One file per background service, named
   `<service-name>.conf`. Adding or removing a service is adding or deleting a
