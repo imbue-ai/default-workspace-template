@@ -88,3 +88,53 @@ def test_upsert_then_remove_round_trips(tmp_path: Path) -> None:
     result = _run(["--remove", "--name", "web"], apps_file)
     assert result.returncode == 0, result.stderr
     assert _read_apps(apps_file) == []
+
+
+def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
+    """Drift guard: the build-app scaffold's name validation must stay a
+    subset of this script's, or the scaffold could mint an app whose
+    ``forward_port.py`` registration then fails at runtime. (The scaffold is
+    deliberately stricter -- letter-start, its own reserved list -- but every
+    name it accepts must register cleanly.)
+    """
+    import importlib.util
+
+    repo_root = Path(__file__).parents[2]
+
+    def _load(module_name: str, path: Path):
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    forward_port = _load("_forward_port_drift_check", Path(__file__).parent / "forward_port.py")
+    scaffold = _load(
+        "_scaffold_drift_check",
+        repo_root / ".agents" / "skills" / "build-app" / "scripts" / "scaffold_flask_lib.py",
+    )
+    names = (
+        "web",
+        "my-app2",
+        "a",
+        "app2",
+        "openvscode-server-4",
+        "x9-y",
+        "double--hyphen",
+        "agent-foo",
+        "localhost",
+        "terminal",
+        "-lead",
+        "trail-",
+        "UPPER",
+        "under_score",
+    )
+    for name in names:
+        is_scaffold_accepted = (
+            bool(scaffold.KEBAB_RE.match(name))
+            and not name.startswith("agent-")
+            and name not in scaffold.RESERVED_NAMES
+            and scaffold._kebab_to_snake(name) not in scaffold.RESERVED_NAMES
+        )
+        if is_scaffold_accepted:
+            assert forward_port.validate_service_name(name) is None, name

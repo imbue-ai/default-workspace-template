@@ -47,6 +47,10 @@ RESERVED_NAMES = frozenset(
         "terminal",
         "deferred-install",
         "imbue-common",
+        # forward_port.py rejects ``localhost`` at registration time (it is
+        # the local origin's root domain); reserve it here too so the scaffold
+        # never mints an app that cannot register.
+        "localhost",
     }
 )
 LOWEST_AUTO_PORT = 8080

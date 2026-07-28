@@ -1,5 +1,6 @@
 """Tests for ``layout_ops`` (mutex, inspect serializer, list helper, op-name validation)."""
 
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any
@@ -591,3 +592,30 @@ def test_service_name_from_url_rejects_external_hosts_containing_double_dash() -
     assert _service_name_from_url("https://foo--bar.example.com/") is None
     assert _service_name_from_url("https://api--myhost--user.example.com/") == "api"
     assert _service_name_from_url("http://web.agent-0af.localhost:8421/") == "web"
+
+
+def test_service_name_from_url_agrees_with_layout_script_parser() -> None:
+    """Drift guard: ``system/scripts/layout.py`` re-implements this parse.
+
+    The script must stay stdlib-only (agents run it bare), so it cannot import
+    this package; this test pins the two copies to each other instead. If it
+    fails, the share-hostname convention changed in one place but not the
+    other.
+    """
+    script_path = Path(__file__).parents[4] / "scripts" / "layout.py"
+    spec = importlib.util.spec_from_file_location("_layout_script_drift_check", script_path)
+    assert spec is not None and spec.loader is not None
+    layout_script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(layout_script)
+    urls = (
+        "http://api.agent-0af.localhost:8421/health",
+        "http://web.agent-0af.localhost:8421/",
+        "https://api--myhost--user.example.com/health",
+        "https://example.com/",
+        "http://agent-0af.localhost:8421/",
+        "https://foo--bar.example.com/",
+        "http://terminal.agent-0af.localhost:8421/?arg=_&arg=agent&arg=main",
+    )
+    for url in urls:
+        coordinates = layout_script._service_coordinates_from_url(url)
+        assert _service_name_from_url(url) == (coordinates[0] if coordinates else None), url

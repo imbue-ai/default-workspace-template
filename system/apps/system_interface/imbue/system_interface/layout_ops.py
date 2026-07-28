@@ -291,6 +291,11 @@ def _service_name_from_url(url: Any) -> str | None:
     Anything else -- an external ``https://`` panel, the bare workspace
     origin (whose first label is the ``agent-<hex>`` coordinate itself), a
     non-string value -- yields None so it never masquerades as a service.
+
+    ``system/scripts/layout.py`` (stdlib-only, cannot import this package)
+    mirrors this parse in ``_service_coordinates_from_url``; a drift test in
+    ``layout_ops_test.py`` pins the two copies to each other. The canonical
+    derivation lives in ``frontend/src/origin.ts``.
     """
     if not isinstance(url, str):
         return None

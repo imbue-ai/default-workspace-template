@@ -253,12 +253,7 @@ def _service_name_from_ref(ref: str) -> str:
     name -- the first ``?`` or ``/`` -- before looking it up. Plain
     ``service:api`` is returned unchanged.
     """
-    remainder = ref.removeprefix("service:")
-    for separator in ("?", "/"):
-        index = remainder.find(separator)
-        if index != -1:
-            remainder = remainder[:index]
-    return remainder
+    return _service_ref_parts(ref)[0]
 
 
 def _validate_replace_url(url: str) -> None:
@@ -303,6 +298,10 @@ def _service_coordinates_from_url(url: str) -> tuple[str, str] | None:
     (``https://<name>--<host>--<user>.<domain>/...``). Returns None for
     anything that is not a service origin (an external URL, the bare
     workspace origin) so a ``service:`` expectation can never match those.
+
+    Mirrors ``_service_name_from_url`` in system_interface's ``layout_ops.py``
+    (this script must stay stdlib-only, so it cannot import that package); a
+    drift test in ``layout_ops_test.py`` pins the two copies to each other.
     """
     parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname or ""

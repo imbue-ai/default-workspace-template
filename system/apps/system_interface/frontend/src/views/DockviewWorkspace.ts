@@ -86,15 +86,6 @@ const AUTOSAVE_DEBOUNCE_MS = 1500;
 const CHAT_PANEL_ID_PREFIX = "chat-";
 const TERMINAL_PANEL_ID_PREFIX = "terminal-session-";
 
-// Every service owns its own browser origin, derived from the shell's host
-// (see src/origin.ts): locally ``http://<name>.agent-<hex>.localhost:8421/``,
-// on shares ``https://<name>--<host>--<user>.<domain>/``. Routing is
-// Host-header based (mngr_forward locally, cloudflared ingress on shares);
-// nothing proxies or rewrites the service's own URLs.
-function getServiceUrl(serviceName: string): string {
-  return deriveServiceOrigin(serviceName);
-}
-
 /** Split the body of a ``service:`` ref into its service name and an
  *  optional ``?query`` suffix. Plain ``service:web`` yields
  *  ``{name: "web", query: ""}``; ``service:browser?session=2`` yields
@@ -116,7 +107,7 @@ function parseServiceRefBody(body: string): { name: string; query: string } {
  *  service origin. */
 function serviceRefUrl(body: string): string {
   const { name, query } = parseServiceRefBody(body);
-  return `${getServiceUrl(name)}${query}`;
+  return `${deriveServiceOrigin(name)}${query}`;
 }
 
 /** The ``?query`` suffix of a stored iframe URL, or "" when it has none.
@@ -137,7 +128,7 @@ function serviceSessionLabel(query: string): string {
 }
 
 export function getTerminalUrl(): string {
-  return getServiceUrl("terminal");
+  return deriveServiceOrigin("terminal");
 }
 
 /** Build the iframe URL that attaches a terminal to ``agentName``'s tmux
@@ -732,7 +723,7 @@ function buildDropdownItems(
   );
   for (const app of apps) {
     if (!openAppNames.has(app.name)) {
-      const serviceUrl = getServiceUrl(app.name);
+      const serviceUrl = deriveServiceOrigin(app.name);
       items.push({
         label: app.name,
         action: () => openIframeTab(serviceUrl, app.name, "iframe", app.name, targetGroup),
@@ -1781,7 +1772,7 @@ function applyLayoutContent(saved: SavedLayout | null): void {
         params.terminalId = mintTerminalId();
         params.url = buildSessionTerminalUrl(params.terminalSessionName, params.terminalId, primaryWorkDir());
       } else if (params.serviceName) {
-        params.url = `${getServiceUrl(params.serviceName)}${urlQuerySuffix(params.url)}`;
+        params.url = `${deriveServiceOrigin(params.serviceName)}${urlQuerySuffix(params.url)}`;
       } else if (params.url) {
         const rebuiltTerminalUrl = rebuildAgentTerminalUrl(params.url);
         if (rebuiltTerminalUrl !== null) params.url = rebuiltTerminalUrl;
@@ -2044,10 +2035,10 @@ function resolveReplaceUrl(url: string): string {
   if (url.startsWith("service:")) {
     const remainder = url.substring("service:".length);
     const slashIndex = remainder.indexOf("/");
-    if (slashIndex === -1) return getServiceUrl(remainder);
+    if (slashIndex === -1) return deriveServiceOrigin(remainder);
     const serviceName = remainder.substring(0, slashIndex);
     const path = remainder.substring(slashIndex + 1);
-    return `${getServiceUrl(serviceName)}${path}`;
+    return `${deriveServiceOrigin(serviceName)}${path}`;
   }
   return url;
 }

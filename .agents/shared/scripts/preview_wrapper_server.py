@@ -110,6 +110,8 @@ def build_wrapper_html(inner_service: str, title: str) -> str:
     // Local hosts look like <wrapper>.agent-<hex>.localhost:8421 (swap the
     // first dot-label); shared hosts look like <wrapper>--<host>--<user>.<domain>
     // (swap the first "--" token of the flat label).
+    // The origin scheme is owned by deriveServiceOrigin in system_interface's
+    // frontend/src/origin.ts; if it changes, this sibling-swap must change too.
     var previewService = {service_literal};
     var host = location.host;
     var firstLabel = host.split(".")[0];
