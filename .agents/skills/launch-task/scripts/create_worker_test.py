@@ -196,6 +196,32 @@ def test_resolve_worker_branch_matches_mngr_spec_parsing(
     assert create_worker_mod.resolve_worker_branch("demo-worker", branch) == expected
 
 
+def test_launch_rejects_a_malformed_branch_spec_before_creating_anything(
+    tmp_path: Path,
+) -> None:
+    """A bad ``--branch`` spec aborts before any mngr call.
+
+    The spec is knowable at launch time, but nothing else consumes it until
+    ``launch_sync`` names the branch to merge -- which happens *after* the await.
+    Left that late, an authoring typo would surface only once the worker had run
+    to completion, discarding the report it had just collected.
+    """
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+
+    with pytest.raises(ValueError):
+        create_worker_mod.launch(
+            name="demo-worker",
+            template="worker",
+            runtime_dir=runtime,
+            task_file=task,
+            runner=runner,
+            branch="main:*/*",
+        )
+
+    assert not [c for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
+
+
 def test_resolve_worker_branch_rejects_malformed_specs() -> None:
     # Authoring bugs, surfaced loudly rather than silently naming a wrong branch:
     # an empty spec (callers pass None for the default) and more than one "*",
