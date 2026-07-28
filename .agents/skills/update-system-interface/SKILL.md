@@ -88,7 +88,7 @@ LEASE_ID=$(tk create "editing service system_interface" -t chore \
     -d "Held by $MNGR_AGENT_NAME across the whole live-edit + harden + reveal pass.")
 ```
 
-then `tk start "$LEASE_ID"` (as its own command). Unlike an ordinary service
+then `tk start "$LEASE_ID"` (as its own command). Unlike an ordinary app
 edit, this lease deliberately spans the entire pass -- including the waits for
 the user's feedback -- and is released only at final teardown (Step 4) or on
 explicit abandonment.
@@ -324,7 +324,7 @@ for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" 
 
 Because the system interface *is* the user's workspace, a final preview is
 essentially always warranted when there is unseen real work (unlike an ordinary
-service, where a tab refresh after go-live often suffices). It is optional only
+app, where a tab refresh after go-live often suffices). It is optional only
 when the user already previewed a polished, real version and the worker changed
 nothing they would see. If the user rejects here, do not merge; tear the preview
 down and decide *with them* whether to re-brief the worker.
