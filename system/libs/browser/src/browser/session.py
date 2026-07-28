@@ -72,7 +72,7 @@ from pydantic import PrivateAttr
 
 from browser import manifest as fleet_manifest
 from browser.audio import AudioCapture, create_null_sink, remove_null_sink
-from browser.capture import Capture
+from browser.capture import Capture, StripeMailbox
 from browser.display import SCREEN_H, SCREEN_W, Display, DisplayError
 from browser.names import generate_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
@@ -120,6 +120,13 @@ _RENDER_MIN_HEIGHT = 480
 # Viewer mouse button name -> X button number (XTest). Wheel is handled separately
 # (buttons 4-7). "none" (a bare move) never presses a button.
 _MOUSE_BUTTONS = {"left": 1, "middle": 2, "right": 3, "none": 0}
+
+# Minimum spacing between client-requested keyframes. The viewer now asks not just at
+# startup (its 500 ms not-yet-painted watchdog) but the moment a stripe row's decoder
+# desyncs -- and that path can fire at delta rate on a jittery network, while every
+# grant costs a full-region IDR from the shared encoder. 0.4 s stays under the 500 ms
+# startup cadence (those requests all still pass) and caps a desync storm at 2.5/s.
+_CLIENT_KEYFRAME_MIN_INTERVAL_S = 0.4
 
 # Fortress's fixed install path (see the env.d unit
 # system/scripts/env.d/1000-playwright-fortress.sh). A stealth, C++-patched
@@ -498,6 +505,8 @@ class LiveBrowser(MutableModel):
     # close().
     _display: Display | None = PrivateAttr(default=None)
     _capture: Capture | None = PrivateAttr(default=None)
+    # Throttle for viewer-requested keyframes (startup watchdog + decoder-desync recovery).
+    _client_keyframe_at: float = PrivateAttr(default=0.0)
     # Per-browser audio: its own PulseAudio null sink (Chromium plays into it via
     # PULSE_SINK, so sound is isolated per browser) captured on demand to PCM. Best-effort:
     # None when PulseAudio isn't available -- the browser just has no sound.
@@ -1008,10 +1017,11 @@ class LiveBrowser(MutableModel):
     # encoder briefly mutates os.environ["DISPLAY"], which must happen on the single
     # loop thread where browser launches also serialize -- never on a Flask thread.
 
-    async def add_stream_subscriber(self, want_h264: bool) -> "queue.Queue[bytes | None] | None":
+    async def add_stream_subscriber(self, want_h264: bool) -> "StripeMailbox | None":
         """Register a ``/stream`` video socket, starting the display encoder on demand.
-        Returns its outbound byte queue, or None when there's no encoder (headless, the
-        browser isn't running, or it's being torn down) -- the handler closes the socket.
+        Returns its outbound stripe mailbox (newest-per-row; queue-compatible ``get``),
+        or None when there's no encoder (headless, the browser isn't running, or it's
+        being torn down) -- the handler closes the socket.
         The ``_closed`` guard matters: a subscribe can race close() (the /stream handshake
         waits before subscribing), and starting a capture against a just-freed display
         whose number may be reused would stream the WRONG browser."""
@@ -1019,9 +1029,9 @@ class LiveBrowser(MutableModel):
             return None
         return self._capture.add_subscriber(want_h264)
 
-    async def remove_stream_subscriber(self, client_queue: "queue.Queue[bytes | None]") -> None:
+    async def remove_stream_subscriber(self, mailbox: StripeMailbox) -> None:
         if self._capture is not None:
-            self._capture.remove_subscriber(client_queue)
+            self._capture.remove_subscriber(mailbox)
 
     async def add_audio_subscriber(self) -> "queue.Queue[bytes | None] | None":
         """Register an ``/audio`` PCM socket, starting the sink capture on demand. Returns
@@ -1195,12 +1205,18 @@ class LiveBrowser(MutableModel):
                 else:
                     self._inject_key(message.get("event", {}))
         elif kind == "request_keyframe":
-            # The viewer asks for a fresh keyframe when it's connected but hasn't painted a
-            # frame yet: it can subscribe just as the encoder starts (the initial IDR races
-            # it) and, on a STATIC page, no damage ever triggers another -- so the view would
-            # sit blank until the user causes a repaint. It re-asks until a frame lands.
-            # Cheap, idempotent, and NOT input-gated (a watcher should see the live page too).
-            if self._capture is not None:
+            # The viewer asks for a fresh keyframe in two cases: it's connected but hasn't
+            # painted a frame yet (it can subscribe just as the encoder starts and the
+            # initial IDR races it; on a STATIC page no damage ever triggers another, so
+            # the view would sit blank until the user causes a repaint -- it re-asks until
+            # a frame lands), and a stripe row's decoder DESYNCED (dropped/rejected delta)
+            # and needs a keyframe to resync now instead of waiting for the periodic one.
+            # NOT input-gated (a watcher should see the live page too), but THROTTLED:
+            # the desync path can fire at delta rate on a jittery network, and each grant
+            # costs a full-region IDR from the shared encoder.
+            now = time.monotonic()
+            if now - self._client_keyframe_at >= _CLIENT_KEYFRAME_MIN_INTERVAL_S and self._capture is not None:
+                self._client_keyframe_at = now
                 self._capture.request_keyframe()
 
     def _inject_mouse(self, event: dict[str, Any]) -> None:
