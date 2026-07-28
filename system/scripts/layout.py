@@ -307,9 +307,12 @@ def _service_coordinates_from_url(url: str) -> tuple[str, str] | None:
     parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname or ""
     first_label, _, rest = host.partition(".")
-    if "--" in first_label:
+    # Share hostnames are exactly <service>--<host>--<user>; registered names
+    # can never contain "--", so an external host that merely contains "--"
+    # (e.g. foo--bar.example.com) must not parse as a service.
+    if first_label.count("--") == 2:
         name = first_label.split("--", 1)[0]
-    elif rest.startswith("agent-"):
+    elif "--" not in first_label and rest.startswith("agent-"):
         name = first_label
     else:
         return None

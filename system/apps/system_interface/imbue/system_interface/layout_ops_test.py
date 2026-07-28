@@ -6,6 +6,7 @@ from typing import Any
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.layout_ops import _service_name_from_url
 from imbue.system_interface.layout_ops import _service_session_suffix
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
@@ -582,3 +583,11 @@ def test_service_session_suffix_distinguishes_browser_panes() -> None:
     assert _service_session_suffix("http://browser.agent-0af.localhost:8421/") == ""
     assert _service_session_suffix("http://web.agent-0af.localhost:8421/") == ""
     assert _service_session_suffix(None) == ""
+
+
+def test_service_name_from_url_rejects_external_hosts_containing_double_dash() -> None:
+    """Share origins are exactly <service>--<host>--<user>; an external host
+    whose first label merely contains "--" must not parse as a service."""
+    assert _service_name_from_url("https://foo--bar.example.com/") is None
+    assert _service_name_from_url("https://api--myhost--user.example.com/") == "api"
+    assert _service_name_from_url("http://web.agent-0af.localhost:8421/") == "web"

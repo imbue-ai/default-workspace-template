@@ -1333,6 +1333,9 @@ def test_service_coordinates_from_url_handles_both_host_shapes() -> None:
     ) == ("browser", "/?session=2")
     assert layout._service_coordinates_from_url("https://example.com/") is None
     assert layout._service_coordinates_from_url("http://agent-0af.localhost:8421/") is None
+    # An external host whose first label merely CONTAINS "--" is not a share
+    # origin (those are exactly <service>--<host>--<user>).
+    assert layout._service_coordinates_from_url("https://foo--bar.example.com/") is None
 
 
 def test_service_name_from_ref_strips_query_and_path() -> None:

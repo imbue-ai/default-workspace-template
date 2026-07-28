@@ -296,9 +296,13 @@ def _service_name_from_url(url: Any) -> str | None:
         return None
     host = urllib.parse.urlsplit(url).hostname or ""
     first_label, _, rest = host.partition(".")
-    if "--" in first_label:
+    # Share hostnames are exactly <service>--<host>--<user> (registered names
+    # can never contain "--", kebab validation forbids consecutive hyphens),
+    # so require BOTH separators -- an external host that merely contains
+    # "--" (e.g. foo--bar.example.com) must not masquerade as a service.
+    if first_label.count("--") == 2:
         return first_label.split("--", 1)[0] or None
-    if rest.startswith("agent-"):
+    if "--" not in first_label and rest.startswith("agent-"):
         return first_label or None
     return None
 
