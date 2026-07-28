@@ -111,8 +111,9 @@ class ResolvedTarget(NamedTuple):
     ``ceiling`` is the app's own template ref when it caps the selection, and
     ``None`` when there is nothing to cap against (the app reports a branch rather
     than a release tag -- a dev build). ``exceeds_ceiling`` marks an override the
-    ceiling could not vouch for: newer than the app, or a branch/ref whose version
-    cannot be compared at all. The default (no-override) path never sets it.
+    ceiling could not vouch for: newer than the app, or a branch/commit carrying no
+    version to compare. A prerelease tag compares fine and is not flagged for being
+    one. The default (no-override) path never sets it.
     """
 
     ref: str
@@ -133,6 +134,56 @@ def _parse_stable_version(tag: str) -> tuple[int, int, int] | None:
     return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
+def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
+    """Order a prerelease's dot-separated identifiers the way semver does.
+
+    Numeric identifiers compare numerically and rank below alphanumeric ones, so
+    ``rc.2`` follows ``rc.1`` rather than sorting lexically (where ``rc.10`` would
+    land before ``rc.2``). Each identifier becomes ``(is_alphanumeric, number,
+    text)`` so a single tuple comparison covers both kinds.
+    """
+    identifiers: list[tuple[int, int, str]] = []
+    for identifier in pre.split("."):
+        if identifier.isdigit():
+            identifiers.append((0, int(identifier), ""))
+        else:
+            identifiers.append((1, 0, identifier))
+    return tuple(identifiers)
+
+
+def parse_version(
+    tag: str,
+) -> tuple[int, int, int, int, tuple[tuple[int, int, str], ...]] | None:
+    """Return a comparable version for any ``minds-v*`` tag, prerelease included.
+
+    Unlike :func:`_parse_stable_version` -- which deliberately refuses a
+    prerelease so one never wins the default "latest stable" selection -- this
+    parses every release tag, because a *ceiling* is a different question from a
+    *candidate*. An app on ``minds-v0.4.0-rc1`` is a real app with a real version,
+    and its workspaces should be capped by it rather than left uncapped.
+
+    Ordering follows semver: a prerelease sorts below its own release, so
+    ``0.4.0-rc1 < 0.4.0``, and a ceiling of ``minds-v0.4.0-rc1`` therefore admits
+    ``minds-v0.3.9`` but not ``minds-v0.4.0``.
+
+    Returns ``None`` only for something that is not a release tag at all (a
+    branch name, a bare commit) -- there is genuinely no version to compare.
+    """
+    match = _TAG_RE.match(tag.strip())
+    if match is None:
+        return None
+    pre = match.group("pre")
+    # The 4th element ranks a prerelease below the release it precedes; the 5th
+    # orders prereleases of the same version among themselves.
+    return (
+        int(match.group(1)),
+        int(match.group(2)),
+        int(match.group(3)),
+        0 if pre is not None else 1,
+        _prerelease_sort_key(pre) if pre is not None else (),
+    )
+
+
 def pick_latest_stable_tag(
     tags: Sequence[str], ceiling: str | None = None
 ) -> str | None:
@@ -143,15 +194,21 @@ def pick_latest_stable_tag(
     ``minds-v0.3.9``.
 
     ``ceiling`` bounds the selection to tags at or below it, so a workspace never
-    picks a template newer than the app driving it. A ``ceiling`` that is not
-    itself a stable ``minds-v*`` tag (a dev app reporting a branch) is treated as
-    no ceiling -- there is no version to compare against.
+    picks a template newer than the app driving it. The ceiling is parsed with
+    :func:`parse_version`, so an app on a *prerelease* (``minds-v0.4.0-rc1``) caps
+    just as well as one on a stable release -- it is a real app with a real
+    version. Only a ceiling that is not a release tag at all (a dev app reporting
+    a branch) means no ceiling, because there is genuinely nothing to compare.
+
+    Candidates are still filtered to *stable* tags: capping by a prerelease does
+    not make one selectable.
     """
-    ceiling_version = _parse_stable_version(ceiling) if ceiling is not None else None
+    ceiling_version = parse_version(ceiling) if ceiling is not None else None
     stable = [
         (version, tag)
         for tag in tags
-        if (version := _parse_stable_version(tag)) is not None
+        if (version := parse_version(tag)) is not None
+        and _parse_stable_version(tag) is not None
         and (ceiling_version is None or version <= ceiling_version)
     ]
     if not stable:
@@ -181,16 +238,18 @@ def is_held_back_by_ceiling(
 
 
 def _is_within_ceiling(ref: str, ceiling: str | None) -> bool:
-    """Whether ``ref`` is provably a stable release at or below ``ceiling``.
+    """Whether ``ref`` is provably a release at or below ``ceiling``.
 
-    False for anything unprovable -- a branch, a bare commit, or a prerelease --
-    so an override the ceiling cannot vouch for is surfaced rather than assumed
-    safe. True when there is no ceiling to enforce.
+    Both sides go through :func:`parse_version`, so a prerelease on either side
+    compares properly rather than being written off. False only for something
+    with no version at all -- a branch or a bare commit -- where the ceiling
+    genuinely cannot vouch for the ref and the flow should surface it rather than
+    assume it is safe. True when there is no ceiling to enforce.
     """
-    ceiling_version = _parse_stable_version(ceiling) if ceiling is not None else None
+    ceiling_version = parse_version(ceiling) if ceiling is not None else None
     if ceiling_version is None:
         return True
-    ref_version = _parse_stable_version(ref)
+    ref_version = parse_version(ref)
     return ref_version is not None and ref_version <= ceiling_version
 
 

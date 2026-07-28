@@ -172,12 +172,13 @@ def test_unprovable_overrides_are_flagged() -> None:
         ).exceeds_ceiling
         is True
     )
-    # A prerelease is equally unprovable even when its version reads as older.
+    # A prerelease, by contrast, *is* provable -- it carries a real version, and
+    # 0.3.7-rc1 sits below the 0.3.9 ceiling -- so it is not flagged.
     assert (
         update_self.resolve_target(
             "minds-v0.3.7-rc1", tags, ceiling="minds-v0.3.9"
         ).exceeds_ceiling
-        is True
+        is False
     )
 
 
@@ -823,3 +824,58 @@ def test_held_back_is_false_without_a_ceiling() -> None:
         )
         is False
     )
+
+
+# --- a prerelease ceiling ---------------------------------------------------
+
+
+def test_prerelease_ceiling_caps_rather_than_disabling_the_cap() -> None:
+    """An app on a release candidate is a real app and must still cap its workspaces.
+
+    Parsing the ceiling as "not a stable tag, therefore no ceiling" would let a
+    workspace on an rc app update arbitrarily far past it -- the exact outcome
+    the ceiling exists to prevent, reached by the guard meant to enforce it.
+    """
+    tags = ["minds-v0.3.9", "minds-v0.4.0", "minds-v0.4.1"]
+    # Semver: 0.4.0-rc1 precedes 0.4.0, so 0.4.0 itself is above this ceiling.
+    assert (
+        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc1")
+        == "minds-v0.3.9"
+    )
+    result = update_self.resolve_target(None, tags, ceiling="minds-v0.4.0-rc1")
+    assert result.ref == "minds-v0.3.9"
+    assert result.ceiling == "minds-v0.4.0-rc1"
+
+
+def test_a_prerelease_ceiling_still_admits_its_own_earlier_releases() -> None:
+    tags = ["minds-v0.3.9", "minds-v0.4.0"]
+    assert (
+        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.4.1-rc1")
+        == "minds-v0.4.0"
+    )
+
+
+def test_capping_by_a_prerelease_does_not_make_prereleases_selectable() -> None:
+    # The ceiling widening to prereleases must not widen *candidate* selection:
+    # the default target is still only ever a stable release.
+    tags = ["minds-v0.3.9", "minds-v0.4.0-rc1", "minds-v0.4.0-rc2"]
+    assert (
+        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc2")
+        == "minds-v0.3.9"
+    )
+
+
+def test_parse_version_orders_prereleases_semver_style() -> None:
+    below = update_self.parse_version("minds-v0.4.0-rc1")
+    above = update_self.parse_version("minds-v0.4.0")
+    assert below is not None and above is not None
+    # A prerelease sorts below the release it precedes.
+    assert below < above
+    # Numeric identifiers compare numerically, not lexically: rc.10 follows rc.2.
+    rc2 = update_self.parse_version("minds-v0.4.0-rc.2")
+    rc10 = update_self.parse_version("minds-v0.4.0-rc.10")
+    assert rc2 is not None and rc10 is not None
+    assert rc2 < rc10
+    # A branch or bare commit has no version at all, and stays uncomparable.
+    assert update_self.parse_version("main") is None
+    assert update_self.parse_version("abc1234") is None
