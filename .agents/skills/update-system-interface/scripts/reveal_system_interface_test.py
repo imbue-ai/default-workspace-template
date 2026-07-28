@@ -516,15 +516,19 @@ def _seed_live_layout(
 ) -> Path:
     """Populate a fake live workspace_layout and point the env at it.
 
-    Writes the two layout files the preview should copy plus two files it must
-    *not* (a client-activity log and the terminal banner), and sets
-    MNGR_HOST_DIR / MNGR_AGENT_ID so ``_live_layout_dir`` resolves here.
+    Writes the two layout files the preview should copy plus the two kinds of
+    non-layout state it must *not* -- the client-activity event log (a nested
+    sub-tree, at the path ``client_activity.get_events_path`` really uses) and
+    the terminal banner -- and sets MNGR_HOST_DIR / MNGR_AGENT_ID so
+    ``_live_layout_dir`` resolves here.
     """
     layout_dir = host_dir / "agents" / agent_id / "workspace_layout"
     (layout_dir / "layouts").mkdir(parents=True)
     (layout_dir / "layouts" / "desktop.json").write_text('{"panels":["chat"]}')
     (layout_dir / "layouts_meta.json").write_text('{"last_active_slug":"desktop"}')
-    (layout_dir / "client_activity_events.jsonl").write_text('{"e":1}\n')
+    events_dir = layout_dir / "events" / "client_activity"
+    events_dir.mkdir(parents=True)
+    (events_dir / "events.jsonl").write_text('{"e":1}\n')
     (layout_dir / "terminal_banner.json").write_text('{"dismissed":true}')
     monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
     monkeypatch.setenv("MNGR_AGENT_ID", agent_id)
@@ -549,8 +553,9 @@ def test_preview_seeds_a_copy_of_only_the_live_layout_files(
     # The layout files are copied through...
     assert (seed_dir / "layouts" / "desktop.json").read_text() == '{"panels":["chat"]}'
     assert (seed_dir / "layouts_meta.json").exists()
-    # ...and the non-layout state is left behind.
-    assert not (seed_dir / "client_activity_events.jsonl").exists()
+    # ...and the non-layout state is left behind, including the whole
+    # client-activity sub-tree that shares the live layout dir.
+    assert not (seed_dir / "events").exists()
     assert not (seed_dir / "terminal_banner.json").exists()
     # The override handed to the shared script points at exactly that copy.
     argv = runner.argvs_starting(*_SERVE_UP)[0]
