@@ -40,7 +40,7 @@ it must not depend on any particular venv being synced.
 The ``preview`` / ``unpreview`` subcommands are thin system-interface adapters
 over the shared ``serve_isolated_instance.py`` motion (the previewable-instance
 substrate every service flow shares). They hand it the system-interface
-specifics -- boot ``uv run system-interface`` from the worker's already-built
+specifics -- boot ``uv run system-interface`` from an already-built
 ``--work-dir`` on a free port; point layout persistence at a throwaway copy of
 the live layout (``SYSTEM_INTERFACE_LAYOUT_DIR``) so the preview renders the
 user's real tabs while its autosaves land in the copy, with MNGR_AGENT_ID also
@@ -48,16 +48,20 @@ dropped as a guard against clobbering the live ``layout.json``; keep agent
 discovery; probe ``/api/agents``; and register the inner app plus the labeled
 "preview" wrapper frame the user opens. The shared script owns the ports, the
 process/service teardown, and the state file; no fetch, checkout, or rebuild
-happens, and the served tree and the worker's folder are never touched. The
-worker is a local git-worktree sub-agent whose work_dir is a folder it has
-already built, and it must still exist at preview time.
+happens, and the served tree and the previewed folder are never touched.
+
+That ``--work-dir`` is either the **lead's own editing worktree** (the live
+editing loop, where no worker exists yet) or a **worker's work_dir** (the
+optional final pre-merge preview). Either way it must be a folder that has
+already been built, and it must still exist at preview time -- for a worker's
+work_dir that means previewing before the worker is destroyed.
 
 The non-deterministic part -- opening the tab and gating on the user's judgment
 -- stays with the agent.
 
 Usage:
     python3 reveal_system_interface.py reveal --rollback-to <pre-merge-sha> [--repo-root PATH]
-    python3 reveal_system_interface.py preview --slug <name> --work-dir <worker-work-dir> [--repo-root PATH]
+    python3 reveal_system_interface.py preview --slug <name> --work-dir <built-work-dir> [--repo-root PATH]
     python3 reveal_system_interface.py preview-refresh --slug <name> [--repo-root PATH]
     python3 reveal_system_interface.py unpreview --slug <name> [--repo-root PATH]
 
@@ -77,10 +81,11 @@ Exit codes (``reveal``):
        on the known-good revision (the requested change did NOT land).
     3  EMERGENCY: even rollback could not restore a healthy UI.
 
-Exit codes (``preview`` / ``unpreview``):
-    0  Success (preview is up / torn down).
-    1  The preview failed to build or boot (and tore itself down), or a bad
-       argument / unreadable state file.
+Exit codes (``preview`` / ``preview-refresh`` / ``unpreview``):
+    0  Success (preview is up / rebooted in place / torn down).
+    1  The preview failed to build or boot (and tore itself down); or there was
+       no live preview to refresh, or the rebooted inner app never became
+       healthy; or a bad argument / unreadable state file.
 """
 
 from __future__ import annotations
@@ -837,43 +842,48 @@ def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
 
 
 def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int:
-    """Stand up a pre-merge preview of the worker's ``work_dir``.
+    """Stand up a preview of an already-built ``work_dir``.
+
+    ``work_dir`` is the lead's own editing worktree during the live editing loop
+    (no worker exists yet), or a worker's work_dir for the optional final
+    pre-merge preview. Either way it must already be built, and it must still
+    exist -- for a worker's work_dir, run this before the worker is destroyed.
 
     Thin system-interface adapter over the shared ``serve_isolated_instance.py``
-    ``up`` motion: validate the worker's app dir, require that the worker built its
-    frontend bundle, then hand the shared script the system-interface specifics --
-    boot ``uv run system-interface`` from the worker's already-built app dir on a
+    ``up`` motion: validate the app dir, require that its frontend bundle was
+    built, then hand the shared script the system-interface specifics --
+    boot ``uv run system-interface`` from that already-built app dir on a
     free port; point layout persistence at a throwaway copy of the live layout
     (``SYSTEM_INTERFACE_LAYOUT_DIR``) so the preview renders the user's real tabs
     while its autosaves land in the copy, and additionally drop MNGR_AGENT_ID as a
     belt-and-suspenders guard against clobbering the live ``layout.json``; keep
     discovery so real conversations still render; probe ``/api/agents``; register
     the inner app and the labeled wrapper frame. The shared script owns the ports,
-    the process/service teardown, and the state file. ``work_dir`` must still
-    exist -- run this before the worker is destroyed.
+    the process/service teardown, and the state file.
     """
     # Sanity-check the work_dir before disturbing anything: a wrong --work-dir
     # should fail fast rather than reaching the shared script.
-    worker_app_dir = Path(work_dir) / APP_DIR
-    if not worker_app_dir.is_dir():
+    previewed_app_dir = Path(work_dir) / APP_DIR
+    if not previewed_app_dir.is_dir():
         sys.stderr.write(
-            f"preview: {worker_app_dir} is not a directory; is --work-dir correct "
-            "and is the worker still alive (not destroyed)?\n"
+            f"preview: {previewed_app_dir} is not a directory; is --work-dir "
+            "correct, and does that folder still exist (an editing worktree that "
+            "was removed, or a worker that was destroyed)?\n"
         )
         return 1
-    # The preview serves the worker's app dir as-is; it does not build for the
-    # worker. A work_dir without a frontend bundle means the worker reported done
-    # without building it (a fresh worktree has no gitignored static/ until built),
-    # so booting would only serve the backend's "Frontend not built" placeholder --
-    # a dead preview that reads as working. Refuse loudly and point at the fix: the
-    # worker must build before it is previewable.
+    # The preview serves the app dir as-is; it never builds for it. A work_dir
+    # without a frontend bundle means whoever produced it skipped the build (a
+    # fresh worktree has no gitignored static/ until built), so booting would only
+    # serve the backend's "Frontend not built" placeholder -- a dead preview that
+    # reads as working. Refuse loudly and point at the fix.
     if not (Path(work_dir) / FRONTEND_BUILD_INDEX).exists():
         sys.stderr.write(
             f"preview: no frontend build in {work_dir} "
             f"({FRONTEND_BUILD_INDEX} is missing), so the preview would serve the "
-            "'Frontend not built' placeholder. The worker must build the frontend "
-            "(cd system/libs/system_interface/frontend && npm ci && npm run build) before "
-            "its work_dir can be previewed -- re-brief it to build, then retry.\n"
+            "'Frontend not built' placeholder. Build the frontend first "
+            "(cd system/libs/system_interface/frontend && npm ci && npm run build) "
+            "-- in your editing worktree, or by re-briefing the worker -- then "
+            "retry.\n"
         )
         return 1
     other = _find_other_preview(repo_root, slug)
@@ -896,7 +906,7 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             "--name",
             _preview_instance_name(slug),
             "--cwd",
-            str(worker_app_dir),
+            str(previewed_app_dir),
             "--port-env",
             PREVIEW_PORT_ENV,
             "--host-env",
@@ -997,9 +1007,9 @@ def _add_repo_root_arg(subparser: argparse.ArgumentParser) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Manage the system-interface update lifecycle: preview a worker "
-            "branch before merging, reveal a merged change with auto-recovery, "
-            "and tear the preview down."
+            "Manage the system-interface update lifecycle: preview a built "
+            "work_dir as a labeled tab, refresh that preview in place, reveal a "
+            "merged change with auto-recovery, and tear the preview down."
         )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1016,8 +1026,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     preview_parser = subparsers.add_parser(
         "preview",
-        help="Boot the worker's already-built work_dir and serve it as a "
-        "previewable tab, before any merge.",
+        help="Boot an already-built work_dir and serve it as a previewable tab, "
+        "before any merge.",
     )
     preview_parser.add_argument(
         "--slug",
@@ -1027,8 +1037,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     preview_parser.add_argument(
         "--work-dir",
         required=True,
-        help="The worker's work_dir (from `mngr ls --include 'name==\"<worker>\"' "
-        "--format json` -> agent.work_dir). The worker must still exist.",
+        help="A built work_dir to serve: the lead's editing worktree during the "
+        "live loop, or a worker's work_dir (from `mngr ls --include "
+        "'name==\"<worker>\"' --format json` -> agent.work_dir) for a final "
+        "pre-merge preview. It must still exist when this runs.",
     )
     _add_repo_root_arg(preview_parser)
 
