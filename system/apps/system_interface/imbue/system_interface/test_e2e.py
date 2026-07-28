@@ -76,7 +76,7 @@ pytestmark = [
         not _frontend_built(),
         reason=(
             "System interface frontend not built "
-            "(run `cd apps/system_interface/frontend && npm run build`); skipping e2e."
+            "(run `cd system/apps/system_interface/frontend && npm run build`); skipping e2e."
         ),
     ),
 ]
@@ -332,9 +332,11 @@ def test_add_tab_menu_lists_unopened_agent(tmp_path: Path, page: Page) -> None:
     sidebar's "list the available agents" behavior now lives, so we assert an
     unopened agent shows up there as an openable item.
     """
-    with _running_e2e_server(
-        tmp_path, _PORT + 3, additional_agents=(("agent-other-999", "other-agent"),)
-    ) as (base_url, _, _):
+    with _running_e2e_server(tmp_path, _PORT + 3, additional_agents=(("agent-other-999", "other-agent"),)) as (
+        base_url,
+        _,
+        _,
+    ):
         page.goto(base_url)
         # The primary agent's chat auto-opens; the extra agent stays closed.
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
