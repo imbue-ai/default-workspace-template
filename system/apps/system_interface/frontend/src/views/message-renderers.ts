@@ -10,7 +10,7 @@ import { openSubagentTab } from "./DockviewWorkspace";
 import type { PermissionResolution } from "./message-classification";
 import { isPermissionRequestCall, isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard } from "./permission-card";
-import { codexToolLabel } from "./codexCaption";
+import { codexToolLabel } from "./captions";
 import { getAgentById } from "../models/AgentManager";
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display

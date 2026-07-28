@@ -9,16 +9,15 @@
  *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness
  *
  * The TOOL_RUNNING caption is the only harness-specific bit; it is routed by the
- * agent's ``harness`` to a peer module (``claudeCaption`` / ``codexCaption``) -- neither
- * is a fallthrough default. A null ``activity_state`` means the server has no per-agent
- * activity tracking for this agent (proto-agents, remote agents) -- the strip collapses.
+ * agent's ``harness`` through the ``captions`` registry to that harness's peer
+ * module. A null ``activity_state`` means the server has no per-agent activity
+ * tracking for this agent (proto-agents, remote agents) -- the strip collapses.
  */
 
 import m from "mithril";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 import { getEffectiveActivityState } from "../models/PendingMessages";
-import { claudeToolLabel } from "./claudeCaption";
-import { codexToolLabel } from "./codexCaption";
+import { toolLabelFor } from "./captions";
 
 /**
  * Find the most recent assistant tool call whose tool_call_id has no matching
@@ -58,7 +57,7 @@ export function isWorkingActivityState(state: string | null | undefined): boolea
 
 /** The in-flight tool caption for the agent's harness. */
 function labelForToolCall(tc: ToolCall, harness: string): string {
-  return harness === "codex" ? codexToolLabel(tc) : claudeToolLabel(tc);
+  return toolLabelFor(harness, tc);
 }
 
 /**

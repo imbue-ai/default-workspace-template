@@ -1,7 +1,7 @@
 /**
  * Claude's TOOL_RUNNING caption: map an in-flight tool call to a verb + target.
- * The claude peer of ``codexCaption``; ``ActivityIndicator`` routes to one or the
- * other by the agent's harness.
+ * The claude entry in the ``captions`` registry (see ``./index``), which routes
+ * by the agent's harness.
  *
  *   - "Reading <basename>"        for Read
  *   - "Editing <basename>"        for Edit / MultiEdit
@@ -12,8 +12,8 @@
  *   - "Running tool…"             for anything unrecognised
  */
 
-import type { ToolCall } from "../models/Response";
-import { MAX_TARGET_LEN, basename, shorten } from "./captionUtils";
+import type { ToolCall } from "../../models/Response";
+import { MAX_TARGET_LEN, basename, shorten } from "./shared";
 
 // Note: Agent / Task are handled separately (Delegating…) before this table.
 const VERB_BY_TOOL: Record<string, string> = {

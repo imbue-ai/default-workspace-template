@@ -1,6 +1,6 @@
 /**
- * Tiny formatting helpers shared by the harness caption peers (claudeCaption /
- * codexCaption) for the TOOL_RUNNING activity label.
+ * Tiny formatting helpers shared by the harness caption peers in this directory
+ * (``./claude``, ``./codex``) for the TOOL_RUNNING activity label.
  */
 
 export const MAX_TARGET_LEN = 60;
