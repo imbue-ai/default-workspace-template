@@ -505,6 +505,21 @@ def _workspace_fast_mode_decision_path() -> Path | None:
     return get_workspace_fast_mode_decision_path(Path(work_dir))
 
 
+def _workspace_fast_mode_response(decision: WorkspaceFastModeDecision) -> Response:
+    """Serve a decision to the frontend, together with the grace period it gates on.
+
+    Shared by both workspace fast-mode endpoints: the frontend takes
+    ``grace_turn_count`` from whichever response it saw last, so the two must
+    report the same one.
+    """
+    response = WorkspaceFastModeResponse(
+        is_decided=decision.is_decided,
+        is_fast_mode_enabled=decision.is_fast_mode_enabled,
+        grace_turn_count=FAST_MODE_GRACE_TURN_COUNT,
+    )
+    return _json_response(response.model_dump())
+
+
 def _get_workspace_fast_mode_endpoint() -> Response:
     """Return the workspace's fast-mode decision and the grace period length.
 
@@ -515,12 +530,7 @@ def _get_workspace_fast_mode_endpoint() -> Response:
     decision = (
         UNDECIDED_FAST_MODE_DECISION if decision_path is None else read_workspace_fast_mode_decision(decision_path)
     )
-    response = WorkspaceFastModeResponse(
-        is_decided=decision.is_decided,
-        is_fast_mode_enabled=decision.is_fast_mode_enabled,
-        grace_turn_count=FAST_MODE_GRACE_TURN_COUNT,
-    )
-    return _json_response(response.model_dump())
+    return _workspace_fast_mode_response(decision)
 
 
 def _set_workspace_fast_mode_endpoint() -> Response:
@@ -544,12 +554,7 @@ def _set_workspace_fast_mode_endpoint() -> Response:
         error = ErrorResponse(detail="Failed to record the fast-mode decision")
         return _json_response(error.model_dump(), status_code=500)
 
-    response = WorkspaceFastModeResponse(
-        is_decided=decision.is_decided,
-        is_fast_mode_enabled=decision.is_fast_mode_enabled,
-        grace_turn_count=FAST_MODE_GRACE_TURN_COUNT,
-    )
-    return _json_response(response.model_dump())
+    return _workspace_fast_mode_response(decision)
 
 
 def _activity_endpoint() -> Response:
