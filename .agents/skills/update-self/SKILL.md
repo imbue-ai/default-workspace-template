@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the latest stable release). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Minds app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 ---
 
 # Pulling updates from the upstream template, safely
@@ -22,8 +22,9 @@ each change by its class. The worker owns the merge, the conflict triage, and th
 validation; you own going live.
 
 The default target is the **latest stable `minds-v*` tag** (released,
-already-tested), not `origin/main`. The user may override to a specific tag or to
-`main`.
+already-tested), not `origin/main` -- and never newer than the Minds app driving
+this workspace, since the template ships the code that app talks to. The user may
+override to a specific tag or to `main`.
 
 Because the update flow itself evolves, once the target is resolved this pass
 **re-points itself at the target version's own copy of the update-self skill**
@@ -78,17 +79,48 @@ with open('system/config/parent.toml', 'rb') as f:
 ")"
 git fetch upstream --tags
 
-REF=$(python3 .agents/skills/update-self/scripts/update_self.py resolve-target --local-tags \
-    | python3 -c 'import sys, json; print(json.load(sys.stdin)["ref"])')
+python3 .agents/skills/update-self/scripts/update_self.py resolve-target --local-tags \
+    > /tmp/update-self-target.json
 # `--local-tags` reads the tags the fetch above just landed (no second network
 # round-trip). Honoring a user override, append e.g. `--override main` or
 # `--override minds-v0.3.6` to the resolve-target call above.
-echo "$REF"
+cat /tmp/update-self-target.json
+REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.json"))["ref"])')
 ```
 
-`resolve-target` prints `{"ref": ..., "kind": "tag|branch|ref"}`; `main` resolves
-to `upstream/main` (not the stale local branch). Keep `$REF` in your shell for the
-dispatch below, and tell the user which version you're updating to.
+`resolve-target` prints `{"ref": ..., "kind": "tag|branch|ref", "ceiling": ...,
+"exceeds_ceiling": ...}`; `main` resolves to `upstream/main` (not the stale local
+branch). Keep `$REF` in your shell for the dispatch below, and tell the user which
+version you're updating to.
+
+**If the command exits non-zero, stop -- nothing is wrong with the workspace.**
+It prints a single plain-language `error:` line saying why no target could be
+chosen, and there are three reasons, each with a different answer for the user:
+the minds app could not be reached (it is closed, or the gateway is down -- retry
+once it is running); the app is too old to report its version (update the minds
+app itself first, then re-run); or every release upstream is already newer than
+the app. Relay that reason in plain terms per the §5a composition rules and offer
+the next step. Do **not** work around it by resolving a ref by hand.
+
+### The version ceiling
+
+The default target is capped at the version of the **minds app driving this
+workspace**, which `resolve-target` reads from the app itself (`ceiling` in the
+output). This matters because the template carries the code the app talks to --
+the system interface and the vendored `mngr` -- so a workspace running a template
+newer than its app would be speaking a protocol the app does not know. When the
+app reports a branch rather than a release tag (a dev build) there is nothing to
+compare against and `ceiling` does not cap anything.
+
+**`"exceeds_ceiling": true` means the user's `--override` names a version this
+app cannot vouch for** -- newer than the app, or a branch/commit whose version
+can't be compared. Do not dispatch the worker on it silently. Tell the user
+plainly what they asked for and what it risks ("that version is newer than your
+Minds app, so parts of your workspace may stop working until you update the app
+itself"), and **get an explicit go-ahead before continuing**. This is a separate
+confirmation from the Step 5a approval gate, and it comes first: 5a asks whether
+to apply a verified update, this asks whether to attempt an unsupported one at
+all. An override at or below the ceiling needs no extra confirmation.
 
 To preview what the release actually changes, always diff from the **merge
 base**, never from `HEAD` -- a `git diff HEAD "$REF"` also shows every *local*
@@ -145,7 +177,10 @@ target. The target's flow is entered at **Step 3**. So an edit to this skill mus
 preserve that boundary: a future version's Steps 1-2 must stay "capture a backup,
 the single-flight/clean-tree checks, then resolve a ref into `$REF`", and its
 Step 3 must stay the worker dispatch -- otherwise an older initiator handing off
-into a newer copy (or vice versa) lands at the wrong step. Keep the staging path
+into a newer copy (or vice versa) lands at the wrong step. The version ceiling is
+part of resolving `$REF`, so it lives in Step 2 and is therefore enforced by the
+*local* copy of this skill: a workspace whose copy predates the ceiling does not
+get capped until it has taken one update that carries it. Keep the staging path
 (`data/.tasks/update-self/skill-at-target/.agents/skills/update-self`) stable for the
 same reason. Note also that this handoff runs the target ref's `update_self.py`
 and follows its prose *before* the Step 5a approval gate; for the default target
@@ -286,6 +321,14 @@ order:
 
 1. **Verdict headline** (one line, first thing they see): "ready to apply,"
    "ready to apply, with one caveat," or "needs your input on X."
+1b. **Held back by your app version** -- only when a newer release existed
+   upstream but the ceiling capped the target below it (compare the resolved
+   `$REF` against the newest tag `git tag --list 'minds-v*'` shows). Say so in one
+   plain line -- "there's a newer version available, but it needs a newer Minds
+   app than you're running, so I stopped at X" -- so the user understands why they
+   aren't getting the newest thing and knows updating the app unlocks it. Say
+   nothing when the target *is* the newest release; there is no ceiling story to
+   tell then.
 2. **What's new** -- always first after the headline. Keep this *detailed*: some
    readers want the specifics, others happily skim it as "great, they're on it."
    Do not thin it out -- carry the worker's digest, just in prose a lay reader

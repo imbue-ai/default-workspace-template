@@ -10,8 +10,17 @@ validation depth, reveal by change class). This script owns the parts that are
 
 ``resolve-target``
     Resolve the ref to update to. Default is the latest **stable** ``minds-v*``
-    tag (semver-sorted, ``-rc``/prerelease excluded); an explicit override may
-    name a specific tag, ``main``, or any other ref.
+    tag (semver-sorted, ``-rc``/prerelease excluded) that is **not newer than the
+    minds app driving this workspace**; an explicit override may name a specific
+    tag, ``main``, or any other ref, and is reported back as exceeding the
+    ceiling when it cannot be proven to sit at or below it.
+
+    The ceiling exists because a workspace's template ships the code the outer
+    app talks to (the system interface, the vendored ``mngr``). Updating past the
+    app's own release would leave the workspace speaking a protocol its app does
+    not know. The ceiling is read from the app itself (``GET /api/v1/app``,
+    baseline-allowed through the latchkey gateway, no grant needed); when it
+    cannot be read the command **fails** rather than silently updating uncapped.
 
 ``classify-merge``
     Split the files upstream changed into the reconciled **merged** set (local
@@ -46,7 +55,9 @@ only pretend to cover. The worker reference owns that recipe.
 The git-touching subcommands are thin wrappers over the pure functions below
 (``pick_latest_stable_tag``, ``resolve_target``, ``classify_path``,
 ``classify_merge``), which carry all the logic and are covered by
-``update_self_test.py``.
+``update_self_test.py``. ``fetch_app_template_ref`` is the one impure helper, and
+is kept to the narrow job of turning a ``latchkey curl`` result into either a ref
+string or a ``CeilingUnavailableError``.
 """
 
 from __future__ import annotations
@@ -59,6 +70,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 from pathlib import Path
 from typing import NamedTuple, Sequence
 
@@ -79,10 +91,18 @@ class ResolvedTarget(NamedTuple):
 
     ``kind`` is ``tag`` (a resolved ``minds-v*`` release), ``branch`` (``main``),
     or ``ref`` (any other override passed straight through for git to validate).
+
+    ``ceiling`` is the app's own template ref when it caps the selection, and
+    ``None`` when there is nothing to cap against (the app reports a branch rather
+    than a release tag -- a dev build). ``exceeds_ceiling`` marks an override the
+    ceiling could not vouch for: newer than the app, or a branch/ref whose version
+    cannot be compared at all. The default (no-override) path never sets it.
     """
 
     ref: str
     kind: str
+    ceiling: str | None = None
+    exceeds_ceiling: bool = False
 
 
 def _parse_stable_version(tag: str) -> tuple[int, int, int] | None:
@@ -97,51 +117,184 @@ def _parse_stable_version(tag: str) -> tuple[int, int, int] | None:
     return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
-def pick_latest_stable_tag(tags: Sequence[str]) -> str | None:
+def pick_latest_stable_tag(
+    tags: Sequence[str], ceiling: str | None = None
+) -> str | None:
     """Return the highest-versioned stable ``minds-v*`` tag, or ``None`` if none.
 
     Prereleases (``minds-v*-rc*``) and non-matching tags are ignored. Selection is
     by semantic version, not lexical order, so ``minds-v0.3.10`` beats
     ``minds-v0.3.9``.
+
+    ``ceiling`` bounds the selection to tags at or below it, so a workspace never
+    picks a template newer than the app driving it. A ``ceiling`` that is not
+    itself a stable ``minds-v*`` tag (a dev app reporting a branch) is treated as
+    no ceiling -- there is no version to compare against.
     """
+    ceiling_version = _parse_stable_version(ceiling) if ceiling is not None else None
     stable = [
         (version, tag)
         for tag in tags
         if (version := _parse_stable_version(tag)) is not None
+        and (ceiling_version is None or version <= ceiling_version)
     ]
     if not stable:
         return None
     return max(stable, key=lambda item: item[0])[1]
 
 
+def _is_within_ceiling(ref: str, ceiling: str | None) -> bool:
+    """Whether ``ref`` is provably a stable release at or below ``ceiling``.
+
+    False for anything unprovable -- a branch, a bare commit, or a prerelease --
+    so an override the ceiling cannot vouch for is surfaced rather than assumed
+    safe. True when there is no ceiling to enforce.
+    """
+    ceiling_version = _parse_stable_version(ceiling) if ceiling is not None else None
+    if ceiling_version is None:
+        return True
+    ref_version = _parse_stable_version(ref)
+    return ref_version is not None and ref_version <= ceiling_version
+
+
 def resolve_target(
-    override: str | None, tags: Sequence[str], remote: str = "upstream"
+    override: str | None,
+    tags: Sequence[str],
+    remote: str = "upstream",
+    ceiling: str | None = None,
 ) -> ResolvedTarget:
     """Resolve the update target ref.
 
-    With no override, pick the latest stable ``minds-v*`` tag (raising if the
-    upstream exposes none). An override of ``main`` selects the template's
-    default branch, **remote-qualified** to ``<remote>/main`` -- a bare ``main``
-    would resolve to the *local* branch, which ``git fetch upstream`` never
-    advances, so the pull would merge stale local code. A tag, by contrast,
-    lands in the local tag namespace on fetch and resolves by its bare name, so a
-    known-tag override is returned as-is. Any other override is passed through
-    verbatim as a ``ref`` for git to validate at fetch time (so a user can pin an
-    arbitrary commit or a ref they've already qualified themselves).
+    With no override, pick the latest stable ``minds-v*`` tag at or below
+    ``ceiling`` (raising if the upstream exposes none). An override of ``main``
+    selects the template's default branch, **remote-qualified** to
+    ``<remote>/main`` -- a bare ``main`` would resolve to the *local* branch, which
+    ``git fetch upstream`` never advances, so the pull would merge stale local
+    code. A tag, by contrast, lands in the local tag namespace on fetch and
+    resolves by its bare name, so a known-tag override is returned as-is. Any
+    other override is passed through verbatim as a ``ref`` for git to validate at
+    fetch time (so a user can pin an arbitrary commit or a ref they've already
+    qualified themselves).
+
+    An override is never silently blocked -- the user asked for it by name -- but
+    one that is not provably at or below ``ceiling`` comes back with
+    ``exceeds_ceiling`` set, which the skill turns into an explicit user
+    confirmation before anything is merged.
     """
     if override is None:
-        latest = pick_latest_stable_tag(tags)
+        latest = pick_latest_stable_tag(tags, ceiling=ceiling)
         if latest is None:
-            raise ValueError(
-                "no stable minds-v* tag found upstream; pass an explicit "
-                "--override (a tag, 'main', or a ref) to update anyway"
-            )
-        return ResolvedTarget(latest, "tag")
+            raise ValueError(_no_target_message(tags, ceiling))
+        return ResolvedTarget(latest, "tag", ceiling, False)
+    exceeds = not _is_within_ceiling(override, ceiling)
     if override == "main":
-        return ResolvedTarget(f"{remote}/{override}", "branch")
+        return ResolvedTarget(f"{remote}/{override}", "branch", ceiling, exceeds)
     if override in set(tags):
-        return ResolvedTarget(override, "tag")
-    return ResolvedTarget(override, "ref")
+        return ResolvedTarget(override, "tag", ceiling, exceeds)
+    return ResolvedTarget(override, "ref", ceiling, exceeds)
+
+
+def _no_target_message(tags: Sequence[str], ceiling: str | None) -> str:
+    """Explain why no default target could be picked, distinguishing the two causes."""
+    if ceiling is not None and pick_latest_stable_tag(tags) is not None:
+        return (
+            f"every stable minds-v* tag upstream is newer than this workspace's minds "
+            f"app ({ceiling}); update the app first, or pass an explicit --override "
+            f"to update past it anyway"
+        )
+    return (
+        "no stable minds-v* tag found upstream; pass an explicit "
+        "--override (a tag, 'main', or a ref) to update anyway"
+    )
+
+
+# --- The app's update ceiling ----------------------------------------------
+
+# The minds app's own version route, addressed through the latchkey gateway's
+# ``minds-api-proxy`` on the reserved gateway-self host. Allowed by the agent
+# permissions baseline (``minds-app-info-read``), so this needs no grant and
+# never raises a permission dialog -- which matters because update-self resolves
+# its target from a background worker, with nobody watching to approve one.
+_MINDS_APP_INFO_URL = "http://latchkey-self.invalid/minds-api-proxy/api/v1/app"
+
+# Bounds the gateway round-trip. The app is local (or a short hop away) and the
+# route reads two in-process values, so a slow answer means something is wrong
+# rather than something is busy.
+_APP_INFO_TIMEOUT_SECONDS = 20
+
+
+class CeilingUnavailableError(Exception):
+    """Raised when the minds app's update ceiling could not be read.
+
+    Never downgraded to "no ceiling": an app that cannot answer is very often an
+    app too old to *have* this route, which is exactly the case the ceiling
+    protects against. Proceeding uncapped here would skip the check precisely
+    when it matters most.
+    """
+
+
+def fetch_app_template_ref(url: str = _MINDS_APP_INFO_URL) -> str:
+    """Return the newest workspace-template ref the running minds app supports.
+
+    Goes through ``latchkey curl``, which injects the gateway credentials and
+    passes every other argument (and curl's exit code) straight through. The
+    three failure modes are reported distinctly, because the user's next action
+    differs: a transport failure is worth retrying, a 404 means the app must be
+    updated first, and a malformed body is a bug worth reporting.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".json") as body_file:
+        try:
+            result = subprocess.run(
+                [
+                    "latchkey",
+                    "curl",
+                    "--silent",
+                    "--show-error",
+                    "--output",
+                    body_file.name,
+                    "--write-out",
+                    "%{http_code}",
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=_APP_INFO_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise CeilingUnavailableError(
+                f"could not reach the minds app to read its version ({e}). The app may be "
+                f"closed or the gateway down; retry once it is running."
+            ) from e
+        if result.returncode != 0:
+            raise CeilingUnavailableError(
+                f"could not reach the minds app to read its version (latchkey curl exited "
+                f"{result.returncode}: {result.stderr.strip()}). The app may be closed or the "
+                f"gateway down; retry once it is running."
+            )
+        status = result.stdout.strip()
+        body = Path(body_file.name).read_text()
+
+    if status == "404":
+        raise CeilingUnavailableError(
+            "this workspace's minds app is too old to report its version (no "
+            f"{url} route), so there is no way to tell how far this workspace may "
+            "safely update. Update the minds app itself first."
+        )
+    if status != "200":
+        raise CeilingUnavailableError(
+            f"the minds app returned HTTP {status} for its version ({body.strip()[:200]})."
+        )
+    try:
+        template_ref = json.loads(body)["workspace_template_ref"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise CeilingUnavailableError(
+            f"the minds app's version response could not be parsed ({e}): {body.strip()[:200]}"
+        ) from e
+    if not isinstance(template_ref, str) or not template_ref:
+        raise CeilingUnavailableError(
+            f"the minds app reported an empty workspace_template_ref: {body.strip()[:200]}"
+        )
+    return template_ref
 
 
 # --- Change classification -------------------------------------------------
@@ -376,8 +529,20 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     if not args.local_tags:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
-    target = resolve_target(args.override, tags, remote=args.remote)
-    print(json.dumps({"ref": target.ref, "kind": target.kind}))
+    # The ceiling is fetched here rather than passed in by the caller so it cannot
+    # be skipped by forgetting a flag; ``--ceiling`` exists to pin it by hand.
+    ceiling = args.ceiling if args.ceiling is not None else fetch_app_template_ref()
+    target = resolve_target(args.override, tags, remote=args.remote, ceiling=ceiling)
+    print(
+        json.dumps(
+            {
+                "ref": target.ref,
+                "kind": target.kind,
+                "ceiling": target.ceiling,
+                "exceeds_ceiling": target.exceeds_ceiling,
+            }
+        )
+    )
     return 0
 
 
@@ -544,6 +709,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Read already-fetched local tags instead of querying the remote.",
     )
+    resolve_parser.add_argument(
+        "--ceiling",
+        default=None,
+        help="Newest template ref to allow (default: ask the running minds app). "
+        "A non-release ref (e.g. a branch) imposes no ceiling.",
+    )
     resolve_parser.set_defaults(func=_cmd_resolve_target)
 
     classify_parser = sub.add_parser(
@@ -583,7 +754,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parents=[common],
     )
     bootstrap_parser.add_argument(
-        "--ref", required=True, help="The resolved target ref to extract the skill from."
+        "--ref",
+        required=True,
+        help="The resolved target ref to extract the skill from.",
     )
     bootstrap_parser.add_argument(
         "--dest",
@@ -594,7 +767,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     bootstrap_parser.set_defaults(func=_cmd_bootstrap_skill)
 
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (CeilingUnavailableError, ValueError) as e:
+        # These two carry the "why you cannot update right now" explanation the
+        # lead relays to the user, so print the message alone -- a traceback would
+        # bury it and read as a crash rather than a refusal.
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
