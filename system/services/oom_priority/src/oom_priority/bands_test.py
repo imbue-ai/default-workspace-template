@@ -13,7 +13,7 @@ from oom_priority import bands
 # separately as sitting above every one of these.
 _BUILTIN_SERVICE_ORDER = (
     "terminal",
-    "system_interface",
+    "system-interface",
     "cloudflared",
     "github-sync",
     "host-backup",

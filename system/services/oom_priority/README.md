@@ -18,7 +18,7 @@ into one of a few bands.
   < user agent (300) < worker agent (600) < agent subprocess (900) < shared
   browser (1000). Chat agents occupy a *dynamic* sub-range, `CHAT_AGENT_FLOOR`
   (300, = an engaged chat) to `CHAT_AGENT_BASE` (560, an idle chat), always
-  between the service bands and the worker band; the system_interface prioritizer
+  between the service bands and the worker band; the system-interface prioritizer
   moves a chat within it from live UI engagement (see "Dynamic chat band" below).
   Bands are positive-only: a negative value (true "never kill")
   needs `CAP_SYS_RESOURCE`, which the container does not have, so the never-kill
@@ -126,7 +126,7 @@ Every agent's band is set once at launch and never changes -- with one exception
 **chat agents**. A chat is a user-facing agent (`user_created` label), and how
 expendable it should be depends on how engaged the user is with it, which is only
 known at runtime. So the launch wrapper tags a chat at `CHAT_AGENT_BASE` (the
-*most*-expendable chat band, 560), and the system_interface `ChatOomPrioritizer`
+*most*-expendable chat band, 560), and the system-interface `ChatOomPrioritizer`
 re-tags it downward toward the protected floor (`CHAT_AGENT_FLOOR`, 300) as the
 user engages: `oom_score_adj` is a function of whether the chat's tab is open,
 whether it is visible, and how recently it was messaged relative to other chats.

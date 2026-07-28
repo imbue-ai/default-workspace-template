@@ -44,7 +44,9 @@ Key fields:
 
   The `python3 system/scripts/oom_tag_service.py user` prefix is the **OOM band tag**
   (see below) -- keep it as the outermost command, in front of any `bash -c`
-  wrapper.
+  wrapper. The `forward_port.py --name` is the service name and becomes the
+  service's hostname label, so it must be DNS-safe: lowercase letters/digits
+  with single hyphens, no underscores, and not starting with `agent-`.
 - `directory=/home/user/workspace` -- run from the repo root, so cwd-relative paths
   (`data/...`, `system/scripts/...`) resolve. Set this on every program.
 - `autostart=true` -- start when supervisord boots.
@@ -77,7 +79,7 @@ and should outlive a service you added. The wrapper sets the process's
 overhead.
 
 Only the built-in template services pass their own name instead of `user` (e.g.
-`... oom_tag_service.py system_interface ...`); anything you add should use
+`... oom_tag_service.py system-interface ...`); anything you add should use
 `user`. There is no protected escape hatch: an unknown key defaults to the
 `user` band, and if you omit the prefix entirely a backstop listener
 (`oom-tag-backstop`) tags the service into the `user` band shortly after it
@@ -127,7 +129,10 @@ Or read the log files directly under `/var/log/supervisor/`.
 
 ## Important
 
-- Program names must be valid supervisord program names (no spaces).
+- Program names must be valid supervisord program names (no spaces). A name
+  registered via `forward_port.py` must additionally be DNS-safe (lowercase
+  letters/digits with single hyphens, no underscores, not starting with
+  `agent-`) because it becomes the service's hostname label.
 - supervisord only manages the programs in `system/supervisord.conf`; it does not touch
   the main agent window or other tmux windows.
 - If you need a one-off command, just run it directly rather than adding a

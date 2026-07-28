@@ -1,8 +1,35 @@
-# The global (Cloudflare) URL
+# The shared (Cloudflare) URL
 
-If the workspace has Cloudflare tunneling configured, the service is
-also reachable at a public URL in addition to the local one. Two
-caveats:
+Every registered service owns its own browser origin. Locally that is
+`http://<name>.<workspace-host>/` (e.g.
+`http://news.agent-ab12.localhost:8421/`). When the workspace is shared
+via Cloudflare, the same service is also reachable at its own public
+origin:
+
+```
+https://<name>--<host>--<user>.<domain>/
+```
+
+(the same two coordinates as the local hostname, spelled as a single
+flat label with `--` separators). Every registered service is exposed
+when the workspace is shared -- there is no per-service opt-in flag; a
+service registered while the workspace is shared gets its DNS record,
+ingress rule, and access policy automatically.
+
+## Who can reach it (two-tier grants)
+
+Sharing is two-tier:
+
+- **Per-service email list**: adding an email to a service's list
+  grants access to that service only.
+- **Workspace master list** (the `system-interface` list): adding an
+  email there grants access to *every* service in the workspace,
+  including services registered later.
+
+Grants are managed from the desktop client's workspace settings, not
+from inside the container.
+
+## Caveats when hunting for the URL from inside the container
 
 - **The public hostname is owned server-side**, not by the
   cloudflared process running in this container. Skimming the
@@ -13,10 +40,10 @@ caveats:
   for a public URL.
 
 The reliable way to get the public URL is through the desktop client
-itself: when the user clicks the service tab, the client resolves the
-public hostname via its services API. If you need the exact URL for
-testing, ask the user to read it from their browser's address bar.
+itself: the tab's origin is derived from the service name and the
+workspace host. If you need the exact URL for testing, ask the user to
+read it from their browser's address bar.
 
-If the workspace does not have a tunnel token configured, this section
-does not apply -- the local `http://127.0.0.1:8000/service/<name>/`
-URL is the only entry point.
+If the workspace is not shared, this section does not apply -- the
+service is reachable only at its local origin (and, from inside the
+container, at its registered `http://127.0.0.1:<port>/` backend URL).

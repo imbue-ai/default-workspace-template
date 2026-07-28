@@ -149,9 +149,10 @@ def test_inspect_resolves_iframe_with_service_name(tmp_path: Path) -> None:
 def test_inspect_emits_chat_terminal_ref_for_agent_attached_terminal(tmp_path: Path) -> None:
     """An iframe pointed at the per-agent terminal URL projects to ``chat-terminal:<name>``.
 
-    The chat panel's "Open agent terminal" button mints iframes pointed
-    at ``/service/terminal/?arg=_&arg=agent&arg=<name>``; ``_resolve_ref``
-    must recognize that URL shape and emit the stable
+    The chat panel's "Open agent terminal" button mints iframes pointed at
+    the terminal service's own origin with dispatch args
+    (``http://terminal.agent-<hex>.localhost:8421/?arg=_&arg=agent&arg=<name>``);
+    ``_resolve_ref`` must recognize that URL shape and emit the stable
     ``chat-terminal:<name>`` ref so the panel is addressable by name
     rather than via an opaque ``terminal:<hash>``.
     """
@@ -165,7 +166,33 @@ def test_inspect_emits_chat_terminal_ref_for_agent_attached_terminal(tmp_path: P
         panel_params={
             "p1": {
                 "panelType": "iframe",
-                "url": "/service/terminal/?arg=_&arg=agent&arg=alice",
+                "url": "http://terminal.agent-0af.localhost:8421/?arg=_&arg=agent&arg=alice",
+            }
+        },
+    )
+    summary = layout_inspect(layout_path, {})
+    refs = [p["ref"] for p in summary["panels"]]
+    assert "chat-terminal:alice" in refs
+
+
+def test_inspect_emits_chat_terminal_ref_on_shared_origin(tmp_path: Path) -> None:
+    """The shared host shape (``terminal--<host>--<user>.<domain>``) is recognized too.
+
+    On shares the service name is the first ``--`` token of the flat
+    hostname rather than the first dot-label, so the origin-based service
+    detection must handle both spellings.
+    """
+    layout_path = tmp_path / "layout.json"
+    _write_layout(
+        layout_path,
+        dockview={
+            "panels": {"p1": {"id": "p1", "title": "alice terminal"}},
+            "grid": {"root": {"type": "leaf", "data": {"views": ["p1"], "activeView": "p1", "size": 1.0}}},
+        },
+        panel_params={
+            "p1": {
+                "panelType": "iframe",
+                "url": "https://terminal--myhost--user.example.com/?arg=_&arg=agent&arg=alice",
             }
         },
     )
@@ -178,8 +205,8 @@ def test_inspect_keeps_anonymous_terminal_as_terminal_hash_ref(tmp_path: Path) -
     """Terminals minted by the "New terminal" button use ``arg=workdir`` and stay ``terminal:<hash>``.
 
     Only the agent-attached terminal pattern (``arg=agent&arg=<name>``)
-    projects to ``chat-terminal:<name>``; everything else under
-    ``/service/terminal/`` falls back to the opaque hash form.
+    projects to ``chat-terminal:<name>``; everything else on the terminal
+    service's origin falls back to the opaque hash form.
     """
     layout_path = tmp_path / "layout.json"
     _write_layout(
@@ -191,7 +218,7 @@ def test_inspect_keeps_anonymous_terminal_as_terminal_hash_ref(tmp_path: Path) -
         panel_params={
             "p1": {
                 "panelType": "iframe",
-                "url": "/service/terminal/?arg=_&arg=workdir&arg=%2Fmngr%2Fcode",
+                "url": "http://terminal.agent-0af.localhost:8421/?arg=_&arg=workdir&arg=%2Fmngr%2Fcode",
             }
         },
     )
@@ -363,10 +390,10 @@ def test_list_marks_open_services_via_layout_json(tmp_path: Path) -> None:
 
 
 def test_list_hides_reserved_system_interface_entry(tmp_path: Path) -> None:
-    """The chrome's own ``system_interface`` registration is filtered server-side
+    """The chrome's own ``system-interface`` registration is filtered server-side
     so every caller (script, direct HTTP, future SDKs) sees the same set."""
     entries = layout_list(
-        service_names=("web", "system_interface", "api"),
+        service_names=("web", "system-interface", "api"),
         agents=[],
         layout_json_path=tmp_path / "missing.json",
         agent_name_by_id={},
@@ -374,7 +401,7 @@ def test_list_hides_reserved_system_interface_entry(tmp_path: Path) -> None:
     refs = {e["ref"] for e in entries}
     assert "service:web" in refs
     assert "service:api" in refs
-    assert "service:system_interface" not in refs
+    assert "service:system-interface" not in refs
 
 
 def test_allocate_terminal_panel_id_returns_terminal_ref_for_panel_id() -> None:
@@ -463,7 +490,7 @@ def test_list_chat_terminal_marks_open_when_url_is_mounted(tmp_path: Path) -> No
         panel_params={
             "p1": {
                 "panelType": "iframe",
-                "url": "/service/terminal/?arg=_&arg=agent&arg=alice",
+                "url": "http://terminal.agent-0af.localhost:8421/?arg=_&arg=agent&arg=alice",
             }
         },
     )
@@ -550,8 +577,8 @@ def test_is_destroyable_terminal_session_blocks_agents_even_with_terminal_like_n
 def test_service_session_suffix_distinguishes_browser_panes() -> None:
     # A browser-fleet iframe carries ?session=<id> so each browser is a distinct
     # ref (service:browser?session=2); every other service iframe stays bare.
-    assert _service_session_suffix("/service/browser/?session=2") == "?session=2"
-    assert _service_session_suffix("/service/browser/?session=0") == "?session=0"
-    assert _service_session_suffix("/service/browser/") == ""
-    assert _service_session_suffix("/service/web/") == ""
+    assert _service_session_suffix("http://browser.agent-0af.localhost:8421/?session=2") == "?session=2"
+    assert _service_session_suffix("http://browser.agent-0af.localhost:8421/?session=0") == "?session=0"
+    assert _service_session_suffix("http://browser.agent-0af.localhost:8421/") == ""
+    assert _service_session_suffix("http://web.agent-0af.localhost:8421/") == ""
     assert _service_session_suffix(None) == ""

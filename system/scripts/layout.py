@@ -68,6 +68,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -99,8 +100,9 @@ _REGISTRATION_POLL_INTERVAL_SECONDS = 0.25
 # Set of accepted ref prefixes.
 #
 # ``chat-terminal:<name>`` addresses the singleton terminal panel attached
-# to the named agent's tmux session (URL pattern ``/service/terminal/
-# ?arg=_&arg=agent&arg=<name>``). Listed before ``chat:`` because the
+# to the named agent's tmux session (URL pattern ``http://terminal.
+# <workspace-host>/?arg=_&arg=agent&arg=<name>``). Listed before ``chat:``
+# because the
 # ``_normalize_ref`` prefix scan returns on the first match -- if ``chat:``
 # came first the longer prefix would never be recognized and
 # ``chat-terminal:foo`` would degrade to a bare service-name fallback.
@@ -246,10 +248,10 @@ def _service_name_from_ref(ref: str) -> str:
 
     A service ref may carry a query (``service:browser?session=2``, used to
     address a specific browser in the fleet) or a path
-    (``service:system_interface/health``). The registration check polls
+    (``service:api/health``). The registration check polls
     ``apps.toml`` for the *service*, so we strip anything after the
     name -- the first ``?`` or ``/`` -- before looking it up. Plain
-    ``service:system_interface`` is returned unchanged.
+    ``service:api`` is returned unchanged.
     """
     remainder = ref.removeprefix("service:")
     for separator in ("?", "/"):
@@ -269,27 +271,76 @@ def _validate_replace_url(url: str) -> None:
     raise SystemExit(EXIT_ERROR)
 
 
-def _resolve_replace_url(url: str) -> str:
-    """Project a ``replace-url`` URL argument to the form stored on the panel.
+def _service_ref_parts(ref: str) -> tuple[str, str]:
+    """Split ``service:<name>[/<path>][?<query>]`` into (name, path-and-query).
 
-    Mirrors the frontend's ``resolveReplaceUrl`` (in ``DockviewWorkspace.ts``):
-    ``service:<name>`` becomes ``/service/<name>/`` (matching ``getServiceUrl``),
-    ``service:<name>/<path>`` becomes ``/service/<name>/<path>``, and plain
-    ``https://`` URLs pass through unchanged. The wait-stable predicate for
-    ``replace-url`` compares against the panel's stored URL, so it must use
-    this resolved form rather than the literal shorthand the agent typed --
-    otherwise every ``service:`` replace-url times out waiting for a string
-    that will never appear.
+    The returned path always starts with ``/`` (the bare service root when
+    the ref carries no path) and keeps any query verbatim, so the result is
+    directly comparable to the path + query of a panel's absolute
+    service-origin URL.
+    """
+    remainder = ref.removeprefix("service:")
+    name = remainder
+    rest = ""
+    for index, char in enumerate(remainder):
+        if char in ("/", "?"):
+            name = remainder[:index]
+            rest = remainder[index:]
+            break
+    if rest.startswith("?"):
+        rest = f"/{rest}"
+    elif not rest:
+        rest = "/"
+    return name, rest
+
+
+def _service_coordinates_from_url(url: str) -> tuple[str, str] | None:
+    """Derive (service_name, path-and-query) from an absolute service-origin URL.
+
+    Service origins carry the service name in the hostname: locally as the
+    first dot-label (``http://<name>.agent-<hex>.localhost:8421/...``), on
+    shares as the first ``--`` token of the flat label
+    (``https://<name>--<host>--<user>.<domain>/...``). Returns None for
+    anything that is not a service origin (an external URL, the bare
+    workspace origin) so a ``service:`` expectation can never match those.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.hostname or ""
+    first_label, _, rest = host.partition(".")
+    if "--" in first_label:
+        name = first_label.split("--", 1)[0]
+    elif rest.startswith("agent-"):
+        name = first_label
+    else:
+        return None
+    if not name:
+        return None
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    return name, path
+
+
+def _resolve_replace_url(url: str) -> str:
+    """Canonicalize a ``replace-url`` URL argument for matching and diff output.
+
+    The frontend derives each service's absolute origin from its own
+    ``location.host`` (``http://<name>.<workspace-host>/`` locally,
+    ``https://<name>--<host>--<user>.<domain>/`` on shares), so this script
+    cannot know the exact URL the browser will store on the panel. A
+    ``service:`` shorthand therefore stays in service-relative form -- name
+    plus path-and-query, canonicalized so ``service:web`` and
+    ``service:web/`` compare equal -- and the wait-stable predicate
+    (``_predicate_url``) compares service coordinates instead of literal
+    URL strings. Plain ``https://`` URLs are stored verbatim by the
+    frontend and pass through unchanged.
     """
     if not url.startswith("service:"):
         return url
-    remainder = url.removeprefix("service:")
-    slash_index = remainder.find("/")
-    if slash_index == -1:
-        return f"/service/{remainder}/"
-    name = remainder[:slash_index]
-    path = remainder[slash_index + 1 :]
-    return f"/service/{name}/{path}"
+    name, path_and_query = _service_ref_parts(url)
+    if path_and_query == "/":
+        return f"service:{name}"
+    return f"service:{name}{path_and_query}"
 
 
 def _post_layout(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
@@ -550,6 +601,29 @@ def _predicate_title(ref: str, title: str) -> _Predicate:
 
 
 def _predicate_url(ref: str, url: str) -> _Predicate:
+    """Wait-stable predicate for ``replace-url``: the panel points at ``url``.
+
+    ``url`` is the ``_resolve_replace_url`` canonical form. For a
+    ``service:`` target the frontend derives the stored URL's origin from
+    its own ``location.host`` -- unknowable here -- so the check compares
+    service coordinates: the panel URL's service name and path-and-query
+    must equal the ref's. An ``https://`` target is stored verbatim and
+    compared literally.
+    """
+    if url.startswith("service:"):
+        expected = _service_ref_parts(url)
+
+        def check_service(layout: dict[str, Any]) -> bool:
+            panel = _find_panel_summary(layout, ref)
+            if panel is None:
+                return False
+            panel_url = panel.get("url")
+            if not isinstance(panel_url, str):
+                return False
+            return _service_coordinates_from_url(panel_url) == expected
+
+        return check_service
+
     def check(layout: dict[str, Any]) -> bool:
         panel = _find_panel_summary(layout, ref)
         return panel is not None and panel.get("url") == url
@@ -1335,9 +1409,10 @@ def _cmd_replace_url(args: argparse.Namespace) -> int:
     if (err := _require_open("replace-url", ref, layout_name=args.layout)) is not None:
         return err
     _validate_replace_url(args.url)
-    # The frontend rewrites ``service:<name>[/<path>]`` to ``/service/<name>...``
-    # before storing it on the panel; the wait-stable predicate must compare
-    # against that resolved form, not the literal shorthand the agent typed.
+    # The frontend derives the service's absolute origin from its own
+    # ``location.host`` before storing the URL on the panel; the server side
+    # cannot know that origin, so the expectation stays service-relative and
+    # ``_predicate_url`` compares service coordinates rather than strings.
     expected_url = _resolve_replace_url(args.url)
     return _run_mutating_op(
         "replace-url",

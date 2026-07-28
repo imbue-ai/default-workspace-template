@@ -22,7 +22,7 @@ Pick a live agent and its claude process, and a subprocess it spawned (run a
 # a subprocess it spawned via the Bash tool should sit at 900.
 cat /proc/<claude_pid>/oom_score_adj          # 300 or 600
 cat /proc/<subprocess_pid>/oom_score_adj      # 900
-# A built-in service sits at its SERVICE_BANDS value (system_interface = 20):
+# A built-in service sits at its SERVICE_BANDS value (system-interface = 20):
 cat /proc/$(pgrep -f system-interface | head -1)/oom_score_adj   # 20
 # The never-kill infra (sshd, supervisord, earlyoom, tini, tmux) stays at 0:
 cat /proc/$(pgrep -x supervisord | head -1)/oom_score_adj        # 0
@@ -75,7 +75,7 @@ poll returns exit code 75 with revive instructions (see
 ## 5. Confirm the protected processes survived
 
 ```bash
-supervisorctl status        # system_interface, cloudflared, terminal, backups: RUNNING
+supervisorctl status        # system-interface, cloudflared, terminal, backups: RUNNING
 ```
 
 Nothing in tiers protected/UI/recovery should appear as a victim in the earlyoom

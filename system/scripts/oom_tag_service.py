@@ -3,14 +3,14 @@
 service band, then exec the service command.
 
 Used as a command prefix in ``system/supervisord.conf`` -- e.g.
-``command=python3 system/scripts/oom_tag_service.py system_interface bash -c "..."`` --
+``command=python3 system/scripts/oom_tag_service.py system-interface bash -c "..."`` --
 so a service lands in its priority band before it (and everything it spawns)
 exists. It sets its *own* ``oom_score_adj`` (the value survives ``execve`` and is
 inherited across fork/exec by children), then ``exec``s the real command with its
 arguments untouched. Mirrors ``claude_oom_launch.py`` (self-tag, then exec).
 
 The first argument is a service key from ``oom_priority.bands.SERVICE_BANDS``.
-Built-in services pass their own name (``system_interface``, ``cloudflared``,
+Built-in services pass their own name (``system-interface``, ``cloudflared``,
 ...); user-created services pass ``user`` so they are shed before any built-in
 service under memory pressure. An unknown key is tagged with the user-service
 band (with a warning), the same as ``user``: an unrecognized service must

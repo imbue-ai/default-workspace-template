@@ -52,7 +52,7 @@ def _run(script_args: list[str], bindir: Path) -> subprocess.CompletedProcess[st
 
 def test_execs_the_command_forwarding_its_args(tmp_path: Path) -> None:
     bindir, out = _fake_command(tmp_path)
-    result = _run(["system_interface", "fake-service", "--flag", "value"], bindir)
+    result = _run(["system-interface", "fake-service", "--flag", "value"], bindir)
     assert result.returncode == 0, result.stderr
     assert out.read_text().splitlines()[0] == "args:--flag value"
 
@@ -74,7 +74,7 @@ def test_unknown_service_key_execs_and_defaults_to_the_user_band(
 
 def test_missing_command_exits_nonzero_with_usage(tmp_path: Path) -> None:
     bindir, _ = _fake_command(tmp_path)
-    result = _run(["system_interface"], bindir)
+    result = _run(["system-interface"], bindir)
     assert result.returncode == 2
     assert "usage:" in result.stderr
 

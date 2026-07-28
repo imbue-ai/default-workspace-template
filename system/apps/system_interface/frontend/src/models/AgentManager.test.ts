@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildSessionTerminalUrl } from "./AgentManager";
 
@@ -9,9 +9,20 @@ function parseArgs(url: string): string[] {
 }
 
 describe("buildSessionTerminalUrl", () => {
-  it("emits the positional args in ttyd dispatch order", () => {
+  beforeEach(() => {
+    // The terminal service origin is derived from the shell's own location
+    // (see src/origin.ts); vitest's node environment has no ``window``, so
+    // stand in a local workspace host.
+    vi.stubGlobal("window", { location: { host: "agent-abc123.localhost:8421", protocol: "http:" } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("emits the positional args in ttyd dispatch order on the terminal service's origin", () => {
     const url = buildSessionTerminalUrl("terminal-1", "term-abc", "/home/user/workspace");
-    expect(url.startsWith("/service/terminal/?")).toBe(true);
+    expect(url.startsWith("http://terminal.agent-abc123.localhost:8421/?")).toBe(true);
     expect(parseArgs(url)).toEqual(["_", "session", "terminal-1", "term-abc", "/home/user/workspace"]);
   });
 
