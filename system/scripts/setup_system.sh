@@ -182,7 +182,7 @@ cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
 #!/bin/sh
 # Best-effort apt Post-Invoke hook: refresh the environment record.
 [ -d /home/user/.mngr ] || exit 0
-[ -d /home/user/workspace/system/libs/env_converge ] || exit 0
+[ -d /home/user/workspace/system/services/env_converge ] || exit 0
 cd /home/user/workspace || exit 0
 MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run env-converge capture >/dev/null 2>&1 || true
 HOOK

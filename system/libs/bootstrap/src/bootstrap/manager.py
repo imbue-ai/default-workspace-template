@@ -210,7 +210,7 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
     """Build the `mngr create` argv for the initial chat agent.
 
     Mirrors the New Agent button's create path (see
-    system/libs/system_interface/.../agent_manager.py:create_chat_agent): the
+    system/apps/system_interface/.../agent_manager.py:create_chat_agent): the
     `chat` template, no-connect, and the inherited `project` label when
     present on the services agent. Adds `--message /welcome`, which used to
     live on `create_templates.main`. The chat agent belongs to its workspace
@@ -221,7 +221,7 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
         "create",
         host_name,
         # `--transfer none` matches what `AgentManager.create_chat_agent`
-        # uses for the "New Chat" button (system/libs/system_interface/.../
+        # uses for the "New Chat" button (system/apps/system_interface/.../
         # agent_manager.py). Without it, mngr defaults to creating a
         # per-agent git worktree on branch `mngr/<agent_name>` -- which
         # collides with the services agent's own worktree branch (set up
@@ -238,7 +238,7 @@ def _build_create_chat_command(host_name: str, labels: dict[str, str]) -> list[s
         "/welcome",
         # Tags the initial chat as a user-created agent so the OOM agent-tagging
         # hook puts it in the protected user-agent band (matching the New Chat /
-        # New Agent paths in system/libs/system_interface).
+        # New Agent paths in system/apps/system_interface).
         "--label",
         "user_created=true",
         "--no-connect",

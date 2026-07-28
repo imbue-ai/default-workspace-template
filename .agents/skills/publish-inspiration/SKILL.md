@@ -85,7 +85,7 @@ and then creates the repo and pushes -- directly from the worker's worktree.
   `.mngr/settings.toml`; the `<uuid>` suffix is random), so the path cannot be
   guessed -- resolve it after the worker's `done` report per §3. Everything
   after assembly runs with cwd = `$WT` (see the callout above).
-- **`BASE_REF` (provenance + clean base).** The workspace's creation snapshot
+- **`BASE_REF` (provenance + clean base).** The workspace's template base
   -- the template state this mind started from (or last updated itself to).
   Resolve it **in-repo, with no network access** (see step 2); do NOT
   `git fetch`/`git pull` upstream. Pass it to `build_inspiration.sh` as
@@ -98,7 +98,7 @@ Ask the user, in plain language. Never enumerate files at them:
 - what they want to include -- an app or feature, but equally a skill, a chat
   customization or behavior, a workflow, a service, config, or seed data:
   anything committable that lives in the repo tree. You translate this into a set
-  of repo-root-relative include paths (e.g. `creations/slack_inbox`
+  of repo-root-relative include paths (e.g. `system/apps/slack_inbox`
   plus their service wiring, or `.agents/skills/<name>` for a skill) -- you reason
   about the backing paths, the user does not;
 - what data should be included -- and this is NOT an all-or-nothing default.
@@ -131,7 +131,7 @@ as-is: an inspiration must be reconstructable from the committed tree, so a
 snapshot that omits it would boot without the very thing that made it worth
 sharing. Recognize this and, before going further, suggest turning it into
 something committable first -- most often by crystallizing it into a skill (this
-repo's `crystallize-artifact` skill promotes just-finished work into a committed,
+repo's `crystallize-creation` skill promotes just-finished work into a committed,
 tested skill), or otherwise capturing it as config, seed data, or a service that
 does live in the tree. Once it is committed, include it like any other path
 above.
@@ -181,7 +181,7 @@ dispatch anyway, handle it in place:
 
 ## 2. Resolve `BASE_REF` and `SOURCE_SHA` (in-repo, no network)
 
-`BASE_REF` is this workspace's **creation snapshot** -- the template state the
+`BASE_REF` is this workspace's **template base** -- the template state the
 mind started from (or last updated itself to). Resolve it deterministically as
 the NEWEST first-parent commit that is a template-state marker:
 
@@ -236,9 +236,9 @@ too-old-base problems in seconds instead of a full worker round-trip.
 a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
 
-(The same marker walk seeds the version ledger's `## Workspace` creation line in
+(The same marker walk seeds the version ledger's `## Workspace` origin line in
 §8 step 4 below (and in `update-self` §5b) -- with one deliberate difference: the
-creation-line walk takes the OLDEST marker (where the mind started) where this
+origin-line walk takes the OLDEST marker (where the mind started) where this
 section takes the NEWEST (the base the mind is on now). This `BASE_REF` bash is
 the primary; keep the two in step if either ever changes.)
 
@@ -332,7 +332,7 @@ worktree to a clean template base and deletes gitignored state -- including
    you do here touches it:
 
    <one line per modification: file + the change to make, e.g.
-   "creations/slack_zen_garden/config.py: replace the hardcoded '#team-garden'
+   "system/apps/slack_zen_garden/config.py: replace the hardcoded '#team-garden'
    channel with a neutral default the adopter sets" -- or the single line
    "None requested.">
 
@@ -953,13 +953,13 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   `## Adopted inspirations` in that order (byte-identical to the shipped root
   file; `update-self` §5b carries the exact heredoc) -- then append.
 
-- **Seed the `## Workspace` creation line if it is absent** -- exactly once per
-  workspace, as the FIRST line under `## Workspace`. Resolve the creation snapshot
+- **Seed the `## Workspace` origin line if it is absent** -- exactly once per
+  workspace, as the FIRST line under `## Workspace`. Resolve the template base
   as the **OLDEST** first-parent template-state marker (`^update-self:` or
   `Initial workspace commit`; fall back to the first-parent root), and resolve its
   date/version/sha from that commit itself. **Use `git describe --tags
   --abbrev=0 --match 'minds-v*' "$CREATION"` (reachability), NEVER `git tag
-  --points-at`** -- no tag is ever *on* a creation snapshot (an `Initial workspace
+  --points-at`** -- no tag is ever *on* a template base (an `Initial workspace
   commit` sits on top of the cloned template; an `update-self:` marker is a merge
   commit; the `minds-v*` tag is always on an ancestor), so a pointing-at lookup
   comes up empty and the line would silently degrade to the unnamed `created from
@@ -1132,8 +1132,8 @@ What it does, in order (see the script for the exact commands):
 9. Overwrites the snapshot's `welcome/SKILL.md` with a generated
    inspiration-specific welcome describing the
    newly-published inspiration.
-10. Removes `docs/VERSION_HISTORY.md` from the snapshot entirely: that ledger is a
-    WORKSPACE artifact -- the SOURCE mind's own record of what it came from and
+10. Removes `docs/VERSION_HISTORY.md` from the snapshot entirely: that ledger is
+    WORKSPACE-only -- the SOURCE mind's own record of what it came from and
     everything it has published -- and never belongs in a published inspiration.
     A mind created from this inspiration grows its own ledger on demand (this
     skill's §8 step 4 and `update-self` §5b write the starter the first time it

@@ -8,7 +8,7 @@ metadata:
 # Managing the workspace dockview layout
 
 The user interacts with you (and the services you create) through a
-tabbed dockview defined in `system/libs/system_interface`. Your chat is one
+tabbed dockview defined in `system/apps/system_interface`. Your chat is one
 such tab; everything else -- service iframes, terminals, ad-hoc URL
 tabs, other agents' chats -- lives alongside it.
 
@@ -260,7 +260,7 @@ no-op messages always go to stderr.
 
 ## When NOT to use this skill
 
-- **Building a brand-new web service.** Use `build-web-service` to
+- **Building a brand-new app.** Use `build-app` to
   scaffold the service first; it ends with a `layout.py open <name>`
   call to surface the new tab.
 - **Persisting layout state.** The frontend auto-saves the layout on
