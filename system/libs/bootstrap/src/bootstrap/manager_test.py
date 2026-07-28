@@ -10,9 +10,11 @@ from pathlib import Path
 
 import pytest
 from imbue.mngr.cli.output_helpers import write_json_line
+from loguru import logger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from bootstrap.manager import (
+    FAST_MODE_DECISION_FILE,
     INITIAL_CHAT_AGENT_ID_FILENAME,
     _build_create_chat_command,
     _configure_git_global,
@@ -354,15 +356,27 @@ def test_fast_mode_follows_a_recorded_decision(
 def test_fast_mode_defaults_on_when_the_decision_is_unreadable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A corrupt or wrong-shaped decision must not silently strand new chats."""
+    """A corrupt or wrong-shaped decision must not silently strand new chats -- and
+    must say so, since falling back turns on the setting that costs money."""
     monkeypatch.chdir(tmp_path)
     decision_path = tmp_path / "data" / ".state" / "fast_mode_decision.json"
     decision_path.parent.mkdir(parents=True)
-    decision_path.write_text("{not valid json")
-    assert _read_workspace_fast_mode_enabled() is True
 
-    decision_path.write_text(json.dumps({"is_fast_mode_enabled": "no"}))
-    assert _read_workspace_fast_mode_enabled() is True
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message), level="WARNING")
+    try:
+        decision_path.write_text("{not valid json")
+        assert _read_workspace_fast_mode_enabled() is True
+
+        # Valid JSON the writer would never produce: the value decides nothing,
+        # so this is a format skew rather than a fresh workspace.
+        decision_path.write_text(json.dumps({"is_fast_mode_enabled": "no"}))
+        assert _read_workspace_fast_mode_enabled() is True
+    finally:
+        logger.remove(sink_id)
+
+    assert len(messages) == 2
+    assert all(str(FAST_MODE_DECISION_FILE) in message for message in messages)
 
 
 # --- _parse_created_agent_id ---

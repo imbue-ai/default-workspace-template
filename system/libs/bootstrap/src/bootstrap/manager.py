@@ -239,7 +239,16 @@ def _read_workspace_fast_mode_enabled() -> bool:
     is_enabled = (
         decision.get("is_fast_mode_enabled") if isinstance(decision, dict) else None
     )
-    return is_enabled if isinstance(is_enabled, bool) else True
+    if not isinstance(is_enabled, bool):
+        # Unlike an absent file, this is a format skew with the writer, and the
+        # fallback below is the setting that costs money -- say so.
+        logger.warning(
+            "Ignored fast-mode decision {} with no boolean is_fast_mode_enabled: {}",
+            FAST_MODE_DECISION_FILE,
+            raw,
+        )
+        return True
+    return is_enabled
 
 
 def _build_create_chat_command(
