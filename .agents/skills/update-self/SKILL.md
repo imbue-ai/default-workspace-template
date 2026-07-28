@@ -324,8 +324,12 @@ WORK_DIR=$(mngr ls --include 'name == "update-self"' --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
     --slug update-self --work-dir "$WORK_DIR"
-python3 system/scripts/layout.py open si-preview
+for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
+
+The `open` loop targets both named layouts because mutating `layout.py` ops
+require `--layout` and only apply on clients with that layout active; the call
+for the layout the user is not on fails fast and harmlessly.
 
 **Other user apps are optional previews.** When the report says another user
 app took meaningful merge work, use your judgment: serve it from the
@@ -496,7 +500,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
   python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py reveal \
       --rollback-to "$ROLLBACK_TO"
   python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
-  python3 system/scripts/layout.py close si-preview
+  for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
   ```
 
   Exit codes per `update-system-interface` Step 5 (`0` revealed; `2`
@@ -620,8 +624,9 @@ command is a cheap no-op pass -- run it anyway so unit-pin bumps still apply.
 ## 6. Teardown
 
 If you previewed a non-system_interface service in 5a, tear that preview down
-too: stop its isolated instance and close its tab (`python3 system/scripts/layout.py
-close <name>`). Then:
+too: stop its isolated instance and close its tab on each named layout
+(`for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" <name>; done`).
+Then:
 
 ```bash
 mkdir -p data/.tasks/update-self/reports/consumed

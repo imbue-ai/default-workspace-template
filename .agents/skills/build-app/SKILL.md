@@ -206,7 +206,7 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
-- `layout.py open <name>` to surface it (see Step 4 for the command), then loop:
+- `layout.py open` to surface it (see Step 4 for the per-layout command), then loop:
   present -> take feedback -> update the mock so the change is *visible* ->
   re-present. Do not accept feedback and move on having only asserted you'll apply
   it.
@@ -330,9 +330,13 @@ new tab. Without this step the user would have to discover it via the
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-python3 system/scripts/layout.py open <name>
+for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>; done
 ```
 
+Mutating `layout.py` ops require `--layout` (the named layouts are
+`desktop` and `mobile`) and only apply on connected clients that have
+that layout active, so the loop tries both: the call for the layout
+the user is on succeeds, and the other fails fast and harmlessly.
 `layout.py` POSTs to a loopback-only workspace_server endpoint that
 broadcasts a `layout_op` message over its WebSocket. The frontend
 focuses the panel if a tab for `<name>` is already open, otherwise
