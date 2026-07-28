@@ -23,8 +23,16 @@
   rather than writing `false`, a running session's state cannot be recovered from
   its settings files at all. The system interface therefore remembers what it last
   set for each agent and reports that, so a toggle no longer snaps back when the
-  frontend reconciles after a change settles. That record is per-process and is
-  empty after a restart of the service, which falls back to the launch-time value.
+  frontend reconciles after a change settles. That record is per-process, is
+  dropped when the agent is destroyed, and is empty after a restart of the
+  service, which falls back to the launch-time value.
+
+- Two consequences of that record worth knowing: it describes a session, so an
+  agent that restarts on its own is back at its launch-time setting while the
+  record still reports the last toggle; and a `/fast on` that Claude Code refuses
+  is displayed as on, since there is no longer anything on disk to reconcile
+  against. This workspace disables the org-level eligibility check that is the
+  thing that would refuse one.
 
 - `read_model_settings` is now `read_model_from_settings` and returns only the
   model; fast mode is resolved separately, since unlike the model it cannot be
