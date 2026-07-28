@@ -158,10 +158,13 @@ def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
     ``rc.2`` follows ``rc.1`` rather than sorting lexically (where ``rc.10`` would
     land before ``rc.2``). Each identifier becomes ``(is_alphanumeric, number,
     text)`` so a single tuple comparison covers both kinds.
+
+    "Numeric" is ``isdecimal``, semver's ``[0-9]+``, and not ``isdigit``, which
+    also admits superscripts and other digits ``int()`` refuses to convert.
     """
     identifiers: list[tuple[int, int, str]] = []
     for identifier in pre.split("."):
-        if identifier.isdigit():
+        if identifier.isdecimal():
             identifiers.append((0, int(identifier), ""))
         else:
             identifiers.append((1, 0, identifier))
