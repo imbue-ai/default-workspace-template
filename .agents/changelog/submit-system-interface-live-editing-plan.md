@@ -27,7 +27,16 @@ preview tab.
   `launch-sync` publishes for callers to merge from is now derived from that spec
   (`resolve_worker_branch`, mirroring mngr's own `[BASE][:NEW]` parsing) rather
   than assumed to be `mngr/<name>` -- with a spec that renames or reuses a
-  branch, the old assumption named a branch the worker never committed to.
+  branch, the old assumption named a branch the worker never committed to. The
+  `launch-task` skill documents the flag, and a malformed spec raises
+  `BranchSpecError` before any worker is created.
+
+- `op-update.md`'s system-interface exception was retargeted at the new handoff:
+  the worker's branch already carries the user-approved change, and the task says
+  which of two shapes applies -- "implement the approved shape for real, then
+  harden", or "harden only: verify, do not re-implement". Previously it told
+  every system-interface worker to implement the brief, which on a harden-only
+  handoff meant redoing work the user had already signed off on.
 
 - The preview no longer seeds a saved layout that itself opens a preview panel.
   Such a layout made the preview render *itself* (its inner app resolves
