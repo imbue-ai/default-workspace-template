@@ -62,10 +62,10 @@ edit may be in flight at a time.
 ## 1. On entry: take the lease, provision in the background, clarify the shape
 
 **Take the editing lease first.** It is the *same* advisory lease
-`update-service` uses ("One editor at a time"), so a system-interface pass and an
-ordinary edit of some other service never collide on it only if they use
-distinct names -- here the name is fixed as `editing service system_interface`.
-Pre-flight exactly as `update-service` describes:
+`update-service` uses ("One editor at a time"). Its title is per-service
+(`editing service <name>`), so a system-interface pass never collides with an
+ordinary edit of some other service -- here the name is fixed as `editing
+service system_interface`. Pre-flight exactly as `update-service` describes:
 
 ```bash
 tk ready > /tmp/service-leases.txt
