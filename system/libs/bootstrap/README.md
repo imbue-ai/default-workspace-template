@@ -30,8 +30,10 @@ service.
 
 ## Services (supervisord)
 
-Services are defined as `[program:*]` sections in `system/supervisord.conf` at the repo
-root, not managed by this package. supervisord starts them, restarts the
+Services are defined as `[program:*]` sections, one service per file under
+`system/supervisord.conf.d/` (pulled in by an `[include]` glob in
+`system/supervisord.conf`, which itself holds only the daemon config and
+`system_interface`), not managed by this package. supervisord starts them, restarts the
 long-lived ones when they exit (`autorestart=true`), and runs one-shot programs
 (like `deferred-install`) exactly once per boot (`autorestart=false`).
 
@@ -41,7 +43,8 @@ writes separate, rotated, container-local logs under
 `/var/log/supervisor/<name>-stdout.log` and `<name>-stderr.log` (not under
 `runtime/`, so they are not backed up).
 
-To add, change, or remove a service, edit `system/supervisord.conf` and run
+To add, change, or remove a service, add/edit/delete
+`system/supervisord.conf.d/<name>.conf` and run
 `supervisorctl reread && supervisorctl update` (and `supervisorctl restart
 <name>` to bounce one). See the `update-service` skill, or
 `.agents/shared/references/service-processes.md`, for details.

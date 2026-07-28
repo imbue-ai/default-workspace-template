@@ -6,11 +6,16 @@
 """Stand up a new Flask web-service creation (and its supervisord program entry).
 
 Creates `creations/<package>/` with a Flask starter (synchronous; flask-sock
-is available for WebSockets), updates the root pyproject.toml
-sources/dependencies (the `creations/*` member glob picks the package up
-automatically), appends a `[program:<name>]` block to
-system/supervisord.conf, and runs `uv sync --all-packages` to materialize the
-workspace.
+is available for WebSockets), writes a `[program:<name>]` block to its own
+`system/supervisord.conf.d/<name>.conf`, and runs `uv sync --all-packages` to
+materialize the workspace.
+
+Nothing shared is edited: the root pyproject.toml needs no entry (the
+`creations/*` workspace member glob already picks the package up, and
+`uv sync --all-packages` installs every member), and the supervisord program
+lives in its own file rather than being appended to a config shared with every
+other service. That is what lets two agents scaffold two services concurrently
+without touching the same file.
 
 Usage:
     uv run .agents/skills/build-web-service/scripts/scaffold_flask_lib.py \\
@@ -29,8 +34,6 @@ from pathlib import Path
 from typing import Iterable
 
 import tomlkit
-from tomlkit import TOMLDocument
-from tomlkit.items import Array, Table
 
 # Both kebab and snake forms are reserved so a kebab name that converts to
 # a snake-cased existing service name is also rejected.
@@ -71,12 +74,33 @@ def _validate_name(name: str) -> None:
 
 def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
     # Every service registers its localhost backend via a forward_port.py call in
-    # its [program:*] command, so scanning the whole config text for
+    # its [program:*] command, so scanning the config text for
     # http://localhost:<port> / http://127.0.0.1:<port> finds all in-use ports.
-    if not supervisord_conf.exists():
-        return set()
-    text = supervisord_conf.read_text()
-    return {int(match.group(1)) for match in LOCALHOST_PORT_RE.finditer(text)}
+    # Scans the main config AND every per-service file in supervisord.conf.d/,
+    # since that is where all but system_interface now live -- missing the
+    # drop-ins would hand a new service a port another one already holds.
+    ports: set[int] = set()
+    for path in _supervisord_conf_files(supervisord_conf):
+        ports.update(
+            int(match.group(1))
+            for match in LOCALHOST_PORT_RE.finditer(path.read_text())
+        )
+    return ports
+
+
+def _supervisord_conf_dir(supervisord_conf: Path) -> Path:
+    """The per-service drop-in directory beside ``supervisord_conf``.
+
+    Mirrors the ``[include] files = supervisord.conf.d/*.conf`` glob in the main
+    config, whose pattern supervisord resolves relative to that file's directory.
+    """
+    return supervisord_conf.parent / f"{supervisord_conf.name}.d"
+
+
+def _supervisord_conf_files(supervisord_conf: Path) -> list[Path]:
+    """The main config plus every per-service drop-in, in supervisord's read order."""
+    files = [supervisord_conf] if supervisord_conf.exists() else []
+    return files + sorted(_supervisord_conf_dir(supervisord_conf).glob("*.conf"))
 
 
 def _applications_toml_ports(applications_toml: Path) -> set[int]:
@@ -324,54 +348,9 @@ def _write_lib(
     return lib_dir
 
 
-def _ensure_in_array(array: Array, value: str) -> bool:
-    """Append value to a TOML array if missing. Returns True if appended."""
-    for item in array:
-        if str(item) == value:
-            return False
-    array.append(value)
-    return True
-
-
-def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
-    path = repo_root / "pyproject.toml"
-    doc: TOMLDocument = tomlkit.parse(path.read_text())
-
-    project = doc.get("project")
-    if not isinstance(project, Table):
-        sys.exit("error: root pyproject.toml is missing a [project] table")
-    deps = project.get("dependencies")
-    if not isinstance(deps, Array):
-        sys.exit(
-            "error: root pyproject.toml [project].dependencies is missing or not an array"
-        )
-    _ensure_in_array(deps, name)
-
-    tool = doc.get("tool")
-    if not isinstance(tool, Table):
-        sys.exit("error: root pyproject.toml is missing a [tool] table")
-    uv = tool.get("uv")
-    if not isinstance(uv, Table):
-        sys.exit("error: root pyproject.toml is missing [tool.uv]")
-    workspace = uv.get("workspace")
-    if not isinstance(workspace, Table):
-        sys.exit("error: root pyproject.toml is missing [tool.uv.workspace]")
-    # No members edit needed: the root pyproject's "creations/*" member glob
-    # already covers every package under creations/.
-    sources = uv.get("sources")
-    if not isinstance(sources, Table):
-        sys.exit("error: root pyproject.toml is missing [tool.uv.sources]")
-    if name not in sources:
-        source_entry = tomlkit.inline_table()
-        source_entry["workspace"] = True
-        sources[name] = source_entry
-
-    path.write_text(tomlkit.dumps(doc))
-
-
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
+command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run --all-packages {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -387,22 +366,32 @@ stderr_logfile_backups=3
 """
 
 
-def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
-    # system/supervisord.conf is INI (not TOML) and has hand-written comments worth
-    # preserving, so append a [program:<name>] block as text rather than
-    # round-tripping through a parser. The command is wrapped in `bash -c "..."`
-    # because supervisord exec's commands directly (no shell) and this one chains
-    # forward_port.py with `&&`; the `oom_tag_service.py user` prefix tags the
-    # new (user-created) service so it is shed before any built-in service under
-    # memory pressure (see system/libs/oom_priority/README.md).
-    path = repo_root / "system/supervisord.conf"
-    if not path.exists():
-        sys.exit(f"error: {path} not found (cannot register the new service)")
-    existing = path.read_text()
-    if f"[program:{name}]" in existing:
-        sys.exit(f"error: system/supervisord.conf already has a [program:{name}] section")
-    block = _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port)
-    path.write_text(existing.rstrip("\n") + "\n\n" + block)
+def _write_supervisord_program(repo_root: Path, name: str, port: int) -> Path:
+    """Write the service's supervisord program to its own drop-in file.
+
+    The command is wrapped in `bash -c "..."` because supervisord exec's commands
+    directly (no shell) and this one chains forward_port.py with `&&`; the
+    `oom_tag_service.py user` prefix tags the new (user-created) service so it is
+    shed before any built-in service under memory pressure (see
+    system/libs/oom_priority/README.md).
+
+    Raises (exits non-zero) if any existing program already claims this name,
+    whether in the main config or in another drop-in -- supervisord would
+    otherwise silently take whichever the include order happened to read last.
+    """
+    conf = repo_root / "system/supervisord.conf"
+    if not conf.exists():
+        sys.exit(f"error: {conf} not found (cannot register the new service)")
+    for existing in _supervisord_conf_files(conf):
+        if f"[program:{name}]" in existing.read_text():
+            sys.exit(
+                f"error: {existing.relative_to(repo_root)} already has a "
+                f"[program:{name}] section"
+            )
+    path = _supervisord_conf_dir(conf) / f"{name}.conf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port))
+    return path
 
 
 def _run_uv_sync(repo_root: Path) -> None:
@@ -465,15 +454,15 @@ def main() -> None:
     lib_dir = _write_lib(
         repo_root, args.name, args.description, port, list(args.extra_dep)
     )
-    _update_root_pyproject(repo_root, args.name, package)
-    _update_supervisord_conf(repo_root, args.name, port)
+    program_path = _write_supervisord_program(repo_root, args.name, port)
 
     if not args.skip_uv_sync:
         _run_uv_sync(repo_root)
 
     print(
         f"Created lib at {lib_dir.relative_to(repo_root)} "
-        f"(service `{args.name}` on port {port}). "
+        f"(service `{args.name}` on port {port}, "
+        f"registered in {program_path.relative_to(repo_root)}). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
         f"references/verify.md (curl + Playwright against /service/{args.name}/)."
     )

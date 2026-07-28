@@ -48,7 +48,8 @@ without inspecting the process tree:
 | Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000) | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
 
 Each supervisord service tags itself the same way an agent's main process does:
-its `command` in `system/supervisord.conf` runs `system/scripts/oom_tag_service.py <key> <the
+its `command` in `system/supervisord.conf.d/<name>.conf` runs
+`system/scripts/oom_tag_service.py <key> <the
 real command>`, which sets its own `oom_score_adj` from `SERVICE_BANDS` and then
 `exec`s the command in place (the band survives `execve` and is inherited by
 every child). Built-in services pass their own name; a **user-created** service

@@ -103,9 +103,9 @@ will fail loudly (the framework will print an error and exit). With
 crash loop visible via `supervisorctl status <name>` and
 `/var/log/supervisor/<name>-stderr.log`. Pick a different port.
 
-The scaffolder's port-picking pre-flight (which parses `system/supervisord.conf`
-and `data/.state/applications.toml`) catches this before you write the
-program entry. For the wrap-existing escape hatch, run `ss -tln`
+The scaffolder's port-picking pre-flight (which parses `system/supervisord.conf`,
+every `system/supervisord.conf.d/*.conf`, and `data/.state/applications.toml`)
+catches this before you write the program entry. For the wrap-existing escape hatch, run `ss -tln`
 manually before choosing a port.
 
 ## Bind host (wrap-existing path mostly)

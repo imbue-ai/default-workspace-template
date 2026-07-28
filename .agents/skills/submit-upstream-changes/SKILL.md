@@ -15,7 +15,8 @@ Push **shared infrastructure** that benefits other agents derived from the templ
 - Scripts (`system/scripts/`, `.agents/shared/scripts/`)
 - CLAUDE.md scaffolding (template-level sections only)
 - Dockerfile
-- `system/supervisord.conf` (template-level service programs)
+- `system/supervisord.conf` and `system/supervisord.conf.d/` (template-level
+  service programs)
 
 Do **not** push agent-specific content:
 

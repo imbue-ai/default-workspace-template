@@ -164,7 +164,7 @@ never flagged even when the app is newer. For that mechanism to stay sound,
 the following are stable contracts that must NOT be changed by edits to this
 library alone:
 
-- the `[program:host-backup]` block in `system/supervisord.conf`,
+- the `[program:host-backup]` block in `system/supervisord.conf.d/host-backup.conf`,
 - this package's registration in the root `pyproject.toml` uv workspace,
 - the `uv run host-backup` / `uv run host-backup-now` entry points.
 
