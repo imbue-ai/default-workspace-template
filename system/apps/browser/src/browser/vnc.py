@@ -282,6 +282,16 @@ class VncDisplay:
         return [
             _VNCSERVER_BINARY,
             self.display,
+            # REQUIRED, and not obviously so: without it vncserver runs its
+            # interactive desktop-environment picker (select-de.sh) whenever
+            # ~/.vnc/xstartup is absent. With no tty it prints "Please choose
+            # Desktop Environment to run" and dies, so the display never comes up
+            # and the launch fails on the readiness timeout with nothing in the
+            # log explaining why. "manual" is the documented value for "I will
+            # start my own applications", which is our case. Passing -select-de
+            # also sets the wrapper's assume-yes flag, so it never prompts about
+            # overwriting an existing xstartup either.
+            "-select-de", "manual",
             "-fg",
             "-noxstartup",
             "-geometry", f"{_SCREEN_W}x{_SCREEN_H}",
@@ -309,10 +319,13 @@ class VncDisplay:
         # is stopped or restarted. Detaching would leave the X server (and the
         # Chromium rendering into it) alive after the service died, while restore()
         # brought up a fresh set alongside them.
+        # Both streams inherit so the wrapper's own diagnostics land in the
+        # service log. Discarding stdout hid the DE-picker failure above behind a
+        # bare readiness timeout, which cost far more than the log noise is worth.
         self._process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
             self._command(),
-            stdout=subprocess.DEVNULL,
-            stderr=None,  # inherit: the server's log lands in the service's stderr
+            stdout=None,
+            stderr=None,
         )
         self._await_ready()
         self._register_service()
