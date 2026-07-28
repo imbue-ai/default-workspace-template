@@ -55,8 +55,10 @@ edit is picked up in place -- the port, the wrapper frame, the service
 registrations, and the user's tab all stay put.
 
 Exit codes:
-    0  Success (instance is up and healthy / torn down).
-    1  Failure to boot (partial state torn down), or a bad argument / unreadable
+    0  Success (instance is up and healthy / rebooted in place / torn down).
+    1  Failure to boot (partial state torn down); or, for ``refresh``, there was
+       no refreshable instance, the old server would not exit in time, or the
+       rebooted server never became healthy; or a bad argument / unreadable
        state file.
 """
 
