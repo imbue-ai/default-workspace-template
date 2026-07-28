@@ -222,9 +222,19 @@ that trips this means the local copy chose a target its app cannot support:
 say so, and offer the ref this pass *would* cap to (re-run without `--override`
 to learn it). Do not dispatch the worker until it is resolved.
 
-The boundary in §2a still holds: `$REF` is still resolved in Step 2, and Step 3
-is still the worker dispatch. This is a guard at the head of the dispatch, not a
-second resolution.
+**If the user takes the capped ref instead**, set `$REF` to it and then re-run
+§2a for the new `$REF` before dispatching. Do not just reassign the variable:
+§2a staged the skill at the *old* `$REF`, and the staged copy is what supplies
+the worker guide, the `update_self.py` both of you run, and the prose you are
+reading -- leaving it in place would run the too-new release's flow against a
+target that is not it. `bootstrap-skill` re-stages destructively, so re-running
+it is safe, and 2a's `differs` branch then decides which document you follow, as
+on the first pass. The capped ref is by construction at or below the ceiling, so
+the second time through 3a clears.
+
+The boundary in §2a still holds: Step 2 is what *resolves* a target and Step 3 is
+the worker dispatch. 3a resolves nothing -- it either clears the target Step 2
+chose or hands the pass back to 2a with the ceiling's answer.
 
 ### 3b. Launch
 
