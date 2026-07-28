@@ -126,16 +126,29 @@ class ResolvedTarget(NamedTuple):
     exceeds_ceiling: bool = False
 
 
-def _parse_stable_version(tag: str) -> tuple[int, int, int] | None:
-    """Return the ``(major, minor, patch)`` of a *stable* ``minds-v*`` tag.
+class Version(NamedTuple):
+    """A ``minds-v*`` tag's version, ordered by plain ``<`` the way semver orders.
 
-    Returns ``None`` for a non-matching tag or any prerelease (a ``-rc``/``-...``
-    suffix), so those never win the "latest stable" selection.
+    **Field order is the precedence order** -- comparison is tuple comparison, so
+    reordering these silently changes which release outranks which.
+
+    ``release_rank`` is 0 for a prerelease and 1 for the release it precedes, so
+    ``0.4.0-rc1 < 0.4.0``; ``prerelease`` then breaks ties among prereleases of
+    the same version. ``release_rank`` is redundant with ``prerelease`` being
+    empty, but it has to be a *field* rather than a property: only a field
+    participates in the comparison that places a prerelease below its release.
     """
-    match = _TAG_RE.match(tag.strip())
-    if match is None or match.group("pre") is not None:
-        return None
-    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+    major: int
+    minor: int
+    patch: int
+    release_rank: int
+    prerelease: tuple[tuple[int, int, str], ...]
+
+    @property
+    def is_stable(self) -> bool:
+        """Whether this is a released version rather than a prerelease of one."""
+        return not self.prerelease
 
 
 def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
@@ -155,16 +168,15 @@ def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
     return tuple(identifiers)
 
 
-def parse_version(
-    tag: str,
-) -> tuple[int, int, int, int, tuple[tuple[int, int, str], ...]] | None:
-    """Return a comparable version for any ``minds-v*`` tag, prerelease included.
+def parse_version(tag: str) -> Version | None:
+    """Return the :class:`Version` of any ``minds-v*`` tag, prerelease included.
 
-    Unlike :func:`_parse_stable_version` -- which deliberately refuses a
-    prerelease so one never wins the default "latest stable" selection -- this
-    parses every release tag, because a *ceiling* is a different question from a
-    *candidate*. An app on ``minds-v0.4.0-rc1`` is a real app with a real version,
-    and its workspaces should be capped by it rather than left uncapped.
+    Every release tag parses, prereleases included, because a *ceiling* is a
+    different question from a *candidate*: an app on ``minds-v0.4.0-rc1`` is a
+    real app with a real version, and its workspaces should be capped by it
+    rather than left uncapped. Candidate selection asks the separate question
+    via :attr:`Version.is_stable`, so a prerelease still never wins the default
+    "latest stable" pick.
 
     Ordering follows semver: a prerelease sorts below its own release, so
     ``0.4.0-rc1 < 0.4.0``, and a ceiling of ``minds-v0.4.0-rc1`` therefore admits
@@ -177,14 +189,12 @@ def parse_version(
     if match is None:
         return None
     pre = match.group("pre")
-    # The 4th element ranks a prerelease below the release it precedes; the 5th
-    # orders prereleases of the same version among themselves.
-    return (
-        int(match.group(1)),
-        int(match.group(2)),
-        int(match.group(3)),
-        0 if pre is not None else 1,
-        _prerelease_sort_key(pre) if pre is not None else (),
+    return Version(
+        major=int(match.group(1)),
+        minor=int(match.group(2)),
+        patch=int(match.group(3)),
+        release_rank=0 if pre is not None else 1,
+        prerelease=_prerelease_sort_key(pre) if pre is not None else (),
     )
 
 
@@ -212,7 +222,7 @@ def pick_latest_stable_tag(
         (version, tag)
         for tag in tags
         if (version := parse_version(tag)) is not None
-        and _parse_stable_version(tag) is not None
+        and version.is_stable
         and (ceiling_version is None or version <= ceiling_version)
     ]
     if not stable:
