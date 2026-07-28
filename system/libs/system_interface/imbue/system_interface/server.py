@@ -41,6 +41,13 @@ from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.fast_mode_policy import FAST_MODE_GRACE_TURN_COUNT
+from imbue.system_interface.fast_mode_policy import UNDECIDED_FAST_MODE_DECISION
+from imbue.system_interface.fast_mode_policy import WorkspaceFastModeDecision
+from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
+from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
+from imbue.system_interface.fast_mode_policy import resolve_launch_fast_mode
+from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
@@ -53,13 +60,6 @@ from imbue.system_interface.layout_ops import is_mutating_op
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
-from imbue.system_interface.fast_mode_policy import FAST_MODE_GRACE_TURN_COUNT
-from imbue.system_interface.fast_mode_policy import UNDECIDED_FAST_MODE_DECISION
-from imbue.system_interface.fast_mode_policy import WorkspaceFastModeDecision
-from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
-from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
-from imbue.system_interface.fast_mode_policy import resolve_launch_fast_mode
-from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
 from imbue.system_interface.model_settings import MODEL_OPTIONS
 from imbue.system_interface.model_settings import is_valid_model_id
 from imbue.system_interface.model_settings import read_model_from_settings
@@ -1683,9 +1683,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_endpoint, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/fast", view_func=_set_fast_mode_endpoint, methods=["POST"])
-    application.add_url_rule(
-        "/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"]
-    )
+    application.add_url_rule("/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"])
     application.add_url_rule(
         "/api/workspace/fast-mode",
         view_func=_set_workspace_fast_mode_endpoint,

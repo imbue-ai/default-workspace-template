@@ -225,18 +225,26 @@ def _read_workspace_fast_mode_enabled() -> bool:
     except FileNotFoundError:
         return True
     except OSError as e:
-        logger.warning("Failed to read fast-mode decision {}: {}", FAST_MODE_DECISION_FILE, e)
+        logger.warning(
+            "Failed to read fast-mode decision {}: {}", FAST_MODE_DECISION_FILE, e
+        )
         return True
     try:
         decision = json.loads(raw)
     except json.JSONDecodeError as e:
-        logger.warning("Ignored malformed fast-mode decision {}: {}", FAST_MODE_DECISION_FILE, e)
+        logger.warning(
+            "Ignored malformed fast-mode decision {}: {}", FAST_MODE_DECISION_FILE, e
+        )
         return True
-    is_enabled = decision.get("is_fast_mode_enabled") if isinstance(decision, dict) else None
+    is_enabled = (
+        decision.get("is_fast_mode_enabled") if isinstance(decision, dict) else None
+    )
     return is_enabled if isinstance(is_enabled, bool) else True
 
 
-def _build_create_chat_command(host_name: str, labels: dict[str, str], is_fast_mode_enabled: bool) -> list[str]:
+def _build_create_chat_command(
+    host_name: str, labels: dict[str, str], is_fast_mode_enabled: bool
+) -> list[str]:
     """Build the `mngr create` argv for the initial chat agent.
 
     Mirrors the New Agent button's create path (see
@@ -327,7 +335,9 @@ def _persist_initial_chat_agent_id(agent_id: str) -> None:
 
 def _create_initial_chat_agent(host_name: str, labels: dict[str, str]) -> bool:
     """Invoke `mngr create` for the initial chat agent; persist its id. Returns success."""
-    cmd = _build_create_chat_command(host_name, labels, _read_workspace_fast_mode_enabled())
+    cmd = _build_create_chat_command(
+        host_name, labels, _read_workspace_fast_mode_enabled()
+    )
     logger.info("Creating initial chat agent: {}", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:

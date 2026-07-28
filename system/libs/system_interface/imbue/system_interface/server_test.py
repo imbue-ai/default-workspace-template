@@ -18,6 +18,7 @@ from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.errors import AgentStartError
+from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -25,6 +26,7 @@ from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.fast_mode_policy import FAST_MODE_GRACE_TURN_COUNT
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
@@ -493,6 +495,75 @@ def test_set_fast_mode_unknown_agent_returns_404(client: FlaskClient) -> None:
     with patch("imbue.system_interface.server._find_agent", return_value=None):
         response = client.post("/api/agents/nonexistent/fast", json={"enabled": True})
     assert response.status_code == 404
+
+
+def test_model_settings_prefers_managed_settings_over_user_settings(client: FlaskClient, tmp_path: Path) -> None:
+    """mngr passes the managed file via --settings, which Claude layers above the
+    shared user settings -- so a freshly launched agent reports the provisioned
+    value, not the stale one the shared config happens to carry."""
+    agent_id = "agent-00000000000000000000000000000020"
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
+    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
+    managed_path.parent.mkdir(parents=True, exist_ok=True)
+    managed_path.write_text(json.dumps({"fastMode": True}))
+
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.get(f"/api/agents/{agent_id}/model-settings")
+
+    # The user settings file has no fastMode key at all, which on its own reads as
+    # off; the managed overlay is what makes this agent fast.
+    assert response.get_json()["fast_mode"] is True
+
+
+def test_model_settings_reports_fast_mode_the_ui_last_set(tmp_path: Path) -> None:
+    """`/fast off` deletes the key instead of writing false, so the toggle would
+    otherwise snap back to the provisioned value the moment the UI reconciled."""
+    agent_id = "agent-00000000000000000000000000000021"
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
+    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
+    managed_path.parent.mkdir(parents=True, exist_ok=True)
+    managed_path.write_text(json.dumps({"fastMode": True}))
+
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is True
+        client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False})
+        # Nothing on disk changed -- only the record of what we sent.
+        assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is False
+
+
+def test_workspace_fast_mode_starts_undecided_and_records_an_answer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The prompt is owed until answered, and the answer survives for later chats."""
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    client = create_application(build_test_state()).test_client()
+
+    initial = client.get("/api/workspace/fast-mode").get_json()
+    assert initial["is_decided"] is False
+    assert initial["is_fast_mode_enabled"] is True
+    assert initial["grace_turn_count"] == FAST_MODE_GRACE_TURN_COUNT
+
+    recorded = client.post("/api/workspace/fast-mode", json={"enabled": False}).get_json()
+    assert recorded["is_decided"] is True
+    assert recorded["is_fast_mode_enabled"] is False
+
+    # A later reader (a new chat create, another browser) sees the same answer.
+    reread = client.get("/api/workspace/fast-mode").get_json()
+    assert reread["is_decided"] is True
+    assert reread["is_fast_mode_enabled"] is False
+
+
+def test_workspace_fast_mode_can_keep_fast_mode_on(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Answering "keep it" must also stick, or the prompt would reappear forever."""
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    client = create_application(build_test_state()).test_client()
+
+    client.post("/api/workspace/fast-mode", json={"enabled": True})
+    reread = client.get("/api/workspace/fast-mode").get_json()
+    assert reread["is_decided"] is True
+    assert reread["is_fast_mode_enabled"] is True
 
 
 def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dict[str, int]) -> AgentManager:
