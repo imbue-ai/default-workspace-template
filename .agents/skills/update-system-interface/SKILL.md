@@ -79,7 +79,7 @@ hours old with no notes), say so and offer to break it; the lease is advisory an
 broken only by the user's call, never silently. **Breaking a stale
 system-interface lease also means tearing down its orphaned pass** -- its preview
 service and tab, its worktree, and its worker if one exists (see the teardown in
-Step 4; run `unpreview` + `layout.py close si-preview`, `git worktree remove`,
+Step 4; run `unpreview` + the `layout.py close` loop, `git worktree remove`,
 and `create_worker.py destroy` for whatever the abandoned pass left behind).
 Otherwise, take your own:
 
@@ -158,8 +158,14 @@ a labeled preview tab and open it:
 ```bash
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
     --slug "update-$SLUG" --work-dir "data/.tasks/si-live/update-$SLUG"
-python3 system/scripts/layout.py open si-preview
+for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
+
+`open` (like every mutating `layout.py` op) requires `--layout` and only applies
+on clients that currently have that layout active, so run it for both named
+layouts -- the one the user is not on fails fast and harmlessly. The same holds
+for `close` everywhere below. (`refresh` is the exception: it takes no
+`--layout`.)
 
 `preview` boots `uv run system-interface` from the worktree's already-built app
 dir on a free port. It points layout persistence at a throwaway copy of the live
@@ -176,7 +182,7 @@ picking the pass back up in a later turn -- close the tab *first*, then boot and
 re-open it:
 
 ```bash
-python3 system/scripts/layout.py close si-preview
+for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
 ```
 
 The seed leaves out any live layout that itself opens a preview panel (seeding
@@ -248,7 +254,7 @@ worktrees, so before creating the worker you must release the lead's hold on
 ```bash
 # tear the live preview down and close its tab (it boots from the worktree)
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug "update-$SLUG"
-python3 system/scripts/layout.py close si-preview
+for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
 # then remove the lead's worktree, freeing the branch for the worker
 git worktree remove data/.tasks/si-live/update-$SLUG
 ```
@@ -313,7 +319,7 @@ WORK_DIR=$(mngr ls --include 'name == "update-'"$SLUG"'"' --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
     --slug "update-$SLUG" --work-dir "$WORK_DIR"
-python3 system/scripts/layout.py open si-preview
+for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
 
 Because the system interface *is* the user's workspace, a final preview is
@@ -390,7 +396,7 @@ interleave.
 
    ```bash
    python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug "update-$SLUG"
-   python3 system/scripts/layout.py close si-preview
+   for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
    ```
 
    `unpreview` only handles the *service*; the `si-preview` tab is a layout panel
