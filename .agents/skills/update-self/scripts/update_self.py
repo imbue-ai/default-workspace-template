@@ -111,9 +111,10 @@ class ResolvedTarget(NamedTuple):
     ``kind`` is ``tag`` (a resolved ``minds-v*`` release), ``branch`` (``main``),
     or ``ref`` (any other override passed straight through for git to validate).
 
-    ``ceiling`` is the app's own template ref when it caps the selection, and
-    ``None`` when there is nothing to cap against (the app reports a branch rather
-    than a release tag -- a dev build). ``exceeds_ceiling`` marks an override the
+    ``ceiling`` is the template ref the app reported, passed through as given --
+    it caps only insofar as it parses as a release, so a dev build's branch name
+    is carried here and caps nothing. ``None`` means no ceiling was supplied at
+    all, which only a direct caller does. ``exceeds_ceiling`` marks an override the
     ceiling could not vouch for: newer than the app, or a branch/commit carrying no
     version to compare. A prerelease tag compares fine and is not flagged for being
     one. The default (no-override) path never sets it.
