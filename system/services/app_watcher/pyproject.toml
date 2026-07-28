@@ -1,7 +1,7 @@
 [project]
 name = "app-watcher"
 version = "0.1.0"
-description = "Watches apps.toml and reconciles with Cloudflare forwarding API"
+description = "Watches apps.toml and writes service discovery events"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
