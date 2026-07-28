@@ -244,7 +244,7 @@ def test_fetch_app_template_ref_returns_the_apps_pinned_ref(
     _install_fake_latchkey(
         monkeypatch,
         tmp_path,
-        body='{"app_version": "0.3.9", "workspace_template_ref": "minds-v0.3.9"}',
+        body='{"workspace_template_ref": "minds-v0.3.9"}',
         status="200",
     )
 
@@ -335,7 +335,7 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
     _install_fake_latchkey(
         monkeypatch,
         tmp_path / "bin",
-        body='{"app_version": "0.3.9", "workspace_template_ref": "minds-v0.3.9"}',
+        body='{"workspace_template_ref": "minds-v0.3.9"}',
         status="200",
     )
 

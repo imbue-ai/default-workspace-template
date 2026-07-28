@@ -18,7 +18,7 @@ validation depth, reveal by change class). This script owns the parts that are
     The ceiling exists because a workspace's template ships the code the outer
     app talks to (the system interface, the vendored ``mngr``). Updating past the
     app's own release would leave the workspace speaking a protocol its app does
-    not know. The ceiling is read from the app itself (``GET /api/v1/app``,
+    not know. The ceiling is read from the app itself (``GET /api/v1/app/version``,
     baseline-allowed through the latchkey gateway, no grant needed); when it
     cannot be read the command **fails** rather than silently updating uncapped.
 
@@ -323,24 +323,24 @@ def _no_target_message(tags: Sequence[str], ceiling: str | None) -> str:
 
 # --- The app's update ceiling ----------------------------------------------
 
-# The minds app's own version route, addressed through the latchkey gateway's
+# The minds app's version route, addressed through the latchkey gateway's
 # ``minds-api-proxy`` on the reserved gateway-self host. Allowed by the agent
-# permissions baseline (``minds-app-info-read``), so this needs no grant and
+# permissions baseline (``minds-app-version-read``), so this needs no grant and
 # never raises a permission dialog -- which matters because update-self resolves
 # its target from a background worker, with nobody watching to approve one.
-_MINDS_APP_INFO_URL = "http://latchkey-self.invalid/minds-api-proxy/api/v1/app"
+_MINDS_APP_VERSION_URL = "http://latchkey-self.invalid/minds-api-proxy/api/v1/app/version"
 
 # Bounds the gateway round-trip, at the house network default (the style guide's
 # 60s, matching this repo's other ``latchkey curl``, ``github_sync``'s
 # ``_LATCHKEY_CURL_TIMEOUT_SECONDS``). Deliberately generous rather than sharp:
 # this is the one call that refuses the *entire* update when it fails, so a
 # timeout that fires on a merely slow answer costs far more than waiting does.
-_APP_INFO_TIMEOUT_SECONDS = 60
+_APP_VERSION_TIMEOUT_SECONDS = 60
 
 # Statuses that mean "this app predates the version route", not "something went
 # wrong". 404 is the obvious one. 403 matters just as much and is in fact the
 # *likelier* of the two: the route and the gateway permission that reaches it
-# (``minds-app-info-read``) ship in the same release, so an app old enough to
+# (``minds-app-version-read``) ship in the same release, so an app old enough to
 # lack the route is also old enough to lack the grant -- and the gateway denies
 # an ungranted request before the app ever sees it. Both must land on the "update
 # your app" message; leaving 403 in the generic branch would give the most common
@@ -358,7 +358,7 @@ class CeilingUnavailableError(Exception):
     """
 
 
-def fetch_app_template_ref(url: str = _MINDS_APP_INFO_URL) -> str:
+def fetch_app_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
     """Return the newest workspace-template ref the running minds app supports.
 
     Goes through ``latchkey curl``, which injects the gateway credentials and
@@ -384,7 +384,7 @@ def fetch_app_template_ref(url: str = _MINDS_APP_INFO_URL) -> str:
                 ],
                 capture_output=True,
                 text=True,
-                timeout=_APP_INFO_TIMEOUT_SECONDS,
+                timeout=_APP_VERSION_TIMEOUT_SECONDS,
             )
         except (OSError, subprocess.TimeoutExpired) as e:
             raise CeilingUnavailableError(

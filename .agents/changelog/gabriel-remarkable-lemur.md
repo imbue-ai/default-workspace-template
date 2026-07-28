@@ -1,6 +1,6 @@
 `update-self` no longer updates a workspace past the version of the Minds app running it.
 
-The workspace template ships the code the app talks to (the system interface, the vendored `mngr`), so a workspace that pulled a template newer than its app would be speaking a protocol the app doesn't know. The update flow now reads the app's own version (`GET /api/v1/app`, allowed for every workspace by default -- no permission prompt) and caps the default target at the newest release at or below it. When the app is running a dev branch rather than a release, there is nothing to compare against and nothing is capped.
+The workspace template ships the code the app talks to (the system interface, the vendored `mngr`), so a workspace that pulled a template newer than its app would be speaking a protocol the app doesn't know. The update flow now reads the app's own version (`GET /api/v1/app/version`, allowed for every workspace by default -- no permission prompt) and caps the default target at the newest release at or below it. When the app is running a dev branch rather than a release, there is nothing to compare against and nothing is capped.
 
 If the app can't be reached at all -- it's closed, the gateway is down, or it's too old to report its version -- the update stops with a plain-language reason instead of proceeding uncapped, since an app that can't answer is often exactly the app a newer template would outrun.
 
