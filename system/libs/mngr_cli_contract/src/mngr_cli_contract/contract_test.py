@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from mngr_cli_contract.contract import MngrArgvContractError, assert_mngr_argv_valid
+from mngr_cli_contract.contract import (
+    MngrArgvContractError,
+    MngrSettingContractError,
+    assert_mngr_argv_valid,
+)
 
 
 @pytest.mark.parametrize(
@@ -22,6 +26,9 @@ from mngr_cli_contract.contract import MngrArgvContractError, assert_mngr_argv_v
         ["mngr", "message", "demo", "-m", "hello"],
         ["mngr", "rsync", "/x/", "demo:/x/", "--uncommitted-changes=merge"],
         ["mngr", "observe", "--discovery-only", "--events-dir", "/tmp/e"],
+        # The chat-create fast-mode override, in both -S spellings.
+        ["mngr", "create", "demo", "-S", "agent_types.claude.settings_overrides.fastMode=false"],
+        ["mngr", "create", "demo", "--setting=agent_types.claude.settings_overrides.fastMode=true"],
         # A non-"mngr" binary path in argv[0] is ignored (only argv[1:] matters).
         ["/path/to/custom-mngr", "message", "demo", "-m", "hi"],
     ],
@@ -50,3 +57,26 @@ def test_rejects_removed_flag_on_existing_subcommand() -> None:
 def test_rejects_bogus_flag() -> None:
     with pytest.raises(MngrArgvContractError):
         assert_mngr_argv_valid(["mngr", "create", "demo", "--no-such-flag"])
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        # A field the owning section does not have.
+        "agent_types.claude.no_such_field=1",
+        # A settings_overrides leaf on a custom agent type. mngr parses a -S as
+        # its own config layer, so the type is resolved without the settings
+        # file's parent_type and validated against the base agent config, which
+        # has no settings_overrides field. This is exactly why the repo's
+        # chat-create paths target `claude` instead of `chat`.
+        "agent_types.chat.settings_overrides.fastMode=false",
+        # A section that does not exist at all.
+        "no_such_section.key=1",
+    ],
+)
+def test_rejects_setting_that_does_not_resolve(setting: str) -> None:
+    """click treats a ``-S`` value as an opaque string, so an unresolvable key
+    path reaches mngr and takes the whole command down at runtime. It must fail
+    here instead."""
+    with pytest.raises(MngrSettingContractError, match="not accepted"):
+        assert_mngr_argv_valid(["mngr", "create", "demo", "-S", setting])

@@ -15,8 +15,14 @@ This is its own workspace package (rather than a module in one project) so the
 root pytest pass and the isolated `system/libs/system_interface` pass -- which share a
 single workspace venv -- import one copy.
 
+`-S KEY=VALUE` config overrides are checked as well: click only sees an opaque
+string there, but mngr resolves the key path against its config model at
+startup and fails the command outright when it does not exist, so each override
+is run through mngr's own `apply_settings_to_config`.
+
 ```python
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 assert_mngr_argv_valid(["mngr", "create", "demo", "-t", "worker"])
+assert_mngr_argv_valid(["mngr", "create", "demo", "-S", "agent_types.claude.settings_overrides.fastMode=true"])
 ```

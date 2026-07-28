@@ -316,7 +316,9 @@ def test_build_create_chat_command_carries_the_fast_mode_setting() -> None:
     disabled = _build_create_chat_command("ws", {"workspace": "ws"}, False)
     assert "agent_types.claude.settings_overrides.fastMode=true" in enabled
     assert "agent_types.claude.settings_overrides.fastMode=false" in disabled
-    # The disabled form must survive the live CLI too, not just the default one.
+    # Both forms must resolve against the live mngr config model, not just parse
+    # as CLI tokens: an unresolvable -S key path fails the create outright.
+    assert_mngr_argv_valid(enabled)
     assert_mngr_argv_valid(disabled)
 
 

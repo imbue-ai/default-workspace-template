@@ -966,10 +966,11 @@ def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
         primary_labels={},
         is_fast_mode_enabled=False,
     )
-    # Spelled the way mngr's -S parser accepts a settings_overrides leaf: lowercase
-    # TOML-style booleans on the type that declares the field.
     assert "agent_types.claude.settings_overrides.fastMode=true" in enabled_argv
     assert "agent_types.claude.settings_overrides.fastMode=false" in disabled_argv
+    # Both forms must resolve against the live mngr config model, not just parse
+    # as CLI tokens: an unresolvable -S key path fails the create outright.
+    assert_mngr_argv_valid(enabled_argv)
     assert_mngr_argv_valid(disabled_argv)
 
 
