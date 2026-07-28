@@ -17,6 +17,33 @@ async function loadWorkspaceFastMode(): Promise<typeof import("./WorkspaceFastMo
   return import("./WorkspaceFastMode");
 }
 
+interface RequestOptions {
+  method: string;
+  url: string;
+  body?: { enabled: boolean };
+}
+
+/** Answer every request with the decision the caller asked to record, as the
+ *  backend does, and report the POST bodies it saw. */
+function recordRequests(postedEnabled: boolean[]): void {
+  mockRequest.mockImplementation((options: RequestOptions) => {
+    if (options.method === "POST") {
+      postedEnabled.push(options.body!.enabled);
+      return Promise.resolve({
+        is_decided: true,
+        is_fast_mode_enabled: options.body!.enabled,
+        grace_turn_count: 5,
+      });
+    }
+    return Promise.resolve({ is_decided: false, is_fast_mode_enabled: true, grace_turn_count: 5 });
+  });
+}
+
+/** Let the request promise's callbacks run. */
+async function flush(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 describe("the fast-mode prompt's owner", () => {
   it("stays with the conversation that raised it", async () => {
     const workspaceFastMode = await loadWorkspaceFastMode();
@@ -28,5 +55,69 @@ describe("the fast-mode prompt's owner", () => {
     workspaceFastMode.openFastModePrompt("agent-b");
 
     expect(workspaceFastMode.getFastModePromptAgentId()).toBe("agent-a");
+  });
+});
+
+describe("answering the fast-mode prompt", () => {
+  it("switches the asking chat to standard speed and records that for the workspace", async () => {
+    const workspaceFastMode = await loadWorkspaceFastMode();
+    const postedEnabled: boolean[] = [];
+    recordRequests(postedEnabled);
+
+    workspaceFastMode.openFastModePrompt("agent-a");
+    // What both buttons-that-aren't-"keep it", the backdrop and Escape all do.
+    workspaceFastMode.resolveFastModePrompt(false);
+    await flush();
+
+    expect(mockSetFastMode).toHaveBeenCalledWith("agent-a", false);
+    expect(postedEnabled).toEqual([false]);
+    expect(workspaceFastMode.getWorkspaceFastMode()).toEqual({
+      is_decided: true,
+      is_fast_mode_enabled: false,
+      grace_turn_count: 5,
+    });
+    expect(workspaceFastMode.getFastModePromptAgentId()).toBeNull();
+  });
+
+  it("leaves the asking chat alone when the user keeps fast mode on", async () => {
+    const workspaceFastMode = await loadWorkspaceFastMode();
+    const postedEnabled: boolean[] = [];
+    recordRequests(postedEnabled);
+
+    workspaceFastMode.openFastModePrompt("agent-a");
+    workspaceFastMode.resolveFastModePrompt(true);
+    await flush();
+
+    // The chat is already running fast, so there is nothing to send it.
+    expect(mockSetFastMode).not.toHaveBeenCalled();
+    expect(postedEnabled).toEqual([true]);
+    expect(workspaceFastMode.getWorkspaceFastMode()?.is_fast_mode_enabled).toBe(true);
+  });
+
+  it("closes the question before the answer reaches the server", async () => {
+    const workspaceFastMode = await loadWorkspaceFastMode();
+    mockRequest.mockImplementation(() => new Promise(() => {}));
+
+    workspaceFastMode.openFastModePrompt("agent-a");
+    workspaceFastMode.resolveFastModePrompt(false);
+
+    // With the POST still in flight the decision already reads as made, so no
+    // chat can raise the prompt again in the meantime.
+    expect(workspaceFastMode.getWorkspaceFastMode()?.is_decided).toBe(true);
+    expect(workspaceFastMode.getFastModePromptAgentId()).toBeNull();
+  });
+});
+
+describe("loading the workspace decision", () => {
+  it("leaves it unknown when the request fails, so no chat prompts", async () => {
+    const workspaceFastMode = await loadWorkspaceFastMode();
+    mockRequest.mockRejectedValue(new Error("offline"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    workspaceFastMode.fetchWorkspaceFastMode();
+    await flush();
+
+    // A missing prompt is better than one raised against a decision we never read.
+    expect(workspaceFastMode.getWorkspaceFastMode()).toBeNull();
   });
 });
