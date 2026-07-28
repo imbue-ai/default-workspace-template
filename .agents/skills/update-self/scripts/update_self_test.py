@@ -250,6 +250,30 @@ def test_fetch_app_template_ref_returns_the_apps_pinned_ref(
     assert update_self.fetch_app_template_ref() == "minds-v0.3.9"
 
 
+def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
+    tmp_path, monkeypatch
+) -> None:
+    """A 403 is the *likelier* old-app signal and must get the same message as a 404.
+
+    The route and the gateway grant that reaches it ship together, so an app old
+    enough to lack the route is also old enough to lack the grant -- and the
+    gateway denies before the app is ever asked. Landing this in the generic
+    "returned HTTP {status}" branch would give the most common old-app case the
+    least actionable wording.
+    """
+    _install_fake_latchkey(
+        monkeypatch, tmp_path, body='{"error": "request not permitted"}', status="403"
+    )
+
+    try:
+        update_self.fetch_app_template_ref()
+    except update_self.CeilingUnavailableError as exc:
+        assert "too old to report its version" in str(exc)
+        assert "Update the minds app itself first" in str(exc)
+    else:
+        raise AssertionError("expected a 403 to block with the old-app message")
+
+
 def test_fetch_app_template_ref_blocks_when_the_app_predates_the_route(
     tmp_path, monkeypatch
 ) -> None:
@@ -326,6 +350,9 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
         "ceiling": "minds-v0.3.9",
         "exceeds_ceiling": False,
         "latest_available": "minds-v0.4.0",
+        # minds-v0.4.0 was available and the ceiling is why it wasn't taken, so
+        # the approval message owes the user the "held back" line.
+        "held_back_by_ceiling": True,
     }
 
 
@@ -740,3 +767,59 @@ def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
     # The staged copy is the local working-tree flow, present and runnable.
     assert staged_skill.joinpath("SKILL.md").read_text() == "LOCAL FLOW\n"
     assert staged_skill.joinpath("scripts", "update_self.py").exists()
+
+
+# --- is_held_back_by_ceiling ------------------------------------------------
+
+
+def test_held_back_is_true_only_when_the_ceiling_chose_the_lower_target() -> None:
+    assert (
+        update_self.is_held_back_by_ceiling(
+            resolved_ref="minds-v0.3.9",
+            latest_available="minds-v0.4.0",
+            ceiling="minds-v0.3.9",
+            has_override=False,
+        )
+        is True
+    )
+    # Already on the newest release: nothing was held back.
+    assert (
+        update_self.is_held_back_by_ceiling(
+            resolved_ref="minds-v0.4.0",
+            latest_available="minds-v0.4.0",
+            ceiling="minds-v0.4.0",
+            has_override=False,
+        )
+        is False
+    )
+
+
+def test_held_back_is_false_when_the_users_own_override_picked_the_older_tag() -> None:
+    """The bug this flag exists to prevent: blaming the app for the user's choice.
+
+    `--override minds-v0.3.6` under a `minds-v0.3.9` ceiling leaves `ref` below
+    `latest_available`, so an eyeball comparison would tell the user their Minds
+    app held the update back when they picked the older tag themselves.
+    """
+    assert (
+        update_self.is_held_back_by_ceiling(
+            resolved_ref="minds-v0.3.6",
+            latest_available="minds-v0.4.0",
+            ceiling="minds-v0.3.9",
+            has_override=True,
+        )
+        is False
+    )
+
+
+def test_held_back_is_false_without_a_ceiling() -> None:
+    # A dev app imposes no cap, so a gap can never be the ceiling's doing.
+    assert (
+        update_self.is_held_back_by_ceiling(
+            resolved_ref="minds-v0.4.0",
+            latest_available="minds-v0.4.0",
+            ceiling=None,
+            has_override=False,
+        )
+        is False
+    )

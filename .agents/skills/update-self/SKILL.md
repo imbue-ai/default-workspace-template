@@ -91,7 +91,7 @@ REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.jso
 ```
 
 `resolve-target` prints `{"ref": ..., "kind": "tag|branch|ref", "ceiling": ...,
-"exceeds_ceiling": ..., "latest_available": ...}`; `main` resolves to
+"exceeds_ceiling": ..., "latest_available": ..., "held_back_by_ceiling": ...}`; `main` resolves to
 `upstream/main` (not the stale local branch). Keep `$REF` in your shell for the
 dispatch below, and tell the user which version you're updating to.
 
@@ -323,14 +323,16 @@ order:
 
 1. **Verdict headline** (one line, first thing they see): "ready to apply,"
    "ready to apply, with one caveat," or "needs your input on X."
-2. **Held back by your app version** -- only when the ceiling capped the target
-   below a newer release, i.e. `latest_available` in the resolve-target output
-   (`/tmp/update-self-target.json`) is a *different, newer* tag than the resolved
-   `ref`. Say so in one plain line -- "there's a newer version available, but it
-   needs a newer Minds app than you're running, so I stopped at X" -- so the user
-   understands why they aren't getting the newest thing and knows updating the app
-   unlocks it. Say nothing when the target *is* `latest_available`; there is no
-   ceiling story to tell then.
+2. **Held back by your app version** -- include this line if and only if
+   `held_back_by_ceiling` is `true` in the resolve-target output
+   (`/tmp/update-self-target.json`). Say it in one plain line -- "there's a newer
+   version available (`latest_available`), but it needs a newer Minds app than
+   you're running, so I stopped at X" -- so the user understands why they aren't
+   getting the newest thing and knows updating the app unlocks it. Do **not**
+   derive this yourself by comparing `ref` against `latest_available`: those two
+   also differ when the *user's own* `--override` picked an older tag, and saying
+   "your app held this back" there blames the app for the user's choice. The flag
+   already accounts for that.
 3. **What's new** -- always first after the ceiling note. Keep this *detailed*:
    some readers want the specifics, others happily skim it as "great, they're on
    it." Do not thin it out -- carry the worker's digest, just in prose a lay reader

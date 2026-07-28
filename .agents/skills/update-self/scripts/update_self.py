@@ -159,6 +159,27 @@ def pick_latest_stable_tag(
     return max(stable, key=lambda item: item[0])[1]
 
 
+def is_held_back_by_ceiling(
+    *,
+    resolved_ref: str,
+    latest_available: str | None,
+    ceiling: str | None,
+    has_override: bool,
+) -> bool:
+    """Whether the ceiling -- and not the user -- is why a newer release was not taken.
+
+    Only true when the flow chose the target itself. With an explicit override the
+    user picked the ref, so a gap between it and ``latest_available`` is their own
+    doing; reporting "your app held this back" there blames the app for the user's
+    choice (an ``--override`` to an *older* tag would otherwise trip it every
+    time). Deciding this here rather than having the lead compare two tags keeps
+    the judgement in tested code, where the rest of the target logic lives.
+    """
+    if has_override or ceiling is None or latest_available is None:
+        return False
+    return latest_available != resolved_ref
+
+
 def _is_within_ceiling(ref: str, ceiling: str | None) -> bool:
     """Whether ``ref`` is provably a stable release at or below ``ceiling``.
 
@@ -236,7 +257,17 @@ _MINDS_APP_INFO_URL = "http://latchkey-self.invalid/minds-api-proxy/api/v1/app"
 # Bounds the gateway round-trip. The app is local (or a short hop away) and the
 # route reads two in-process values, so a slow answer means something is wrong
 # rather than something is busy.
-_APP_INFO_TIMEOUT_SECONDS = 20
+_APP_INFO_TIMEOUT_SECONDS = 60
+
+# Statuses that mean "this app predates the version route", not "something went
+# wrong". 404 is the obvious one. 403 matters just as much and is in fact the
+# *likelier* of the two: the route and the gateway permission that reaches it
+# (``minds-app-info-read``) ship in the same release, so an app old enough to
+# lack the route is also old enough to lack the grant -- and the gateway denies
+# an ungranted request before the app ever sees it. Both must land on the "update
+# your app" message; leaving 403 in the generic branch would give the most common
+# case the least useful wording.
+_APP_TOO_OLD_STATUSES = frozenset({"403", "404"})
 
 
 class CeilingUnavailableError(Exception):
@@ -290,11 +321,11 @@ def fetch_app_template_ref(url: str = _MINDS_APP_INFO_URL) -> str:
         status = result.stdout.strip()
         body = Path(body_file.name).read_text()
 
-    if status == "404":
+    if status in _APP_TOO_OLD_STATUSES:
         raise CeilingUnavailableError(
-            "this workspace's minds app is too old to report its version (no "
-            f"{url} route), so there is no way to tell how far this workspace may "
-            "safely update. Update the minds app itself first."
+            "this workspace's minds app is too old to report its version (it answered "
+            f"HTTP {status} for {url}), so there is no way to tell how far this workspace "
+            "may safely update. Update the minds app itself first."
         )
     if status != "200":
         raise CeilingUnavailableError(
@@ -549,6 +580,7 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     # be skipped by forgetting a flag; ``--ceiling`` exists to pin it by hand.
     ceiling = args.ceiling if args.ceiling is not None else fetch_app_template_ref()
     target = resolve_target(args.override, tags, remote=args.remote, ceiling=ceiling)
+    latest_available = pick_latest_stable_tag(tags)
     print(
         json.dumps(
             {
@@ -556,7 +588,13 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
                 "kind": target.kind,
                 "ceiling": target.ceiling,
                 "exceeds_ceiling": target.exceeds_ceiling,
-                "latest_available": pick_latest_stable_tag(tags),
+                "latest_available": latest_available,
+                "held_back_by_ceiling": is_held_back_by_ceiling(
+                    resolved_ref=target.ref,
+                    latest_available=latest_available,
+                    ceiling=target.ceiling,
+                    has_override=args.override is not None,
+                ),
             }
         )
     )
