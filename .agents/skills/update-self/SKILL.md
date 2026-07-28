@@ -80,10 +80,12 @@ with open('system/config/parent.toml', 'rb') as f:
 git fetch upstream --tags
 
 python3 .agents/skills/update-self/scripts/update_self.py resolve-target --local-tags \
-    > /tmp/update-self-target.json
+    > /tmp/update-self-target.json || exit 1
 # `--local-tags` reads the tags the fetch above just landed (no second network
 # round-trip). Honoring a user override, append e.g. `--override main` or
-# `--override minds-v0.3.6` to the resolve-target call above.
+# `--override minds-v0.3.6` to the resolve-target call above. The `|| exit 1`
+# leaves a refusal's `error:` line as the last thing printed -- without it the
+# read below fails on the empty file and buries that line under a traceback.
 cat /tmp/update-self-target.json
 REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.json"))["ref"])')
 ```
