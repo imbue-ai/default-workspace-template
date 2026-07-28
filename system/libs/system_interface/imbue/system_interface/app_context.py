@@ -56,8 +56,11 @@ class SystemInterfaceState(MutableModel):
     # Fast mode as last set through this UI, per agent. Claude Code deletes the
     # ``fastMode`` key when ``/fast`` turns it off rather than writing false, so a
     # running session's fast-mode state is not recoverable from its settings files
-    # -- the command we sent is the only record of it. Empty after a restart of
-    # this service, which falls back to the agent's launch-time value.
+    # -- the command we sent is the only record of it. It records a session, not
+    # an agent: a restart of this service empties it (and the fallback to the
+    # agent's launch-time value is then right), but a restart of the *agent* puts
+    # that session back at its launch-time value while the entry still reports the
+    # last toggle, until the agent is destroyed or this service restarts.
     live_fast_mode_by_agent_id: dict[str, bool] = {}
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
@@ -126,6 +129,15 @@ class SystemInterfaceState(MutableModel):
         # manager's own lock.
         self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
         return watcher
+
+    def forget_live_fast_mode(self, agent_id: str) -> None:
+        """Drop the remembered fast-mode setting for an agent that is gone.
+
+        Part of tearing an agent down, alongside the agent manager's own state:
+        the record describes a session, so once the agent is destroyed it is
+        stale by definition and must not answer for a later agent.
+        """
+        self.live_fast_mode_by_agent_id.pop(agent_id, None)
 
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:

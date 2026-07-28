@@ -533,6 +533,38 @@ def test_model_settings_reports_fast_mode_the_ui_last_set(tmp_path: Path) -> Non
         assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is False
 
 
+def test_destroying_an_agent_forgets_its_fast_mode_record(tmp_path: Path) -> None:
+    """The record describes a session, so it must not outlive the agent -- both
+    because it would accumulate and because it would answer for whatever comes
+    next under that id."""
+    agent_id = "agent-00000000000000000000000000000022"
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
+
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager._agents[agent_id] = AgentStateItem(
+        id=agent_id, name="doomed-agent", state="RUNNING", labels={}, work_dir="/code"
+    )
+    application = create_application(build_test_state(agent_manager=manager))
+    client = application.test_client()
+    destroyed = FinishedProcess(
+        returncode=0,
+        stdout="Destroyed agent: doomed-agent",
+        stderr="",
+        command=("mngr", "destroy", "doomed-agent", "--force"),
+        is_output_already_logged=False,
+    )
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False})
+        assert state_of(application).live_fast_mode_by_agent_id == {agent_id: False}
+        with patch(
+            "imbue.system_interface.server.run_local_command_modern_version",
+            return_value=destroyed,
+        ):
+            assert client.post(f"/api/agents/{agent_id}/destroy").status_code == 200
+
+    assert state_of(application).live_fast_mode_by_agent_id == {}
+
+
 def test_workspace_fast_mode_starts_undecided_and_records_an_answer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

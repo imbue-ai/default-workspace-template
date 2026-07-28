@@ -1375,6 +1375,7 @@ def _destroy_agent(agent_id: str) -> Response:
     # Remove the agent from the system_interface's tracked state immediately
     # so the frontend reflects the destruction without waiting for mngr observe.
     agent_manager.remove_agent(agent_id)
+    get_state().forget_live_fast_mode(agent_id)
 
     return _json_response(DestroyAgentResponse(status="ok").model_dump())
 
