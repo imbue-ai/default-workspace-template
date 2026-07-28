@@ -2,13 +2,14 @@
 # Assemble a clean, shareable "inspiration" snapshot on top of the DEFAULT_WORKSPACE_TEMPLATE base the
 # mind was created from, then commit it. Run by the launch-task WORKER the
 # publish-inspiration skill dispatches, from the worker's own git worktree
-# (cwd = worktree repo root); the live mind's /code is never touched. This is
+# (cwd = worktree repo root); the live mind's /home/user/workspace is never touched. This is
 # v1 of the inspirations flow (see INSPIRATION_FLOW_VERSION below); the
 # generated manifest records it as `format: v1` in its front-matter.
 #
 # The dev `create-new-mind-repo` recipe is NOT available in the VM, so this is
 # self-contained. It does the assembly + secret scan + manifest/thumbnail +
-# /welcome rewrite + boot smoke-check + single commit. It does NOT create the
+# /welcome rewrite + version-history removal + boot smoke-check + single commit.
+# It does NOT create the
 # GitHub repo or push, and it deliberately leaves two things unfinished for the
 # worker to complete before reporting done: the manifest's FILL-IN blocks (real
 # prose) and the placeholder thumbnail (a bespoke, app-specific SVG). The lead
@@ -41,6 +42,12 @@ set -euo pipefail
 # Version of the inspirations flow (and of the manifest format this script
 # writes into the generated manifest's `format:` front-matter key).
 INSPIRATION_FLOW_VERSION="v1"
+
+# The published version of THIS inspiration (front-matter `version:`), distinct
+# from the flow/manifest-format version above. A first publish is always v1; a
+# later update of the same inspiration publishes v2, v3, ... and the source
+# workspace's docs/VERSION_HISTORY.md counts them.
+INSPIRATION_VERSION="v1"
 
 # Resolve this script's own directory up front, before any cd: the sibling
 # scan_secrets.sh + betterleaks.toml live next to this script, and the script
@@ -128,7 +135,7 @@ THUMBNAIL="inspiration-${SLUG}.svg"
 # Guard against a wrong --base-ref: minds assembled via subtree merges can have
 # several parallel root commits, and a naive fallback can land on a near-empty
 # one instead of the real DEFAULT_WORKSPACE_TEMPLATE seed. Any bootable template tree must contain
-# pyproject.toml and supervisord.conf, so require both in BASE_REF's tree. This
+# pyproject.toml and system/supervisord.conf, so require both in BASE_REF's tree. This
 # runs BEFORE the destructive read-tree in step 2 so a bad ref aborts cleanly
 # without touching the worktree.
 if ! git rev-parse --verify --quiet "${BASE_REF}^{tree}" > /dev/null; then
@@ -136,7 +143,7 @@ if ! git rev-parse --verify --quiet "${BASE_REF}^{tree}" > /dev/null; then
     exit 5
 fi
 base_missing=""
-for required in pyproject.toml supervisord.conf; do
+for required in pyproject.toml system/supervisord.conf; do
     if [ -z "$(git ls-tree --name-only "${BASE_REF}^{tree}" -- "$required")" ]; then
         base_missing="${base_missing} ${required}"
     fi
@@ -286,11 +293,32 @@ if [ -z "$manifest_description" ]; then
     manifest_description="A shareable snapshot of ${TITLE}."
 fi
 
+# The RECIPE: how this inspiration is derived from its source workspace, so a
+# later update can re-run it instead of diffing two repos. The include sets are
+# known here; the exclusions and the published-version modification RULES are
+# not (the lead resolved them with the user), so they are FILL-IN lines the
+# worker replaces -- caught by the same `<!-- FILL-IN (publishing agent)` gate
+# as every other placeholder. RULES only, never the removed values: the point of
+# a modification is that the value does not ship.
+recipe_include_block="include:"$'\n'
+for rel in "${INCLUDE_PATHS[@]}"; do
+    recipe_include_block+="  - ${rel}"$'\n'
+done
+if [ "${#DATA_INCLUDE_PATHS[@]}" -gt 0 ]; then
+    recipe_include_block+="data_include:"$'\n'
+    for rel in "${DATA_INCLUDE_PATHS[@]}"; do
+        recipe_include_block+="  - ${rel}"$'\n'
+    done
+else
+    recipe_include_block+="data_include: []"$'\n'
+fi
+
 cat > "$MANIFEST" <<MANIFEST_EOF
 ---
 title: ${TITLE}
 description: ${manifest_description}
 thumbnail: ${THUMBNAIL}
+version: ${INSPIRATION_VERSION}
 format: ${INSPIRATION_FLOW_VERSION}
 ---
 
@@ -322,9 +350,33 @@ ${included_paths_block}
 with prose that makes the list above self-explanatory: for each included path,
 say what it is (an app or lib with code, a skill, data) and what role it plays.
 Then describe how the pieces wire together at runtime: which supervisord
-programs (in supervisord.conf) run them, which ports they listen on and how
+programs (in system/supervisord.conf) run them, which ports they listen on and how
 those are registered in forward_port.py (if applicable), and any scripts or
 services that connect them. -->
+
+## Recipe
+
+This inspiration is version \`${INSPIRATION_VERSION}\` (front-matter \`version:\`).
+It is not a fork of the workspace it came from -- it is DERIVED from it by the
+recipe below: include these paths, leave these out, apply these
+published-version rules. An update re-runs the recipe against the current
+workspace and publishes the result as the next version, so anything excluded
+here stays excluded even though it still exists in the source workspace. This
+block is the durable home of that recipe -- a later update reads it back from
+here.
+
+\`\`\`yaml
+version: ${INSPIRATION_VERSION}
+${recipe_include_block}exclude:
+<!-- FILL-IN (publishing agent): replace this line with one \`  - <path or feature>\`
+entry per deliberate exclusion (paths not included, and features stripped out of
+an included path), or with the single line \`  []\` if nothing was excluded. -->
+modification_rules:
+<!-- FILL-IN (publishing agent): replace this line with one \`  - <rule>\` entry per
+published-version modification, stated as a RULE and never the removed value
+(e.g. \`  - replace the hardcoded team Slack channel with a neutral default\`),
+or with the single line \`  []\` if there were none. -->
+\`\`\`
 
 ## Prerequisites
 
@@ -340,11 +392,19 @@ with one line per requirement, using exactly these forms:
   the adopting agent initiates this via a latchkey permission request during
   setup -- it must not merely mention it)
 - requires_secret: <ENV_VAR or config key> (what it is for and where to put it)
+- requires_llm: <how the code reaches Claude, and what an adopter needs>
+  (include this line whenever the app calls an LLM: name the method it was
+  built for -- keyed litellm via ANTHROPIC_API_KEY, or keyless subscription via
+  claude -p -- so an adopter on the other method knows to switch it per the
+  use-ai-integration skill)
 
 Derive the real values from the included code (e.g. every service the app
-calls through \`latchkey curl\`). Example:
+calls through \`latchkey curl\`, and whether any code calls an LLM). Example:
 - requires_permission: slack-api / slack-read-all (user-approved; adopting
   agent initiates during setup)
+- requires_llm: calls Claude via the keyed litellm path (ANTHROPIC_API_KEY set);
+  an adopter on the keyless subscription path must switch the model calls per
+  use-ai-integration
 If nothing is required, write exactly: "No prerequisites -- runs with no
 external permissions or secrets." -->
 
@@ -383,6 +443,18 @@ not included, anything that will not work out of the box. For each, say what
 is missing and what a working replacement looks like. Do NOT list activation
 requirements here (permissions, tokens, accounts) -- those belong in
 "Prerequisites" above. If there are genuinely no holes, say so explicitly. -->
+
+## Publication history
+
+This inspiration's changelog: what each published version changed. The PUBLISHER
+appends one entry per version (newest last); earlier entries are never rewritten.
+This is distinct from "Adaptation history" below, which is the ADOPTERS' log.
+
+<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment with
+the first entry, in the form:
+### v1 (YYYY-MM-DD) -- <one line: what this first version publishes>
+using today's date. A later update of this inspiration (the update-published-inspiration
+flow) appends "### v2 (date) -- what changed since v1", and so on. -->
 
 ## Adaptation history
 
@@ -517,9 +589,23 @@ Each \`inspiration-<slug>.md\` is the full manifest for that inspiration: what
 it is, how it works, the prerequisites it needs, and how to adapt it.
 README_EOF
 
+# --- 8.6 remove the version history so it never ships in an inspiration ------
+
+# docs/VERSION_HISTORY.md is WORKSPACE-only, never part of an inspiration: it records
+# where a mind came from and every inspiration it has published (slugs, repo
+# URLs, source commits). None of that belongs in a published inspiration -- and
+# after an update-self, BASE_REF's tree can carry an accumulated copy of it --
+# so drop it from the snapshot entirely. A mind created from this inspiration
+# grows its OWN ledger when it first runs update-self or publishes (update-self
+# and publish-inspiration write the starter on demand if the file is absent), so
+# nothing is lost by omitting it here. `rm -f` is safe whether or not the base
+# tree carried the file. This runs AFTER the no-diff guard so it can never make
+# an empty include set look like it had something to publish.
+rm -f docs/VERSION_HISTORY.md
+
 # --- 9. boot smoke-check WITHOUT side effects, then single commit -------------
 
-# Validate supervisord.conf via the supervisor python lib -- realize() +
+# Validate system/supervisord.conf via the supervisor python lib -- realize() +
 # process_config() parse and check the config WITHOUT starting the daemon.
 # NEVER `supervisord -t`: in supervisord, -t means --strip_ansi and LAUNCHES the
 # daemon. If the lib is unavailable, skip the check (config holes in selected
@@ -533,7 +619,7 @@ README_EOF
 # build error, spuriously aborting a publish that is otherwise fine. Deriving
 # the interpreter from the supervisord shebang keeps the check ~0.1s and robust.
 smoke_ok=1
-if [ -f "supervisord.conf" ]; then
+if [ -f "system/supervisord.conf" ]; then
     SMOKE_PY="python3"
     SUPERVISORD_BIN="$(command -v supervisord 2>/dev/null || true)"
     if [ -n "$SUPERVISORD_BIN" ]; then
@@ -556,7 +642,7 @@ except Exception:
     sys.exit(0)
 
 options = ServerOptions()
-options.configfile = "supervisord.conf"
+options.configfile = "system/supervisord.conf"
 options.realize(args=[])
 options.process_config(do_usage=False)
 PYEOF
@@ -565,7 +651,7 @@ PYEOF
     fi
 fi
 if [ "$smoke_ok" -ne 1 ]; then
-    echo "build_inspiration.sh: boot smoke-check FAILED -- supervisord.conf did not realize cleanly" >&2
+    echo "build_inspiration.sh: boot smoke-check FAILED -- system/supervisord.conf did not realize cleanly" >&2
     exit 4
 fi
 
@@ -604,7 +690,8 @@ echo "  thumbnail: ${THUMBNAIL}"
 echo "  readme:    README.md (regenerated to describe this inspiration)"
 echo "  boot smoke-check: passed"
 echo "  NEXT: ${MANIFEST} still has <!-- FILL-IN (publishing agent): ... --> placeholders in"
-echo "  'What it is', 'How it works', 'Prerequisites', and 'Holes'; README.md has one FILL-IN"
+echo "  'What it is', 'How it works', 'Recipe' (exclude + modification_rules), 'Prerequisites',"
+echo "  'Holes', and 'Publication history' (the v1 changelog entry); README.md has one FILL-IN"
 echo "  (its overview); and ${THUMBNAIL}"
 echo "  is a generic placeholder (marker comment inside). Replace ALL FILL-INs with real content"
 echo "  (or explicit 'none' prose) AND replace the placeholder with a bespoke SVG for this app,"

@@ -15,7 +15,7 @@ What it does, given the pre-merge revision (``--rollback-to``):
 2. Classify what changed since the known-good revision (frontend src / frontend
    manifest / backend src / backend manifest).
 3. Refresh dependencies only if a manifest changed (``npm ci`` / ``uv tool
-   install -e apps/system_interface --reinstall``). A plain restart does NOT
+   install -e system/apps/system_interface --reinstall``). A plain restart does NOT
    re-resolve the editable tool's dependencies, so a backend dependency add
    would otherwise crash the service on restart.
 4. For a backend change, *pre-flight* the merged code on a throwaway port before
@@ -97,10 +97,17 @@ ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
 MNGR_AGENT_ID_HEADER = "X-Mngr-Agent-Id"
 
 # The served app, the editable tool the live service runs from, and the build
-# surfaces. These mirror scripts/build_workspace.sh -- the source of truth for
+# surfaces. These mirror system/scripts/build_workspace.sh -- the source of truth for
 # how the served environment is constructed.
-APP_DIR = "apps/system_interface"
+APP_DIR = "system/apps/system_interface"
 FRONTEND_DIR = f"{APP_DIR}/frontend"
+# The frontend build output the backend serves at ``/``. Both ``node_modules``
+# and this ``static/`` bundle are gitignored, so a fresh worktree has neither
+# until the worker builds it. The preview serves the worker's app dir as-is and
+# will not build for it (see ``preview``): a work_dir without this bundle is a
+# worker that skipped its build, and the preview refuses it rather than boot the
+# backend's "Frontend not built" placeholder.
+FRONTEND_BUILD_INDEX = f"{APP_DIR}/imbue/system_interface/static/index.html"
 TOOL_NAME = "system-interface"
 RELOAD_OP = "reload_system_interface"
 
@@ -129,7 +136,7 @@ PREVIEW_SERVICE_NAME = "si-preview"
 # the service names above are fixed, a second concurrent preview would silently
 # hijack the tab of the one already up, and its teardown would later deregister
 # the service out from under it.
-_INSTANCES_ROOT = "runtime/isolated-instances"
+_INSTANCES_ROOT = "data/.state/isolated-instances"
 _INSTANCE_STATE_FILENAME = "instance.json"
 # The system interface reads its bind host/port from the environment; the shared
 # script injects the free port into PORT and 127.0.0.1 into HOST.
@@ -702,14 +709,15 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
     """Stand up a pre-merge preview of the worker's ``work_dir``.
 
     Thin system-interface adapter over the shared ``serve_isolated_instance.py``
-    ``up`` motion: validate the worker's app dir, then hand the shared script the
-    system-interface specifics -- boot ``uv run system-interface`` from the
-    worker's already-built app dir on a free port; neuter layout persistence by
-    dropping MNGR_AGENT_ID (so the preview can't clobber the live ``layout.json``)
-    while keeping discovery, so the real conversations still render; probe
-    ``/api/agents``; register the inner app and the labeled wrapper frame. The
-    shared script owns the ports, the process/service teardown, and the state
-    file. ``work_dir`` must still exist -- run this before the worker is destroyed.
+    ``up`` motion: validate the worker's app dir, require that the worker built its
+    frontend bundle, then hand the shared script the system-interface specifics --
+    boot ``uv run system-interface`` from the worker's already-built app dir on a
+    free port; neuter layout persistence by dropping MNGR_AGENT_ID (so the preview
+    can't clobber the live ``layout.json``) while keeping discovery, so the real
+    conversations still render; probe ``/api/agents``; register the inner app and
+    the labeled wrapper frame. The shared script owns the ports, the
+    process/service teardown, and the state file. ``work_dir`` must still exist --
+    run this before the worker is destroyed.
     """
     # Sanity-check the work_dir before disturbing anything: a wrong --work-dir
     # should fail fast rather than reaching the shared script.
@@ -718,6 +726,21 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
         sys.stderr.write(
             f"preview: {worker_app_dir} is not a directory; is --work-dir correct "
             "and is the worker still alive (not destroyed)?\n"
+        )
+        return 1
+    # The preview serves the worker's app dir as-is; it does not build for the
+    # worker. A work_dir without a frontend bundle means the worker reported done
+    # without building it (a fresh worktree has no gitignored static/ until built),
+    # so booting would only serve the backend's "Frontend not built" placeholder --
+    # a dead preview that reads as working. Refuse loudly and point at the fix: the
+    # worker must build before it is previewable.
+    if not (Path(work_dir) / FRONTEND_BUILD_INDEX).exists():
+        sys.stderr.write(
+            f"preview: no frontend build in {work_dir} "
+            f"({FRONTEND_BUILD_INDEX} is missing), so the preview would serve the "
+            "'Frontend not built' placeholder. The worker must build the frontend "
+            "(cd system/apps/system_interface/frontend && npm ci && npm run build) before "
+            "its work_dir can be previewed -- re-brief it to build, then retry.\n"
         )
         return 1
     other = _find_other_preview(repo_root, slug)

@@ -67,7 +67,11 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
 The body must be a JSON object with exactly four fields:
 `agent_id` (use `$MNGR_AGENT_ID`), `type` (use "predefined"), `payload`, and `rationale`.
 
-`payload` must be an object with exactly two fields: `scope` (string) and `permissions` (array of strings). `scope` needs to be one of the scopes specified in the response to the `/permissions/available/<service_name>` call.
+`payload` must be an object with at least two fields: `scope` (string) and `permissions` (array of strings). `scope` needs to be one of the scopes specified in the response to the `/permissions/available/<service_name>` call.
+
+When you need permissions for a specific account, you can
+specify the optional third field on the `payload`: `account` (which should be a string).
+For example: `-d '{... "payload": {"scope": ..., "permissions": ..., "account": "bob@example.com"}}'.
 
 When not sure (and if applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
 
@@ -111,6 +115,37 @@ latchkey services info slack
 
 Returns auth options, credentials status, and developer notes about the service.
 
+### Using multiple accounts
+
+It is possible to associate credentials with a specific account
+(and have credentials for more than a single account per service).
+The user can do that by clicking "Add account" on the "Connectors" settings
+page in the Minds app.
+
+Another way is for you to send a permission request with an "account"
+in the payload as described above - approving the permission request will prompt
+the user to sign in. Just double-check the actual resulting account; it may be
+different than the one requested by you.
+
+You can then reference it in curl calls:
+
+```bash
+latchkey --account alice@example.com curl ...
+```
+
+The `--account` option must go right after `latchkey`.
+
+You can see the existing accounts as keys in the credential
+dictionary produced by `latchkey services info`. An empty string
+as the key means "unknown account".
+
+### Expired or invalid credentials
+
+When the existing credentials are expired or invalid, there are currently two ways  to trigger a new login:
+
+- By re-sending the permission request to the user (use this when there's just a single account for the given service)
+- By disconnecting and reconnecting the account on the "Connectors" settings page (tell the user to do that if there are more than one account configured for the given service).
+
 
 ## Secondary gateway
 
@@ -137,7 +172,3 @@ Latchkey currently offers varying levels of support for the
 following services: AWS, Calendly, Coolify, Discord, Dropbox, Figma, GitHub, GitLab,
 Gmail, Google Analytics, Google Calendar, Google Docs, Google Drive, Google Sheets, Google Slides,
 Linear, Mailchimp, Notion, Ramp, Sentry, Slack, Stripe, Telegram, Todoist, Umami, Yelp, Zoom, and more.
-
-## Notion hack
-
-Always use the `notion-mcp` latchkey service (`latchkey services info notion-mcp`) rather than the legacy plain `notion` one.

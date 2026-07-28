@@ -82,7 +82,7 @@ On `type: gate`:
   skill's own guidelines. The user does not care about technical details --
   do not surface them.
 - **Escalate to the user** for user intent, scope, subjective preference, or
-  domain knowledge you do not have. `final-artifact` gates always escalate.
+  domain knowledge you do not have. `final-creation` gates always escalate.
   `outline-approval` gates default to answer-yourself; only escalate if the
   worker has surfaced a *genuine process question* (a decision about user
   intent, scope, or domain that you cannot make from context). Most
@@ -156,7 +156,7 @@ mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
   first, then the `<WORKER>:<PATH>` agent endpoint. Exactly one side must
   reference an agent or remote host.
 - Path resolution: mngr treats an argument as a *local path* only when it
-  starts with `/`, `./`, `../`, or `~/` -- a bare `runtime/foo` is read as an
+  starts with `/`, `./`, `../`, or `~/` -- a bare `data/foo` is read as an
   *agent name* (hence the `./` on the source above). On an agent endpoint, a
   relative `<WORKER>:PATH` resolves against the worker's workdir; an absolute
   `<WORKER>:/PATH` is used verbatim.

@@ -27,9 +27,9 @@ invent a second, different way of producing the data.
 Pick a short kebab-case slug `$SLUG` for the task (e.g. `fetch-emails`,
 `email-slack-connections`). It is used for:
 
-- Runtime path: `runtime/fetch-process-show/$SLUG/`
-- Sample data path: `runtime/fetch-process-show/$SLUG/sample.json`
-- Slug passed to `crystallize-artifact` at the end (reused as its `$NAME`)
+- Runtime path: `data/.tasks/fetch-process-show/$SLUG/`
+- Sample data path: `data/.tasks/fetch-process-show/$SLUG/sample.json`
+- Slug passed to `crystallize-creation` at the end (reused as its `$NAME`)
 
 ## Clarify and scope (skeleton phases 1-3)
 
@@ -92,11 +92,11 @@ combined operation.
   asking the user to choose.
 
 Keep validation code simple -- inline bash, `uv run python -c`, or short scripts
-under `runtime/fetch-process-show/$SLUG/` if substantive.
+under `data/.tasks/fetch-process-show/$SLUG/` if substantive.
 
 ## The sample loop (skeleton phase 5)
 
-The throwaway artifact for data work is a **small real sample** put in front of
+The throwaway creation for data work is a **small real sample** put in front of
 the user in their intended delivery channel. It is a *feedback instrument, not
 the product*: its job is to let the user confirm the process is right *before*
 you build or automate anything. Keep it throwaway -- no production scripts,
@@ -133,7 +133,7 @@ sample looks right across all shapes. Only that confirmation unlocks the next
 phase. If the user rejects the sample outright, go back to the plan and
 re-propose (re-run research only if the new ask needs it).
 
-Save the raw sample to `runtime/fetch-process-show/$SLUG/sample.json` so the user
+Save the raw sample to `data/.tasks/fetch-process-show/$SLUG/sample.json` so the user
 can ask to see it and so it can **seed the first surface**. Include in each
 sampled record its **raw payload and a source reference**, not only the processed
 fields -- the first surface renders this sample, and per the preserve-and-surface
@@ -166,14 +166,14 @@ surface on an unconfirmed process bakes the wrong process into code *and* into a
 background worker that cannot see the corrections the user hasn't made yet.
 
 Once the user has confirmed, the harden/ratify pass (skeleton phase 7) runs as
-a **`crystallize-artifact` worker** (the crystallize operation, artifact = a
+a **`crystallize-creation` worker** (the crystallize operation, creation = a
 script-centric **skill**):
 
-1. **Kick off `crystallize-artifact`** with `artifact=skill` and
-   `source_artifacts_dir: runtime/fetch-process-show/$SLUG/` in the task
+1. **Kick off `crystallize-creation`** with `type=skill` and
+   `source_artifacts_dir: data/.tasks/fetch-process-show/$SLUG/` in the task
    frontmatter, reusing `$SLUG` as its `$NAME`.
 2. **Launch the lead-proxy poll** (`run_in_background: true`) for worker reports,
-   per `crystallize-artifact` Step 5 / `.agents/shared/references/lead-proxy.md`.
+   per `crystallize-creation` Step 5 / `.agents/shared/references/lead-proxy.md`.
    Do this *before* returning to the user. The poll does not block subsequent
    steps. Without it, Gate 1 / Gate 2 reports never reach the user and the worker
    deadlocks waiting for approval.
@@ -211,7 +211,7 @@ raw payload (rendered in its native format -- "view raw email" shows the rendere
 email, not HTML source) and jump to its source (e.g. "open in Gmail"). Build it in
 quietly from the confirmed sample, so the throwaway and crystallized versions
 agree; this depends on the sample carrying the raw payload + source reference.
-**If the surface is a web view, use the `build-web-service` skill** -- it runs its
+**If the surface is a web view, use the `build-app` skill** -- it runs its
 own UI-mock confirmation (the data sample confirms the data *shape*, not the UI
 shape) and covers the same raw-data requirement, including rendering untrusted HTML
 safely. Hand it the confirmed `sample.json` so the mock renders real data.
@@ -241,7 +241,7 @@ requirements.
 
 ## Background crystallize gates
 
-The standard lead-proxy mechanics for `crystallize-artifact` apply -- nothing
+The standard lead-proxy mechanics for `crystallize-creation` apply -- nothing
 special. By default Gate 1 outline-approval is answered by the lead unless the
-worker has a genuine process question, and Gate 2 final-artifact escalates to the
+worker has a genuine process question, and Gate 2 final-creation escalates to the
 user but is deferred until the user isn't actively working on something else.
