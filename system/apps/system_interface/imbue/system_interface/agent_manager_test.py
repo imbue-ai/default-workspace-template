@@ -49,7 +49,7 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 pytestmark = pytest.mark.flaky
 
 
-def _seed_agent(manager: AgentManager, agent_id: str) -> None:
+def _seed_agent(manager: AgentManager, agent_id: str, harness: str = "claude") -> None:
     """Insert a placeholder ``AgentStateItem`` directly into the tracked map."""
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
@@ -58,6 +58,7 @@ def _seed_agent(manager: AgentManager, agent_id: str) -> None:
             state="RUNNING",
             labels={},
             work_dir=None,
+            harness=harness,
         )
 
 
@@ -1261,9 +1262,7 @@ def test_update_session_events_no_op_when_not_tracked(agent_manager: AgentManage
     )
     with agent_manager._lock:
         assert "ghost" not in agent_manager._activity_state_by_agent
-        assert "ghost" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "ghost" not in agent_manager._last_event_type_by_agent
-        assert "ghost" not in agent_manager._last_event_timestamp_by_agent
+        assert "ghost" not in agent_manager._activity_tracker_by_agent
 
 
 def test_reset_activity_state_clears_tool_running(
@@ -1310,9 +1309,7 @@ def test_reset_activity_state_no_op_when_not_tracked(agent_manager: AgentManager
     agent_manager.reset_activity_state("ghost")
     with agent_manager._lock:
         assert "ghost" not in agent_manager._activity_state_by_agent
-        assert "ghost" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "ghost" not in agent_manager._last_event_type_by_agent
-        assert "ghost" not in agent_manager._last_event_timestamp_by_agent
+        assert "ghost" not in agent_manager._activity_tracker_by_agent
 
 
 def test_stale_transcript_tail_after_restart_shows_idle(agent_manager: AgentManager, tmp_path: Path) -> None:
@@ -1360,6 +1357,44 @@ def test_stale_transcript_tail_after_restart_shows_idle(agent_manager: AgentMana
         assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
 
 
+def test_codex_stale_transcript_tail_uses_the_codex_marker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """A codex agent's staleness override reads ``codex_process_started``.
+
+    The codex peer of ``test_stale_transcript_tail_after_restart_shows_idle``.
+    mngr_codex writes ``codex_process_started``, never the claude marker, so a
+    manager that stats a hardcoded ``claude_process_started`` finds nothing,
+    passes ``process_started_at=None``, and disables the override entirely --
+    leaving a codex agent that was killed mid-turn (an unclosed ``turn_started``)
+    pinned on "Thinking..." until the user sends another message.
+    """
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness="codex")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    # A turn opened in the distant past and never closed: the restart killed
+    # codex before it could write task_complete.
+    agent_manager.update_session_events(
+        "agent-1",
+        [{"type": "turn_started", "timestamp": "2020-01-01T00:00:00.000Z"}],
+    )
+    with agent_manager._lock:
+        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+
+    # The claude marker must NOT rescue a codex agent -- wrong harness, ignored.
+    (state_dir / "claude_process_started").touch()
+    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+    with agent_manager._lock:
+        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+
+    # mngr_codex touches its own marker on resume; now the tail reads stale.
+    (state_dir / "codex_process_started").touch()
+    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+    with agent_manager._lock:
+        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+        assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
+
+
 def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
@@ -1374,18 +1409,14 @@ def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_p
     with agent_manager._lock:
         assert "agent-1" in agent_manager._activity_tracked_agents
         assert "agent-1" in agent_manager._activity_state_by_agent
-        assert "agent-1" in agent_manager._has_unmatched_tool_use_by_agent
-        assert "agent-1" in agent_manager._last_event_type_by_agent
-        assert "agent-1" in agent_manager._last_event_timestamp_by_agent
+        assert "agent-1" in agent_manager._activity_tracker_by_agent
 
     agent_manager._stop_activity_tracking("agent-1")
 
     with agent_manager._lock:
         assert "agent-1" not in agent_manager._activity_tracked_agents
         assert "agent-1" not in agent_manager._activity_state_by_agent
-        assert "agent-1" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "agent-1" not in agent_manager._last_event_type_by_agent
-        assert "agent-1" not in agent_manager._last_event_timestamp_by_agent
+        assert "agent-1" not in agent_manager._activity_tracker_by_agent
 
 
 def test_agent_removed_event_fires_removal_side_effects(agent_manager: AgentManager, tmp_path: Path) -> None:

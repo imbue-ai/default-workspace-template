@@ -1472,7 +1472,8 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
         # synchronously. Assert before ``stop()``, which clears these
         # caches alongside the marker watchers.
         with manager._lock:
-            assert manager._has_unmatched_tool_use_by_agent[agent_id] is True
+            tracker = manager._activity_tracker_by_agent[agent_id]
+            assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.TOOL_RUNNING
             assert manager._activity_state_by_agent[agent_id] == ActivityState.TOOL_RUNNING
     finally:
         manager.stop()
