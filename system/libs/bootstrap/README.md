@@ -32,8 +32,8 @@ service.
 
 Services are defined as `[program:*]` sections, one service per file under
 `system/supervisord.conf.d/` (pulled in by an `[include]` glob in
-`system/supervisord.conf`, which itself holds only the daemon config and
-`system_interface`), not managed by this package. supervisord starts them, restarts the
+`system/supervisord.conf`, which itself holds only the daemon config), not
+managed by this package. supervisord starts them, restarts the
 long-lived ones when they exit (`autorestart=true`), and runs one-shot programs
 (like `deferred-install`) exactly once per boot (`autorestart=false`).
 
