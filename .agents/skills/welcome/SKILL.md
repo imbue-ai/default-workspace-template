@@ -17,7 +17,7 @@ Output the following welcome message to the user, verbatim, as your entire respo
 
 I'm an AI operating system built to extend *you* — so you can do your best work.
 
-I can take on tasks for you, build custom AI tools you can easily edit, connect to the tools you already use to pull in information, or just brainstorm ways to make your work better.
+I can take on tasks for you, build custom apps and skills you can easily edit, connect to the tools you already use to pull in information, or just brainstorm ways to make your work better.
 
 **Let's get started**
 

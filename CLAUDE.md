@@ -8,6 +8,10 @@ Claude Code's built-in `TodoWrite` is disabled, use tk instead. Step records (`t
 
 The pytest-timeout note in AGENTS.md (`PYTEST_MAX_DURATION_SECONDS`) refers to the **Bash tool** timeout.
 
+# Self-modification
+
+- **CLAUDE.md**: (this file) update these instructions if you discover better ways to operate.
+
 # Memory
 
 Use Claude's built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
