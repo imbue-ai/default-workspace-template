@@ -99,6 +99,15 @@ If the task references gitignored files outside the runtime dir, set
 `source_artifacts_dir: <dir>` in the task frontmatter; `launch`
 pushes that directory into the worker's worktree automatically.
 
+**Optional `--branch`.** Omit it (the default) and the worker gets a fresh
+`mngr/$NAME` cut from your HEAD. Pass an existing branch name (`--branch
+mngr/some-branch`) to have the worker check *that* branch out directly, so its
+commits extend work you already built up rather than starting from HEAD -- the
+branch must not be checked out in another worktree when the worker is created.
+The full mngr `[BASE][:NEW]` spec is accepted; see the flag's `--help` and
+`resolve_worker_branch` in `create_worker.py` for the exact grammar. Whatever you
+pass, the branch to merge from is what that spec resolves to, not `mngr/$NAME`.
+
 ## 3. Background-poll for the worker's report
 
 Poll with `create_worker.py await` as a background task
@@ -135,7 +144,7 @@ report -> diagnose worker liveness, then surface to the user per
 Flow-specific substitutions when reading `lead-proxy.md`:
 
 - Worker name: `$NAME`
-- Branch: `mngr/$NAME`
+- Branch: `mngr/$NAME` by default, or whatever a `--branch` spec resolved to
 - Task file (pass to `create_worker.py await --task-file`): `data/.tasks/launch-task/$NAME/task.md`
 - `finish_report_path`: `data/.tasks/launch-task/$NAME/reports/report.md`
 - Reports dir (for `<REPORTS_DIR>`, i.e. `dirname finish_report_path`): `data/.tasks/launch-task/$NAME/reports/`
