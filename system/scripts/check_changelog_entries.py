@@ -7,10 +7,11 @@ computed here, where the base ref is present, and the gate refuses to run (loud
 non-zero exit) rather than pass vacuously when it cannot establish a base
 distinct from HEAD.
 
-A "project" is a directory under ``system/libs/`` or ``creations/`` containing
-a ``pyproject.toml``, the synthetic ``agents`` bucket that owns the ``.agents``
-tree (skills and shared agent config), or the synthetic ``dev`` bucket that
-owns everything else (system/scripts/, .github/, docs/, build tooling). Each
+A "project" is a directory under ``system/libs/``, ``system/services/``, or
+``system/apps/`` containing a ``pyproject.toml``, the synthetic ``agents``
+bucket that owns the ``.agents`` tree (skills and shared agent config), or the
+synthetic ``dev`` bucket that owns everything else (system/scripts/, .github/,
+docs/, build tooling). Each
 project holds its per-PR entries in ``<project_dir>/changelog/`` (the
 ``agents`` bucket's entries live in ``.agents/changelog/``, the ``dev``
 bucket's in ``system/changelog/``); a PR that touches a project must add
@@ -41,27 +42,28 @@ DEV_PROJECT = "dev"
 AGENTS_PROJECT = "agents"
 AGENTS_DIR = ".agents"
 
+# The directories whose immediate children are workspace projects (each child
+# with a pyproject.toml is a project). Mirrors the root pyproject's uv member
+# globs.
+PROJECT_PARENT_DIRS = ("system/libs", "system/services", "system/apps")
+
 
 def project_for_path(rel_path: Path | str, repo_root: Path) -> str:
     """Return the project that owns ``rel_path`` (a repo-relative path).
 
-    A ``system/libs/<name>/...`` or ``creations/<name>/...`` path resolves to
-    ``<name>`` when that directory contains a ``pyproject.toml``. Anything
-    under ``.agents/`` (skills and shared agent config) resolves to the
-    synthetic ``agents`` bucket. Everything else falls back to ``dev``. The
-    ``pyproject.toml`` check guards against a path like
-    ``system/libs/garbage/...`` (not an actual project) being treated as a
-    real project.
+    A ``system/libs/<name>/...``, ``system/services/<name>/...``, or
+    ``system/apps/<name>/...`` path resolves to ``<name>`` when that directory
+    contains a ``pyproject.toml``. Anything under ``.agents/`` (skills and
+    shared agent config) resolves to the synthetic ``agents`` bucket.
+    Everything else falls back to ``dev``. The ``pyproject.toml`` check guards
+    against a path like ``system/libs/garbage/...`` (not an actual project)
+    being treated as a real project.
     """
     parts = Path(rel_path).parts
-    if len(parts) >= 3 and parts[0] == "system" and parts[1] == "libs":
+    if len(parts) >= 3 and "/".join(parts[:2]) in PROJECT_PARENT_DIRS:
         candidate = repo_root / parts[0] / parts[1] / parts[2]
         if (candidate / "pyproject.toml").exists():
             return parts[2]
-    if len(parts) >= 2 and parts[0] == "creations":
-        candidate = repo_root / parts[0] / parts[1]
-        if (candidate / "pyproject.toml").exists():
-            return parts[1]
     if parts and parts[0] == AGENTS_DIR:
         return AGENTS_PROJECT
     return DEV_PROJECT
@@ -73,24 +75,22 @@ def project_entries_dir(project: str, repo_root: Path) -> Path:
         return repo_root / "system" / "changelog"
     if project == AGENTS_PROJECT:
         return repo_root / AGENTS_DIR / "changelog"
-    libs = repo_root / "system" / "libs" / project
-    if libs.is_dir():
-        return libs / "changelog"
-    creations = repo_root / "creations" / project
-    if creations.is_dir():
-        return creations / "changelog"
+    for parent_name in PROJECT_PARENT_DIRS:
+        candidate = repo_root / parent_name / project
+        if candidate.is_dir():
+            return candidate / "changelog"
     raise ValueError(f"Unknown project: {project!r}")
 
 
 def all_known_projects(repo_root: Path) -> set[str]:
     """Return every known project name, including the synthetic buckets.
 
-    A project is every ``system/libs/<name>`` and ``creations/<name>`` that
-    contains a ``pyproject.toml``, plus the synthetic ``dev`` and ``agents``
-    buckets.
+    A project is every ``system/libs/<name>``, ``system/services/<name>``, and
+    ``system/apps/<name>`` that contains a ``pyproject.toml``, plus the
+    synthetic ``dev`` and ``agents`` buckets.
     """
     names: set[str] = {DEV_PROJECT, AGENTS_PROJECT}
-    for parent_name in ("system/libs", "creations"):
+    for parent_name in PROJECT_PARENT_DIRS:
         parent = repo_root / parent_name
         if not parent.is_dir():
             continue

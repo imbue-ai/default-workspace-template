@@ -19,7 +19,7 @@ enabled, three pieces work together (see `system/libs/github_sync/README.md`):
    stays private, halting the hook's pushes if it ever isn't.
 
 What is synced is exactly what is committed to git. Workspace data under
-`data/` (memories, tickets, uploads, per-creation data) is gitignored and is
+`data/` (memories, tickets, uploads, per-app data) is gitignored and is
 NOT shipped to GitHub -- the restic `host-backup` service covers it.
 
 ## Hard rules
@@ -146,7 +146,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
    ```
 
 9. **Add the service** by appending this block to `system/supervisord.conf`, then
-    `supervisorctl reread && supervisorctl update` (see the edit-services
+    `supervisorctl reread && supervisorctl update` (see the update-app
     skill):
 
     ```ini
@@ -154,7 +154,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
     # git wiring fresh and re-verifies the sync repo stays private (the
     # post-commit hook does the pushing). See system/libs/github_sync/README.md.
     # The oom_tag_service.py prefix sets its OOM shed-priority band (see
-    # system/libs/oom_priority).
+    # system/services/oom_priority).
     [program:github-sync]
     command=python3 system/scripts/oom_tag_service.py github-sync uv run github-sync run
     directory=/home/user/workspace

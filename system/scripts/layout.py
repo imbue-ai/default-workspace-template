@@ -75,8 +75,8 @@ from typing import Any, Callable
 import tomlkit
 import yaml
 
-DEFAULT_APPLICATIONS_FILE = "data/.state/applications.toml"
-ENV_APPLICATIONS_FILE = "MINDS_APPLICATIONS_FILE"
+DEFAULT_APPS_FILE = "data/.state/apps.toml"
+ENV_APPS_FILE = "MINDS_APPS_FILE"
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
 ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
@@ -91,7 +91,7 @@ ENV_NO_WAIT_STABLE = "MINDS_LAYOUT_NO_WAIT_STABLE"
 
 # How long ``open`` / ``split`` wait for a freshly-registered service to
 # appear before giving up. The supervisord-managed forward_port.py call races
-# with the agent invoking this script right after build-web-service, so we
+# with the agent invoking this script right after build-app, so we
 # tolerate a brief window where the entry is not yet visible.
 _REGISTRATION_TIMEOUT_SECONDS = 5.0
 _REGISTRATION_POLL_INTERVAL_SECONDS = 0.25
@@ -147,23 +147,23 @@ def _mngr_agent_id() -> str:
     return os.environ.get(ENV_MNGR_AGENT_ID, "")
 
 
-def _applications_file() -> Path:
-    """Path to the agent's applications.toml registry.
+def _apps_file() -> Path:
+    """Path to the agent's apps.toml registry.
 
-    Defaults to ``data/.state/applications.toml`` relative to cwd (the script
+    Defaults to ``data/.state/apps.toml`` relative to cwd (the script
     is invoked from the agent's repo root). Override via
-    ``MINDS_APPLICATIONS_FILE`` -- used by tests to point at a sandboxed
+    ``MINDS_APPS_FILE`` -- used by tests to point at a sandboxed
     fixture without depending on cwd.
     """
-    return Path(os.environ.get(ENV_APPLICATIONS_FILE, DEFAULT_APPLICATIONS_FILE))
+    return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))
 
 
-def _read_application_names(path: Path) -> list[str]:
+def _read_app_names(path: Path) -> list[str]:
     if not path.exists():
         return []
     with open(path, "rb") as f:
         doc = tomlkit.load(f)
-    apps = doc.get("applications", [])
+    apps = doc.get("apps", [])
     names: list[str] = []
     for app in apps:
         name = app.get("name") if hasattr(app, "get") else None
@@ -173,7 +173,7 @@ def _read_application_names(path: Path) -> list[str]:
 
 
 def _is_service_registered(name: str) -> bool:
-    return name in _read_application_names(_applications_file())
+    return name in _read_app_names(_apps_file())
 
 
 def _wait_for_registration(name: str, timeout: float) -> bool:
@@ -247,7 +247,7 @@ def _service_name_from_ref(ref: str) -> str:
     A service ref may carry a query (``service:browser?session=2``, used to
     address a specific browser in the fleet) or a path
     (``service:system_interface/health``). The registration check polls
-    ``applications.toml`` for the *service*, so we strip anything after the
+    ``apps.toml`` for the *service*, so we strip anything after the
     name -- the first ``?`` or ``/`` -- before looking it up. Plain
     ``service:system_interface`` is returned unchanged.
     """
@@ -1053,7 +1053,7 @@ def _cmd_open(args: argparse.Namespace) -> int:
         service_name = _service_name_from_ref(ref)
         if not _wait_for_registration(service_name, _REGISTRATION_TIMEOUT_SECONDS):
             sys.stderr.write(
-                f"error: service {service_name!r} is not registered in {_applications_file()} "
+                f"error: service {service_name!r} is not registered in {_apps_file()} "
                 f"after waiting {_REGISTRATION_TIMEOUT_SECONDS:.0f}s. "
                 f"Did you forward_port.py / start the service?\n"
             )
@@ -1140,7 +1140,7 @@ def _cmd_split(args: argparse.Namespace) -> int:
         service_name = _service_name_from_ref(ref)
         if not _wait_for_registration(service_name, _REGISTRATION_TIMEOUT_SECONDS):
             sys.stderr.write(
-                f"error: service {service_name!r} is not registered in {_applications_file()} "
+                f"error: service {service_name!r} is not registered in {_apps_file()} "
                 f"after waiting {_REGISTRATION_TIMEOUT_SECONDS:.0f}s.\n"
             )
             return EXIT_ERROR

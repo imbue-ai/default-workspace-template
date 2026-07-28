@@ -1,29 +1,29 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at system/libs/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
 ---
 
 # Updating the system interface
 
-`system/libs/system_interface` is the live web UI the user is looking at right now
+`system/apps/system_interface` is the live web UI the user is looking at right now
 (the dockview shell, the chat panels, the progress view). A broken build here is
 served straight to the user, so you never edit the served copy directly: you
 make every change in an **isolated worktree clone**, verify it builds and passes
 there, and only merge it back into the served tree once it's known-good. This
 skill is the single canonical path for that.
 
-This is the **system-interface specialization of the generic artifact
+This is the **system-interface specialization of the generic creation
 lifecycle.** It reuses the generic update orchestration -- the task file, the
-generic `harden-worker`, and the report poll -- from `update-artifact` with
-`artifact=system-interface`, and adds the one thing the system interface needs
-that no other artifact does: a `safe-reveal` go-live (pre-merge **preview**, then
+generic `harden-worker`, and the report poll -- from `update-creation` with
+`type=system-interface`, and adds the one thing the system interface needs
+that no other creation does: a `safe-reveal` go-live (pre-merge **preview**, then
 a reveal-or-roll-back script). The worker/orchestration core is shared; the
 preview and reveal are owned here.
 
 ## The hard rule
 
 **Never edit the system-interface tree that is being served to the user.** Do
-not run `Edit`/`Write` on files under `system/libs/system_interface/` in this (the
+not run `Edit`/`Write` on files under `system/apps/system_interface/` in this (the
 served) checkout, and do not rebuild or restart the live UI from uncommitted
 edits here. Every change is made in a separate, isolated clone of the source,
 built and tested there, and merged back only after it passes. The only things
@@ -39,9 +39,9 @@ is just the mechanism for that safe, separate place to work.
 
 ## Flow overview
 
-1. **Delegate** the change to the generic worker via the `update-artifact`
-   orchestration core (`artifact=system-interface`). The worker follows
-   `harden-artifact.md` + `op-update.md` + `artifact-system-interface.md`, which
+1. **Delegate** the change to the generic worker via the `update-creation`
+   orchestration core (`type=system-interface`). The worker follows
+   `harden-creation.md` + `op-update.md` + `type-system-interface.md`, which
    own how to build, test, and verify the change in isolation.
 2. The **worker** implements + builds + tests it on its own branch, then reports
    `done` (the system interface emits **no gate** -- approval is your preview).
@@ -60,11 +60,11 @@ is just the mechanism for that safe, separate place to work.
 
 **Check for a concurrent system-interface pass first.** Passes here are named
 per-slug, so two can coexist without colliding on names -- but both edit
-`system/libs/system_interface`, so whichever merges second is guaranteed stale (see
+`system/apps/system_interface`, so whichever merges second is guaranteed stale (see
 the freshness check in Step 4). Look for another pass in flight:
 
 ```bash
-grep -l 'artifact: system-interface' data/.tasks/harden/update-*/task.md
+grep -l 'type: system-interface' data/.tasks/harden/update-*/task.md
 ```
 
 For any hit, check whether its `update <slug>` tracking ticket is still
@@ -73,14 +73,14 @@ liveness probe). If a live one exists, tell the user and let them decide --
 dispatching in parallel is allowed but means the second merge will have to
 rebase and re-verify. This is a warning, not a hard block.
 
-Then follow `update-artifact` Steps 1-3 (open a ticket, write the task file,
+Then follow `update-creation` Steps 1-3 (open a ticket, write the task file,
 launch the worker, background-poll the report) with these system-interface
 specifics:
 
 - **Pick a slug** `$SLUG` for the change. The worker agent / branch is
   `update-$SLUG` / `mngr/update-$SLUG`; the runtime dir is
   `data/.tasks/harden/update-$SLUG/`.
-- **Task-file frontmatter:** `operation: update`, `artifact: system-interface`,
+- **Task-file frontmatter:** `operation: update`, `type: system-interface`,
   plus the standard `lead_agent` / `finish_report_path`
   (`data/.tasks/harden/update-$SLUG/reports/report.md`). Per the system-interface
   exception in `op-update.md`, there is **no `## Change origin` marker** -- the
@@ -91,8 +91,8 @@ specifics:
   looks wrong in plain words -- see the next bullet; omit it, or write "no real
   scenario", for net-new work), and `## Success criteria` (what "done" looks
   like, plus the standing line: *follow the installed `harden-worker` sub-skill;
-  it composes `harden-artifact.md`, `op-update.md`, and
-  `artifact-system-interface.md` for how to run, test, verify, and what not to
+  it composes `harden-creation.md`, `op-update.md`, and
+  `type-system-interface.md` for how to run, test, verify, and what not to
   touch; report `done` only when its testing contract and the review gates all
   pass*).
 - **Judge whether a real scenario motivates the change, and if so point the
@@ -122,11 +122,11 @@ specifics:
   something new -- in which case name the real anchor and call out the new part.
   Use your judgment.
 - **Launch** with `--template subskill-worker` (installs the generic
-  `harden-worker`) per `update-artifact` Step 3, then background-poll per
+  `harden-worker`) per `update-creation` Step 3, then background-poll per
   `.agents/shared/references/lead-proxy.md`.
 - **Terminal handling differs:** the system interface emits no gate, and on
-  `done` you do **not** merge here (that is `update-artifact` Step 4's behavior
-  for other artifacts). Instead, go to the preview below. On `stuck` or a
+  `done` you do **not** merge here (that is `update-creation` Step 4's behavior
+  for other creations). Instead, go to the preview below. On `stuck` or a
   dead-worker timeout, surface to the user per
   `.agents/skills/launch-task/references/worker-failure.md` -- do **not**
   preview, merge, or reveal, and do not retry silently.
@@ -201,7 +201,7 @@ If the user **approves** the preview:
 1. **Take the editing lease** so no other chat's merge or reveal interleaves
    with yours -- the reveal's auto-rollback restores a captured revision, so a
    foreign merge landing mid-motion could be swept away by it. Same advisory
-   mechanics as `update-service`'s "One editor at a time": first check
+   mechanics as `update-app`'s "One editor at a time": first check
    `tk ready` for another agent's `editing service system_interface` lease and
    surface it to the user instead of proceeding if one is held; then
 
@@ -216,12 +216,12 @@ If the user **approves** the preview:
    preview verdict (that wait happens *before* this step).
 
 2. **Freshness check** -- the branch is only mergeable if
-   `system/libs/system_interface/` has not changed since the worker branched (for
+   `system/apps/system_interface/` has not changed since the worker branched (for
    example, another pass merged in the meantime):
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only "$BASE" HEAD -- system/libs/system_interface/
+   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale --
@@ -265,7 +265,7 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 - **Classifies** what the merge changed (frontend source, frontend manifest,
   backend source, backend manifest).
 - **Refreshes dependencies only if a manifest changed** -- `npm ci` for the
-  frontend, `uv tool install -e system/libs/system_interface --reinstall` for the
+  frontend, `uv tool install -e system/apps/system_interface --reinstall` for the
   backend. This is essential: a plain restart does *not* re-resolve the
   editable-installed tool's dependencies, so a backend dependency addition would
   otherwise crash the service on restart.
