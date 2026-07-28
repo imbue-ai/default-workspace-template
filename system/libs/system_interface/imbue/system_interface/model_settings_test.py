@@ -6,7 +6,7 @@ from pathlib import Path
 from imbue.system_interface.model_settings import DEFAULT_MODEL_ID
 from imbue.system_interface.model_settings import base_alias
 from imbue.system_interface.model_settings import is_valid_model_id
-from imbue.system_interface.model_settings import read_model_settings
+from imbue.system_interface.model_settings import read_model_from_settings
 from imbue.system_interface.model_settings import supports_fast_mode
 
 
@@ -36,27 +36,26 @@ def test_only_opus_supports_fast_mode() -> None:
     assert not supports_fast_mode("haiku")
 
 
-def test_read_model_settings_reads_model_and_fast_mode(tmp_path: Path) -> None:
+def test_read_model_from_settings_reads_the_selected_model(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(json.dumps({"model": "sonnet", "fastMode": True}))
-    assert read_model_settings(settings_path) == ("sonnet", True)
+    assert read_model_from_settings(settings_path) == "sonnet"
 
 
-def test_read_model_settings_defaults_when_keys_absent(tmp_path: Path) -> None:
+def test_read_model_from_settings_defaults_when_key_absent(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(json.dumps({"theme": "dark"}))
-    assert read_model_settings(settings_path) == (DEFAULT_MODEL_ID, False)
+    assert read_model_from_settings(settings_path) == DEFAULT_MODEL_ID
 
 
-def test_read_model_settings_defaults_on_missing_or_unreadable_file(tmp_path: Path) -> None:
-    assert read_model_settings(tmp_path / "nope.json") == (DEFAULT_MODEL_ID, False)
+def test_read_model_from_settings_defaults_on_missing_or_unreadable_file(tmp_path: Path) -> None:
+    assert read_model_from_settings(tmp_path / "nope.json") == DEFAULT_MODEL_ID
     bad = tmp_path / "bad.json"
     bad.write_text("{not valid json")
-    assert read_model_settings(bad) == (DEFAULT_MODEL_ID, False)
+    assert read_model_from_settings(bad) == DEFAULT_MODEL_ID
 
 
-def test_read_model_settings_ignores_wrong_typed_values(tmp_path: Path) -> None:
+def test_read_model_from_settings_ignores_wrong_typed_value(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
-    # A non-string model and a non-bool fastMode fall back to the defaults.
-    settings_path.write_text(json.dumps({"model": 123, "fastMode": "yes"}))
-    assert read_model_settings(settings_path) == (DEFAULT_MODEL_ID, False)
+    settings_path.write_text(json.dumps({"model": 123}))
+    assert read_model_from_settings(settings_path) == DEFAULT_MODEL_ID

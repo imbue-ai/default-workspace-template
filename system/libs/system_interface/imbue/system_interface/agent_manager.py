@@ -49,6 +49,8 @@ from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
+from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import ApplicationEntry
@@ -113,6 +115,7 @@ def _build_chat_create_command(
     name: str,
     agent_id: str,
     primary_labels: dict[str, str],
+    is_fast_mode_enabled: bool,
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent. Pure (see above)."""
     cmd = [
@@ -129,6 +132,13 @@ def _build_chat_create_command(
         # dynamic chat band (re-tagged from live UI engagement), not the worker band.
         "--label",
         "user_created=true",
+        # Chat is the one interactive agent type, so it is the only one that starts
+        # fast; .mngr/settings.toml defaults every other type to standard speed. The
+        # override targets `claude` because only the type that declares
+        # settings_overrides accepts a -S on it, and `chat` inherits from it. This
+        # create resolves its own config, so it never reaches any other agent.
+        "-S",
+        f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}",
         "--no-connect",
     ]
     # Inherit the project label from the primary agent. The chat agent belongs to
@@ -632,7 +642,12 @@ class AgentManager:
             msg = f"Cannot determine work directory for primary agent {self._own_agent_id}"
             raise AgentCreationError(msg)
 
-        cmd = _build_chat_create_command(self._mngr_binary, name, agent_id, primary_labels)
+        # New chats launch at the workspace's fast-mode setting: fast until the
+        # user answers the prompt, then whatever they chose.
+        decision = read_workspace_fast_mode_decision(get_workspace_fast_mode_decision_path(Path(work_dir)))
+        cmd = _build_chat_create_command(
+            self._mngr_binary, name, agent_id, primary_labels, decision.is_fast_mode_enabled
+        )
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
 

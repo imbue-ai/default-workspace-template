@@ -22,6 +22,7 @@ from werkzeug.exceptions import HTTPException
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
+from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import claude_auth_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
@@ -52,9 +53,16 @@ from imbue.system_interface.layout_ops import is_mutating_op
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
+from imbue.system_interface.fast_mode_policy import FAST_MODE_GRACE_TURN_COUNT
+from imbue.system_interface.fast_mode_policy import UNDECIDED_FAST_MODE_DECISION
+from imbue.system_interface.fast_mode_policy import WorkspaceFastModeDecision
+from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
+from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
+from imbue.system_interface.fast_mode_policy import resolve_launch_fast_mode
+from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
 from imbue.system_interface.model_settings import MODEL_OPTIONS
 from imbue.system_interface.model_settings import is_valid_model_id
-from imbue.system_interface.model_settings import read_model_settings
+from imbue.system_interface.model_settings import read_model_from_settings
 from imbue.system_interface.model_settings import supports_fast_mode
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
@@ -75,8 +83,10 @@ from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
 from imbue.system_interface.models import SetFastModeRequest
 from imbue.system_interface.models import SetModelRequest
+from imbue.system_interface.models import SetWorkspaceFastModeRequest
 from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
+from imbue.system_interface.models import WorkspaceFastModeResponse
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.service_dispatcher import register_service_routes
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -391,22 +401,40 @@ def _send_message_endpoint(agent_id: str) -> Response:
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
 
+def _resolve_agent_fast_mode(agent_info: AgentInfo) -> bool:
+    """Whether fast mode is on for the agent's running session.
+
+    Prefers whatever this UI last set for the agent: Claude Code deletes the
+    ``fastMode`` key on ``/fast off`` instead of writing false, so a session
+    toggled off is indistinguishable on disk from one that was never toggled.
+    With nothing sent this process lifetime, the layered settings files give the
+    value the session launched at.
+    """
+    live_fast_mode = get_state().live_fast_mode_by_agent_id.get(agent_info.id)
+    if live_fast_mode is not None:
+        return live_fast_mode
+    return resolve_launch_fast_mode(
+        claude_settings_path=agent_info.claude_config_dir / "settings.json",
+        managed_settings_path=get_managed_settings_path(agent_info.agent_state_dir),
+    )
+
+
 def _get_model_settings_endpoint(agent_id: str) -> Response:
     """Return the agent's current model + fast-mode selection for the composer picker.
 
-    Reads the agent's Claude Code ``settings.json`` (the source of truth the
-    ``/model`` and ``/fast`` commands write to). ``fast_mode_supported`` reflects
-    the current model so the frontend knows whether to surface the fast toggle.
+    The model comes from the agent's Claude Code ``settings.json`` (what ``/model``
+    writes). Fast mode is resolved separately because it is layered across two
+    settings files (see ``_resolve_agent_fast_mode``). ``fast_mode_supported``
+    reflects the current model so the frontend knows whether to surface the toggle.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
 
-    settings_path = agent_info.claude_config_dir / "settings.json"
-    model, fast_mode = read_model_settings(settings_path)
+    model = read_model_from_settings(agent_info.claude_config_dir / "settings.json")
     response = ModelSettingsResponse(
         model=model,
-        fast_mode=fast_mode,
+        fast_mode=_resolve_agent_fast_mode(agent_info),
         fast_mode_supported=supports_fast_mode(model),
         options=MODEL_OPTIONS,
     )
@@ -461,7 +489,67 @@ def _set_fast_mode_endpoint(agent_id: str) -> Response:
         error = ErrorResponse(detail=f"Failed to set fast mode for agent '{agent_info.name}' (0 successful agents)")
         return _json_response(error.model_dump(), status_code=500)
 
+    # Remember what we just set: the agent's settings files will not show it (see
+    # _resolve_agent_fast_mode), so this is what keeps the composer's toggle
+    # reading correctly when the frontend reconciles after a change settles.
+    get_state().live_fast_mode_by_agent_id[agent_info.id] = set_fast_mode_request.enabled
+
     return _json_response(SendMessageResponse(status="ok").model_dump())
+
+
+def _workspace_fast_mode_decision_path() -> Path | None:
+    """Where this workspace records its fast-mode decision, or None outside a workspace."""
+    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
+    if not work_dir:
+        return None
+    return get_workspace_fast_mode_decision_path(Path(work_dir))
+
+
+def _get_workspace_fast_mode_endpoint() -> Response:
+    """Return the workspace's fast-mode decision and the grace period length.
+
+    The frontend uses this to decide whether a chat still owes the user the
+    fast-mode prompt, and after how many turns to raise it.
+    """
+    decision_path = _workspace_fast_mode_decision_path()
+    decision = (
+        UNDECIDED_FAST_MODE_DECISION if decision_path is None else read_workspace_fast_mode_decision(decision_path)
+    )
+    response = WorkspaceFastModeResponse(
+        is_decided=decision.is_decided,
+        is_fast_mode_enabled=decision.is_fast_mode_enabled,
+        grace_turn_count=FAST_MODE_GRACE_TURN_COUNT,
+    )
+    return _json_response(response.model_dump())
+
+
+def _set_workspace_fast_mode_endpoint() -> Response:
+    """Record the user's answer to the fast-mode prompt for the whole workspace.
+
+    Every chat agent created from here on launches with this setting, and no chat
+    prompts again. Applying it to the *running* agent is a separate call to the
+    per-agent fast endpoint, so the two stay independently testable.
+    """
+    decision_path = _workspace_fast_mode_decision_path()
+    if decision_path is None:
+        error = ErrorResponse(detail="Cannot record a fast-mode decision outside a workspace")
+        return _json_response(error.model_dump(), status_code=500)
+
+    set_request = SetWorkspaceFastModeRequest.model_validate(request.get_json())
+    decision = WorkspaceFastModeDecision(is_decided=True, is_fast_mode_enabled=set_request.enabled)
+    try:
+        write_workspace_fast_mode_decision(decision_path, decision)
+    except OSError as e:
+        logger.opt(exception=e).error("Failed to record the workspace fast-mode decision")
+        error = ErrorResponse(detail="Failed to record the fast-mode decision")
+        return _json_response(error.model_dump(), status_code=500)
+
+    response = WorkspaceFastModeResponse(
+        is_decided=decision.is_decided,
+        is_fast_mode_enabled=decision.is_fast_mode_enabled,
+        grace_turn_count=FAST_MODE_GRACE_TURN_COUNT,
+    )
+    return _json_response(response.model_dump())
 
 
 def _activity_endpoint() -> Response:
@@ -1595,6 +1683,15 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_endpoint, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/fast", view_func=_set_fast_mode_endpoint, methods=["POST"])
+    application.add_url_rule(
+        "/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"]
+    )
+    application.add_url_rule(
+        "/api/workspace/fast-mode",
+        view_func=_set_workspace_fast_mode_endpoint,
+        methods=["POST"],
+        endpoint="_set_workspace_fast_mode",
+    )
     application.add_url_rule("/api/activity", view_func=_activity_endpoint, methods=["POST"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
     application.add_url_rule("/api/uploads/<path:relative_path>", view_func=_serve_attachment, methods=["GET"])

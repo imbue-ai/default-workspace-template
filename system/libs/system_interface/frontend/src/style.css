@@ -1894,6 +1894,80 @@ body {
   background: #b91c1c;
 }
 
+/* ── Fast-mode grace-period prompt ── */
+.fast-mode-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.fast-mode-modal {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 24px;
+  width: 460px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.fast-mode-modal-title {
+  font-family: var(--font-family-heading);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0 0 12px;
+}
+
+.fast-mode-modal-message {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.fast-mode-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.fast-mode-modal-btn {
+  padding: 8px 16px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-base);
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+}
+
+.fast-mode-modal-btn-standard {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+}
+
+.fast-mode-modal-btn-standard:hover {
+  background: var(--color-bg-hover);
+}
+
+.fast-mode-modal-btn-fast {
+  background: var(--color-accent, #2563eb);
+  color: #fff;
+  border-color: var(--color-accent, #2563eb);
+}
+
+.fast-mode-modal-btn-fast:hover {
+  filter: brightness(0.92);
+}
+
 /* ── Share modal ── */
 .share-modal-overlay {
   position: fixed;

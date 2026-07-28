@@ -32,6 +32,7 @@ import { createTranscriptScroll } from "./transcript-scroll";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import { getAgentById, getProtoAgents } from "../models/AgentManager";
 import { openLoginModal } from "../models/ClaudeAuth";
+import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
@@ -598,6 +599,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     const agent = getAgentById(agentId);
     const agentIsIdle = agent?.activity_state === "IDLE";
+
+    // A new chat starts on fast mode; once it has run its grace period, ask the
+    // user whether to keep it. Checked here because this is where the loaded
+    // transcript and the idle flag meet. Every gate is a cheap read and raising
+    // the prompt is idempotent, so re-running it per render is fine.
+    maybePromptForFastMode(agentId, events, agentIsIdle);
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the

@@ -53,6 +53,12 @@ class SystemInterfaceState(MutableModel):
     latchkey_http_client: httpx.Client
     watchers: dict[str, AgentSessionWatcher] = {}
     latchkey_catalog_cache: dict[str, Any] = {}
+    # Fast mode as last set through this UI, per agent. Claude Code deletes the
+    # ``fastMode`` key when ``/fast`` turns it off rather than writing false, so a
+    # running session's fast-mode state is not recoverable from its settings files
+    # -- the command we sent is the only record of it. Empty after a restart of
+    # this service, which falls back to the agent's launch-time value.
+    live_fast_mode_by_agent_id: dict[str, bool] = {}
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _latchkey_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)

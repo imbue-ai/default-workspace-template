@@ -53,23 +53,24 @@ def supports_fast_mode(model: str) -> bool:
     return any(base_alias(option.id) == alias and option.supports_fast_mode for option in MODEL_OPTIONS)
 
 
-def read_model_settings(settings_path: Path) -> tuple[str, bool]:
-    """Read ``(model, fast_mode)`` from a Claude Code ``settings.json``.
+def read_model_from_settings(settings_path: Path) -> str:
+    """Read the selected ``model`` from a Claude Code ``settings.json``.
 
-    A missing file, unreadable JSON, or absent keys fall back to the default
-    model and fast mode off, so the picker still renders (just showing defaults)
-    for an agent whose settings have not been written yet.
+    A missing file, unreadable JSON, or an absent key falls back to the default
+    model, so the picker still renders (just showing the default) for an agent
+    whose settings have not been written yet. Fast mode is resolved separately
+    (see ``fast_mode_policy``): unlike the model, it is layered across two
+    settings files and cannot be read from this one alone.
     """
     try:
         raw = settings_path.read_text()
     except OSError:
-        return (DEFAULT_MODEL_ID, False)
+        return DEFAULT_MODEL_ID
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        return (DEFAULT_MODEL_ID, False)
+        return DEFAULT_MODEL_ID
     model = data.get("model")
     if not isinstance(model, str) or not model:
-        model = DEFAULT_MODEL_ID
-    fast_mode = data.get("fastMode")
-    return (model, fast_mode if isinstance(fast_mode, bool) else False)
+        return DEFAULT_MODEL_ID
+    return model

@@ -76,6 +76,20 @@ class SetFastModeRequest(FrozenModel):
     enabled: bool = Field(description="True to enable fast mode, False to disable it")
 
 
+class WorkspaceFastModeResponse(FrozenModel):
+    """Response from GET /api/workspace/fast-mode."""
+
+    is_decided: bool = Field(description="Whether the user has answered the fast-mode prompt")
+    is_fast_mode_enabled: bool = Field(description="The fast-mode setting new chat agents launch with")
+    grace_turn_count: int = Field(description="User turns a chat agent runs fast before the prompt appears")
+
+
+class SetWorkspaceFastModeRequest(FrozenModel):
+    """Request body for POST /api/workspace/fast-mode."""
+
+    enabled: bool = Field(description="True to keep fast mode on for this workspace, False to turn it off")
+
+
 class AttachmentUploadResponse(FrozenModel):
     """Response from the chat attachment upload endpoint."""
 
