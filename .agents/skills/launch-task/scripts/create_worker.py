@@ -416,9 +416,18 @@ def launch(
     branch not being checked out in another worktree at create time (git forbids
     the same branch in two worktrees); the ``BASE:NEW`` form has no such
     constraint, since mngr cuts ``NEW`` from ``BASE`` without checking ``BASE``
-    out. Use ``resolve_worker_branch`` to name the branch a given spec produces.
+    out. The spec is resolved through ``resolve_worker_branch`` up front, so a
+    malformed one raises here -- before any worker is created -- rather than
+    after a caller has waited out a whole run.
     """
     runner = runner or Runner()
+
+    # Parse the branch spec before anything is created. A malformed spec is an
+    # authoring bug in the caller's argv, and it is knowable now: leaving it to
+    # ``launch_sync``'s own resolve (which runs after the await) would only
+    # surface it once the worker had already run to completion, discarding the
+    # report it had just collected.
+    resolve_worker_branch(name, branch)
 
     if not runtime_dir.is_dir():
         print(
