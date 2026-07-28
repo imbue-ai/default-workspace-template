@@ -97,12 +97,12 @@ dispatch below, and tell the user which version you're updating to.
 
 **If the command exits non-zero, stop -- nothing is wrong with the workspace.**
 It prints a single plain-language `error:` line saying why no target could be
-chosen, and there are three reasons, each with a different answer for the user:
-the minds app could not be reached (it is closed, or the gateway is down -- retry
-once it is running); the app is too old to report its version (update the minds
-app itself first, then re-run); or every release upstream is already newer than
-the app. Relay that reason in plain terms per the §5a composition rules and offer
-the next step. Do **not** work around it by resolving a ref by hand.
+chosen. Relay *that* line in plain terms per the §5a composition rules and offer
+the next step; the usual reasons each have a different answer for the user: the
+minds app could not be reached (it is closed, or the gateway is down -- retry once
+it is running); the app is too old to report its version (update the minds app
+itself first, then re-run); or every release upstream is already newer than the
+app. Do **not** work around it by resolving a ref by hand.
 
 ### The version ceiling
 
