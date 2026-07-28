@@ -92,6 +92,16 @@ SKILL_DIR_REL = ".agents/skills/update-self"
 _TAG_RE = re.compile(r"^minds-v(\d+)\.(\d+)\.(\d+)(?:-(?P<pre>.+))?$")
 
 
+class NoUpdateTargetError(ValueError):
+    """Raised when no ref to update to could be chosen.
+
+    A refusal, not a fault: the workspace is fine, there is simply nothing it may
+    update to right now (no stable tag upstream, or every one above the app's
+    ceiling). Distinct from a plain ``ValueError`` so the CLI can render exactly
+    this case as a one-line explanation and let a genuine bug keep its traceback.
+    """
+
+
 class ResolvedTarget(NamedTuple):
     """The ref the update merges in, plus a coarse ``kind`` for the caller's log.
 
@@ -190,7 +200,7 @@ def resolve_target(
     if override is None:
         latest = pick_latest_stable_tag(tags, ceiling=ceiling)
         if latest is None:
-            raise ValueError(_no_target_message(tags, ceiling))
+            raise NoUpdateTargetError(_no_target_message(tags, ceiling))
         return ResolvedTarget(latest, "tag", ceiling, False)
     exceeds = not _is_within_ceiling(override, ceiling)
     if override == "main":
@@ -776,7 +786,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (CeilingUnavailableError, ValueError) as e:
+    except (CeilingUnavailableError, NoUpdateTargetError) as e:
         # These two carry the "why you cannot update right now" explanation the
         # lead relays to the user, so print the message alone -- a traceback would
         # bury it and read as a crash rather than a refusal.
