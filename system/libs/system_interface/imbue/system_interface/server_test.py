@@ -659,9 +659,7 @@ def test_layout_dir_override_wins_over_the_agent_path(tmp_path: Path) -> None:
     # autosaves would land on the live layout, which is the exact thing this
     # prevents.
     override = tmp_path / "seeded-layout"
-    app = create_application(
-        build_test_state(config=Config(system_interface_layout_dir=override))
-    )
+    app = create_application(build_test_state(config=Config(system_interface_layout_dir=override)))
 
     with app.app_context():
         assert _primary_agent_layout_dir() == override
@@ -673,9 +671,7 @@ def test_layout_dir_override_is_per_app_not_process_wide(tmp_path: Path) -> None
     # from the process env instead would make whichever booted last win, and a
     # lingering connection on the other would write into the wrong workspace.
     override = tmp_path / "seeded-layout"
-    previewing = create_application(
-        build_test_state(config=Config(system_interface_layout_dir=override))
-    )
+    previewing = create_application(build_test_state(config=Config(system_interface_layout_dir=override)))
     plain = create_application(build_test_state(config=Config()))
 
     with previewing.app_context():
