@@ -770,36 +770,49 @@ def _preview_layout_seed_dir(repo_root: Path, slug: str) -> Path:
     return repo_root / _PREVIEW_LAYOUT_SEED_ROOT / _preview_instance_name(slug)
 
 
-def _layout_content_references_preview(path: Path) -> bool:
-    """Whether a persisted layout file opens a panel on one of the preview services.
+def _layout_seed_refusal_reason(path: Path) -> str | None:
+    """Why this persisted layout file must not be seeded, or None to seed it.
 
-    Reads the dockview ``panelParams`` map, whose ``serviceName`` is what a
-    service iframe is addressed by. An unreadable or unparsable file counts as
-    referencing: the server could not render it either, so declining to seed it
-    loses nothing and keeps the failure mode on the safe side.
+    Two independent reasons, kept distinct so the operator is told the true one:
+
+    - It opens a panel on one of the preview services. Read from the dockview
+      ``panelParams`` map, whose ``serviceName`` is what a service iframe is
+      addressed by; seeding it would render the preview inside itself.
+    - It is not readable layout JSON. The server could not render it either, so
+      declining to seed loses nothing and keeps the failure mode on the safe
+      side -- but it is a corrupt file in the *live* workspace, which is worth
+      saying out loud rather than blaming on the nesting guard.
     """
     try:
         content = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError, ValueError):
-        return True
+    except OSError as exc:
+        return f"it could not be read ({exc})"
+    except ValueError as exc:
+        # json.JSONDecodeError is a ValueError subclass.
+        return f"it is not valid JSON ({exc})"
     if not isinstance(content, dict):
-        return True
+        return "its contents are not a JSON object"
     panel_params = content.get("panelParams")
     if not isinstance(panel_params, dict):
-        return False
-    return any(
-        isinstance(params, dict)
-        and params.get("serviceName") in _PREVIEW_SERVICE_NAMES
+        return None
+    opens_preview = any(
+        isinstance(params, dict) and params.get("serviceName") in _PREVIEW_SERVICE_NAMES
         for params in panel_params.values()
     )
+    if opens_preview:
+        return (
+            "it opens a preview panel, which would render the preview inside itself"
+        )
+    return None
 
 
 def _seed_layout_file(source: Path, destination: Path) -> None:
-    """Copy one persisted layout file unless it would nest the preview in itself."""
-    if _layout_content_references_preview(source):
+    """Copy one persisted layout file unless something disqualifies it."""
+    reason = _layout_seed_refusal_reason(source)
+    if reason is not None:
         sys.stderr.write(
-            f"preview: not seeding {source.name} -- it opens a preview panel, which "
-            "would render the preview inside itself; that layout opens empty.\n"
+            f"preview: not seeding {source.name} -- {reason}; that layout opens "
+            "empty.\n"
         )
         return
     shutil.copy2(source, destination)

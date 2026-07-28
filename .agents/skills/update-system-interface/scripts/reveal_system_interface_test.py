@@ -615,6 +615,28 @@ def test_preview_drops_a_legacy_layout_that_opens_the_preview_itself(
     assert not (seed_dir / "layout.json").exists()
 
 
+def test_preview_skips_a_corrupt_layout_and_says_why(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A live layout file the server itself could not render is left out of the
+    # seed -- but the operator must be told *that*, not that the nesting guard
+    # fired, or they go looking for a preview panel that isn't there.
+    repo_root = tmp_path / "repo"
+    work_dir = _make_work_dir(repo_root)
+    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    (layout_dir / "layouts" / "truncated.json").write_text('{"panelParams":')
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=_RecordingRunner())
+
+    assert code == 0
+    seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
+    assert not (seed_dir / "layouts" / "truncated.json").exists()
+    message = capsys.readouterr().err
+    assert "truncated.json" in message
+    assert "not valid JSON" in message
+    assert "preview panel" not in message
+
+
 def test_preview_seeds_layouts_that_open_other_services(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
