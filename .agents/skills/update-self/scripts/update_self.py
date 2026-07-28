@@ -316,9 +316,11 @@ def _no_target_message(tags: Sequence[str], ceiling: str | None) -> str:
 # its target from a background worker, with nobody watching to approve one.
 _MINDS_APP_INFO_URL = "http://latchkey-self.invalid/minds-api-proxy/api/v1/app"
 
-# Bounds the gateway round-trip. The app is local (or a short hop away) and the
-# route reads two in-process values, so a slow answer means something is wrong
-# rather than something is busy.
+# Bounds the gateway round-trip, at the house network default (the style guide's
+# 60s, matching this repo's other ``latchkey curl``, ``github_sync``'s
+# ``_LATCHKEY_CURL_TIMEOUT_SECONDS``). Deliberately generous rather than sharp:
+# this is the one call that refuses the *entire* update when it fails, so a
+# timeout that fires on a merely slow answer costs far more than waiting does.
 _APP_INFO_TIMEOUT_SECONDS = 60
 
 # Statuses that mean "this app predates the version route", not "something went
