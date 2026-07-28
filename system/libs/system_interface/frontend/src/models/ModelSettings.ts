@@ -1,18 +1,26 @@
 /**
  * Per-agent model + fast-mode state for the composer model picker.
  *
- * The backend exposes the agent's Claude Code selection (read from its
- * settings.json) and applies changes by sending `/model` / `/fast` slash
- * commands to the running session (see server.py). This module caches that
- * state per agent, reflects a pick optimistically so the control feels
- * responsive, and applies changes through a per-agent single-flight chain: at
- * most one change request is in flight for an agent at a time, and they run in
- * click order. That is what keeps rapid clicks correct -- without it, the
- * browser fires the requests concurrently and the threaded backend delivers the
- * `/model` / `/fast` commands to Claude in a nondeterministic order, so the
- * agent can end up in the opposite state from the last click. When the chain
- * drains, we read settings.json once to reconcile the display with reality
- * (catching a refused change, e.g. an org-gated `/fast on`).
+ * The backend exposes the agent's Claude Code selection -- the model from its
+ * settings.json, fast mode resolved across the two settings layers Claude
+ * reads -- and applies changes by sending `/model` / `/fast` slash commands to
+ * the running session (see server.py). This module caches that state per agent,
+ * reflects a pick optimistically so the control feels responsive, and applies
+ * changes through a per-agent single-flight chain: at most one change request is
+ * in flight for an agent at a time, and they run in click order. That is what
+ * keeps rapid clicks correct -- without it, the browser fires the requests
+ * concurrently and the threaded backend delivers the `/model` / `/fast` commands
+ * to Claude in a nondeterministic order, so the agent can end up in the opposite
+ * state from the last click.
+ *
+ * When the chain drains, we re-read the settings once to reconcile the display.
+ * For the model that is a read of reality, and catches a refused change. For
+ * fast mode it is not: Claude Code deletes the `fastMode` key on `/fast off`
+ * rather than writing false, so a running session's fast-mode state is not
+ * recoverable from disk and the backend reports what it was last told to set
+ * (see `_resolve_agent_fast_mode`). A refused `/fast on` therefore still
+ * displays as on -- which this workspace avoids by disabling the org-level
+ * eligibility check that would refuse it.
  */
 
 import m from "mithril";
