@@ -13,3 +13,7 @@ Added codex as a peer harness in the workspace chat UI, alongside claude.
 - The "New Codex Agent" launcher is gated behind a FEATURE_FLAG_ENABLE_CODEX
   feature flag (off by default), so codex can be dark-launched and enabled per
   host without a rebuild.
+- Fixed: a codex agent interrupted mid-turn and resumed could stay stuck on
+  "Thinking..." until the user sent another message. The restart-boundary check
+  looked for claude's marker file on every agent, so it never fired for codex
+  (which writes its own).

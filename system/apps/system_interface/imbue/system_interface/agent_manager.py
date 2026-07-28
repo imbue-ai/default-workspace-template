@@ -39,13 +39,8 @@ from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
-from imbue.system_interface.activity_state import has_unmatched_tool_use
-from imbue.system_interface.activity_state import last_event_timestamp
-from imbue.system_interface.activity_state import last_event_type
-from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
-from imbue.system_interface.claude_activity_state import derive_claude
-from imbue.system_interface.codex_activity_state import codex_turn_open
-from imbue.system_interface.codex_activity_state import derive_codex
+from imbue.system_interface.harness_activity import HarnessActivityTracker
+from imbue.system_interface.harness_activity import build_tracker_for_harness
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
@@ -348,13 +343,10 @@ class AgentManager:
     _mngr_binary: str
     _host_dir: Path
     _activity_tracked_agents: set[str]
-    _has_unmatched_tool_use_by_agent: dict[str, bool]
-    # Codex only: whether the latest turn marker in the transcript is an open turn
-    # (task_started with no task_complete/turn_aborted after it). Drives the codex
-    # activity latch. Absent/False for claude (its transcript has no turn markers).
-    _codex_turn_open_by_agent: dict[str, bool]
-    _last_event_type_by_agent: dict[str, str | None]
-    _last_event_timestamp_by_agent: dict[str, str | None]
+    # Per-agent activity tracker, built from the agent's harness when tracking
+    # starts. Owns that harness's cached transcript signals and its derivation;
+    # see :mod:`harness_activity`.
+    _activity_tracker_by_agent: dict[str, HarnessActivityTracker]
     _activity_state_by_agent: dict[str, ActivityState]
     # Assist chats whose tab we have already auto-opened (or that existed at
     # startup, seeded by ``_initial_discover`` so we never auto-open them). Lets
@@ -406,10 +398,7 @@ class AgentManager:
         manager._mngr_binary = mngr_binary
         manager._host_dir = get_host_dir()
         manager._activity_tracked_agents = set()
-        manager._has_unmatched_tool_use_by_agent = {}
-        manager._codex_turn_open_by_agent = {}
-        manager._last_event_type_by_agent = {}
-        manager._last_event_timestamp_by_agent = {}
+        manager._activity_tracker_by_agent = {}
         manager._activity_state_by_agent = {}
         manager._auto_opened_assist_ids = set()
         # Built last: its ``list_chat_agent_ids`` callback reads ``_agents`` /
@@ -449,9 +438,7 @@ class AgentManager:
 
         with self._lock:
             self._activity_tracked_agents.clear()
-            self._has_unmatched_tool_use_by_agent.clear()
-            self._codex_turn_open_by_agent.clear()
-            self._last_event_type_by_agent.clear()
+            self._activity_tracker_by_agent.clear()
             self._activity_state_by_agent.clear()
 
     @property
@@ -1241,28 +1228,35 @@ class AgentManager:
             return
         with self._lock:
             self._activity_tracked_agents.add(agent_id)
+            # Built once, from the harness the agent was created with. This is the
+            # single place a harness name selects behavior; everything downstream
+            # just calls the tracker.
+            if agent_id not in self._activity_tracker_by_agent:
+                agent_state = self._agents.get(agent_id)
+                harness = agent_state.harness if agent_state is not None else ""
+                self._activity_tracker_by_agent[agent_id] = build_tracker_for_harness(harness)
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
     def _stop_activity_tracking(self, agent_id: str) -> None:
         """Stop activity tracking and clear cached activity state."""
         with self._lock:
             self._activity_tracked_agents.discard(agent_id)
-            self._has_unmatched_tool_use_by_agent.pop(agent_id, None)
-            self._codex_turn_open_by_agent.pop(agent_id, None)
-            self._last_event_type_by_agent.pop(agent_id, None)
-            self._last_event_timestamp_by_agent.pop(agent_id, None)
+            self._activity_tracker_by_agent.pop(agent_id, None)
             self._activity_state_by_agent.pop(agent_id, None)
 
-    def _read_process_started_at(self, agent_id: str) -> float | None:
-        """Return the mtime of the agent's ``claude_process_started`` marker, or None.
+    def _read_process_started_at(self, agent_id: str, marker_filename: str) -> float | None:
+        """Return the mtime of the agent's ``*_process_started`` marker, or None.
 
         mngr touches this marker on every startup/resume (a fresh, not-mid-turn
-        Claude process), so its mtime is the boundary the activity tracker
-        compares transcript timestamps against. Returns ``None`` when the marker
-        is absent (e.g. an agent that has not restarted since the marker was
-        introduced) so the staleness override simply does not fire.
+        agent process), so its mtime is the boundary the activity tracker
+        compares transcript timestamps against. The filename is harness-specific
+        (``HarnessActivityTracker.marker_filename``) because each mngr plugin
+        writes its own -- ``claude_process_started`` / ``codex_process_started``.
+        Returns ``None`` when the marker is absent (e.g. an agent that has not
+        restarted since the marker was introduced) so the staleness override
+        simply does not fire.
         """
-        marker = self._get_agent_state_dir(agent_id) / "claude_process_started"
+        marker = self._get_agent_state_dir(agent_id) / marker_filename
         try:
             return marker.stat().st_mtime
         except OSError:
@@ -1278,38 +1272,26 @@ class AgentManager:
         Quietly does nothing when the agent is not being tracked for activity
         (e.g. a remote agent) or is no longer in ``_agents``.
         """
-        # Read the restart-boundary marker outside the lock (it is a filesystem
-        # stat, not shared state). Re-read on every recompute so a restart that
-        # touches the marker is reflected even when no new transcript events
-        # arrive -- the post-restart observe snapshot drives the recompute.
-        process_started_at = self._read_process_started_at(agent_id)
+        # Resolve the tracker first: it names the marker to stat, and the stat
+        # must stay outside the lock (it is a filesystem call, not shared state).
+        with self._lock:
+            tracker = self._activity_tracker_by_agent.get(agent_id)
+        if tracker is None:
+            return
+        # Re-read on every recompute so a restart that touches the marker is
+        # reflected even when no new transcript events arrive -- the post-restart
+        # observe snapshot drives the recompute.
+        process_started_at = self._read_process_started_at(agent_id, tracker.marker_filename)
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
             agent_state = self._agents.get(agent_id)
             if agent_state is None:
                 return
-            has_pending_tool = self._has_unmatched_tool_use_by_agent.get(agent_id, False)
-            cached_last_event_type = self._last_event_type_by_agent.get(agent_id)
-            tail_event_at = parse_iso_timestamp_to_epoch(self._last_event_timestamp_by_agent.get(agent_id))
-            # Dispatch to the agent's harness peer. Codex uses its authoritative
-            # task_started/task_complete turn latch; claude uses the lifecycle +
-            # transcript-tail heuristic. Neither is a fallthrough default.
-            if agent_state.harness == "codex":
-                new_state = derive_codex(
-                    turn_open=self._codex_turn_open_by_agent.get(agent_id, False),
-                    has_pending_tool_use=has_pending_tool,
-                    tail_event_at=tail_event_at,
-                    process_started_at=process_started_at,
-                )
-            else:
-                new_state = derive_claude(
-                    is_agent_running=agent_state.state in RUNNING_LIFECYCLE_STATES,
-                    has_pending_tool_use=has_pending_tool,
-                    tail_event_type=cached_last_event_type,
-                    tail_event_at=tail_event_at,
-                    process_started_at=process_started_at,
-                )
+            new_state = tracker.derive(
+                is_agent_running=agent_state.state in RUNNING_LIFECYCLE_STATES,
+                process_started_at=process_started_at,
+            )
             old_state = self._activity_state_by_agent.get(agent_id)
             if old_state == new_state and agent_state.activity_state == new_state.value:
                 return
@@ -1331,50 +1313,34 @@ class AgentManager:
         """Recompute transcript-derived activity signals from the full event list.
 
         Called by ``server._get_or_create_watcher`` whenever the
-        :class:`AgentSessionWatcher` learns of new events. Cheap to call: short
-        circuits when both the unmatched-tool-use boolean and the last event
-        type are unchanged.
+        :class:`AgentSessionWatcher` learns of new events. Cheap to call: the
+        tracker short circuits when none of its derived signals changed, so a
+        streamed line that moves nothing skips both the recompute and its
+        per-event marker stat.
 
         No-op for agents not being tracked for activity (e.g. remote agents, or
         stale callbacks for an agent that was just destroyed).
         """
-        new_pending = has_unmatched_tool_use(events)
-        new_turn_open = codex_turn_open(events)
-        new_last_type = last_event_type(events)
-        new_last_timestamp = last_event_timestamp(events)
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
-            old_pending = self._has_unmatched_tool_use_by_agent.get(agent_id, False)
-            old_turn_open = self._codex_turn_open_by_agent.get(agent_id, False)
-            old_last_type = self._last_event_type_by_agent.get(agent_id)
-            if old_pending == new_pending and old_turn_open == new_turn_open and old_last_type == new_last_type:
+            tracker = self._activity_tracker_by_agent.get(agent_id)
+            if tracker is None or not tracker.observe(events):
                 return
-            self._has_unmatched_tool_use_by_agent[agent_id] = new_pending
-            self._codex_turn_open_by_agent[agent_id] = new_turn_open
-            self._last_event_type_by_agent[agent_id] = new_last_type
-            # Refreshed alongside the type so the stale-tail check sees the
-            # current tail's time. This sits under the same short-circuit above:
-            # a new event that leaves pending/type unchanged returns early and
-            # skips both this refresh and the recompute (and its per-event marker
-            # stat), so streamed lines that don't change the derived signals stay
-            # cheap.
-            self._last_event_timestamp_by_agent[agent_id] = new_last_timestamp
 
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
     def reset_activity_state(self, agent_id: str) -> None:
         """Force ``agent_id`` back to IDLE after an interrupt/restart.
 
-        Interrupting an agent restarts its Claude process. The restart abandons
+        Interrupting an agent restarts its harness process. The restart abandons
         the session transcript mid-turn -- the last recorded event is still an
         unmatched ``tool_use`` or a ``tool_result`` -- so the transcript-derived
         activity state stays pinned at TOOL_RUNNING / THINKING until the user
         sends another message. The restart is a backend action that the
         transcript never records, so the backend must reset the derived signals
-        explicitly: clearing the unmatched-tool-use flag, the codex turn-open
-        latch, and the cached last event type makes the harness derive settle on
-        IDLE.
+        explicitly; ``HarnessActivityTracker.reset`` clears whichever signals
+        that harness caches, making its derive settle on IDLE.
 
         No-op for agents not being tracked for activity (remote agents, or a
         callback racing with destruction).
@@ -1382,10 +1348,10 @@ class AgentManager:
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
-            self._has_unmatched_tool_use_by_agent[agent_id] = False
-            self._codex_turn_open_by_agent[agent_id] = False
-            self._last_event_type_by_agent[agent_id] = None
-            self._last_event_timestamp_by_agent[agent_id] = None
+            tracker = self._activity_tracker_by_agent.get(agent_id)
+            if tracker is None:
+                return
+            tracker.reset()
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
     def _read_apps(self, toml_path: Path) -> None:
