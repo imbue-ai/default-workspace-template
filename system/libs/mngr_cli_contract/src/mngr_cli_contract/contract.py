@@ -29,19 +29,17 @@ workspace venv) import a single copy rather than duplicating the validator.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 import click
 from imbue.mngr.cli.common_opts import apply_settings_to_config
-from imbue.mngr.config.data_types import MngrConfig, TmuxConfig
+from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.errors import MngrError
 
 # Importing the CLI is also what loads the mngr plugins, and therefore what
 # registers the per-agent-type config classes that a
 # ``-S agent_types.<type>....`` override is resolved against.
 from imbue.mngr.main import cli
-from imbue.mngr.utils.logging import LoggingConfig
 
 # click parameter name of mngr's ``-S`` / ``--setting`` option, i.e. the key its
 # values arrive under in a parsed option dict.
@@ -98,22 +96,13 @@ def assert_mngr_settings_valid(settings: Sequence[str]) -> None:
     reported it, so every spelling click accepts (``-S K=V``, ``-SK=V``,
     ``--setting=K=V``) is covered without this module re-deriving any of them.
 
-    The overrides are applied to a bare constructed config rather than the
-    repo's loaded settings, so an ``__extend`` suffix extends from nothing. That
-    does not affect whether the key path resolves, which is what is pinned here.
+    The overrides are applied to an all-defaults config rather than the repo's
+    loaded settings, so an ``__extend`` suffix extends from nothing. That does
+    not affect whether the key path resolves, which is what is pinned here.
     """
     if not settings:
         return
-    base_config = MngrConfig.model_construct(
-        prefix="mngr-",
-        default_host_dir=Path("~/.mngr"),
-        agent_types={},
-        providers={},
-        plugins={},
-        logging=LoggingConfig(),
-        tmux=TmuxConfig(),
-        commands={},
-    )
+    base_config = MngrConfig()
     for setting in settings:
         try:
             apply_settings_to_config(base_config, [setting], frozenset())
