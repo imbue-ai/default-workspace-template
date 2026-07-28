@@ -9,9 +9,9 @@ command, logs) or adds/removes a program, rather than only its code.
 Background services are defined as `[program:<name>]` sections, one service per
 file under `system/supervisord.conf.d/`, which the main
 `system/supervisord.conf` pulls in with `[include] files =
-supervisord.conf.d/*.conf`. (`system_interface` is the one exception -- it stays
-in the main config because the minds desktop client's recovery probe parses that
-file directly and does not follow the include.) `uv run bootstrap` runs first-boot
+supervisord.conf.d/*.conf`. Every program lives in a drop-in, including
+`system_interface`; the main config holds only the daemon's own settings.
+`uv run bootstrap` runs first-boot
 setup and then `exec`s `supervisord` in the foreground (in the `bootstrap`
 tmux window); supervisord starts and supervises every program. supervisord
 does **not** watch the config file -- you apply changes with

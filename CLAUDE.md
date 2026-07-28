@@ -235,7 +235,7 @@ Memory is gitignored (everything under `data/` is). It survives container loss v
 
 **Before editing any code that belongs to a supervisord service -- a user-facing web service or a background daemon -- load the `update-service` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit a service's code or its `system/supervisord.conf.d/<name>.conf` without it.
 
-You can define background services as supervisord programs, one service per file under `system/supervisord.conf.d/` (pulled in by an `[include]` glob in `system/supervisord.conf`, which itself holds only the daemon config and `system_interface`).
+You can define background services as supervisord programs, one service per file under `system/supervisord.conf.d/` (pulled in by an `[include]` glob in `system/supervisord.conf`, which itself holds only the daemon config).
 Supervisord (launched by `bootstrap` after first-boot setup) supervises them; each program writes its own rotated logs under `/var/log/supervisor/<name>-stdout.log` and `/var/log/supervisor/<name>-stderr.log`.
 To add, change, or remove a service, add/edit/delete `system/supervisord.conf.d/<name>.conf` and run `supervisorctl reread && supervisorctl update` (and `supervisorctl restart <name>` to bounce one). Inspect with `supervisorctl status` / `supervisorctl tail -f <name> stderr`.
 One file per service is deliberate: two agents adding services concurrently never touch the same file, so neither is blocked on the other's uncommitted work.
