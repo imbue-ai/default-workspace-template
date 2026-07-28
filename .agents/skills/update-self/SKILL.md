@@ -180,9 +180,12 @@ preserve that boundary: a future version's Steps 1-2 must stay "capture a backup
 the single-flight/clean-tree checks, then resolve a ref into `$REF`", and its
 Step 3 must stay the worker dispatch -- otherwise an older initiator handing off
 into a newer copy (or vice versa) lands at the wrong step. The version ceiling is
-part of resolving `$REF`, so it lives in Step 2 and is therefore enforced by the
-*local* copy of this skill: a workspace whose copy predates the ceiling does not
-get capped until it has taken one update that carries it. Keep the staging path
+part of resolving `$REF`, so Step 2 computes it from the *local* copy -- which on
+a workspace whose template predates the ceiling does not compute one at all.
+Step 3a therefore re-checks it from the staged target copy before the dispatch,
+so the cap holds on the very first update into it. Keep 3a in any future version:
+it, not Step 2, is what protects a workspace arriving from an older template.
+Keep the staging path
 (`data/.tasks/update-self/skill-at-target/.agents/skills/update-self`) stable for the
 same reason. Note also that this handoff runs the target ref's `update_self.py`
 and follows its prose *before* the Step 5a approval gate; for the default target
@@ -191,6 +194,39 @@ merge itself, but a `--override` to an untrusted ref means trusting that ref's
 flow code and instructions -- only override to a ref you trust.
 
 ## 3. Dispatch the worker
+
+### 3a. Re-check the ceiling from the staged copy (first, before anything else)
+
+Run the version ceiling once more, from the **staged target copy**:
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    resolve-target --local-tags --override "$REF" > /tmp/update-self-recheck.json || exit 1
+cat /tmp/update-self-recheck.json
+```
+
+**This is not redundant with Step 2 -- it is the only ceiling check that runs on
+a workspace updating *into* the ceiling for the first time.** Step 2 runs from
+this workspace's *local* skill copy, and any workspace whose template predates
+the ceiling has a local copy that does not check one: it happily resolves the
+newest tag upstream, which is exactly the too-new target the ceiling exists to
+refuse. The staged copy is by construction at least as new as `$REF`, so this
+check runs no matter how stale the initiator was. That is precisely what §2a's
+hand-off machinery is for -- "a fix that shipped in the release is applied on the
+way *in*" -- and the ceiling is such a fix.
+
+If `exceeds_ceiling` is `true` here and the user has **not** already confirmed an
+over-ceiling `--override` in Step 2, stop and take that confirmation now, with
+the same plain-language framing Step 2 describes. A default (no-override) resolve
+that trips this means the local copy chose a target its app cannot support:
+say so, and offer the ref this pass *would* cap to (re-run without `--override`
+to learn it). Do not dispatch the worker until it is resolved.
+
+The boundary in §2a still holds: `$REF` is still resolved in Step 2, and Step 3
+is still the worker dispatch. This is a guard at the head of the dispatch, not a
+second resolution.
+
+### 3b. Launch
 
 Open a tracking ticket, write the task file, launch via the `launch-task`
 machinery, and background-poll.
