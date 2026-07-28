@@ -127,6 +127,14 @@ _AWAIT_TIMEOUT_RC = 124
 _AWAIT_SHED_RC = 75
 
 
+class BranchSpecError(ValueError):
+    """A malformed mngr ``--branch`` spec (avoids raising a built-in directly).
+
+    Inherits ``ValueError`` so the failure still reads as a bad-argument error to
+    anything catching broadly, while giving callers a name to catch precisely.
+    """
+
+
 def resolve_worker_branch(name: str, branch: str | None) -> str:
     """The branch the worker's commits actually land on, for a ``--branch`` spec.
 
@@ -150,7 +158,7 @@ def resolve_worker_branch(name: str, branch: str | None) -> str:
         return f"mngr/{name}"
     if ":" not in branch:
         if not branch:
-            raise ValueError(
+            raise BranchSpecError(
                 "branch spec must not be empty -- pass None for mngr's default (mngr/<name>)"
             )
         return branch
@@ -158,7 +166,7 @@ def resolve_worker_branch(name: str, branch: str | None) -> str:
     if not new:
         new = _MNGR_DEFAULT_NEW_BRANCH_PATTERN
     if new.count("*") > 1:
-        raise ValueError(
+        raise BranchSpecError(
             f"branch spec allows at most one '*' in the new branch name: {branch!r}"
         )
     return new.replace("*", name)

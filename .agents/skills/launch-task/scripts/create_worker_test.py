@@ -209,7 +209,7 @@ def test_launch_rejects_a_malformed_branch_spec_before_creating_anything(
     runtime, task, _ = _make_layout(tmp_path)
     runner = _RecordingRunner()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(create_worker_mod.BranchSpecError):
         create_worker_mod.launch(
             name="demo-worker",
             template="worker",
@@ -226,9 +226,9 @@ def test_resolve_worker_branch_rejects_malformed_specs() -> None:
     # Authoring bugs, surfaced loudly rather than silently naming a wrong branch:
     # an empty spec (callers pass None for the default) and more than one "*",
     # which mngr itself rejects.
-    with pytest.raises(ValueError):
+    with pytest.raises(create_worker_mod.BranchSpecError):
         create_worker_mod.resolve_worker_branch("demo-worker", "")
-    with pytest.raises(ValueError):
+    with pytest.raises(create_worker_mod.BranchSpecError):
         create_worker_mod.resolve_worker_branch("demo-worker", "main:*/*")
 
 
