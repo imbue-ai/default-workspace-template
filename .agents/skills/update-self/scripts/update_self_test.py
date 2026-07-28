@@ -193,8 +193,10 @@ def test_overrides_are_never_flagged_without_a_ceiling() -> None:
 # --- fetch_app_template_ref ------------------------------------------------
 
 
-def _fake_latchkey(directory: Path, body: str, status: str, exit_code: int = 0) -> None:
-    """Install a stub ``latchkey`` on PATH that mimics the real curl passthrough.
+def _install_fake_latchkey(
+    monkeypatch, directory: Path, body: str, status: str, exit_code: int = 0
+) -> None:
+    """Put a stub ``latchkey`` on PATH that mimics the real curl passthrough.
 
     The real ``latchkey curl`` forwards its arguments to ``curl`` and passes
     curl's exit code, stdout and stderr back. The stub honors the two arguments
@@ -202,6 +204,7 @@ def _fake_latchkey(directory: Path, body: str, status: str, exit_code: int = 0) 
     %{http_code}`` for the status on stdout -- so the test exercises the actual
     subprocess call rather than a stand-in for it.
     """
+    directory.mkdir(parents=True, exist_ok=True)
     script = directory / "latchkey"
     lines = [
         "#!/usr/bin/env python3",
@@ -216,17 +219,33 @@ def _fake_latchkey(directory: Path, body: str, status: str, exit_code: int = 0) 
         lines.append(f"sys.exit({exit_code})")
     script.write_text("\n".join(lines) + "\n")
     script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}:{os.environ['PATH']}")
+
+
+def _init_repo_with_tags(root: Path, *tags: str) -> None:
+    """Init a git repo at ``root`` with one empty commit carrying ``tags``."""
+
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+    root.mkdir(parents=True, exist_ok=True)
+    _git("init", "-q")
+    _git("config", "user.email", "test@example.com")
+    _git("config", "user.name", "test")
+    _git("commit", "--allow-empty", "-q", "-m", "root")
+    for tag in tags:
+        _git("tag", tag)
 
 
 def test_fetch_app_template_ref_returns_the_apps_pinned_ref(
     tmp_path, monkeypatch
 ) -> None:
-    _fake_latchkey(
+    _install_fake_latchkey(
+        monkeypatch,
         tmp_path,
         body='{"app_version": "0.3.9", "workspace_template_ref": "minds-v0.3.9"}',
         status="200",
     )
-    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
 
     assert update_self.fetch_app_template_ref() == "minds-v0.3.9"
 
@@ -237,8 +256,9 @@ def test_fetch_app_template_ref_blocks_when_the_app_predates_the_route(
     # The case the ceiling most needs to catch: an app old enough to lack the
     # route is also an app a newer template would outrun. It must not degrade to
     # "no ceiling".
-    _fake_latchkey(tmp_path, body='{"error": "Not Found"}', status="404")
-    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    _install_fake_latchkey(
+        monkeypatch, tmp_path, body='{"error": "Not Found"}', status="404"
+    )
 
     try:
         update_self.fetch_app_template_ref()
@@ -251,8 +271,7 @@ def test_fetch_app_template_ref_blocks_when_the_app_predates_the_route(
 def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
     tmp_path, monkeypatch
 ) -> None:
-    _fake_latchkey(tmp_path, body="", status="000", exit_code=7)
-    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    _install_fake_latchkey(monkeypatch, tmp_path, body="", status="000", exit_code=7)
 
     try:
         update_self.fetch_app_template_ref()
@@ -266,8 +285,9 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
 def test_fetch_app_template_ref_blocks_on_an_unparseable_body(
     tmp_path, monkeypatch
 ) -> None:
-    _fake_latchkey(tmp_path, body="<html>gateway error</html>", status="200")
-    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    _install_fake_latchkey(
+        monkeypatch, tmp_path, body="<html>gateway error</html>", status="200"
+    )
 
     try:
         update_self.fetch_app_template_ref()
@@ -286,34 +306,13 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
     approval message tells the user about.
     """
     repo = tmp_path / "repo"
-    repo.mkdir()
-
-    def _git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
-
-    _git("init", "-q")
-    _git(
-        "-c",
-        "user.email=test@example.com",
-        "-c",
-        "user.name=test",
-        "commit",
-        "--allow-empty",
-        "-q",
-        "-m",
-        "root",
-    )
-    _git("tag", "minds-v0.3.9")
-    _git("tag", "minds-v0.4.0")
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _fake_latchkey(
-        bin_dir,
+    _init_repo_with_tags(repo, "minds-v0.3.9", "minds-v0.4.0")
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "bin",
         body='{"app_version": "0.3.9", "workspace_template_ref": "minds-v0.3.9"}',
         status="200",
     )
-    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
 
     assert (
         update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
@@ -336,11 +335,9 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _fake_latchkey(bin_dir, body="", status="000", exit_code=7)
-    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    _install_fake_latchkey(
+        monkeypatch, tmp_path / "bin", body="", status="000", exit_code=7
+    )
 
     assert (
         update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
@@ -489,22 +486,7 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
     # Python < 3.13 (bpo-9351). Asserting on the resolved tag (which only
     # exists in the tmp repo) catches both -- a clobber would resolve against
     # the real repo and either fail or print a different ref.
-    def _git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
-
-    _git("init", "-q")
-    _git(
-        "-c",
-        "user.email=test@example.com",
-        "-c",
-        "user.name=test",
-        "commit",
-        "--allow-empty",
-        "-q",
-        "-m",
-        "root",
-    )
-    _git("tag", "minds-v0.1.0")
+    _init_repo_with_tags(tmp_path, "minds-v0.1.0")
 
     # ``--ceiling main`` pins a non-release ceiling (i.e. no cap), so this test
     # stays about the ``--repo-root`` plumbing and never reaches for the app.
