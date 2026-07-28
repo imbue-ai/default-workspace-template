@@ -56,8 +56,12 @@ export function fetchWorkspaceFastMode(): void {
     });
 }
 
+/** Raise the shared prompt on behalf of `agentId`. The first conversation to
+ *  claim it keeps it until it is answered: every mounted ChatPanel re-runs this
+ *  check on every render, so letting a second agent take over would flip the
+ *  owner (and schedule a redraw) on every frame while both are waiting. */
 export function openFastModePrompt(agentId: string): void {
-  if (promptingAgentId === agentId) {
+  if (promptingAgentId !== null) {
     return;
   }
   promptingAgentId = agentId;
