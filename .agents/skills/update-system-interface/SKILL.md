@@ -171,6 +171,20 @@ frame the user opens as the `si-preview` tab. It never touches the served tree.
 (It refuses to boot if another pass's preview is already up rather than hijacking
 the tab; surface that and coordinate.)
 
+**If you have to re-run `preview` mid-loop** -- the instance died, or you are
+picking the pass back up in a later turn -- close the tab *first*, then boot and
+re-open it:
+
+```bash
+python3 system/scripts/layout.py close si-preview
+```
+
+The seed leaves out any live layout that itself opens a preview panel (seeding
+one would make the preview render inside itself), so seeding while the tab is
+still open hands the preview an *empty* layout rather than the user's real tabs.
+Prefer `preview-refresh` for ordinary rounds; it re-seeds nothing and so never
+hits this.
+
 **Each subsequent round -- refresh in place; the tab never goes blank.** The tab
 points at the wrapper page, which never moves. After editing:
 
