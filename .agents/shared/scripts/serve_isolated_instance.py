@@ -465,20 +465,20 @@ def up(
             "services": services,
             "inner_log": str(inner_log_path),
             "wrapper_log": str(wrapper_log_path) if preview_requested else None,
-            # The recipe to re-boot the inner server (pids[0]) on the same port,
-            # so ``refresh`` can replay it without re-passing any of it. The inner
-            # server is always the first spawn, so pids[0] is the one refresh
-            # cycles; the wrapper (pids[1], if any) is left running.
+            # The rest of the recipe to re-boot the inner server (pids[0]) on the
+            # same port, so ``refresh`` can replay it without re-passing any of
+            # it. Only what the keys above do not already record -- refresh reads
+            # ``cwd`` / ``inner_port`` / ``inner_log`` from the top level, so
+            # there is one spelling of each fact. The inner server is always the
+            # first spawn, so pids[0] is the one refresh cycles; the wrapper
+            # (pids[1], if any) is left running.
             "inner": {
                 "command": list(command),
-                "cwd": str(cwd),
-                "port": inner_port,
                 "port_env": port_env,
                 "host_env": host_env,
                 "env_overrides": dict(env_overrides or {}),
                 "unset_env": list(unset_env),
                 "health_path": health_path,
-                "log": str(inner_log_path),
             },
         }
         _state_path(repo_root, name).write_text(json.dumps(state, indent=2))
@@ -581,7 +581,8 @@ def refresh(
         return 1
 
     old_pid = int(pids[0])
-    port = int(inner["port"])
+    port = int(state["inner_port"])
+    inner_log = str(state["inner_log"])
     # 1. Stop the old inner server and wait for it to release the port. A live
     #    listening socket cannot be rebound, so we must not respawn until it is
     #    gone -- otherwise the new process fails to bind.
@@ -606,9 +607,9 @@ def refresh(
     try:
         new_pid = spawner.spawn_detached(
             list(inner["command"]),
-            cwd=inner["cwd"],
+            cwd=str(state["cwd"]),
             env=env,
-            log_path=inner["log"],
+            log_path=inner_log,
         )
     except OSError as exc:
         sys.stderr.write(f"refresh: failed to relaunch the inner server: {exc}\n")
@@ -628,7 +629,7 @@ def refresh(
     ):
         sys.stderr.write(
             f"refresh: inner server did not become healthy on port {port} after "
-            f"reboot (see {inner['log']}). The preview tab will show an error until "
+            f"reboot (see {inner_log}). The preview tab will show an error until "
             "the underlying build boots; fix it and refresh again.\n"
         )
         return 1
