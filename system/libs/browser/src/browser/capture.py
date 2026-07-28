@@ -5,25 +5,40 @@ libx264 bundled, GStreamer-free). One :class:`Capture` per browser, started ON
 DEMAND -- the first ``/stream`` subscriber starts the encoder, the last one to
 leave stops it, so an unwatched browser costs zero CPU. pixelflux emits the final
 wire bytes (a 10-byte header for H.264, 6-byte for JPEG, then the payload -- see
-``docs/live-view-v2.md``); we fan those bytes out to every subscriber's queue
-VERBATIM, never parsing them.
+``docs/live-view-v2.md``); we fan those bytes out to every subscriber's
+:class:`StripeMailbox` VERBATIM, never parsing beyond the tiny fixed header.
+
+Each subscriber's mailbox keeps only the NEWEST unsent stripe per stripe row.
+Stripes are drawn independently at ``(0, y_start)``, so an older unsent stripe for
+a row is strictly obsolete the moment a newer one exists -- delivering it would
+spend socket time showing something already false. This bounds a slow client's
+staleness at ~one frame regardless of how many stripes the encoder produces
+(the old fixed-depth FIFO held 64 stripes, which on a 2-core host -- 2 stripes per
+frame -- was 32 frames = 1.6 s of stale video at 20 fps before anything dropped).
 
 Threading: ``pixelflux`` invokes the stripe callback on its own native thread; the
-fan-out onto per-subscriber ``queue.Queue``s is thread-safe. Encoder start/stop run
-on the daemon's loop thread (the callers reach them via the loop bridge), which is
-also where the per-browser ``DISPLAY`` is mutated -- so the brief env change here
+fan-out into the mailboxes is lock-protected and thread-safe. Encoder start/stop
+run on the daemon's loop thread (the callers reach them via the loop bridge), which
+is also where the per-browser ``DISPLAY`` is mutated -- so the brief env change here
 can't race a concurrent browser launch (it saves and restores the prior value, and
-the loop is single-threaded).
+the loop is single-threaded). Each running capture also owns a small
+:class:`_DamageRateBooster` watcher thread on its own X connection (see below).
 """
 
 import os
 import queue
+import select
+import struct
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
 from loguru import logger
+from Xlib import X
+from Xlib import display as xdisplay
+from Xlib import error as xerror
+from Xlib.ext import damage as xdamage
 
 # pixelflux's wheel links native libs (libva*, libgbm, libdrm, ...) at IMPORT time,
 # even in CPU mode. Those are absent on CI / bare boxes (where the live view never
@@ -50,33 +65,232 @@ def _load_pixelflux() -> "tuple[Any, Any] | None":
             return None
     return _pixelflux
 
-# Outbound depth per stream socket. Kept SMALL to bound latency: a backpressured client
-# riding at the cap would otherwise buffer (queue / stripes-per-frame / fps) seconds of
-# stale video. ~64 stripes ≈ a few frames ≈ ~200 ms; on overflow we flush to the newest
-# stripe and request a keyframe (a dropped delta corrupts that row anyway).
-_STREAM_QUEUE_MAX = int(os.environ.get("BROWSER_STREAM_QUEUE_MAX", "64"))
 
-# 20fps, not 30: a browser is mostly static reading + occasional scroll, so 20 is
-# plenty smooth and cuts the CPU-x264 encode cost by a third -- which matters a lot on a
-# small/constrained workspace where a busy encoder starves everything else (and drops
-# sockets -> "Reconnecting…"). Damage-driven capture already idles a static page near 0.
-_TARGET_FPS = float(os.environ.get("BROWSER_STREAM_FPS", "20"))
+# Base capture rate. pixelflux's capture loop is a FIXED tick -- it sleeps to a
+# wall-clock deadline and nothing wakes it early, so a screen change waits half a
+# frame interval ON AVERAGE before the encoder even looks at it: ~25 ms at the old
+# 20 fps, ~12.5 ms at 40. That tick wait, not encode CPU, is the larger latency
+# cost -- measured on the smallest cloud workspace (2 vCPU), the whole encoder ran
+# at ~27% of one core during sustained scrolling, so the CPU argument for 20 no
+# longer held. Idle cost stays near zero either way: the encoder is damage-driven
+# past capture, so a static page pays only the per-tick grab+hash.
+_TARGET_FPS = float(os.environ.get("BROWSER_STREAM_FPS", "40"))
+# While the display is actually changing, the _DamageRateBooster raises the live
+# rate to this (and decays back after _BOOST_DECAY_S of quiet). <= base disables.
+_BOOST_FPS = float(os.environ.get("BROWSER_STREAM_BOOST_FPS", "60"))
+_BOOST_DECAY_S = float(os.environ.get("BROWSER_STREAM_BOOST_DECAY_S", "2"))
 _VIDEO_CRF = int(os.environ.get("BROWSER_STREAM_CRF", "25"))
 # A keyframe at least this often, so a client whose decoder ever desyncs (a rejected chunk
 # or a dropped delta on a then-static page) always recovers within the interval instead of
 # waiting for a repaint that may never come.
 _KEYFRAME_INTERVAL_S = float(os.environ.get("BROWSER_STREAM_KEYFRAME_INTERVAL", "2"))
-# Minimum seconds between keyframe requests triggered by a full-queue drop (so a
-# persistently-slow client can't make us re-encode a keyframe on every stripe).
+# Minimum seconds between keyframe requests triggered by dropping an unsent stripe (so a
+# persistently-slow client can't make us re-encode a keyframe on every replacement).
 _IDR_ON_DROP_INTERVAL = 0.5
 
 _MODE_H264 = 1
 _MODE_JPEG = 0
 
+# Wire-format facts the mailbox relies on (see docs/live-view-v2.md): both stripe
+# kinds carry their row's y_start as a big-endian u16 at bytes [4:6], and an H.264
+# stripe's byte [1] is its frametype (0x01 = IDR keyframe, 0x00 = delta).
+_STRIPE_TYPE_JPEG = 0x03
+_STRIPE_TYPE_H264 = 0x04
+_H264_FRAMETYPE_IDR = 0x01
+_STRIPE_MIN_LEN = 6
+
 # Errors a pixelflux call can raise (it's a PyO3/Rust extension; failures surface as
 # these built-ins). The optional/best-effort calls -- cursor rendering, region update,
-# stop -- swallow these so a display hiccup never takes the daemon down.
+# rate changes, stop -- swallow these so a display hiccup never takes the daemon down.
 _PIXELFLUX_ERRORS = (RuntimeError, OSError, ValueError, AttributeError)
+
+# Errors the XDamage watcher can hit talking to a display that is resizing, wedged, or
+# torn down mid-session (ConnectionClosedError is NOT under DisplayError in python-xlib).
+# The watcher is an optimization; any of these just ends it.
+_XLIB_ERRORS = (
+    xerror.DisplayError,
+    xerror.ConnectionClosedError,
+    xerror.XError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    AttributeError,
+)
+
+
+class StripeMailbox:
+    """Outbound stripe buffer for one ``/stream`` subscriber: newest-per-row.
+
+    Holds at most ONE pending stripe per stripe row (keyed by the wire header's
+    y_start); a newer stripe for a row replaces the unsent older one in place, so
+    the buffer's depth -- and therefore the client's worst-case staleness -- is
+    bounded at one frame regardless of stripe count or frame rate. Replacement is
+    where H.264's delta chain can break: dropping an unsent delta (or worse, an
+    unsent keyframe) leaves the client decoding against state it never saw, so
+    :meth:`put` reports it and the Capture requests a fresh IDR (throttled).
+
+    API-compatible with the ``queue.Queue`` it replaced where the stream socket
+    handler is concerned: ``get(timeout=...)`` raises ``queue.Empty`` on timeout and
+    returns ``None`` (the shutdown sentinel) once closed and drained, so
+    ``runner.stream_socket`` needed no changes.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        # row key -> newest unsent stripe. Insertion-ordered; in-place replacement
+        # keeps a row's queue position, so pop order stays oldest-pending-row first.
+        self._pending: "dict[tuple[int, int], bytes]" = {}
+        self._unknown_seq = 0  # distinct keys for unrecognized payloads: never coalesced
+        self._closed = False
+
+    def _row_key(self, data: bytes) -> "tuple[int, int]":
+        if len(data) >= _STRIPE_MIN_LEN and data[0] in (_STRIPE_TYPE_H264, _STRIPE_TYPE_JPEG):
+            return (data[0], struct.unpack_from(">H", data, 4)[0])
+        # Unknown/short payload: give it a unique key so it passes through un-coalesced
+        # (type byte -1 can never collide with a real stripe's key).
+        self._unknown_seq += 1
+        return (-1, self._unknown_seq)
+
+    def put(self, data: bytes) -> bool:
+        """Store a stripe, replacing any unsent one for the same row.
+
+        Returns True iff the replacement broke that row's H.264 decode chain: an
+        unsent H.264 stripe was dropped and the replacement is a delta (a keyframe
+        replacement resets the chain by itself; JPEG stripes are self-contained)."""
+        key = self._row_key(data)
+        with self._cond:
+            if self._closed:
+                return False
+            replaced = self._pending.get(key)
+            self._pending[key] = data
+            self._cond.notify()
+        return (
+            replaced is not None
+            and key[0] == _STRIPE_TYPE_H264
+            and data[1] != _H264_FRAMETYPE_IDR
+        )
+
+    def get(self, timeout: "float | None" = None) -> "bytes | None":
+        """Pop the oldest-pending row's stripe. Raises ``queue.Empty`` on timeout;
+        returns ``None`` once the mailbox is closed and drained (shutdown sentinel)."""
+        with self._cond:
+            if not self._cond.wait_for(lambda: self._pending or self._closed, timeout):
+                raise queue.Empty
+            if self._pending:
+                key = next(iter(self._pending))
+                return self._pending.pop(key)
+            return None
+
+    def get_nowait(self) -> "bytes | None":
+        """Queue-compatible non-blocking pop (raises ``queue.Empty`` when nothing pends)."""
+        return self.get(timeout=0)
+
+    def close(self) -> None:
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
+
+
+class _DamageRateBooster:
+    """Raises the live capture rate while the display is actually changing.
+
+    TRUE damage-driven capture -- waking the encoder the moment a pixel changes --
+    needs an upstream pixelflux change: its capture loop sleeps to a fixed wall-clock
+    deadline that nothing can interrupt, so the best any caller can do is choose how
+    fast that clock ticks. pixelflux DOES honor rate changes live (``fps`` is re-read
+    every iteration), so this watcher holds a second X connection to the browser's
+    display, subscribes to XDamage on the root window (which reports rendering into
+    any descendant, i.e. the whole screen), and:
+
+    - on the first damage event, raises the rate to ``_BOOST_FPS``;
+    - after ``_BOOST_DECAY_S`` with no damage, decays back to ``_TARGET_FPS``.
+
+    So sustained motion (scroll, video) is captured at the boost rate while a static
+    page ticks -- and pays its per-tick grab+hash -- only at the base rate. The
+    watcher is strictly an optimization: any X error (display torn down mid-session,
+    extension missing) just ends the thread and capture continues at the base rate.
+    Idle, the thread blocks in ``select`` on the X socket and costs nothing.
+    """
+
+    def __init__(self, display_name: str, cap: Any) -> None:
+        self._display_name = display_name
+        self._cap = cap  # pixelflux ScreenCapture; update_framerate() is thread-safe (atomic store)
+        # Self-pipe so stop() can interrupt a select() blocked on the X socket.
+        self._stop_r, self._stop_w = os.pipe()
+        self._stopped = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=f"damage-boost{display_name}", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Non-blocking: wake the watcher thread so it exits, then release the wake pipe.
+
+        Called exactly once, by whoever harvested the booster out of the Capture (the
+        harvest nulls ``_booster`` under the Capture lock, so there is a single caller).
+        The pipe fds are closed HERE, never by the thread -- so a stop can never write
+        into a recycled fd number, and a thread that died early (X error) at worst
+        parks two fds until this teardown."""
+        self._stopped.set()
+        try:
+            os.write(self._stop_w, b"x")
+        except OSError:
+            pass
+        # If the thread is blocked in select(), either the write above or the close
+        # below (EBADF) wakes it; it exits on the event either way.
+        for pipe_fd in (self._stop_r, self._stop_w):
+            try:
+                os.close(pipe_fd)
+            except OSError:
+                pass
+
+    def _set_fps(self, fps: float) -> None:
+        try:
+            self._cap.update_framerate(fps)
+        except _PIXELFLUX_ERRORS as e:
+            logger.debug("damage boost {}: rate change ignored ({})", self._display_name, e)
+
+    def _run(self) -> None:
+        disp = None
+        try:
+            disp = xdisplay.Display(self._display_name)
+            # DAMAGE requires a version handshake before any other request.
+            disp.damage_query_version()
+            damage_id = disp.screen().root.damage_create(xdamage.DamageReportNonEmpty)
+            disp.flush()
+            fd = disp.fileno()
+            boosted = False
+            last_damage = 0.0
+            while not self._stopped.is_set():
+                # Idle (not boosted): block until damage or stop. Boosted: wake at
+                # decay granularity to check for quiet.
+                readable, _, _ = select.select(
+                    [fd, self._stop_r], [], [], _BOOST_DECAY_S if boosted else None
+                )
+                if self._stop_r in readable:
+                    break
+                now = time.monotonic()
+                if fd in readable:
+                    while disp.pending_events():
+                        disp.next_event()  # contents irrelevant; the wakeup IS the signal
+                    # NonEmpty reporting arms once per accumulation: subtract to re-arm.
+                    disp.damage_subtract(damage_id, X.NONE, X.NONE)
+                    disp.flush()
+                    last_damage = now
+                    if not boosted:
+                        boosted = True
+                        self._set_fps(_BOOST_FPS)
+                if boosted and now - last_damage >= _BOOST_DECAY_S:
+                    boosted = False
+                    self._set_fps(_TARGET_FPS)
+        except _XLIB_ERRORS as e:
+            logger.debug("damage boost {}: watcher ended ({}); capture stays at base rate",
+                         self._display_name, e)
+        finally:
+            # The pipe fds are stop()'s to close, never this thread's (fd-recycling safety).
+            if disp is not None:
+                try:
+                    disp.close()
+                except _XLIB_ERRORS:
+                    pass
 
 
 class Capture:
@@ -86,17 +300,18 @@ class Capture:
         self._display_name = display_name  # ":N"
         self._region = region  # () -> (x, y, w, h) current capture rect (chrome cropped)
         self._cap: Any = None  # pixelflux ScreenCapture while capturing, else None
-        self._subscribers: list["queue.Queue[bytes | None]"] = []
+        self._booster: "_DamageRateBooster | None" = None
+        self._subscribers: "list[StripeMailbox]" = []
         self._lock = threading.Lock()  # guards _subscribers + _cap against the pixelflux thread
         self._mode = _MODE_H264
         self._last_idr_at = 0.0  # throttle for keyframe-on-drop (see _on_stripe)
 
-    def add_subscriber(self, want_h264: bool) -> "queue.Queue[bytes | None] | None":
+    def add_subscriber(self, want_h264: bool) -> "StripeMailbox | None":
         """Register a stream socket. Starts the encoder on the first subscriber (in that
         subscriber's codec mode); otherwise forces a keyframe so the newcomer can begin
-        decoding at once. Returns its outbound queue, or None if the encoder can't start
+        decoding at once. Returns its outbound mailbox, or None if the encoder can't start
         (pixelflux's native libs not present yet) so the caller retries."""
-        client_queue: "queue.Queue[bytes | None]" = queue.Queue(maxsize=_STREAM_QUEUE_MAX)
+        mailbox = StripeMailbox()
         with self._lock:
             if not self._subscribers:
                 # First subscriber: start the encoder. If pixelflux's native libs aren't
@@ -112,7 +327,7 @@ class Capture:
                     self._display_name, "h264" if want_h264 else "jpeg",
                     "h264" if self._mode == _MODE_H264 else "jpeg",
                 )
-            self._subscribers.append(client_queue)
+            self._subscribers.append(mailbox)
             # Force a keyframe NOW that this subscriber is REGISTERED, so it gets a full
             # frame at once. Critical for a browser sitting on an already-loaded STATIC page
             # (common: the home page finished loading during init, before any viewer): the
@@ -122,19 +337,23 @@ class Capture:
             # damage (a mouse move, a nav). Requesting an IDR here paints immediately.
             if self._cap is not None:
                 self._cap.request_idr_frame()
-        return client_queue
+        return mailbox
 
-    def remove_subscriber(self, client_queue: "queue.Queue[bytes | None]") -> None:
+    def remove_subscriber(self, mailbox: StripeMailbox) -> None:
         """Deregister a stream socket; stops the encoder when the last one leaves. The
         actual ``stop_capture`` runs OUTSIDE ``_lock`` -- it joins pixelflux's callback
         thread, which may itself be blocked taking ``_lock`` in ``_on_stripe``; stopping
         under the lock would deadlock the whole (single-threaded) daemon."""
         cap_to_stop = None
+        booster_to_stop = None
         with self._lock:
-            if client_queue in self._subscribers:
-                self._subscribers.remove(client_queue)
+            if mailbox in self._subscribers:
+                self._subscribers.remove(mailbox)
             if not self._subscribers and self._cap is not None:
                 cap_to_stop, self._cap = self._cap, None
+                booster_to_stop, self._booster = self._booster, None
+        if booster_to_stop is not None:
+            booster_to_stop.stop()
         if cap_to_stop is not None:
             self._stop_capture(cap_to_stop)
 
@@ -212,8 +431,11 @@ class Capture:
             else:
                 os.environ["DISPLAY"] = prior
         self._cap = cap
-        logger.info("browser stream {}: encoder started ({}, {}x{}@{:.0f})",
-                    self._display_name, "h264" if self._mode == _MODE_H264 else "jpeg", w, h, _TARGET_FPS)
+        if _BOOST_FPS > _TARGET_FPS:
+            self._booster = _DamageRateBooster(self._display_name, cap)
+        logger.info("browser stream {}: encoder started ({}, {}x{}@{:.0f}, boost {:.0f})",
+                    self._display_name, "h264" if self._mode == _MODE_H264 else "jpeg", w, h,
+                    _TARGET_FPS, _BOOST_FPS if _BOOST_FPS > _TARGET_FPS else _TARGET_FPS)
         return True
 
     def _stop_capture(self, cap: Any) -> None:
@@ -238,29 +460,15 @@ class Capture:
         with self._lock:
             subscribers = list(self._subscribers)
             cap = self._cap
-        dropped = False
-        for client_queue in subscribers:
-            try:
-                client_queue.put_nowait(data)
-            except queue.Full:
-                # Backpressured: flush this client's whole backlog to the newest stripe
-                # (stale video is worthless; a dropped delta corrupts the row regardless),
-                # then it recovers on the keyframe we request below. Bounded by the queue
-                # size (never unbounded).
-                for _ in range(_STREAM_QUEUE_MAX):
-                    try:
-                        client_queue.get_nowait()
-                    except queue.Empty:
-                        break
-                try:
-                    client_queue.put_nowait(data)
-                    dropped = True
-                except queue.Full:
-                    pass
-        # A dropped H.264 delta corrupts that stripe until it next repaints (damage-
-        # driven), which a static region may never do. Ask for a keyframe so the client
-        # recovers -- throttled so a persistently-slow client doesn't spam keyframes.
-        if dropped and cap is not None:
+        chain_broken = False
+        for mailbox in subscribers:
+            if mailbox.put(data):
+                chain_broken = True
+        # Replacing an unsent H.264 stripe with a delta leaves that row's decoder without
+        # the state the delta assumes, corrupting it until the next keyframe -- which on a
+        # static region may never come on its own. Ask for one, throttled so a persistently
+        # slow client doesn't turn every replacement into a full-region IDR.
+        if chain_broken and cap is not None:
             now = time.monotonic()
             if now - self._last_idr_at > _IDR_ON_DROP_INTERVAL:
                 self._last_idr_at = now
@@ -272,13 +480,14 @@ class Capture:
     def close(self) -> None:
         """Force-stop and drop all subscribers (browser teardown)."""
         cap_to_stop = None
+        booster_to_stop = None
         with self._lock:
-            for client_queue in self._subscribers:
-                try:
-                    client_queue.put_nowait(None)  # shutdown sentinel
-                except queue.Full:
-                    pass
+            for mailbox in self._subscribers:
+                mailbox.close()  # unblocks the stream socket with the None sentinel
             self._subscribers.clear()
             cap_to_stop, self._cap = self._cap, None
+            booster_to_stop, self._booster = self._booster, None
+        if booster_to_stop is not None:
+            booster_to_stop.stop()
         if cap_to_stop is not None:
             self._stop_capture(cap_to_stop)  # OUTSIDE the lock (joins the callback thread)

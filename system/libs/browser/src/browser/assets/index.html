@@ -138,7 +138,11 @@
   const stage = document.getElementById("stage");
   const cliptoast = document.getElementById("cliptoast");
   const canvas = document.getElementById("screen");
-  const ctx = canvas.getContext("2d");
+  // desynchronized: let Chromium paint this canvas outside the compositor's frame
+  // queue (a low-latency hint, ~a display frame saved when honored; ignored where
+  // unsupported). Safe here: stripes are opaque full-width rects, so there is no
+  // partial-composite state worth synchronizing with the page.
+  const ctx = canvas.getContext("2d", { desynchronized: true });
   const fsbtn = document.getElementById("fsbtn");
   const placeholder = document.getElementById("placeholder");
   const overlay = document.getElementById("overlay");
@@ -175,6 +179,30 @@
   const decoders = new Map();  // y_start -> { dec, sawKey }   (one VideoDecoder per H.264 stripe row)
   const frameQueue = [];       // { img, y }  drained by the rAF render loop (img = VideoFrame | ImageBitmap)
   let rafPending = false;
+  // Desync recovery: whenever a stripe row's decoder loses its delta chain (a dropped or
+  // rejected chunk), ask the encoder for a keyframe NOW instead of waiting out the periodic
+  // one (up to BROWSER_STREAM_KEYFRAME_INTERVAL, 2s -- a visible per-row freeze). Throttled
+  // here (and again server-side) because a jittery link can desync at delta rate.
+  let lastKeyframeReqAt = 0;
+  function requestKeyframeForDesync() {
+    const now = performance.now();
+    if (now - lastKeyframeReqAt < 250) return;
+    lastKeyframeReqAt = now;
+    sendCast({ type: "request_keyframe" });
+  }
+  // Stream reconnect: on an unexpected socket drop, retry immediately (delay 0 after a
+  // connection that delivered stripes) with doubling backoff to 2s while attempts die
+  // without a single stripe -- so a healthy blip repairs in ~1 RTT instead of waiting for
+  // the 1s reconcile heartbeat (which stays, as the backstop that can never be stranded).
+  let streamReconnectTimer = null;
+  let streamReconnectDelayMs = 0;
+  let streamGotStripe = false;  // did the CURRENT connection deliver any stripe?
+  function scheduleStreamReconnect() {
+    if (streamReconnectTimer !== null || closedForGood || crashed || !streamWanted) return;
+    const delay = streamReconnectDelayMs;
+    streamReconnectDelayMs = Math.min(streamReconnectDelayMs ? streamReconnectDelayMs * 2 : 250, 2000);
+    streamReconnectTimer = setTimeout(() => { streamReconnectTimer = null; connectStream(); }, delay);
+  }
   let focused = false;         // keyboard-capture (focused tier) is on
   let keyboardLocked = false;  // navigator.keyboard.lock() active (immersive tier) -> forward reserved combos too
   let pendingClipboard = null; // remote clipboard push deferred until the next user gesture
@@ -374,7 +402,7 @@
     s = { dec: null, sawKey: false };
     s.dec = new VideoDecoder({
       output: (frame) => pushFrame(frame, y),
-      error: () => { try { s.dec.close(); } catch (_) {} decoders.delete(y); },
+      error: () => { try { s.dec.close(); } catch (_) {} decoders.delete(y); requestKeyframeForDesync(); },
     });
     // Register BEFORE configure(): if configure throws (codec truly unsupported despite
     // the handshake), the catch closes the decoder and returns null instead of leaking a
@@ -404,19 +432,24 @@
       const h = dv.getUint16(8);
       const s = decoderFor(y, w, h);
       if (!s) return;  // codec unsupported; decoder couldn't configure
-      // Decoder falling behind (CPU-starved viewer): drop DELTAS to shed load and mark
-      // desynced; keyframes still go through, so the periodic keyframe re-syncs it. Kept
-      // tight (2) so latency can't ACCUMULATE -- a real-time stream must stay near "now",
-      // dropping frames rather than playing a growing backlog.
-      if (s.dec.decodeQueueSize > 2 && !frametype) { s.sawKey = false; return; }
-      if (!s.sawKey) { if (!frametype) return; s.sawKey = true; }  // drop deltas until the first key
+      // Decoder falling behind (a burst of stripes -- network jitter delivering several at
+      // once -- or a genuinely CPU-starved viewer): drop DELTAS to shed load and mark
+      // desynced. Kept tight (2) so latency can't ACCUMULATE -- a real-time stream must
+      // stay near "now", dropping frames rather than playing a growing backlog. Dropping
+      // is cheap ONLY because we immediately ask for a keyframe: without that, the row
+      // froze for up to the 2s periodic-IDR interval (the request path below existed but
+      // was only ever used by the pre-first-frame watchdog).
+      if (s.dec.decodeQueueSize > 2 && !frametype) { s.sawKey = false; requestKeyframeForDesync(); return; }
+      // Desynced: drop deltas until a key arrives, re-asking (throttled) each time --
+      // so a lost request or a still-busy encoder can't strand the row.
+      if (!s.sawKey) { if (!frametype) { requestKeyframeForDesync(); return; } s.sawKey = true; }
       try {
         s.dec.decode(new EncodedVideoChunk({
           type: frametype ? "key" : "delta",
           timestamp: Math.round(performance.now() * 1000),  // monotonic microseconds
           data: new Uint8Array(buf, 10),
         }));
-      } catch (_) { s.sawKey = false; }  // decoder rejected the chunk; wait for the next key
+      } catch (_) { s.sawKey = false; requestKeyframeForDesync(); }  // rejected chunk; resync on the next key
     } else if (type === 0x03) {          // JPEG: [2:4]=frame_id, [4:6]=y, [6:]=JFIF
       const y = dv.getUint16(4);
       createImageBitmap(new Blob([new Uint8Array(buf, 6)], { type: "image/jpeg" }))
@@ -449,6 +482,7 @@
   function connectStream() {
     if (streamWs || browserId === null || closedForGood || crashed || !streamWanted) return;
     gotH264Bytes = false;
+    streamGotStripe = false;
     const s = new WebSocket(wsUrl("browsers/" + browserId + "/stream"));
     streamWs = s;
     s.binaryType = "arraybuffer";
@@ -465,23 +499,29 @@
         if (h264) armH264Watchdog();  // JPEG can't fail to decode, so only guard H.264
       }
     };
-    s.onmessage = (ev) => onStripe(ev.data);
+    s.onmessage = (ev) => { streamGotStripe = true; onStripe(ev.data); };
     s.onclose = () => {
       if (streamWs === s) streamWs = null;
       clearH264Watchdog();
       resetDecoders();
-      // No explicit reconnect timer: the 1s reconcileStream poll reopens the socket (same
-      // worst-case latency) whenever streamWs is null and the pane should stream.
+      // Reconnect NOW (the 1s reconcileStream poll remains the stranded-state backstop):
+      // waiting out the heartbeat cost up to a full second of black per drop. A connection
+      // that delivered stripes was healthy, so its drop retries at 0ms; ones that die
+      // stripe-less back off (250ms doubling to 2s) so a down daemon isn't hammered.
+      if (streamGotStripe) streamReconnectDelayMs = 0;
+      scheduleStreamReconnect();
     };
     s.onerror = () => { try { s.close(); } catch (_) {} };
   }
   function closeStream() {  // pane hidden / crashed / gone: stop encode, drop decoders
     streamWanted = false;
     clearH264Watchdog();
+    if (streamReconnectTimer !== null) { clearTimeout(streamReconnectTimer); streamReconnectTimer = null; }
     if (streamWs) { try { streamWs.close(); } catch (_) {} streamWs = null; }
     resetDecoders();
   }
-  function openStream() { streamWanted = true; connectStream(); }  // pane visible again
+  // Pane visible again: fresh start, so the retry backoff resets too.
+  function openStream() { streamWanted = true; streamReconnectDelayMs = 0; connectStream(); }
 
   // --- audio: the browser's sound as raw PCM (48 kHz stereo s16le) over its own socket ---
   // Played through a Web Audio worklet ring buffer: incoming chunks queue up and the
