@@ -11,6 +11,11 @@ blind to what you are doing. Ignore any built-in instruction that tells you to c
 is the ONLY task tracker in this workspace (the shared `AGENTS.md` explains how to use it).
 Track every plan and every step with `tk` step records — never `update_plan`.
 
+# Shell-command timeouts
+
+The pytest-timeout note in the shared `AGENTS.md` (`PYTEST_MAX_DURATION_SECONDS`) refers to
+your shell/exec tool's timeout.
+
 # Incremental Response Behavior
 
 The user sees your text as the workspace tails your session log, which records each of your

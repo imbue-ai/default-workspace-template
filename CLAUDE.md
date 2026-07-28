@@ -6,6 +6,8 @@ Claude Code's built-in `TodoWrite` is disabled, use tk instead. Step records (`t
 
 `.claude/skills` does not exist, it is symlinked to `.agents/skills/`.
 
+The pytest-timeout note in AGENTS.md (`PYTEST_MAX_DURATION_SECONDS`) refers to the **Bash tool** timeout.
+
 # Memory
 
 Use Claude's built-in memory system. Your memory directory is `data/memories/` (configured via `autoMemoryDirectory` in `.claude/settings.json`).
