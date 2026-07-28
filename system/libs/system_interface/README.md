@@ -94,6 +94,14 @@ with no saved content renders as the fresh welcome-chat state. A
 pre-existing single `layout.json` is migrated into `desktop` on first
 access.
 
+`SYSTEM_INTERFACE_LAYOUT_DIR` (`Config.system_interface_layout_dir`)
+overrides that location and wins even when `MNGR_AGENT_ID` is set. The
+`update-system-interface` preview points it at a throwaway copy of the
+live layout, so the preview tab opens with the user's real tabs while
+its own autosaves land in the copy instead of the live layout. It is
+read off the per-app config rather than the process env, so two servers
+sharing one process each resolve their own layout dir.
+
 Each browser client picks its layout on first connect by user agent
 (mobile browsers get `mobile`, everything else `desktop`), remembers
 the choice in localStorage, and can switch via the "+" menu's
