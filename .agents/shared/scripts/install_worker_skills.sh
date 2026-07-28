@@ -11,7 +11,7 @@ set -euo pipefail
 # .agents/shared/ (rather than under a parent skill's assets/worker/) keeps any
 # worker-only material out of the auto-loaded .agents/skills/ tree, and means
 # every subskill-worker installs exactly this one worker -- it reads the
-# operation + artifact from its task file and composes the matching references.
+# operation + creation from its task file and composes the matching references.
 #
 # The worker's references live at .agents/shared/worker/references/ and the
 # worker reads them from there (its checkout has the full repo). We deliberately

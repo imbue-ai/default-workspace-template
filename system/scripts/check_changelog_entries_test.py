@@ -42,7 +42,7 @@ def _init_repo(tmp_path: Path) -> Path:
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
     # Two real projects (pyproject.toml present) plus the dev bucket layout.
-    for rel in ("system/libs/alpha/pyproject.toml", "creations/beta/pyproject.toml"):
+    for rel in ("system/libs/alpha/pyproject.toml", "system/apps/beta/pyproject.toml", "system/services/gamma/pyproject.toml"):
         p = repo / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("[project]\nname='x'\n")
@@ -58,10 +58,11 @@ def _add_entry(repo: Path, project_dir: str, branch: str) -> None:
     (d / f"{branch.replace('/', '-')}.md").write_text("did a thing\n")
 
 
-def test_project_for_path_maps_libs_creations_and_dev(tmp_path: Path) -> None:
+def test_project_for_path_maps_libs_services_apps_and_dev(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     assert gate.project_for_path("system/libs/alpha/foo.py", repo) == "alpha"
-    assert gate.project_for_path("creations/beta/bar.py", repo) == "beta"
+    assert gate.project_for_path("system/apps/beta/bar.py", repo) == "beta"
+    assert gate.project_for_path("system/services/gamma/baz.py", repo) == "gamma"
     # A system/libs/ dir without a pyproject.toml is not a real project -> dev.
     assert gate.project_for_path("system/libs/nope/x.py", repo) == "dev"
     # Anything under .agents/ -> the synthetic agents bucket.
@@ -114,8 +115,8 @@ def test_gate_fails_when_touched_project_missing_entry(tmp_path: Path) -> None:
 def test_gate_passes_when_entry_present(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "checkout", "-q", "-b", "feat/y")
-    (repo / "creations/beta/new.py").write_text("print(1)\n")
-    _add_entry(repo, "creations/beta", "feat/y")
+    (repo / "system/apps/beta/new.py").write_text("print(1)\n")
+    _add_entry(repo, "system/apps/beta", "feat/y")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "touch beta with entry")
 

@@ -82,7 +82,7 @@ On `type: gate`:
   skill's own guidelines. The user does not care about technical details --
   do not surface them.
 - **Escalate to the user** for user intent, scope, subjective preference, or
-  domain knowledge you do not have. `final-artifact` gates always escalate.
+  domain knowledge you do not have. `final-creation` gates always escalate.
   `outline-approval` gates default to answer-yourself; only escalate if the
   worker has surfaced a *genuine process question* (a decision about user
   intent, scope, or domain that you cannot make from context). Most
