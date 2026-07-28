@@ -119,8 +119,13 @@ Returns auth options, credentials status, and developer notes about the service.
 
 It is possible to associate credentials with a specific account
 (and have credentials for more than a single account per service).
-Currently, the only way to do that is for the user to click "Add
-account" on the "Connectors" settings page in the Minds app.
+The user can do that by clicking "Add account" on the "Connectors" settings
+page in the Minds app.
+
+Another way is for you to send a permission request with an "account"
+in the payload as described above - approving the permission request will prompt
+the user to sign in. Just double-check the actual resulting account; it may be
+different than the one requested by you.
 
 You can then reference it in curl calls:
 
