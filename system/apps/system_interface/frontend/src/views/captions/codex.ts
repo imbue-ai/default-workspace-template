@@ -1,6 +1,6 @@
 /**
- * Codex's TOOL_RUNNING caption. The codex peer of ``claudeCaption``; routed by the
- * agent's harness in ``ActivityIndicator``.
+ * Codex's TOOL_RUNNING caption. The codex entry in the ``captions`` registry (see
+ * ``./index``), which routes by the agent's harness.
  *
  * Codex runs in code mode (pinned via ``features.code_mode_host``): every operation
  * is a single ``exec`` tool whose input is a JavaScript program calling
@@ -10,8 +10,8 @@
  * falls back to "Running code" / "Running tool…" rather than guessing.
  */
 
-import type { ToolCall } from "../models/Response";
-import { basename, shorten } from "./captionUtils";
+import type { ToolCall } from "../../models/Response";
+import { basename, shorten } from "./shared";
 
 // tools.<fn> -> verb. `update_plan` is intentionally omitted: the codex private
 // prompt forbids it, so it should never be in flight.

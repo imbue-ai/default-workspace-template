@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ToolCall } from "../models/Response";
-import { codexToolLabel } from "./codexCaption";
+import type { ToolCall } from "../../models/Response";
+import { codexToolLabel } from "./codex";
 
 // Codex code mode: tool_name is always "exec"; input_preview is the JS program.
 function exec(js: string): ToolCall {

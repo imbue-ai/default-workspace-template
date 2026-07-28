@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ToolCall } from "../models/Response";
-import { claudeToolLabel } from "./claudeCaption";
+import type { ToolCall } from "../../models/Response";
+import { claudeToolLabel } from "./claude";
 
 function tc(tool_name: string, input_preview: string): ToolCall {
   return { tool_call_id: "tc1", tool_name, input_preview };
