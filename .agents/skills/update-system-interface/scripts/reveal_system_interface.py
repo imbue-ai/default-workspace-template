@@ -15,7 +15,7 @@ What it does, given the pre-merge revision (``--rollback-to``):
 2. Classify what changed since the known-good revision (frontend src / frontend
    manifest / backend src / backend manifest).
 3. Refresh dependencies only if a manifest changed (``npm ci`` / ``uv tool
-   install -e system/libs/system_interface --reinstall``). A plain restart does NOT
+   install -e system/apps/system_interface --reinstall``). A plain restart does NOT
    re-resolve the editable tool's dependencies, so a backend dependency add
    would otherwise crash the service on restart.
 4. For a backend change, *pre-flight* the merged code on a throwaway port before
@@ -112,7 +112,7 @@ MNGR_AGENT_ID_HEADER = "X-Mngr-Agent-Id"
 # The served app, the editable tool the live service runs from, and the build
 # surfaces. These mirror system/scripts/build_workspace.sh -- the source of truth for
 # how the served environment is constructed.
-APP_DIR = "system/libs/system_interface"
+APP_DIR = "system/apps/system_interface"
 FRONTEND_DIR = f"{APP_DIR}/frontend"
 # The frontend build output the backend serves at ``/``. Both ``node_modules``
 # and this ``static/`` bundle are gitignored, so a fresh worktree has neither
@@ -177,7 +177,7 @@ _SEEDED_LAYOUT_ENTRIES = ("layouts", _LAYOUT_REGISTRY_FILENAME, "layout.json")
 ENV_MNGR_HOST_DIR = "MNGR_HOST_DIR"
 # A seeded layout that itself contains a preview panel would make the preview
 # render *itself*: the inner app resolves ``service:si-preview`` against the same
-# live application registry, so the panel proxies back to the wrapper that frames
+# live app registry, so the panel proxies back to the wrapper that frames
 # it -- infinitely nested iframes. The documented flow closes the tab before any
 # re-preview, but that is ordering, not a guarantee (a layout can autosave with
 # the tab open, or an abandoned pass can leave one behind), so the seed drops any
@@ -892,7 +892,7 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             f"preview: no frontend build in {work_dir} "
             f"({FRONTEND_BUILD_INDEX} is missing), so the preview would serve the "
             "'Frontend not built' placeholder. Build the frontend first "
-            "(cd system/libs/system_interface/frontend && npm ci && npm run build) "
+            "(cd system/apps/system_interface/frontend && npm ci && npm run build) "
             "-- in your editing worktree, or by re-briefing the worker -- then "
             "retry.\n"
         )

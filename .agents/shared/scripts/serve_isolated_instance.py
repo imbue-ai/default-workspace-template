@@ -3,7 +3,7 @@
 
 This is the shared substrate under two service flows:
 
-- ``update-service`` boots a copy of a service against a *copy* of its data
+- ``update-app`` boots a copy of a service against a *copy* of its data
   (``DATA_DIR`` pointed at a scratch dir) so an edit can be exercised -- writes,
   deletes, migrations -- without ever touching the user's live store. The agent
   reaches the instance directly on its loopback port.
