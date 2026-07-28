@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+from loguru import logger
+
 from imbue.system_interface.fast_mode_policy import UNDECIDED_FAST_MODE_DECISION
 from imbue.system_interface.fast_mode_policy import WorkspaceFastModeDecision
 from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
@@ -70,6 +72,23 @@ def test_missing_fast_mode_key_is_distinguishable_from_false(tmp_path: Path) -> 
     assert read_fast_mode_setting(false_path) is False
 
     assert read_fast_mode_setting(tmp_path / "nope.json") is None
+
+
+def test_unreadable_settings_read_as_unset_but_are_logged(tmp_path: Path) -> None:
+    """A file that will not open reads as unset like an absent one, so the layering
+    still resolves -- but unlike an absent one it says so, since it may well have
+    held the value that decides the answer."""
+    unreadable_path = tmp_path / "settings.json"
+    unreadable_path.mkdir()
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message), level="WARNING")
+    try:
+        assert read_fast_mode_setting(unreadable_path) is None
+    finally:
+        logger.remove(sink_id)
+
+    assert any(str(unreadable_path) in message for message in messages)
 
 
 def test_managed_settings_outrank_user_settings(tmp_path: Path) -> None:

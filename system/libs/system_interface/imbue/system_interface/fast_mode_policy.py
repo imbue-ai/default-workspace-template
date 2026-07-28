@@ -77,10 +77,18 @@ def read_fast_mode_setting(settings_path: Path) -> bool | None:
     Absent and present-but-false are genuinely different here: Claude Code deletes
     the key when ``/fast`` turns fast mode off rather than writing false, so only a
     caller that knows the layering can decide what an absent key means.
+
+    A file that is simply not there is the expected case for the managed overlay
+    and reads as unset silently; anything else that goes wrong reading or parsing
+    it also reads as unset, but is logged -- it would otherwise hand the decision
+    to a lower layer with nothing to say why.
     """
     try:
         raw = settings_path.read_text()
-    except OSError:
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        logger.warning("Failed to read Claude settings at {}: {}", settings_path, e)
         return None
     try:
         data = json.loads(raw)
