@@ -384,13 +384,13 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
 
 def test_classify_path_reveal_classes() -> None:
     cases = {
-        "system/libs/system_interface/src/App.tsx": update_self.CLASS_SYSTEM_INTERFACE,
+        "system/apps/system_interface/src/App.tsx": update_self.CLASS_SYSTEM_INTERFACE,
         "system/supervisord.conf": update_self.CLASS_SERVICE,
         "system/libs/bootstrap/src/bootstrap/main.py": update_self.CLASS_SERVICE,
         "system/vendor/mngr/libs/mngr/foo.py": update_self.CLASS_EDITABLE_TOOL,
         "system/scripts/forward_port.py": update_self.CLASS_SHARED_RUNTIME,
         ".agents/skills/update-self/SKILL.md": update_self.CLASS_SHARED_RUNTIME,
-        "system/libs/oom_priority/src/oom_priority/ledger.py": update_self.CLASS_SHARED_RUNTIME,
+        "system/services/oom_priority/src/oom_priority/ledger.py": update_self.CLASS_SHARED_RUNTIME,
         # Provisioning files: pinned-toolchain scripts (would otherwise read as
         # shared_runtime under system/scripts/) and the .mngr/ create config (would
         # otherwise fall through to other) -- both need the provisioner reveal.
@@ -406,7 +406,7 @@ def test_classify_path_reveal_classes() -> None:
         # it must never trigger that class's reveal action (e.g. a service
         # restart for system/libs/bootstrap/README.md).
         "system/libs/bootstrap/README.md": update_self.CLASS_DOCS,
-        "system/libs/system_interface/README.md": update_self.CLASS_DOCS,
+        "system/apps/system_interface/README.md": update_self.CLASS_DOCS,
         "system/vendor/mngr/README.md": update_self.CLASS_DOCS,
     }
     for path, expected in cases.items():
@@ -415,8 +415,8 @@ def test_classify_path_reveal_classes() -> None:
 
 def test_classify_path_project_mapping() -> None:
     assert (
-        update_self.classify_path("system/libs/system_interface/foo.py").project
-        == "system/libs/system_interface"
+        update_self.classify_path("system/apps/system_interface/foo.py").project
+        == "system/apps/system_interface"
     )
     assert (
         update_self.classify_path("system/vendor/mngr/x.py").project
@@ -427,7 +427,7 @@ def test_classify_path_project_mapping() -> None:
 
 def test_classify_path_manifest_flag() -> None:
     assert update_self.classify_path(
-        "system/libs/system_interface/pyproject.toml"
+        "system/apps/system_interface/pyproject.toml"
     ).is_manifest
     assert update_self.classify_path(
         "system/vendor/mngr/libs/mngr/pyproject.toml"
@@ -440,19 +440,19 @@ def test_classify_path_manifest_flag() -> None:
 
 def test_classify_merge_splits_merged_and_pulled_in() -> None:
     upstream_changed = [
-        "system/libs/system_interface/src/App.tsx",  # also local -> merged
+        "system/apps/system_interface/src/App.tsx",  # also local -> merged
         "system/scripts/forward_port.py",  # upstream only -> pulled in
         "system/supervisord.conf",  # upstream only -> pulled in
     ]
     local_changed = [
-        "system/libs/system_interface/src/App.tsx",
+        "system/apps/system_interface/src/App.tsx",
         "PURPOSE.md",  # local only, not an upstream update -> ignored
     ]
     result = update_self.classify_merge(upstream_changed, local_changed)
 
     merged_paths = [entry["path"] for entry in result.merged]
     pulled_paths = [entry["path"] for entry in result.pulled_in]
-    assert merged_paths == ["system/libs/system_interface/src/App.tsx"]
+    assert merged_paths == ["system/apps/system_interface/src/App.tsx"]
     assert pulled_paths == ["system/scripts/forward_port.py", "system/supervisord.conf"]
     # A file only local changed is not surfaced as an upstream update at all.
     assert "PURPOSE.md" not in merged_paths + pulled_paths
@@ -460,12 +460,12 @@ def test_classify_merge_splits_merged_and_pulled_in() -> None:
 
 def test_classify_merge_summary_fields() -> None:
     upstream_changed = [
-        "system/libs/system_interface/src/App.tsx",  # merged
+        "system/apps/system_interface/src/App.tsx",  # merged
         "system/vendor/mngr/libs/mngr/foo.py",  # merged
         "system/scripts/forward_port.py",  # pulled in
     ]
     local_changed = [
-        "system/libs/system_interface/src/App.tsx",
+        "system/apps/system_interface/src/App.tsx",
         "system/vendor/mngr/libs/mngr/foo.py",
     ]
     result = update_self.classify_merge(upstream_changed, local_changed)
@@ -475,7 +475,7 @@ def test_classify_merge_summary_fields() -> None:
     ]
     assert result.reveal_classes_pulled_in == [update_self.CLASS_SHARED_RUNTIME]
     assert result.projects_to_validate == [
-        "system/libs/system_interface",
+        "system/apps/system_interface",
         "system/vendor/mngr",
     ]
 
@@ -563,7 +563,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # Base commit: one pre-existing top-level entry (must NOT be reported as
     # newly added), plus a source file the target will leave untouched.
     _write("changelog/old-entry.md")
-    _write("system/libs/browser/src/browser/session.py", "print('hi')\n")
+    _write("system/apps/browser/src/browser/session.py", "print('hi')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "base")
     _git("tag", "base")
@@ -572,11 +572,11 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # entry (excluded), and a non-changelog source change (ignored).
     _write(".agents/changelog/my-branch.md")
     _write("system/changelog/my-branch.md")
-    _write("system/libs/browser/changelog/my-branch.md")
-    _write("system/libs/system_interface/changelog/my-branch.md")
-    _write("creations/beta/changelog/my-branch.md")
+    _write("system/apps/browser/changelog/my-branch.md")
+    _write("system/apps/system_interface/changelog/my-branch.md")
+    _write("system/services/gamma/changelog/my-branch.md")
     _write("system/vendor/mngr/libs/mngr/changelog/upstream-entry.md")
-    _write("system/libs/browser/src/browser/session.py", "print('bye')\n")
+    _write("system/apps/browser/src/browser/session.py", "print('bye')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "target")
     _git("tag", "target")
@@ -598,10 +598,10 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     added = json.loads(capsys.readouterr().out)["added"]
     assert sorted(added) == [
         ".agents/changelog/my-branch.md",
-        "creations/beta/changelog/my-branch.md",
+        "system/apps/browser/changelog/my-branch.md",
+        "system/apps/system_interface/changelog/my-branch.md",
         "system/changelog/my-branch.md",
-        "system/libs/browser/changelog/my-branch.md",
-        "system/libs/system_interface/changelog/my-branch.md",
+        "system/services/gamma/changelog/my-branch.md",
     ]
 
 

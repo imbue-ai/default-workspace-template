@@ -35,5 +35,5 @@ cd "$REPO_ROOT"
 uv sync --all-packages --frozen --no-install-workspace --no-install-local
 
 # Frontend npm dependencies (exact, from the lockfile).
-cd "$REPO_ROOT/system/libs/system_interface/frontend"
+cd "$REPO_ROOT/system/apps/system_interface/frontend"
 npm ci

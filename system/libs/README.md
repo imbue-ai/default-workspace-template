@@ -1,13 +1,18 @@
 # system/libs/
 
-The built-in workspace packages. Each is a uv workspace member with its own
-`pyproject.toml`; see each package's README for details.
+Support libraries: workspace packages that are neither apps (no tab) nor
+background services (no supervised program of their own). Each is a uv
+workspace member with its own `pyproject.toml`; see each package's README for
+details.
 
-Services (supervised via `system/supervisord.conf`): `system_interface` (the
-workspace web UI), `app_watcher`, `browser`, `cloudflare_tunnel`,
-`github_sync`, `host_backup`, and the one-shot `env_converge`. Libraries:
-`bootstrap` (first-boot setup, then launches supervisord), `oom_priority`,
-`tk_command_parsing`, `mngr_cli_contract`.
+- `bootstrap/` - First-boot setup; then launches supervisord, which supervises
+  the apps and services.
+- `github_sync/` - The opt-in GitHub auto-push wiring (a git hook, not a
+  daemon; see the github-sync skill).
+- `mngr_cli_contract/` - Shared validator that checks mngr CLI argvs against
+  the live mngr command tree.
+- `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket
+  tracker's command output.
 
-User-built packages do NOT go here -- they live in `creations/` at the
-workspace root (see the build-web-service skill).
+Apps live in `system/apps/`; standalone background services live in
+`system/services/`.

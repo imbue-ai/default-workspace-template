@@ -12,7 +12,7 @@ string drift together. `assert_mngr_argv_valid` confronts the emitted argv with
 the real CLI surface instead, so that class of breakage fails at merge time.
 
 This is its own workspace package (rather than a module in one project) so the
-root pytest pass and the isolated `system/libs/system_interface` pass -- which share a
+root pytest pass and the isolated `system/apps/system_interface` pass -- which share a
 single workspace venv -- import one copy.
 
 ```python

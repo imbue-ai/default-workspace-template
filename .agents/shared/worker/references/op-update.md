@@ -1,11 +1,11 @@
 # Operation: update
 
-The **change-an-existing-artifact** operation: extend, refactor, or verify an
-artifact that already exists. Load this alongside `harden-artifact.md` (the
-universal contract) and your artifact reference (where it lives, how to test it,
+The **change-an-existing-creation** operation: extend, refactor, or verify a
+creation that already exists. Load this alongside `harden-creation.md` (the
+universal contract) and your creation reference (where it lives, how to test it,
 what not to touch).
 
-The artifact already exists on disk, so there is nothing to reconstruct. The one
+The creation already exists on disk, so there is nothing to reconstruct. The one
 axis of variation is a **design-gate toggle** keyed on whether the change is
 already committed:
 
@@ -25,15 +25,15 @@ absent or unrecognized.
 
 ## Valid report `name:` values
 
-- Gates: `outline-approval` (emergent only -- the design gate), `final-artifact`
+- Gates: `outline-approval` (emergent only -- the design gate), `final-creation`
   (both).
 - Terminal statuses: `done`, `stuck`, `no-update-needed`.
 
-**System-interface exception.** When the artifact is the system interface, there
+**System-interface exception.** When the creation is the system interface, there
 is no `## Change origin` toggle and **no gate report at all**: the change is
 handed to you as a plain brief, and user approval happens through the lead's
 pre-merge live preview, not a worker gate. Implement the brief, verify it per
-`artifact-system-interface.md`, then report `done` (or a mid-flight `question`,
+`type-system-interface.md`, then report `done` (or a mid-flight `question`,
 or `stuck`) with a body that summarizes the work so the lead can frame the
 preview:
 
@@ -45,8 +45,8 @@ Updated the system interface on branch `<branch>`. Ready to preview.
 - Screenshots reviewed: <pages/states you eyeballed>
 ```
 
-The committed/emergent paths and gates below apply only to skill and service
-artifacts.
+The committed/emergent paths and gates below apply only to skill, app, and service
+creations.
 
 ## Emergent path
 
@@ -56,18 +56,18 @@ artifacts.
    quotes are your primary guide.
 2. Locate the incident and the manual follow-up in the lead's transcript, per
    `.agents/shared/worker/references/transcript-exploration.md`.
-3. Read the artifact's current state on disk per your artifact reference.
+3. Read the creation's current state on disk per your creation reference.
 
 ### Stage 2: Design and Gate 1
 
-For a **skill** artifact, first decide update-in-place vs. split-a-new-sibling
+For a **skill** creation, first decide update-in-place vs. split-a-new-sibling
 per `.agents/shared/worker/references/update-vs-create-new.md` (default to in-place;
-only split when the gap has a concrete standalone use case). Other artifacts
+only split when the gap has a concrete standalone use case). Other creations
 update in place.
 
 Propose an outline. For a **skill**, the outline contents are defined in
 `.agents/shared/worker/references/skill-outline-fields.md`; add the update decision
-(update-in-place vs. new sibling). For a **service**, the
+(update-in-place vs. new sibling). For an **app** (or a service), the
 outline is the decision, what changes, and the routes/scenarios affected. Write a
 `type: gate`, `name: outline-approval` report with the outline plus "Approve this
 outline? (yes / no with notes)". Push it and stop. Wait for an explicit yes
@@ -75,9 +75,9 @@ before coding.
 
 ### Stage 3: Implement
 
-Edit the artifact per your artifact reference, preserving the existing contract
+Edit the creation per your creation reference, preserving the existing contract
 for current callers unless the outline calls for a breaking change. After the
-localized edit, sweep the rest of the artifact for any cross-reference,
+localized edit, sweep the rest of the creation for any cross-reference,
 summary, or description that names the changed material and update it too --
 treat the sweep as part of the edit, not a follow-up.
 
@@ -88,14 +88,14 @@ treat the sweep as part of the edit, not a follow-up.
 1. Read the task file's `## Committed change` section: branch, commit range,
    summary, and design rationale.
 2. Read the pushed `commit.diff` / `commit.log` (staged alongside the task file)
-   to see the actual diff, and read the artifact's post-change state on disk.
+   to see the actual diff, and read the creation's post-change state on disk.
 3. If the rationale alludes to conversational context the diff does not explain,
    locate those turns in the lead's transcript.
 
 ### Stage 2: Verify against the rationale
 
 Cross-check the committed change against the stated design rationale: does the
-diff implement what the rationale describes (fidelity)? Does the edited artifact
+diff implement what the rationale describes (fidelity)? Does the edited creation
 stay coherent -- no orphaned references, broken links, or cross-reference drift
 (consistency)? If the rationale claims backward compatibility, do existing
 callers still work? Do not redesign; note any divergence as a final-gate finding
@@ -105,7 +105,7 @@ for the user to adjudicate.
 
 ### Validate and run scenarios
 
-Validate the artifact per your artifact reference, then run 2-3 scenarios. At
+Validate the creation per your creation reference, then run 2-3 scenarios. At
 least one must exercise the changed path (the absorbed incident in the emergent
 path; the changed path in the committed path); others exercise neighbouring or
 edge paths to catch regressions.
@@ -113,20 +113,20 @@ edge paths to catch regressions.
 If the change introduces a new persisted store or enlarges an existing one --
 newly fetching and storing data, adding a log/cache/archive, or widening what an
 existing store retains -- apply the bound-disk-growth contract in
-`harden-artifact.md` to that store: give it an explicit retention bound, evict as
+`harden-creation.md` to that store: give it an explicit retention bound, evict as
 part of the run that writes, and cover the bound with a test. An update that
-turns a stateless artifact into one that accretes is exactly where an unbounded
+turns a stateless creation into one that accretes is exactly where an unbounded
 store slips in, since the harden attention is otherwise on the changed path.
 
 ### Review gates
 
-Run `/autofix` and the other gates per `harden-artifact.md`. In the committed
+Run `/autofix` and the other gates per `harden-creation.md`. In the committed
 path, any fixes become follow-up commits on your branch.
 
 ### Final gate, then hand off
 
-Write a `type: gate`, `name: final-artifact` report plus "Approve and save? (yes
-/ no with notes)", with the body keyed to your artifact:
+Write a `type: gate`, `name: final-creation` report plus "Approve and save? (yes
+/ no with notes)", with the body keyed to your creation:
 
 **Skill:**
 
@@ -139,10 +139,10 @@ Write a `type: gate`, `name: final-artifact` report plus "Approve and save? (yes
   consumer or surface would need to adapt to>
 ```
 
-**Service:**
+**App or service:**
 
 ```
-Updated service `<name>`:
+Updated app or service `<name>`:
 - Change: <one-sentence>
 - Routes affected: <list>
 - Scenarios / tests run: <list, all pass>
@@ -154,10 +154,10 @@ fine; the merge still brings the live commit forward.
 
 ## If no change is needed
 
-If the right answer turns out to be "leave the artifact alone", emit a
+If the right answer turns out to be "leave the creation alone", emit a
 `name: no-update-needed` terminal report. Do not commit a null change.
 
 ## If you need to give up
 
-Emit a `stuck` terminal report per `harden-artifact.md`, stating what blocked
+Emit a `stuck` terminal report per `harden-creation.md`, stating what blocked
 you and where the work stands.

@@ -151,10 +151,10 @@ def _is_live(url: str) -> bool:
 def test_classify_distinguishes_all_four_kinds() -> None:
     changes = reveal_mod.classify_changes(
         [
-            "system/libs/system_interface/frontend/src/views/Chat.ts",
-            "system/libs/system_interface/frontend/package.json",
-            "system/libs/system_interface/imbue/system_interface/server.py",
-            "system/libs/system_interface/pyproject.toml",
+            "system/apps/system_interface/frontend/src/views/Chat.ts",
+            "system/apps/system_interface/frontend/package.json",
+            "system/apps/system_interface/imbue/system_interface/server.py",
+            "system/apps/system_interface/pyproject.toml",
         ]
     )
     assert (
@@ -178,8 +178,8 @@ def test_classify_treats_root_uv_lock_as_backend_manifest() -> None:
 def test_classify_ignores_backend_test_files() -> None:
     changes = reveal_mod.classify_changes(
         [
-            "system/libs/system_interface/imbue/system_interface/server_test.py",
-            "system/libs/system_interface/imbue/system_interface/test_e2e.py",
+            "system/apps/system_interface/imbue/system_interface/server_test.py",
+            "system/apps/system_interface/imbue/system_interface/test_e2e.py",
         ]
     )
     assert not changes.any
@@ -194,7 +194,7 @@ def test_classify_ignores_unrelated_paths() -> None:
 
 
 def test_frontend_only_builds_and_broadcasts_without_restart() -> None:
-    runner = _runner_with_diff("M\tsystem/libs/system_interface/frontend/src/views/Chat.ts\n")
+    runner = _runner_with_diff("M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n")
     http = _FakeHttp(_all_healthy)
     spawner = _FakeSpawner()
 
@@ -212,7 +212,7 @@ def test_frontend_only_builds_and_broadcasts_without_restart() -> None:
 
 def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> None:
     runner = _runner_with_diff(
-        "M\tsystem/libs/system_interface/imbue/system_interface/server.py\nM\tsystem/libs/system_interface/pyproject.toml\n"
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\nM\tsystem/apps/system_interface/pyproject.toml\n"
     )
     http = _FakeHttp(_all_healthy)
     spawner = _FakeSpawner()
@@ -225,7 +225,7 @@ def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> Non
         "tool",
         "install",
         "-e",
-        "system/libs/system_interface",
+        "system/apps/system_interface",
         "--reinstall",
     ]
     assert spawner.spawns and spawner.spawns[0] == [
@@ -238,7 +238,7 @@ def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> Non
 
 def test_backend_src_only_skips_dependency_refresh() -> None:
     runner = _runner_with_diff(
-        "M\tsystem/libs/system_interface/imbue/system_interface/server.py\n"
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
     )
     http = _FakeHttp(_all_healthy)
 
@@ -267,7 +267,7 @@ def test_failed_preflight_never_restarts_live_service_and_rolls_back() -> None:
     # New backend file that cannot boot: pre-flight (non-live URL) never returns
     # 200; live URL is healthy (old code still running, and healthy after revert).
     runner = _runner_with_diff(
-        "A\tsystem/libs/system_interface/imbue/system_interface/new_module.py\n"
+        "A\tsystem/apps/system_interface/imbue/system_interface/new_module.py\n"
     )
     http = _FakeHttp(lambda url: 200 if _is_live(url) else None)
 
@@ -290,7 +290,7 @@ def test_failed_preflight_with_manifest_refreshes_deps_but_does_not_restart() ->
     # still reinstall deps back to known-good (to fix the on-disk venv) but must
     # NOT restart the live service, which was never touched.
     runner = _runner_with_diff(
-        "M\tsystem/libs/system_interface/pyproject.toml\nM\tsystem/libs/system_interface/imbue/system_interface/server.py\n"
+        "M\tsystem/apps/system_interface/pyproject.toml\nM\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
     )
     http = _FakeHttp(lambda url: 200 if _is_live(url) else None)
 
@@ -309,7 +309,7 @@ def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
     # how many restarts have happened (wait_healthy retries many times, so a
     # short None sequence would otherwise pass on a later poll).
     runner = _runner_with_diff(
-        "M\tsystem/libs/system_interface/imbue/system_interface/server.py\n"
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
     )
 
     def responder(url: str) -> int | None:
@@ -340,7 +340,7 @@ def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
 
 def test_emergency_when_rollback_cannot_restore_health() -> None:
     runner = _runner_with_diff(
-        "M\tsystem/libs/system_interface/imbue/system_interface/server.py\n"
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
     )
     http = _FakeHttp(
         lambda url: None if _is_live(url) else 200
@@ -352,7 +352,7 @@ def test_emergency_when_rollback_cannot_restore_health() -> None:
 
 
 def test_frontend_build_failure_rolls_back() -> None:
-    runner = _runner_with_diff("M\tsystem/libs/system_interface/frontend/src/views/Chat.ts\n")
+    runner = _runner_with_diff("M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n")
     # First build (the reveal) fails; the recovery rebuild from known-good succeeds.
     runner.respond(
         ("npm", "run", "build"), [_Result(returncode=1, stderr="type error"), _Result()]
@@ -371,7 +371,7 @@ def test_frontend_build_failure_rolls_back() -> None:
 
 def test_dirty_tree_refuses_before_touching_anything() -> None:
     runner = _runner_with_diff(
-        "M\tsystem/libs/system_interface/imbue/system_interface/server.py\n", dirty=True
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n", dirty=True
     )
     http = _FakeHttp(_all_healthy)
 
@@ -399,9 +399,9 @@ def test_restore_tree_removes_adds_and_checks_out_the_rest() -> None:
     runner = _RecordingRunner()
     reveal_mod._restore_tree(
         [
-            ("A", "system/libs/system_interface/imbue/system_interface/new_module.py"),
-            ("M", "system/libs/system_interface/imbue/system_interface/server.py"),
-            ("D", "system/libs/system_interface/frontend/src/old.ts"),
+            ("A", "system/apps/system_interface/imbue/system_interface/new_module.py"),
+            ("M", "system/apps/system_interface/imbue/system_interface/server.py"),
+            ("D", "system/apps/system_interface/frontend/src/old.ts"),
         ],
         _ROLLBACK,
         _REPO,
@@ -413,13 +413,13 @@ def test_restore_tree_removes_adds_and_checks_out_the_rest() -> None:
             "rm",
             "--force",
             "--ignore-unmatch",
-            "system/libs/system_interface/imbue/system_interface/new_module.py",
+            "system/apps/system_interface/imbue/system_interface/new_module.py",
         ]
     ]
     checkouts = [c[-1] for c in runner.argvs_starting("git", "checkout")]
     assert checkouts == [
-        "system/libs/system_interface/imbue/system_interface/server.py",
-        "system/libs/system_interface/frontend/src/old.ts",
+        "system/apps/system_interface/imbue/system_interface/server.py",
+        "system/apps/system_interface/frontend/src/old.ts",
     ]
 
 
@@ -438,7 +438,7 @@ _SERVE_DOWN = (sys.executable, str(reveal_mod._SHARED_SERVE_SCRIPT), "down")
 
 
 def _make_work_dir(tmp_path: Path, *, built: bool = True) -> Path:
-    """A stand-in for a worker's work_dir: a folder with an system/libs/system_interface.
+    """A stand-in for a worker's work_dir: a folder with an system/apps/system_interface.
 
     ``built`` seeds the frontend build output the backend serves, modelling a
     worker that produced a bundle; pass ``built=False`` for a worker that reported
@@ -490,7 +490,7 @@ def test_preview_rejects_a_work_dir_without_the_app(tmp_path: Path) -> None:
     # A wrong --work-dir (or a destroyed worker) should fail fast, before the
     # shared script is ever invoked.
     runner = _RecordingRunner()
-    bad_work_dir = tmp_path / "gone"  # no system/libs/system_interface under it
+    bad_work_dir = tmp_path / "gone"  # no system/apps/system_interface under it
 
     code = reveal_mod.preview(_SLUG, str(bad_work_dir), tmp_path, runner=runner)
 

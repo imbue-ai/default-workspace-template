@@ -15,7 +15,7 @@ based on the feedback from the user. If the user is actively sitting and talking
 with you and waiting on the result of your work, they expect to receive check-ins and
 frequent signals about the state of things on which they want to give their feedback.
 
-The fix: put a cheap, real, throwaway artifact in
+The fix: put a cheap, real, throwaway creation in
 front of the user *first*, loop until they confirm the shape, and defer everything
 expensive (thorough tests, review gates, polish) to a background worker so the
 user is never blocked.
@@ -45,18 +45,18 @@ specifics, but the shape below holds for all of them.
    abandoning the user's core ask? If yes (your own code, a trivial transform),
    it does not belong in this pass. If no, validate it now. Fail fast here.
 
-5. **Put a cheap, real, prototype artifact in front of the user.** Produce the
-   smallest *real* artifact that lets the user judge the shape and loop on it:
-   present, take feedback, present an updated artifact that *visibly applies* the
+5. **Put a cheap, real, prototype creation in front of the user.** Produce the
+   smallest *real* creation that lets the user judge the shape and loop on it:
+   present, take feedback, present an updated creation that *visibly applies* the
    feedback. Keep this phase
    throwaway -- no production scripts, services, tests, or commits yet; producing
-   the artifact by hand, in-context, is fine, as long as the *output* is real.
+   the creation by hand, in-context, is fine, as long as the *output* is real.
    Loop until the user **explicitly confirms** the shape is right. That
    confirmation is the gate to everything below.
 
 6. **Hard gate: nothing hardened before confirmation.** Do not crystallize, write
    thorough tests, run review gates, or build production state on an unconfirmed
-   artifact. Hardening a moving target bakes in the wrong shape -- and bakes it
+   creation. Hardening a moving target bakes in the wrong shape -- and bakes it
    into a background worker that cannot see corrections the user has not made
    yet. The confirmation from phase 5 is what unlocks this.
 
@@ -64,18 +64,18 @@ specifics, but the shape below holds for all of them.
    polish. This **always runs in a background worker**; you never run the
    code-guardian gates or the thorough test passes yourself.
    Backgrounding never strands the user, because they already have the confirmed
-   artifact (or a usable build of it) to work with while the slow checks run
+   creation (or a usable build of it) to work with while the slow checks run
    behind them. Notably, this means that at the time of backgrounding there must
-   be a reasonably representative sample artifact; it can't just be a basic mock.
+   be a reasonably representative sample creation; it can't just be a basic mock.
    This background pass is the **harden pass** -- its universal contract lives in
-   `.agents/shared/worker/references/harden-artifact.md`, and the create operation that
-   produces a brand-new artifact from a confirmed prototype is the
-   `crystallize-artifact` lead. Each specialization (`build-web-service`,
-   `fetch-process-show`, ...) hands its confirmed artifact to that lead, which
+   `.agents/shared/worker/references/harden-creation.md`, and the create operation that
+   produces a brand-new creation from a confirmed prototype is the
+   `crystallize-creation` lead. Each specialization (`build-app`,
+   `fetch-process-show`, ...) hands its confirmed creation to that lead, which
    dispatches the generic worker; this skeleton stays mechanism-agnostic.
 
 8. **Deliver further capabilities one at a time.** A confirmation on the first
-   artifact approves *that* artifact, not everything downstream of it. Every
+   creation approves *that* creation, not everything downstream of it. Every
    additional piece the task accretes -- a second view, a follow-up action,
    persistence, scheduling -- gets its *own* delivery and its *own* feedback gate.
    Do not bundle them. Build one, ship it, ask whether to do the next, wait.
@@ -84,11 +84,11 @@ specifics, but the shape below holds for all of them.
 
 - **Demonstrate what's perceivable, elicit what isn't.** The user can only judge
   the parts of the result they can *perceive* -- how it looks, reads, or behaves
-  -- by seeing them, so demonstrate those with a cheap artifact. The parts they
+  -- by seeing them, so demonstrate those with a cheap creation. The parts they
   can't perceive -- architecture, persistence, internal structure -- you *elicit
   and record* instead: surface the decision and write it down, **never build it**
   during the interactive phase. Decide those once, at the last responsible
-  moment, from the converged artifact.
+  moment, from the converged creation.
 
 - **Default and declare.** Pick the simplest conventional default for any choice
   the user has not constrained, state it in one line, and move on. Only turn a

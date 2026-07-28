@@ -65,11 +65,11 @@ WORKDIR /home/user/workspace/
 
 # Root + per-workspace-member pyproject.toml + uv.lock.
 COPY pyproject.toml uv.lock /home/user/workspace/
-COPY system/libs/app_watcher/pyproject.toml /home/user/workspace/system/libs/app_watcher/pyproject.toml
+COPY system/services/app_watcher/pyproject.toml /home/user/workspace/system/services/app_watcher/pyproject.toml
 COPY system/libs/bootstrap/pyproject.toml /home/user/workspace/system/libs/bootstrap/pyproject.toml
-COPY system/libs/cloudflare_tunnel/pyproject.toml /home/user/workspace/system/libs/cloudflare_tunnel/pyproject.toml
+COPY system/services/cloudflare_tunnel/pyproject.toml /home/user/workspace/system/services/cloudflare_tunnel/pyproject.toml
 COPY system/libs/github_sync/pyproject.toml /home/user/workspace/system/libs/github_sync/pyproject.toml
-COPY system/libs/system_interface/pyproject.toml /home/user/workspace/system/libs/system_interface/pyproject.toml
+COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/apps/system_interface/pyproject.toml
 
 # system/vendor/mngr path-dependency manifests. The root pyproject.toml's
 # [tool.uv.sources] points imbue-common, imbue-mngr, imbue-mngr-claude,
@@ -87,7 +87,7 @@ COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace
 COPY system/vendor/mngr/libs/concurrency_group/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/concurrency_group/pyproject.toml
 
 # Frontend npm manifest (lockfile + package.json) -- install needs only these.
-COPY system/libs/system_interface/frontend/package.json system/libs/system_interface/frontend/package-lock.json /home/user/workspace/system/libs/system_interface/frontend/
+COPY system/apps/system_interface/frontend/package.json system/apps/system_interface/frontend/package-lock.json /home/user/workspace/system/apps/system_interface/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
 COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies

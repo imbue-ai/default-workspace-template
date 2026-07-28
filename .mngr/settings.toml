@@ -681,6 +681,124 @@ systemctl enable minds-autostart.service
 """,
 ]
 
+# template for GCP Compute Engine VPS provider (gcp mode). Mirrors the aws
+# template above: minds addresses the create as
+# `system-services@<host>.byo-gcp-<slug>` (a bring-your-own account block minds
+# writes on account setup), so no `provider` is declared here. Zone / machine
+# type come from that provider block (`default_zone` / `default_machine_type`)
+# plus the matching `-b --gcp-zone=` / `-b --gcp-machine-type=` minds passes.
+[create_templates.gcp]
+target_path = "/mngr/code/"
+build_arg__extend = ["--file=Dockerfile", "."]
+# Disable idle detection entirely -- the host should never auto-shutdown; the
+# machine is up for the whole user session (see the aws template's comment).
+idle_mode = "disabled"
+# Same container-hardening `docker run` args as the aws template. They are
+# runtime-agnostic (harmless under plain runc; required under gVisor's runsc if
+# the provider block opts into it): see the aws template for the rationale.
+start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
+# Same forwarding as the docker template; see comment there.
+pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
+# Same first-boot seed as the docker template; see comment there.
+post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
+# Install the outer-VM boot unit so the agent recovers after a VM reboot even
+# without the desktop app; identical to the aws template's unit.
+post_host_create_outer_command__extend = [
+    """
+set -eu
+cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
+#!/bin/sh
+# On VM boot, start every mngr-managed agent container and relaunch the
+# system-services agent inside it (in its full host+agent env, via the shared
+# in-container start script). Containers are found by the fixed mngr label, so
+# this survives container rebuilds. `docker start` is a no-op if the container's
+# --restart policy already brought it back; `mngr start` is idempotent + flock-
+# serialized, so racing the desktop client is safe.
+set -u
+for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
+    docker start "$cid" >/dev/null 2>&1 || true
+    docker exec --workdir / "$cid" bash -lc 'exec /mngr/code/scripts/minds_start_services_agent.sh' || true
+done
+BOOT
+chmod +x /usr/local/sbin/minds-outer-autostart.sh
+cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
+[Unit]
+Description=Start the minds system-services agent on boot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/minds-outer-autostart.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable minds-autostart.service
+""",
+]
+
+# template for Azure Virtual Machines VPS provider (azure mode). Mirrors the
+# aws template above: minds addresses the create as
+# `system-services@<host>.byo-azure-<slug>` (a bring-your-own account block
+# minds writes on account setup), so no `provider` is declared here. Region /
+# VM size come from that provider block (`default_region` / `default_vm_size`)
+# plus the matching `-b --azure-region=` / `-b --azure-vm-size=` minds passes.
+[create_templates.azure]
+target_path = "/mngr/code/"
+build_arg__extend = ["--file=Dockerfile", "."]
+# Disable idle detection entirely -- the host should never auto-shutdown; the
+# machine is up for the whole user session (see the aws template's comment).
+idle_mode = "disabled"
+# Same container-hardening `docker run` args as the aws template. They are
+# runtime-agnostic (harmless under plain runc; required under gVisor's runsc if
+# the provider block opts into it): see the aws template for the rationale.
+start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
+# Same forwarding as the docker template; see comment there.
+pass_host_env__extend = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GH_TOKEN"]
+# Same first-boot seed as the docker template; see comment there.
+post_host_create_command__extend = ["/usr/local/bin/fct-seed"]
+# Install the outer-VM boot unit so the agent recovers after a VM reboot even
+# without the desktop app; identical to the aws template's unit.
+post_host_create_outer_command__extend = [
+    """
+set -eu
+cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
+#!/bin/sh
+# On VM boot, start every mngr-managed agent container and relaunch the
+# system-services agent inside it (in its full host+agent env, via the shared
+# in-container start script). Containers are found by the fixed mngr label, so
+# this survives container rebuilds. `docker start` is a no-op if the container's
+# --restart policy already brought it back; `mngr start` is idempotent + flock-
+# serialized, so racing the desktop client is safe.
+set -u
+for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
+    docker start "$cid" >/dev/null 2>&1 || true
+    docker exec --workdir / "$cid" bash -lc 'exec /mngr/code/scripts/minds_start_services_agent.sh' || true
+done
+BOOT
+chmod +x /usr/local/sbin/minds-outer-autostart.sh
+cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
+[Unit]
+Description=Start the minds system-services agent on boot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/minds-outer-autostart.sh
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable minds-autostart.service
+""",
+]
+
 # Template for imbue_cloud-leased pool hosts. minds invokes this as
 # `--template main --template imbue_cloud` (mirroring how the other modes
 # use `--template main --template <provider>`), so the imbue_cloud-specific
@@ -727,6 +845,40 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 [create_templates.chat]
 type = "chat"
 
+# Caretaker template: the weekly maintenance agent (the "Caretaker") -- the
+# tailored example of the generic `schedule_agent` template below. Like `chat`,
+# it is a plain `claude` agent sharing the services agent's CLAUDE_CONFIG_DIR
+# via the inherited host env, but it is oriented by an appended system prompt
+# to run the `caretaker` skill. It is spawned (and re-woken) by the caretaker
+# job (the /etc/cron.d/minds-caretaker entry the enable-caretaker skill
+# creates -- absent until then, weekly and findings-gated via
+# system/scripts/caretaker_check.sh once enabled) via
+# system/scripts/run_schedule_agent.sh, and is labelled schedule_agent=caretaker so
+# it can be found as a singleton (the agent surfaces its own chat tab via
+# system/scripts/layout.py after its first message).
+[create_templates.caretaker]
+type = "claude"
+env = ["MNGR_AGENT_ROLE=caretaker"]
+agent_args = [
+    "--append-system-prompt",
+    "You are the Caretaker: a maintenance agent for this workspace, woken about once a week when a scheduled check finds something worth reporting. When you are messaged to run, follow the `caretaker` skill (.agents/skills/caretaker/SKILL.md) exactly. Always speak to the user in plain, non-technical, user-experience terms. Apart from one look-only scan on your very first run -- which you always do to introduce yourself, and which never changes anything -- never scan logs or apply fixes without the permission recorded in data/.state/caretaker/permissions.md, and never apply a fix on that first run.",
+]
+
+# Schedule-agent template: the reusable base for any skill run on a cadence
+# (the Caretaker above is a tailored instance). system/scripts/run_schedule_agent.sh
+# <skill> spawns one of these per skill, labels it schedule_agent=<skill>,
+# and messages it `/<skill>` on every run -- so a new scheduled
+# agent (e.g. a morning news digest) needs only a skill plus a cron entry, no
+# new template. It is a plain `claude` agent oriented, by an appended system
+# prompt, to run whatever skill the slash-command it receives names.
+[create_templates.schedule_agent]
+type = "claude"
+env = ["MNGR_AGENT_ROLE=schedule_agent"]
+agent_args = [
+    "--append-system-prompt",
+    "You are a schedule agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: for L in desktop mobile; do python3 system/scripts/layout.py open --layout \"$L\" \"chat:$MNGR_AGENT_NAME\"; done (--layout is required; the layout the user is not on fails fast and harmlessly; best-effort -- continue if both fail). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it.",
+]
+
 # Worktree template: agent in a new git worktree, no services by default --
 # creates its own as needed. Uses the plain `claude` type (not `main`), so
 # worktree agents run a real claude binary and share the services agent's
@@ -759,13 +911,14 @@ agent_args = [
 ]
 
 # Subskill-worker template: sub-agent for any flow that hands its worker the
-# generic harden worker -- the crystallize-artifact / update-artifact /
-# heal-artifact lifecycle (across skills, services, and the system interface).
+# generic harden worker -- the crystallize-creation / update-creation /
+# heal-creation lifecycle (across skills, apps, services, and the system
+# interface).
 # Inherits from `worker`, adds:
 #  - MNGR_AGENT_ROLE=worker so the harden Stop hook skips in-worker.
 #  - A pre-provision step that installs the single generic worker sub-skill from
 #    .agents/shared/worker/ into the worker's .agents/skills/ tree as
-#    `harden-worker`. The worker reads the operation + artifact from its task
+#    `harden-worker`. The worker reads the operation + type from its task
 #    file and composes the matching references.
 [create_templates.subskill-worker]
 type = "worker"
