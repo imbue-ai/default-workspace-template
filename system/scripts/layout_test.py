@@ -56,7 +56,7 @@ def _write_apps_toml(path: Path, names: list[str]) -> None:
         entry["name"] = name
         entry["url"] = f"http://localhost:9000/{name}"
         apps.append(entry)
-    doc["applications"] = apps
+    doc["apps"] = apps
     path.write_text(tomlkit.dumps(doc))
 
 
@@ -118,9 +118,9 @@ def test_inspect_emits_layout_payload(monkeypatch: pytest.MonkeyPatch, capsys: p
 
 
 def test_open_waits_for_registration_then_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    apps_file = tmp_path / "applications.toml"
+    apps_file = tmp_path / "apps.toml"
     _write_apps_toml(apps_file, ["web"])
-    monkeypatch.setenv(layout.ENV_APPLICATIONS_FILE, str(apps_file))
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
 
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
@@ -133,9 +133,9 @@ def test_open_waits_for_registration_then_posts(tmp_path: Path, monkeypatch: pyt
 def test_open_fails_when_service_not_registered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    apps_file = tmp_path / "applications.toml"
+    apps_file = tmp_path / "apps.toml"
     _write_apps_toml(apps_file, ["other"])
-    monkeypatch.setenv(layout.ENV_APPLICATIONS_FILE, str(apps_file))
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
     monkeypatch.setattr(layout, "_REGISTRATION_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(layout, "_REGISTRATION_POLL_INTERVAL_SECONDS", 0.01)
 
@@ -150,9 +150,9 @@ def test_open_fails_when_service_not_registered(
 
 
 def test_open_full_ref_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    apps_file = tmp_path / "applications.toml"
+    apps_file = tmp_path / "apps.toml"
     _write_apps_toml(apps_file, ["web"])
-    monkeypatch.setenv(layout.ENV_APPLICATIONS_FILE, str(apps_file))
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
 
@@ -163,9 +163,9 @@ def test_open_full_ref_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 def test_open_new_group_flag_sets_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--new-group`` opts out of the share-existing-group default."""
-    apps_file = tmp_path / "applications.toml"
+    apps_file = tmp_path / "apps.toml"
     _write_apps_toml(apps_file, ["web"])
-    monkeypatch.setenv(layout.ENV_APPLICATIONS_FILE, str(apps_file))
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
 
@@ -186,7 +186,7 @@ def test_open_chat_terminal_ref_skips_registration_and_posts_through(
     """
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
-    # No applications.toml is set up: if the script misclassified the ref
+    # No apps.toml is set up: if the script misclassified the ref
     # as ``service:chat-terminal:alice`` the registration poll would fire.
 
     rc = layout.main(["open", "chat-terminal:alice", "--layout", "desktop"])
@@ -211,11 +211,11 @@ def test_normalize_ref_preserves_chat_terminal_prefix() -> None:
 
 def test_open_external_url_skips_registration_and_posts_bare_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """A bare ``https://`` target is an external-URL ref: it must NOT be
-    treated as a service name (no applications.toml registration check)
+    treated as a service name (no apps.toml registration check)
     and reaches the server verbatim."""
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
-    # No applications.toml set up and no _wait_for_registration override:
+    # No apps.toml set up and no _wait_for_registration override:
     # if the URL were misclassified as a service this would fail/hang.
 
     rc = layout.main(["open", "https://example.com/dashboard", "--layout", "desktop"])
@@ -231,9 +231,9 @@ def test_open_terminal_prints_returned_ref_to_stdout(
     returns ``terminal:<hash>`` in the HTTP response so the script can
     print it. The agent then has a stable handle for follow-up ops
     without round-tripping through ``inspect``."""
-    apps_file = tmp_path / "applications.toml"
+    apps_file = tmp_path / "apps.toml"
     _write_apps_toml(apps_file, ["terminal"])
-    monkeypatch.setenv(layout.ENV_APPLICATIONS_FILE, str(apps_file))
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
 
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
@@ -252,9 +252,9 @@ def test_open_without_returned_ref_emits_nothing(
     """Non-terminal ``open`` responses (no ``ref`` field) must leave stdout
     empty: callers parsing the script's stdout rely on it being silent
     unless the server explicitly returns a synchronously-allocated ref."""
-    apps_file = tmp_path / "applications.toml"
+    apps_file = tmp_path / "apps.toml"
     _write_apps_toml(apps_file, ["web"])
-    monkeypatch.setenv(layout.ENV_APPLICATIONS_FILE, str(apps_file))
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
 
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
@@ -1311,7 +1311,7 @@ def test_resolve_replace_url_matches_frontend_resolver() -> None:
 
 
 def test_service_name_from_ref_strips_query_and_path() -> None:
-    # The registration check polls applications.toml for the SERVICE, so a
+    # The registration check polls apps.toml for the SERVICE, so a
     # browser-session ref (service:browser?session=2) or a path ref must reduce
     # to the bare service name before lookup.
     assert layout._service_name_from_ref("service:browser?session=2") == "browser"

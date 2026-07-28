@@ -41,13 +41,13 @@ cd "$REPO_ROOT"
 git config --global --add safe.directory "$REPO_ROOT"
 
 # Build the system_interface frontend (deps installed by install_dependencies.sh).
-( cd "$REPO_ROOT/system/libs/system_interface/frontend" && npm run build )
+( cd "$REPO_ROOT/system/apps/system_interface/frontend" && npm run build )
 
 # Install mngr and system-interface as tools (both need the plugin packages so
 # they can parse plugin-specific config). mngr_modal is intentionally not
 # registered (providers.modal.is_enabled=false).
 uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr"
-uv tool install -e "$REPO_ROOT/system/libs/system_interface" \
+uv tool install -e "$REPO_ROOT/system/apps/system_interface" \
     --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_claude"
 mngr plugin add \
     --path system/vendor/mngr/libs/mngr_claude \

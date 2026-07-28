@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(
-    0, str(Path(__file__).resolve().parents[1] / "libs" / "oom_priority" / "src")
+    0, str(Path(__file__).resolve().parents[1] / "services" / "oom_priority" / "src")
 )
 
 from oom_priority import bands

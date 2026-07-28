@@ -17,7 +17,7 @@ import subprocess
 import time
 
 # The tree restic snapshots. Mirrors host-backup's convention (see
-# system/libs/host_backup): the backup root is the home tree that CONTAINS the
+# system/services/host_backup): the backup root is the home tree that CONTAINS the
 # mngr host dir -- /home/user, whose ".mngr" child is MNGR_HOST_DIR -- so code,
 # agent state, and data all land in the snapshot. A host dir NOT named ".mngr"
 # (the legacy /mngr layout) is itself the backup root.

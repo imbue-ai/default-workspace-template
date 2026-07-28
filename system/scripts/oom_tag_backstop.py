@@ -3,7 +3,7 @@
 
 The primary tagging mechanism is the ``oom_tag_service.py`` command prefix,
 which puts a service in its band at spawn, before anything it runs exists (see
-``system/libs/oom_priority``). This listener closes the gap the prefix cannot: a
+``system/services/oom_priority``). This listener closes the gap the prefix cannot: a
 program whose command omits the prefix would keep the inherited
 ``oom_score_adj`` of 0 and sit as protected as sshd/supervisord -- an unknown
 process must default to being expendable, not protected. Subscribed to
@@ -37,7 +37,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 
 sys.path.insert(
-    0, str(Path(__file__).resolve().parents[1] / "libs" / "oom_priority" / "src")
+    0, str(Path(__file__).resolve().parents[1] / "services" / "oom_priority" / "src")
 )
 
 from oom_priority import bands

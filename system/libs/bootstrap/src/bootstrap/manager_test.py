@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -14,14 +15,19 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from bootstrap.manager import (
     INITIAL_CHAT_AGENT_ID_FILENAME,
+    TimezoneFetchError,
+    _apply_container_timezone,
+    _install_runtime_cron_entries,
     _build_create_chat_command,
     _configure_git_global,
     _ensure_host_claude_config_dir,
+    _fetch_user_timezone,
     _format_env_file,
     _initialize_workspace_main_branch,
     _maybe_create_initial_chat,
     _parse_created_agent_id,
     _parse_env_file,
+    _parse_timezone_response,
     _persist_initial_chat_agent_id,
     _read_host_name,
     _read_main_agent_labels,
@@ -521,3 +527,215 @@ def test_initialize_workspace_main_branch_is_idempotent_on_clean_main(
     _initialize_workspace_main_branch()
     branch = _git_in(work_dir, "branch", "--show-current").stdout.strip()
     assert branch == "main"
+
+
+# --- _install_runtime_cron_entries ---
+
+
+def test_install_runtime_cron_entries_copies_files_with_0644(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "data" / ".state" / "cron.d"
+    source.mkdir(parents=True)
+    (source / "minds-caretaker").write_text("* * * * * root true\n")
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+
+    _install_runtime_cron_entries(target_dir=target)
+
+    installed = target / "minds-caretaker"
+    assert installed.read_text() == "* * * * * root true\n"
+    assert (installed.stat().st_mode & 0o777) == 0o644
+
+
+def test_install_runtime_cron_entries_skips_names_cron_would_ignore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "data" / ".state" / "cron.d"
+    source.mkdir(parents=True)
+    (source / "bad.name").write_text("* * * * * root true\n")
+    (source / "good-name").write_text("* * * * * root true\n")
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+
+    _install_runtime_cron_entries(target_dir=target)
+
+    assert not (target / "bad.name").exists()
+    assert (target / "good-name").exists()
+
+
+def test_install_runtime_cron_entries_no_ops_without_source_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "etc-cron-d"
+    target.mkdir()
+    _install_runtime_cron_entries(target_dir=target)
+    assert list(target.iterdir()) == []
+
+
+def test_install_runtime_cron_entries_tolerates_unwritable_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "data" / ".state" / "cron.d"
+    source.mkdir(parents=True)
+    (source / "minds-caretaker").write_text("* * * * * root true\n")
+    # Target dir does not exist: the per-file OSError is logged, not raised.
+    _install_runtime_cron_entries(target_dir=tmp_path / "missing")
+
+
+# --- _apply_container_timezone ---
+
+
+def _make_zoneinfo_tree(tmp_path: Path) -> Path:
+    """Build a fake zoneinfo dir with a single America/New_York zone file."""
+    zoneinfo = tmp_path / "zoneinfo"
+    (zoneinfo / "America").mkdir(parents=True)
+    (zoneinfo / "America" / "New_York").write_bytes(b"TZif-fake")
+    return zoneinfo
+
+
+def test_apply_container_timezone_symlinks_and_writes_name(tmp_path: Path) -> None:
+    zoneinfo = _make_zoneinfo_tree(tmp_path)
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    localtime = etc / "localtime"
+    timezone_file = etc / "timezone"
+
+    assert _apply_container_timezone(
+        "America/New_York",
+        zoneinfo_dir=zoneinfo,
+        localtime_path=localtime,
+        timezone_path=timezone_file,
+    )
+
+    assert localtime.is_symlink()
+    assert Path(os.readlink(localtime)) == zoneinfo / "America" / "New_York"
+    assert timezone_file.read_text() == "America/New_York\n"
+
+
+def test_apply_container_timezone_replaces_existing_localtime(tmp_path: Path) -> None:
+    """The common container case: /etc/localtime already exists (a regular file
+    baked into the image) and must be atomically replaced by the symlink."""
+    zoneinfo = _make_zoneinfo_tree(tmp_path)
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    localtime = etc / "localtime"
+    localtime.write_bytes(b"stale UTC zone data")
+    timezone_file = etc / "timezone"
+
+    assert _apply_container_timezone(
+        "America/New_York",
+        zoneinfo_dir=zoneinfo,
+        localtime_path=localtime,
+        timezone_path=timezone_file,
+    )
+    assert localtime.is_symlink()
+    assert Path(os.readlink(localtime)) == zoneinfo / "America" / "New_York"
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "",
+        "../../etc",
+        "America/../../etc/passwd",
+        "America/New York",
+        "UTC;rm -rf /",
+        "/America/New_York",
+        "America/",
+    ],
+)
+def test_apply_container_timezone_rejects_malformed_names(
+    tmp_path: Path, bad_name: str
+) -> None:
+    zoneinfo = _make_zoneinfo_tree(tmp_path)
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    localtime = etc / "localtime"
+
+    assert not _apply_container_timezone(
+        bad_name,
+        zoneinfo_dir=zoneinfo,
+        localtime_path=localtime,
+        timezone_path=etc / "timezone",
+    )
+    assert not localtime.exists()
+
+
+def test_apply_container_timezone_rejects_unknown_zone(tmp_path: Path) -> None:
+    """A well-formed name whose zoneinfo file does not exist is rejected."""
+    zoneinfo = _make_zoneinfo_tree(tmp_path)
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    localtime = etc / "localtime"
+
+    assert not _apply_container_timezone(
+        "Mars/Olympus_Mons",
+        zoneinfo_dir=zoneinfo,
+        localtime_path=localtime,
+        timezone_path=etc / "timezone",
+    )
+    assert not localtime.exists()
+
+
+def test_apply_container_timezone_tolerates_oserror(tmp_path: Path) -> None:
+    """A failing filesystem write (here: parent dir absent) returns False
+    instead of raising -- bootstrap must never die on the timezone step."""
+    zoneinfo = _make_zoneinfo_tree(tmp_path)
+    missing_dir = tmp_path / "does-not-exist"
+
+    assert not _apply_container_timezone(
+        "America/New_York",
+        zoneinfo_dir=zoneinfo,
+        localtime_path=missing_dir / "localtime",
+        timezone_path=missing_dir / "timezone",
+    )
+
+
+# --- _fetch_user_timezone ---
+
+
+def test_fetch_user_timezone_returns_empty_when_gateway_env_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
+    monkeypatch.delenv("LATCHKEY_GATEWAY_PASSWORD", raising=False)
+    monkeypatch.delenv("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", raising=False)
+    assert _fetch_user_timezone() == ""
+
+
+# --- _parse_timezone_response ---
+
+
+def test_parse_timezone_response_returns_the_zone_name() -> None:
+    assert _parse_timezone_response(b'{"timezone": "America/New_York"}') == "America/New_York"
+
+
+def test_parse_timezone_response_accepts_the_documented_unknown_answer() -> None:
+    """{"timezone": ""} is the desktop client's valid "unknown" answer -- it must
+    come back as "" (fall back to UTC), not raise (which would be retried)."""
+    assert _parse_timezone_response(b'{"timezone": ""}') == ""
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[]",
+        b'"America/New_York"',
+        b"{}",
+        b'{"timezone": null}',
+        b'{"timezone": 42}',
+    ],
+)
+def test_parse_timezone_response_rejects_wrong_shapes(body: bytes) -> None:
+    with pytest.raises(TimezoneFetchError):
+        _parse_timezone_response(body)
+
+
+def test_parse_timezone_response_rejects_a_non_json_body() -> None:
+    with pytest.raises(ValueError):
+        _parse_timezone_response(b"<html>bad gateway</html>")
