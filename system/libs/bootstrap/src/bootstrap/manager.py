@@ -281,8 +281,10 @@ def _build_create_chat_command(
         "user_created=true",
         # Chat is the only interactive agent type, so it is the only one that
         # starts fast; .mngr/settings.toml defaults every other type to standard
-        # speed. The override targets `claude` because only the type declaring
-        # settings_overrides accepts a -S on it, and `chat` inherits from it.
+        # speed. The override targets `claude` because a -S is parsed as its own
+        # config layer, without the `parent_type = "claude"` that settings.toml
+        # gives `chat` -- so only a plugin-registered type accepts a
+        # settings_overrides leaf, and `chat` inherits the value anyway.
         "-S",
         f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}",
         "--no-connect",

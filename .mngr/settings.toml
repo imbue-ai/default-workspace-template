@@ -94,9 +94,12 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # interface and the bootstrap both pass
 # `-S agent_types.claude.settings_overrides.fastMode=<bool>`, resolved from the
 # workspace's fast-mode decision (see system_interface's fast_mode_policy.py).
-# That override targets `claude` rather than `chat` because only the type that
-# declares `settings_overrides` accepts a `-S` on it; a chat create resolves its
-# own config, so overriding the base there never reaches a worker create.
+# That override targets `claude` rather than `chat` because a `-S` is parsed as
+# its own config layer, without the `parent_type = "claude"` this file gives
+# `chat` -- so `chat` resolves against the base agent config, which has no
+# `settings_overrides` field, and the create is rejected. `claude` is registered
+# by the claude plugin, whose config class declares it. A chat create resolves
+# its own config, so overriding the base there never reaches a worker create.
 settings_overrides__extend = {model = "opus[1m]", fastMode = false}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/scripts/claude_oom_launch.py) sets its own

@@ -10,9 +10,11 @@
   opening conversation feels responsive, and switch to whatever the user chose
   once they have answered the prompt.
 
-- The override targets `claude` rather than `chat` because only the agent type
-  that declares `settings_overrides` accepts a `-S` on it; a chat create resolves
-  its own config, so overriding the base type there never reaches a worker create.
+- The override targets `claude` rather than `chat` because a `-S` is parsed as its
+  own config layer, without the `parent_type = "claude"` that `.mngr/settings.toml`
+  gives `chat`: only a plugin-registered agent type accepts a `settings_overrides`
+  leaf there. A chat create resolves its own config, so overriding the base type
+  there never reaches a worker create.
 
 - The `CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE=1` host env var is now documented as
   vestigial: fast mode for Opus 4.7 was deprecated on 2026-06-25 and removed on
