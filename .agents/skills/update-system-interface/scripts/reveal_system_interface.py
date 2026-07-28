@@ -800,9 +800,7 @@ def _layout_seed_refusal_reason(path: Path) -> str | None:
         for params in panel_params.values()
     )
     if opens_preview:
-        return (
-            "it opens a preview panel, which would render the preview inside itself"
-        )
+        return "it opens a preview panel, which would render the preview inside itself"
     return None
 
 
