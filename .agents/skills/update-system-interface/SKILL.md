@@ -250,8 +250,15 @@ worktrees, so before creating the worker you must release the lead's hold on
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug "update-$SLUG"
 python3 system/scripts/layout.py close si-preview
 # then remove the lead's worktree, freeing the branch for the worker
-git worktree remove --force data/.tasks/si-live/update-$SLUG
+git worktree remove data/.tasks/si-live/update-$SLUG
 ```
+
+Deliberately no `--force`: every build artifact in that worktree (`.venv/`,
+`node_modules/`, `static/`, `.test_output/`) is gitignored, so a worktree whose
+rounds you committed removes cleanly. If git refuses, the worktree still holds
+uncommitted work -- commit it (which also restores the branch-`HEAD`-equals-what-
+the-user-saw invariant) and retry. Never discard it to get past the refusal; the
+branch you are about to hand the worker is the only copy.
 
 **Create the worker on the branch.** Follow `update-artifact` Steps 1-3 (open the
 `update-$SLUG` tracking ticket, write the task file with `operation: update` /
@@ -391,8 +398,9 @@ interleave.
    deregistered service. Then destroy the worker per `launch-task`, close the
    `update-$SLUG` ticket, and release the editing lease with
    `tk close "$LEASE_ID" "Live edit hardened, revealed, and torn down."`. Also
-   remove the lead's worktree if it still exists (`git worktree remove --force
-   data/.tasks/si-live/update-$SLUG`).
+   remove the lead's worktree if it still exists (`git worktree remove
+   data/.tasks/si-live/update-$SLUG` -- again without `--force`, so a refusal
+   surfaces uncommitted work instead of deleting it).
 
 ## Why this shape
 
