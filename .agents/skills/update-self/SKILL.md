@@ -91,9 +91,10 @@ REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.jso
 ```
 
 `resolve-target` prints `{"ref": ..., "kind": "tag|branch|ref", "ceiling": ...,
-"exceeds_ceiling": ..., "latest_available": ..., "held_back_by_ceiling": ...}`; `main` resolves to
-`upstream/main` (not the stale local branch). Keep `$REF` in your shell for the
-dispatch below, and tell the user which version you're updating to.
+"exceeds_ceiling": ..., "latest_available": ..., "held_back_by_ceiling": ...}`;
+`main` resolves to `upstream/main` (not the stale local branch). Keep `$REF` in
+your shell for the dispatch below, and tell the user which version you're
+updating to.
 
 **If the command exits non-zero, stop -- nothing is wrong with the workspace.**
 It prints a single plain-language `error:` line saying why no target could be
@@ -183,9 +184,9 @@ into a newer copy (or vice versa) lands at the wrong step. The version ceiling i
 part of resolving `$REF`, so Step 2 computes it from the *local* copy -- which on
 a workspace whose template predates the ceiling does not compute one at all.
 Step 3a therefore re-checks it from the staged target copy before the dispatch,
-so the cap holds on the very first update into it. Keep 3a in any future version:
-it, not Step 2, is what protects a workspace arriving from an older template.
-Keep the staging path
+so the cap holds on the very first update into it. Keep 3a in any future
+version: it, not Step 2, is what protects a workspace arriving from an older
+template. Keep the staging path
 (`data/.tasks/update-self/skill-at-target/.agents/skills/update-self`) stable for the
 same reason. Note also that this handoff runs the target ref's `update_self.py`
 and follows its prose *before* the Step 5a approval gate; for the default target
