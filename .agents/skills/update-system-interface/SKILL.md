@@ -113,9 +113,17 @@ cd "data/.tasks/si-live/update-$SLUG" && uv sync --all-packages \
 earlier pass on this slug was abandoned without tearing down (or a worker still
 holds the branch). Do *not* force past it -- that branch may carry unmerged work.
 Look at what is on it (`git log --oneline HEAD..mngr/update-$SLUG`) and surface
-the choice to the user: resume it (`git worktree add` without `-b`, dropping the
-`HEAD` argument, so the existing branch is checked out as-is), or pick a fresh
-`$SLUG` and leave the old branch alone. Delete it only if the user says so.
+the choice to the user: resume it, or pick a fresh `$SLUG` and leave the old
+branch alone. Delete it only if the user says so. Resuming checks the existing
+branch out as-is -- note the different argument shape (the branch is now the
+commit-ish, not a `-b` flag value):
+
+```bash
+git worktree add "data/.tasks/si-live/update-$SLUG" "mngr/update-$SLUG"
+```
+
+That still fails if a worker or another worktree is holding the branch, which is
+the case to surface rather than force past.
 
 By the time you have an edit to show, the worktree is warm. **How rough the
 first previewed pass should be scales with shape-uncertainty, not with "does it
