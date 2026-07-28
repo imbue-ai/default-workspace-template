@@ -813,8 +813,25 @@ def test_held_back_is_false_when_the_users_own_override_picked_the_older_tag() -
     )
 
 
-def test_held_back_is_false_without_a_ceiling() -> None:
-    # A dev app imposes no cap, so a gap can never be the ceiling's doing.
+def test_held_back_is_false_when_the_app_imposes_no_cap() -> None:
+    """A dev app caps nothing, so a gap can never be the ceiling's doing.
+
+    A dev build reports a *branch*, not nothing, so `ceiling="main"` -- and not
+    `None` -- is the shape the CLI actually produces here. It reaches `False` by
+    a different route than a `None` ceiling does: the branch parses to no
+    version, so the selection was never bounded and `latest_available` is the
+    resolved ref. Both routes are asserted.
+    """
+    assert (
+        update_self.is_held_back_by_ceiling(
+            resolved_ref="minds-v0.4.0",
+            latest_available="minds-v0.4.0",
+            ceiling="main",
+            has_override=False,
+        )
+        is False
+    )
+    # No ceiling supplied at all -- only a direct caller does this.
     assert (
         update_self.is_held_back_by_ceiling(
             resolved_ref="minds-v0.4.0",
