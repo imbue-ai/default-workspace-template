@@ -1,8 +1,10 @@
 - Fast mode is no longer on for every agent. `.mngr/settings.toml` now sets
   `fastMode = false` in the `settings_overrides__extend` for `[agent_types.claude]`,
-  so every non-interactive agent type that inherits it (worker, worktree,
-  subskill-worker) runs at standard speed. Fast mode buys latency at a higher
-  per-token price, which only pays off when a human is waiting on the reply.
+  so every non-interactive agent runs at standard speed: the `claude` type itself
+  (which the `worktree` create template selects directly), the `worker` and `main`
+  types that inherit it, and the `subskill-worker` template that resolves to
+  `worker`. Fast mode buys latency at a higher per-token price, which only pays
+  off when a human is waiting on the reply.
 
 - User-facing chat agents instead get their fast-mode setting per create: both
   chat-create paths pass `-S agent_types.claude.settings_overrides.fastMode=<bool>`,

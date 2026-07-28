@@ -87,10 +87,12 @@ auto_dismiss_dialogs = true
 auto_allow_permissions = true
 auto_disable_questions = true
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
-# fastMode defaults OFF here so every NON-interactive agent type that inherits
-# this one (worker, worktree, subskill-worker) runs at standard speed -- fast mode
-# buys latency at a higher per-token price, which is worth it only when a human is
-# waiting on the reply. User-facing chat agents override it per create: the system
+# fastMode defaults OFF here so every NON-interactive agent runs at standard
+# speed -- this type itself (which the `worktree` create template below selects
+# directly), the `worker` and `main` types that inherit it, and the
+# `subskill-worker` template that resolves to `worker`. Fast mode buys latency at
+# a higher per-token price, which is worth it only when a human is waiting on the
+# reply. User-facing chat agents override it per create: the system
 # interface and the bootstrap both pass
 # `-S agent_types.claude.settings_overrides.fastMode=<bool>`, resolved from the
 # workspace's fast-mode decision (see system_interface's fast_mode_policy.py).
