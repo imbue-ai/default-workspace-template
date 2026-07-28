@@ -1072,12 +1072,13 @@ def _ws_endpoint(websocket: Any) -> None:
     """Unified WebSocket for agent state and application updates."""
     state = get_state()
     # Resolve the primary agent's layout dir once, at connect, and bind it to
-    # this connection for the lifetime of the loop. The resolver reads
-    # process-global env (MNGR_HOST_DIR / MNGR_AGENT_ID); capturing it here
-    # keeps every write this connection makes pointed at *this* server's
-    # workspace even if that env is later mutated (which only happens in tests,
-    # where several servers share one process -- a stray late write from a
-    # lingering connection would otherwise land in another server's log).
+    # this connection for the lifetime of the loop. The resolver reads this
+    # app's config override, falling back to process-global env (MNGR_HOST_DIR /
+    # MNGR_AGENT_ID); capturing it here keeps every write this connection makes
+    # pointed at *this* server's workspace even if that env is later mutated
+    # (which only happens in tests, where several servers share one process -- a
+    # stray late write from a lingering connection would otherwise land in
+    # another server's log).
     _run_ws_broadcast_loop(
         websocket=websocket,
         agent_manager=state.agent_manager,
