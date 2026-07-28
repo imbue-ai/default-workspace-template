@@ -89,11 +89,14 @@ under `creations/<your-package>/` so they get an isolated tab and prefix.
 
 - **Pick a kebab-case service name.** Becomes the URL segment
   `/service/<name>/`. Short and descriptive (`news`, `docs-viewer`)
-  beats clever. Avoid names already used in `system/supervisord.conf`
-  (`system_interface`, `browser`, etc. are reserved by the scaffolder).
+  beats clever. Avoid names already used by an existing program
+  (`system_interface`, `browser`, etc. are reserved by the scaffolder, and it
+  refuses any name already claimed in `system/supervisord.conf` or a
+  `system/supervisord.conf.d/*.conf` drop-in).
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
-  `system/supervisord.conf` and `data/.state/applications.toml`; if you're choosing
+  `system/supervisord.conf`, every `system/supervisord.conf.d/*.conf`, and
+  `data/.state/applications.toml`; if you're choosing
   manually, avoid `8000` (system_interface) and `8081` (the browser
   service).
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
@@ -150,17 +153,16 @@ What gets generated:
   zero.
 - `creations/<package>/README.md` -- one-line description.
 
-What gets updated:
+What else gets written (note that **no shared file is touched** -- no root
+`pyproject.toml` edit, no append to a shared supervisord config -- which is what
+lets two agents scaffold two services in the same tree at the same time):
 
-- Root `pyproject.toml` -- adds `<service-name>` to
-  `[project].dependencies` and `<service-name> = { workspace = true }` to
-  `[tool.uv.sources]` (the `creations/*` member glob picks the package up
-  without a members edit).
-- `system/supervisord.conf` -- appends a program block:
+- `system/supervisord.conf.d/<name>.conf` -- the service's own program file,
+  picked up by the `[include]` glob in `system/supervisord.conf`:
 
   ```ini
   [program:<name>]
-  command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
+  command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run --all-packages <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -175,7 +177,10 @@ What gets updated:
   directly (no shell) and this one chains `forward_port.py` with `&&`. The
   `oom_tag_service.py user` prefix tags this user-created service so it is
   shed before any built-in service under memory pressure (see
-  `system/libs/oom_priority/README.md`).
+  `system/libs/oom_priority/README.md`). `uv run --all-packages` (rather than a
+  bare `uv run`) makes the service repair its own environment on start: a stray
+  plain `uv sync` prunes every workspace member the root does not depend on --
+  which is all of `creations/` -- and `--all-packages` reinstates them.
 
 supervisord does not watch the config, so tell it to pick up the new
 program, then confirm it is running:
@@ -406,8 +411,9 @@ calling the work done.
 
 ## Escape hatch: wrap an existing server
 
-For pre-existing third-party tools, do not scaffold a lib. Add a
-`[program:<name>]` block to `system/supervisord.conf` that runs
+For pre-existing third-party tools, do not scaffold a lib. Write a
+`[program:<name>]` block to its own `system/supervisord.conf.d/<name>.conf`
+(never append to the shared `system/supervisord.conf`) that runs
 `forward_port.py` and then your existing start command. supervisord runs
 commands directly (no shell), so wrap any command that chains with `&&`
 in `bash -c "..."`, and prefix the whole thing with
@@ -453,8 +459,8 @@ Two valid shapes:
   autorestart=true
   ```
 
-After editing `system/supervisord.conf`, run `supervisorctl reread &&
-supervisorctl update` to start the new program.
+After writing `system/supervisord.conf.d/<name>.conf`, run `supervisorctl reread
+&& supervisorctl update` to start the new program.
 
 The `forward_port.py` call MUST come first in the command -- the port
 must be registered before the app starts listening, otherwise the

@@ -13,7 +13,7 @@ Before doing anything, understand what is actually happening:
 
 - Read any error messages carefully
 - Check the tmux windows: `tmux list-windows -t $(tmux display-message -p '#S')`
-- Check if services are running: `supervisorctl status` (compare against the programs defined in `system/supervisord.conf`)
+- Check if services are running: `supervisorctl status` (compare against the programs defined in `system/supervisord.conf` and `system/supervisord.conf.d/`)
 - Check the wait counter state: `cat data/.state/wait_counter 2>/dev/null || echo "no counter"`
 
 ## 2. Diagnose

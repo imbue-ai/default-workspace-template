@@ -3,7 +3,8 @@
 The built-in workspace packages. Each is a uv workspace member with its own
 `pyproject.toml`; see each package's README for details.
 
-Services (supervised via `system/supervisord.conf`): `system_interface` (the
+Services (supervised via `system/supervisord.conf` and its
+`supervisord.conf.d/` drop-ins): `system_interface` (the
 workspace web UI), `app_watcher`, `browser`, `cloudflare_tunnel`,
 `github_sync`, `host_backup`, and the one-shot `env_converge`. Libraries:
 `bootstrap` (first-boot setup, then launches supervisord), `oom_priority`,

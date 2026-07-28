@@ -73,13 +73,19 @@ Run these in order before `git merge`:
    ```
 
    `<ARTIFACT_PATHS>` is the artifact's whole footprint, not just the files
-   the worker touched: for a service, `creations/<package>/ system/supervisord.conf`;
-   for a skill, `.agents/skills/<name>/`; for a shared script or reference,
-   its path; for the system interface, `system/libs/system_interface/` (that
-   artifact's merge lives in `update-system-interface` Step 4, which applies
-   this same check). Empty output means fresh: merge normally. Any output
-   means the base moved under the worker: the pass is stale -- do not merge;
-   supersede it (below).
+   the worker touched: for a service,
+   `creations/<package>/ system/supervisord.conf.d/<name>.conf`; for a skill,
+   `.agents/skills/<name>/`; for a shared script or reference, its path; for the
+   system interface, `system/libs/system_interface/` (that artifact's merge
+   lives in `update-system-interface` Step 4, which applies this same check).
+   Empty output means fresh: merge normally. Any output means the base moved
+   under the worker: the pass is stale -- do not merge; supersede it (below).
+
+   Every path in a service's footprint belongs to that service alone -- the
+   supervisord program lives in its own drop-in rather than in the shared
+   config, and the root `pyproject.toml` needs no per-service entry. So a
+   concurrent service being built in the same tree cannot make this pass look
+   stale, and cannot make the merge conflict.
 
 3. **Never hand-resolve a conflicted hardened branch.** If the merge itself
    conflicts, `git merge --abort` and treat the pass as stale. Resolving the

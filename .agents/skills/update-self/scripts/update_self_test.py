@@ -86,6 +86,10 @@ def test_classify_path_reveal_classes() -> None:
     cases = {
         "system/libs/system_interface/src/App.tsx": update_self.CLASS_SYSTEM_INTERFACE,
         "system/supervisord.conf": update_self.CLASS_SERVICE,
+        # A per-service drop-in defines a program just as the main config does,
+        # so it needs the same services-agent restart to take effect.
+        "system/supervisord.conf.d/host-backup.conf": update_self.CLASS_SERVICE,
+        "system/supervisord.conf.d/news-digest.conf": update_self.CLASS_SERVICE,
         "system/libs/bootstrap/src/bootstrap/main.py": update_self.CLASS_SERVICE,
         "system/vendor/mngr/libs/mngr/foo.py": update_self.CLASS_EDITABLE_TOOL,
         "system/scripts/forward_port.py": update_self.CLASS_SHARED_RUNTIME,

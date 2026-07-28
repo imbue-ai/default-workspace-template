@@ -6,8 +6,12 @@ program. Reach for this from any service flow (`update-service`,
 `build-web-service`) when a change touches *how a service runs* (its port,
 command, logs) or adds/removes a program, rather than only its code.
 
-Background services are defined as `[program:<name>]` sections in
-`system/supervisord.conf` at the repo root. `uv run bootstrap` runs first-boot
+Background services are defined as `[program:<name>]` sections, one service per
+file under `system/supervisord.conf.d/`, which the main
+`system/supervisord.conf` pulls in with `[include] files =
+supervisord.conf.d/*.conf`. (`system_interface` is the one exception -- it stays
+in the main config because the minds desktop client's recovery probe parses that
+file directly and does not follow the include.) `uv run bootstrap` runs first-boot
 setup and then `exec`s `supervisord` in the foreground (in the `bootstrap`
 tmux window); supervisord starts and supervises every program. supervisord
 does **not** watch the config file -- you apply changes with
@@ -86,7 +90,10 @@ than ~1s later, and it keeps the command self-documenting.
 
 ## Adding a service
 
-1. Add a new `[program:<name>]` section to `system/supervisord.conf`.
+1. Write a `[program:<name>]` section to its own file at
+   `system/supervisord.conf.d/<name>.conf`. One file per service: two agents
+   adding services at the same time never touch the same file, so neither has
+   to commit the other's half-finished work to get its own service registered.
 2. Apply it:
 
    ```bash
@@ -99,18 +106,19 @@ than ~1s later, and it keeps the command self-documenting.
 
 ## Removing a service
 
-1. Delete the `[program:<name>]` section from `system/supervisord.conf`.
+1. Delete `system/supervisord.conf.d/<name>.conf`.
 2. `supervisorctl reread && supervisorctl update` -- supervisord stops and
    forgets the removed program.
 
 For a web service, also drop its `data/.state/applications.toml` entry with
 `python3 system/scripts/forward_port.py --name <name> --remove`; for a scaffolded
 web lib, `build-web-service`'s `cleanup.md` reference covers the full
-teardown (reverting the lib and the root `pyproject.toml` edits).
+teardown (reverting the lib).
 
 ## Modifying a service
 
-1. Change the program's `command` (or other fields) in `system/supervisord.conf`.
+1. Change the program's `command` (or other fields) in
+   `system/supervisord.conf.d/<name>.conf`.
 2. `supervisorctl reread && supervisorctl update` applies the change (it
    restarts the program when its definition changed). To bounce a program
    without editing its config, use `supervisorctl restart <name>`.
@@ -128,8 +136,9 @@ Or read the log files directly under `/var/log/supervisor/`.
 ## Important
 
 - Program names must be valid supervisord program names (no spaces).
-- supervisord only manages the programs in `system/supervisord.conf`; it does not touch
-  the main agent window or other tmux windows.
+- supervisord only manages the programs in `system/supervisord.conf` and
+  `system/supervisord.conf.d/`; it does not touch the main agent window or other
+  tmux windows.
 - If you need a one-off command, just run it directly rather than adding a
   program.
 - For standing up a new web service (Flask lib or wrapping a third-party

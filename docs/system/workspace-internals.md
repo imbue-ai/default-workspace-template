@@ -19,7 +19,9 @@ mngr create my-workspace main -t local \
 - `.mngr/settings.toml` - Agent types, create templates, command defaults
 - `.agents/skills/` - Agent skills (task delegation, services, self-update)
 - `system/scripts/` - Utility and provisioning scripts
-- `system/supervisord.conf` - Supervisord config defining the background services
+- `system/supervisord.conf` - Supervisord daemon config, the `system_interface`
+  program, and an `[include]` of `supervisord.conf.d/*.conf`
+- `system/supervisord.conf.d/` - One file per background service
 - `system/libs/` - The built-in workspace packages, including `bootstrap/`
   (first-boot setup, then launches supervisord to supervise the services) and
   `system_interface/` (the workspace web UI)

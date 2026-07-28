@@ -5,9 +5,10 @@ description: "Use immediately whenever the user asks you to update, change, fix,
 
 # Changing an existing service
 
-A "service" here is a `[program:<name>]` under supervisord (see
-`system/supervisord.conf`). Two kinds, differing only in whether there's a tab to
-refresh:
+A "service" here is a `[program:<name>]` under supervisord, defined in its own
+`system/supervisord.conf.d/<name>.conf` (see
+`.agents/shared/references/service-processes.md`). Two kinds, differing only in
+whether there's a tab to refresh:
 
 - **User-facing web service** -- the user opens it as a tab rendering at
   `/service/<name>/` (scaffolded via `build-web-service`).
@@ -143,7 +144,9 @@ process restarts:
   markup. Skip straight to the refresh.
 
 - **Change to the service *definition*** (its port, its `command`, its log
-  config, or adding/removing a program): edit `system/supervisord.conf`, then
+  config, or adding/removing a program): edit that service's
+  `system/supervisord.conf.d/<name>.conf` (add or delete the whole file to add
+  or remove a program), then
   `supervisorctl reread && supervisorctl update`. The full program schema,
   the add/remove/inspect mechanics, and the `forward_port.py` wiring live
   in [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).

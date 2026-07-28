@@ -506,7 +506,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
   longer contains the update), surface the failure, and re-dispatch once the
   cause is fixed. Exit 3 means the restore itself failed -- surface immediately.
 
-- **`service` / `system/supervisord.conf` / `bootstrap`** -- restart the whole services
+- **`service` / `system/supervisord.conf` / `system/supervisord.conf.d/` / `bootstrap`** -- restart the whole services
   agent (do not use `supervisorctl reread && update` here), then refresh any
   affected tab (`python3 system/scripts/layout.py refresh <name>`):
 

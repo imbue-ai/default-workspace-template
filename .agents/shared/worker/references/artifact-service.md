@@ -1,8 +1,8 @@
 # Artifact: service
 
-A web service -- a scaffolded Flask lib under `creations/<package>/`, registered in
-`system/supervisord.conf`, reachable at `/service/<name>/` through the system_interface
-proxy. This reference describes what a service *is*; for how to run and test a web
+A web service -- a scaffolded Flask lib under `creations/<package>/`, registered by
+its own `system/supervisord.conf.d/<name>.conf`, reachable at `/service/<name>/`
+through the system_interface proxy. This reference describes what a service *is*; for how to run and test a web
 frontend in isolation, see
 `.agents/shared/worker/references/web-frontend-testing.md`.
 
@@ -11,8 +11,10 @@ frontend in isolation, see
 - The scaffolded lib: `creations/<package>/src/<package>/runner.py` (the Flask app
   and routes), plus its `pyproject.toml`, `README.md`, and
   `test_<package>_ratchets.py`.
-- The service entry in `system/supervisord.conf` and the matching root `pyproject.toml`
-  workspace wiring -- you normally do not touch these; the scaffold created them.
+- The service entry at `system/supervisord.conf.d/<name>.conf` -- you normally do
+  not touch it; the scaffold created it. The root `pyproject.toml` needs no entry
+  at all: the `creations/*` workspace member glob picks the package up and
+  `uv sync --all-packages` installs it.
 
 ## Running and testing
 
