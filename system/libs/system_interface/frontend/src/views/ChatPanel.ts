@@ -602,8 +602,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     // A new chat starts on fast mode; once it has run its grace period, ask the
     // user whether to keep it. Checked here because this is where the loaded
-    // transcript and the idle flag meet. Every gate is a cheap read and raising
-    // the prompt is idempotent, so re-running it per render is fine.
+    // transcript and the idle flag meet. Re-running it per render is fine:
+    // raising the prompt is idempotent, and three cheap reads (workspace already
+    // answered, agent mid-reply, fast mode already off) short-circuit ahead of
+    // the one gate that is not cheap -- the turn count, which walks the held
+    // transcript. Only an idle fast-mode chat in a workspace that has not
+    // answered reaches that walk, and it raises the modal on the first render
+    // that does, so the window is the one the user is about to close.
     maybePromptForFastMode(agentId, events, agentIsIdle);
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire

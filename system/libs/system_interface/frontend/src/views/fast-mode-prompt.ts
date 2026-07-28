@@ -62,7 +62,8 @@ export function isFastModePromptOwed(agentId: string, events: TranscriptEvent[],
 }
 
 /** Raise the prompt if this conversation has earned it. Safe to call on every
- *  render: opening is idempotent, and every gate above is a cheap read. */
+ *  render: opening is idempotent, and the gates that walk the transcript sit
+ *  behind the cheap ones (see isFastModePromptOwed). */
 export function maybePromptForFastMode(agentId: string, events: TranscriptEvent[], isAgentIdle: boolean): void {
   if (isFastModePromptOwed(agentId, events, isAgentIdle)) {
     openFastModePrompt(agentId);
