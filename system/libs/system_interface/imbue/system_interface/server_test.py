@@ -48,18 +48,37 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 _WS_RECEIVE_TIMEOUT = 15.0
 
 
-def test_layout_dir_override_wins_over_the_agent_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # The pre-merge preview points SYSTEM_INTERFACE_LAYOUT_DIR at a throwaway copy
-    # of the live layout so it renders the user's real tabs without writing to the
-    # live one. That override must win even when a real MNGR_AGENT_ID is present
-    # (the autouse isolation fixture sets one) -- otherwise the preview's autosaves
-    # would land on the live layout, which is the exact thing this prevents.
+def test_layout_dir_override_wins_over_the_agent_path(tmp_path: Path) -> None:
+    # The live-editing preview points system_interface_layout_dir at a throwaway
+    # copy of the live layout so it renders the user's real tabs without writing to
+    # the live one. That override must win even when a real MNGR_AGENT_ID is
+    # present (the autouse isolation fixture sets one) -- otherwise the preview's
+    # autosaves would land on the live layout, which is the exact thing this
+    # prevents.
     override = tmp_path / "seeded-layout"
-    monkeypatch.setenv("SYSTEM_INTERFACE_LAYOUT_DIR", str(override))
+    app = create_application(
+        build_test_state(config=Config(system_interface_layout_dir=override))
+    )
 
-    assert _primary_agent_layout_dir() == override
+    with app.app_context():
+        assert _primary_agent_layout_dir() == override
+
+
+def test_layout_dir_override_is_per_app_not_process_wide(tmp_path: Path) -> None:
+    # The override lives on each app's own config, so two servers in one process
+    # (how the test suite runs them) resolve to their own layout dirs. Reading it
+    # from the process env instead would make whichever booted last win, and a
+    # lingering connection on the other would write into the wrong workspace.
+    override = tmp_path / "seeded-layout"
+    previewing = create_application(
+        build_test_state(config=Config(system_interface_layout_dir=override))
+    )
+    plain = create_application(build_test_state(config=Config()))
+
+    with previewing.app_context():
+        assert _primary_agent_layout_dir() == override
+    with plain.app_context():
+        assert _primary_agent_layout_dir() != override
 
 
 @pytest.fixture

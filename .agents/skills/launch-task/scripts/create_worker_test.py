@@ -167,6 +167,79 @@ def test_no_branch_omits_the_flag(tmp_path: Path) -> None:
     assert "--branch" not in create_argv
 
 
+@pytest.mark.parametrize(
+    "branch, expected",
+    [
+        # No spec: mngr applies its own default (":mngr/*") and cuts mngr/<name>.
+        (None, "mngr/demo-worker"),
+        # BASE with no colon: that branch is checked out directly, so it *is* the
+        # worker's branch -- not a fresh mngr/<name>.
+        ("mngr/update-my-slug", "mngr/update-my-slug"),
+        # BASE:NEW: NEW is cut from BASE, so the worker lands on NEW.
+        ("mngr/update-my-slug:mngr/harden-my-slug", "mngr/harden-my-slug"),
+        # "*" in NEW expands to the agent name, as mngr does.
+        ("main:mngr/*", "mngr/demo-worker"),
+        ("main:wip/*-attempt", "wip/demo-worker-attempt"),
+        # Empty NEW falls back to mngr's own default pattern.
+        ("main:", "mngr/demo-worker"),
+        # Empty BASE means "current branch", but NEW still names the result.
+        (":feature/x", "feature/x"),
+    ],
+)
+def test_resolve_worker_branch_matches_mngr_spec_parsing(
+    branch: str | None, expected: str
+) -> None:
+    """The reported branch is the one mngr actually produces for a ``--branch``
+    spec. This is the value ``launch-sync`` publishes for callers to merge from,
+    so deriving it as a fixed ``mngr/<name>`` would name a branch the worker
+    never committed to."""
+    assert create_worker_mod.resolve_worker_branch("demo-worker", branch) == expected
+
+
+def test_resolve_worker_branch_rejects_malformed_specs() -> None:
+    # Authoring bugs, surfaced loudly rather than silently naming a wrong branch:
+    # an empty spec (callers pass None for the default) and more than one "*",
+    # which mngr itself rejects.
+    with pytest.raises(ValueError):
+        create_worker_mod.resolve_worker_branch("demo-worker", "")
+    with pytest.raises(ValueError):
+        create_worker_mod.resolve_worker_branch("demo-worker", "main:*/*")
+
+
+def test_launch_sync_reports_the_branch_the_spec_actually_produces(
+    tmp_path: Path,
+) -> None:
+    # End to end: with a BASE:NEW handoff spec, the published result must name
+    # NEW. Reporting mngr/<name> here would send the caller to merge a branch
+    # that does not exist.
+    runtime, task, _ = _make_layout(tmp_path)
+    report = runtime / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    _write_launch_sync_task(task, report)
+    result_json = tmp_path / "result.json"
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch_sync(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        timeout_seconds=30,
+        poll_interval_seconds=5,
+        runner=runner,
+        sleeper=_write_report_on_sleep(
+            report, "---\ntype: status\nname: done\n---\n\nok\n"
+        ),
+        clock=lambda: 0.0,
+        out=io.StringIO(),
+        result_path=result_json,
+        branch="mngr/update-my-slug:mngr/harden-my-slug",
+    )
+
+    assert rc == 0
+    assert json.loads(result_json.read_text())["branch"] == "mngr/harden-my-slug"
+
+
 def test_source_artifacts_dir_synced_after_runtime(tmp_path: Path) -> None:
     """A frontmatter ``source_artifacts_dir`` is synced right after the runtime dir."""
     runtime, task, artifacts = _make_layout(tmp_path)

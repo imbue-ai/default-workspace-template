@@ -33,9 +33,10 @@ Four subcommands cover the lead-side lifecycle:
     still be coming).
 
 ``destroy``
-    Destroys the worker agent (``mngr destroy <name> --force``). The git branch
-    ``mngr/<name>`` survives in the shared object store, so the work can still
-    be merged or inspected.
+    Destroys the worker agent (``mngr destroy <name> --force``). The worker's git
+    branch (``mngr/<name>`` by default, or whatever ``--branch`` resolved to)
+    survives in the shared object store, so the work can still be merged or
+    inspected.
 
 The ``launch`` / ``await`` / ``launch-sync`` subcommands take the same
 ``--task-file``: ``launch`` sends it to the worker, and ``await`` /
@@ -110,6 +111,11 @@ _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
 _DEFAULT_TIMEOUT = "30m"
 _DEFAULT_POLL_INTERVAL = "5s"
 
+# mngr's own default ``--branch`` NEW-branch pattern (``_DEFAULT_NEW_BRANCH_PATTERN``
+# in ``mngr/cli/create.py``): ``*`` expands to the agent name. Mirrored here so
+# ``resolve_worker_branch`` can name the branch mngr will actually produce.
+_MNGR_DEFAULT_NEW_BRANCH_PATTERN = "mngr/*"
+
 # Distinct exit code for an await that timed out without the report appearing,
 # matching coreutils ``timeout``'s convention so the prose's mental model
 # carries over.
@@ -119,6 +125,43 @@ _AWAIT_TIMEOUT_RC = 124
 # Separate from the timeout code so the lead can tell "paused for memory" apart
 # from "still running, just slow".
 _AWAIT_SHED_RC = 75
+
+
+def resolve_worker_branch(name: str, branch: str | None) -> str:
+    """The branch the worker's commits actually land on, for a ``--branch`` spec.
+
+    Mirrors mngr's own ``[BASE][:NEW]`` parsing (``_parse_branch_flag`` in
+    ``mngr/cli/create.py``):
+
+    - ``None`` -- no ``--branch`` passed, so mngr applies its default spec
+      (``:mngr/*``) and cuts a fresh ``mngr/<name>``.
+    - ``BASE`` (no colon) -- ``BASE`` is checked out directly, so it *is* the
+      worker's branch.
+    - ``BASE:NEW`` -- ``NEW`` is created from ``BASE``, with ``*`` expanding to
+      the agent name; an empty ``NEW`` falls back to mngr's ``mngr/*`` pattern.
+
+    This is not cosmetic bookkeeping: ``launch-sync`` reports this branch as the
+    machine-readable contract its callers merge from. Deriving it as a fixed
+    ``mngr/<name>`` was correct only while ``--branch`` did not exist -- with a
+    spec that renames or reuses a branch, that guess names a branch the worker
+    never committed to, so a caller would merge the wrong ref (or a missing one).
+    """
+    if branch is None:
+        return f"mngr/{name}"
+    if ":" not in branch:
+        if not branch:
+            raise ValueError(
+                "branch spec must not be empty -- pass None for mngr's default (mngr/<name>)"
+            )
+        return branch
+    _base, new = branch.split(":", 1)
+    if not new:
+        new = _MNGR_DEFAULT_NEW_BRANCH_PATTERN
+    if new.count("*") > 1:
+        raise ValueError(
+            f"branch spec allows at most one '*' in the new branch name: {branch!r}"
+        )
+    return new.replace("*", name)
 
 
 def _normalize_dir(value: str) -> str:
@@ -363,15 +406,17 @@ def launch(
     before the task message lands so the worker's first transcript read
     sees fresh events.
 
-    ``branch`` is an optional mngr ``--branch`` spec. The default (``None``)
-    keeps mngr's own default (branch ``mngr/<name>`` from the current HEAD). Pass
-    an existing branch name (e.g. ``mngr/update-<slug>``) to have the worker
-    *check out that branch directly* instead of branching anew -- so its commits
-    extend the branch the lead already built up, rather than starting from the
-    lead's current HEAD. (This is the ``[BASE]`` form with no ``:NEW``; see
-    ``mngr create --branch``.) The caller is responsible for the branch not being
-    checked out in another worktree at create time -- git forbids the same branch
-    in two worktrees.
+    ``branch`` is an optional mngr ``--branch`` spec, passed through verbatim in
+    the full ``[BASE][:NEW]`` form. The default (``None``) keeps mngr's own
+    default (branch ``mngr/<name>`` from the current HEAD). Pass an existing
+    branch name (e.g. ``mngr/update-<slug>``) to have the worker *check out that
+    branch directly* instead of branching anew -- so its commits extend the
+    branch the lead already built up, rather than starting from the lead's
+    current HEAD. In that ``[BASE]``-only form the caller is responsible for the
+    branch not being checked out in another worktree at create time (git forbids
+    the same branch in two worktrees); the ``BASE:NEW`` form has no such
+    constraint, since mngr cuts ``NEW`` from ``BASE`` without checking ``BASE``
+    out. Use ``resolve_worker_branch`` to name the branch a given spec produces.
     """
     runner = runner or Runner()
 
@@ -623,10 +668,12 @@ def parse_report(text: str) -> ReportResult:
 
 
 def destroy(name: str, runner: Runner | None = None) -> None:
-    """Destroy the worker agent. The git branch ``mngr/<name>`` survives.
+    """Destroy the worker agent. The worker's git branch survives.
 
     ``mngr destroy`` removes the agent and its worktree; the branch persists in
     the shared object store, so a caller can still merge or inspect the work.
+    That branch is ``mngr/<name>`` unless ``launch`` was given a ``--branch``
+    spec -- see ``resolve_worker_branch``.
     """
     runner = runner or Runner()
     runner.run(["mngr", "destroy", name, "--force"], check=True)
@@ -733,7 +780,7 @@ def launch_sync(
         worker_name=name,
         pending_shed_check=_worker_has_pending_shed,
     )
-    branch = f"mngr/{name}"
+    worker_branch = resolve_worker_branch(name, branch)
     if await_rc != 0:
         # Timed out: leave the worker alive for liveness diagnosis.
         _emit_run_result(
@@ -742,7 +789,7 @@ def launch_sync(
                 "type": None,
                 "name": None,
                 "body": "",
-                "branch": branch,
+                "branch": worker_branch,
                 "raw_report": "",
             },
             stream,
@@ -766,7 +813,7 @@ def launch_sync(
             "type": report.report_type,
             "name": report.name,
             "body": report.body,
-            "branch": branch,
+            "branch": worker_branch,
             "raw_report": report.raw,
         },
         stream,

@@ -16,6 +16,13 @@ class Config(BaseSettings):
     system_interface_static_paths: list[str] | None = None
     system_interface_host: str = "127.0.0.1"
     system_interface_port: int = 8000
+    # Where workspace layouts are read and written, overriding the usual
+    # MNGR_AGENT_ID-derived path. The system-interface live-editing preview points
+    # this at a throwaway copy of the live layout so the preview renders the
+    # user's real tabs while its own autosaves land in the copy. Config-scoped
+    # rather than read from the ambient process env so that several servers
+    # sharing one process (the test setup) cannot clobber each other's layouts.
+    system_interface_layout_dir: Path | None = None
 
     @field_validator("system_interface_javascript_plugins", "system_interface_static_paths", mode="before")
     @classmethod

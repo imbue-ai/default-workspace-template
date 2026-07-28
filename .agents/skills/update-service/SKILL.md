@@ -235,6 +235,18 @@ where the data dies. Encode these, cheapest first:
   rm -rf /tmp/<name>-scratch      # deleting a copy can't harm real data
   ```
 
+  **To pick up a further edit, refresh in place -- don't tear down and re-`up`.**
+  A `down`/`up` cycle picks a new port, so a surfaced preview tab would point at
+  a dead one. `refresh` re-boots just the instance's own process on its existing
+  port, leaving the port, the service registration, and any tab untouched:
+
+  ```bash
+  python3 .agents/shared/scripts/serve_isolated_instance.py refresh --name <name>-test
+  ```
+
+  A change that only alters files the running process reads from disk on each
+  request needs no refresh at all. Reserve `down` for when you are finished.
+
   This is the point of the `DATA_DIR` + `<PACKAGE_UPPER>_PORT` overrides: the
   isolation you need is **data isolation, not code isolation**, and it's a
   copy-plus-one-command setup, not a worktree. The live store is only ever

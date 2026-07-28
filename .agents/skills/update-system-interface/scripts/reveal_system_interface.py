@@ -152,8 +152,9 @@ PREVIEW_PORT_ENV = "SYSTEM_INTERFACE_PORT"
 PREVIEW_HOST_ENV = "SYSTEM_INTERFACE_HOST"
 
 # Seed the preview with the user's real tab layout. The preview boots pointed at
-# a throwaway *copy* of the live layout (via SYSTEM_INTERFACE_LAYOUT_DIR, which
-# the server honors ahead of the MNGR_AGENT_ID-derived path) so it renders the
+# a throwaway *copy* of the live layout (via SYSTEM_INTERFACE_LAYOUT_DIR -- the
+# env spelling of the server's ``Config.system_interface_layout_dir`` field, which
+# it honors ahead of the MNGR_AGENT_ID-derived path) so it renders the
 # user's existing tabs while its own layout autosaves land in the copy -- never
 # clobbering the live layout. This script owns the copy (the shared serve
 # script wipes its own state dir on every boot, so the seed can't live there):
@@ -164,8 +165,22 @@ PREVIEW_HOST_ENV = "SYSTEM_INTERFACE_HOST"
 PREVIEW_LAYOUT_DIR_ENV = "SYSTEM_INTERFACE_LAYOUT_DIR"
 _PREVIEW_LAYOUT_SEED_ROOT = "data/.state/si-preview-layout"
 _WORKSPACE_LAYOUT_SUBDIR = "workspace_layout"
-_SEEDED_LAYOUT_ENTRIES = ("layouts", "layouts_meta.json", "layout.json")
+# The slug registry (display names + last-active slug), which carries no panels
+# and so is copied verbatim rather than filtered like the layout contents.
+_LAYOUT_REGISTRY_FILENAME = "layouts_meta.json"
+_SEEDED_LAYOUT_ENTRIES = ("layouts", _LAYOUT_REGISTRY_FILENAME, "layout.json")
 ENV_MNGR_HOST_DIR = "MNGR_HOST_DIR"
+# A seeded layout that itself contains a preview panel would make the preview
+# render *itself*: the inner app resolves ``service:si-preview`` against the same
+# live application registry, so the panel proxies back to the wrapper that frames
+# it -- infinitely nested iframes. The documented flow closes the tab before any
+# re-preview, but that is ordering, not a guarantee (a layout can autosave with
+# the tab open, or an abandoned pass can leave one behind), so the seed drops any
+# layout content referencing a preview service. The layout stays *registered* in
+# the copied ``layouts_meta.json`` and merely opens empty -- exactly the
+# has-no-content-yet state the server already models for a freshly-created
+# layout, so nothing downstream sees a missing slug.
+_PREVIEW_SERVICE_NAMES = frozenset({PREVIEW_SERVICE_NAME, PREVIEW_INNER_SERVICE_NAME})
 
 # Endpoints used to probe liveness. ``/api/agents`` exercises the mngr plugin
 # discovery path -- exactly what a missing backend dependency or a broken
@@ -750,6 +765,41 @@ def _preview_layout_seed_dir(repo_root: Path, slug: str) -> Path:
     return repo_root / _PREVIEW_LAYOUT_SEED_ROOT / _preview_instance_name(slug)
 
 
+def _layout_content_references_preview(path: Path) -> bool:
+    """Whether a persisted layout file opens a panel on one of the preview services.
+
+    Reads the dockview ``panelParams`` map, whose ``serviceName`` is what a
+    service iframe is addressed by. An unreadable or unparsable file counts as
+    referencing: the server could not render it either, so declining to seed it
+    loses nothing and keeps the failure mode on the safe side.
+    """
+    try:
+        content = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return True
+    if not isinstance(content, dict):
+        return True
+    panel_params = content.get("panelParams")
+    if not isinstance(panel_params, dict):
+        return False
+    return any(
+        isinstance(params, dict)
+        and params.get("serviceName") in _PREVIEW_SERVICE_NAMES
+        for params in panel_params.values()
+    )
+
+
+def _seed_layout_file(source: Path, destination: Path) -> None:
+    """Copy one persisted layout file unless it would nest the preview in itself."""
+    if _layout_content_references_preview(source):
+        sys.stderr.write(
+            f"preview: not seeding {source.name} -- it opens a preview panel, which "
+            "would render the preview inside itself; that layout opens empty.\n"
+        )
+        return
+    shutil.copy2(source, destination)
+
+
 def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
     """Copy the live layout files into a fresh throwaway dir and return it.
 
@@ -757,6 +807,11 @@ def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
     the source of truth at preview time. When there is no live layout to copy
     (MNGR_AGENT_ID unset, or the workspace has no saved layout yet) the dir is
     left empty and the preview simply renders the fresh-workspace state.
+
+    ``layouts_meta.json`` (the slug registry) is copied verbatim, while each
+    layout's *content* is filtered through ``_seed_layout_file`` -- so a layout
+    that would nest the preview inside itself stays registered but opens empty,
+    rather than disappearing from the picker.
     """
     seed_dir = _preview_layout_seed_dir(repo_root, slug)
     shutil.rmtree(seed_dir, ignore_errors=True)
@@ -767,9 +822,17 @@ def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
     for entry in _SEEDED_LAYOUT_ENTRIES:
         source = live_dir / entry
         if source.is_dir():
-            shutil.copytree(source, seed_dir / entry)
+            # The per-slug layout contents; each is filtered independently.
+            destination_dir = seed_dir / entry
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            for layout_file in sorted(source.iterdir()):
+                if layout_file.is_file():
+                    _seed_layout_file(layout_file, destination_dir / layout_file.name)
         elif source.exists():
-            shutil.copy2(source, seed_dir / entry)
+            if entry == _LAYOUT_REGISTRY_FILENAME:
+                shutil.copy2(source, seed_dir / entry)
+            else:
+                _seed_layout_file(source, seed_dir / entry)
     return seed_dir
 
 
@@ -860,7 +923,14 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
         cwd=str(repo_root),
         check=False,
     )
-    return int(getattr(result, "returncode", 0))
+    returncode = int(getattr(result, "returncode", 0))
+    if returncode != 0:
+        # The boot failed, so nothing will consume the copy we just seeded and no
+        # ``unpreview`` is owed for an instance that never came up. Remove it here
+        # rather than leaving a stale layout copy behind for a preview that does
+        # not exist.
+        shutil.rmtree(seed_dir, ignore_errors=True)
+    return returncode
 
 
 def preview_refresh(slug: str, repo_root: Path, *, runner: Runner) -> int:

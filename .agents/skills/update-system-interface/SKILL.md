@@ -109,6 +109,14 @@ cd "data/.tasks/si-live/update-$SLUG" && uv sync --all-packages \
   && (cd system/libs/system_interface/frontend && npm ci && npm run build)
 ```
 
+**If `git worktree add -b` fails because `mngr/update-$SLUG` already exists**, an
+earlier pass on this slug was abandoned without tearing down (or a worker still
+holds the branch). Do *not* force past it -- that branch may carry unmerged work.
+Look at what is on it (`git log --oneline HEAD..mngr/update-$SLUG`) and surface
+the choice to the user: resume it (`git worktree add` without `-b`, dropping the
+`HEAD` argument, so the existing branch is checked out as-is), or pick a fresh
+`$SLUG` and leave the old branch alone. Delete it only if the user says so.
+
 By the time you have an edit to show, the worktree is warm. **How rough the
 first previewed pass should be scales with shape-uncertainty, not with "does it
 change what the user sees":** an obvious contained change (font, color,
