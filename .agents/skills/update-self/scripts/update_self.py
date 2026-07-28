@@ -22,6 +22,12 @@ validation depth, reveal by change class). This script owns the parts that are
     baseline-allowed through the latchkey gateway, no grant needed); when it
     cannot be read the command **fails** rather than silently updating uncapped.
 
+    The output also carries ``latest_available``, the newest stable tag upstream
+    *ignoring* the ceiling (``null`` if there is none). Comparing it against the
+    resolved ``ref`` is how the flow knows a newer release was held back, without
+    asking the agent to eyeball a tag listing (which is sorted lexically and
+    includes prereleases).
+
 ``classify-merge``
     Split the files upstream changed into the reconciled **merged** set (local
     also diverged there -- validate) vs the clean **pulled-in** set (local left
@@ -540,6 +546,7 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
                 "kind": target.kind,
                 "ceiling": target.ceiling,
                 "exceeds_ceiling": target.exceeds_ceiling,
+                "latest_available": pick_latest_stable_tag(tags),
             }
         )
     )

@@ -91,9 +91,9 @@ REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.jso
 ```
 
 `resolve-target` prints `{"ref": ..., "kind": "tag|branch|ref", "ceiling": ...,
-"exceeds_ceiling": ...}`; `main` resolves to `upstream/main` (not the stale local
-branch). Keep `$REF` in your shell for the dispatch below, and tell the user which
-version you're updating to.
+"exceeds_ceiling": ..., "latest_available": ...}`; `main` resolves to
+`upstream/main` (not the stale local branch). Keep `$REF` in your shell for the
+dispatch below, and tell the user which version you're updating to.
 
 **If the command exits non-zero, stop -- nothing is wrong with the workspace.**
 It prints a single plain-language `error:` line saying why no target could be
@@ -323,28 +323,28 @@ order:
 
 1. **Verdict headline** (one line, first thing they see): "ready to apply,"
    "ready to apply, with one caveat," or "needs your input on X."
-1b. **Held back by your app version** -- only when a newer release existed
-   upstream but the ceiling capped the target below it (compare the resolved
-   `$REF` against the newest tag `git tag --list 'minds-v*'` shows). Say so in one
-   plain line -- "there's a newer version available, but it needs a newer Minds
-   app than you're running, so I stopped at X" -- so the user understands why they
-   aren't getting the newest thing and knows updating the app unlocks it. Say
-   nothing when the target *is* the newest release; there is no ceiling story to
-   tell then.
-2. **What's new** -- always first after the headline. Keep this *detailed*: some
-   readers want the specifics, others happily skim it as "great, they're on it."
-   Do not thin it out -- carry the worker's digest, just in prose a lay reader
+2. **Held back by your app version** -- only when the ceiling capped the target
+   below a newer release, i.e. `latest_available` in the resolve-target output
+   (`/tmp/update-self-target.json`) is a *different, newer* tag than the resolved
+   `ref`. Say so in one plain line -- "there's a newer version available, but it
+   needs a newer Minds app than you're running, so I stopped at X" -- so the user
+   understands why they aren't getting the newest thing and knows updating the app
+   unlocks it. Say nothing when the target *is* `latest_available`; there is no
+   ceiling story to tell then.
+3. **What's new** -- always first after the ceiling note. Keep this *detailed*:
+   some readers want the specifics, others happily skim it as "great, they're on
+   it." Do not thin it out -- carry the worker's digest, just in prose a lay reader
    parses (describe what each change does, not the file names).
-3. **Conflicts** -- "none," or what needed reconciling.
-4. **Validation** -- did the suite pass; is any failure pre-existing/unrelated.
-5. **Caveats** -- only if any; what to expect after applying.
-6. **Pre-existing issues** -- only if any, and only after verifying attribution
+4. **Conflicts** -- "none," or what needed reconciling.
+5. **Validation** -- did the suite pass; is any failure pre-existing/unrelated.
+6. **Caveats** -- only if any; what to expect after applying.
+7. **Pre-existing issues** -- only if any, and only after verifying attribution
    (see the worker guidance's §4a): state plainly whether each lives in
    **built-in** code (present at the target ref -> report upstream) or the
    **user's own** code. Never call built-in code "workspace-added."
-7. **The ask** -- see the language rule below.
+8. **The ask** -- see the language rule below.
 
-**Detail in the informational sections (2-4); plain language at the decision
+**Detail in the informational sections (3-5); plain language at the decision
 points.** Spend deliberate plain-language care only where the message asks the
 user to **decide or act** -- the verdict headline, any caveat that needs their
 action, and the closing ask. Those carry no jargon: never "merge," "land," or

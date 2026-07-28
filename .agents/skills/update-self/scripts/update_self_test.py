@@ -280,7 +280,11 @@ def test_fetch_app_template_ref_blocks_on_an_unparseable_body(
 def test_resolve_target_cli_reads_the_ceiling_from_the_app(
     tmp_path, monkeypatch, capsys
 ) -> None:
-    """End to end: with no ``--ceiling``, the CLI asks the app and caps on the answer."""
+    """End to end: with no ``--ceiling``, the CLI asks the app and caps on the answer.
+
+    ``latest_available`` reports the release that was held back, which is what the
+    approval message tells the user about.
+    """
     repo = tmp_path / "repo"
     repo.mkdir()
 
@@ -322,6 +326,7 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
         "kind": "tag",
         "ceiling": "minds-v0.3.9",
         "exceeds_ceiling": False,
+        "latest_available": "minds-v0.4.0",
     }
 
 
