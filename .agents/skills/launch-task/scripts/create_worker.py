@@ -402,7 +402,8 @@ def launch(
     the task's ``finish_report_path`` -- a stale report from a previous run
     would satisfy ``await`` instantly, so launch refuses until the caller has
     confirmed it was handled and moved it aside. So does a dirty working tree:
-    the worker branches from committed HEAD, so uncommitted changes never reach
+    the worker is created from a committed branch tip -- this checkout's HEAD by
+    default, or whatever ``branch`` names -- so uncommitted changes never reach
     it (and ``mngr create`` refuses a dirty tree anyway) -- launch stops with an
     actionable "commit first" message rather than letting that surface as an
     opaque ``mngr create`` failure. Malformed task-file frontmatter instead
@@ -478,19 +479,20 @@ def launch(
         )
         return 2
 
-    # A dirty working tree is fatal: the worker is created from committed HEAD,
-    # so uncommitted changes never reach it, and ``mngr create`` refuses a dirty
+    # A dirty working tree is fatal: the worker is created from a committed
+    # branch tip (this checkout's HEAD, or the one ``--branch`` names), so
+    # uncommitted changes never reach it, and ``mngr create`` refuses a dirty
     # tree regardless. Catch it here with an actionable message. Commit -- never
     # stash: stashed work silently drops out of multi-agent coordination and
     # gets lost.
     if not _worktree_is_clean(runner):
         print(
             f"create_worker: refusing to launch {name}: the working tree has "
-            "uncommitted changes. The worker is created from your committed "
-            "HEAD, so uncommitted changes never reach it (and `mngr create` "
-            "refuses a dirty tree). Commit your changes -- do NOT stash "
-            "(stashed work gets lost during multi-agent coordination) -- then "
-            "relaunch.",
+            "uncommitted changes. The worker is created from a committed branch "
+            "tip (this checkout's HEAD, or the branch `--branch` names), so "
+            "uncommitted changes never reach it (and `mngr create` refuses a "
+            "dirty tree). Commit your changes -- do NOT stash (stashed work "
+            "gets lost during multi-agent coordination) -- then relaunch.",
             file=sys.stderr,
         )
         return 2
