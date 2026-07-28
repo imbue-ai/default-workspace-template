@@ -338,12 +338,12 @@ it from inside that preview. Skip previews for services that came in clean.
 **When the update touches `system/libs/system_interface/` at all** (merged *or* pulled
 in -- anything that makes 5c run the safe-reveal), first take the
 `editing service system_interface` lease and hold it through the end of 5c, for
-the same reason the `update-system-interface` flow holds it across merge + reveal:
-the reveal's auto-rollback restores a captured revision, so a foreign merge
-landing between here and the reveal could be swept away by it. Check `tk ready` for another agent's lease
-and surface instead of proceeding if one is held; then `tk create "editing
-service system_interface" -t chore` and `tk start` it (each as its own
-command). Release it (tk close) after 5c.
+the same reason the `update-system-interface` flow holds it across its whole
+pass: the reveal's auto-rollback restores a captured revision, so a foreign
+merge landing between here and the reveal could be swept away by it. Check
+`tk ready` for another agent's lease and surface instead of proceeding if one is
+held; then `tk create "editing service system_interface" -t chore` and
+`tk start` it (each as its own command). Release it (tk close) after 5c.
 
 Capture the rollback revision, then fast-forward the worker branch. It branched
 off this exact `HEAD`, so the merge fast-forwards and **preserves the worker's
