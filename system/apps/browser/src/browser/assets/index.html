@@ -10,20 +10,7 @@
   html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; background: #1e1e1e; color: #ddd; }
   #app { display: flex; flex-direction: column; height: 100vh; min-width: 0; }
 
-  #tabbar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: #252525; border-bottom: 1px solid #333; overflow-x: auto; }
-  .tab { padding: 4px 8px; background: #333; border-radius: 4px 4px 0 0; font-size: 12px; white-space: nowrap; cursor: pointer; max-width: 180px; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 6px; align-items: center; }
-  .tab.active { background: #0e639c; }
-  .tab .close { opacity: .6; }
-  .tab .close:hover { opacity: 1; }
-  #newtab { padding: 4px 9px; background: #333; border: none; color: #ddd; border-radius: 4px; cursor: pointer; }
-  #newtab:disabled { opacity: .5; cursor: not-allowed; }
 
-  #navbar { display: flex; gap: 6px; padding: 6px; background: #252525; border-bottom: 1px solid #333; align-items: center; }
-  .navbtn { padding: 4px 9px; background: #333; border: none; color: #ddd; border-radius: 4px; cursor: pointer; font-size: 15px; line-height: 1; }
-  .navbtn:hover:not(:disabled) { background: #3d3d3d; }
-  .navbtn:disabled { opacity: .4; cursor: not-allowed; }
-  #url { flex: 1; padding: 5px 8px; background: #1e1e1e; border: 1px solid #444; color: #ddd; border-radius: 4px; }
-  #url:disabled { opacity: .5; }
 
   /* A small persistent status bar shown whenever the human can drive the browser
      (resting/AI-untouched OR explicitly taken). Always-on "You have control"
@@ -34,8 +21,8 @@
   #returnbtn { padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
 
   #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-  #screen { max-width: 100%; max-height: 100%; cursor: default; }
-  #screen:focus { outline: none; }
+  /* The VNC client fills the pane; it does its own scaling to the framebuffer. */
+  #screen { width: 100%; height: 100%; border: 0; display: block; background: #000; }
   #placeholder { position: absolute; color: #777; font-size: 13px; text-align: center; padding: 0 20px; }
 
   /* Full-stage grey overlay shown while an agent has control. It sits above the
@@ -70,24 +57,26 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   /* While init/crashed cover the pane, hide the tab + nav chrome so a half-built
      browser never peeks through. Toggled by the `chrome-hidden` class on #app. */
-  #app.chrome-hidden #tabbar, #app.chrome-hidden #navbar, #app.chrome-hidden #returnbar { display: none; }
+  #app.chrome-hidden #returnbar { display: none; }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="tabbar"><button id="newtab" title="New tab">+</button></div>
-  <div id="navbar">
-    <button id="back" class="navbtn" title="Back">&#8592;</button>
-    <button id="forward" class="navbtn" title="Forward">&#8594;</button>
-    <button id="reload" class="navbtn" title="Reload this page">&#8635;</button>
-    <input id="url" placeholder="Enter URL and press Enter" />
-  </div>
+  <!-- No tab strip, no nav bar, no address bar: this view streams the whole X
+       display, so Chromium's OWN chrome is in the pixels. The hand-built versions
+       existed because CDP screencast captures only the page viewport; they would now
+       be a second, worse copy stacked above the real one. -->
   <div id="returnbar">
     <span id="returnqueue">You have control.</span>
     <button id="returnbtn">Return control to agents</button>
   </div>
   <div id="stage">
-    <canvas id="screen" tabindex="0"></canvas>
+    <!-- KasmVNC's own HTML5 client, proxied per-browser by the daemon. Pointer and
+         keyboard go straight down its RFB socket to this browser's Xvnc, which
+         injects them as X events -- so native context menus, native <select>
+         dropdowns and click-drag all work with no input code here. The overlays
+         below stack on top of it exactly as they did over the canvas. -->
+    <iframe id="screen" title="Live browser"></iframe>
     <div id="placeholder">Starting browser…</div>
     <div id="overlay">
       <div class="msg" id="overlaymsg">An agent has control.</div>
@@ -108,15 +97,8 @@
 (function () {
   "use strict";
   const app = document.getElementById("app");
-  const canvas = document.getElementById("screen");
-  const ctx = canvas.getContext("2d");
+  const screenFrame = document.getElementById("screen");
   const placeholder = document.getElementById("placeholder");
-  const tabbar = document.getElementById("tabbar");
-  const newtabBtn = document.getElementById("newtab");
-  const backBtn = document.getElementById("back");
-  const forwardBtn = document.getElementById("forward");
-  const reloadBtn = document.getElementById("reload");
-  const urlInput = document.getElementById("url");
   const overlay = document.getElementById("overlay");
   const crashOverlay = document.getElementById("crashoverlay");
   const initOverlay = document.getElementById("initoverlay");
@@ -131,8 +113,6 @@
   // human can only drive the page while owner === "human".
   let controlOwner = "human";
   let castWs = null;
-  let hasFrame = false;
-  let lastMove = 0;
   let browserId = null;
   let reconnectTimer = null;
   let closedForGood = false;  // set on a 1008 close: the browser is gone, stop reconnecting.
@@ -186,13 +166,12 @@
     const humanPinned = state.owner === "human" && !!state.human_pinned;
     if (agentDriving) { handoffReason = null; handoffAgent = null; }  // resumed -> clear the ask
 
-    tabbar.style.opacity = agentDriving ? "0.5" : "1";
-    tabbar.style.pointerEvents = agentDriving ? "none" : "auto";
-    urlInput.disabled = agentDriving;
-    newtabBtn.disabled = agentDriving;
-    backBtn.disabled = agentDriving;
-    forwardBtn.disabled = agentDriving;
-    reloadBtn.disabled = agentDriving;
+    // While an agent drives, the human must not be able to click into the page. The
+    // "agent has control" overlay covers the pane, but an iframe still receives
+    // pointer events through an overlay unless it is explicitly made inert -- and
+    // unlike the old canvas there is no per-event `controlOwner` check to fall back
+    // on, because input no longer passes through this page at all.
+    screenFrame.style.pointerEvents = agentDriving ? "none" : "auto";
 
     if (agentDriving) {
       const who = state.owner_name || state.owner_agent_id || "an agent";
@@ -238,7 +217,6 @@
   }
 
   function showLoading(msg) {
-    hasFrame = false;
     placeholder.textContent = msg || "Loading…";
     placeholder.style.display = "block";
   }
@@ -272,7 +250,6 @@
   function showCrashed() {
     crashed = true;
     lifecycle = "crashed";  // keep the explicit lifecycle consistent with the overlay
-    hasFrame = false;
     stopIdleTimer();
     overlay.classList.remove("show");
     returnBar.classList.remove("show");
@@ -283,117 +260,35 @@
     // small placeholder so the two don't both show.
     placeholder.style.display = "none";
     crashOverlay.classList.add("show");
-    tabbar.style.opacity = "0.5";
-    tabbar.style.pointerEvents = "none";
-    [urlInput, newtabBtn, backBtn, forwardBtn, reloadBtn].forEach((el) => (el.disabled = true));
-  }
-
-  function renderTabs(tabs) {
-    [...tabbar.querySelectorAll(".tab")].forEach((t) => t.remove());
-    tabs.forEach((tab) => {
-      const el = document.createElement("div");
-      el.className = "tab" + (tab.active ? " active" : "");
-      el.title = tab.url;
-      const label = document.createElement("span");
-      label.textContent = tab.title || tab.url || "tab";
-      el.appendChild(label);
-      const close = document.createElement("span");
-      close.className = "close";
-      close.textContent = "x";
-      close.onclick = (e) => { e.stopPropagation(); sendCast({ type: "tab", action: "close", index: tab.index }); };
-      el.appendChild(close);
-      el.onclick = () => { showLoading(); sendCast({ type: "tab", action: "activate", index: tab.index }); };
-      tabbar.insertBefore(el, newtabBtn);
-      // Don't clobber the URL while the user is typing in it.
-      if (tab.active && document.activeElement !== urlInput) urlInput.value = tab.url || "";
-    });
-  }
-
-  function drawFrame(b64) {
-    const img = new Image();
-    img.onload = () => {
-      if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-      }
-      ctx.drawImage(img, 0, 0);
-      placeholder.style.display = "none";
-      hasFrame = true;
-    };
-    img.src = "data:image/jpeg;base64," + b64;
+    // Stop input reaching a dead display: the crash overlay covers the iframe, but
+    // the iframe would still take pointer events through it without this.
+    screenFrame.style.pointerEvents = "none";
   }
 
   function sendCast(obj) { if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify(obj)); }
 
-  // --- coordinate scaling: canvas CSS px -> frame device px ---
-  function scaled(e) {
-    const r = canvas.getBoundingClientRect();
-    const sx = canvas.width / r.width;
-    const sy = canvas.height / r.height;
-    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
+  // --- the live view: KasmVNC's client in an iframe ---
+  //
+  // Everything that used to live here -- frame decode, coordinate scaling, mouse and
+  // key event forwarding, tab rendering, the address bar -- is gone. Pixels and input
+  // both ride the RFB socket now, and Chromium's own chrome is in the picture.
+  //
+  // The client is attached ONCE per browser, and deliberately never on a lifecycle
+  // change: reassigning src would reconnect RFB and flash the pane on every control
+  // handoff. The overlays above it handle every non-running state.
+  function attachScreen(id) {
+    if (screenFrame.dataset.browserId === id) return;  // already attached to this browser
+    screenFrame.dataset.browserId = id;
+    // Each browser's KasmVNC is its OWN workspace service, "browser-<name>", so its
+    // client is served at that prefix's ROOT -- a sibling of this page. That is what
+    // the client needs: it builds absolute /assets/... URLs and derives its websocket
+    // URL from window.location, so it has to own its prefix. A relative "../" keeps
+    // this correct however the workspace is reached (locally, or through a tunnel).
+    screenFrame.src = "../browser-" + encodeURIComponent(id) + "/vnc.html?autoconnect=1&resize=remote&reconnect=1&show_dot=1";
+    placeholder.style.display = "none";
   }
-  function modifiers(e) {
-    return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
-  }
-  const BUTTONS = ["left", "middle", "right"];
-
-  function mouse(type, e) {
-    if (controlOwner === "agent" || !hasFrame) return;
-    if (type === "mouseMoved") {
-      const now = performance.now();
-      if (now - lastMove < 30) return;  // throttle moves so they don't starve the frame stream
-      lastMove = now;
-    }
-    const p = scaled(e);
-    const button = BUTTONS[e.button] || "left";
-    sendCast({ type: "mouse", event: {
-      type: type, x: p.x, y: p.y,
-      button: (type === "mouseMoved") ? "none" : button,
-      buttons: e.buttons, clickCount: (type === "mousePressed" || type === "mouseReleased") ? 1 : 0,
-      modifiers: modifiers(e),
-    }});
-  }
-  canvas.addEventListener("mousedown", (e) => { canvas.focus(); mouse("mousePressed", e); });
-  canvas.addEventListener("mouseup", (e) => mouse("mouseReleased", e));
-  canvas.addEventListener("mousemove", (e) => mouse("mouseMoved", e));
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  canvas.addEventListener("wheel", (e) => {
-    if (controlOwner === "agent" || !hasFrame) return;
-    e.preventDefault();
-    const p = scaled(e);
-    sendCast({ type: "mouse", event: { type: "mouseWheel", x: p.x, y: p.y, button: "none", deltaX: e.deltaX, deltaY: e.deltaY, modifiers: modifiers(e) } });
-  }, { passive: false });
-
-  function key(type, e) {
-    if (controlOwner === "agent" || !hasFrame) return;
-    e.preventDefault();
-    const isChar = type === "keyDown" && e.key.length === 1;
-    sendCast({ type: "key", event: {
-      type: type, key: e.key, code: e.code,
-      windowsVirtualKeyCode: e.keyCode, text: isChar ? e.key : undefined,
-      autoRepeat: e.repeat, modifiers: modifiers(e),
-    }});
-  }
-  // Listen on the canvas (focused by a click), so host/browser shortcuts still
-  // work when the browser pane isn't focused, and typing in the URL input is
-  // unaffected.
-  canvas.addEventListener("keydown", (e) => key("keyDown", e));
-  canvas.addEventListener("keyup", (e) => key("keyUp", e));
 
   // --- controls ---
-  newtabBtn.onclick = () => { showLoading(); sendCast({ type: "tab", action: "new" }); };  // server opens the home page
-  // Page navigation (only active while the human has control; the server also
-  // gates on that). These drive the live page's own history, not the pane.
-  backBtn.onclick = () => sendCast({ type: "back" });
-  forwardBtn.onclick = () => sendCast({ type: "forward" });
-  reloadBtn.onclick = () => sendCast({ type: "reload" });
-  urlInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      let u = urlInput.value.trim();
-      if (u && !/^https?:\/\//.test(u)) u = "https://" + u;
-      if (u) { showLoading(); sendCast({ type: "navigate", url: u }); }
-    }
-  });
   // Take control: optimistically hide the overlay so a laggy round-trip can't
   // invite a double-click; the authoritative {type:"control"} broadcast reconciles.
   takeControlBtn.onclick = () => {
@@ -427,8 +322,13 @@
         // Only show the starting overlay when this browser hasn't reached running yet.
         if (lifecycle !== "running") setLifecycle("init");
       }
-      else if (m.type === "control") { setLifecycle(m.lifecycle); setControl(m); }  // explicit lifecycle drives the overlays
-      else if (m.type === "frame") { if (lifecycle === "running") drawFrame(m.data); }  // only paint once running
+      else if (m.type === "control") {
+        setLifecycle(m.lifecycle);
+        setControl(m);
+        // Attach the live view the moment this browser is up. Its display only
+        // exists once Chromium has launched, so attaching earlier would 404.
+        if (m.lifecycle === "running" && browserId) attachScreen(browserId);
+      }
       else if (m.type === "handoff_request") {
         // An agent handed us the browser for a CAPTCHA/verification it can't do. Latch
         // the ask and re-render the bar (the preceding control message left us pinned).
@@ -436,11 +336,10 @@
         handoffAgent = m.agent_name || "An agent";
         setControl(lastControlState);
       }
-      else if (m.type === "tabs") { if (lifecycle === "running") renderTabs(m.tabs); }  // tabs only meaningful once running
+      // m.type === "tabs" -> ignore; Chromium's own tab strip is in the stream now.
       // m.type === "ping" -> ignore; it only keeps the proxy stream alive.
     };
     castWs.onclose = (ev) => {
-      hasFrame = false;
       // 1008: the browser/session no longer exists (daemon restarted or closed, or the
       // name is invalid). Terminal -- show a clear message and stop reconnecting.
       if (ev.code === 1008) {

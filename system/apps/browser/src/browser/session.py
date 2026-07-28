@@ -42,13 +42,14 @@ Cloud / litellm proxy (``ANTHROPIC_BASE_URL``) path is intentionally unsupported
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import queue
 import shutil
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from pathlib import Path
 from typing import Any, Literal
 
@@ -70,6 +71,7 @@ from pydantic import PrivateAttr
 from browser import manifest as fleet_manifest
 from browser.names import generate_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
+from browser.vnc import VncDisplay, VncStartupError
 
 # browser-use phones home anonymized telemetry by default; disable it (the
 # compute has no business making that call, and it spams connection-error logs
@@ -455,6 +457,9 @@ class LiveBrowser(MutableModel):
     # the last `state`'s numbered elements (so `click <index>` resolves a node), and
     # the sticky-lease activity timestamp the idle-TTL sweep checks.
     _action_handler: ActionHandler | None = PrivateAttr(default=None)
+    # This browser's private KasmVNC display (its X server + live-view client).
+    # None before start() and after close().
+    _vnc: VncDisplay | None = PrivateAttr(default=None)
     _selector_map: dict[int, Any] = PrivateAttr(default_factory=dict)
     _lease_touched_at: float = PrivateAttr(default=0.0)
     _screenshot_seq: int = PrivateAttr(default=0)
@@ -509,13 +514,59 @@ class LiveBrowser(MutableModel):
         browser can be driven and the viewer shows the live page."""
         return self._lifecycle == "running"
 
+    def _start_vnc(self) -> None:
+        """Bring up this browser's private KasmVNC display (see browser.vnc).
+
+        REQUIRED, not best-effort: a browser IS its VNC display. Chromium is launched
+        headful and renders into this X server, so without it there is nothing to run
+        and nothing to show. A failure here fails the launch, loudly -- the fleet has
+        exactly one live-view path and no degraded mode to fall back into.
+        """
+        display = VncDisplay(self.browser_id)
+        try:
+            display.start()
+        except VncStartupError:
+            display.release()
+            raise
+        self._vnc = display
+
+    def _stop_vnc(self) -> None:
+        """Tear the display down. Idempotent; safe on a browser that never started one."""
+        display = self._vnc
+        self._vnc = None
+        if display is not None:
+            display.stop()
+
+    @contextlib.contextmanager
+    def _display_env(self) -> "Iterator[None]":
+        """Scope ``DISPLAY`` to this browser's X server for the duration of a launch.
+
+        Chromium reads DISPLAY from its environment at exec, and browser-use gives us
+        no hook to pass a per-launch env, so we mutate the process env around the
+        launch and restore it. Safe because the manager's ``_startup_lock`` serializes
+        launches (at most one at a time) and the daemon runs one event loop -- so no
+        other launch can observe the mutated value.
+        """
+        previous = os.environ.get("DISPLAY")
+        if self._vnc is not None:
+            os.environ["DISPLAY"] = self._vnc.display
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("DISPLAY", None)
+            else:
+                os.environ["DISPLAY"] = previous
+
     def _build_bu_session(self, profile_dir: Path, chromium_path: str, *, chromium_sandbox: bool) -> BrowserSession:
         """Construct (don't start) the browser-use session for this browser's persistent
         profile. ``chromium_sandbox`` is False when Chromium's in-process sandbox must be
         disabled (see _NO_SANDBOX / the start() fallback); browser-use then injects
         ``--no-sandbox`` itself."""
         return BrowserSession(
-            headless=_HEADLESS,
+            # Always headful: the live view IS this browser's X framebuffer, so a
+            # headless Chromium would render nothing into it.
+            headless=False,
             executable_path=chromium_path,
             # Persistent profile on the workspace volume -- the whole point of
             # persistence. The dir name (see _profile_dir) is load-bearing for
@@ -541,6 +592,13 @@ class LiveBrowser(MutableModel):
         once with the sandbox off (the only thing the retry changes), covering any non-root
         runtime that also can't sandbox."""
         disable_sandbox = _should_disable_sandbox()
+        with self._display_env():
+            return await self._start_bu_session_locked(profile_dir, chromium_path, disable_sandbox)
+
+    async def _start_bu_session_locked(
+        self, profile_dir: Path, chromium_path: str, disable_sandbox: bool
+    ) -> BrowserSession:
+        """The launch itself, run with ``DISPLAY`` already scoped to this browser."""
         session = self._build_bu_session(profile_dir, chromium_path, chromium_sandbox=not disable_sandbox)
         try:
             await session.start()
@@ -575,6 +633,9 @@ class LiveBrowser(MutableModel):
         profile_dir = _profile_dir(self.browser_id)
         profile_dir.mkdir(parents=True, exist_ok=True)
         _clear_stale_singleton(profile_dir)  # a prior hard kill may have orphaned a lock
+        # This browser's own X server + live-view client. Started BEFORE Chromium, which
+        # is launched headful against it.
+        self._start_vnc()
         self._bu_session = await self._start_bu_session(profile_dir, chromium_path)
         # The Chromium tree just spawned (and its processes self-write their
         # oom_score_adj moments later): have the OOM sweep re-band it.
@@ -633,6 +694,10 @@ class LiveBrowser(MutableModel):
                 await bu_session.kill()
             except _BROWSER_ERRORS as e:
                 logger.debug("aborted-launch kill ignored ({})", e)
+        # Reap the display too, or an aborted launch leaks an Xvnc (and its display
+        # number) for the life of the container -- close() never runs for a browser
+        # that was already popped from the registry.
+        self._stop_vnc()
         return True
 
     async def _open_initial_tabs(
@@ -719,17 +784,9 @@ class LiveBrowser(MutableModel):
                     )
                 except _BROWSER_ERRORS as e:
                     logger.debug("device-metrics override ignored ({})", e)
-                cdp.on("Page.screencastFrame", self._on_screencast_frame)
-                await cdp.send(
-                    "Page.startScreencast",
-                    {
-                        "format": _SCREENCAST_FORMAT,
-                        "quality": _SCREENCAST_QUALITY,
-                        "maxWidth": _SCREENCAST_MAX_WIDTH,
-                        "maxHeight": _SCREENCAST_MAX_HEIGHT,
-                        "everyNthFrame": _SCREENCAST_EVERY_NTH_FRAME,
-                    },
-                )
+                # No CDP screencast: pixels come from this browser's VNC display.
+                # The CDP session itself stays -- the fleet still uses it for device
+                # metrics, tab tracking and agent actions -- but nothing streams frames.
             except _BROWSER_ERRORS as e:
                 logger.debug("screencast attach ignored ({})", e)
                 return
@@ -1779,20 +1836,14 @@ class LiveBrowser(MutableModel):
         fan-out list, so the viewer's first messages are deterministic -- no live
         frame can interleave ahead of the control/tabs the viewer needs first.
 
-        We also replay a screencast frame (``_latest_frame``) to a new client of a
-        RUNNING browser. The CDP screencast only emits a frame on a repaint, so a client
-        connecting to a browser sitting on a static/blank page would otherwise see a
-        black canvas (and the viewer's "Starting browser…" banner would never clear)
-        until the page next changed. If no frame has been cached yet (the common case for
-        a browser that just flipped ``init`` -> ``running`` and hasn't repainted --
-        finding [6]), we force a one-off capture so even the very first viewer sees the
-        live page at once. Skipped when crashed -- a dead browser shows the crash state,
-        not a stale frame.
+        No frame is replayed: pixels come from the browser's VNC display, which paints
+        a joining client from its framebuffer on connect. (The old CDP screencast only
+        emitted on repaint, so a viewer joining a static page needed a replayed or
+        on-demand frame to avoid sitting on black.)
 
-        The seed is at most four messages onto a fresh, empty queue whose maxsize
+        The seed is at most three messages onto a fresh, empty queue whose maxsize
         (``_CAST_QUEUE_MAX_SIZE`` = 16) is far larger, so the ``put_nowait``s here can
-        never raise ``queue.Full`` -- but the late-frame push goes through the same
-        Full-safe ``_broadcast``-style path for symmetry (finding [8]).
+        never raise ``queue.Full``.
 
         Runs on the loop (the runner calls it via ``bridge.run``), so the list
         mutation is single-threaded with respect to :meth:`_broadcast`.
@@ -1805,12 +1856,11 @@ class LiveBrowser(MutableModel):
         client_queue.put_nowait(json.dumps({"type": "tabs", "tabs": await self._tab_list()}, default=str))
         if self._crashed:  # a viewer opening a crashed browser sees the crash state at once
             client_queue.put_nowait(json.dumps({"type": "crashed", "browser_id": self.browser_id}, default=str))
-        elif self._is_running:
-            # Replay the live page so a new client isn't stuck on black. Capture one on
-            # demand if nothing has been cached yet (just flipped to running, no repaint).
-            frame = self._latest_frame if self._latest_frame is not None else await self._capture_one_frame()
-            if frame is not None:
-                client_queue.put_nowait(json.dumps({"type": "frame", "data": frame}, default=str))
+        # No frame replay: the live view is the VNC display, which paints a joining
+        # client from the framebuffer on connect. The old on-demand capture existed
+        # because the CDP screencast only emitted on repaint, so a viewer joining a
+        # static page sat on black -- with no screencast attached it would now do a
+        # pointless CDP round-trip on every single pane open.
         self._cast_queues.append(client_queue)
         return client_queue
 
@@ -1922,6 +1972,10 @@ class LiveBrowser(MutableModel):
                 await bu_session.kill()
             except _BROWSER_ERRORS as e:
                 logger.debug("browser kill ignored ({})", e)
+        # The display goes LAST: Chromium must be gone before the X server it renders
+        # into, or it loses its connection mid-teardown and the observer reports a
+        # crash for a browser we are deliberately closing.
+        self._stop_vnc()
 
 
 async def _safe_title(page: Page) -> str:
