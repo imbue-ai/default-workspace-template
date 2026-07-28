@@ -629,10 +629,13 @@ _recently_allocated_terminal_names: set[str] = set()
 def _primary_agent_layout_dir() -> Path | None:
     """Return the workspace layout directory for this workspace's primary agent.
 
-    An explicit ``SYSTEM_INTERFACE_LAYOUT_DIR`` override wins when set: the
-    pre-merge preview points it at a throwaway copy of the live layout so the
-    preview renders the user's real tabs while its own autosaves land in the copy,
-    never clobbering the live layout.
+    The config's ``system_interface_layout_dir`` wins when set (from
+    ``SYSTEM_INTERFACE_LAYOUT_DIR``, as pydantic-settings maps every other
+    ``SYSTEM_INTERFACE_*`` field): the live-editing preview points it at a
+    throwaway copy of the live layout so the preview renders the user's real tabs
+    while its own autosaves land in the copy, never clobbering the live layout.
+    It is read off the per-app config rather than the process env so that two
+    servers in one process each keep their own override.
 
     Otherwise the system_interface serves a single workspace (its own primary
     agent) and the layout lives at
@@ -640,9 +643,9 @@ def _primary_agent_layout_dir() -> Path | None:
     override is unset and MNGR_AGENT_ID is missing, which should only happen in
     dev/test setups that don't care about persistence.
     """
-    override = os.environ.get("SYSTEM_INTERFACE_LAYOUT_DIR", "")
-    if override:
-        return Path(override)
+    override = get_state().config.system_interface_layout_dir
+    if override is not None:
+        return override
     agent_id = os.environ.get("MNGR_AGENT_ID", "")
     if not agent_id:
         return None

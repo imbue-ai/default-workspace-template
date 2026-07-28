@@ -23,7 +23,18 @@ preview tab.
 
 - `create_worker.py` (`launch-task`) gained a `--branch` passthrough to
   `mngr create`, so the harden worker can check out and extend the branch the
-  lead already built up instead of branching anew from HEAD.
+  lead already built up instead of branching anew from HEAD. The branch that
+  `launch-sync` publishes for callers to merge from is now derived from that spec
+  (`resolve_worker_branch`, mirroring mngr's own `[BASE][:NEW]` parsing) rather
+  than assumed to be `mngr/<name>` -- with a spec that renames or reuses a
+  branch, the old assumption named a branch the worker never committed to.
+
+- The preview no longer seeds a saved layout that itself opens a preview panel.
+  Such a layout made the preview render *itself* (its inner app resolves
+  `service:si-preview` against the same live registry, so the panel proxies back
+  to the wrapper framing it). The layout stays registered and simply opens empty.
+  A `preview` that fails to boot now also removes the layout copy it had already
+  seeded, instead of leaving it for an `unpreview` that is never coming.
 
 - `interactive-delivery.md` phase 5 was recast around **fast feedback**, with
   two demonstrative-artifact types chosen by wiring-cost vs. restart-cost: a

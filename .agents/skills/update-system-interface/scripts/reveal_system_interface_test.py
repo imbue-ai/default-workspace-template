@@ -13,6 +13,7 @@ never regress, because a broken backend takes down the user's whole UI.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -556,6 +557,83 @@ def test_preview_seeds_a_copy_of_only_the_live_layout_files(
     assert _flag(argv, "--env") == f"{reveal_mod.PREVIEW_LAYOUT_DIR_ENV}={seed_dir}"
 
 
+def _preview_panel_layout(service_name: str) -> str:
+    """A persisted layout whose single panel is an iframe on ``service_name``."""
+    return json.dumps(
+        {
+            "panelParams": {
+                "iframe-1": {"panelType": "iframe", "serviceName": service_name},
+            }
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "service_name", [reveal_mod.PREVIEW_SERVICE_NAME, reveal_mod.PREVIEW_INNER_SERVICE_NAME]
+)
+def test_preview_does_not_seed_a_layout_that_opens_the_preview_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, service_name: str
+) -> None:
+    # Seeding a layout that already has a preview panel would make the preview
+    # render itself: the inner app resolves that service against the same live
+    # registry, so the panel proxies back to the wrapper framing it. The layout's
+    # *content* must be dropped -- while the registry that names the slug is still
+    # copied, so the layout opens empty instead of vanishing from the picker.
+    repo_root = tmp_path / "repo"
+    work_dir = _make_work_dir(repo_root)
+    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    (layout_dir / "layouts" / "with-preview.json").write_text(
+        _preview_panel_layout(service_name)
+    )
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=_RecordingRunner())
+
+    assert code == 0
+    seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
+    assert not (seed_dir / "layouts" / "with-preview.json").exists()
+    # The unrelated layout and the slug registry still come through.
+    assert (seed_dir / "layouts" / "desktop.json").exists()
+    assert (seed_dir / "layouts_meta.json").exists()
+
+
+def test_preview_drops_a_legacy_layout_that_opens_the_preview_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The same guard covers the legacy single-file layout, not just the per-slug
+    # directory -- a workspace that never migrated would otherwise nest itself.
+    repo_root = tmp_path / "repo"
+    work_dir = _make_work_dir(repo_root)
+    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    (layout_dir / "layout.json").write_text(
+        _preview_panel_layout(reveal_mod.PREVIEW_SERVICE_NAME)
+    )
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=_RecordingRunner())
+
+    assert code == 0
+    seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
+    assert not (seed_dir / "layout.json").exists()
+
+
+def test_preview_seeds_layouts_that_open_other_services(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The guard is scoped to the preview's own services: an ordinary service panel
+    # is exactly what the user wants to see reproduced in the preview.
+    repo_root = tmp_path / "repo"
+    work_dir = _make_work_dir(repo_root)
+    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    (layout_dir / "layouts" / "with-browser.json").write_text(
+        _preview_panel_layout("browser")
+    )
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=_RecordingRunner())
+
+    assert code == 0
+    seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
+    assert (seed_dir / "layouts" / "with-browser.json").exists()
+
+
 def test_preview_reseeds_from_scratch_on_rerun(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -666,6 +744,24 @@ def test_preview_propagates_a_shared_script_failure(tmp_path: Path) -> None:
     code = reveal_mod.preview(_SLUG, str(work_dir), tmp_path, runner=runner)
 
     assert code == 1
+
+
+def test_preview_removes_the_seeded_layout_when_the_boot_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The seed is written before the boot is attempted. If the boot fails there is
+    # no live preview and so no ``unpreview`` coming to clean up after it -- the
+    # failing path has to remove its own copy rather than leave one orphaned.
+    repo_root = tmp_path / "repo"
+    work_dir = _make_work_dir(repo_root)
+    _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    runner = _RecordingRunner()
+    runner.respond(_SERVE_UP, _Result(returncode=1))
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=runner)
+
+    assert code == 1
+    assert not reveal_mod._preview_layout_seed_dir(repo_root, _SLUG).exists()
 
 
 def test_preview_refresh_delegates_to_the_shared_script(tmp_path: Path) -> None:
