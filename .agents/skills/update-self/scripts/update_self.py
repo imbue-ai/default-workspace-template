@@ -22,11 +22,14 @@ validation depth, reveal by change class). This script owns the parts that are
     baseline-allowed through the latchkey gateway, no grant needed); when it
     cannot be read the command **fails** rather than silently updating uncapped.
 
-    The output also carries ``latest_available``, the newest stable tag upstream
-    *ignoring* the ceiling (``null`` if there is none). Comparing it against the
-    resolved ``ref`` is how the flow knows a newer release was held back, without
-    asking the agent to eyeball a tag listing (which is sorted lexically and
-    includes prereleases).
+    The output also carries ``held_back_by_ceiling`` -- whether the ceiling, and
+    not the user, is why a newer release was not taken -- alongside
+    ``latest_available``, the newest stable tag upstream *ignoring* the ceiling
+    (``null`` if there is none) and so the release that flag names. The judgement
+    is made here rather than left to the agent, both because the two refs also
+    differ when an ``--override`` picked an *older* tag (nobody's app held that
+    back) and because the alternative is eyeballing a tag listing, which is
+    sorted lexically and includes prereleases.
 
 ``classify-merge``
     Split the files upstream changed into the reconciled **merged** set (local
