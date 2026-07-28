@@ -430,7 +430,7 @@ def test_refresh_reboots_inner_on_same_port_leaving_wrapper_and_services(
     # distinguishable from the old.
     up_spawner = _FakeSpawner()
     assert _up_preview(tmp_path, spawner=up_spawner) == 0
-    inner_port = json.loads(_state_path(tmp_path).read_text())["inner"]["port"]
+    inner_port = json.loads(_state_path(tmp_path).read_text())["inner_port"]
 
     runner = _RecordingRunner()
     spawner = _FakeSpawner(detached_pid=5555)
