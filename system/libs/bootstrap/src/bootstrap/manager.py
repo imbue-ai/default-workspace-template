@@ -13,10 +13,14 @@ sourced agent environment (MNGR_AGENT_STATE_DIR, CLAUDE_CONFIG_DIR, etc.).
 
 import json
 import os
+import re
 import subprocess
+import urllib.request
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
@@ -26,6 +30,16 @@ SUPERVISORD_CONF = Path("system/supervisord.conf")
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
 
 STATE_DIR = Path("data/.state")
+
+# Durable home for user-editable cron entries. /etc/cron.d lives on the
+# container rootfs and is lost when the container is recreated; files under
+# data/.state/cron.d persist with the container volume, and the bootstrap
+# installs them into /etc/cron.d at each boot. The entry file is still the
+# on/off switch for its job -- it just lives where it survives.
+RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
+# cron silently ignores drop-ins with dots or other odd characters in their
+# names; install only names it will accept and warn about the rest.
+_CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # Signal file gating exactly-once creation of the initial chat agent. Lives
 # under data/.state/, which persists with the container volume.
@@ -469,6 +483,152 @@ def _configure_git_global() -> None:
             )
 
 
+class TimezoneFetchError(Exception):
+    """The timezone endpoint answered with an unusable payload."""
+
+
+def _parse_timezone_response(body: bytes) -> str:
+    """Parse the timezone endpoint's body into an IANA name, or "" for unknown.
+
+    A well-formed ``{"timezone": ""}`` is the desktop client's documented
+    answer when the user's timezone cannot be determined -- a valid response,
+    returned as "" so callers fall back to UTC without treating it as a
+    failure. Raises ValueError for a non-JSON or non-UTF-8 body and
+    TimezoneFetchError for a well-formed body of the wrong shape.
+    """
+    payload = json.loads(body.decode("utf-8"))
+    timezone_name = payload.get("timezone") if isinstance(payload, dict) else None
+    if not isinstance(timezone_name, str):
+        raise TimezoneFetchError(f"unexpected timezone payload: {payload!r}")
+    return timezone_name
+
+
+# The gateway's reverse tunnel may not be up yet this early in boot, and there
+# is no readiness event to wait on -- hence the small bounded retry.
+@retry(
+    retry=retry_if_exception_type((OSError, ValueError, TimezoneFetchError)),
+    stop=stop_after_attempt(3),
+    wait=wait_fixed(3),
+    reraise=True,
+)
+def _request_timezone(request: urllib.request.Request) -> str:
+    """One GET of the timezone endpoint; raises so the retry decorator can act.
+
+    OSError covers URLError/HTTPError (refused, 403/503, timeout); ValueError
+    covers a non-JSON or non-UTF-8 body; TimezoneFetchError an unexpected
+    payload shape. A well-formed "unknown" answer is returned as "" without
+    retrying -- the server's answer will not change within the retry window.
+    """
+    with urllib.request.urlopen(request, timeout=5) as response:
+        body = response.read()
+    return _parse_timezone_response(body)
+
+
+def _fetch_user_timezone() -> str:
+    """Fetch the user's IANA timezone name from the minds desktop client.
+
+    GETs /api/v1/timezone through the latchkey gateway's minds-api-proxy using
+    the gateway env vars mngr injects into the agent environment. Timezone-at-
+    boot: the caller points /etc/localtime + /etc/timezone at the result so
+    cron schedules run in the user's local time. Returns "" on any failure
+    (missing env, refused connection, non-200, malformed body) -- and when the
+    desktop client itself does not know the timezone -- so the caller can fall
+    back to UTC.
+    """
+    gateway = os.environ.get("LATCHKEY_GATEWAY", "")
+    password = os.environ.get("LATCHKEY_GATEWAY_PASSWORD", "")
+    permissions = os.environ.get("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "")
+    if not gateway or not password or not permissions:
+        logger.debug("Latchkey gateway env not fully set; skipping timezone fetch")
+        return ""
+    request = urllib.request.Request(
+        f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/timezone",
+        headers={
+            "X-Latchkey-Gateway-Password": password,
+            "X-Latchkey-Gateway-Permissions-Override": permissions,
+        },
+    )
+    try:
+        timezone_name = _request_timezone(request)
+    except (OSError, ValueError, TimezoneFetchError) as e:
+        logger.warning(
+            "Could not fetch the user timezone from the gateway ({}); "
+            "container stays on UTC",
+            e,
+        )
+        return ""
+    if not timezone_name:
+        logger.debug("Desktop client does not know the user timezone; container stays on UTC")
+    return timezone_name
+
+
+def _apply_container_timezone(
+    tz_name: str,
+    zoneinfo_dir: Path = Path("/usr/share/zoneinfo"),
+    localtime_path: Path = Path("/etc/localtime"),
+    timezone_path: Path = Path("/etc/timezone"),
+) -> bool:
+    """Point /etc/localtime and /etc/timezone at the named IANA zone.
+
+    The name is validated by loading it with ``ZoneInfo`` -- the same check the
+    minds desktop client applies before serving the value -- which by spec
+    rejects absolute paths and ``..`` components (so a malicious response
+    cannot traverse out of the zoneinfo dir) and proves the zone is real. The
+    ``is_file`` check below still matters: ZoneInfo may resolve a zone from
+    elsewhere on TZPATH, but the symlink must point into ``zoneinfo_dir``
+    specifically. The localtime swap is a temp symlink + os.replace so a
+    concurrent reader never sees the file missing. Must run before supervisord
+    starts cron: cron reads the timezone once at daemon start. Best-effort:
+    returns False with a warning on any failure.
+    """
+    try:
+        ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError, KeyError, OSError):
+        logger.warning("Ignoring invalid timezone name {!r}", tz_name)
+        return False
+    zone_file = zoneinfo_dir / tz_name
+    if not zone_file.is_file():
+        logger.warning("Timezone {!r} has no zoneinfo file at {}", tz_name, zone_file)
+        return False
+    try:
+        tmp_link = localtime_path.with_name(localtime_path.name + ".minds-tmp")
+        tmp_link.unlink(missing_ok=True)
+        tmp_link.symlink_to(zone_file)
+        os.replace(tmp_link, localtime_path)
+        timezone_path.write_text(tz_name + "\n")
+    except OSError as e:
+        logger.warning("Failed to apply timezone {!r}: {}", tz_name, e)
+        return False
+    logger.info("Container timezone set to {}", tz_name)
+    return True
+
+
+def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> None:
+    """Install data/.state/cron.d/* into /etc/cron.d (mode 0644).
+
+    Best-effort per file: a bad name or an OSError is logged and skipped so
+    one broken entry cannot block the rest (or the boot). Runs before
+    supervisord starts cron, though cron would also pick the files up on its
+    minute-level rescan.
+    """
+    if not RUNTIME_CRON_DIR.is_dir():
+        return
+    for entry in sorted(RUNTIME_CRON_DIR.iterdir()):
+        if not entry.is_file():
+            continue
+        if not _CRON_NAME_PATTERN.fullmatch(entry.name):
+            logger.warning("Skipping cron entry with a name cron would ignore: {}", entry.name)
+            continue
+        try:
+            target = target_dir / entry.name
+            target.write_text(entry.read_text())
+            target.chmod(0o644)
+        except OSError as e:
+            logger.warning("Failed to install cron entry {}: {}", entry.name, e)
+            continue
+        logger.info("Installed cron entry {} into {}", entry.name, target_dir)
+
+
 def _ensure_supervisor_log_dir() -> None:
     """Create supervisord's log directory if missing.
 
@@ -525,10 +685,22 @@ def main() -> None:
     # agent runs git.
     _configure_git_global()
 
+    # Set the container clock to the user's timezone so cron schedules run in
+    # their local time. Must precede _exec_supervisord: cron reads the
+    # timezone once at daemon start.
+    tz_name = _fetch_user_timezone()
+    if tz_name:
+        _apply_container_timezone(tz_name)
+
     _bootstrap_init_chat_dir()
 
     # Overlay symlinks must exist before services start writing.
     _run_env_converge_fast_phase()
+
+    # Reinstall any cron entries persisted under data/.state/cron.d (e.g.
+    # the Caretaker's schedule) so they survive container recreation. Must
+    # precede _exec_supervisord so entries exist before cron starts.
+    _install_runtime_cron_entries()
 
     # Make sure supervisord's log directory exists, then hand off: replace this
     # process with supervisord in the foreground. supervisord owns every
