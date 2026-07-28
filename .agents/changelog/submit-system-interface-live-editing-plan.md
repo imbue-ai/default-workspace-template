@@ -46,10 +46,10 @@ preview tab.
   seeded, instead of leaving it for an `unpreview` that is never coming.
 
 - `interactive-delivery.md` phase 5 was recast around **fast feedback**, with
-  two demonstrative-artifact types chosen by wiring-cost vs. restart-cost: a
+  two demonstrative-prototype types chosen by wiring-cost vs. restart-cost: a
   Type 1 "janky real edit" (rough, but in the real code and shown through the
-  real surface) and a Type 2 "detached prototype" (a throwaway mock). `update-service`
+  real surface) and a Type 2 "detached prototype" (a throwaway mock). `update-app`
   picked up that taxonomy plus guidance that a preview is the exception, not the
-  default (reserve it for changes costly to redo); `update-artifact` and
+  default (reserve it for changes costly to redo); `update-creation` and
   `update-self` were updated to match the live-loop handoff onto the lead's
   branch.
