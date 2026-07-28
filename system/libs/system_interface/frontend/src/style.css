@@ -1959,13 +1959,14 @@ body {
 }
 
 .fast-mode-modal-btn-fast {
-  background: var(--color-accent, #2563eb);
+  background: var(--color-accent);
   color: #fff;
-  border-color: var(--color-accent, #2563eb);
+  border-color: var(--color-accent);
 }
 
 .fast-mode-modal-btn-fast:hover {
-  filter: brightness(0.92);
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
 }
 
 /* ── Share modal ── */
