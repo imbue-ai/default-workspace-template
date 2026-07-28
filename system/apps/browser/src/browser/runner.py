@@ -35,6 +35,7 @@ FastAPI ``root_path`` it replaced only emitted prefix-aware URLs the page never
 relied on).
 """
 
+import contextlib
 import json
 import os
 import queue
@@ -66,6 +67,7 @@ from browser.session import (
     anthropic_key_status,
     deferred_install_ready,
 )
+from browser.vnc import reap_orphan_displays
 from browser.wsgi import make_threaded_server
 
 ROOT_PATH = os.environ.get("ROOT_PATH", "")
@@ -167,6 +169,12 @@ async def _startup() -> None:
     construction), so it does not block read-only routes from serving immediately.
     """
     try:
+        # Before anything is restored: kill any Xvnc left behind by a previous
+        # browser-service that was OOM-killed (supervisord never got to reap its
+        # process group). This process owns no display yet, so every one in our
+        # range is an orphan -- and restore() below would otherwise start a second
+        # set alongside them.
+        reap_orphan_displays()
         ready, reason = deferred_install_ready()
         if not ready:
             # Chromium isn't installed yet; don't block. The fleet starts empty and the

@@ -200,6 +200,13 @@ let showTerminalDestroyDialog = false;
 let terminalDestroySessionName: string | null = null;
 let terminalDestroyPanelId: string | null = null;
 
+// Browser-destroy dialog state. Same shape again: closing a browser tab only
+// hides the pane, while destroying actually closes the browser in the fleet --
+// killing its Chromium and freeing its slot against the fleet's cap.
+let showBrowserDestroyDialog = false;
+let browserDestroySessionName: string | null = null;
+let browserDestroyPanelId: string | null = null;
+
 // Share modal state
 let showShareModal = false;
 let shareServiceName: string | null = null;
@@ -474,6 +481,26 @@ function createCustomTab(options: { id: string; name: string }): {
               terminalDestroySessionName = sessionName;
               terminalDestroyPanelId = options.id;
               showTerminalDestroyDialog = true;
+              m.redraw();
+            },
+            "dv-custom-tab-action-destructive",
+          ),
+        );
+      }
+
+      // Destroy button -- on browser tabs. Closes the browser in the fleet
+      // (killing its Chromium and freeing its slot against the cap); closing
+      // the tab alone only hides the pane and leaves the browser running.
+      const browserSessionName = browserPanelSessionName(pp);
+      if (browserSessionName) {
+        actions.appendChild(
+          createTabActionButton(
+            "Destroy browser",
+            "trash",
+            () => {
+              browserDestroySessionName = browserSessionName;
+              browserDestroyPanelId = options.id;
+              showBrowserDestroyDialog = true;
               m.redraw();
             },
             "dv-custom-tab-action-destructive",
@@ -1166,6 +1193,21 @@ function createUnrecoverablePanelRenderer(panelId: string): IContentRenderer {
  *  tab-action selection and the terminal-renderer choice. */
 function isTerminalPanelParams(pp: PanelParams | undefined): boolean {
   return pp?.terminalSessionName !== undefined || pp?.terminalId !== undefined;
+}
+
+/** The fleet browser a panel is showing, or null if it isn't a browser pane.
+ *
+ *  Browser panes are service iframes with ``serviceName === "browser"`` whose
+ *  ``url`` carries the ``?session=<name>`` that selects which browser in the
+ *  fleet they show (see addPanelForRef). That name is the fleet's addressing
+ *  key, so it is also what the Destroy button passes to the close endpoint.
+ *  The bare ``service:browser`` (no session) is not a real browser pane and
+ *  yields null -- there is nothing to destroy. */
+function browserPanelSessionName(pp: PanelParams | undefined): string | null {
+  if (pp?.serviceName !== "browser" || !pp.url) return null;
+  const queryStart = pp.url.indexOf("?");
+  if (queryStart === -1) return null;
+  return new URLSearchParams(pp.url.substring(queryStart + 1)).get("session");
 }
 
 /** Mint a fresh per-tab terminal id. The backend maps this back to the tab's
@@ -2807,6 +2849,38 @@ async function executeTerminalDestroy(sessionName: string, panelId: string): Pro
   m.redraw();
 }
 
+async function executeBrowserDestroy(sessionName: string, panelId: string): Promise<void> {
+  // Close the browser in the fleet, then drop the tab. Deliberately NOT gated on
+  // ownership: the daemon's close() releases every queued agent and messages the
+  // one driving, so taking a browser from an agent is safe -- it learns the
+  // browser is gone rather than hanging on a corpse.
+  try {
+    const response = await fetch(getServiceUrl("browser") + `browsers/${encodeURIComponent(sessionName)}`, {
+      method: "DELETE",
+    });
+    // 404 means it is already gone (closed elsewhere, or the daemon restarted):
+    // the tab is stale, so fall through and drop it rather than erroring.
+    if (!response.ok && response.status !== 404) {
+      const data = await response.json().catch(() => ({}));
+      const detail = (data as { detail?: string }).detail ?? "Unknown error";
+      alert(`Failed to destroy browser: ${detail}`);
+      return;
+    }
+  } catch (e) {
+    alert(`Failed to destroy browser: ${(e as Error).message}`);
+    return;
+  }
+
+  if (dockview) {
+    const panel = dockview.panels.find((p) => p.id === panelId);
+    if (panel) {
+      dockview.removePanel(panel);
+    }
+  }
+
+  m.redraw();
+}
+
 export const DockviewWorkspace: m.Component = {
   oncreate(vnode: m.VnodeDOM) {
     const wrapper = vnode.dom as HTMLElement;
@@ -2973,6 +3047,26 @@ export const DockviewWorkspace: m.Component = {
                 showTerminalDestroyDialog = false;
                 terminalDestroySessionName = null;
                 terminalDestroyPanelId = null;
+              },
+            })
+          : null,
+
+        showBrowserDestroyDialog && browserDestroySessionName
+          ? m(DestroyConfirmDialog, {
+              agentName: browserDestroySessionName,
+              title: "Destroy browser",
+              onConfirm() {
+                showBrowserDestroyDialog = false;
+                const sessionName = browserDestroySessionName!;
+                const panelId = browserDestroyPanelId!;
+                browserDestroySessionName = null;
+                browserDestroyPanelId = null;
+                void executeBrowserDestroy(sessionName, panelId);
+              },
+              onCancel() {
+                showBrowserDestroyDialog = false;
+                browserDestroySessionName = null;
+                browserDestroyPanelId = null;
               },
             })
           : null,

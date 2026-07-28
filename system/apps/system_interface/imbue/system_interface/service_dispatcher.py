@@ -327,6 +327,10 @@ def _forward_backend_to_client(
             logger.trace("Client WebSocket already closed during backend->client cleanup")
 
 
+# Read buffer for a backend WebSocket leg. See _connect_backend_websocket.
+_BACKEND_WS_RECEIVE_BYTES = 65536
+
+
 def _connect_backend_websocket(ws_url: str, subprotocols: list[str] | None) -> simple_websocket.Client:
     """Open a WebSocket to the backend, trying every resolved address in turn.
 
@@ -352,7 +356,23 @@ def _connect_backend_websocket(ws_url: str, subprotocols: list[str] | None) -> s
             (parsed.scheme, f"{host_for_url}:{port}", parsed.path, parsed.query, parsed.fragment)
         )
         try:
-            return simple_websocket.Client(candidate_url, subprotocols=subprotocols)
+            return simple_websocket.Client(
+                candidate_url,
+                subprotocols=subprotocols,
+                # Some backends refuse an upgrade that carries no Origin: KasmVNC
+                # answers 404 with "request failed websocket checks, missing
+                # Sec-WebSocket-Origin header". simple_websocket sends none by
+                # default. We present the backend's own address, which is what a
+                # same-origin client would send and what an origin check expects;
+                # backends that ignore Origin (ttyd, the browser fleet's cast
+                # socket) are unaffected.
+                headers={"Origin": f"http://{host_for_url}:{port}"},
+                # 4 KiB is far too small for binary streams like RFB framebuffer
+                # updates -- each one would cost many recv syscalls plus
+                # reassembly, and this proxy runs inside the workspace where gVisor
+                # makes every syscall several times more expensive.
+                receive_bytes=_BACKEND_WS_RECEIVE_BYTES,
+            )
         except (ConnectionRefusedError, ConnectionError, OSError, TimeoutError, ConnectionClosed) as error:
             last_error = error
             logger.trace("Backend WebSocket connect to {} failed, trying next address: {}", address, error)

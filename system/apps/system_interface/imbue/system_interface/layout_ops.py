@@ -116,6 +116,18 @@ _MUTEX_TTL_SECONDS: float = 0.5
 # the same view of "addressable things" without duplicating the filter.
 _HIDDEN_SERVICES: frozenset[str] = frozenset({"system_interface"})
 
+# Reserved service-name PREFIXES, for families whose members are created at
+# runtime and so can't be enumerated above. ``browser-<name>`` is one service per
+# live browser in the fleet (each browser's own KasmVNC display, registered when
+# it launches). They are addressed through ``service:browser?session=<name>``, not
+# by their own service name, so listing them would show every browser twice.
+_HIDDEN_SERVICE_PREFIXES: tuple[str, ...] = ("browser-",)
+
+
+def is_hidden_service(service_name: str) -> bool:
+    """Whether a service is internal plumbing rather than an addressable tab."""
+    return service_name in _HIDDEN_SERVICES or service_name.startswith(_HIDDEN_SERVICE_PREFIXES)
+
 
 def is_known_op(op: str) -> bool:
     return op in _KNOWN_OPS
@@ -569,7 +581,7 @@ def layout_list(
     open_refs = _collect_open_refs(layout_json_path, agent_name_by_id)
     entries: list[dict[str, Any]] = []
     for service_name in service_names:
-        if service_name in _HIDDEN_SERVICES:
+        if is_hidden_service(service_name):
             continue
         ref = f"service:{service_name}"
         entries.append(
