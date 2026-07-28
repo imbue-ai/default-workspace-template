@@ -350,8 +350,9 @@ def fetch_app_template_ref(url: str = _MINDS_APP_INFO_URL) -> str:
     Goes through ``latchkey curl``, which injects the gateway credentials and
     passes every other argument (and curl's exit code) straight through. Each
     failure mode is reported distinctly, because the user's next action differs:
-    a transport failure is worth retrying, a 404 means the app must be updated
-    first, and any other bad status or malformed body is a bug worth reporting.
+    a transport failure is worth retrying, an :data:`_APP_TOO_OLD_STATUSES`
+    answer (403 or 404) means the app must be updated first, and any other bad
+    status or malformed body is a bug worth reporting.
     """
     with tempfile.NamedTemporaryFile(suffix=".json") as body_file:
         try:
