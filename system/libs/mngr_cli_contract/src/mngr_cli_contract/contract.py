@@ -17,7 +17,7 @@ verifying the CLI surface the repo depends on, not the runtime values a
 particular invocation carries.
 
 This lives in its own workspace package so both repo-side pytest passes (the
-root pass and the isolated system/libs/system_interface pass, which share one
+root pass and the isolated system/apps/system_interface pass, which share one
 workspace venv) import a single copy rather than duplicating the validator.
 """
 

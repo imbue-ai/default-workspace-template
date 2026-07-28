@@ -13,14 +13,14 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 - If you ever need to work with another *git* repo that is *outside* of this monorepo as a read-only dependency, you should do so by adding a git subtree under `system/vendor/`.
 - If you need to *actively develop* against an external repo (e.g. `mngr`), check out a standalone clone of it under `.external_worktrees/<repo-name>/`. This directory is gitignored so the external clones don't pollute the monorepo. The branch in the external clone should mirror the branch you're on in this monorepo.
 - This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `data/.tickets/` (the path is set via the `TICKETS_DIR` env var so tickets sit with the rest of the workspace's data).
-- All relative paths in this repo assume cwd = repo root (`/home/user/workspace`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (e.g. `data/creations/<name>/` for a creation's data); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state under `data/.state/`.
-- When adding a new web app, use the `build-web-service` skill, which sets up a new package under `creations/` + a service entry + `forward_port.py` registration on its own port. Do NOT edit `system/libs/system_interface/` for this -- that's the top-level workspace UI, not a template for new views.
+- All relative paths in this repo assume cwd = repo root (`/home/user/workspace`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (visible folders are the user's to organize; e.g. `data/.apps/<name>/` holds an app's stored data and `data/.skills/<name>/` a skill's own state); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state under `data/.state/`.
+- When adding a new app, use the `build-app` skill, which sets up a new package under `system/apps/` + a supervisord program entry + `forward_port.py` registration on its own port. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new apps.
 
 # Task management (CRITICAL — read this before doing real work)
 
-You manage your work using `tk`, the vendored ticket tracker at `system/vendor/tk/`. It is the **only** task tracker available — any of your built-in todo tools are disabled. `tk` stores two kinds of records, distinguished by the `--step` flag at creation:
+You manage your work using `tk`, the vendored ticket tracker at `system/vendor/tk/`. It is the **only** task tracker available. `tk` stores two kinds of records, distinguished by the `--step` flag at creation:
 
-- **Step records** (`tk create --step "..."`) are the go-to tool to write a todo: turn-bound, creator-private progress markers that render as nodes on the user-facing chat progress view (a vertical timeline with a status icon and a one-line summary per step). Most turns use only these.
+- **Step records** (`tk create --step "..."`) are turn-bound, creator-private progress markers that render as nodes on the user-facing chat progress view (a vertical timeline with a status icon and a one-line summary per step). Most turns use only these.
 - **Regular tickets** (`tk create "..."`, no flag) are substantive, cross-agent work units other agents can see and pick up. They do **not** render in the chat progress view. They matter only when work spans turns or is handed between agents.
 
 Because step titles and close-summaries populate the progress view, **every one is user-facing copy**: plain English for a non-technical reader, no file names, no tool names, no jargon.
@@ -47,7 +47,9 @@ Skip records for: chitchat, single-line acknowledgements, and trivial answers; p
 
 - After all steps are closed, write your final user-facing message — *this* is where results, findings, and recommendations go.
 - **Close your final step *before* writing that wrap-up reply** — the view promotes a final run of prose with no open step to your top-level reply below the timeline. (Best-effort; the view renders sensibly either way.)
-- **Never mention steps, tickets, or `tk` to the user.** Don't narrate the machinery ("closing this step," "moving on"). Speak only about the work itself.
+- **Never name the machinery to the user — describe the work instead.** The `tk` calls and the words for them are invisible plumbing: the user sees only the progress timeline and your prose, so a sentence like "Let me close this step" refers to something they cannot see and reads as a non-sequitur. This is the single most common leak, so treat it as a hard rule. When talking to the user, NEVER use these words in their `tk` sense: **step, ticket, `tk`, close/closing, open/reopen, start/starting, mark, check off, in progress, record, todo, task list, progress view**. There is nothing to announce before or after a `tk` call — just make the call silently and let the timeline update itself.
+  - Instead, speak only about the actual work, using natural transitions. These are good: "Moving on to the API wiring." / "Finishing up with the tests." / "Next I'll check the config." / "That's the migration done — now the cleanup." Say nothing at all if there's no substantive work to describe.
+  - Concrete rewrites: "Let me close this step" / "Closing this out" / "Marking this done" → just say what you finished, e.g. "The parser changes are in." (or say nothing). "Starting the next step" → "Now I'll wire up the endpoint." "Let me add a step for that" → "I'll also need to update the schema." If a sentence's subject is the record rather than the work, delete or rewrite it.
 - Steps may stay open across turns. At the start of each new user message you'll get a system reminder listing your still-open steps; for each, decide before doing anything else whether to keep working on it (`tk start` if needed), replace it (close with a status summary, then create new steps for the new direction), or close it honestly if you're moving on. Don't silently abandon one.
 - There is no "failed" status — every record terminates as `closed`. If a step didn't pan out, still close it; the summary describes the work you did, and your final message reports the result honestly.
 
@@ -111,10 +113,10 @@ Only after doing all of the above should you begin writing code.
 - Do NOT write code in `__init__.py`--leave them completely blank (the only exception is for a line like "hookimpl = pluggy.HookimplMarker("mngr")", which should go at the very root __init__.py of a library).
 - Do NOT make constructs like module-level usage of `__all__`
 - Before finishing your response, if you have made any changes, then you must ensure that you have run ALL tests in the project(s) you modified, and that they all pass. DO NOT just run a subset of the tests! However, while iterating (e.g. fixing a failing test, developing a feature), run only the relevant tests for rapid feedback -- save the full suite for the final check.
-- To run tests for a single project: "cd system/vendor/mngr && uv run pytest" or "cd system/libs/system_interface && uv run pytest". Each project has its own pytest and coverage configuration in its pyproject.toml.
+- To run tests for a single project: "cd system/vendor/mngr && uv run pytest" or "cd system/apps/system_interface && uv run pytest". Each project has its own pytest and coverage configuration in its pyproject.toml.
 - While you're iterating, you can pass "--no-cov --cov-fail-under=0" to disable coverge (slightly faster), but during your final check, you *MUST NOT* pass those flags (it will fail in CI anyway)
 - For faster iteration, add "-m 'not tmux and not modal and not docker and not docker_sdk and not acceptance and not release'" to skip slow infrastructure tests (~30s instead of ~95s). These still run in CI. Note that you *MUST* also pass "--no-cov --cov-fail-under=0" when doing this, otherwise it will complain about a lack of coverage.
-- When running pytest with a shell-command timeout, always set `PYTEST_MAX_DURATION_SECONDS` to match the timeout (in seconds). For example, if using a 2-minute timeout: `PYTEST_MAX_DURATION_SECONDS=120 uv run pytest ...`. This ensures the pytest global lock file records a deadline, allowing other pytest processes to break a stale lock if this one gets killed by the timeout.
+- When running pytest with a tool timeout, always set `PYTEST_MAX_DURATION_SECONDS` to match the timeout (in seconds). For example, if using a 2-minute timeout: `PYTEST_MAX_DURATION_SECONDS=120 uv run pytest ...`. This ensures the pytest global lock file records a deadline, allowing other pytest processes to break a stale lock if this one gets killed by the timeout.
 - Running pytest will produce files in .test_output/ (relative to the directory you ran from) for things like slow tests and coverage reports.
 - Note that "uv run pytest" defaults to running all "unit" and "integration" tests, but the "acceptance" tests also run in CI when a PR exists. Do *not* run *all* the acceptance tests locally to validate changes--let CI run them once a PR is opened (it's faster than running them locally).
 - If you need to run a specific acceptance or release test to write or fix it, iterate on that specific test locally by calling "just test <full_path>::<test_name>" from the root of the git checkout. Do this rather than re-running all tests in CI.
@@ -198,12 +200,12 @@ You can (and should) modify your own configuration to improve yourself:
 
 - **AGENTS.md**: (this file) update these instructions if you discover better ways to operate.
 - **.agents/skills/**: Create new skills or modify existing ones. Each skill is a directory with a SKILL.md file.
-- **system/supervisord.conf**: Add, modify, or remove background services. See the `update-service` skill.
+- **system/supervisord.conf**: Add, modify, or remove background services. See the `update-app` skill.
 - **system/scripts/**: Add utility scripts that help you accomplish your purpose.
 
 Commit your changes to git after making modifications.
 
-Inspirations are a publishable, reusable, bootable snapshot of the apps and features a mind has built (one repo can accumulate several); another mind can adapt one into itself.
+Users make "creations": apps (opened as tabs), skills (a skill run automatically on a schedule is an "automation"), data (documents, images, notes), and customizations of any of them. Inspirations are a publishable, reusable, bootable snapshot of the creations a mind has built (one repo can accumulate several); another mind can adapt one into itself.
 
 # Updates
 
@@ -217,32 +219,30 @@ The upstream is defined in `system/config/parent.toml`.
 - **Run a skill's steps one at a time in chat.** When a skill exposes per-step subcommands (plus a `run all`), drive the subcommands individually -- mirror each as a `tk` step and surface its output -- so the user gets a rich progress view, pausing only at the skill's declared `[prose]` steps. Reserve `run all` for headless or scheduled runs where there's no chat to show progress in.
 
 - **Live first, ratify at turn-end.** Handle the user's immediate request *live* in the current chat to keep it interactive; at turn-end, formalize the work through the relevant lifecycle skill, which runs its hardening pass in a background worker (never inline in the main agent). Route by situation:
-  - Net-new task needing research or experimentation -> `do-something-new` (it routes to `fetch-process-show` for data or `build-web-service` for a web view).
-  - Just-finished work that's cohesive, likely to recur, and mostly deterministic -> `crystallize-artifact` to promote it into a committed, tested skill.
-  - A skill errored or gave a wrong result -> work around it live, then `heal-artifact` at turn-end. Never patch the skill inline.
-  - You changed an existing skill, or a skill ran but needed manual post-processing -> `update-artifact` at turn-end so the change is verified and the skill swallows the gap.
+  - Net-new task needing research or experimentation -> `do-something-new` (it routes to `fetch-process-show` for data or `build-app` for a web view).
+  - Just-finished work that's cohesive, likely to recur, and mostly deterministic -> `crystallize-creation` to promote it into a committed, tested skill.
+  - A skill errored or gave a wrong result -> work around it live, then `heal-creation` at turn-end. Never patch the skill inline.
+  - You changed an existing skill, or a skill ran but needed manual post-processing -> `update-creation` at turn-end so the change is verified and the skill swallows the gap.
 
   For non-skill contract-bearing files (hook scripts, this file) there is no worker pipeline -- apply the live change carefully and add manual rigor at turn-end (real fixtures, end-to-end exercise of new code paths).
 
-# Memory
+# Apps and services
 
-Memory lives under `data/memories/`. It is gitignored (everything under `data/` is) and survives container loss via the restic `host-backup` service, which snapshots the whole home tree.
+**Before editing any code that belongs to a supervisord program -- an app (a tab the user can open) or a background service -- load the `update-app` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit an app's or service's code or `system/supervisord.conf` without it.
 
-# Services
-
-**Before editing any code that belongs to a supervisord service -- a user-facing web service or a background daemon -- load the `update-service` skill first.** It owns the live change loop (apply, refresh, verify) and the turn-end hardening flow; do not hand-edit a service's code or `system/supervisord.conf` without it.
-
-You can define background services as supervisord programs in `system/supervisord.conf`.
+Apps and background services both run as supervisord programs in `system/supervisord.conf`.
 Supervisord (launched by `bootstrap` after first-boot setup) supervises them; each program writes its own rotated logs under `/var/log/supervisor/<name>-stdout.log` and `/var/log/supervisor/<name>-stderr.log`.
 To add, change, or remove a service, edit `system/supervisord.conf` and run `supervisorctl reread && supervisorctl update` (and `supervisorctl restart <name>` to bounce one). Inspect with `supervisorctl status` / `supervisorctl tail -f <name> stderr`.
-See the `update-service` skill for details.
+See the `update-app` skill for details.
+
+For routine jobs that run on a cadence and then exit (backups, health checks, the weekly Caretaker -- off by default, see the enable-caretaker skill), use cron via the **`manage-scheduled-tasks`** skill rather than a supervisord program; and after building or editing any service, use the `check-app-errors` skill to scan `/var/log/supervisor/` for errors (a clean exit code does not mean the service is healthy).
 
 # Git
 
 Commit your changes locally.
-`data/` is gitignored (it holds all workspace data: `data/memories/` for memory, `data/.tickets/`, per-creation data, uploads, and machine state).
+`data/` is gitignored (it holds all workspace data: `data/memories/`, `data/.tickets/`, per-app data, uploads, and machine state).
 
-Chat file uploads (files a user attaches to a message) are stored under `data/uploads/`. Uploads can be arbitrarily large and any format, so they don't belong in version-controllable content; like the rest of `data/` they are gitignored and never pushed to GitHub, but the host-level `host-backup` service (a restic snapshot of the whole home tree) captures them, so uploads survive container loss. See `system/libs/host_backup/README.md`.
+Chat file uploads (files a user attaches to a message) are stored under `data/uploads/`. Uploads can be arbitrarily large and any format, so they don't belong in version-controllable content; like the rest of `data/` they are gitignored and never pushed to GitHub, but the host-level `host-backup` service (a restic snapshot of the whole home tree) captures them, so uploads survive container loss. See `system/services/host_backup/README.md`.
 
 GitHub sync is opt-in via the `github-sync` skill. When the user has enabled it: a `post-commit` hook auto-pushes the active branch of every checkout to `origin` (the workspace's dedicated private repo) in the background -- you do not need to push manually; the hook never blocks the commit, and output is captured at `/tmp/post-commit-push.log`. Only git commits are synced; `data/` is covered by the restic host backup instead. See `system/libs/github_sync/README.md`.
 
