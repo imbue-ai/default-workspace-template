@@ -147,6 +147,31 @@ class _FakeCDP:
         return {}
 
 
+def test_fit_window_size_matches_the_pane_with_a_bounded_floor_and_ceiling() -> None:
+    assert bsession.fit_window_size(900, 600) == (900, 600)
+    assert bsession.fit_window_size(2000, 1100) == (1280, 704)
+    assert bsession.fit_window_size(300, 300) == (640, 400)
+
+
+def test_resize_to_pane_sets_the_native_browser_window_bounds() -> None:
+    class WindowCDP(_FakeCDP):
+        async def send(self, method: str, params: Any = None) -> dict[str, Any]:
+            self.sends.append((method, params))
+            return {"windowId": 7} if method == "Browser.getWindowForTarget" else {}
+
+    browser = _running_browser(browser_id="b1")
+    cdp = WindowCDP()
+    browser._active_cdp = cdp  # type: ignore[assignment]
+    browser._active_target_id = "target-1"
+
+    asyncio.run(browser.resize_to_pane(2000, 1100))
+
+    assert cdp.sends == [
+        ("Browser.getWindowForTarget", {"targetId": "target-1"}),
+        ("Browser.setWindowBounds", {"windowId": 7, "bounds": {"left": 0, "top": 0, "width": 1280, "height": 704}}),
+    ]
+
+
 def test_acquire_release_is_compare_and_set() -> None:
     browser = _running_browser(browser_id="b1")
 

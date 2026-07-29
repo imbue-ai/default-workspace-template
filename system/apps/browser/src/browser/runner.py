@@ -771,6 +771,22 @@ def cmd_tab(browser_id: str) -> Response:
     )
 
 
+def resize_browser(browser_id: str) -> Response:
+    """Match Fortress's real window to the browser pane without a render loop."""
+    if (gate := _require_ready()) is not None:
+        return gate
+    resolved = _resolve_sync(browser_id)
+    if isinstance(resolved, Response):
+        return resolved
+    body = _body()
+    try:
+        width, height = int(body["width"]), int(body["height"])
+    except (KeyError, TypeError, ValueError):
+        return _error({"error": "width and height are required integers"}, 400)
+    resized = bridge.run(resolved.resize_to_pane(width, height), timeout=_ROUTE_TIMEOUT)
+    return jsonify({"resized": resized})
+
+
 # --- screencast WebSocket ----------------------------------------------------
 
 
@@ -932,6 +948,7 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/keys", view_func=cmd_keys, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/screenshot", view_func=cmd_screenshot, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/tab", view_func=cmd_tab, methods=["POST"])
+    application.add_url_rule("/browsers/<string:browser_id>/resize", view_func=resize_browser, methods=["POST"])
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
 
 

@@ -104,6 +104,8 @@ _SCREENCAST_FORMAT = "jpeg"
 _SCREENCAST_QUALITY = 55
 _SCREENCAST_MAX_WIDTH = 1280
 _SCREENCAST_MAX_HEIGHT = 800
+_MIN_WINDOW_WIDTH = 640
+_MIN_WINDOW_HEIGHT = 400
 # Every frame: the first frame after a tab switch arrives sooner, so clicking a
 # tab feels snappier. Slightly more bandwidth than skipping frames.
 _SCREENCAST_EVERY_NTH_FRAME = 1
@@ -127,6 +129,15 @@ _DEFAULT_MODEL = os.environ.get("BROWSER_USE_MODEL", "claude-sonnet-4-6")
 # in headless Chromium), so no Xvfb is needed. Set BROWSER_HEADLESS=0 to run
 # headful (stronger anti-bot fidelity) if a site blocks headless.
 _HEADLESS = os.environ.get("BROWSER_HEADLESS", "1") != "0"
+
+
+def fit_window_size(pane_width: int, pane_height: int) -> tuple[int, int]:
+    """Keep the live browser legible without rendering more than 1280 px wide."""
+    width, height = max(1, pane_width), max(1, pane_height)
+    if width > _SCREENCAST_MAX_WIDTH:
+        height = round(height * _SCREENCAST_MAX_WIDTH / width)
+        width = _SCREENCAST_MAX_WIDTH
+    return max(_MIN_WINDOW_WIDTH, width), max(_MIN_WINDOW_HEIGHT, height)
 
 # Page the browser opens on, and the default for "New tab".
 _HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com")
@@ -456,6 +467,7 @@ class LiveBrowser(MutableModel):
     _send_in_flight: bool = PrivateAttr(default=False)
     _nav_tracked: set[Page] = PrivateAttr(default_factory=set)
     _active_target_id: str | None = PrivateAttr(default=None)
+    _last_window_size: tuple[int, int] | None = PrivateAttr(default=None)
     _keepalive_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
     # The in-flight serialized launch task (set by the manager's _spawn_launch). close()
     # awaits it via the manager so a teardown can't race a suspended start() -- the launch
@@ -626,11 +638,6 @@ class LiveBrowser(MutableModel):
             args=["--disable-dev-shm-usage"],
             chromium_sandbox=chromium_sandbox,
             keep_alive=True,
-            # Pin a fixed viewport + window so every site renders at the same
-            # resolution -- a consistent "Chromium in a small window", not a size
-            # that shifts per page. Matches the screencast cap so frames never scale.
-            viewport={"width": _SCREENCAST_MAX_WIDTH, "height": _SCREENCAST_MAX_HEIGHT},
-            window_size={"width": _SCREENCAST_MAX_WIDTH, "height": _SCREENCAST_MAX_HEIGHT},
             device_scale_factor=1,
         )
 
@@ -817,24 +824,6 @@ class LiveBrowser(MutableModel):
                     self._active_target_id = info["targetInfo"]["targetId"]
                 except _BROWSER_ERRORS:
                     self._active_target_id = None
-                # Force a uniform render size on EVERY tab. browser-use pins the
-                # viewport on the first page, but tabs opened later (by the agent or
-                # by the site) can come up at a different size, so their frames would
-                # stream at a different resolution and the viewer would letterbox them
-                # inconsistently. Overriding the device metrics on each screencast
-                # target makes every tab stream at exactly the screencast cap.
-                try:
-                    await cdp.send(
-                        "Emulation.setDeviceMetricsOverride",
-                        {
-                            "width": _SCREENCAST_MAX_WIDTH,
-                            "height": _SCREENCAST_MAX_HEIGHT,
-                            "deviceScaleFactor": 1,
-                            "mobile": False,
-                        },
-                    )
-                except _BROWSER_ERRORS as e:
-                    logger.debug("device-metrics override ignored ({})", e)
                 # No CDP screencast: pixels come from this browser's VNC display.
                 # The CDP session itself stays -- the fleet still uses it for device
                 # metrics, tab tracking and agent actions -- but nothing streams frames.
@@ -842,6 +831,26 @@ class LiveBrowser(MutableModel):
                 logger.debug("screencast attach ignored ({})", e)
                 return
         await self._broadcast_tabs()
+
+    async def resize_to_pane(self, pane_width: int, pane_height: int) -> bool:
+        """Resize Fortress to the VNC viewer's effective framebuffer size."""
+        cdp, target_id = self._active_cdp, self._active_target_id
+        if not self._is_running or cdp is None or target_id is None:
+            return False
+        width, height = fit_window_size(pane_width, pane_height)
+        if self._last_window_size == (width, height):
+            return True
+        try:
+            window = await cdp.send("Browser.getWindowForTarget", {"targetId": target_id})
+            await cdp.send(
+                "Browser.setWindowBounds",
+                {"windowId": window["windowId"], "bounds": {"left": 0, "top": 0, "width": width, "height": height}},
+            )
+        except (KeyError, *_BROWSER_ERRORS) as e:
+            logger.debug("browser {} resize ignored ({})", self.browser_id, e)
+            return False
+        self._last_window_size = (width, height)
+        return True
 
     async def _stop_screencast(self) -> None:
         cdp = self._active_cdp
