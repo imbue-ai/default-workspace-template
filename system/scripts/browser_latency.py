@@ -14,24 +14,23 @@ We measure the first two directly and report the remainder as one combined
 VNC server that ours does not provide, so an honest single number beats a
 fabricated split.
 
-  ICA RTT       input -> pixels on screen. What the user feels. Graded against
-                the published Citrix thresholds (great <180ms, good <240ms).
-                Sourced from the deterministic probe when available, else from
-                real clicks.
+  ICA RTT       input -> pixels on screen. What the user feels, from REAL
+                clicks -- the only series that travels the true input path.
+                Graded against the published Citrix thresholds (great <180ms,
+                good <240ms).
   ICA Latency   a periodic timestamp echo over the cast socket -- the same
                 network path the video rides. The floor; nothing beats it.
   processing    ICA RTT minus ICA Latency: render + encode + transport-of-bytes
                 + decode + paint.
 
-Two sample series feed ICA RTT:
-
-  probe         a fixed-size repaint the daemon triggers on request. Same bytes
-                every time, so these ARE comparable across runs and settings --
-                which uncontrolled click sampling is not (the standard critique
-                of click-to-photon as a benchmark).
-  click>photon  real clicks. Not comparable run-to-run (a link repaints a
-                viewport, a checkbox a few hundred pixels) but it is ground
-                truth for what the user actually experienced.
+  srv>glass     a fixed-size repaint the daemon triggers, timed from the moment
+                the server reports the change committed until the pixels land.
+                Excludes input injection (the daemon triggers it over CDP, a
+                path no user input takes), so it isolates encode + bytes +
+                decode + paint -- the half encoding and transport work moves --
+                and is comparable across runs because the repaint never varies.
+                Uncontrolled click sampling is not comparable: a link repaints a
+                viewport, a checkbox a few hundred pixels.
 
 Standalone and stdlib-only on purpose: this is a HUMAN diagnostic, so it must
 run from any shell -- no venv, no MNGR_AGENT_ID (that requirement exists for the
@@ -133,10 +132,12 @@ def _render(name: str, payload: dict[str, Any]) -> None:
         print(f"  ICA RTT       {total:7.1f}ms   [{_grade(total)}]   great <180, good <240")
         print(f"    ICA Latency {network:7.1f}ms   network -- the floor ({share} of total)")
         print(f"    processing  {processing:7.1f}ms   render + encode + bytes + decode + paint")
-        print(f"                (from the {ica.get('ica_rtt_source')} series)")
+        glass = ica.get("server_to_glass_ms")
+        if glass is not None:
+            print(f"      of which  {glass:7.1f}ms   server->glass (encode + bytes + decode + paint)")
 
     print("  --")
-    _series("probe", payload.get("probe"), "the pane fires one every 4s once it is open")
+    _series("srv>glass", payload.get("server_to_glass"), "the pane probes every 4s once open")
     _series("click>photon", payload.get("click_photon"), "click inside the live view")
     _series("rtt", payload.get("rtt"), "open this browser's pane")
 
@@ -164,7 +165,7 @@ def main() -> int:
                 continue
             _render(name, payload)
         print("note: transport is TCP; packet loss is invisible to it and shows up as rtt spikes.")
-        print("      probe = fixed-size repaint (comparable across runs); clicks are ground truth.")
+        print("      srv>glass = fixed-size repaint, comparable across runs; clicks are ground truth.")
         watching = bool(args.watch)
         if watching:
             tick.wait(2)
