@@ -273,6 +273,29 @@ def test_read_managed_auth_env_tolerates_missing_and_corrupt_files(isolated_clau
     assert claude_auth.read_managed_auth_env() == {}
 
 
+# ----- config dir / .claude.json resolution -----
+
+
+def test_resolution_defaults_to_home_claude_when_config_dir_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With CLAUDE_CONFIG_DIR unset (the workspace-wide default since the
+    ~/.claude cutover) the config dir is ~/.claude and the global config is
+    ~/.claude.json -- BESIDE the dir, not inside it, matching where claude
+    itself reads the API-key approval from."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert claude_auth._resolve_claude_config_dir() == tmp_path / ".claude"
+    assert claude_auth._resolve_claude_json_path() == tmp_path / ".claude.json"
+
+
+def test_resolution_honors_explicit_config_dir_env(isolated_claude_config: Path) -> None:
+    """An explicitly exported CLAUDE_CONFIG_DIR pins both the config dir and
+    the .claude.json inside it (claude's set-var layout)."""
+    assert claude_auth._resolve_claude_config_dir() == isolated_claude_config
+    assert claude_auth._resolve_claude_json_path() == isolated_claude_config / ".claude.json"
+
+
 # ----- workspace host id -----
 
 
