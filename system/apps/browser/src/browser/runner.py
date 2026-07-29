@@ -111,7 +111,10 @@ bridge = AsyncLoopBridge()
 manager = BrowserSessionManager()
 
 application = Flask(__name__, static_folder=None)
-application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
+# ping_interval keeps idle cast sockets alive through the proxy chain;
+# receive_bytes raises simple_websocket's 4 KiB read buffer to match the rest
+# of the chain (fewer recv syscalls under gVisor for large inbound messages).
+application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25, "receive_bytes": 65536}
 sock = Sock(application)
 
 # Init gate: cleared at import, set when startup restore finishes (always, even on

@@ -1586,6 +1586,15 @@ def create_application(state: SystemInterfaceState) -> Flask:
         # Echo back whatever subprotocol the client offered so the WS proxy is
         # transparent (e.g. ttyd's ``tty``); see ``_ReflectClientSubprotocols``.
         "subprotocols": _ReflectClientSubprotocols(),
+        # simple_websocket's default read buffer is 4 KiB -- far too small for
+        # binary streams like VNC framebuffer updates arriving FROM the client
+        # side (input bursts, clipboard) and, more importantly, cheap to raise:
+        # each oversized frame otherwise costs dozens of recv syscalls plus
+        # reassembly, and this server runs under gVisor where every syscall is
+        # several times more expensive. Matches the 64 KiB the backend legs of
+        # the service proxy already use (flask_sock forwards this dict verbatim
+        # as Server(...) kwargs).
+        "receive_bytes": 65536,
     }
     attach_state(application, state)
 

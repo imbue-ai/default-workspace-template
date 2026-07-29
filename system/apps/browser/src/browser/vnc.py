@@ -312,6 +312,33 @@ class VncDisplay:
             # answer nothing can ever reach. Pinning publicIP skips the query;
             # the advertised candidate is self-referential and inert.
             "-publicIP", "127.0.0.1",
+            # --- encoding: make the server authoritative, and stop shipping
+            # click repaints at JPEG quality 100 (all verified against the
+            # v1.4.0 tag + its pinned client commit).
+            #
+            # Without -IgnoreClientSettingsKasm, the CLIENT overwrites these at
+            # connect: its default "medium" preset forces dynamic quality max 9
+            # -- and Kasm quality 9 maps to JPEG quality 100 -- and clamps the
+            # SERVER's frame clock to 24fps (ConnParams.cxx applies the
+            # client's FrameRate pseudo-encoding globally). Kasm's dynamic
+            # quality is a change tracker, not a bandwidth adapter: a rect that
+            # was static and changes ONCE -- exactly a click repaint -- scores
+            # zero and is sent at the max. So the interactive path paid ~2.5x
+            # the bytes (150-300KB a full repaint) and up to ~42ms of frame
+            # scheduling, per click.
+            "-IgnoreClientSettingsKasm",
+            # One notch below the server's own default (8); JPEG 86 vs 100 is
+            # a ~2.5x byte cut that is near-imperceptible for text. The min
+            # and video-mode values reproduce what the client preset was
+            # already providing, so busy/scrolling behaviour is unchanged --
+            # only the first-change (click) quality and the frame clock move.
+            "-DynamicQualityMin", "3",
+            "-DynamicQualityMax", "7",
+            "-TreatLossless", "7",
+            "-FrameRate", "60",
+            "-MaxVideoResolution", "960x540",
+            "-JpegVideoQuality", "5",
+            "-WebpVideoQuality", "5",
         ]
 
     def start(self) -> None:
