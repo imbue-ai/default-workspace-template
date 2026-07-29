@@ -1,10 +1,15 @@
 - New chats now start on fast mode and then ask whether to keep it. After a
   configurable number of user turns (`FAST_MODE_GRACE_TURN_COUNT` in
-  `fast_mode_policy.py`, currently 5) a modal explains that fast mode was turned
-  on to make things responsive, that it costs more per token, and offers to keep
-  it or switch to standard speed. Dismissing the modal -- backdrop or Escape --
-  switches to standard speed, which the copy states outright, so the cheaper
-  outcome is the one nobody can pick by accident.
+  `fast_mode_policy.py`, currently 5) a popover appears above the composer's
+  lightning-bolt toggle -- the control that answers the same question every time
+  after this one. It attributes fast mode to Anthropic rather than to the
+  workspace, naming the chat's own model, says the model works much faster for a
+  significantly higher price, and links to Anthropic's fast mode docs.
+  "Switch to standard speed" is the highlighted default and opens focused, and
+  dismissing the popover -- backdrop or Escape -- takes it too, which the copy
+  states outright, so the cheaper outcome is the one nobody can pick by accident.
+  The popover falls back to the middle of the screen when the toggle is in a
+  hidden panel or has no room above it.
 
 - The answer is recorded for the whole workspace at
   `data/.state/fast_mode_decision.json` and served by

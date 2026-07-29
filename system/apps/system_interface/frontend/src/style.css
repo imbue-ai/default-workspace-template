@@ -1913,9 +1913,61 @@ body {
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 24px;
+  /* Kept in sync with FAST_MODE_MODAL_WIDTH_PX, which the anchored popover
+     sets inline once it knows where it is going. */
   width: 460px;
   max-width: 90vw;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+/* Pointed at the composer's fast-mode toggle when there is room above it;
+   without this class the overlay's flex layout centers the box instead. */
+.fast-mode-modal--anchored {
+  position: fixed;
+}
+
+.fast-mode-modal--anchored::before,
+.fast-mode-modal--anchored::after {
+  content: "";
+  position: absolute;
+  left: var(--fast-mode-arrow-left);
+  border-left: 9px solid transparent;
+  border-right: 9px solid transparent;
+  margin-left: -9px;
+}
+
+/* Two stacked triangles: the outer one continues the box's border, the inner
+   one fills it with the surface color. */
+.fast-mode-modal--anchored::before {
+  bottom: -9px;
+  border-top: 9px solid var(--color-border);
+}
+
+.fast-mode-modal--anchored::after {
+  bottom: -8px;
+  border-left-width: 8px;
+  border-right-width: 8px;
+  margin-left: -8px;
+  border-top: 8px solid var(--color-surface);
+}
+
+.fast-mode-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.fast-mode-modal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: var(--color-accent);
+  background: var(--color-accent-light);
+  flex-shrink: 0;
 }
 
 .fast-mode-modal-title {
@@ -1923,7 +1975,7 @@ body {
   font-size: 16px;
   font-weight: 600;
   color: var(--color-text-primary);
-  margin: 0 0 12px;
+  margin: 0;
 }
 
 .fast-mode-modal-message {
@@ -1931,6 +1983,15 @@ body {
   color: var(--color-text-secondary);
   margin: 0 0 16px;
   line-height: 1.5;
+}
+
+.fast-mode-modal-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-accent);
+  text-decoration: underline;
+  white-space: nowrap;
 }
 
 .fast-mode-modal-actions {
@@ -1949,24 +2010,31 @@ body {
   border: 1px solid var(--color-border);
 }
 
+.fast-mode-modal-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Standard speed is the default action -- the cheaper outcome, the one the
+   backdrop and Escape also take -- so it carries the accent. */
 .fast-mode-modal-btn-standard {
-  background: var(--color-surface);
-  color: var(--color-text-primary);
-}
-
-.fast-mode-modal-btn-standard:hover {
-  background: var(--color-bg-hover);
-}
-
-.fast-mode-modal-btn-fast {
   background: var(--color-accent);
   color: #fff;
   border-color: var(--color-accent);
 }
 
-.fast-mode-modal-btn-fast:hover {
+.fast-mode-modal-btn-standard:hover {
   background: var(--color-accent-hover);
   border-color: var(--color-accent-hover);
+}
+
+.fast-mode-modal-btn-fast {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+}
+
+.fast-mode-modal-btn-fast:hover {
+  background: var(--color-bg-hover);
 }
 
 /* ── Share modal ── */

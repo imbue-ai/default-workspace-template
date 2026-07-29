@@ -181,6 +181,10 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             {
               type: "button",
               class: `fast-toggle${settings.fast_mode ? " fast-toggle--on" : ""}`,
+              // Which chat this toggle belongs to, so the grace-period prompt
+              // can anchor itself to the composer that raised it (see
+              // fast-mode-anchor.ts).
+              "data-agent-id": agentId,
               "data-tooltip": settings.fast_mode ? "Disable fast mode" : "Enable fast mode",
               "aria-label": settings.fast_mode ? "Disable fast mode" : "Enable fast mode",
               "aria-pressed": settings.fast_mode ? "true" : "false",
