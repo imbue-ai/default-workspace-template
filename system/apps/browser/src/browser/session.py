@@ -467,10 +467,13 @@ class LiveBrowser(MutableModel):
     # readout persistent.
     _latency_rtt: deque = PrivateAttr(default_factory=lambda: deque(maxlen=512))
     _latency_click: deque = PrivateAttr(default_factory=lambda: deque(maxlen=256))
-    # Deterministic-trigger samples (see fire_repaint_probe): same bytes every
-    # time, so these ARE comparable across runs -- unlike the click ring, whose
-    # spread is dominated by what the user happened to click on.
-    _latency_probe: deque = PrivateAttr(default_factory=lambda: deque(maxlen=256))
+    # Server-to-glass samples (see fire_repaint_probe): a fixed-size repaint,
+    # timed from the moment the server says the change is committed until the
+    # pixels arrive. Excludes input injection entirely, so it isolates
+    # encode + bytes + decode + paint -- the half that encoding and transport
+    # work actually moves -- and is comparable across runs because the repaint
+    # is identical every time.
+    _latency_glass: deque = PrivateAttr(default_factory=lambda: deque(maxlen=256))
     _selector_map: dict[int, Any] = PrivateAttr(default_factory=dict)
     _lease_touched_at: float = PrivateAttr(default=0.0)
     _screenshot_seq: int = PrivateAttr(default=0)
@@ -1087,8 +1090,8 @@ class LiveBrowser(MutableModel):
             self._latency_rtt.append(float(ms))
         elif kind == "click_photon":
             self._latency_click.append(float(ms))
-        elif kind == "probe":
-            self._latency_probe.append(float(ms))
+        elif kind == "glass":
+            self._latency_glass.append(float(ms))
 
     async def latency_snapshot(self) -> dict[str, Any]:
         """Aggregate the latency rings for ``GET /browsers/<id>/latency``.
@@ -1109,7 +1112,7 @@ class LiveBrowser(MutableModel):
 
         rtt = stats(self._latency_rtt)
         click = stats(self._latency_click)
-        probe = stats(self._latency_probe)
+        glass = stats(self._latency_glass)
         if rtt is not None:
             recent = list(self._latency_rtt)[-100:]
             threshold = max(2 * rtt["p50_ms"], rtt["p50_ms"] + 30)
@@ -1126,20 +1129,22 @@ class LiveBrowser(MutableModel):
         # give us -- so it is reported honestly as a single "processing" figure
         # rather than a fabricated split.
         #
-        # ICA RTT prefers the PROBE series when it exists: same repaint every
-        # time, hence comparable across runs. The click series is kept because
-        # it is what the user actually experienced.
-        total = probe or click
+        # ICA RTT comes from real clicks -- that is the user-visible total, and
+        # it is the only series that traverses the true input path. The probe
+        # deliberately does NOT feed it: the probe's repaint is triggered over
+        # CDP, so counting from the request would bill injection overhead that
+        # no user pays. The probe instead reports server-to-glass separately.
+        total = click
         processing = None
         if rtt is not None and total is not None:
             processing = round(total["p50_ms"] - rtt["p50_ms"], 1)
         return {
             "rtt": rtt,
             "click_photon": click,
-            "probe": probe,
+            "server_to_glass": glass,
             "ica": {
                 "ica_rtt_ms": total["p50_ms"] if total else None,
-                "ica_rtt_source": ("probe" if probe else "click") if total else None,
+                "server_to_glass_ms": glass["p50_ms"] if glass else None,
                 "ica_latency_ms": rtt["p50_ms"] if rtt else None,
                 "processing_ms": processing,
             },

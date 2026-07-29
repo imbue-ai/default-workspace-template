@@ -410,6 +410,7 @@
   // what the CLI grades.
   let probeTimer = null;
   let probeBusy = false;
+  let probePending = null;   // {ctx, band, before} armed at request, started at ack
   function startProbe() {
     if (probeTimer) return;
     probeTimer = setInterval(() => {
@@ -427,29 +428,50 @@
       const band = { x: 0, y: Math.round(canvas.height * 0.12), w: canvas.width, h: 8 };
       let before;
       try { before = ctx.getImageData(band.x, band.y, band.w, band.h).data; } catch (_) { return; }
-      const t0 = performance.now();
       probeBusy = true;
+      probePending = { ctx, band, before };
       sendCast({ type: "probe_request" });
-      (function watch() {
-        const now = performance.now();
-        if (now - t0 > 3000) { probeBusy = false; return; }  // no repaint; skip the sample
-        let changed = false;
-        try {
-          const after = ctx.getImageData(band.x, band.y, band.w, band.h).data;
-          for (let i = 0; i < after.length; i += 64) {
-            if (Math.abs(after[i] - before[i]) > 24) { changed = true; break; }
-          }
-        } catch (_) { probeBusy = false; return; }
-        if (changed) {
-          probeBusy = false;
-          sendCast({ type: "latency_sample", kind: "probe", ms: now - t0 });
-          return;
-        }
-        requestAnimationFrame(watch);
-      })();
     }, 4000);
   }
-  function stopProbe() { if (probeTimer) { clearInterval(probeTimer); probeTimer = null; } probeBusy = false; }
+
+  // Start timing at the ACK, not at the request. The daemon triggers the
+  // repaint over CDP -- a path no user input ever takes -- so counting from the
+  // request would bill that injection overhead to the stream and report a
+  // latency nobody experiences. Counting from "the server says the change is
+  // committed" measures SERVER-TO-GLASS: encode + bytes on the wire + decode +
+  // paint. That is precisely the half our encoding and transport work targets,
+  // and unlike click sampling it is the same repaint every time, so it is
+  // comparable across runs.
+  function handleProbeFired(m) {
+    const pending = probePending;
+    probePending = null;
+    if (!pending || !m.ok) { probeBusy = false; return; }
+    const { ctx, band, before } = pending;
+    const tAck = performance.now();
+    (function watch() {
+      const now = performance.now();
+      if (now - tAck > 3000) { probeBusy = false; return; }  // no repaint; skip
+      let changed = false;
+      try {
+        const after = ctx.getImageData(band.x, band.y, band.w, band.h).data;
+        for (let i = 0; i < after.length; i += 64) {
+          if (Math.abs(after[i] - before[i]) > 24) { changed = true; break; }
+        }
+      } catch (_) { probeBusy = false; return; }
+      if (changed) {
+        probeBusy = false;
+        sendCast({ type: "latency_sample", kind: "glass", ms: now - tAck });
+        return;
+      }
+      requestAnimationFrame(watch);
+    })();
+  }
+
+  function stopProbe() {
+    if (probeTimer) { clearInterval(probeTimer); probeTimer = null; }
+    probeBusy = false;
+    probePending = null;
+  }
 
   // --- focus indicator + tips ----------------------------------------------
   //
@@ -513,7 +535,7 @@
     castWs.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.type === "ping_echo" && m.t0 !== undefined) { handleEcho(m); return; }
-      if (m.type === "probe_fired") { if (!m.ok) probeBusy = false; return; }
+      if (m.type === "probe_fired") { handleProbeFired(m); return; }
       if (m.type === "crashed") showCrashed();
       else if (crashed) return;  // once crashed, ignore any late frames/control/tabs
       else if (m.type === "launch_failed") {
