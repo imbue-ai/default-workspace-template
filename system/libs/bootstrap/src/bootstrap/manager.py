@@ -453,7 +453,9 @@ def _fetch_user_timezone() -> str:
         )
         return ""
     if not timezone_name:
-        logger.debug("Desktop client does not know the user timezone; container stays on UTC")
+        logger.debug(
+            "Desktop client does not know the user timezone; container stays on UTC"
+        )
     return timezone_name
 
 
@@ -512,7 +514,9 @@ def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> Non
         if not entry.is_file():
             continue
         if not _CRON_NAME_PATTERN.fullmatch(entry.name):
-            logger.warning("Skipping cron entry with a name cron would ignore: {}", entry.name)
+            logger.warning(
+                "Skipping cron entry with a name cron would ignore: {}", entry.name
+            )
             continue
         try:
             target = target_dir / entry.name

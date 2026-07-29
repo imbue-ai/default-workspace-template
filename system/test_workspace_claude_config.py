@@ -88,14 +88,20 @@ def test_main_agent_type_resolves_to_plain_command_agent() -> None:
     assert str(resolved.agent_config.command) == "sleep infinity"
 
 
-def test_claude_version_pin_is_consistent_across_settings_dockerfile_and_setup_script() -> None:
+def test_claude_version_pin_is_consistent_across_settings_dockerfile_and_setup_script() -> (
+    None
+):
     settings_version = _load_raw_settings()["agent_types"]["claude"]["version"]
 
-    dockerfile_match = re.search(r"^ARG CLAUDE_CODE_VERSION=(\S+)$", _DOCKERFILE_PATH.read_text(), re.MULTILINE)
+    dockerfile_match = re.search(
+        r"^ARG CLAUDE_CODE_VERSION=(\S+)$", _DOCKERFILE_PATH.read_text(), re.MULTILINE
+    )
     assert dockerfile_match is not None
     dockerfile_version = dockerfile_match.group(1)
 
-    setup_match = re.search(r"\$\{CLAUDE_CODE_VERSION:=(\S+)\}", _SETUP_SYSTEM_PATH.read_text())
+    setup_match = re.search(
+        r"\$\{CLAUDE_CODE_VERSION:=(\S+)\}", _SETUP_SYSTEM_PATH.read_text()
+    )
     assert setup_match is not None
     setup_version = setup_match.group(1)
 

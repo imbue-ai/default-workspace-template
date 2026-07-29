@@ -17,11 +17,11 @@ from bootstrap.manager import (
     INITIAL_CHAT_AGENT_ID_FILENAME,
     TimezoneFetchError,
     _apply_container_timezone,
-    _install_runtime_cron_entries,
     _build_create_chat_command,
     _configure_git_global,
     _fetch_user_timezone,
     _initialize_workspace_main_branch,
+    _install_runtime_cron_entries,
     _maybe_create_initial_chat,
     _parse_created_agent_id,
     _parse_timezone_response,
@@ -639,7 +639,10 @@ def test_fetch_user_timezone_returns_empty_when_gateway_env_missing(
 
 
 def test_parse_timezone_response_returns_the_zone_name() -> None:
-    assert _parse_timezone_response(b'{"timezone": "America/New_York"}') == "America/New_York"
+    assert (
+        _parse_timezone_response(b'{"timezone": "America/New_York"}')
+        == "America/New_York"
+    )
 
 
 def test_parse_timezone_response_accepts_the_documented_unknown_answer() -> None:

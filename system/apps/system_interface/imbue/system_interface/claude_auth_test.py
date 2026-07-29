@@ -954,9 +954,7 @@ def test_status_managed_env_outranks_credentials_fold(isolated_claude_config: Pa
     (isolated_claude_config / "settings.json").write_text(json.dumps({"env": {"ANTHROPIC_API_KEY": "sk-ant-key"}}))
 
     def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
-        return FakeFinishedProcess(
-            stdout='{"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "Max"}'
-        )
+        return FakeFinishedProcess(stdout='{"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "Max"}')
 
     service = claude_auth.ClaudeAuthService(command_runner=_runner)
     assert service.get_auth_status().auth_mode is claude_auth.AuthMode.API_KEY
@@ -983,8 +981,15 @@ def test_extract_setup_token_ignores_stale_frame_under_first_row() -> None:
     extractor stored an 80-column stump here)."""
     frame_end = "\x1b[?2026l"
     raw = (
-        "\x1b[2J\x1b[1;1H" + _FAKE_TOKEN[:80] + "\x1b[2;1H" + "esponse_type=code&redirect_uri=stale" + frame_end
-        + "\x1b[2;1H\x1b[K" + _FAKE_TOKEN[80:] + "\x1b[3;1H\x1b[KStore this token securely." + frame_end
+        "\x1b[2J\x1b[1;1H"
+        + _FAKE_TOKEN[:80]
+        + "\x1b[2;1H"
+        + "esponse_type=code&redirect_uri=stale"
+        + frame_end
+        + "\x1b[2;1H\x1b[K"
+        + _FAKE_TOKEN[80:]
+        + "\x1b[3;1H\x1b[KStore this token securely."
+        + frame_end
     )
     assert claude_auth._extract_setup_token(raw) == _FAKE_TOKEN
 
@@ -1025,9 +1030,7 @@ def test_list_argv_accepted_by_live_cli() -> None:
 
 
 def test_restart_with_message_argv_accepted_by_live_cli() -> None:
-    assert_mngr_argv_valid(
-        claude_auth._build_restart_with_message_command(["agent-a", "agent-b"], "please continue")
-    )
+    assert_mngr_argv_valid(claude_auth._build_restart_with_message_command(["agent-a", "agent-b"], "please continue"))
 
 
 def test_restart_no_resume_argv_accepted_by_live_cli() -> None:

@@ -228,9 +228,7 @@ def _default_pexpect_spawner(executable: str, args: list[str], timeout: float) -
     # Dimensions pinned to the geometry the extraction replays the stream
     # at (see _render_final_screen) -- these are pexpect's defaults, made
     # explicit so the two can never drift apart.
-    return pexpect.spawn(
-        executable, args, timeout=timeout, encoding="utf-8", dimensions=(_PTY_LINES, _PTY_COLUMNS)
-    )
+    return pexpect.spawn(executable, args, timeout=timeout, encoding="utf-8", dimensions=(_PTY_LINES, _PTY_COLUMNS))
 
 
 class AuthMode(str, Enum):
@@ -303,7 +301,8 @@ class AuthStatus(FrozenModel):
     restart_detail: str | None = Field(default=None, description="Human-readable detail for the current restart phase")
     restart_error: str | None = Field(default=None, description="Error message when restart_phase is 'failed'")
     restart_reason: str | None = Field(
-        default=None, description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'"
+        default=None,
+        description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'",
     )
 
 
@@ -758,9 +757,7 @@ def _extract_setup_token(raw_output: str) -> str | None:
     return token
 
 
-def _drain_pty_stream_until_quiet(
-    process: Any, consumed: str, quiet_seconds: float, deadline_seconds: float
-) -> str:
+def _drain_pty_stream_until_quiet(process: Any, consumed: str, quiet_seconds: float, deadline_seconds: float) -> str:
     """Read PTY output until no chunk arrives for `quiet_seconds`.
 
     Used to detect the end of the CLI's paste-echo burst before sending
@@ -1032,15 +1029,11 @@ class ClaudeAuthService(MutableModel):
             running.remove(never_welcomed_agent_name)
             waiting.append(never_welcomed_agent_name)
         if running:
-            self._set_restart_progress(
-                RestartPhase.RESTARTING, f"Restarting {len(running)} active agent(s)", None
-            )
+            self._set_restart_progress(RestartPhase.RESTARTING, f"Restarting {len(running)} active agent(s)", None)
             logger.info("Restarting previously-RUNNING agents {} via mngr start --restart", running)
             self._run_restart_command(_build_restart_with_message_command(running, RESTART_CONTINUE_MESSAGE))
         if waiting:
-            self._set_restart_progress(
-                RestartPhase.RESTARTING, f"Restarting {len(waiting)} idle agent(s)", None
-            )
+            self._set_restart_progress(RestartPhase.RESTARTING, f"Restarting {len(waiting)} idle agent(s)", None)
             logger.info("Restarting previously-WAITING agents {} via mngr start --restart", waiting)
             self._run_restart_command(_build_restart_no_resume_command(waiting))
         return running + waiting
@@ -1053,7 +1046,11 @@ class ClaudeAuthService(MutableModel):
 
     def _set_restart_progress(self, phase: RestartPhase, detail: str | None, error: str | None) -> None:
         with self._restart_state_lock:
-            reason = self._restart_progress.reason if self._restart_progress is not None else RestartReason.CREDENTIALS_SAVED
+            reason = (
+                self._restart_progress.reason
+                if self._restart_progress is not None
+                else RestartReason.CREDENTIALS_SAVED
+            )
             self._restart_progress = RestartProgress(phase=phase, detail=detail, error=error, reason=reason)
 
     def current_restart_progress(self) -> RestartProgress | None:
@@ -1394,12 +1391,16 @@ class ClaudeAuthService(MutableModel):
             )
         if match_index == 0:
             # Drain the goodbye output so the process reaps cleanly.
-            self._current_setup_token_output = _drain_pty_stream(process, self._current_setup_token_output, lambda buffer: False)
+            self._current_setup_token_output = _drain_pty_stream(
+                process, self._current_setup_token_output, lambda buffer: False
+            )
             return True
         if match_index in (1, 3):
             # Failure line matched, or EOF: the buffer decides (success and
             # exit can arrive in one read, so EOF does not imply failure).
-            self._current_setup_token_output = _drain_pty_stream(process, self._current_setup_token_output, lambda buffer: False)
+            self._current_setup_token_output = _drain_pty_stream(
+                process, self._current_setup_token_output, lambda buffer: False
+            )
             if _LOGIN_SUCCESS_REGEX.search(self._current_setup_token_output):
                 return True
             failed_match = _LOGIN_FAILED_LINE_REGEX.search(self._current_setup_token_output)

@@ -135,7 +135,9 @@ def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     settings_env: dict[str, object] = {}
     # Resolve the config dir the way claude itself does: $CLAUDE_CONFIG_DIR
     # when explicitly set, else ~/.claude (the workspace never sets the var).
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "") or os.path.expanduser("~/.claude")
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "") or os.path.expanduser(
+        "~/.claude"
+    )
     settings_path = os.path.join(config_dir, "settings.json")
     try:
         with open(settings_path, encoding="utf-8") as f:
@@ -188,7 +190,9 @@ def write_anthropic_env_snapshot() -> str:
         lines.append(f"ANTHROPIC_BASE_URL={creds.base_url}")
     directory = os.path.dirname(ANTHROPIC_ENV_SNAPSHOT_PATH)
     os.makedirs(directory, exist_ok=True)
-    fd = os.open(ANTHROPIC_ENV_SNAPSHOT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(
+        ANTHROPIC_ENV_SNAPSHOT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+    )
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return ANTHROPIC_ENV_SNAPSHOT_PATH
