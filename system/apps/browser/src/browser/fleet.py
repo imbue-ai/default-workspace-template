@@ -41,6 +41,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import tomllib
 import urllib.error
 import urllib.request
@@ -340,6 +341,47 @@ def _render_event(event: dict[str, Any], browser_name: str) -> int | None:
     return None
 
 
+def _render_latency(name: str, payload: dict[str, Any]) -> None:
+    rtt = payload.get("rtt")
+    click = payload.get("click_photon")
+    overhead = payload.get("overhead_ms")
+    _out(f"browser {name} latency (samples from open viewer panes)")
+    if rtt is None:
+        _out("  rtt          -- no samples yet; open the browser's pane and leave it open a few seconds")
+    else:
+        spikes = f"   spikes {rtt.get('spikes_recent', 0)}/{rtt.get('spike_window', 0)}"
+        _out(f"  rtt          p50 {rtt['p50_ms']:7.1f}ms   p95 {rtt['p95_ms']:7.1f}ms   (n={rtt['n']}){spikes}")
+    if click is None:
+        _out("  click＞photon -- no samples yet; click inside the live view")
+    else:
+        _out(f"  click＞photon p50 {click['p50_ms']:7.1f}ms   p95 {click['p95_ms']:7.1f}ms   (n={click['n']})")
+    if overhead is not None:
+        # Healthy overhead is roughly frame interval + encode + decode.
+        verdict = "at the RTT floor" if overhead <= 80 else "pipeline overhead worth investigating"
+        _out(f"  overhead     {overhead:7.1f}ms  (click＞photon minus rtt) -- {verdict}; healthy is ~30-80ms")
+    _out("  note: transport is TCP; raw packet loss is invisible to it. Loss shows")
+    _out("  up here as rtt spikes.")
+
+
+def cmd_latency(args: argparse.Namespace) -> int:
+    # An Event used purely as an interruptible timer (the no-time.sleep house
+    # rule); Ctrl-C still exits the watch loop through KeyboardInterrupt.
+    tick = threading.Event()
+    watching = True
+    while watching:
+        status, payload = _request("GET", f"/browsers/{args.name}/latency")
+        if status != 200:
+            _err(payload.get("error", f"latency failed ({status})"))
+            return _EXIT_ERROR
+        if args.watch:
+            _out("\033[2J\033[H")  # clear; a tiny live dashboard
+        _render_latency(args.name, payload)
+        watching = bool(args.watch)
+        if watching:
+            tick.wait(2)
+    return _EXIT_OK
+
+
 def cmd_task(args: argparse.Namespace) -> int:
     if not args.no_pane:
         _pull_in_pane(args.name)
@@ -563,6 +605,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_close = sub.add_parser("close", help="Close an entire browser (all tabs) and retire its name. For one tab, use `tab <name> close`.")
     p_close.add_argument("name")
     p_close.set_defaults(func=cmd_close)
+
+    p_latency = sub.add_parser(
+        "latency",
+        help="Show a browser's live-view latency: transport rtt, click-to-photon, and their difference (pipeline overhead).",
+    )
+    p_latency.add_argument("name")
+    p_latency.add_argument("--watch", action="store_true", help="Refresh every 2s as a tiny dashboard (Ctrl-C to stop).")
+    p_latency.set_defaults(func=cmd_latency)
 
     p_task = sub.add_parser("task", help="Run a browser-use task on a browser; stream its trace.")
     p_task.add_argument("name", help="Browser name (from `ls` or the name `new` printed).")

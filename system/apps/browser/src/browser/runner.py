@@ -41,6 +41,7 @@ import os
 import queue
 import signal
 import threading
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import FrameType
@@ -308,6 +309,18 @@ def create_browser() -> Response:
         logger.error("failed to register browser: {}", e)
         return _error({"error": f"Could not start browser: {e}"}, 503)
     return jsonify({"name": session.browser_id, "key_available": available})
+
+
+def browser_latency(browser_id: str) -> Response:
+    """Latency readout for one browser: viewer-reported RTT and click-to-photon
+    aggregates. The samples come from the viewer page (the only vantage point
+    that can see both ends of the wire) over the cast socket; the rings live on
+    the session, so the numbers persist across viewer reconnects and this route
+    is cheap to poll (the CLI's --watch)."""
+    session = _resolve_sync_for_ws(browser_id)
+    if session is None:
+        return jsonify({"error": "no such browser"}), 404
+    return jsonify(bridge.run(session.latency_snapshot(), timeout=_ROUTE_TIMEOUT))
 
 
 def close_browser(browser_id: str) -> Response:
@@ -746,7 +759,7 @@ def cmd_tab(browser_id: str) -> Response:
 
 
 def _cast_inbound_pump(
-    ws: Any, session: LiveBrowser, stop_event: threading.Event
+    ws: Any, session: LiveBrowser, client_queue: "queue.Queue[str | None]", stop_event: threading.Event
 ) -> None:
     """Read inbound cast messages on a dedicated thread until the socket closes.
 
@@ -763,13 +776,31 @@ def _cast_inbound_pump(
             data = ws.receive(timeout=_CAST_INBOUND_POLL_SECONDS)
             if data is None:
                 continue  # poll timeout; re-check the stop flag and keep reading
-            if not _init_done.is_set():
-                continue  # the view streams read-only until the gate opens
             try:
                 message = json.loads(data)
             except (ValueError, TypeError):
                 continue
             kind = message.get("type")
+            # Latency plumbing rides the pump thread itself, NOT the loop bridge:
+            # the echo's t1/t2 stamps must not include event-loop scheduling, or
+            # the "RTT" would measure daemon load instead of the network. The
+            # reply goes onto this client's own outbound queue (a put wakes the
+            # drain immediately). Handled before the init gate -- both are
+            # read-only and useful while the fleet restores.
+            if kind == "ping_echo":
+                t1 = time.time() * 1000.0
+                with contextlib.suppress(queue.Full):
+                    client_queue.put_nowait(json.dumps({
+                        "type": "ping_echo", "t0": message.get("t0"),
+                        "t1": t1, "t2": time.time() * 1000.0,
+                    }))
+                continue
+            if kind == "latency_sample":
+                bridge.submit(session.record_latency_sample(
+                    str(message.get("kind", "")), message.get("ms")))
+                continue
+            if not _init_done.is_set():
+                continue  # the view streams read-only until the gate opens
             if kind == "take_control":
                 bridge.run(session.take_control(), timeout=_ROUTE_TIMEOUT)
             elif kind == "return_to_agents":
@@ -829,7 +860,7 @@ def cast_socket(ws: Any, browser_id: str) -> None:
     stop_event = threading.Event()
     inbound = threading.Thread(
         target=_cast_inbound_pump,
-        kwargs={"ws": ws, "session": session, "stop_event": stop_event},
+        kwargs={"ws": ws, "session": session, "client_queue": client_queue, "stop_event": stop_event},
         name=f"browser-cast-inbound-{browser_id}",
         daemon=True,
     )
@@ -870,6 +901,7 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers", view_func=list_browsers, methods=["GET"])
     application.add_url_rule("/browsers", view_func=create_browser, methods=["POST"], endpoint="create_browser")
     application.add_url_rule("/browsers/<string:browser_id>", view_func=close_browser, methods=["DELETE"])
+    application.add_url_rule("/browsers/<string:browser_id>/latency", view_func=browser_latency, methods=["GET"])
     application.add_url_rule("/browsers/<string:browser_id>/release", view_func=release_browser, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/task", view_func=run_task, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/hold", view_func=hold_browser, methods=["POST"])

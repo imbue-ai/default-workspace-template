@@ -96,3 +96,30 @@ card; its first bullet documents which keyboard shortcuts are reliable
 per platform (Cmd combos on macOS are partly unreliable -- use Ctrl+T/W as the
 workaround -- while plain letters and Cmd+C/V/A/E/F work), followed by the
 sharing/queue, handoff and saved-logins notes unchanged.
+
+----
+
+`agentic-browser-fleet latency <name> [--watch]`: how far is the live view from
+the network floor?
+
+Three numbers, chosen so the question has a one-line answer:
+
+- **rtt** -- a periodic timestamp echo over the cast socket, i.e. the same
+  network path the video rides. NTP-style four-timestamp math subtracts the
+  daemon's hold time, so this is the wire, not server load. This is the floor.
+- **click-to-photon** -- on a real click in the live view, the time until a
+  pixel near the click visibly changes on the canvas. This is what you feel.
+  Clicks that change nothing on screen simply produce no sample.
+- **overhead** -- click-to-photon minus rtt: the pipeline's own cost above the
+  network. Healthy is roughly frame interval + encode + decode (~30-80ms);
+  verified in-workspace at ~59ms on the loopback path (rtt floor ~1-2ms there).
+
+The viewer page is the measurer (the only vantage point that sees both ends);
+samples ride the existing cast socket, aggregate in per-browser rings on the
+daemon (so they persist across viewer reconnects), and `--watch` refreshes the
+readout every 2s as a tiny dashboard. RTT spike counts stand in for packet
+loss, which TCP hides from the application by design.
+
+KasmVNC's own bottleneck-stats API is deliberately NOT folded in: it refuses to
+authorise anyone while basic auth is disabled, and enabling basic auth for the
+whole session just to fetch garnish would put a credential on the viewer path.
