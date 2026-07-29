@@ -123,9 +123,20 @@ def resolve_primary_agent_id(runner: Runner) -> str:
     The fallback keeps the refresh addressed at *something* plausible when the
     lookup cannot run (no ``mngr`` on PATH, discovery erroring): in a workspace
     whose primary agent is the caller -- the common case for the update flows
-    that run this -- our own id is the right answer anyway.
+    that run this -- our own id is the right answer anyway. It is reported on
+    stderr because for a sub-agent it is the *wrong* answer, and the POST that
+    follows succeeds either way.
     """
     own_id = os.environ.get(ENV_MNGR_AGENT_ID, "")
+
+    def fall_back(reason: str) -> str:
+        sys.stderr.write(
+            f"refresh: could not resolve this workspace's primary agent id ({reason}); "
+            "falling back to this agent's own id, which addresses the wrong window "
+            "if this is a sub-agent.\n"
+        )
+        return own_id
+
     try:
         completed = runner.run(
             ["mngr", "ls", "--include", _PRIMARY_AGENT_QUERY, "--ids"],
@@ -133,17 +144,17 @@ def resolve_primary_agent_id(runner: Runner) -> str:
             text=True,
             timeout=_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.SubprocessError):
-        return own_id
+    except (OSError, subprocess.SubprocessError) as exc:
+        return fall_back(f"{type(exc).__name__}: {exc}")
     if completed.returncode != 0:
-        return own_id
+        return fall_back(f"mngr ls exited {completed.returncode}")
     # ``--ids`` prints one id per line; a workspace has exactly one primary, but
     # take the first line rather than assuming the output is a single token.
     for line in (completed.stdout or "").splitlines():
         candidate = line.strip()
         if candidate:
             return candidate
-    return own_id
+    return fall_back("mngr ls listed no primary agent")
 
 
 def broadcast_reload(http: HttpClient, base_url: str) -> bool:
