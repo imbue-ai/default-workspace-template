@@ -193,7 +193,10 @@ def _read_events(events_dir: Path) -> list[dict[str, object]]:
 def test_every_way_a_tick_ends_emits_a_terminal_event(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Drive each way `_run_one_tick` can end and assert the endings match the terminal set.
+    """Drive each way a tick can end and assert the endings match the terminal set.
+
+    Four come from `_run_one_tick`'s step helpers; the last comes from the loop's
+    outer handler, which is where a tick that raises ends up.
 
     `host-backup-now` waits for a member of TICK_TERMINAL_EVENT_TYPES, so a tick
     ending that emits something outside that set strands the caller until its
