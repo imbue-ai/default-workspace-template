@@ -55,7 +55,18 @@ export function FastModeModal(): m.Component {
                 ),
                 ")",
               ]),
-              m("p.fast-mode-modal-message", "You can toggle Fast Mode at any time with the button"),
+              m("p.fast-mode-modal-message", [
+                "You can toggle Fast Mode at any time with the ",
+                // A copy of the composer's toggle, so "the button" has something to
+                // point at. Decorative: hidden from assistive tech, which gets the
+                // sentence on its own.
+                m(
+                  "span.fast-toggle.fast-toggle--on.fast-toggle--inline",
+                  { "aria-hidden": "true" },
+                  m.trust(icon("zap", { size: 16 })),
+                ),
+                " button",
+              ]),
               m("div.fast-mode-modal-actions", [
                 m(
                   "button.fast-mode-modal-btn.fast-mode-modal-btn-fast",

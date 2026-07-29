@@ -817,6 +817,16 @@ body {
   background: var(--color-accent-light);
 }
 
+/* A non-interactive copy of the toggle, set inline in running text so a sentence
+   about "the button" can show which one. Reuses the rules above rather than
+   restating them, so the copy cannot drift from the real control. */
+.fast-toggle--inline {
+  width: 26px;
+  height: 26px;
+  cursor: default;
+  vertical-align: -0.45em;
+}
+
 /* ── Markdown content styling ── */
 .markdown-content {
   line-height: 1.5;
