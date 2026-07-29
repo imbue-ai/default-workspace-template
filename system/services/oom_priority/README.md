@@ -40,15 +40,15 @@ without inspecting the process tree:
 | What | When | Band | Set by |
 |---|---|---|---|
 | never-kill infra (sshd, supervisord, earlyoom, tini, tmux) | (inherited) | protected (0) | nothing -- 0 is the default, plus earlyoom `--avoid` |
-| a built-in supervisord service | launch | its `SERVICE_BANDS` value | `system/scripts/oom_tag_service.py <service>` (command prefix) |
-| a user-created supervisord service | launch | user service (above every built-in) | `system/scripts/oom_tag_service.py user` (command prefix) |
-| an agent's main process | launch | chat -> expendable chat band (560); worker or unidentifiable -> worker agent | `system/scripts/claude_oom_launch.py` |
+| a built-in supervisord service | launch | its `SERVICE_BANDS` value | `system/services/oom_priority/bin/oom_tag_service.py <service>` (command prefix) |
+| a user-created supervisord service | launch | user service (above every built-in) | `system/services/oom_priority/bin/oom_tag_service.py user` (command prefix) |
+| an agent's main process | launch | chat -> expendable chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/claude_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/claude_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
 | a shared browser | launch | `SHARED_BROWSER` (1000, the ceiling) | inline `oom_score_adj` write in the `browser` program |
 | Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000) | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
 
 Each supervisord service tags itself the same way an agent's main process does:
-its `command` in `system/supervisord.conf` runs `system/scripts/oom_tag_service.py <key> <the
+its `command` in `system/supervisord.conf` runs `system/services/oom_priority/bin/oom_tag_service.py <key> <the
 real command>`, which sets its own `oom_score_adj` from `SERVICE_BANDS` and then
 `exec`s the command in place (the band survives `execve` and is inherited by
 every child). Built-in services pass their own name; a **user-created** service
@@ -56,7 +56,7 @@ every child). Built-in services pass their own name; a **user-created** service
 any built-in service. An unknown key is tagged as `user` too (with a warning):
 an unrecognized service must fail *expendable*, never protected.
 
-A **backstop event listener** (`system/scripts/oom_tag_backstop.py`, the
+A **backstop event listener** (`system/services/oom_priority/bin/oom_tag_backstop.py`, the
 `oom-tag-backstop` supervisord program) covers the one case the prefix cannot: a
 service whose command omits the wrapper entirely, which would otherwise keep the
 inherited `oom_score_adj` of 0 and sit as protected as sshd/supervisord. On
@@ -72,7 +72,7 @@ the RUNNING event fires only after `startsecs` (~1s), leaving a short window
 where an unwrapped service runs untagged.
 
 The agent's main process tags *itself*: the `claude` and `worker` agent types'
-`command` (in `.mngr/settings.toml`) runs `system/scripts/claude_oom_launch.py`, which
+`command` (in `.mngr/settings.toml`) runs `system/services/oom_priority/bin/claude_oom_launch.py`, which
 sets its own `oom_score_adj` to the agent band, records its pid, then `exec`s
 claude in place. (Both the `claude` and `worker` types set the command. The
 `worker` type has to repeat it rather than inherit it from `claude` because of an
@@ -148,12 +148,12 @@ the UI's liveness dot; it no longer drives OOM re-tagging.)
 ## Outputs
 
 - **Shed ledger** (`data/.state/oom_priority/events/shed.jsonl`): append-only,
-  written by `system/scripts/earlyoom_record_shed.py` (earlyoom's `-N` after-kill hook).
+  written by `system/services/oom_priority/bin/earlyoom_record_shed.py` (earlyoom's `-N` after-kill hook).
   One `process_shed` line per kill, carrying the agent name only when an agent's
   *own* process was shed. Read by the revival-notice hook
-  (`system/scripts/claude_shed_notice_hook.py`) and the launch-task report poll.
+  (`system/services/oom_priority/bin/claude_shed_notice_hook.py`) and the launch-task report poll.
 - **Agent-pid registry** (`data/.state/oom_priority/agent_pids/<pid>.json`): written
-  by the launch wrapper (`system/scripts/claude_oom_launch.py`), read by the kill hook.
+  by the launch wrapper (`system/services/oom_priority/bin/claude_oom_launch.py`), read by the kill hook.
 
 Both live under `runtime/` so they ride the runtime-backup branch. Their absolute
 location is pinned via `OOM_PRIORITY_RUNTIME_DIR` (see `.mngr/settings.toml`) so

@@ -17,7 +17,7 @@ does **not** watch the config file -- you apply changes with
 
 ```ini
 [program:my-service]
-command=python3 system/scripts/oom_tag_service.py user uv run my-service
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user uv run my-service
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -39,10 +39,10 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name foo && uv run foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name foo && uv run foo"
   ```
 
-  The `python3 system/scripts/oom_tag_service.py user` prefix is the **OOM band tag**
+  The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
   (see below) -- keep it as the outermost command, in front of any `bash -c`
   wrapper.
 - `directory=/home/user/workspace` -- run from the repo root, so cwd-relative paths
@@ -69,7 +69,7 @@ that launched supervisord -- you do not need a per-program `environment=`.
 
 A background `earlyoom` daemon sheds processes when the container runs low on
 memory, most-expendable first (see `system/services/oom_priority/README.md`). Prefix every
-service `command` with `python3 system/scripts/oom_tag_service.py user` so a
+service `command` with `python3 system/services/oom_priority/bin/oom_tag_service.py user` so a
 **user-created** service is shed *before* any built-in service (the UI, tunnel,
 terminal, backups) under memory pressure -- those are the workspace's lifelines
 and should outlive a service you added. The wrapper sets the process's
