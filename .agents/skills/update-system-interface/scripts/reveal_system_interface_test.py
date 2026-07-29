@@ -252,6 +252,25 @@ def test_refresh_runs_after_the_restart_not_before() -> None:
     assert restart_index < refresh_index
 
 
+def test_unspawnable_refresh_helper_does_not_fail_a_successful_reveal() -> None:
+    """The refresh runs last, after the reveal has already succeeded.
+
+    It is the one step that cannot fail the reveal: the change has landed and
+    the live UI is confirmed healthy, so a helper we cannot even spawn (no
+    memory to fork right after the restart) must not turn that into a
+    non-zero exit the lead reads as "the change did not land".
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    runner.respond((sys.executable,), OSError("Cannot allocate memory"))
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert code == 0
+    assert _refreshed_the_view(runner)  # it was attempted, not skipped
+
+
 def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> None:
     runner = _runner_with_diff(
         "M\tsystem/apps/system_interface/imbue/system_interface/server.py\nM\tsystem/apps/system_interface/pyproject.toml\n"
