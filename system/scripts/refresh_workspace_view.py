@@ -254,13 +254,17 @@ def broadcast_reload(http: HttpClient, base_url: str) -> bool:
     return False
 
 
-def request_app_refresh(http: HttpClient, primary_agent_id: str) -> bool:
+def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
     """Ask the Minds app to drop its cache and reload its view of this workspace.
 
     Returns whether the app accepted the request. Absent gateway env means we are
     not running under a Minds desktop app at all (a bare ``mngr`` workspace, a
     test harness), which is not a failure -- the broadcast alone is the whole
     story there.
+
+    The primary-agent lookup happens after that env check, not before: it is a
+    subprocess with a 30s budget, and there is nothing to address it to when no
+    app is attached.
     """
     gateway = os.environ.get(ENV_GATEWAY, "")
     password = os.environ.get(ENV_GATEWAY_PASSWORD, "")
@@ -271,6 +275,7 @@ def request_app_refresh(http: HttpClient, primary_agent_id: str) -> bool:
             "(the reload broadcast still went out).\n"
         )
         return False
+    primary_agent_id = resolve_primary_agent_id(runner)
     if not primary_agent_id:
         sys.stderr.write(
             "refresh: could not resolve this workspace's agent id; skipping the "
@@ -316,7 +321,7 @@ def refresh(
     # Deliberately unconditional and independent: each channel reaches viewers
     # the other cannot, and a failure of one says nothing about the other.
     broadcast_ok = broadcast_reload(http, resolved_base)
-    app_ok = request_app_refresh(http, resolve_primary_agent_id(runner))
+    app_ok = request_app_refresh(http, runner)
     if broadcast_ok or app_ok:
         sys.stderr.write("refresh: requested a reload of this workspace's view.\n")
     else:
