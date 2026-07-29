@@ -72,7 +72,7 @@ from browser import manifest as fleet_manifest
 from browser.names import generate_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
 from browser.focus import FocusKeeper
-from browser.vnc import VncDisplay, VncStartupError
+from browser.vnc import VncDisplay, VncStartupError, is_available as is_vnc_available
 
 # browser-use phones home anonymized telemetry by default; disable it (the
 # compute has no business making that call, and it spams connection-error logs
@@ -355,11 +355,24 @@ def anthropic_key_status() -> tuple[bool, str]:
 
 
 def deferred_install_ready() -> tuple[bool, str]:
-    """Return ``(ready, reason)`` once Chromium is installed."""
+    """Return ``(ready, reason)`` once every asynchronously-installed dependency is present.
+
+    Both dependencies land after the container's services are already up (the
+    env-converge one-shot's slow phase), so a browser launched in the first minute
+    of a fresh workspace can find either one missing. Gate on ALL of them here:
+    this is the only readiness check whose refusal reaches the user as a readable
+    "try again" message. ``VncDisplay.start`` re-checks the display server as a
+    backstop, but that failure surfaces mid-launch, where the viewer is already
+    polling a session that is about to be removed -- so it reads as a hang rather
+    than as "not ready yet".
+    """
     if os.environ.get("BROWSER_SKIP_INSTALL_CHECK") == "1":
-        return True, "ready"  # host/CI testing without an installed Fortress
+        return True, "ready"  # host/CI testing without an installed Fortress or KasmVNC
     if not os.access(_FORTRESS_EXECUTABLE, os.X_OK):
         return False, "Chromium is still installing in this workspace; try again in a minute."
+    # One check covers kasmvncserver too: both binaries come from the same install.
+    if not is_vnc_available():
+        return False, "The browser display server is still installing in this workspace; try again in a minute."
     return True, "ready"
 
 

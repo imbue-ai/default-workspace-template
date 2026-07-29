@@ -197,3 +197,38 @@ config keys exist and consults the command-line flag only when they do not --
 and the shipped defaults file always defines them, as 1024x768. So every display
 has been coming up at 1024x768 while the code asked for 1280x800, silently. The
 session now writes the user config that actually controls this.
+
+----
+
+The readiness gate now covers the display server, not just Chromium.
+
+Both of the browser's heavy dependencies install asynchronously, after the
+container's services are already accepting requests: Fortress and KasmVNC land
+during the env-converge one-shot's slow phase. Only Fortress was gated. So a
+click in the window where Fortress had arrived and KasmVNC had not passed the
+gate, and then died deeper in the launch, in `VncDisplay.start`.
+
+Those two failure sites behave nothing alike. The gate returns a 503 the viewer
+already handles, with a readable "try again in a minute". `VncDisplay.start`
+raises after the session exists, so the session is removed while the viewer goes
+on polling its cast endpoint -- which answers 200 -- and the user watches a
+spinner that never resolves and never explains itself.
+
+Observed on a freshly leased pool host, where the gap is widest because the bake
+parks the container and convergence re-runs on adoption: Fortress at 14:40:11,
+the click at 14:40:29 (gate passed, launch failed), vncserver at 14:40:36. Seven
+seconds of real waiting presented as an indefinite hang.
+
+The gate now checks both, so either dependency being mid-install produces the
+same message Chromium already produced. One `vncserver` lookup covers
+`kasmvncserver` too -- same install. `BROWSER_SKIP_INSTALL_CHECK=1` bypasses the
+new check as well, since host and CI runs have neither dependency.
+
+`VncDisplay.start` keeps its own check as a backstop; it is simply no longer the
+one users reach.
+
+Deliberately not done: no bounded wait, no distinction between "installing" and
+"install failed", no client-side auto-retry. The Chromium gate has never had any
+of those and has been fine, so adding them only for the display server would be
+speculative and inconsistent with the code beside it. If an install ever does
+fail permanently, that is when to add it.
