@@ -19,6 +19,13 @@ set -euo pipefail
 readonly SUPERVISORD_CONF="/home/user/workspace/system/supervisord.conf"
 readonly PROGRAM="system_interface"
 readonly API_BASE="http://127.0.0.1:8000"
+# How long to wait for the restarted service to answer HTTP again: attempts x
+# interval, so 30 x 0.5s = 15s.
+readonly SERVE_WAIT_ATTEMPTS=30
+readonly SERVE_WAIT_INTERVAL_SECONDS=0.5
+# Grace for browsers to re-establish their websockets after the restart, before
+# the one-shot reload broadcast goes out.
+readonly CLIENT_RECONNECT_SETTLE_SECONDS=2
 # Flags are env vars, so accept only names that can BE env vars.
 readonly FLAG_NAME_PATTERN='^[A-Za-z_][A-Za-z0-9_]*$'
 
@@ -145,7 +152,28 @@ supervisorctl reread
 supervisorctl update
 supervisorctl restart "$PROGRAM"
 
-# --- Step 3: verify the flags reached the running process --------------------
+# --- Step 3: wait for the service to serve again ------------------------------
+# `supervisorctl restart` returns once the process is SPAWNED, not once it is
+# listening, so the broadcast below would otherwise fire at a socket that is not
+# up yet and silently reach nobody.
+echo
+printf 'waiting for %s to serve...' "$PROGRAM"
+is_serving=0
+for _ in $(seq 1 "$SERVE_WAIT_ATTEMPTS"); do
+    if curl -fsS "${API_BASE}/" >/dev/null 2>&1; then
+        is_serving=1
+        break
+    fi
+    sleep "$SERVE_WAIT_INTERVAL_SECONDS"
+done
+if [ "$is_serving" -eq 1 ]; then
+    echo " up"
+else
+    echo " timed out"
+    echo "warning: $PROGRAM is not answering at $API_BASE -- check 'supervisorctl status'" >&2
+fi
+
+# --- Step 4: verify the flags reached the running process --------------------
 # The process environment is the authoritative check: it is what the app actually
 # read. (The served HTML exposes some flags as meta tags, but the env-var ->
 # meta-tag mapping is per-flag and known only to the backend, so it cannot be
@@ -167,7 +195,16 @@ for flag in "$@"; do
     fi
 done
 
-# --- Step 4: reload every connected browser so the new flag takes effect -----
+# --- Step 5: reload every connected browser so the new flag takes effect -----
+# A flag is served to the browser as a meta tag in the HTML, so picking it up
+# needs a full page load -- a websocket reconnect alone will not do it.
+#
+# The restart dropped every browser's websocket, and the broadcast is one-shot:
+# a browser that reconnects after it is sent simply never hears it and sits on
+# stale HTML. So give the clients a moment to re-establish first. This is a
+# heuristic -- the server exposes no "who is connected" signal to wait on -- and
+# it is why the manual-refresh fallback below matters.
+sleep "$CLIENT_RECONNECT_SETTLE_SECONDS"
 curl -fsS -X POST "${API_BASE}/api/layout/broadcast" \
     -H "Content-Type: application/json" \
     -d '{"op":"reload_system_interface","args":{},"agent_id":""}' >/dev/null &&
