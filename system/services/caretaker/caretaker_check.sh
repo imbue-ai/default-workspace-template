@@ -12,8 +12,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CARETAKER_DIR="$ROOT/data/.state/caretaker"
+RUN_AUTOMATION="$ROOT/system/libs/automations/run_automation.sh"
 
 log() { printf '%s caretaker_check: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
@@ -25,7 +26,7 @@ MARKER="$CARETAKER_DIR/last_check"
 if [ ! -f "$CARETAKER_DIR/permissions.md" ]; then
     log "first run: waking the agent to introduce itself"
     touch "$MARKER"
-    exec bash "$SCRIPT_DIR/run_schedule_agent.sh" caretaker --template caretaker
+    exec bash "$RUN_AUTOMATION" caretaker --template caretaker
 fi
 
 FINDINGS=""
@@ -68,4 +69,4 @@ log "findings; waking the agent"
     printf '# What the weekly check found (%s)\n\n' "$(date +'%Y-%m-%d %H:%M %Z')"
     printf '%s' "$FINDINGS"
 } > "$CARETAKER_DIR/findings.md"
-exec bash "$SCRIPT_DIR/run_schedule_agent.sh" caretaker --template caretaker
+exec bash "$RUN_AUTOMATION" caretaker --template caretaker

@@ -1,4 +1,4 @@
-"""Tests for scripts/run_job.sh, the completion-tracked recurring-job runner.
+"""Tests for run_job.sh, the completion-tracked recurring-job runner.
 
 The script is exercised as a real subprocess with its documented test hooks:
 ``MINDS_JOB_STATE_DIR`` roots the state under tmp_path and

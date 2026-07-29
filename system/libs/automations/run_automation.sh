@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
 #
-# run_schedule_agent.sh -- wake a singleton "schedule agent" for one scheduled run.
+# run_automation.sh -- wake a singleton "automation agent" for one scheduled run.
 #
-# A schedule agent is a once-per-cadence agent that runs a single skill: it is
+# An automation agent is a once-per-cadence agent that runs a single skill: it is
 # created once, kept alive across runs (never destroyed/recreated), and on each
 # run has its chat cleared and its skill re-triggered in place. The weekly
-# Caretaker is the canonical example (`run_schedule_agent.sh caretaker`), but the same
+# Caretaker is the canonical example (`run_automation.sh caretaker`), but the same
 # machinery drives any skill on any cadence -- e.g. a morning news agent
-# (`run_schedule_agent.sh news`) -- so adding one is just: write a skill and schedule
+# (`run_automation.sh news`) -- so adding one is just: write a skill and schedule
 # this script. See the manage-scheduled-tasks skill.
 #
 # Usage:
-#   run_schedule_agent.sh <skill> [--template <template>] [--agent-name <name>]
+#   run_automation.sh <skill> [--template <template>] [--agent-name <name>]
 #
 #   <skill>          Required. Names the skill to run: the agent is messaged
 #                    `/<skill>` on every run and found as a singleton by the
-#                    `schedule_agent=<skill>` label.
-#   --template <t>   Create template for the agent (default: `schedule_agent`, a plain
+#                    `automation=<skill>` label.
+#   --template <t>   Create template for the agent (default: `automation`, a plain
 #                    claude agent oriented to run the named skill). The Caretaker
 #                    passes its own tailored template (`caretaker`).
 #   --agent-name <n> Agent name shown in the UI (default: the skill name).
 #
 # Invoked by the weekly caretaker job (the entry the enable-caretaker skill
-# creates, via system/scripts/run_job.sh and system/scripts/caretaker_check.sh) or any
+# creates, via system/libs/automations/run_job.sh and system/services/caretaker/caretaker_check.sh) or any
 # other cron entry, through
-# system/scripts/with_agent_env.sh so it runs from the repo root (/home/user/workspace) with the
+# system/libs/automations/with_agent_env.sh so it runs from the repo root (/home/user/workspace) with the
 # services agent's environment (MNGR_HOST_DIR, MNGR_AGENT_ID, ... -- cron
 # scrubs the env otherwise).
 #
@@ -43,21 +43,21 @@ set -euo pipefail
 
 # ---- Arguments --------------------------------------------------------------
 SKILL=""
-TEMPLATE="schedule_agent"
+TEMPLATE="automation"
 AGENT_NAME=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --template) TEMPLATE="$2"; shift 2 ;;
     --agent-name) AGENT_NAME="$2"; shift 2 ;;
-    --*) echo "run_schedule_agent: unknown option: $1" >&2; exit 2 ;;
+    --*) echo "run_automation: unknown option: $1" >&2; exit 2 ;;
     *)
       if [ -z "$SKILL" ]; then SKILL="$1"; shift
-      else echo "run_schedule_agent: unexpected argument: $1" >&2; exit 2; fi
+      else echo "run_automation: unexpected argument: $1" >&2; exit 2; fi
       ;;
   esac
 done
 if [ -z "$SKILL" ]; then
-  echo "usage: run_schedule_agent.sh <skill> [--template <template>] [--agent-name <name>]" >&2
+  echo "usage: run_automation.sh <skill> [--template <template>] [--agent-name <name>]" >&2
   exit 2
 fi
 AGENT_NAME="${AGENT_NAME:-$SKILL}"
@@ -65,14 +65,14 @@ AGENT_NAME="${AGENT_NAME:-$SKILL}"
 # Singleton identity + the per-run trigger. The run message is a hidden
 # slash-command (like /welcome), so the user's first visible message is always
 # the agent's own output, never the command that produced it.
-SCHEDULE_FILTER="labels.schedule_agent == \"${SKILL}\""
+SCHEDULE_FILTER="labels.automation == \"${SKILL}\""
 RUN_MESSAGE="/${SKILL}"
 
 # Settle time (seconds) between sending /clear and the run trigger, so the clear
 # lands (the fresh session starts) before the run trigger.
 CLEAR_SETTLE_SECONDS=2
 
-log() { printf '%s run_schedule_agent[%s]: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SKILL" "$*"; }
+log() { printf '%s run_automation[%s]: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SKILL" "$*"; }
 
 # Resolve the workspace label so the agent's tab groups with the user's other
 # agents in the minds UI (mirrors system/libs/bootstrap's create-chat workspace logic:
@@ -103,39 +103,39 @@ print("")
 PY
 }
 
-# Active schedule-agent ids for this skill (one per line; empty if none).
-schedule_agent_ids() {
+# Active automation-agent ids for this skill (one per line; empty if none).
+automation_agent_ids() {
   uv run mngr list --active --include "$SCHEDULE_FILTER" --ids --on-error continue 2>/dev/null || true
 }
 
-# Create the persistent schedule agent whose first message is `/<skill>`. A brand-new
+# Create the persistent automation agent whose first message is `/<skill>`. A brand-new
 # agent starts from an empty chat, so a self-detecting skill delivers its
 # first-run behavior (e.g. the caretaker's welcome) on this first run.
-create_schedule_agent() {
+create_automation_agent() {
   local workspace label_args=()
   workspace="$(resolve_workspace)"
   if [ -n "$workspace" ]; then
     label_args=(--label "workspace=${workspace}")
   fi
-  log "creating the persistent schedule agent (template: ${TEMPLATE}, first message: ${RUN_MESSAGE})"
+  log "creating the persistent automation agent (template: ${TEMPLATE}, first message: ${RUN_MESSAGE})"
   uv run mngr create "$AGENT_NAME" \
     --transfer none \
     --template "$TEMPLATE" \
     --no-connect \
     --format json \
-    --label "schedule_agent=${SKILL}" \
+    --label "automation=${SKILL}" \
     "${label_args[@]}" \
     --message "$RUN_MESSAGE"
 }
 
 main() {
   local ids id
-  ids="$(schedule_agent_ids)"
+  ids="$(automation_agent_ids)"
 
   if [ -z "${ids//[[:space:]]/}" ]; then
     # First run ever: no agent exists, so create the persistent one.
-    create_schedule_agent
-    log "persistent schedule agent created; first run started"
+    create_automation_agent
+    log "persistent automation agent created; first run started"
     return 0
   fi
 
@@ -145,14 +145,14 @@ main() {
   id="$(printf '%s\n' "$ids" | head -n 1)"
 
   # Clear the rendered chat so this run starts from an empty conversation.
-  log "clearing schedule agent ${id} for a fresh run"
+  log "clearing automation agent ${id} for a fresh run"
   uv run mngr message "$id" --start --message "/clear"
 
   # Let the clear land (new session boundary recorded) before triggering the run.
   sleep "$CLEAR_SETTLE_SECONDS"
 
   # Re-trigger the skill in the now-empty chat.
-  log "triggering schedule agent ${id} run"
+  log "triggering automation agent ${id} run"
   uv run mngr message "$id" --start --message "$RUN_MESSAGE"
 }
 
