@@ -29,18 +29,6 @@ def _write_tick(events_dir: Path, *types: BackupEventType, tick_id: str) -> None
         write_event(events_dir, make_event(event_type, tick_id=tick_id))
 
 
-def _wait_from_start(events_path: Path) -> dict[str, object] | None:
-    """Wait for a completion over the whole existing file.
-
-    The deadline is bounded, so a waiter that does not recognise the terminal
-    event returns None here rather than hanging -- which is exactly the
-    regression the caller asserts against.
-    """
-    return _wait_for_next_completion(
-        events_path, 0, time.monotonic() + _GENEROUS_TIMEOUT_SECONDS
-    )
-
-
 @pytest.mark.parametrize(
     ("mid_tick_events", "terminal_event", "expected_exit_code"),
     [
@@ -86,7 +74,9 @@ def test_wait_ends_on_every_tick_ending_and_maps_it_to_an_exit_code(
         terminal_event,
         tick_id="tick-under-test",
     )
-    completion = _wait_from_start(tmp_path / "events.jsonl")
+    completion = _wait_for_next_completion(
+        tmp_path / "events.jsonl", 0, time.monotonic() + _GENEROUS_TIMEOUT_SECONDS
+    )
     assert completion is not None
     assert completion["type"] == terminal_event.value
     assert _exit_code_for_completion(completion) == expected_exit_code
