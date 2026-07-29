@@ -1,0 +1,5 @@
+`uv run host-backup-now` no longer appears to hang when the triggered tick ends without running restic.
+
+It only treated `restic_backup_succeeded` / `restic_backup_failed` as terminal, so a tick that resolved some other way -- backups not configured (`tick_skipped_due_to_missing_secrets`, i.e. no `data/.secrets/restic.env`), a failed snapshot step (`snapshot_failed`), or an error caught by the loop's outer handler (`tick_error`) -- left the command polling until its 30-minute `--timeout` and then exiting 2, even though the tick was long over. It now returns as soon as the tick reaches any terminal event. The same widened set is shared with the in-flight wait that runs first, which previously had the same blind spot for `snapshot_failed`.
+
+Exit codes now distinguish the outcomes, so a flow that takes a backup as a precondition (e.g. the `update-self` skill) can tell "there is no restore point" from "the backup attempt failed" without parsing the printed event: `0` for a successful backup, `3` for backups not configured, `1` for any other tick outcome, and `2` when no terminal event was observed before the timeout.

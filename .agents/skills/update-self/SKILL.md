@@ -45,12 +45,12 @@ restarts services, and a backup is the recovery path if one of those goes wrong:
 uv run host-backup-now
 ```
 
-It waits for any in-flight backup, forces a fresh tick, and prints the
-`restic_backup_succeeded` / `restic_backup_failed` event -- confirm success before
-continuing. If it reports backups aren't configured
-(`tick_skipped_due_to_missing_secrets` -- no `data/.secrets/restic.env`), there
+It waits for any in-flight backup, forces a fresh tick, and prints the tick's
+terminal event -- exit 0 means `restic_backup_succeeded`; confirm that before
+continuing. Exit 3 means backups aren't configured
+(`tick_skipped_due_to_missing_secrets` -- no `data/.secrets/restic.env`), so there
 is **no** restore point: tell the user, and get their explicit go-ahead before
-proceeding without one.
+proceeding without one. Any other non-zero exit is a failed backup attempt.
 
 **Single-flight.** One pass at a time (its worker name, branch, and runtime dir
 are fixed). Check for a live one:

@@ -99,7 +99,7 @@ def test_full_backup_forget_prune_cycle(tmp_path: Path) -> None:
     # Restic exposes the snapshot in `snapshots`:
     snapshots = subprocess.run(
         ["restic", "snapshots", "--json"],
-        env={**env, "PATH": _path_for_subprocess()},
+        env=_env_for_subprocess(env),
         capture_output=True,
         text=True,
         check=True,
@@ -153,7 +153,7 @@ def test_exclude_pattern_actually_skips_files(tmp_path: Path) -> None:
     # Listing the snapshot's files via `restic ls latest` must NOT include .venv:
     listing = subprocess.run(
         ["restic", "ls", "latest"],
-        env={**env, "PATH": _path_for_subprocess()},
+        env=_env_for_subprocess(env),
         capture_output=True,
         text=True,
         check=True,
@@ -162,16 +162,21 @@ def test_exclude_pattern_actually_skips_files(tmp_path: Path) -> None:
     assert ".venv" not in listing.stdout
 
 
-def _path_for_subprocess() -> str:
-    """Return $PATH for subprocess.run; subprocess clears it when env= is set."""
-    return os.environ.get("PATH", "/usr/bin:/bin")
+def _env_for_subprocess(env_overrides: dict[str, str]) -> dict[str, str]:
+    """Merge restic settings onto os.environ, the way `run_restic` does.
+
+    `env=` replaces the whole environment rather than extending it, so passing
+    only the RESTIC_* keys leaves restic without `PATH` or `HOME` -- and without
+    `HOME` it cannot locate its cache directory and every command fails.
+    """
+    return {**os.environ, **env_overrides}
 
 
 def _snapshot_ids(env: dict[str, str]) -> set[str]:
     """Return the full ids of all snapshots currently in the repo."""
     result = subprocess.run(
         ["restic", "snapshots", "--json"],
-        env={**env, "PATH": _path_for_subprocess()},
+        env=_env_for_subprocess(env),
         capture_output=True,
         text=True,
         check=True,
@@ -255,7 +260,7 @@ def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
             "2000-01-01 00:00:00",
             str(source_dir),
         ],
-        env={**env, "PATH": _path_for_subprocess()},
+        env=_env_for_subprocess(env),
         capture_output=True,
         text=True,
         check=True,
