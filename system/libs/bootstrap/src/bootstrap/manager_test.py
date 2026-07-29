@@ -20,18 +20,14 @@ from bootstrap.manager import (
     _install_runtime_cron_entries,
     _build_create_chat_command,
     _configure_git_global,
-    _ensure_host_claude_config_dir,
     _fetch_user_timezone,
-    _format_env_file,
     _initialize_workspace_main_branch,
     _maybe_create_initial_chat,
     _parse_created_agent_id,
-    _parse_env_file,
     _parse_timezone_response,
     _persist_initial_chat_agent_id,
     _read_host_name,
     _read_main_agent_labels,
-    _resolve_services_claude_config_dir,
 )
 
 # --- _configure_git_global ---
@@ -67,95 +63,6 @@ def test_configure_git_global_sets_insteadof_but_not_hookspath(
         check=False,
     ).stdout.strip()
     assert hooks_path == ""
-
-
-# --- Env-file helpers ---
-
-
-def test_parse_env_file_handles_plain_and_quoted() -> None:
-    content = 'A=1\nB="two words"\nC="he said \\"hi\\""\n\n# comment\n'
-    parsed = _parse_env_file(content)
-    assert parsed == {"A": "1", "B": "two words", "C": 'he said "hi"'}
-
-
-def test_format_env_file_round_trips_through_parse() -> None:
-    env = {"FOO": "bar", "PATH_WITH_SPACE": "/a b/c"}
-    parsed = _parse_env_file(_format_env_file(env))
-    assert parsed == env
-
-
-# --- _resolve_services_claude_config_dir ---
-
-
-def test_resolve_services_claude_config_dir_returns_per_agent_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
-    resolved = _resolve_services_claude_config_dir()
-    assert resolved == tmp_path / "plugin" / "claude" / "anthropic"
-
-
-def test_resolve_services_claude_config_dir_returns_none_when_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("MNGR_AGENT_STATE_DIR", raising=False)
-    assert _resolve_services_claude_config_dir() is None
-
-
-# --- _ensure_host_claude_config_dir ---
-
-
-def test_ensure_host_claude_config_dir_writes_when_env_file_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    target = Path("/some/per-agent/path")
-    _ensure_host_claude_config_dir(target)
-    parsed = _parse_env_file((tmp_path / "env").read_text())
-    assert parsed == {"CLAUDE_CONFIG_DIR": str(target)}
-
-
-def test_ensure_host_claude_config_dir_preserves_other_keys(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    (tmp_path / "env").write_text(_format_env_file({"OTHER": "preexisting"}))
-    target = Path("/some/per-agent/path")
-    _ensure_host_claude_config_dir(target)
-    parsed = _parse_env_file((tmp_path / "env").read_text())
-    assert parsed == {"OTHER": "preexisting", "CLAUDE_CONFIG_DIR": str(target)}
-
-
-def test_ensure_host_claude_config_dir_no_rewrite_when_value_matches(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    target = Path("/some/per-agent/path")
-    env_file = tmp_path / "env"
-    env_file.write_text(_format_env_file({"CLAUDE_CONFIG_DIR": str(target)}))
-    mtime_before = env_file.stat().st_mtime_ns
-    _ensure_host_claude_config_dir(target)
-    assert env_file.stat().st_mtime_ns == mtime_before
-
-
-def test_ensure_host_claude_config_dir_overwrites_drifted_value(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    env_file = tmp_path / "env"
-    env_file.write_text(_format_env_file({"CLAUDE_CONFIG_DIR": "/stale/path"}))
-    target = Path("/new/path")
-    _ensure_host_claude_config_dir(target)
-    parsed = _parse_env_file(env_file.read_text())
-    assert parsed["CLAUDE_CONFIG_DIR"] == str(target)
-
-
-def test_ensure_host_claude_config_dir_skips_when_host_dir_env_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
-    # Should silently no-op rather than raise.
-    _ensure_host_claude_config_dir(tmp_path / "ignored")
 
 
 # --- _read_host_name ---
@@ -303,6 +210,14 @@ def test_build_create_chat_command_requests_json_output() -> None:
     assert cmd[cmd.index("--format") + 1] == "json"
 
 
+def test_build_create_chat_command_never_pins_claude_config_dir() -> None:
+    """Every claude in the workspace must resolve claude's own default
+    ~/.claude, so the create argv must not export CLAUDE_CONFIG_DIR (the old
+    services-agent-owned shared dir was removed in the ~/.claude cutover)."""
+    cmd = _build_create_chat_command("ws", {"workspace": "ws"})
+    assert all("CLAUDE_CONFIG_DIR" not in arg for arg in cmd)
+
+
 # --- _parse_created_agent_id ---
 
 
@@ -408,6 +323,18 @@ def test_maybe_create_initial_chat_creates_and_writes_signal(
     _maybe_create_initial_chat()
     assert len(stub.calls) == 1
     assert (_bootstrap_env / "data" / ".state" / "initial_chat_created").exists()
+
+
+def test_maybe_create_initial_chat_writes_no_host_env_file(
+    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
+) -> None:
+    """The bootstrap must not touch $MNGR_HOST_DIR/env at all: since the
+    ~/.claude cutover there is no CLAUDE_CONFIG_DIR (or anything else) for it
+    to export, and a stray env write would silently pin every future agent."""
+    stub = _StubSubprocess(returncode=0)
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    _maybe_create_initial_chat()
+    assert not (_bootstrap_env / "env").exists()
 
 
 def test_maybe_create_initial_chat_persists_created_agent_id(

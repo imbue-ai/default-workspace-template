@@ -85,7 +85,12 @@ auto_dismiss_dialogs = true
 auto_allow_permissions = true
 auto_disable_questions = true
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
-settings_overrides__extend = {model = "opus[1m]", fastMode = true}
+# skipDangerousModePermissionPrompt suppresses Claude Code's bypass-permissions
+# warning dialog (every agent here launches with --dangerously-skip-permissions).
+# It must ride the mngr-managed --settings overlay because nothing provisions the
+# shared ~/.claude/settings.json: in shared config-dir mode mngr writes nothing
+# into the shared dir, and claude itself only creates it lazily.
+settings_overrides__extend = {model = "opus[1m]", fastMode = true, skipDangerousModePermissionPrompt = true}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/scripts/claude_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
@@ -103,11 +108,13 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_oom_launch.py
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with CLAUDE_CODE_VERSION in the Dockerfile.
 version = "2.1.207"
-# Share the services agent's CLAUDE_CONFIG_DIR across every other agent so
-# auth, plugins, marketplaces, and settings are configured exactly once
-# (inside the services agent) and inherited via the host env file the
-# bootstrap writes. Disabled below on the "main" type, which still owns
-# the per-agent config dir that everyone else points at.
+# Do not provision a per-agent Claude config dir: every claude in the workspace
+# shares one config dir so auth, plugins, marketplaces, and sessions are
+# configured exactly once. CLAUDE_CONFIG_DIR is deliberately left UNSET
+# everywhere (no agent env, no host env), so every claude -- mngr-launched
+# agents and a bare `claude` in a workspace terminal alike -- resolves claude's
+# own default: ~/.claude for the config dir and ~/.claude.json for the global
+# config beside it.
 isolate_local_config_dir = false
 
 # User-facing chat agents run this type -- the initial /welcome agent and every
@@ -123,29 +130,24 @@ isolate_local_config_dir = false
 parent_type = "claude"
 settings_overrides__extend = { outputStyle = "Engineering Subordinate" }
 
-# The "main" (services) agent type -- inherits everything from claude, then
-# disables every path that pulls user-local content into the workspace. The
-# repo at the requested git ref is the canonical workspace definition;
-# nothing from the invoking user's ~/.claude/ or ~/.mngr/ should leak in.
+# The "main" (services) agent type -- a plain `command` agent, NOT a claude
+# agent. No claude ever runs as this agent: window 0 only sleeps while the
+# bootstrap window (extra_window) runs supervisord, which owns every background
+# service, and the real chat agents are spun up separately by the bootstrap.
+# Making window 0 a live claude would be unsafe: the user could close it,
+# tearing down the tmux session (and supervisord with it).
+#
+# Because it is not a claude agent, mngr does no claude provisioning for it --
+# in particular it gets no per-agent CLAUDE_CONFIG_DIR in its env, so
+# supervisord services (and any `mngr create` they run) inherit an environment
+# with the var unset and every claude in the workspace lands on the shared
+# ~/.claude (see [agent_types.claude] above). Nothing from the invoking user's
+# ~/.claude/ or ~/.mngr/ leaks into the workspace: the repo at the requested
+# git ref is the canonical workspace definition, and command agents sync no
+# user-local claude state at all.
 [agent_types.main]
-parent_type = "claude"
-sync_home_settings = false
-sync_claude_json = false
-sync_claude_credentials = false
-sync_credentials_on_login = false
-# Keep this agent's per-agent CLAUDE_CONFIG_DIR (don't inherit the parent's
-# new shared-mode default). Every other agent in the workspace points at
-# *this* directory via the host env var the bootstrap writes.
-isolate_local_config_dir = true
-# Window 0 of the services agent must never actually run claude -- the bootstrap
-# window (extra_window) runs supervisord, which owns every background service,
-# and the real chat agents are spun up separately by the bootstrap. Making
-# window 0 a live claude is unsafe: the user could close it, tearing down the
-# tmux session (and supervisord with it). The trailing "&& claude" is
-# unreachable; it exists only so ClaudeAgent.assemble_command can still splice
-# --resume / --session-id onto a claude-shaped invocation without producing a
-# syntactically bogus command.
-command = "sleep infinity && claude"
+parent_type = "command"
+command = "sleep infinity"
 
 # the "worker" agent type -- the default for delegated tasks
 [agent_types.worker]
@@ -292,7 +294,7 @@ type = "main"
 # to it instead.
 #
 # bootstrap is the only extra_window now. It runs first-boot setup (git config,
-# CLAUDE_CONFIG_DIR host-env write, initial chat agent) and then launches
+# initial chat agent) and then launches
 # supervisord, which runs every background service (system_interface, web,
 # cloudflared, app-watcher, host-backup, terminal, and the one-shot
 # deferred-install -- see system/supervisord.conf; the opt-in github-sync service is
@@ -831,7 +833,7 @@ start_arg__extend = ["--restart=unless-stopped"]
 # host's ``/home/user/.mngr/env``, so the in-container mngr sees the same prefix the
 # desktop client used. Anthropic credentials are deliberately NOT forwarded
 # anywhere: workspace Claude auth lives in the env block of the shared
-# CLAUDE_CONFIG_DIR settings.json, written by the in-UI sign-in modal.
+# ~/.claude/settings.json, written by the in-UI sign-in modal.
 pass_host_env__extend = ["MNGR_PREFIX"]
 # Seed /home/user/workspace from the baked image on first boot (idempotent warm-boot
 # fast path). Runs after create_host for both paths; on the fast path the
@@ -847,8 +849,8 @@ type = "chat"
 
 # Caretaker template: the weekly maintenance agent (the "Caretaker") -- the
 # tailored example of the generic `schedule_agent` template below. Like `chat`,
-# it is a plain `claude` agent sharing the services agent's CLAUDE_CONFIG_DIR
-# via the inherited host env, but it is oriented by an appended system prompt
+# it is a plain `claude` agent sharing the workspace's ~/.claude config dir,
+# but it is oriented by an appended system prompt
 # to run the `caretaker` skill. It is spawned (and re-woken) by the caretaker
 # job (the /etc/cron.d/minds-caretaker entry the enable-caretaker skill
 # creates -- absent until then, weekly and findings-gated via
@@ -881,8 +883,8 @@ agent_args = [
 
 # Worktree template: agent in a new git worktree, no services by default --
 # creates its own as needed. Uses the plain `claude` type (not `main`), so
-# worktree agents run a real claude binary and share the services agent's
-# CLAUDE_CONFIG_DIR via the inherited host env var.
+# worktree agents run a real claude binary and share the workspace's ~/.claude
+# config dir.
 [create_templates.worktree]
 type = "claude"
 

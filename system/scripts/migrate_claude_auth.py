@@ -4,7 +4,8 @@
 Older workspaces received ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_BASE_URL`` via
 the mngr host env file (``$MNGR_HOST_DIR/env``), which every process freezes
 at start. Auth now lives in the ``env`` block of the shared
-``$CLAUDE_CONFIG_DIR/settings.json`` (written by the in-UI sign-in modal),
+the shared claude settings.json (``~/.claude/settings.json`` unless
+``CLAUDE_CONFIG_DIR`` overrides it; written by the in-UI sign-in modal),
 so changing credentials only requires restarting claude agents -- never the
 services agent. This script performs the one-time move:
 

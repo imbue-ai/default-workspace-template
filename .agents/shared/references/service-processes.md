@@ -62,8 +62,10 @@ Key fields:
   instead.
 
 Services inherit the agent environment (`MNGR_AGENT_STATE_DIR`,
-`CLAUDE_CONFIG_DIR`, `MNGR_HOST_DIR`, `LATCHKEY_*`, ...) from the bootstrap shell
+`MNGR_HOST_DIR`, `LATCHKEY_*`, ...) from the bootstrap shell
 that launched supervisord -- you do not need a per-program `environment=`.
+(`CLAUDE_CONFIG_DIR` is deliberately NOT in that environment: every claude
+in the workspace uses claude's own default `~/.claude`.)
 
 ## OOM priority (memory-pressure shedding)
 

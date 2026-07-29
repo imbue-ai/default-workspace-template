@@ -1,12 +1,13 @@
 """In-mind Claude authentication: settings-env credential writes, setup-token flow, agent restarts.
 
 Implements the backend half of the in-UI Claude login modal. All credentials
-live in the ``env`` block of the shared ``$CLAUDE_CONFIG_DIR/settings.json``
-(the config dir every claude in the mind inherits), NEVER in the mngr host
-env file: the host env file is frozen into long-lived processes (supervisord
-and its services) at boot, so changing it would require tearing down the
-whole workspace, while a settings.json edit only requires restarting the
-claude agents themselves.
+live in the ``env`` block of the shared ``~/.claude/settings.json`` (the
+config dir every claude in the mind resolves by claude's own default --
+``CLAUDE_CONFIG_DIR`` is deliberately unset workspace-wide), NEVER in the
+mngr host env file: the host env file is frozen into long-lived processes
+(supervisord and its services) at boot, so changing it would require tearing
+down the whole workspace, while a settings.json edit only requires
+restarting the claude agents themselves.
 
 Five sign-in paths:
 
@@ -463,14 +464,36 @@ def read_workspace_host_id() -> str | None:
 
 
 def _resolve_claude_config_dir() -> Path:
+    """Resolve the shared Claude config dir the way claude itself does.
+
+    ``$CLAUDE_CONFIG_DIR`` when set, else ``~/.claude``. In a minds workspace
+    the env var is deliberately unset everywhere (no agent or host env
+    exports it), so this resolves to the same ``~/.claude`` a bare ``claude``
+    in a workspace terminal uses.
+    """
     config_dir = os.environ.get(_CLAUDE_CONFIG_DIR_ENV_VAR, "")
-    if not config_dir:
-        raise ClaudeAuthError(f"{_CLAUDE_CONFIG_DIR_ENV_VAR} is unset; cannot locate the Claude config")
-    return Path(config_dir)
+    if config_dir:
+        return Path(config_dir)
+    return Path.home() / ".claude"
+
+
+def _resolve_claude_json_path() -> Path:
+    """Locate the global claude config file (``.claude.json``) claude reads.
+
+    Mirrors claude's own resolution (and mngr_claude's
+    ``find_user_config_in_unisolated_mode``): ``$CLAUDE_CONFIG_DIR/.claude.json``
+    when the env var is set, but ``~/.claude.json`` -- BESIDE ``~/.claude/``,
+    not inside it -- when unset. Writing the approval into the wrong one of
+    the two would leave claude challenging the key.
+    """
+    config_dir = os.environ.get(_CLAUDE_CONFIG_DIR_ENV_VAR, "")
+    if config_dir:
+        return Path(config_dir) / _CLAUDE_JSON_FILENAME
+    return Path.home() / _CLAUDE_JSON_FILENAME
 
 
 def _resolve_claude_settings_path() -> Path:
-    """Locate the shared `$CLAUDE_CONFIG_DIR/settings.json` for the mind."""
+    """Locate the shared `settings.json` (inside the config dir) for the mind."""
     return _resolve_claude_config_dir() / "settings.json"
 
 
@@ -554,7 +577,7 @@ def record_api_key_approval(managed_env: Mapping[str, str], claude_json_path_ove
     api_key = managed_env.get(ANTHROPIC_API_KEY_ENV_VAR, "")
     if not api_key:
         return
-    claude_json_path = claude_json_path_override or (_resolve_claude_config_dir() / _CLAUDE_JSON_FILENAME)
+    claude_json_path = claude_json_path_override or _resolve_claude_json_path()
     data: dict[str, Any] = {}
     if claude_json_path.exists():
         try:
@@ -882,7 +905,7 @@ class ClaudeAuthService(MutableModel):
         `auth_mode` / `masked_key_suffix` are folded into the returned
         status for the modal's header.
         """
-        managed_env = self._read_managed_env_tolerant()
+        managed_env = read_managed_auth_env()
         combined_extra = {**managed_env, **(dict(extra_env) if extra_env else {})}
         runner_env = {**os.environ, **combined_extra} if combined_extra else None
         try:
@@ -909,19 +932,6 @@ class ClaudeAuthService(MutableModel):
         if not isinstance(payload, dict):
             raise ClaudeAuthError(f"claude auth status returned non-object JSON: {payload!r}")
         return self._with_derived_mode(_parse_status_payload(payload), combined_extra)
-
-    def _read_managed_env_tolerant(self) -> dict[str, str]:
-        """Read the managed settings env, tolerating an unset CLAUDE_CONFIG_DIR.
-
-        Status checks must not explode merely because the env var is
-        missing (e.g. in a degraded mind) -- they degrade to "no managed
-        credentials" and the modal walks the user through recovery.
-        """
-        try:
-            return read_managed_auth_env()
-        except ClaudeAuthError as e:
-            logger.warning("Cannot read managed auth env: {}", e)
-            return {}
 
     def _with_derived_mode(self, status: AuthStatus, managed_env: Mapping[str, str]) -> AuthStatus:
         progress = self.current_restart_progress()
@@ -1411,7 +1421,7 @@ class ClaudeAuthService(MutableModel):
         process start).
         """
         self._drop_current_session_locked()
-        managed_env = self._read_managed_env_tolerant()
+        managed_env = read_managed_auth_env()
         if provider is OAuthProvider.CLAUDEAI and not managed_env:
             self._clear_terminal_restart_progress()
             status = self.get_auth_status()
