@@ -8,8 +8,11 @@ metadata:
 # How to build an app
 
 An "app" here is something the user can click on as a tab in
-the desktop client and see render at `/service/<name>/`, proxied
-through the system_interface.
+the desktop client and see render at its own browser origin --
+locally `http://<name>.<workspace-host>/` (e.g.
+`http://news.agent-ab12.localhost:8421/`). The forwarder routes that
+origin straight to the port you register; nothing proxies or rewrites
+your app's traffic.
 
 There is one canonical path (scaffold a new Flask lib) and one
 escape hatch (wrap a pre-existing third-party server). Modify/remove
@@ -75,22 +78,26 @@ wait for approval.
   below.
 
 If you would otherwise scaffold a Flask lib whose only job is to
-shell out to a third-party tool, do not do that -- the system_interface
-already proxies `/service/<name>/...` to whatever URL you register.
+shell out to a third-party tool, do not do that -- the forwarder
+already routes the service's origin to whatever URL you register.
 Adding a Python proxy in front of the third-party server adds a hop,
 costs an extra process, and complicates WebSocket and streaming
 behavior. Use the escape hatch instead.
 
 Do not extend `system/apps/system_interface/` to add a new view. That app runs
 the top-level workspace UI; new apps go in their own scaffolded lib
-under `system/apps/<your-package>/` so they get an isolated tab and prefix.
+under `system/apps/<your-package>/` so they get an isolated tab and origin.
 
 ## Pre-flight (both paths)
 
-- **Pick a kebab-case app name.** Becomes the URL segment
-  `/service/<name>/`. Short and descriptive (`news`, `docs-viewer`)
-  beats clever. Avoid names already used in `system/supervisord.conf`
-  (`system_interface`, `browser`, etc. are reserved by the scaffolder).
+- **Pick a kebab-case app name.** Becomes the service's hostname
+  label: the tab renders at `http://<name>.<workspace-host>/`, so the
+  name must be DNS-safe -- lowercase letters/digits with single
+  hyphens, no underscores, and it must not start with `agent-` (that
+  prefix is reserved for workspace hostnames). Short and descriptive
+  (`news`, `docs-viewer`) beats clever. Avoid names already used in
+  `system/supervisord.conf` (`system_interface`, `browser`, etc. are
+  reserved by the scaffolder).
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
   `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
@@ -115,7 +122,9 @@ uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
 ```
 
 Required:
-- `--name`: kebab-case (lowercase letters/digits with single hyphens).
+- `--name`: kebab-case (lowercase letters/digits with single hyphens;
+  no underscores, must not start with `agent-`) -- it becomes the
+  service's hostname label.
 - `--description`: becomes the lib `pyproject.toml` description.
 
 Optional:
@@ -136,9 +145,9 @@ What gets generated:
 - `system/apps/<package>/src/<package>/__init__.py` -- empty.
 - `system/apps/<package>/src/<package>/runner.py` -- sync Flask starter.
   Builds a `Flask` app and serves it with
-  `werkzeug.serving.run_simple(..., threaded=True)`. It serves at `/`;
-  the system_interface proxy handles the `/service/<name>/` prefixing,
-  so no `root_path`/`ROOT_PATH` is needed. It also defines a `DATA_DIR`
+  `werkzeug.serving.run_simple(..., threaded=True)`. It serves at `/`,
+  and the app owns its own browser origin, so no path prefix or
+  `root_path`/`ROOT_PATH` is needed. It also defines a `DATA_DIR`
   constant (defaults to `data/.apps/<name>/`, overridable via the
   `<PACKAGE_UPPER>_DATA_DIR` env var) -- route all persistent state
   through it (see File-path conventions below) -- and a `PORT` constant
@@ -167,10 +176,11 @@ What gets updated:
   # plus rotated stdout/stderr logfiles under /var/log/supervisor/<name>-*.log
   ```
 
-  The Flask app serves at `/` and needs no prefix env var: the
-  system_interface proxy handles `/service/<name>/` prefixing (it
-  rewrites absolute paths in served HTML and installs a scoped service
-  worker that prepends the prefix to the page's own fetches). The
+  The Flask app serves at `/` and needs no prefix env var: your app
+  owns its origin, so root-absolute URLs (`href="/api"`), WebSockets
+  (`new WebSocket("/ws")`), cookies (`Set-Cookie: Path=/`), and
+  service workers all work exactly as written -- nothing rewrites
+  anything. The
   `bash -c "..."` wrapper is required because supervisord runs commands
   directly (no shell) and this one chains `forward_port.py` with `&&`. The
   `oom_tag_service.py user` prefix tags this user-created app so it is
@@ -313,12 +323,12 @@ Two cases, two patterns:
 ## Step 3: Verify
 
 Both paths use the same verification recipe. See
-[references/verify.md](references/verify.md) -- curl against
-`http://127.0.0.1:8000/service/<name>/` then a Playwright assertion
-on a unique-to-your-app marker.
+[references/verify.md](references/verify.md) -- curl against the
+registered backend URL `http://127.0.0.1:<port>/` then a Playwright
+assertion on a unique-to-your-app marker.
 
-If verification surfaces something unexpected (502, "duplicated
-dockview tab bar", redirect loop, broken WebSockets), see
+If verification surfaces something unexpected (connection refused,
+a tab stuck on the loading page, broken WebSockets), see
 [references/cross-flow-gotchas.md](references/cross-flow-gotchas.md)
 -- it's symptom-indexed.
 
@@ -481,18 +491,22 @@ python3 system/scripts/forward_port.py --name NAME --remove
 
 Flags:
 
-- `--name`: app name (must match the URL segment a user
-  clicks: `/service/<name>/`).
+- `--name`: app name. It becomes the service's hostname label (the
+  tab renders at `http://<name>.<workspace-host>/`), so it is
+  validated as DNS-safe: lowercase letters/digits with single hyphens,
+  no underscores, and it must not start with `agent-` (reserved for
+  workspace hostnames). Registration fails loudly on an invalid name.
 - `--url`: full URL where the app is reachable from inside the
   container (e.g. `http://localhost:8090`).
 - `--remove`: remove the named entry from
   `data/.state/apps.toml`. Use this when tearing down a service.
 
-## The global (Cloudflare) URL
+## The shared (Cloudflare) URL
 
-If the workspace has Cloudflare tunneling configured, the service is also
-reachable at a public URL -- with caveats about where that hostname lives and
-why it isn't in `data/.state/apps.toml`. See
+If the workspace is shared, every registered service is also reachable at
+its own public origin (`https://<name>--<host>--<user>.<domain>/`) -- with
+caveats about where that hostname lives and why it isn't in
+`data/.state/apps.toml`. See
 [references/public-url.md](references/public-url.md).
 
 ## Cleanup

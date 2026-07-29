@@ -32,18 +32,20 @@ from loguru import logger as _loguru_logger
 
 from imbue.system_interface.models import TerminalSessionInfo
 
-# Path prefix the dispatcher uses for the workspace terminal service. The
-# agent-attached terminal URL the frontend stores is
-# ``/service/terminal/?arg=_&arg=agent&arg=<name>``; the anonymous "New
-# terminal" path uses ``arg=workdir`` instead and is left as ``terminal:<hash>``.
-_TERMINAL_SERVICE_URL_PATH = "/service/terminal/"
+# Name of the workspace terminal service. The agent-attached terminal URL the
+# frontend stores is the terminal service's own origin with dispatch args,
+# e.g. ``http://terminal.agent-<hex>.localhost:8421/?arg=_&arg=agent&arg=<name>``;
+# the anonymous "New terminal" form uses ``arg=workdir`` instead and is left
+# as ``terminal:<hash>``.
+_TERMINAL_SERVICE_NAME = "terminal"
 
 # Query parameter that distinguishes individual browsers in the per-workspace
-# browser fleet. The viewer is served at ``/service/browser/?session=<id>``;
-# each id is a separately-addressable pane. When a service iframe's URL carries
-# this query, ``_resolve_ref`` projects it to ``service:browser?session=<id>``
-# (rather than the bare ``service:browser``) so the CLI and frontend can
-# address, dedup, and focus each browser independently.
+# browser fleet. The viewer is served at the browser service's origin with a
+# ``?session=<id>`` query; each id is a separately-addressable pane. When a
+# service iframe's URL carries this query, ``_resolve_ref`` projects it to
+# ``service:browser?session=<id>`` (rather than the bare ``service:browser``)
+# so the CLI and frontend can address, dedup, and focus each browser
+# independently.
 _BROWSER_SESSION_QUERY_KEY = "session"
 
 # Set of op names the endpoint dispatches on. Anything else is a 400.
@@ -279,11 +281,43 @@ def is_destroyable_terminal_session(session_name: str, prefix: str) -> bool:
     return bool(session_name) and not _is_agent_session(session_name, prefix)
 
 
+def _service_name_from_url(url: Any) -> str | None:
+    """Service name of an absolute service-origin URL, or None.
+
+    The frontend persists panel URLs as absolute service origins whose host
+    carries the service name as its first label: locally
+    ``http://<name>.agent-<hex>.localhost:8421/...`` and on shares
+    ``https://<name>--<host>--<user>.<domain>/...`` (first ``--`` token).
+    Anything else -- an external ``https://`` panel, the bare workspace
+    origin (whose first label is the ``agent-<hex>`` coordinate itself), a
+    non-string value -- yields None so it never masquerades as a service.
+
+    ``system/scripts/layout.py`` (stdlib-only, cannot import this package)
+    mirrors this parse in ``_service_coordinates_from_url``; a drift test in
+    ``layout_ops_test.py`` pins the two copies to each other. The canonical
+    derivation lives in ``frontend/src/origin.ts``.
+    """
+    if not isinstance(url, str):
+        return None
+    host = urllib.parse.urlsplit(url).hostname or ""
+    first_label, _, rest = host.partition(".")
+    # Share hostnames are exactly <service>--<host>--<user> (registered names
+    # can never contain "--", kebab validation forbids consecutive hyphens),
+    # so require BOTH separators -- an external host that merely contains
+    # "--" (e.g. foo--bar.example.com) must not masquerade as a service.
+    if first_label.count("--") == 2:
+        return first_label.split("--", 1)[0] or None
+    if "--" not in first_label and rest.startswith("agent-"):
+        return first_label or None
+    return None
+
+
 def _extract_agent_terminal_name(url: str) -> str | None:
     """If ``url`` is the per-agent terminal URL, return the bound agent name.
 
     The frontend's chat-panel "Open agent terminal" button mints iframes
-    pointed at ``/service/terminal/?arg=_&arg=agent&arg=<name>`` (the
+    pointed at the terminal service's origin with dispatch args
+    (``http://terminal.<workspace-host>/?arg=_&arg=agent&arg=<name>``; the
     ttyd dispatch script attaches to the named tmux session). Detecting
     this shape lets ``_resolve_ref`` project these panels as
     ``chat-terminal:<name>`` -- a stable, predictable ref that mirrors
@@ -292,13 +326,13 @@ def _extract_agent_terminal_name(url: str) -> str | None:
     minted via the "New terminal" button use ``arg=workdir`` instead and
     fall through to the ``terminal:<hash>`` branch.
     """
-    parsed = urllib.parse.urlparse(url)
-    if parsed.path != _TERMINAL_SERVICE_URL_PATH:
+    if _service_name_from_url(url) != _TERMINAL_SERVICE_NAME:
         return None
     # ``parse_qs`` returns repeated-key values in the order they appear in
     # the query string, which is what the frontend's URL builder emits:
     # ``arg=_&arg=agent&arg=<name>``.
-    args = urllib.parse.parse_qs(parsed.query, keep_blank_values=True).get("arg", [])
+    query = urllib.parse.urlsplit(url).query
+    args = urllib.parse.parse_qs(query, keep_blank_values=True).get("arg", [])
     if len(args) != 3 or args[0] != "_" or args[1] != "agent":
         return None
     name = args[2]
@@ -308,14 +342,15 @@ def _extract_agent_terminal_name(url: str) -> str | None:
 def _service_session_suffix(url: Any) -> str:
     """Return ``?session=<id>`` for a browser-fleet iframe URL, else ``""``.
 
-    The browser viewer is served at ``/service/browser/?session=<id>`` and
-    each id is a separately-addressable pane. ``_resolve_ref`` appends this
-    suffix to the ``service:browser`` ref so the CLI and frontend can
-    address / dedup / focus each browser independently. Only the
-    ``session`` query is carried through (mirroring how the agent ref
-    ``service:browser?session=<id>`` is written); every other service
-    iframe URL yields the empty suffix and stays a bare ``service:<name>``
-    ref. Tolerates a non-string / unparsable ``url`` by returning ``""``.
+    The browser viewer is served at the browser service's origin with a
+    ``?session=<id>`` query and each id is a separately-addressable pane.
+    ``_resolve_ref`` appends this suffix to the ``service:browser`` ref so
+    the CLI and frontend can address / dedup / focus each browser
+    independently. Only the ``session`` query is carried through (mirroring
+    how the agent ref ``service:browser?session=<id>`` is written); every
+    other service iframe URL yields the empty suffix and stays a bare
+    ``service:<name>`` ref. Tolerates a non-string / unparsable ``url`` by
+    returning ``""``.
     """
     if not isinstance(url, str):
         return ""
@@ -357,12 +392,13 @@ def _resolve_ref(
         ref = f"subagent:{subagent_session_id or _short_hash(panel_id)}"
     elif panel_type == "iframe" and service_name:
         # A service iframe is normally addressed as ``service:<name>``. The
-        # browser fleet is the exception: each browser pane points at
-        # ``/service/browser/?session=<id>`` and must be separately
-        # addressable, so we carry the ``?session=<id>`` query into the ref
-        # (``service:browser?session=2``). Two browser panes with different
-        # session ids thus get distinct refs and never collide in inspect /
-        # dedup / focus. Any other service iframe stays ``service:<name>``.
+        # browser fleet is the exception: each browser pane points at the
+        # browser service's origin with a ``?session=<id>`` query and must be
+        # separately addressable, so we carry the ``?session=<id>`` query
+        # into the ref (``service:browser?session=2``). Two browser panes
+        # with different session ids thus get distinct refs and never collide
+        # in inspect / dedup / focus. Any other service iframe stays
+        # ``service:<name>``.
         session_suffix = _service_session_suffix(url)
         ref = f"service:{service_name}{session_suffix}"
     elif (
@@ -374,7 +410,7 @@ def _resolve_ref(
         # form so they're addressable by name (parallel to ``chat:<name>``)
         # rather than only via the opaque ``terminal:<hash>``.
         ref = f"chat-terminal:{agent_terminal_name}"
-    elif panel_type == "iframe" and isinstance(url, str) and url.startswith(_TERMINAL_SERVICE_URL_PATH):
+    elif panel_type == "iframe" and _service_name_from_url(url) == _TERMINAL_SERVICE_NAME:
         ref = f"terminal:{_short_hash(panel_id)}"
     elif panel_type == "iframe":
         ref = f"url:{_short_hash(panel_id)}"
@@ -577,9 +613,10 @@ def layout_list(
         )
         # The agent-attached terminal is a separately-addressable singleton
         # (one tmux session per agent name). Its ``is_open`` reflects
-        # whether a panel pointed at ``/service/terminal/?arg=_&arg=agent
-        # &arg=<name>`` is currently mounted; ``is_running`` mirrors the
-        # owning agent so a stopped agent's terminal is flagged as such.
+        # whether a panel pointed at the terminal service's origin with
+        # ``?arg=_&arg=agent&arg=<name>`` is currently mounted;
+        # ``is_running`` mirrors the owning agent so a stopped agent's
+        # terminal is flagged as such.
         terminal_ref = f"chat-terminal:{name}"
         entries.append(
             {

@@ -12,6 +12,7 @@ Usage:
 import argparse
 import fcntl
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -19,6 +20,50 @@ import tomlkit
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
+
+# Service-name rule: lowercase alphanumeric/underscore runs separated by
+# single hyphens (no uppercase, no leading/trailing/consecutive hyphens).
+# The registered name becomes the first label of the service's origin
+# hostname (http://<name>.agent-<hex>.localhost:8421/ locally,
+# https://<name>--<host>--<user>.<domain>/ on shares), so it must work as a
+# hostname label. Underscores are allowed -- ``system_interface`` predates
+# this scheme and underscore labels resolve fine on Cloudflare DNS and in
+# Chromium -- but consecutive hyphens would collide with the ``--`` share
+# separator. Accepts a superset of KEBAB_RE in the build-app scaffold.
+NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
+
+# The workspace coordinate in local origins is the ``agent-<hex>`` label; a
+# service whose name starts with ``agent-`` would collide with it when the
+# forwarder parses hostnames, so the prefix is reserved.
+RESERVED_NAME_PREFIX = "agent-"
+
+# ``localhost`` is the local origin's root domain; a service by that name
+# would produce the nonsense hostname ``localhost.agent-<hex>.localhost``.
+RESERVED_NAMES = frozenset({"localhost"})
+
+
+def validate_service_name(name: str) -> str | None:
+    """Return an error message when ``name`` cannot be a service origin label.
+
+    Returns None for a usable name. Applied to both upsert and remove so a
+    bad name fails loudly instead of silently registering an unroutable (or
+    unremovable) entry.
+    """
+    if not NAME_PATTERN.match(name):
+        return (
+            f"invalid app name {name!r}: names must be lowercase "
+            "alphanumeric/underscore runs separated by single hyphens (no "
+            "leading, trailing, or consecutive hyphens) because the name "
+            "becomes the service's origin hostname label"
+        )
+    if name.startswith(RESERVED_NAME_PREFIX):
+        return (
+            f"invalid app name {name!r}: the {RESERVED_NAME_PREFIX!r} prefix is "
+            "reserved for the workspace coordinate in service origin hostnames"
+        )
+    if name in RESERVED_NAMES:
+        return f"invalid app name {name!r}: this name is reserved"
+    return None
 
 
 def _apps_file() -> Path:
@@ -114,6 +159,10 @@ def main() -> None:
 
     if not args.remove and not args.url:
         parser.error("--url is required when not using --remove")
+
+    name_error = validate_service_name(args.name)
+    if name_error is not None:
+        parser.error(name_error)
 
     apps_file = _apps_file()
     lock_path = apps_file.parent / ".apps.lock"

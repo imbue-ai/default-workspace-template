@@ -5,6 +5,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
 import { parseJsonMessage } from "./ws-json";
@@ -439,11 +440,10 @@ export async function fetchTerminalSessions(): Promise<{ terminals: TerminalSess
   }
 }
 
-// The workspace terminal (ttyd) service is proxied at this same-origin path
-// (the service dispatcher adds no base-path prefix). Kept here rather than in
-// the view so the pure URL builder below is unit-testable without importing
+// The workspace terminal (ttyd) service lives on its own derived origin
+// (``http://terminal.<ws-host>/`` locally). The URL builder below is kept
+// here rather than in the view so it is unit-testable without importing
 // dockview-core (which needs a DOM).
-const TERMINAL_SERVICE_URL_PATH = "/service/terminal/";
 
 /** Build the ttyd URL that attaches a tab to a named tmux session via the
  *  ``session`` dispatch key. The ttyd dispatch reads the args positionally:
@@ -459,7 +459,7 @@ export function buildSessionTerminalUrl(sessionName: string, terminalId: string,
   params.append("arg", sessionName);
   params.append("arg", terminalId);
   params.append("arg", workdir);
-  return `${TERMINAL_SERVICE_URL_PATH}?${params.toString()}`;
+  return `${deriveServiceOrigin("terminal")}?${params.toString()}`;
 }
 
 /** Ask the backend to allocate the next free ``terminal-N`` session name. The

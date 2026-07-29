@@ -1,11 +1,13 @@
 """Tests for ``layout_ops`` (mutex, inspect serializer, list helper, op-name validation)."""
 
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.layout_ops import _service_name_from_url
 from imbue.system_interface.layout_ops import _service_session_suffix
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
@@ -149,9 +151,10 @@ def test_inspect_resolves_iframe_with_service_name(tmp_path: Path) -> None:
 def test_inspect_emits_chat_terminal_ref_for_agent_attached_terminal(tmp_path: Path) -> None:
     """An iframe pointed at the per-agent terminal URL projects to ``chat-terminal:<name>``.
 
-    The chat panel's "Open agent terminal" button mints iframes pointed
-    at ``/service/terminal/?arg=_&arg=agent&arg=<name>``; ``_resolve_ref``
-    must recognize that URL shape and emit the stable
+    The chat panel's "Open agent terminal" button mints iframes pointed at
+    the terminal service's own origin with dispatch args
+    (``http://terminal.agent-<hex>.localhost:8421/?arg=_&arg=agent&arg=<name>``);
+    ``_resolve_ref`` must recognize that URL shape and emit the stable
     ``chat-terminal:<name>`` ref so the panel is addressable by name
     rather than via an opaque ``terminal:<hash>``.
     """
@@ -165,7 +168,33 @@ def test_inspect_emits_chat_terminal_ref_for_agent_attached_terminal(tmp_path: P
         panel_params={
             "p1": {
                 "panelType": "iframe",
-                "url": "/service/terminal/?arg=_&arg=agent&arg=alice",
+                "url": "http://terminal.agent-0af.localhost:8421/?arg=_&arg=agent&arg=alice",
+            }
+        },
+    )
+    summary = layout_inspect(layout_path, {})
+    refs = [p["ref"] for p in summary["panels"]]
+    assert "chat-terminal:alice" in refs
+
+
+def test_inspect_emits_chat_terminal_ref_on_shared_origin(tmp_path: Path) -> None:
+    """The shared host shape (``terminal--<host>--<user>.<domain>``) is recognized too.
+
+    On shares the service name is the first ``--`` token of the flat
+    hostname rather than the first dot-label, so the origin-based service
+    detection must handle both spellings.
+    """
+    layout_path = tmp_path / "layout.json"
+    _write_layout(
+        layout_path,
+        dockview={
+            "panels": {"p1": {"id": "p1", "title": "alice terminal"}},
+            "grid": {"root": {"type": "leaf", "data": {"views": ["p1"], "activeView": "p1", "size": 1.0}}},
+        },
+        panel_params={
+            "p1": {
+                "panelType": "iframe",
+                "url": "https://terminal--myhost--user.example.com/?arg=_&arg=agent&arg=alice",
             }
         },
     )
@@ -178,8 +207,8 @@ def test_inspect_keeps_anonymous_terminal_as_terminal_hash_ref(tmp_path: Path) -
     """Terminals minted by the "New terminal" button use ``arg=workdir`` and stay ``terminal:<hash>``.
 
     Only the agent-attached terminal pattern (``arg=agent&arg=<name>``)
-    projects to ``chat-terminal:<name>``; everything else under
-    ``/service/terminal/`` falls back to the opaque hash form.
+    projects to ``chat-terminal:<name>``; everything else on the terminal
+    service's origin falls back to the opaque hash form.
     """
     layout_path = tmp_path / "layout.json"
     _write_layout(
@@ -191,7 +220,7 @@ def test_inspect_keeps_anonymous_terminal_as_terminal_hash_ref(tmp_path: Path) -
         panel_params={
             "p1": {
                 "panelType": "iframe",
-                "url": "/service/terminal/?arg=_&arg=workdir&arg=%2Fmngr%2Fcode",
+                "url": "http://terminal.agent-0af.localhost:8421/?arg=_&arg=workdir&arg=%2Fmngr%2Fcode",
             }
         },
     )
@@ -463,7 +492,7 @@ def test_list_chat_terminal_marks_open_when_url_is_mounted(tmp_path: Path) -> No
         panel_params={
             "p1": {
                 "panelType": "iframe",
-                "url": "/service/terminal/?arg=_&arg=agent&arg=alice",
+                "url": "http://terminal.agent-0af.localhost:8421/?arg=_&arg=agent&arg=alice",
             }
         },
     )
@@ -550,8 +579,43 @@ def test_is_destroyable_terminal_session_blocks_agents_even_with_terminal_like_n
 def test_service_session_suffix_distinguishes_browser_panes() -> None:
     # A browser-fleet iframe carries ?session=<id> so each browser is a distinct
     # ref (service:browser?session=2); every other service iframe stays bare.
-    assert _service_session_suffix("/service/browser/?session=2") == "?session=2"
-    assert _service_session_suffix("/service/browser/?session=0") == "?session=0"
-    assert _service_session_suffix("/service/browser/") == ""
-    assert _service_session_suffix("/service/web/") == ""
+    assert _service_session_suffix("http://browser.agent-0af.localhost:8421/?session=2") == "?session=2"
+    assert _service_session_suffix("http://browser.agent-0af.localhost:8421/?session=0") == "?session=0"
+    assert _service_session_suffix("http://browser.agent-0af.localhost:8421/") == ""
+    assert _service_session_suffix("http://web.agent-0af.localhost:8421/") == ""
     assert _service_session_suffix(None) == ""
+
+
+def test_service_name_from_url_rejects_external_hosts_containing_double_dash() -> None:
+    """Share origins are exactly <service>--<host>--<user>; an external host
+    whose first label merely contains "--" must not parse as a service."""
+    assert _service_name_from_url("https://foo--bar.example.com/") is None
+    assert _service_name_from_url("https://api--myhost--user.example.com/") == "api"
+    assert _service_name_from_url("http://web.agent-0af.localhost:8421/") == "web"
+
+
+def test_service_name_from_url_agrees_with_layout_script_parser() -> None:
+    """Drift guard: ``system/scripts/layout.py`` re-implements this parse.
+
+    The script must stay stdlib-only (agents run it bare), so it cannot import
+    this package; this test pins the two copies to each other instead. If it
+    fails, the share-hostname convention changed in one place but not the
+    other.
+    """
+    script_path = Path(__file__).parents[4] / "scripts" / "layout.py"
+    spec = importlib.util.spec_from_file_location("_layout_script_drift_check", script_path)
+    assert spec is not None and spec.loader is not None
+    layout_script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(layout_script)
+    urls = (
+        "http://api.agent-0af.localhost:8421/health",
+        "http://web.agent-0af.localhost:8421/",
+        "https://api--myhost--user.example.com/health",
+        "https://example.com/",
+        "http://agent-0af.localhost:8421/",
+        "https://foo--bar.example.com/",
+        "http://terminal.agent-0af.localhost:8421/?arg=_&arg=agent&arg=main",
+    )
+    for url in urls:
+        coordinates = layout_script._service_coordinates_from_url(url)
+        assert _service_name_from_url(url) == (coordinates[0] if coordinates else None), url
