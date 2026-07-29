@@ -216,6 +216,15 @@ Then bring the whole picture to the user in one message:
 - **Billing-relevant AI decisions** (Step 8's review) and any scheduled job whose
   purpose is unclear.
 
+**File the migrated call sites' latchkey grants now, not later.** The `latchkey`
+findings name which third-party services the user's own creations reach. Grants
+are keyed to the host, so none of the old workspace's carried over. File **one
+batched permission request per scope** here -- before the user starts using
+anything -- rather than letting each migrated app hit a denial the first time they
+open it. Use the `latchkey` skill's `type: "predefined"` request, one call per
+scope, all of them back-to-back, with a rationale naming the creation that needs
+it.
+
 ## 6. Dispatch the worker
 
 Open the tracking ticket, write the task file, launch, and background-poll.
@@ -399,9 +408,9 @@ credential where the answer is unambiguous. **Ask the user whenever billing is a
 stake** -- a copied API key in a subscription-auth workspace silently bills full
 API rates, so that case is always a question. See the `use-ai-integration` skill.
 
-**Latchkey.** The batched request from Step 2 covered the migration itself; file
-one further batched request per scope for the *migrated call sites*, so the user
-approves them in a single sitting rather than hitting a denial later.
+**Latchkey.** Step 5 already filed the migrated call sites' grants. Confirm each
+one landed, and only re-request a scope the audit genuinely missed -- never
+re-ask for a permission you have already been told was granted.
 
 **Old GitHub sync.** If the source had it enabled (a `github_sync.toml` and an
 `origin` pointing at a private repo), report that plainly and offer to run
