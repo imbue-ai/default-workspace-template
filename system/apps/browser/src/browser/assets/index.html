@@ -19,6 +19,27 @@
   #returnbar.show { display: flex; }
   #returnbar.handoff { background: #5a3a1a; color: #ffcc66; }
   #returnbtn { padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+  #losefocusbtn { padding: 5px 12px; background: #3a7a5c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+  #tipsbtn { padding: 5px 12px; background: #444; border: none; color: #ddd; border-radius: 4px; cursor: pointer; }
+  .hidden { display: none !important; }
+  /* Keys-go-to-the-browser flag: shown while keyboard focus is inside the live
+     view, alongside the matching green ring on #stage. */
+  #focusflag { color: #0e9c6b; font-weight: 600; }
+
+  /* Focus indicator: while keyboard focus is inside the live view (so keys go to
+     the remote browser), a 2px accent inset glow rings the pane. Same tier the
+     old canvas viewer had; driven by focus/blur of the client iframe's window. */
+  #stage.focused { box-shadow: inset 0 0 0 2px #0e9c6b, inset 0 0 10px rgba(14, 156, 107, 0.5); }
+
+  /* Tips modal: a centered card over the pane, opened from the bar's "View tips". */
+  #tipsmodal { display: none; position: absolute; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.6); align-items: center; justify-content: center; padding: 24px; }
+  #tipsmodal.show { display: flex; }
+  #tipscard { background: #252526; border: 1px solid #3a3a3a; border-radius: 8px; max-width: 560px; max-height: 82%; overflow: auto; padding: 20px 22px; color: #ddd; font-size: 13px; line-height: 1.5; }
+  #tipscard h2 { margin: 0 0 12px; font-size: 16px; color: #fff; }
+  #tipscard ul { margin: 0; padding-left: 18px; }
+  #tipscard li { margin: 9px 0; }
+  #tipscard b { color: #4ec9b0; }
+  #tipsclose { margin-top: 18px; padding: 6px 14px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
 
   #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
   /* The VNC client fills the pane; it does its own scaling to the framebuffer. */
@@ -68,6 +89,9 @@
        be a second, worse copy stacked above the real one. -->
   <div id="returnbar">
     <span id="returnqueue">You have control.</span>
+    <span id="focusflag" class="hidden">Keys go to the browser.</span>
+    <button id="losefocusbtn" class="hidden">Lose browser focus</button>
+    <button id="tipsbtn">View tips</button>
     <button id="returnbtn">Return control to agents</button>
   </div>
   <div id="stage">
@@ -92,6 +116,25 @@
       <div class="msg">Starting browser…</div>
     </div>
   </div>
+  <div id="tipsmodal">
+    <div id="tipscard">
+      <h2>Using this browser</h2>
+      <ul>
+        <li><b>Keyboard shortcuts.</b><br />
+          For Mac: Cmd + C, V, A, E, F, etc. can be used in this browser. Other Cmd
+          hotkeys are not reliable, such as Cmd + T, W or N. However, you can also use
+          Ctrl + T, W, etc. to get around that!<br />
+          For Windows/Linux: Ctrl + C, V, A, E, F (and their Shift variants), etc. can
+          be used in this browser. Other Ctrl hotkeys are not reliable, such as
+          Ctrl + W or Ctrl + N.</li>
+        <li><b>Use it like a normal browser.</b> Click, type, scroll, copy and paste text and images, manage tabs, and watch videos (with sound) — it all works.</li>
+        <li><b>You share each browser with agents, through a queue.</b> Only one of you drives at a time; whoever else wants it waits in line. Click “Return control to agents” to hand it back when you're done.</li>
+        <li><b>An agent may hand a browser to you</b> for something it can't do itself — a captcha or a login check. Control comes to you and this bar turns amber; finish the step, then return control.</li>
+        <li><b>Logins are saved.</b> Each browser keeps its own cookies and sign-ins, and they persist across restarts — so you stay logged in.</li>
+      </ul>
+      <button id="tipsclose">Got it</button>
+    </div>
+  </div>
 </div>
 <script>
 (function () {
@@ -108,6 +151,12 @@
   const returnBar = document.getElementById("returnbar");
   const returnBtn = document.getElementById("returnbtn");
   const returnQueue = document.getElementById("returnqueue");
+  const stage = document.getElementById("stage");
+  const focusFlag = document.getElementById("focusflag");
+  const loseFocusBtn = document.getElementById("losefocusbtn");
+  const tipsBtn = document.getElementById("tipsbtn");
+  const tipsModal = document.getElementById("tipsmodal");
+  const tipsCloseBtn = document.getElementById("tipsclose");
 
   // Latest control state from the server's {type:"control"} broadcast. The
   // human can only drive the page while owner === "human".
@@ -276,9 +325,33 @@
   // The client is attached ONCE per browser, and deliberately never on a lifecycle
   // change: reassigning src would reconnect RFB and flash the pane on every control
   // handoff. The overlays above it handle every non-running state.
+  // --- focus indicator + tips ----------------------------------------------
+  //
+  // While keyboard focus is inside the client iframe, every keystroke goes to
+  // the remote browser -- the green ring on the stage and the bar flag say so,
+  // and "Lose browser focus" is the explicit exit (clicking any bar button also
+  // pulls focus back out naturally). The client document is same-origin, so its
+  // window's focus/blur events are attachable directly; reattached on every
+  // iframe load since a reconnect replaces the document.
+  function setFocused(on) {
+    stage.classList.toggle("focused", on);
+    focusFlag.classList.toggle("hidden", !on);
+    loseFocusBtn.classList.toggle("hidden", !on);
+  }
+  loseFocusBtn.onclick = () => { screenFrame.blur(); loseFocusBtn.blur(); setFocused(false); };
+  tipsBtn.onclick = () => tipsModal.classList.add("show");
+  tipsCloseBtn.onclick = () => tipsModal.classList.remove("show");
+  tipsModal.addEventListener("click", (e) => { if (e.target === tipsModal) tipsModal.classList.remove("show"); });
+
   function attachScreen(id) {
     if (screenFrame.dataset.browserId === id) return;  // already attached to this browser
     screenFrame.dataset.browserId = id;
+    screenFrame.addEventListener("load", () => {
+      try {
+        screenFrame.contentWindow.addEventListener("focus", () => setFocused(true));
+        screenFrame.contentWindow.addEventListener("blur", () => setFocused(false));
+      } catch (_) { /* cross-origin only if misconfigured; the indicator just stays off */ }
+    });
     // Each browser's KasmVNC is its OWN workspace service, "browser-<name>", so its
     // client is served at that prefix's ROOT -- a sibling of this page. That is what
     // the client needs: it builds absolute /assets/... URLs and derives its websocket
