@@ -103,7 +103,11 @@ _HEALTH_INTERVAL_SECONDS = 1.0
 # no window at all. Only this workspace's agents are visible from here, so
 # exactly one carries ``is_primary``. Mirrors the resolution the ``assist``
 # skill uses for bug reports.
-_PRIMARY_AGENT_QUERY = "has(labels.is_primary) && has(labels.workspace)"
+#
+# ``is_primary`` alone is the whole filter: minds dropped the ``workspace``
+# label from its agents, so requiring it too matched nothing and sent every
+# caller down the fall-back path below.
+_PRIMARY_AGENT_QUERY = "has(labels.is_primary)"
 
 
 class Runner:
