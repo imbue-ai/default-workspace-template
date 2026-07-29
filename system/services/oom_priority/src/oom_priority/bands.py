@@ -45,7 +45,7 @@ AGENT_SUBPROCESS: Final[int] = 900
 
 # Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` (the most
 # expendable chat) and its expendability is re-tagged at runtime from live UI
-# activity (see the system-interface ``ChatOomPrioritizer``): the more a chat is
+# activity (see the system_interface ``ChatOomPrioritizer``): the more a chat is
 # engaged with, the more protected it is, but every chat always stays strictly
 # below ``WORKER_AGENT`` (workers are shed before any chat) and strictly above the
 # service bands (a chat revives on its next message, so it is shed before a
@@ -121,7 +121,7 @@ def chat_agent_oom_score_adj(
 USER_SERVICE: Final[int] = 200
 SERVICE_BANDS: Final[dict[str, int]] = {
     "terminal": 10,
-    "system-interface": 20,
+    "system_interface": 20,
     "cloudflared": 30,
     # Opt-in runtime/ sync (added by the github-sync skill); inherits the band the
     # now-removed runtime-backup service used to hold.

@@ -188,7 +188,7 @@ host_log_dir = "/var/log/mngr"
 # gVisor's gofer-backed filesystem, which returns EOPNOTSUPP for os.link() of a
 # socket inode. supervisord installs its control socket via a hard link, so on a
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
-# system-interface -- the workspace then sits on the "Loading workspace" loader
+# system_interface -- the workspace then sits on the "Loading workspace" loader
 # forever. A tmpfs /run makes the hard link work. Mirrors the tmpfs /run that the
 # aws-<region> provider start args and the ovh/vultr/imbue_cloud host setup apply.
 # /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
@@ -293,7 +293,7 @@ type = "main"
 #
 # bootstrap is the only extra_window now. It runs first-boot setup (git config,
 # CLAUDE_CONFIG_DIR host-env write, initial chat agent) and then launches
-# supervisord, which runs every background service (system-interface, web,
+# supervisord, which runs every background service (system_interface, web,
 # cloudflared, app-watcher, host-backup, terminal, and the one-shot
 # deferred-install -- see system/supervisord.conf; the opt-in github-sync service is
 # added by its skill). The old git_auth_setup window is gone (the git config

@@ -39,7 +39,7 @@ def record_agent_pid(pid: int, agent_name: str, is_worker: bool, agent_id: str |
     """Register ``pid`` as the main process of ``agent_name``.
 
     ``agent_id`` (mngr's stable per-agent id) is recorded alongside the name so a
-    consumer that knows only the id -- e.g. the system-interface OOM prioritizer,
+    consumer that knows only the id -- e.g. the system_interface OOM prioritizer,
     which re-tags a chat by id -- can resolve the live pid via
     ``lookup_pid_by_agent_id``. It is optional so older callers/tests that pass
     only a name still work.

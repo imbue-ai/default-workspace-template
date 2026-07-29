@@ -22,7 +22,7 @@ describe("deriveServiceOrigin", () => {
   });
 
   it("swaps the first -- token on a shared host", () => {
-    expect(deriveServiceOrigin("terminal", "system-interface--myhost--amir.imbue.app", "https:")).toBe(
+    expect(deriveServiceOrigin("terminal", "system_interface--myhost--amir.imbue.app", "https:")).toBe(
       "https://terminal--myhost--amir.imbue.app/",
     );
   });
@@ -33,8 +33,8 @@ describe("deriveServiceOrigin", () => {
       "http://my-service.agent-abc123.localhost:8421/",
     );
     // ...and on a shared host it replaces the leading token wholesale, even
-    // when that token itself contains single hyphens (``system-interface``).
-    expect(deriveServiceOrigin("my-service", "system-interface--myhost--amir.imbue.app", "https:")).toBe(
+    // when that token itself contains single hyphens (``system_interface``).
+    expect(deriveServiceOrigin("my-service", "system_interface--myhost--amir.imbue.app", "https:")).toBe(
       "https://my-service--myhost--amir.imbue.app/",
     );
   });

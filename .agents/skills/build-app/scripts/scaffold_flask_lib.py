@@ -66,7 +66,9 @@ def _validate_name(name: str) -> None:
     # The name becomes the service's hostname label (the app is served at
     # http://<name>.<workspace-host>/), so it must be DNS-safe: kebab-case,
     # no underscores, and not in the `agent-` prefix space reserved for
-    # workspace hostnames. forward_port.py enforces the same rules.
+    # workspace hostnames. forward_port.py accepts a superset (underscores
+    # are allowed there for legacy names like ``system_interface``), so every
+    # name the scaffold mints registers cleanly.
     if not KEBAB_RE.match(name):
         sys.exit(
             f"error: --name {name!r} is not valid kebab-case "

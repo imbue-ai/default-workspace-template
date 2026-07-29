@@ -96,12 +96,12 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   hyphens, no underscores, and it must not start with `agent-` (that
   prefix is reserved for workspace hostnames). Short and descriptive
   (`news`, `docs-viewer`) beats clever. Avoid names already used in
-  `system/supervisord.conf` (`system-interface`, `browser`, etc. are
+  `system/supervisord.conf` (`system_interface`, `browser`, etc. are
   reserved by the scaffolder).
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
   `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
-  manually, avoid `8000` (system-interface) and `8081` (the browser
+  manually, avoid `8000` (system_interface) and `8081` (the browser
   service).
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
   app from inside the same container; binding to all interfaces is
@@ -369,7 +369,7 @@ renaming, maximizing, replacing an iframe's URL, inspecting the live
 tree -- see the `manage-layout` skill. `layout.py list` is also useful
 when the user is asking about what tabs are available (it prints every
 user-facing registered service plus every mngr-level agent, with
-open/running flags; the workspace chrome's own `system-interface` entry
+open/running flags; the workspace chrome's own `system_interface` entry
 is hidden).
 
 ## Step 5: Finalize in the background (after the user confirms the working site)

@@ -22,7 +22,7 @@ Sharing is two-tier:
 
 - **Per-service email list**: adding an email to a service's list
   grants access to that service only.
-- **Workspace master list** (the `system-interface` list): adding an
+- **Workspace master list** (the `system_interface` list): adding an
   email there grants access to *every* service in the workspace,
   including services registered later.
 

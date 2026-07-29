@@ -35,7 +35,7 @@ def _read_apps(apps_file: Path) -> list[dict[str, str]]:
     return tomllib.loads(apps_file.read_text()).get("apps", [])
 
 
-@pytest.mark.parametrize("name", ["terminal", "browser", "my-app", "app2", "a", "openvscode-server-4"])
+@pytest.mark.parametrize("name", ["terminal", "browser", "my-app", "app2", "a", "openvscode-server-4", "system_interface"])
 def test_valid_names_register_and_are_persisted(tmp_path: Path, name: str) -> None:
     apps_file = tmp_path / "apps.toml"
     result = _run(["--name", name, "--url", "http://localhost:7681"], apps_file)
@@ -46,7 +46,6 @@ def test_valid_names_register_and_are_persisted(tmp_path: Path, name: str) -> No
 @pytest.mark.parametrize(
     "name",
     [
-        "my_app",
         "MyApp",
         "UPPER",
         "agent-abc",
@@ -69,7 +68,7 @@ def test_invalid_names_are_rejected_with_a_clear_error(tmp_path: Path, name: str
 
 def test_remove_also_rejects_invalid_names(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
-    result = _run(["--remove", "--name", "my_app"], apps_file)
+    result = _run(["--remove", "--name", "double--hyphen"], apps_file)
     assert result.returncode != 0
     assert "invalid app name" in result.stderr
 

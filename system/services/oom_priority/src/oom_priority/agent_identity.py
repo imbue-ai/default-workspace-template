@@ -71,7 +71,7 @@ def is_chat_agent(agent_name: str) -> bool:
 
     A chat is a user-facing agent (created through the UI or an equivalent
     user_created path). It launches at the most-expendable chat band and the
-    system-interface prioritizer pulls it toward the protected floor as the user
+    system_interface prioritizer pulls it toward the protected floor as the user
     engages with it. Returns False when the record is unavailable or the agent is
     not found, so an unclassifiable agent is treated as least-protected rather
     than given a chat's engagement-based protection.

@@ -79,7 +79,7 @@ and should outlive a service you added. The wrapper sets the process's
 overhead.
 
 Only the built-in template services pass their own name instead of `user` (e.g.
-`... oom_tag_service.py system-interface ...`); anything you add should use
+`... oom_tag_service.py system_interface ...`); anything you add should use
 `user`. There is no protected escape hatch: an unknown key defaults to the
 `user` band, and if you omit the prefix entirely a backstop listener
 (`oom-tag-backstop`) tags the service into the `user` band shortly after it

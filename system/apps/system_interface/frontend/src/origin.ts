@@ -6,7 +6,7 @@
  * - Local workspace hosts (``agent-<hex>.localhost:8421``) nest the service
  *   as a subdomain label: service ``foo`` lives at
  *   ``http://foo.agent-<hex>.localhost:8421/``.
- * - Shared hosts (``system-interface--<host>--<user>.<domain>``) swap the
+ * - Shared hosts (``system_interface--<host>--<user>.<domain>``) swap the
  *   text before the FIRST ``--`` token: ``foo`` lives at
  *   ``https://foo--<host>--<user>.<domain>/``.
  *

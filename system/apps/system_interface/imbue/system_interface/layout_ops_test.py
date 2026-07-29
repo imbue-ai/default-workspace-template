@@ -392,10 +392,10 @@ def test_list_marks_open_services_via_layout_json(tmp_path: Path) -> None:
 
 
 def test_list_hides_reserved_system_interface_entry(tmp_path: Path) -> None:
-    """The chrome's own ``system-interface`` registration is filtered server-side
+    """The chrome's own ``system_interface`` registration is filtered server-side
     so every caller (script, direct HTTP, future SDKs) sees the same set."""
     entries = layout_list(
-        service_names=("web", "system-interface", "api"),
+        service_names=("web", "system_interface", "api"),
         agents=[],
         layout_json_path=tmp_path / "missing.json",
         agent_name_by_id={},
@@ -403,7 +403,7 @@ def test_list_hides_reserved_system_interface_entry(tmp_path: Path) -> None:
     refs = {e["ref"] for e in entries}
     assert "service:web" in refs
     assert "service:api" in refs
-    assert "service:system-interface" not in refs
+    assert "service:system_interface" not in refs
 
 
 def test_allocate_terminal_panel_id_returns_terminal_ref_for_panel_id() -> None:

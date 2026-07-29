@@ -33,10 +33,12 @@ Step 3 verification.
 ## Service names must be DNS-safe
 
 The name becomes the service's hostname label, so it must be lowercase
-letters/digits with single hyphens -- **no underscores** -- and must
-not start with `agent-` (reserved for workspace hostnames).
-`forward_port.py` and the scaffolder both reject invalid names; if a
-registration fails loudly at startup, check the name first.
+letters/digits with single hyphens -- **no underscores** for new apps
+(the scaffolder requires kebab-case; `forward_port.py` additionally
+tolerates underscores for legacy names like `system_interface`) -- and
+must not start with `agent-` (reserved for workspace hostnames). Both
+reject invalid names; if a registration fails loudly at startup, check
+the name first.
 
 ## Don't hardcode `localhost:<port>` in browser-facing code
 

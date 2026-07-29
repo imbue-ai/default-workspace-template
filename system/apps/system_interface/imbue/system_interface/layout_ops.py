@@ -116,7 +116,7 @@ _MUTEX_TTL_SECONDS: float = 0.5
 # Reserved service entries that aren't user-facing tabs. Filtered out of
 # ``layout_list`` so every caller (script, direct HTTP, future SDKs) gets
 # the same view of "addressable things" without duplicating the filter.
-_HIDDEN_SERVICES: frozenset[str] = frozenset({"system-interface"})
+_HIDDEN_SERVICES: frozenset[str] = frozenset({"system_interface"})
 
 
 def is_known_op(op: str) -> bool:
