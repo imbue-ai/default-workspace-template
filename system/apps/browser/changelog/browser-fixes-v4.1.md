@@ -150,3 +150,23 @@ is capped at 1 MiB by KasmVNC itself. Xvnc declines incremental transfers as a
 requestor, and Chromium switches to incremental above exactly 1 MiB, so larger
 images are dropped with only an INFO log. Raising that needs our own transfer
 path for the oversize case.
+
+----
+
+The pane goes back to `resize=remote`.
+
+Switching it to `resize=scale` was a mistake, and the "cropped and off-centre"
+pane was its consequence, not an unrelated bug. `scale` pins the server
+framebuffer at the launch geometry and scales client-side, which sounds cheaper
+and is not: the encoder works on damaged rectangles *of the framebuffer*, so a
+1280x800 framebuffer costs a full 1280x800 of encoding and transmission even
+when the pane is 700x450 and the client discards most of those pixels in CSS.
+`remote` sizes the framebuffer to the pane, so only visible pixels are ever
+encoded -- less work whenever the pane is smaller than the framebuffer, which is
+the normal case.
+
+`remote` also gives the behaviour that was wanted in the first place: the
+browser viewport *is* the pane, filled and sharp at any size, with no letterbox
+and nothing cropped. Its cost is per resize rather than ongoing -- a mode change,
+a relayout and a full repaint -- and the client debounces that by 500ms, so
+dragging a pane divider produces one resize at the end rather than one per frame.
