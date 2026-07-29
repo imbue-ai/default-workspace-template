@@ -83,3 +83,16 @@ cannot cover -- earlyoom kills the service directly and never signals the group 
 the service also sweeps its own display range at startup, before restoring
 anything, and kills whatever it finds there. At that point it owns no display, so
 anything in range is an orphan from a previous run.
+
+----
+
+The browser pane got its focus indicator and tips card back.
+
+While keyboard focus is inside the live view -- so keys go to the remote
+browser -- the pane shows the green inset ring and a "Keys go to the browser"
+flag in the control bar, with an explicit "Lose browser focus" button as the
+exit, matching the old canvas viewer. A "View tips" button opens the usage
+card; its first bullet documents which keyboard shortcuts are reliable
+per platform (Cmd combos on macOS are partly unreliable -- use Ctrl+T/W as the
+workaround -- while plain letters and Cmd+C/V/A/E/F work), followed by the
+sharing/queue, handoff and saved-logins notes unchanged.
