@@ -36,7 +36,6 @@ from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
-from imbue.system_interface.testing import LOCAL_PROVIDER
 from imbue.system_interface.testing import build_agent_details
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -1137,7 +1136,11 @@ def test_follow_mode_folds_agents_from_the_running_observers_event_file(
     lock_fd = acquire_observe_lock(tmp_path)
     try:
         manager.start()
-        assert manager.get_agent_events_status().is_alive is True
+        assert poll_until(
+            lambda: manager.get_agent_events_status().is_alive,
+            timeout=5.0,
+            poll_interval=0.05,
+        ), f"status stayed {manager.get_agent_events_status()!r}"
         assert poll_until(
             lambda: [a.name for a in manager.get_agents()] == ["already-here"],
             timeout=5.0,
@@ -1153,6 +1156,45 @@ def test_follow_mode_folds_agents_from_the_running_observers_event_file(
             timeout=5.0,
             poll_interval=0.05,
         ), f"agents were {manager.get_agents()!r}"
+    finally:
+        manager.stop()
+        release_observe_lock(lock_fd)
+
+
+def test_follow_mode_is_not_alive_until_a_snapshot_has_been_folded(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cleanly-started follower is not yet evidence that events are arriving.
+
+    The follower drops every line until it has a full-state snapshot to fold
+    from, so one attached to a stream that has not emitted one sits at boot-state
+    discovery -- the frozen agent view the health gate exists to catch. Reporting
+    it alive would let a preview boot into exactly that state.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+
+    # A stream with only a per-agent update and no snapshot: unfoldable, so the
+    # follower forwards nothing.
+    append_observe_event(tmp_path, make_agent_state_event(_agent_details("orphan")))
+
+    manager = AgentManager.build(broadcaster, events_mode=AgentEventsMode.FOLLOW)
+    lock_fd = acquire_observe_lock(tmp_path)
+    try:
+        manager.start()
+        status = manager.get_agent_events_status()
+        assert status.mode is AgentEventsMode.FOLLOW
+        assert status.is_alive is False
+
+        append_observe_event(tmp_path, make_full_agent_state_event([_agent_details("first")]))
+        assert poll_until(
+            lambda: manager.get_agent_events_status().is_alive,
+            timeout=5.0,
+            poll_interval=0.05,
+        ), f"status stayed {manager.get_agent_events_status()!r}"
     finally:
         manager.stop()
         release_observe_lock(lock_fd)

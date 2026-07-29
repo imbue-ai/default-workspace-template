@@ -179,6 +179,16 @@ _WORKSPACE_LAYOUT_SUBDIR = "workspace_layout"
 _LAYOUT_REGISTRY_FILENAME = "layouts_meta.json"
 _SEEDED_LAYOUT_ENTRIES = ("layouts", _LAYOUT_REGISTRY_FILENAME, "layout.json")
 ENV_MNGR_HOST_DIR = "MNGR_HOST_DIR"
+# The layout belongs to the workspace's *primary* agent -- the services agent
+# supervisord (and therefore the live system interface) runs under, which mngr
+# labels ``is_primary=true``. It is emphatically NOT whichever agent runs this
+# script: the frontend hides is_primary agents from the agent list, so the lead
+# driving this skill is always some other agent (a chat agent, or a worktree
+# worker) whose state dir has no workspace_layout/ at all. Resolving the primary
+# agent by label is the same convention as system/scripts/with_agent_env.sh and
+# bootstrap's _read_main_agent_labels.
+_AGENT_DATA_FILENAME = "data.json"
+_PRIMARY_AGENT_LABEL = "is_primary"
 # A seeded layout that itself contains a preview panel would make the preview
 # render *itself*: the inner app resolves ``service:si-preview`` against the same
 # live app registry, so the panel proxies back to the wrapper that frames
@@ -787,20 +797,55 @@ def _find_other_preview(repo_root: Path, slug: str) -> str | None:
     return None
 
 
-def _live_layout_dir() -> Path | None:
-    """The live workspace's layout dir, resolved from the ambient env, or None.
+def _mngr_host_dir() -> Path:
+    """The mngr host dir, mirroring the system interface's own resolver."""
+    return Path(os.environ.get(ENV_MNGR_HOST_DIR, "") or (Path.home() / ".mngr"))
 
-    Mirrors the system interface's own resolver: the layout lives at
-    ``$MNGR_HOST_DIR/agents/<MNGR_AGENT_ID>/workspace_layout/`` (host dir falling
-    back to ``~/.mngr``). Returns None when MNGR_AGENT_ID is unset (dev/test) --
-    there is then nothing to seed and the preview boots to the fresh-workspace
-    state, exactly as it did before seeding existed.
+
+def _is_primary_agent_data(data_path: Path) -> bool:
+    """Whether this agent record carries the ``is_primary=true`` label."""
+    try:
+        data = json.loads(data_path.read_text())
+    except (OSError, ValueError):
+        # A half-written or unreadable record just isn't a match; the scan moves
+        # on rather than failing the whole preview over one bad file.
+        return False
+    if not isinstance(data, dict):
+        return False
+    labels = data.get("labels")
+    if not isinstance(labels, dict):
+        return False
+    # Labels round-trip through pydantic serialization, so coerce rather than
+    # comparing against a bare `True`.
+    return str(labels.get(_PRIMARY_AGENT_LABEL, "")).lower() == "true"
+
+
+def _live_layout_dir() -> Path | None:
+    """The live workspace's layout dir, or None if the primary agent isn't found.
+
+    The system interface persists layouts under *its own* agent's state dir --
+    ``$MNGR_HOST_DIR/agents/<primary-agent-id>/workspace_layout/`` -- and it runs
+    under the workspace's services agent, the one mngr labels
+    ``is_primary=true``. So this resolves that agent by scanning the host dir's
+    agent records, exactly as ``system/scripts/with_agent_env.sh`` does.
+
+    It deliberately does *not* use the ambient ``MNGR_AGENT_ID``, even though the
+    server's resolver does: the server reads its own id, whereas here the ambient
+    id belongs to whoever ran this script -- the lead chat agent, or a worker.
+    Those agents never own a workspace_layout/, so deriving the path from that id
+    resolved somewhere that does not exist and silently seeded nothing, which is
+    why the preview always opened with the fresh-workspace layout.
+
+    Returns None when the host dir has no primary agent (dev/test, or a host that
+    isn't a minds workspace); the caller reports that rather than seeding blind.
     """
-    agent_id = os.environ.get(ENV_MNGR_AGENT_ID, "")
-    if not agent_id:
+    agents_dir = _mngr_host_dir() / "agents"
+    if not agents_dir.is_dir():
         return None
-    host_dir = Path(os.environ.get(ENV_MNGR_HOST_DIR, "") or (Path.home() / ".mngr"))
-    return host_dir / "agents" / agent_id / _WORKSPACE_LAYOUT_SUBDIR
+    for state_dir in sorted(agents_dir.iterdir()):
+        if _is_primary_agent_data(state_dir / _AGENT_DATA_FILENAME):
+            return state_dir / _WORKSPACE_LAYOUT_SUBDIR
+    return None
 
 
 def _preview_layout_seed_dir(repo_root: Path, slug: str) -> Path:
@@ -858,9 +903,12 @@ def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
     """Copy the live layout files into a fresh throwaway dir and return it.
 
     Re-seeded from scratch on every ``preview`` call, since the live layout is
-    the source of truth at preview time. When there is no live layout to copy
-    (MNGR_AGENT_ID unset, or the workspace has no saved layout yet) the dir is
-    left empty and the preview simply renders the fresh-workspace state.
+    the source of truth at preview time. When there is no live layout to copy the
+    dir is left empty and the preview renders the fresh-workspace state -- but it
+    says so on stderr first. "The preview opened with default tabs" and "seeding
+    found nothing" are indistinguishable on screen, so a silent empty seed reads
+    as a working preview; that silence is what hid the primary-agent resolution
+    bug (see ``_live_layout_dir``) through a whole round of real use.
 
     ``layouts_meta.json`` (the slug registry) is copied verbatim, while each
     layout's *content* is filtered through ``_seed_layout_file`` -- so a layout
@@ -871,7 +919,19 @@ def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
     shutil.rmtree(seed_dir, ignore_errors=True)
     seed_dir.mkdir(parents=True, exist_ok=True)
     live_dir = _live_layout_dir()
-    if live_dir is None or not live_dir.is_dir():
+    if live_dir is None:
+        sys.stderr.write(
+            f"preview: no agent under {_mngr_host_dir() / 'agents'} carries the "
+            f"'{_PRIMARY_AGENT_LABEL}=true' label, so the live layout could not be "
+            "located; the preview will open with the default tabs rather than "
+            "yours.\n"
+        )
+        return seed_dir
+    if not live_dir.is_dir():
+        sys.stderr.write(
+            f"preview: {live_dir} does not exist, so this workspace has no saved "
+            "layout yet; the preview will open with the default tabs.\n"
+        )
         return seed_dir
     for entry in _SEEDED_LAYOUT_ENTRIES:
         source = live_dir / entry
