@@ -18,7 +18,14 @@ Users make "creations". There are conventions for the common kinds:
 
 - an **app**: something the user opens as a tab and interacts with. Lives
   under `system/apps/<package>/`, runs as a supervisord program, registers its
-  port via `forward_port.py`.
+  port via `forward_port.py`, and is served at its own browser origin: the
+  service name is prefixed as a hostname label on the workspace host, so
+  locally the app lives at `http://<name>.<host-id>.localhost:8421/` (the
+  workspace host id looks like `host-<32hex>`; shared hostnames follow the
+  same prefix rule on a longer base). Nothing proxies or rewrites app
+  traffic, so registered service names must be DNS-safe hostname labels
+  (lowercase letters/digits with single hyphens, not `localhost`, not
+  starting with `host-` or `agent-`).
 - a **skill**: teaches the mind how to do work the user cares about (including
   scripts and CLI tools, which ship inside the skill that knows how to use
   them). A skill that is automatically run on a schedule is called an

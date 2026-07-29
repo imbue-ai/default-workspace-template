@@ -9,8 +9,9 @@ Both apps and background services run as a `[program:<name>]` under
 supervisord (see `system/supervisord.conf`). They differ only in whether
 there's a tab to refresh:
 
-- **App** -- the user opens it as a tab rendering at `/service/<name>/`
-  (scaffolded via `build-app`). Lives under `system/apps/<package>/`.
+- **App** -- the user opens it as a tab rendering at the service's own
+  origin, `http://<name>.<workspace-host>/` (scaffolded via
+  `build-app`). Lives under `system/apps/<package>/`.
 - **Background service** -- a supervisord program with no tab (`host-backup`,
   `cloudflared`, forwarders), standalone under `system/services/` or co-owned
   by an app (named `<app>-<role>`, code in the app's folder).
@@ -179,12 +180,13 @@ no tab -- skip this step.
 Confirm the change actually does the right thing, exercised as the user
 would (not just "the process is up"):
 
-- **App**: `curl` against
-  `http://127.0.0.1:8000/service/<name>/` then a Playwright assertion on a
+- **App**: `curl` against the registered backend URL
+  `http://127.0.0.1:<port>/` then a Playwright assertion on a
   marker unique to your change. The recipe is in
   `build-app`'s [verify reference](../build-app/references/verify.md);
-  the symptom-indexed gotchas (502, duplicated tab bar, redirect loop,
-  broken WebSockets) are in that skill's `cross-flow-gotchas.md`.
+  the symptom-indexed gotchas (connection refused, a tab stuck on the
+  loading page, broken WebSockets) are in that skill's
+  `cross-flow-gotchas.md`.
 - **Daemon**: watch its log (`supervisorctl tail -f <name> stderr`) and
   confirm the new behavior actually fires.
 
