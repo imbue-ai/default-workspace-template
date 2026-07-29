@@ -30,6 +30,7 @@ def _isolate_browser_persistence(tmp_path, monkeypatch: pytest.MonkeyPatch):
     """
     monkeypatch.setattr(_session, "_PROFILE_ROOT", tmp_path / "profiles")
     monkeypatch.setattr(_manifest, "_MANIFEST_PATH", tmp_path / "browser-fleet.json")
+    monkeypatch.setattr(_session, "is_audio_available", lambda: True)
     # Start each test with a clean shared daemon manager so a fake browser installed by
     # one HTTP test can't leak into another's shutdown (which would try to .kill() it).
     _runner.manager._browsers.clear()

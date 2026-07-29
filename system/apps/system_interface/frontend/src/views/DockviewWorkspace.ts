@@ -2415,9 +2415,16 @@ function createReactiveIframeRenderer(panelId: string): IContentRenderer {
   element.style.flexDirection = "column";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const iframePanelComponent: m.ComponentTypes<any, any> = IframePanel;
+  let panelVisible = true;
+  let visibilityDisposable: { dispose: () => void } | null = null;
   return {
     element,
-    init() {
+    init(parameters) {
+      panelVisible = parameters.api.isVisible;
+      visibilityDisposable = parameters.api.onDidVisibilityChange((event) => {
+        panelVisible = event.isVisible;
+        m.redraw();
+      });
       m.mount(element, {
         view: () => {
           const p = panelParams.get(panelId);
@@ -2426,11 +2433,13 @@ function createReactiveIframeRenderer(panelId: string): IContentRenderer {
             title: p?.title ?? "Tab",
             serviceName: p?.serviceName,
             panelId,
+            isVisible: panelVisible,
           });
         },
       });
     },
     dispose() {
+      visibilityDisposable?.dispose();
       m.mount(element, null);
     },
   };
