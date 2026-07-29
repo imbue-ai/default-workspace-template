@@ -432,7 +432,14 @@
     // the client needs: it builds absolute /assets/... URLs and derives its websocket
     // URL from window.location, so it has to own its prefix. A relative "../" keeps
     // this correct however the workspace is reached (locally, or through a tunnel).
-    screenFrame.src = "../browser-" + encodeURIComponent(id) + "/vnc.html?autoconnect=1&resize=remote&reconnect=1&show_dot=1";
+    screenFrame.src = "../browser-" + encodeURIComponent(id) + "/vnc.html?autoconnect=1&resize=remote&reconnect=1&show_dot=1"
+      // Belt-and-braces mirror of the server-side encoding flags (the server runs
+      // -IgnoreClientSettingsKasm, so these mostly document intent client-side and
+      // cover any cached localStorage settings). video_quality=10 ("custom") is
+      // LOAD-BEARING: any other preset force-overwrites the fine-grained values
+      // at UI startup.
+      + "&video_quality=10&dynamic_quality_min=3&dynamic_quality_max=7&treat_lossless=7"
+      + "&framerate=60&framerate_image_mode=60&framerate_streaming_mode=60";
     placeholder.style.display = "none";
   }
 
