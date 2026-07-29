@@ -233,6 +233,33 @@ def _list_agents_endpoint() -> Response:
     return _json_response(AgentListResponse(agents=items).model_dump())
 
 
+def _health_endpoint() -> Response:
+    """Report whether this instance is actually working, for a boot health gate.
+
+    Two independent things must hold, and it is 200 only when both do:
+
+    - a fresh mngr discovery succeeds, which exercises the plugin/config path a
+      missing backend dependency or a bad plugin config would take down;
+    - the agent lifecycle event stream is live (see
+      ``AgentManager.get_agent_events_status``).
+
+    The second check is the point. ``/api/agents`` runs its own discovery rather
+    than reading the manager's cache, so it answers correctly even on an
+    instance whose lifecycle stream died -- which let a preview whose agent view
+    was permanently frozen sail through its boot probe looking healthy. A
+    degraded instance answers 503 here, so whoever is gating on it (the preview
+    boot, the reveal pre-flight) refuses to bring it up.
+    """
+    agents = _discover_with_filters()
+    status = get_state().agent_manager.get_agent_events_status()
+    payload = {
+        "status": "ok" if status.is_alive else "degraded",
+        "agent_count": len(agents),
+        "agent_events": status.model_dump(mode="json"),
+    }
+    return _json_response(payload, status_code=200 if status.is_alive else 503)
+
+
 def _find_agent(agent_id: str) -> AgentInfo | None:
     """Find a specific agent by ID, from the AgentManager's already-loaded state."""
     agent_manager: AgentManager = get_state().agent_manager
@@ -1597,6 +1624,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
+    application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-worktree", view_func=_create_worktree_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
     application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])

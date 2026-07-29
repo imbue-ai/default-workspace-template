@@ -109,10 +109,15 @@ class _FakeSpawner(reveal_mod.Spawner):
     """Records the pre-flight throwaway boot ``reveal`` runs before a live restart."""
 
     spawns: list[list[str]] = field(default_factory=list)
+    # The environment each pre-flight boot was given, so a test can assert how
+    # the throwaway instance was configured (e.g. that it follows the live
+    # observer rather than starting one of its own).
+    envs: list[dict] = field(default_factory=list)
     last: _FakeSpawned | None = None
 
     def spawn(self, argv: Sequence[str], cwd: str, env: dict) -> _FakeSpawned:
         self.spawns.append(list(argv))
+        self.envs.append(dict(env))
         self.last = _FakeSpawned()
         return self.last
 
@@ -244,6 +249,37 @@ def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> Non
     assert spawner.last is not None and spawner.last.terminated  # and torn down
     assert runner.ran("mngr", "start", "--restart", "system-services")
     assert any(_is_live(u) for u in http.get_urls)  # live health probed
+
+
+def test_preflight_boot_follows_the_live_observer_and_uses_the_strict_health_path() -> None:
+    """The pre-flight boots beside the still-running live service, so it must follow it.
+
+    Trying to run its own observer would lose the single-writer lock, and the old
+    ``/api/agents`` probe would have passed the pre-flight anyway -- so the gate
+    proved nothing about whether the merged backend can serve a live agent view.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    http = _FakeHttp(_all_healthy)
+    spawner = _FakeSpawner()
+
+    code = _reveal(runner, http, spawner)
+
+    assert code == 0
+    assert len(spawner.envs) == 1
+    assert (
+        spawner.envs[0][reveal_mod.PREVIEW_AGENT_EVENTS_MODE_ENV]
+        == reveal_mod.FOLLOW_AGENT_EVENTS_MODE
+    )
+    preflight_urls = [u for u in http.get_urls if not _is_live(u)]
+    assert preflight_urls
+    assert all(u.endswith(reveal_mod.STRICT_HEALTH_PATH) for u in preflight_urls)
+    # The live service keeps the looser probe: a rollback here is heavy and
+    # lifecycle-stream trouble on the live UI is not something reverting fixes.
+    live_urls = [u for u in http.get_urls if _is_live(u)]
+    assert live_urls
+    assert all(u.endswith(reveal_mod.HEALTH_PATH) for u in live_urls)
 
 
 def test_backend_src_only_skips_dependency_refresh() -> None:
@@ -468,6 +504,11 @@ def _flag(argv: Sequence[str], flag: str) -> str:
     return argv[argv.index(flag) + 1]
 
 
+def _flags(argv: Sequence[str], flag: str) -> list[str]:
+    """Every value of a repeatable flag (``--env`` is passed more than once)."""
+    return [argv[index + 1] for index, item in enumerate(argv) if item == flag]
+
+
 def test_preview_delegates_to_the_shared_script_with_si_specifics(
     tmp_path: Path,
 ) -> None:
@@ -488,15 +529,42 @@ def test_preview_delegates_to_the_shared_script_with_si_specifics(
     assert argv[-3:] == ["uv", "run", reveal_mod.TOOL_NAME]
     # System-interface specifics: bind port/host env, point layout persistence at
     # a throwaway copy (SYSTEM_INTERFACE_LAYOUT_DIR) with MNGR_AGENT_ID dropped as a
-    # backstop, probe /api/agents, register the inner app + wrapper.
+    # backstop, register the inner app + wrapper.
     assert _flag(argv, "--port-env") == reveal_mod.PREVIEW_PORT_ENV
     assert _flag(argv, "--host-env") == reveal_mod.PREVIEW_HOST_ENV
     assert _flag(argv, "--unset-env") == reveal_mod.ENV_MNGR_AGENT_ID
-    assert _flag(argv, "--env").startswith(f"{reveal_mod.PREVIEW_LAYOUT_DIR_ENV}=")
-    assert _flag(argv, "--health-path") == reveal_mod.HEALTH_PATH
+    env_overrides = _flags(argv, "--env")
+    assert any(v.startswith(f"{reveal_mod.PREVIEW_LAYOUT_DIR_ENV}=") for v in env_overrides)
     assert _flag(argv, "--service-name") == reveal_mod.PREVIEW_INNER_SERVICE_NAME
     assert _flag(argv, "--preview-service-name") == reveal_mod.PREVIEW_SERVICE_NAME
     assert _flag(argv, "--preview-title") == _SLUG
+
+
+def test_preview_follows_the_live_observer_and_gates_on_the_strict_health_path(
+    tmp_path: Path,
+) -> None:
+    """A preview must read the live agent event stream, not compete for it.
+
+    ``mngr observe`` is single-writer per mngr host dir and the live system
+    interface holds that lock, so a preview that started its own observer had it
+    die seconds into boot and showed a frozen agent list plus "No conversation
+    data" for every agent created afterwards -- while still passing a health
+    probe that only listed agents. FOLLOW mode fixes the cause; the strict health
+    path is what stops a preview from coming up if it is broken anyway.
+    """
+    work_dir = _make_work_dir(tmp_path)
+    runner = _RecordingRunner()
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), tmp_path, runner=runner)
+
+    assert code == 0
+    argv = runner.argvs_starting(*_SERVE_UP)[0]
+    assert (
+        f"{reveal_mod.PREVIEW_AGENT_EVENTS_MODE_ENV}={reveal_mod.FOLLOW_AGENT_EVENTS_MODE}"
+        in _flags(argv, "--env")
+    )
+    assert _flag(argv, "--health-path") == reveal_mod.STRICT_HEALTH_PATH
+    assert reveal_mod.STRICT_HEALTH_PATH != reveal_mod.HEALTH_PATH
 
 
 def test_preview_rejects_a_work_dir_without_the_app(tmp_path: Path) -> None:

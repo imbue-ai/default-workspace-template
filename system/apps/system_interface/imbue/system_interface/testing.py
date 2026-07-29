@@ -10,6 +10,10 @@ Also houses `build_test_state`, the test-side composition root: it builds a
 `SystemInterfaceState` with fakes for whichever collaborators a test overrides
 and cheap real instances for the rest, mirroring `main.build_production_state`
 without ever starting the agent manager.
+
+And `build_agent_details`, the one builder for the `AgentDetails` the observe
+event stream carries -- shared by every test that feeds the manager or the
+follower a realistic lifecycle event.
 """
 
 from __future__ import annotations
@@ -21,6 +25,9 @@ from collections.abc import Iterator
 from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
+from datetime import datetime
+from datetime import timezone
+from pathlib import Path
 
 import httpx
 import pexpect
@@ -28,7 +35,15 @@ import simple_websocket
 from flask import Flask
 
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.interfaces.data_types import AgentDetails
+from imbue.mngr.interfaces.data_types import HostDetails
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import AgentLifecycleState
+from imbue.mngr.primitives import AgentName
+from imbue.mngr.primitives import CommandString
+from imbue.mngr.primitives import HostId
+from imbue.mngr.primitives import HostState
+from imbue.mngr.primitives import ProviderInstanceName
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
@@ -40,6 +55,44 @@ from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
+
+LOCAL_PROVIDER = ProviderInstanceName("local")
+
+
+def build_agent_details(
+    name: str,
+    agent_id: AgentId | None = None,
+    state: AgentLifecycleState = AgentLifecycleState.RUNNING,
+    labels: dict[str, str] | None = None,
+    work_dir: str = "/tmp/work",
+    host_id: HostId | None = None,
+    provider_name: ProviderInstanceName = LOCAL_PROVIDER,
+) -> AgentDetails:
+    """Build an ``AgentDetails`` with controllable identity, state, and location.
+
+    Mirrors what the observe stream carries: a real lifecycle ``state`` and a
+    nested ``HostDetails`` whose id/provider are what ``_build_agent_match``
+    reads to route messages. Fields no consumer under test inspects are given
+    inert defaults.
+    """
+    return AgentDetails(
+        id=agent_id if agent_id is not None else AgentId(),
+        name=AgentName(name),
+        type="claude",
+        command=CommandString("claude"),
+        work_dir=Path(work_dir),
+        initial_branch=None,
+        create_time=datetime.now(timezone.utc),
+        start_on_boot=False,
+        state=state,
+        labels=labels if labels is not None else {},
+        host=HostDetails(
+            id=host_id if host_id is not None else HostId(),
+            name="test-host",
+            provider_name=provider_name,
+            state=HostState.RUNNING,
+        ),
+    )
 
 
 class RecordingMngrMessenger(MngrMessenger):

@@ -54,7 +54,7 @@ def build_production_state(
     ``testing.build_test_state``.
     """
     broadcaster = WebSocketBroadcaster()
-    agent_manager = AgentManager.build(broadcaster)
+    agent_manager = AgentManager.build(broadcaster, events_mode=config.system_interface_agent_events_mode)
     welcome_resender = WelcomeResender(
         resolve_agent=agent_manager.get_agent_info_by_id,
         send_message_fn=agent_manager.send_message_to_agent,

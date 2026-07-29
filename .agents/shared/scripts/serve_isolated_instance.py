@@ -107,6 +107,11 @@ _HEALTH_INTERVAL_SECONDS = 1.0
 _STOP_ATTEMPTS = 30
 _STOP_INTERVAL_SECONDS = 0.5
 
+# How much of a failed boot's log to quote back on stderr. Enough to carry the
+# traceback or the refusal message that explains the failure, short enough not to
+# bury it.
+_LOG_EXCERPT_LINES = 40
+
 
 class InstanceError(Exception):
     """A throwaway instance failed to boot (avoids raising built-in exceptions)."""
@@ -266,6 +271,25 @@ def parse_env_assignments(assignments: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
+def _log_excerpt(log_path: Path, max_lines: int = _LOG_EXCERPT_LINES) -> str:
+    """Return the last ``max_lines`` of a boot log, formatted for stderr.
+
+    A failed boot's cause is always in this log, and the caller is an agent
+    reading our stderr -- quoting the tail inline turns "it did not become
+    healthy" into an actionable message instead of a pointer to a file it has to
+    remember to go read. Best-effort: an unreadable log just yields a note.
+    """
+    try:
+        lines = log_path.read_text(errors="replace").splitlines()
+    except OSError as exc:
+        return f"  (could not read {log_path}: {exc})\n"
+    if not lines:
+        return f"  ({log_path} is empty)\n"
+    tail = lines[-max_lines:]
+    body = "".join(f"  | {line}\n" for line in tail)
+    return f"  last {len(tail)} line(s) of {log_path}:\n{body}"
+
+
 def _state_dir(repo_root: Path, name: str) -> Path:
     return repo_root / STATE_ROOT / name
 
@@ -399,8 +423,8 @@ def up(
             sleeper,
         ):
             raise InstanceError(
-                f"instance did not become healthy on port {inner_port} "
-                f"(see {inner_log_path})"
+                f"instance did not become healthy on port {inner_port}\n"
+                f"{_log_excerpt(inner_log_path)}"
             )
 
         # 2. Register it as a proxied service, if asked.
@@ -446,8 +470,8 @@ def up(
                 sleeper,
             ):
                 raise InstanceError(
-                    f"preview wrapper did not become healthy on port {wrapper_port} "
-                    f"(see {wrapper_log_path})"
+                    f"preview wrapper did not become healthy on port {wrapper_port}\n"
+                    f"{_log_excerpt(wrapper_log_path)}"
                 )
             _register_service(
                 runner,
@@ -631,8 +655,9 @@ def refresh(
     ):
         sys.stderr.write(
             f"refresh: inner server did not become healthy on port {port} after "
-            f"reboot (see {inner_log}). The preview tab will show an error until "
-            "the underlying build boots; fix it and refresh again.\n"
+            "reboot. The preview tab will show an error until the underlying "
+            "build boots; fix it and refresh again.\n"
+            f"{_log_excerpt(Path(inner_log))}"
         )
         return 1
     sys.stderr.write(

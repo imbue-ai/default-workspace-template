@@ -17,10 +17,12 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.mngr.api.observe import make_full_agent_state_event
 from imbue.mngr.errors import AgentStartError
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_events import AgentEventsMode
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
@@ -35,6 +37,7 @@ from imbue.system_interface.server import _primary_agent_layout_dir
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
+from imbue.system_interface.testing import build_agent_details
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
@@ -107,6 +110,41 @@ def test_list_agents_endpoint(client: FlaskClient) -> None:
     assert len(data["agents"]) == 1
     assert data["agents"][0]["name"] == "test-agent"
     assert data["agents"][0]["state"] == "RUNNING"
+
+
+def test_health_is_degraded_while_no_lifecycle_events_have_arrived(client: FlaskClient) -> None:
+    """Discovery working is not enough; the lifecycle stream must be live too.
+
+    This is the gap that let a preview boot green with a permanently frozen agent
+    view: ``/api/agents`` runs its own discovery, so it answers 200 regardless of
+    whether the instance is receiving lifecycle events at all.
+    """
+    with patch("imbue.system_interface.server.discover_agents", return_value=[]):
+        agents_response = client.get("/api/agents")
+        health_response = client.get("/api/health")
+
+    assert agents_response.status_code == 200
+    assert health_response.status_code == 503
+    body = health_response.get_json()
+    assert body["status"] == "degraded"
+    assert body["agent_events"]["is_alive"] is False
+
+
+def test_health_is_ok_once_the_lifecycle_stream_is_feeding_the_instance(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager = AgentManager.build(broadcaster)
+    manager._handle_observe_event(make_full_agent_state_event([build_agent_details("live")]))
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    with patch("imbue.system_interface.server.discover_agents", return_value=[]):
+        response = client.get("/api/health")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] == "ok"
+    assert body["agent_events"]["is_alive"] is True
+    assert body["agent_events"]["mode"] == AgentEventsMode.OBSERVE
 
 
 def test_get_events_for_unknown_agent(client: FlaskClient) -> None:

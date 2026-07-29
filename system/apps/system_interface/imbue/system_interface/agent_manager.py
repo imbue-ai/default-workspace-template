@@ -49,6 +49,10 @@ from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.system_interface.agent_events import AgentEventsMode
+from imbue.system_interface.agent_events import AgentEventsStatus
+from imbue.system_interface.agent_events import ObserveEventFollower
+from imbue.system_interface.agent_events import ObserveStreamUnavailableError
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
@@ -284,7 +288,12 @@ def _make_apps_file_handler(
 class AgentManager:
     """Manages agent lifecycle detection, app-registry watching, and agent creation.
 
-    Runs mngr observe as a subprocess for event-driven agent lifecycle detection.
+    Sources event-driven agent lifecycle state in one of two ways, per
+    ``AgentEventsMode``: by running ``mngr observe`` as a subprocess and reading
+    its ``--stream-events`` stdout (the workspace's own system interface), or by
+    following the event file that another process's observer is writing (a
+    preview or pre-flight instance sharing the same host, which cannot take the
+    single-writer observe lock).
     Watches data/.state/apps.toml for each agent.
     Handles agent creation via local mngr create calls.
     """
@@ -312,8 +321,22 @@ class AgentManager:
     _own_agent_id: str
     _own_work_dir: str
     _shutdown_event: ShutdownEvent
+    _events_mode: AgentEventsMode
     _observe_cg: ConcurrencyGroup | None
     _observe_process: RunningProcess | None
+    # Set in FOLLOW mode once the follower is running; None before ``start`` and
+    # when the follower refused to start (``_events_failure`` then says why).
+    _follower: ObserveEventFollower | None
+    # Why the lifecycle stream is dead, in either mode: the observe subprocess
+    # failed to spawn or exited, or the follower found no observer to follow.
+    # None means "nothing has gone wrong (yet)", which is not by itself proof
+    # that events are flowing -- see ``_has_received_lifecycle_event``.
+    _events_failure: str | None
+    # Positive evidence that the OBSERVE-mode subprocess really is streaming: a
+    # healthy observer emits a full-state snapshot within seconds of starting,
+    # while one that loses the lock exits without ever emitting. Spawning
+    # successfully is therefore not enough to call the stream alive.
+    _has_received_lifecycle_event: bool
     _creation_cg: ConcurrencyGroup
     _mngr_binary: str
     _host_dir: Path
@@ -342,6 +365,7 @@ class AgentManager:
         broadcaster: WebSocketBroadcaster,
         messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
+        events_mode: AgentEventsMode = AgentEventsMode.OBSERVE,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
@@ -349,7 +373,11 @@ class AgentManager:
         real mngr discover/send. Tests pass one whose ``discover``/``send`` are
         fakes to avoid touching mngr. ``mngr_binary`` is the path or name of the
         mngr executable used for the stream-events observe subprocess and for
-        agent-creation commands.
+        agent-creation commands. ``events_mode`` selects whether this instance
+        runs the observer itself or follows one another process is running --
+        the default is correct for the workspace's own system interface, and a
+        second instance on the same host must be built with
+        ``AgentEventsMode.FOLLOW`` or its observer will lose the lock and die.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -365,8 +393,12 @@ class AgentManager:
         manager._own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
         manager._own_work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
         manager._shutdown_event = ShutdownEvent.build_root()
+        manager._events_mode = events_mode
         manager._observe_cg = None
         manager._observe_process = None
+        manager._follower = None
+        manager._events_failure = None
+        manager._has_received_lifecycle_event = False
         manager._creation_cg = ConcurrencyGroup(name="agent-creation")
         manager._creation_cg.__enter__()
         manager._mngr_binary = mngr_binary
@@ -387,17 +419,76 @@ class AgentManager:
         return manager
 
     def start(self) -> None:
-        """Start the observe subprocess and perform initial agent discovery."""
+        """Perform initial agent discovery, then attach to the lifecycle event stream.
+
+        Never raises: a lifecycle stream that cannot be attached to is recorded
+        as a failure and surfaced through :meth:`get_agent_events_status` (and
+        thus the ``/api/health`` gate), so the caller decides what a dead stream
+        means rather than the server dying at import-time-ish depth.
+        """
         self._initial_discover()
-        self._start_observe()
+        if self._events_mode is AgentEventsMode.FOLLOW:
+            self._start_follow()
+        else:
+            self._start_observe()
 
     def start_without_observe(self) -> None:
         """Start with initial discovery only, no observe subprocess. For testing."""
         self._initial_discover()
 
+    def get_agent_events_status(self) -> AgentEventsStatus:
+        """Report whether agent lifecycle events are actually reaching this instance.
+
+        This is the question a health gate must ask. Listing agents is not: a
+        one-shot discovery succeeds just as well on an instance whose lifecycle
+        stream is dead, which is how a preview with a frozen agent view used to
+        pass its boot health check while showing "No conversation data" for
+        every agent created after it booted.
+        """
+        with self._lock:
+            failure = self._events_failure
+            has_received_event = self._has_received_lifecycle_event
+            follower = self._follower
+        if failure is not None:
+            return AgentEventsStatus(mode=self._events_mode, is_alive=False, detail=failure)
+        if self._events_mode is AgentEventsMode.FOLLOW:
+            return self._build_follow_status(follower)
+        if not has_received_event:
+            return AgentEventsStatus(
+                mode=self._events_mode,
+                is_alive=False,
+                detail="Waiting for the first event from the 'mngr observe' subprocess.",
+            )
+        return AgentEventsStatus(
+            mode=self._events_mode,
+            is_alive=True,
+            detail="Folding live events from this instance's own 'mngr observe' subprocess.",
+        )
+
+    def _build_follow_status(self, follower: ObserveEventFollower | None) -> AgentEventsStatus:
+        """Render FOLLOW-mode liveness from the follower's own view of the stream."""
+        if follower is None:
+            return AgentEventsStatus(
+                mode=self._events_mode,
+                is_alive=False,
+                detail="The agent-lifecycle follower has not been started.",
+            )
+        follower_failure = follower.failure_detail()
+        if follower_failure is not None:
+            return AgentEventsStatus(mode=self._events_mode, is_alive=False, detail=follower_failure)
+        return AgentEventsStatus(
+            mode=self._events_mode,
+            is_alive=True,
+            detail="Following the agent-lifecycle event stream written by the workspace's own observer.",
+        )
+
     def stop(self) -> None:
-        """Stop the observe subprocess, file watchers, and creation threads."""
+        """Stop the observe subprocess or follower, file watchers, and creation threads."""
         self._shutdown_event.set()
+
+        if self._follower is not None:
+            self._follower.stop()
+            self._follower = None
 
         if self._observe_cg is not None:
             self._observe_cg.shutdown()
@@ -862,6 +953,44 @@ class AgentManager:
         """Build the argv for the mngr observe --stream-events subprocess. Pure."""
         return _build_observe_command_argv(self._mngr_binary)
 
+    def _record_events_failure(self, detail: str) -> None:
+        """Record why the lifecycle event stream is dead (first cause wins).
+
+        There is deliberately no restart: in OBSERVE mode the usual cause is
+        that another process legitimately owns the observe lock, and retrying
+        would just lose it again. Recording the failure is what makes it visible
+        to ``/api/health``, which is how a second instance fails its boot gate
+        instead of running on with a frozen agent view.
+        """
+        with self._lock:
+            if self._events_failure is not None:
+                return
+            self._events_failure = detail
+
+    def _start_follow(self) -> None:
+        """Attach to the event stream that another process's observer is writing."""
+        follower = ObserveEventFollower(
+            events_base_dir=self._host_dir,
+            on_line=self._handle_follower_line,
+        )
+        try:
+            follower.start()
+        except ObserveStreamUnavailableError as e:
+            _loguru_logger.error("Could not follow the agent-lifecycle event stream: {}", e)
+            self._record_events_failure(str(e))
+            return
+        with self._lock:
+            self._follower = follower
+
+    def _handle_follower_line(self, line: str) -> None:
+        """Fold one raw event line from the follower.
+
+        The follower forwards exactly the lines ``mngr observe --stream-events``
+        would have printed, so both modes converge on the same handler and the
+        fold cannot diverge between them.
+        """
+        self._handle_observe_output_line(line, True)
+
     def _start_observe(self) -> None:
         """Start the mngr observe subprocess and a watchdog for early exit."""
         cmd = self._build_observe_command()
@@ -892,10 +1021,11 @@ class AgentManager:
                 shutdown_event=self._shutdown_event,
                 is_checked_by_group=False,
             )
-        except (OSError, InvalidConcurrencyGroupStateError):
+        except (OSError, InvalidConcurrencyGroupStateError) as e:
             _loguru_logger.warning(
                 "Could not start mngr observe subprocess. Agent lifecycle events will not be detected."
             )
+            self._record_events_failure(f"The 'mngr observe' subprocess could not be started: {e}")
             self._observe_cg.__exit__(None, None, None)
             self._observe_cg = None
             return
@@ -921,6 +1051,7 @@ class AgentManager:
             if self._shutdown_event.is_set():
                 return
             _loguru_logger.opt(exception=e).error("mngr observe subprocess failed")
+            self._record_events_failure(f"The 'mngr observe' subprocess failed: {type(e).__name__}: {e}")
             return
 
         if self._shutdown_event.is_set():
@@ -932,6 +1063,10 @@ class AgentManager:
             "Agent lifecycle events will no longer be detected. stderr: {}",
             process.returncode,
             stderr if stderr else "(empty)",
+        )
+        self._record_events_failure(
+            f"The 'mngr observe' subprocess exited unexpectedly (returncode={process.returncode}), so agent "
+            f"lifecycle events are no longer being detected. stderr: {stderr if stderr else '(empty)'}"
         )
 
     def _handle_observe_output_line(self, line: str, is_stdout: bool) -> None:
@@ -967,6 +1102,9 @@ class AgentManager:
         auto-open, exactly as the discovery membership delta used to.
         """
         with self._lock:
+            # Proof that the stream is really feeding us, not merely that a
+            # subprocess was spawned -- see ``_has_received_lifecycle_event``.
+            self._has_received_lifecycle_event = True
             before_details = dict(self._agent_details_by_id)
             match event:
                 case FullAgentStateEvent():
