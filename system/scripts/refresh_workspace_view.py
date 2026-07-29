@@ -76,8 +76,13 @@ ENV_GATEWAY_PERMISSIONS = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 
 RELOAD_OP = "reload_system_interface"
 
-# Both HTTP calls are courtesies on a path the caller is blocking on, so they get
-# a short leash: a wedged desktop app or frontend must not stall a reveal.
+# Per-request timeout for every HTTP call here: the two refresh POSTs and each
+# health probe below. The POSTs are courtesies on a path the caller is blocking
+# on, so they get a short leash -- a wedged desktop app or frontend must not
+# stall a reveal. Note that the health poll multiplies this by its attempt count:
+# a server that accepts connections without answering costs the full value on
+# every probe, so that loop reports the time it actually spent rather than a
+# figure derived from its interval.
 _TIMEOUT_SECONDS = 10.0
 
 # The primary-agent lookup gets its own, longer budget. It is not an HTTP call to
@@ -217,16 +222,20 @@ def wait_until_serving(
     the Minds app channel does not go through this server at all.
     """
     url = f"{base_url}{_HEALTH_PATH}"
+    started_at = time.monotonic()
     for attempt in range(_HEALTH_ATTEMPTS):
         if http.get_status(url, timeout=_TIMEOUT_SECONDS) == 200:
             return True
         if attempt < _HEALTH_ATTEMPTS - 1:
             sleeper(_HEALTH_INTERVAL_SECONDS)
+    # Report the time this actually took rather than a figure derived from the
+    # interval: a server that accepts connections without answering spends the
+    # full per-probe timeout each round, so the two differ by an order of
+    # magnitude in exactly the case worth reading this message for.
     sys.stderr.write(
-        f"refresh: the system interface did not answer within "
-        f"{int(_HEALTH_ATTEMPTS * _HEALTH_INTERVAL_SECONDS)}s; refreshing anyway, but "
-        "an attached browser (including a shared tunnel viewer) may still be showing "
-        "the previous build.\n"
+        f"refresh: the system interface did not answer in {_HEALTH_ATTEMPTS} probes over "
+        f"{int(time.monotonic() - started_at)}s; refreshing anyway, but an attached browser "
+        "(including a shared tunnel viewer) may still be showing the previous build.\n"
     )
     return False
 
