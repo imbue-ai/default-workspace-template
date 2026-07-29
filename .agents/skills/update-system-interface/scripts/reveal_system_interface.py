@@ -22,9 +22,10 @@ What it does, given the pre-merge revision (``--rollback-to``):
    touching the live service -- if it cannot boot, the live service is never
    restarted and we go straight to rollback (the UI never went down).
 5. Build the frontend bundle and restart the backend, as applicable, then ask
-   every open view of the workspace to reload (``system/scripts/
-   refresh_workspace_view.py``) -- for a backend-only change too, since the
-   restart leaves the open page rendering from what it had already fetched.
+   every open view of the workspace to reload, via
+   ``system/scripts/refresh_workspace_view.py`` -- for a backend-only change
+   too, since the restart leaves the open page rendering from what it had
+   already fetched.
 6. Probe the live service's loopback endpoint until healthy (with a deadline).
 7. On ANY failure, restore the served tree to the known-good revision (as a
    forward revert commit) and re-probe to *confirm* the UI is back. The live
