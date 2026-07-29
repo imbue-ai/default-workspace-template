@@ -2,6 +2,9 @@
 
 These tests exercise the contract the update flows depend on:
 
+- The interface is waited for before either channel fires, because callers run
+  this while the services agent is still restarting and the broadcast has no
+  replay.
 - Both channels fire on every run, independently -- the WebSocket broadcast
   reaches shared tunnel viewers the Minds app cannot, and the app call drops a
   cache and survives a dead WebSocket the broadcast needs.
@@ -32,11 +35,28 @@ _BASE_URL = "http://127.0.0.1:8000"
 
 
 class _RecordingHttp(refresh_workspace_view.HttpClient):
-    """Records every POST and answers each URL from a caller-supplied status map."""
+    """Records every POST and answers each URL from a caller-supplied status map.
 
-    def __init__(self, status_by_url_fragment: dict[str, int | None]) -> None:
+    ``health_statuses`` is consumed one entry per health probe (the last repeats),
+    so a test can model a server that is down for N probes and then comes back.
+    It defaults to an immediately-healthy server, which is the common case.
+    """
+
+    def __init__(
+        self,
+        status_by_url_fragment: dict[str, int | None],
+        health_statuses: list[int | None] | None = None,
+    ) -> None:
         self._status_by_url_fragment = status_by_url_fragment
+        self._health_statuses = list(health_statuses or [200])
         self.posts: list[tuple[str, dict, dict]] = []
+        self.health_probes: list[str] = []
+
+    def get_status(self, url: str, timeout: float) -> int | None:
+        self.health_probes.append(url)
+        if len(self._health_statuses) > 1:
+            return self._health_statuses.pop(0)
+        return self._health_statuses[0]
 
     def post_json(
         self, url: str, payload: dict, headers: dict, timeout: float
@@ -102,6 +122,58 @@ def test_refresh_fires_both_channels() -> None:
         app_url
         == f"http://gateway.invalid/minds-api-proxy/api/v1/agents/{_PRIMARY_ID}/refresh"
     )
+
+
+def test_waits_for_the_interface_before_broadcasting() -> None:
+    """The broadcast must not be fired at a server that is still restarting.
+
+    Callers run this straight after `mngr start --restart system-services`. The
+    broadcast is a live fan-out with no replay, so one sent at a dead port is not
+    retried -- it is lost, and with it the only channel that reaches a shared
+    tunnel viewer. So the wait has to happen before the POST, not alongside it.
+    """
+    http = _RecordingHttp({}, health_statuses=[None, None, 200])
+    slept: list[float] = []
+
+    exit_code = refresh_workspace_view.refresh(
+        runner=_StubRunner(), http=http, base_url=_BASE_URL, sleeper=slept.append
+    )
+
+    assert exit_code == 0
+    assert http.health_probes == [f"{_BASE_URL}/api/agents"] * 3
+    assert len(slept) == 2  # one between each pair of probes, none after the last
+    assert http.url_containing("/api/layout/broadcast") is not None
+
+
+def test_a_healthy_interface_is_not_waited_on() -> None:
+    """The common case (a frontend-only reveal, no restart) must not pay a delay."""
+    http = _RecordingHttp({})
+    slept: list[float] = []
+
+    refresh_workspace_view.refresh(
+        runner=_StubRunner(), http=http, base_url=_BASE_URL, sleeper=slept.append
+    )
+
+    assert len(http.health_probes) == 1
+    assert slept == []
+
+
+def test_an_interface_that_never_returns_still_fires_both_channels() -> None:
+    """Giving up on the probe must not also give up on refreshing.
+
+    The probe only tells us about *this* server: the Minds app channel does not
+    go through it at all, and a browser may reach it by a route we cannot (a
+    stale MINDS_WORKSPACE_SERVER_URL). Trying and failing costs nothing.
+    """
+    http = _RecordingHttp({}, health_statuses=[None])
+
+    exit_code = refresh_workspace_view.refresh(
+        runner=_StubRunner(), http=http, base_url=_BASE_URL, sleeper=lambda _s: None
+    )
+
+    assert exit_code == 0
+    assert http.url_containing("/api/layout/broadcast") is not None
+    assert http.url_containing("/minds-api-proxy/") is not None
 
 
 def test_broadcast_asks_for_a_whole_interface_reload() -> None:

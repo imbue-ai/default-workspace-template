@@ -9,7 +9,13 @@ for a sustained stretch, and a services restart that comes back quickly never
 crosses that bar. Without this call the user keeps reading a page that was
 rendered by the previous build.
 
-Two independent channels are fired, because neither one reaches every viewer:
+Callers run this straight after the restart, so it first waits (bounded) for the
+system interface to answer again. That wait is here rather than in each caller
+because the broadcast below is a live fan-out with no replay: fired at a port
+that is still down it is not retried, it is lost -- and with it the only channel
+that reaches a shared viewer.
+
+Two independent channels are then fired, because neither one reaches every viewer:
 
 ``reload_system_interface`` broadcast (the workspace's own WebSocket)
     Reaches every *browser* attached to the system interface -- the Minds app's
@@ -54,9 +60,10 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
-from typing import Sequence
+from typing import Callable, Sequence
 
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
@@ -72,6 +79,22 @@ RELOAD_OP = "reload_system_interface"
 # Both calls are courtesies on a path the caller is blocking on, so they get a
 # short leash: a wedged desktop app or frontend must not stall a reveal.
 _TIMEOUT_SECONDS = 10.0
+
+# Path that answers only once the system interface is serving again, and how long
+# we will wait for it. Callers run this straight after
+# ``mngr start --restart system-services``, when the server is still coming back
+# up -- and the broadcast is a *live* fan-out to currently-connected sockets, with
+# no replay, so firing it at a dead port does not just fail, it loses the only
+# channel that reaches a shared tunnel viewer. Waiting here rather than in each
+# caller keeps the three call sites (the reveal script, update-app, update-self)
+# from drifting on it, which is the whole reason this motion is shared.
+#
+# Matches the reveal script's own post-restart probe (30 x 1s) so the two agree on
+# how long a restart is allowed to take. This is a ceiling, not a cost: a healthy
+# server answers the first probe, which is the common frontend-only case.
+_HEALTH_PATH = "/api/agents"
+_HEALTH_ATTEMPTS = 30
+_HEALTH_INTERVAL_SECONDS = 1.0
 
 
 # The Minds app identifies a *workspace* by its primary agent id, not by whoever
@@ -91,7 +114,17 @@ class Runner:
 
 
 class HttpClient:
-    """Indirection over the two outbound POSTs so tests can intercept them."""
+    """Indirection over the outbound HTTP so tests can intercept it."""
+
+    def get_status(self, url: str, timeout: float) -> int | None:
+        """Return the HTTP status for a GET, or ``None`` if the host is unreachable."""
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                return int(response.status)
+        except urllib.error.HTTPError as exc:
+            return int(exc.code)
+        except (urllib.error.URLError, OSError):
+            return None
 
     def post_json(
         self, url: str, payload: dict, headers: dict, timeout: float
@@ -155,6 +188,31 @@ def resolve_primary_agent_id(runner: Runner) -> str:
         if candidate:
             return candidate
     return fall_back("mngr ls listed no primary agent")
+
+
+def wait_until_serving(
+    http: HttpClient, base_url: str, sleeper: Callable[[float], None]
+) -> bool:
+    """Poll until the system interface answers, or the attempt ceiling is reached.
+
+    Returns whether it came back. A ``False`` is not fatal -- the caller still
+    tries both channels, because a server we cannot probe may yet be reachable
+    from a browser (a stale ``MINDS_WORKSPACE_SERVER_URL``, for instance), and
+    the Minds app channel does not go through this server at all.
+    """
+    url = f"{base_url}{_HEALTH_PATH}"
+    for attempt in range(_HEALTH_ATTEMPTS):
+        if http.get_status(url, timeout=_TIMEOUT_SECONDS) == 200:
+            return True
+        if attempt < _HEALTH_ATTEMPTS - 1:
+            sleeper(_HEALTH_INTERVAL_SECONDS)
+    sys.stderr.write(
+        f"refresh: the system interface did not answer within "
+        f"{int(_HEALTH_ATTEMPTS * _HEALTH_INTERVAL_SECONDS)}s; refreshing anyway, but "
+        "an attached browser (including a shared tunnel viewer) may still be showing "
+        "the previous build.\n"
+    )
+    return False
 
 
 def broadcast_reload(http: HttpClient, base_url: str) -> bool:
@@ -222,11 +280,23 @@ def request_app_refresh(http: HttpClient, primary_agent_id: str) -> bool:
     return False
 
 
-def refresh(*, runner: Runner, http: HttpClient, base_url: str | None = None) -> int:
+def refresh(
+    *,
+    runner: Runner,
+    http: HttpClient,
+    base_url: str | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> int:
     """Fire both refresh channels. Always returns 0 -- see the module docstring."""
     resolved_base = (
         base_url or os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL)
     ).rstrip("/")
+    # Wait before either channel. Callers run this immediately after restarting
+    # the services agent, and the broadcast has no replay -- fired at a port that
+    # is still down it is simply lost, taking shared tunnel viewers with it. The
+    # app channel does not need the wait, but benefits: its reload then lands on
+    # the real interface instead of the loading page.
+    wait_until_serving(http, resolved_base, sleeper)
     # Deliberately unconditional and independent: each channel reaches viewers
     # the other cannot, and a failure of one says nothing about the other.
     broadcast_ok = broadcast_reload(http, resolved_base)
