@@ -42,10 +42,19 @@ def _restic_available() -> bool:
     return shutil.which("restic") is not None
 
 
-pytestmark = pytest.mark.skipif(
-    not _restic_available(),
-    reason="restic binary not on PATH (install via apt-get install restic to enable)",
-)
+# Every test here drives several real restic subprocesses (init + backup +
+# forget + prune), which takes the better part of ten seconds -- past the
+# repo-global pytest timeout. Still far below restic.py's own 3600s ceiling, so
+# a genuinely wedged restic is caught here rather than hanging the suite.
+_RESTIC_TEST_TIMEOUT_SECONDS = 60
+
+pytestmark = [
+    pytest.mark.skipif(
+        not _restic_available(),
+        reason="restic binary not on PATH (install via apt-get install restic to enable)",
+    ),
+    pytest.mark.timeout(_RESTIC_TEST_TIMEOUT_SECONDS),
+]
 
 
 def _env_for_local_repo(repo_path: Path) -> dict[str, str]:
