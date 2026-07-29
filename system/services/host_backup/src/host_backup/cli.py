@@ -9,7 +9,8 @@ than the in-flight one).
 
 It then waits for the triggered tick to reach any terminal event and prints it,
 exiting 0 on success, 3 when backups are not configured, 1 on any other tick
-outcome, and 2 if no terminal event was observed before the timeout.
+outcome, and 2 when no outcome was observed at all (no terminal event before the
+timeout, or no events log to read in the first place).
 """
 
 import json

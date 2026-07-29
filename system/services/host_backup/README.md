@@ -115,8 +115,10 @@ as soon as the tick is over rather than waiting out its `--timeout`.
 Exit codes let a caller that takes a backup as a precondition distinguish the
 outcomes without parsing the event: `0` for `restic_backup_succeeded`, `3` for
 `tick_skipped_due_to_missing_secrets` (backups are not configured, so there is
-no restore point), `1` for any other tick outcome, and `2` when no terminal
-event was observed before the timeout.
+no restore point), `1` for any other tick outcome, and `2` when no outcome was
+observed at all -- either no terminal event arrived before the timeout, or the
+events log could not be located in the first place (see below), in which case
+nothing was triggered either.
 
 The service writes its events under the *primary* agent's state dir (it
 inherits `MNGR_AGENT_STATE_DIR` from the bootstrap shell that started
