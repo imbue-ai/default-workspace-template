@@ -5,12 +5,32 @@ interface IframePanelAttrs {
   title: string;
   serviceName?: string;
   panelId?: string;
+  isVisible?: boolean;
 }
 
 export const IFRAME_PANEL_SERVICE_NAME_ATTR = "data-service-name";
 export const IFRAME_PANEL_PANEL_ID_ATTR = "data-panel-id";
 
+function postVisibility(iframe: HTMLIFrameElement, visible: boolean): void {
+  iframe.contentWindow?.postMessage({ type: "minds-pane-visibility", visible }, window.location.origin);
+}
+
 export const IframePanel: m.Component<IframePanelAttrs> = {
+  oncreate(vnode) {
+    const iframe = vnode.dom as HTMLIFrameElement;
+    const state = iframe as HTMLIFrameElement & { __mindsPaneVisible?: boolean };
+    state.__mindsPaneVisible = vnode.attrs.isVisible !== false;
+    iframe.addEventListener("load", () => postVisibility(iframe, state.__mindsPaneVisible !== false));
+    postVisibility(iframe, state.__mindsPaneVisible);
+  },
+  onupdate(vnode) {
+    const iframe = vnode.dom as HTMLIFrameElement & { __mindsPaneVisible?: boolean };
+    iframe.__mindsPaneVisible = vnode.attrs.isVisible !== false;
+    postVisibility(iframe, iframe.__mindsPaneVisible);
+  },
+  onremove(vnode) {
+    postVisibility(vnode.dom as HTMLIFrameElement, false);
+  },
   view(vnode) {
     const { url, title, serviceName, panelId } = vnode.attrs;
     const attrs: Record<string, string> = {

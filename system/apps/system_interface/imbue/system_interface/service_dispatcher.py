@@ -22,6 +22,7 @@ asyncio anywhere.
 """
 
 import socket
+import ssl
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -382,6 +383,7 @@ def _connect_backend_websocket(ws_url: str, subprotocols: list[str] | None) -> s
                 # makes every syscall several times more expensive.
                 receive_bytes=_BACKEND_WS_RECEIVE_BYTES,
                 max_message_size=_MAX_WS_MESSAGE_BYTES,
+                ssl_context=ssl._create_unverified_context() if parsed.scheme == "wss" else None,
             )
         except (ConnectionRefusedError, ConnectionError, OSError, TimeoutError, ConnectionClosed) as error:
             last_error = error

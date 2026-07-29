@@ -232,3 +232,8 @@ Deliberately not done: no bounded wait, no distinction between "installing" and
 of those and has been fine, so adding them only for the display server would be
 speculative and inconsistent with the code beside it. If an install ever does
 fail permanently, that is when to add it.
+
+
+----
+
+Browser panes now stream audio without paying capture CPU while idle. Each browser owns a private PulseAudio sink and Kasm audio relay; Chromium is launched against that sink, while FFmpeg starts only when the pane is visible and Pulse reports a RUNNING sink input. Dockview hide, iframe unload, and browser close all disconnect capture. PulseAudio and FFmpeg resolve from the committed Debian snapshot; the Kasm relay and matching JSMpeg client are commit-pinned and SHA256-verified.

@@ -71,6 +71,7 @@ from pydantic import PrivateAttr
 from browser import manifest as fleet_manifest
 from browser.names import generate_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
+from browser.audio import AudioStartupError, BrowserAudio, is_available as is_audio_available
 from browser.focus import FocusKeeper
 from browser.vnc import VncDisplay, VncStartupError, is_available as is_vnc_available
 
@@ -384,6 +385,8 @@ def deferred_install_ready() -> tuple[bool, str]:
     # One check covers kasmvncserver too: both binaries come from the same install.
     if not is_vnc_available():
         return False, "The browser display server is still installing in this workspace; try again in a minute."
+    if not is_audio_available():
+        return False, "Browser audio is still installing in this workspace; try again in a minute."
     return True, "ready"
 
 
@@ -486,6 +489,7 @@ class LiveBrowser(MutableModel):
     # This browser's private KasmVNC display (its X server + live-view client).
     # None before start() and after close().
     _vnc: VncDisplay | None = PrivateAttr(default=None)
+    _audio: BrowserAudio | None = PrivateAttr(default=None)
     # Holds X input focus on this browser's window (see browser/focus.py). None
     # before start() and after close().
     _focus: FocusKeeper | None = PrivateAttr(default=None)
@@ -599,6 +603,21 @@ class LiveBrowser(MutableModel):
         if display is not None:
             display.stop()
 
+    def _start_audio(self) -> None:
+        assert self._vnc is not None
+        audio = BrowserAudio(self.browser_id, self._vnc.slot, self._vnc.certificate)
+        try:
+            audio.start()
+        except AudioStartupError:
+            audio.stop()
+            raise
+        self._audio = audio
+
+    def _stop_audio(self) -> None:
+        audio, self._audio = self._audio, None
+        if audio is not None:
+            audio.stop()
+
     @contextlib.contextmanager
     def _display_env(self) -> "Iterator[None]":
         """Scope ``DISPLAY`` to this browser's X server for the duration of a launch.
@@ -609,16 +628,19 @@ class LiveBrowser(MutableModel):
         launches (at most one at a time) and the daemon runs one event loop -- so no
         other launch can observe the mutated value.
         """
-        previous = os.environ.get("DISPLAY")
+        previous = {key: os.environ.get(key) for key in ("DISPLAY", "PULSE_SERVER", "PULSE_SINK")}
         if self._vnc is not None:
             os.environ["DISPLAY"] = self._vnc.display
+        if self._audio is not None:
+            os.environ.update(self._audio.environment)
         try:
             yield
         finally:
-            if previous is None:
-                os.environ.pop("DISPLAY", None)
-            else:
-                os.environ["DISPLAY"] = previous
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def _build_bu_session(self, profile_dir: Path, chromium_path: str, *, chromium_sandbox: bool) -> BrowserSession:
         """Construct (don't start) the browser-use session for this browser's persistent
@@ -693,6 +715,7 @@ class LiveBrowser(MutableModel):
         # This browser's own X server + live-view client. Started BEFORE Chromium, which
         # is launched headful against it.
         self._start_vnc()
+        self._start_audio()
         self._bu_session = await self._start_bu_session(profile_dir, chromium_path)
         # The Chromium tree just spawned (and its processes self-write their
         # oom_score_adj moments later): have the OOM sweep re-band it.
@@ -755,8 +778,17 @@ class LiveBrowser(MutableModel):
         # Reap the display too, or an aborted launch leaks an Xvnc (and its display
         # number) for the life of the container -- close() never runs for a browser
         # that was already popped from the registry.
+        self._stop_audio()
         self._stop_vnc()
         return True
+
+    async def audio_connect(self) -> None:
+        if self._audio is not None:
+            self._audio.connect()
+
+    async def audio_disconnect(self) -> None:
+        if self._audio is not None:
+            self._audio.disconnect()
 
     async def _open_initial_tabs(
         self, first_page: Page, restore_tabs: list[str] | None, active_tab: int = 0
@@ -2106,6 +2138,7 @@ class LiveBrowser(MutableModel):
         # The display goes LAST: Chromium must be gone before the X server it renders
         # into, or it loses its connection mid-teardown and the observer reports a
         # crash for a browser we are deliberately closing.
+        self._stop_audio()
         self._stop_vnc()
 
 

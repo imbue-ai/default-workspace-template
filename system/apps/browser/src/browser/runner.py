@@ -47,11 +47,12 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, request, send_file
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
+from browser.audio import JSMPEG_CLIENT
 from browser.loop_bridge import AsyncLoopBridge, cancel_task
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
@@ -240,6 +241,10 @@ def _body() -> dict[str, Any]:
 
 def index() -> Response:
     return Response(_INDEX_HTML.read_text(), mimetype="text/html")
+
+
+def jsmpeg_client() -> Response:
+    return send_file(JSMPEG_CLIENT, mimetype="application/javascript", conditional=True)
 
 
 def health() -> Response:
@@ -787,6 +792,22 @@ def resize_browser(browser_id: str) -> Response:
     return jsonify({"resized": resized})
 
 
+def audio_connect(browser_id: str) -> Response:
+    resolved = _resolve_sync(browser_id)
+    if isinstance(resolved, Response):
+        return resolved
+    bridge.run(resolved.audio_connect(), timeout=_ROUTE_TIMEOUT)
+    return jsonify({"service": f"browser-{browser_id}-audio"})
+
+
+def audio_disconnect(browser_id: str) -> Response:
+    resolved = _resolve_sync(browser_id)
+    if isinstance(resolved, Response):
+        return resolved
+    bridge.run(resolved.audio_disconnect(), timeout=_ROUTE_TIMEOUT)
+    return jsonify({"disconnected": True})
+
+
 # --- screencast WebSocket ----------------------------------------------------
 
 
@@ -927,6 +948,7 @@ def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
 
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
+    application.add_url_rule("/jsmpeg.min.js", view_func=jsmpeg_client, methods=["GET"])
     application.add_url_rule("/health", view_func=health, methods=["GET"])
     application.add_url_rule("/init-status", view_func=init_status, methods=["GET"])
     application.add_url_rule("/key-status", view_func=key_status, methods=["GET"])
@@ -949,6 +971,8 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/screenshot", view_func=cmd_screenshot, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/tab", view_func=cmd_tab, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/resize", view_func=resize_browser, methods=["POST"])
+    application.add_url_rule("/browsers/<string:browser_id>/audio/connect", view_func=audio_connect, methods=["POST"])
+    application.add_url_rule("/browsers/<string:browser_id>/audio/disconnect", view_func=audio_disconnect, methods=["POST"])
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
 
 

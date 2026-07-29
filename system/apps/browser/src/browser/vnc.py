@@ -312,6 +312,14 @@ class VncDisplay:
         self.display = f":{self.display_num}"
         self._process: subprocess.Popen[bytes] | None = None
 
+    @property
+    def slot(self) -> int:
+        return self.display_num - _DISPLAY_BASE
+
+    @property
+    def certificate(self) -> Path:
+        return _KASMVNC_USER_CONFIG.parent / "self.pem"
+
     def _command(self) -> list[str]:
         # Deliberately the vncserver wrapper, not Xvnc -- see the module docstring.
         # Auth off because the only path in is system_interface's authenticated

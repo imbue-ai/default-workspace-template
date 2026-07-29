@@ -136,6 +136,7 @@
     </div>
   </div>
 </div>
+<script src="jsmpeg.min.js"></script>
 <script>
 (function () {
   "use strict";
@@ -173,6 +174,36 @@
   // guessing state from whether a frame arrived. Starts "init": until the first control
   // message we assume the browser is still coming up and show the starting overlay.
   let lifecycle = "init";
+  let paneVisible = false;
+  let audioPlayer = null;
+  let audioConnected = false;
+
+  async function connectAudio() {
+    if (!browserId || audioConnected || !paneVisible || lifecycle !== "running") return;
+    audioConnected = true;
+    try {
+      const response = await fetch("browsers/" + encodeURIComponent(browserId) + "/audio/connect", { method: "POST" });
+      if (!response.ok || !paneVisible) { disconnectAudio(); return; }
+      const audioUrl = wsUrl("../browser-" + encodeURIComponent(browserId) + "-audio/kasmaudio");
+      audioPlayer = new JSMpeg.Player(audioUrl, { audio: true, video: false, autoplay: true });
+    } catch (_) { audioConnected = false; }
+  }
+
+  function disconnectAudio() {
+    if (!audioConnected) return;
+    audioConnected = false;
+    if (audioPlayer) { audioPlayer.destroy(); audioPlayer = null; }
+    if (browserId) fetch("browsers/" + encodeURIComponent(browserId) + "/audio/disconnect", { method: "POST", keepalive: true }).catch(() => {});
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== parent || event.origin !== location.origin || event.data?.type !== "minds-pane-visibility") return;
+    paneVisible = !!event.data.visible;
+    if (paneVisible) void connectAudio(); else disconnectAudio();
+  });
+  window.addEventListener("pagehide", disconnectAudio);
+  window.addEventListener("beforeunload", disconnectAudio);
+  window.addEventListener("pointerdown", () => audioPlayer?.audioOut?.unlock?.(), true);
   // Latched when an agent hands off for a CAPTCHA/verification ({type:"handoff_request"}):
   // the return bar shows what the human must do, until control goes back to an agent.
   let handoffReason = null, handoffAgent = null;
@@ -290,6 +321,7 @@
       initOverlay.classList.remove("show");
       app.classList.remove("chrome-hidden");
       placeholder.style.display = "none";
+      void connectAudio();
     }
   }
 
@@ -297,6 +329,7 @@
   // state -- distinct from the agent-control overlay and the "reconnecting" state --
   // and lock the controls. This browser is gone; a new one opens as a separate tab.
   function showCrashed() {
+    disconnectAudio();
     crashed = true;
     lifecycle = "crashed";  // keep the explicit lifecycle consistent with the overlay
     stopIdleTimer();
@@ -612,6 +645,7 @@
       // 1008: the browser/session no longer exists (daemon restarted or closed, or the
       // name is invalid). Terminal -- show a clear message and stop reconnecting.
       if (ev.code === 1008) {
+        disconnectAudio();
         closedForGood = true;
         overlay.classList.remove("show");
         returnBar.classList.remove("show");
