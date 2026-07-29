@@ -223,19 +223,35 @@ def _install_fake_latchkey(
     monkeypatch.setenv("PATH", f"{directory}:{os.environ['PATH']}")
 
 
-def _init_repo_with_tags(root: Path, *tags: str) -> None:
-    """Init a git repo at ``root`` with one empty commit carrying ``tags``."""
+def _init_workspace_repo(
+    root: Path, *, merged_tags: tuple[str, ...], unmerged_tags: tuple[str, ...]
+) -> None:
+    """Init a workspace repo whose HEAD carries local work on top of ``merged_tags``.
+
+    Models the shape every real workspace has and that a single-commit fixture
+    cannot: a template base it was created from (``merged_tags``, ancestors of
+    ``HEAD``), its own commits on top, and releases upstream has cut since on a
+    line that has *not* been merged (``unmerged_tags``). Both sets are visible to
+    ``git tag --list``, so target selection sees them all while the
+    already-merged check can still tell them apart.
+    """
 
     def _git(*args: str) -> None:
         subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
     root.mkdir(parents=True, exist_ok=True)
-    _git("init", "-q")
+    _git("init", "-q", "-b", "workspace")
     _git("config", "user.email", "test@example.com")
     _git("config", "user.name", "test")
-    _git("commit", "--allow-empty", "-q", "-m", "root")
-    for tag in tags:
+    _git("commit", "--allow-empty", "-q", "-m", "template base")
+    for tag in merged_tags:
         _git("tag", tag)
+    _git("checkout", "-q", "-b", "upstream-line")
+    _git("commit", "--allow-empty", "-q", "-m", "upstream release")
+    for tag in unmerged_tags:
+        _git("tag", tag)
+    _git("checkout", "-q", "workspace")
+    _git("commit", "--allow-empty", "-q", "-m", "local work")
 
 
 def test_fetch_app_template_ref_returns_the_apps_pinned_ref(
@@ -329,9 +345,18 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
 
     ``latest_available`` reports the release that was held back, which is what the
     approval message tells the user about.
+
+    The workspace sits *behind* the ceiling (created from 0.3.5, app on 0.3.9), so
+    the capped target is a real update and the pass proceeds. Being capped is not
+    the same as having nothing to gain -- the fixture has to keep those apart, or
+    it would be asserting the already-merged refusal's territory instead.
     """
     repo = tmp_path / "repo"
-    _init_repo_with_tags(repo, "minds-v0.3.9", "minds-v0.4.0")
+    _init_workspace_repo(
+        repo,
+        merged_tags=("minds-v0.3.5",),
+        unmerged_tags=("minds-v0.3.9", "minds-v0.4.0"),
+    )
     _install_fake_latchkey(
         monkeypatch,
         tmp_path / "bin",
@@ -355,6 +380,115 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
         # the approval message owes the user the "held back" line.
         "held_back_by_ceiling": True,
     }
+
+
+def test_resolve_target_cli_refuses_when_the_app_caps_it_at_the_release_it_is_on(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The case the ceiling exists for, from the seat of a workspace already at it.
+
+    Created from 0.3.9, app on 0.3.9, 0.4.0 upstream. Tag selection alone resolves
+    0.3.9 -- the release the workspace *is* -- and would run a whole backup, worker
+    and validation pass to merge nothing while never telling the user why 0.4.0
+    was not on offer. The refusal has to name the app, because updating the app is
+    the one action that gets them 0.4.0.
+    """
+    repo = tmp_path / "repo"
+    _init_workspace_repo(
+        repo, merged_tags=("minds-v0.3.9",), unmerged_tags=("minds-v0.4.0",)
+    )
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "bin",
+        body='{"workspace_template_ref": "minds-v0.3.9"}',
+        status="200",
+    )
+
+    assert (
+        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "already on minds-v0.3.9" in captured.err
+    assert "minds-v0.4.0 is available upstream but needs a newer app" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_resolve_target_cli_refuses_when_already_on_the_newest_release(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Nothing newer exists, so the refusal must not blame the app for it."""
+    repo = tmp_path / "repo"
+    _init_workspace_repo(repo, merged_tags=("minds-v0.3.9",), unmerged_tags=())
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "bin",
+        body='{"workspace_template_ref": "minds-v0.3.9"}',
+        status="200",
+    )
+
+    assert (
+        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert "already on minds-v0.3.9" in captured.err
+    assert "nothing to update" in captured.err
+    assert "newer app" not in captured.err
+
+
+def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """An override names a ref explicitly, and that rule outranks saving a no-op merge.
+
+    Blocking here would make ``--override`` unusable for the one case it is most
+    needed in -- re-running a landing that half-finished -- so the already-merged
+    refusal is deliberately confined to the path where the flow picked the target.
+    """
+    repo = tmp_path / "repo"
+    _init_workspace_repo(
+        repo, merged_tags=("minds-v0.3.9",), unmerged_tags=("minds-v0.4.0",)
+    )
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "bin",
+        body='{"workspace_template_ref": "minds-v0.3.9"}',
+        status="200",
+    )
+
+    assert (
+        update_self.main(
+            [
+                "resolve-target",
+                "--local-tags",
+                "--repo-root",
+                str(repo),
+                "--override",
+                "minds-v0.3.9",
+            ]
+        )
+        == 0
+    )
+
+    assert json.loads(capsys.readouterr().out)["ref"] == "minds-v0.3.9"
+
+
+def test_already_current_message_only_blames_the_app_when_it_is_to_blame() -> None:
+    held_back = update_self.already_current_message(
+        "minds-v0.3.9", "minds-v0.4.0", "minds-v0.3.9", True
+    )
+    assert "minds-v0.3.9" in held_back and "minds-v0.4.0" in held_back
+    assert "needs a newer app" in held_back
+
+    current = update_self.already_current_message(
+        "minds-v0.3.9", "minds-v0.3.9", "minds-v0.3.9", False
+    )
+    assert "nothing to update" in current
+    assert "newer app" not in current
 
 
 def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
@@ -514,7 +648,11 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
     # Python < 3.13 (bpo-9351). Asserting on the resolved tag (which only
     # exists in the tmp repo) catches both -- a clobber would resolve against
     # the real repo and either fail or print a different ref.
-    _init_repo_with_tags(tmp_path, "minds-v0.1.0")
+    #
+    # The tag has to sit on an *unmerged* line: a tag on HEAD is a target the
+    # workspace already has, which resolve-target refuses, and this test is about
+    # the flag plumbing rather than that refusal.
+    _init_workspace_repo(tmp_path, merged_tags=(), unmerged_tags=("minds-v0.1.0",))
 
     # ``--ceiling main`` pins a non-release ceiling (i.e. no cap), so this test
     # stays about the ``--repo-root`` plumbing and never reaches for the app.

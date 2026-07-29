@@ -31,6 +31,17 @@ validation depth, reveal by change class). This script owns the parts that are
     back) and because the alternative is eyeballing a tag listing, which is
     sorted lexically and includes prereleases.
 
+    A default target the workspace is **already on** is a refusal too: tag
+    selection is a pure function of the tag names and the ceiling, so on its own
+    it will happily "update" to the release the workspace was created from. The
+    command therefore also asks git whether the chosen ref is already an ancestor
+    of ``HEAD`` and refuses when it is, rather than spending a backup, a worker,
+    and a validation run on a merge that changes nothing. This is what makes the
+    ceiling bite for a workspace sitting *at* it: with a newer release upstream
+    the refusal names the app as the reason it cannot be had, and without one it
+    is a plain "already up to date". A workspace *behind* the ceiling still
+    updates to it -- being capped is not the same as having nothing to gain.
+
 ``classify-merge``
     Split the files upstream changed into the reconciled **merged** set (local
     also diverged there -- validate) vs the clean **pulled-in** set (local left
@@ -99,9 +110,10 @@ class NoUpdateTargetError(ValueError):
     """Raised when no ref to update to could be chosen.
 
     A refusal, not a fault: the workspace is fine, there is simply nothing it may
-    update to right now (no stable tag upstream, or every one above the app's
-    ceiling). Distinct from a plain ``ValueError`` so the CLI can render exactly
-    this case as a one-line explanation and let a genuine bug keep its traceback.
+    update to right now -- no stable tag upstream, every one above the app's
+    ceiling, or the one it may take already merged. Distinct from a plain
+    ``ValueError`` so the CLI can render exactly this case as a one-line
+    explanation and let a genuine bug keep its traceback.
     """
 
 
@@ -319,6 +331,31 @@ def _no_target_message(tags: Sequence[str], ceiling: str | None) -> str:
         "no stable minds-v* tag found upstream; pass an explicit "
         "--override (a tag, 'main', or a ref) to update anyway"
     )
+
+
+def already_current_message(
+    ref: str, latest_available: str | None, ceiling: str | None, is_held_back: bool
+) -> str:
+    """Explain that the default target is already merged, naming the ceiling when it is why.
+
+    The two cases read very differently to a user and need different next steps.
+    Held back: a newer release exists and the app is the only thing standing
+    between them and it, so the message has to say so -- updating the app is the
+    action that unblocks them. Not held back: the workspace is simply current,
+    and there is nothing to do.
+
+    ``is_held_back`` comes from :func:`is_held_back_by_ceiling` rather than being
+    re-derived from ``ref`` vs ``latest_available`` here, so the two places that
+    speak about the ceiling cannot disagree about when it is to blame.
+    """
+    if is_held_back:
+        return (
+            f"this workspace is already on {ref}, the newest release your minds app "
+            f"({ceiling}) supports; {latest_available} is available upstream but needs a "
+            f"newer app -- update the app first, or pass an explicit --override to update "
+            f"past it anyway"
+        )
+    return f"this workspace is already on {ref}, the newest release upstream; nothing to update"
 
 
 # --- The app's update ceiling ----------------------------------------------
@@ -637,6 +674,25 @@ def _list_names(output: str) -> list[str]:
     return [line for line in output.splitlines() if line]
 
 
+def _is_already_merged(ref: str, repo_root: Path) -> bool:
+    """Whether ``ref`` is already reachable from ``HEAD``, so merging it changes nothing.
+
+    Cannot use :func:`_git` (``check=True``): exit 1 is the ordinary "not an
+    ancestor" answer, not a failure. Any other code is a real git error -- a ref
+    that does not resolve, or no ``HEAD`` at all -- and is raised rather than read
+    as "not merged", which would silently skip the check.
+    """
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ref, "HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode not in (0, 1):
+        result.check_returncode()
+    return result.returncode == 0
+
+
 def _repo_root(args: argparse.Namespace) -> Path:
     """The ``--repo-root`` value, whether given before or after the subcommand.
 
@@ -661,6 +717,21 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     ceiling = args.ceiling if args.ceiling is not None else fetch_app_template_ref()
     target = resolve_target(args.override, tags, remote=args.remote, ceiling=ceiling)
     latest_available = pick_latest_stable_tag(tags)
+    is_held_back = is_held_back_by_ceiling(
+        resolved_ref=target.ref,
+        latest_available=latest_available,
+        ceiling=target.ceiling,
+        has_override=args.override is not None,
+    )
+    # Only the default path: an override was asked for by name, and the rule that
+    # it is never silently blocked outranks saving a no-op merge. The lead sees
+    # the ref it named and can say "you are already on that" itself.
+    if args.override is None and _is_already_merged(target.ref, repo_root):
+        raise NoUpdateTargetError(
+            already_current_message(
+                target.ref, latest_available, target.ceiling, is_held_back
+            )
+        )
     print(
         json.dumps(
             {
@@ -669,12 +740,7 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
                 "ceiling": target.ceiling,
                 "exceeds_ceiling": target.exceeds_ceiling,
                 "latest_available": latest_available,
-                "held_back_by_ceiling": is_held_back_by_ceiling(
-                    resolved_ref=target.ref,
-                    latest_available=latest_available,
-                    ceiling=target.ceiling,
-                    has_override=args.override is not None,
-                ),
+                "held_back_by_ceiling": is_held_back,
             }
         )
     )

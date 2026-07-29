@@ -102,8 +102,10 @@ chosen. Relay *that* line in plain terms per the §5a composition rules and offe
 the next step; the usual reasons each have a different answer for the user: the
 minds app could not be reached (it is closed, or the gateway is down -- retry once
 it is running); the app is too old to report its version (update the minds app
-itself first, then re-run); or every release upstream is already newer than the
-app. Do **not** work around it by resolving a ref by hand.
+itself first, then re-run); every release upstream is already newer than the app;
+or the workspace is already on the release it may take -- which is either "you are
+current" or "updating the app unlocks the newer one," and the `error:` line says
+which. Do **not** work around it by resolving a ref by hand.
 
 ### The version ceiling
 
@@ -114,6 +116,15 @@ the system interface and the vendored `mngr` -- so a workspace running a templat
 newer than its app would be speaking a protocol the app does not know. When the
 app reports a branch rather than a release tag (a dev build) there is nothing to
 compare against and `ceiling` does not cap anything.
+
+A workspace already sitting *at* the ceiling gets a refusal rather than a pass:
+the capped target is the release it was created from, so there is nothing to
+merge, and `resolve-target` says so instead of spending a backup, a worker and a
+validation run on a no-op -- naming the newer release the app is holding back
+when there is one. A workspace *behind* the ceiling still updates to it: being
+capped is not the same as having nothing to gain, which is why the two cases are
+distinguished by whether the resolved ref is already an ancestor of `HEAD` and
+not by the ceiling alone.
 
 **`"exceeds_ceiling": true` means the user's `--override` names a version this
 app cannot vouch for** -- newer than the app, or a branch/commit whose version
