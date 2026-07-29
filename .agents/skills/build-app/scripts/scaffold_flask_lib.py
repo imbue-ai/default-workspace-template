@@ -47,8 +47,17 @@ RESERVED_NAMES = frozenset(
         "terminal",
         "deferred-install",
         "imbue-common",
+        # forward_port.py rejects ``localhost`` at registration time (it is
+        # the local origin's root domain); reserve it here too so the scaffold
+        # never mints an app that cannot register.
+        "localhost",
     }
 )
+# Workspace hostnames carry their coordinate as a ``host-<hex>`` label
+# (``agent-`` is the legacy spelling); a service name starting with either
+# prefix could collide with that coordinate label, so forward_port.py rejects
+# both and the scaffold must too.
+RESERVED_NAME_PREFIXES = ("host-", "agent-")
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
@@ -59,12 +68,25 @@ def _kebab_to_snake(name: str) -> str:
 
 
 def _validate_name(name: str) -> None:
+    # The name becomes the leading label of the service's origin hostname
+    # (the app is served at http://<name>.<workspace-host>/), so it must be
+    # DNS-safe kebab-case and stay out of the reserved coordinate prefix
+    # space. forward_port.py accepts a superset (underscores are tolerated
+    # there for legacy names like ``system_interface``), so every name the
+    # scaffold mints registers cleanly -- a drift test in
+    # system/scripts/forward_port_test.py pins that subset relation.
     if not KEBAB_RE.match(name):
         sys.exit(
             f"error: --name {name!r} is not valid kebab-case "
             "(lowercase letters/digits with single hyphens, "
             "starting with a letter)"
         )
+    for prefix in RESERVED_NAME_PREFIXES:
+        if name.startswith(prefix):
+            sys.exit(
+                f"error: --name {name!r} starts with {prefix!r}, which is "
+                "reserved for workspace hostnames"
+            )
     if name in RESERVED_NAMES or _kebab_to_snake(name) in RESERVED_NAMES:
         sys.exit(f"error: --name {name!r} is reserved")
 
@@ -165,10 +187,11 @@ Services run from /home/user/workspace (the repo root). Conventions:
   the port at the ``run_simple`` call.
 
 This is a synchronous Flask app served by the threaded Werkzeug server.
-The system_interface proxy at ``/service/{name}/`` rewrites absolute
-paths in served HTML and installs a scoped service worker that prepends
-the prefix to the page's own fetches, so the app can serve at ``/`` and
-still work behind the proxy. Use ``flask_sock`` if you need WebSockets.
+The app owns its own browser origin (the forwarder routes
+``http://{name}.<workspace-host>/`` straight to this port), so it serves
+at ``/`` and root-absolute URLs, cookies, and service workers all work
+unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
+WebSockets.
 """
 
 import os
@@ -473,9 +496,10 @@ def main() -> None:
 
     print(
         f"Created lib at {lib_dir.relative_to(repo_root)} "
-        f"(app `{args.name}` on port {port}). "
+        f"(app `{args.name}` on port {port}; the tab renders at the service's "
+        f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
-        f"references/verify.md (curl + Playwright against /service/{args.name}/)."
+        f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."
     )
 
 
