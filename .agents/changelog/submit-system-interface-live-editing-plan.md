@@ -45,6 +45,26 @@ preview tab.
   A `preview` that fails to boot now also removes the layout copy it had already
   seeded, instead of leaving it for an `unpreview` that is never coming.
 
+- The preview and the reveal pre-flight now **follow** the live agent-lifecycle
+  event stream instead of competing for it. Both boot a second system interface
+  beside the live one, which holds the single-writer `mngr observe` lock, so both
+  used to come up with a permanently frozen agent view -- and both used to pass
+  their health probe anyway, because `/api/agents` runs its own discovery and
+  never looks at the lifecycle stream. They now launch with
+  `SYSTEM_INTERFACE_AGENT_EVENTS_MODE=FOLLOW` and gate on the new strict
+  `/api/health`, which stays red unless that stream is really feeding the
+  instance. A preview whose lifecycle stream cannot be established therefore does
+  not come up at all: a silently frozen preview is worse than no preview, because
+  the user reads it as the real UI. The *live* service's post-restart and recovery
+  probes deliberately keep the looser `/api/agents` -- a rollback there is heavy,
+  and lifecycle-stream trouble on the live UI is not something reverting a UI
+  change would fix.
+
+- `serve_isolated_instance.py` now quotes the tail of the boot log on stderr when
+  an instance (or the preview wrapper, or a `refresh`) fails to become healthy,
+  instead of only naming the log file. The caller reading that stderr is an agent,
+  so the reason for the failure is now in front of it.
+
 - `interactive-delivery.md` phase 5 was recast around **fast feedback**, with
   two demonstrative-prototype types chosen by wiring-cost vs. restart-cost: a
   Type 1 "janky real edit" (rough, but in the real code and shown through the

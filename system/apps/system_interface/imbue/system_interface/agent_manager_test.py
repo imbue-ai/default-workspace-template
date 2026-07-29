@@ -4,8 +4,6 @@ import json
 import queue
 import shutil
 import threading
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,20 +14,19 @@ from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 from watchdog.events import FileOpenedEvent
 
+from imbue.mngr.api.observe import acquire_observe_lock
+from imbue.mngr.api.observe import append_observe_event
 from imbue.mngr.api.observe import make_agent_removed_event
 from imbue.mngr.api.observe import make_agent_state_event
 from imbue.mngr.api.observe import make_full_agent_state_event
+from imbue.mngr.api.observe import release_observe_lock
 from imbue.mngr.interfaces.data_types import AgentDetails
-from imbue.mngr.interfaces.data_types import HostDetails
 from imbue.mngr.primitives import AgentId as MngrAgentId
 from imbue.mngr.primitives import AgentLifecycleState
-from imbue.mngr.primitives import AgentName as MngrAgentName
-from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import HostId
-from imbue.mngr.primitives import HostState
-from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import poll_until
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.agent_events import AgentEventsMode
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
@@ -39,6 +36,8 @@ from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
+from imbue.system_interface.testing import LOCAL_PROVIDER
+from imbue.system_interface.testing import build_agent_details
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -61,42 +60,10 @@ def _seed_agent(manager: AgentManager, agent_id: str) -> None:
         )
 
 
-_PROVIDER = ProviderInstanceName("local")
-
-
-def _agent_details(
-    name: str,
-    agent_id: MngrAgentId | None = None,
-    state: AgentLifecycleState = AgentLifecycleState.RUNNING,
-    labels: dict[str, str] | None = None,
-    work_dir: str = "/tmp/work",
-    host_id: HostId | None = None,
-    provider_name: ProviderInstanceName = _PROVIDER,
-) -> AgentDetails:
-    """Build an ``AgentDetails`` with controllable identity, state, and location.
-
-    Mirrors what the observe stream carries: a real lifecycle ``state`` and a
-    nested ``HostDetails`` whose id/provider are what ``_build_agent_match`` reads
-    to route messages. Fields the manager never inspects are given inert defaults.
-    """
-    return AgentDetails(
-        id=agent_id if agent_id is not None else MngrAgentId(),
-        name=MngrAgentName(name),
-        type="claude",
-        command=CommandString("claude"),
-        work_dir=Path(work_dir),
-        initial_branch=None,
-        create_time=datetime.now(timezone.utc),
-        start_on_boot=False,
-        state=state,
-        labels=labels if labels is not None else {},
-        host=HostDetails(
-            id=host_id if host_id is not None else HostId(),
-            name="test-host",
-            provider_name=provider_name,
-            state=HostState.RUNNING,
-        ),
-    )
+# The one shared builder for observe-stream ``AgentDetails`` (see
+# ``testing.build_agent_details``); aliased to the name this module's ~40 call
+# sites already use.
+_agent_details = build_agent_details
 
 
 def _drain(q: queue.Queue[str | None]) -> list[dict[str, Any]]:
@@ -560,9 +527,7 @@ def test_agent_state_event_locates_agent_immediately(agent_manager: AgentManager
     assert str(matches[0].provider_name) == "local"
 
 
-def test_on_apps_changed(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
-) -> None:
+def test_on_apps_changed(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
     """Application changes are detected and broadcast."""
     q = broadcaster.register()
 
@@ -1107,6 +1072,111 @@ def test_start_observe_watchdog_stays_quiet_on_clean_shutdown(
 
     errors = [r for r in loguru_records if r.startswith("ERROR") and "mngr observe" in r]
     assert errors == [], f"Watchdog logged errors during clean shutdown: {errors}"
+
+
+def test_dead_observe_subprocess_makes_the_lifecycle_stream_report_dead(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """A watchdog that only logs is what let a broken instance look healthy.
+
+    The exit must also land in ``get_agent_events_status``, because that is what
+    ``/api/health`` reads and what a preview's boot gate refuses on.
+    """
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        manager._start_observe()
+        went_dead = poll_until(
+            lambda: not manager.get_agent_events_status().is_alive
+            and "exited unexpectedly" in manager.get_agent_events_status().detail,
+            timeout=5.0,
+            poll_interval=0.05,
+        )
+        assert went_dead, f"status stayed {manager.get_agent_events_status()!r}"
+    finally:
+        manager.stop()
+
+
+def test_observe_mode_is_not_alive_until_an_event_actually_arrives(
+    agent_manager: AgentManager,
+) -> None:
+    """Spawning an observer is not evidence it is streaming; an event is.
+
+    An observer that loses the single-writer lock exits ~20s into boot without
+    ever emitting, so a health gate that trusted "the subprocess started" would
+    go green on an instance whose agent view was already doomed.
+    """
+    before = agent_manager.get_agent_events_status()
+    assert before.mode is AgentEventsMode.OBSERVE
+    assert before.is_alive is False
+
+    agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("first")]))
+
+    after = agent_manager.get_agent_events_status()
+    assert after.is_alive is True
+
+
+def test_follow_mode_folds_agents_from_the_running_observers_event_file(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second instance gets a live agent view without taking the observe lock.
+
+    This is the whole point: the preview boots alongside the workspace's own
+    system interface, which holds the lock, and still sees agents appear.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+
+    existing = _agent_details("already-here")
+    append_observe_event(tmp_path, make_full_agent_state_event([existing]))
+
+    manager = AgentManager.build(broadcaster, events_mode=AgentEventsMode.FOLLOW)
+    lock_fd = acquire_observe_lock(tmp_path)
+    try:
+        manager.start()
+        assert manager.get_agent_events_status().is_alive is True
+        assert poll_until(
+            lambda: [a.name for a in manager.get_agents()] == ["already-here"],
+            timeout=5.0,
+            poll_interval=0.05,
+        ), f"agents were {manager.get_agents()!r}"
+
+        # An agent created after the follower booted is exactly what used to
+        # render as "No conversation data" in a frozen preview.
+        appeared = _agent_details("created-later")
+        append_observe_event(tmp_path, make_agent_state_event(appeared))
+        assert poll_until(
+            lambda: any(a.name == "created-later" for a in manager.get_agents()),
+            timeout=5.0,
+            poll_interval=0.05,
+        ), f"agents were {manager.get_agents()!r}"
+    finally:
+        manager.stop()
+        release_observe_lock(lock_fd)
+
+
+def test_follow_mode_reports_dead_when_there_is_no_observer_to_follow(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Starting must not raise, but the instance must not claim to be working."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+
+    manager = AgentManager.build(broadcaster, events_mode=AgentEventsMode.FOLLOW)
+    try:
+        manager.start()
+        status = manager.get_agent_events_status()
+        assert status.mode is AgentEventsMode.FOLLOW
+        assert status.is_alive is False
+        assert "mngr observe" in status.detail
+    finally:
+        manager.stop()
 
 
 def test_handle_observe_output_line_logs_stderr_as_warning(

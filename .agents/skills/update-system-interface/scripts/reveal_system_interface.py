@@ -45,7 +45,11 @@ specifics -- boot ``uv run system-interface`` from an already-built
 the live layout (``SYSTEM_INTERFACE_LAYOUT_DIR``) so the preview renders the
 user's real tabs while its autosaves land in the copy, with MNGR_AGENT_ID also
 dropped as a guard against clobbering the live ``layout.json``; keep agent
-discovery; probe ``/api/agents``; and register the inner app plus the labeled
+discovery; source agent lifecycle events by *following* the live observer rather
+than running a second one (``SYSTEM_INTERFACE_AGENT_EVENTS_MODE=FOLLOW``, since
+``mngr observe`` is single-writer per mngr host dir); probe ``/api/health``,
+which refuses to go green unless that lifecycle stream is actually live; and
+register the inner app plus the labeled
 "preview" wrapper frame the user opens. The shared script owns the ports, the
 process/service teardown, and the state file; no fetch, checkout, or rebuild
 happens, and the served tree and the previewed folder are never touched.
@@ -187,11 +191,35 @@ ENV_MNGR_HOST_DIR = "MNGR_HOST_DIR"
 # layout, so nothing downstream sees a missing slug.
 _PREVIEW_SERVICE_NAMES = frozenset({PREVIEW_SERVICE_NAME, PREVIEW_INNER_SERVICE_NAME})
 
-# Endpoints used to probe liveness. ``/api/agents`` exercises the mngr plugin
-# discovery path -- exactly what a missing backend dependency or a broken
-# plugin-config parse would take down -- so a 200 there is a strong "the backend
-# actually works" signal, not just "the server is listening". It is also handed
-# to the shared preview script as its ``--health-path``.
+# How a throwaway second instance sources agent lifecycle events. ``mngr observe``
+# is single-writer per mngr host dir (an exclusive flock), and this box's live
+# system interface already holds that lock -- so an instance booted alongside it
+# (the preview, the pre-flight) that tried to run its own observer would have it
+# die seconds into boot, leaving that instance's agent list and chat panels
+# frozen at boot state forever while terminals and everything else kept working.
+# FOLLOW makes it read the live observer's event stream instead, which is all a
+# read-only second instance ever needed. This is the env spelling of the server's
+# ``Config.system_interface_agent_events_mode``.
+PREVIEW_AGENT_EVENTS_MODE_ENV = "SYSTEM_INTERFACE_AGENT_EVENTS_MODE"
+FOLLOW_AGENT_EVENTS_MODE = "FOLLOW"
+
+# Endpoints used to probe liveness.
+#
+# ``/api/health`` is the strict gate, used for the *throwaway* instances (the
+# preview and the pre-flight boot). It asserts both that a fresh mngr discovery
+# works -- the plugin/config path a missing backend dependency or a broken
+# plugin-config parse would take down -- and that the instance's agent lifecycle
+# event stream is actually live. That second half is why ``/api/agents`` is not
+# enough: it runs its own discovery rather than reading the cache the lifecycle
+# stream feeds, so it answers 200 on an instance whose agent view is dead. A
+# preview that came up looking healthy and showed "No conversation data" for
+# every agent created after it booted is exactly the gap this closes.
+STRICT_HEALTH_PATH = "/api/health"
+# ``/api/agents`` stays the probe for the *live* service (post-restart and during
+# recovery). Deliberately the looser check: a rollback here is a heavy, risky
+# action, and lifecycle-stream trouble on the live service is not something
+# reverting a UI change would fix -- it would just escalate a real problem into a
+# spurious rollback, and then into an "even rollback failed" emergency.
 HEALTH_PATH = "/api/agents"
 SERVE_PATH = "/"
 
@@ -455,16 +483,26 @@ def _preflight_ok(
     sleeper: Callable[[float], None],
 ) -> bool:
     """Boot the merged backend on a throwaway port and probe it, without touching
-    the live service. Returns True iff it serves a healthy response."""
+    the live service. Returns True iff it serves a healthy response.
+
+    Runs in FOLLOW mode: this boots *alongside* the still-running live service,
+    which holds the single-writer observe lock, so a pre-flight that tried to run
+    its own observer would lose the lock and boot with a dead agent view -- and
+    then pass anyway, because the old ``/api/agents`` probe never looked at the
+    lifecycle stream. Following the live observer makes the pre-flight both able
+    to come up and able to prove the merged backend really can serve a live agent
+    view, which is what this gate is for.
+    """
     port = find_free_port()
     env = dict(os.environ)
     env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
     env["SYSTEM_INTERFACE_PORT"] = str(port)
+    env[PREVIEW_AGENT_EVENTS_MODE_ENV] = FOLLOW_AGENT_EVENTS_MODE
     spawned = spawner.spawn([TOOL_NAME], cwd=str(repo_root / APP_DIR), env=env)
     try:
         return wait_healthy(
             http,
-            f"http://127.0.0.1:{port}{HEALTH_PATH}",
+            f"http://127.0.0.1:{port}{STRICT_HEALTH_PATH}",
             _PREFLIGHT_ATTEMPTS,
             _PREFLIGHT_INTERVAL_SECONDS,
             sleeper,
@@ -868,9 +906,18 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
     (``SYSTEM_INTERFACE_LAYOUT_DIR``) so the preview renders the user's real tabs
     while its autosaves land in the copy, and additionally drop MNGR_AGENT_ID as a
     belt-and-suspenders guard against clobbering the live ``layout.json``; keep
-    discovery so real conversations still render; probe ``/api/agents``; register
+    discovery so real conversations still render; run in FOLLOW mode so the
+    preview reads the live observer's agent lifecycle stream instead of trying to
+    start a second observer it cannot get the lock for; probe ``/api/health``,
+    which stays red unless that stream really is feeding the preview; register
     the inner app and the labeled wrapper frame. The shared script owns the ports,
     the process/service teardown, and the state file.
+
+    Because the health gate is strict, a preview whose lifecycle stream cannot be
+    established does not come up at all -- the shared script tears the partial
+    instance down and this returns non-zero. That is deliberate: a preview whose
+    agent view is silently frozen is worse than no preview, because the user
+    reads it as the real UI.
     """
     # Sanity-check the work_dir before disturbing anything: a wrong --work-dir
     # should fail fast rather than reaching the shared script.
@@ -924,10 +971,12 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             PREVIEW_HOST_ENV,
             "--env",
             f"{PREVIEW_LAYOUT_DIR_ENV}={seed_dir}",
+            "--env",
+            f"{PREVIEW_AGENT_EVENTS_MODE_ENV}={FOLLOW_AGENT_EVENTS_MODE}",
             "--unset-env",
             ENV_MNGR_AGENT_ID,
             "--health-path",
-            HEALTH_PATH,
+            STRICT_HEALTH_PATH,
             "--service-name",
             PREVIEW_INNER_SERVICE_NAME,
             "--preview-service-name",
