@@ -798,6 +798,15 @@ def _cast_inbound_pump(
                         "t1": t1, "t2": time.time() * 1000.0,
                     }))
                 continue
+            if kind == "probe_request":
+                # Fire a fixed-size repaint and tell THIS viewer it fired. The
+                # viewer times the whole thing on its own clock (request sent ->
+                # pixels changed), so no clock sync is involved; we only report
+                # whether there was a page to paint into.
+                fired = bridge.run(session.fire_repaint_probe(), timeout=_ROUTE_TIMEOUT)
+                with contextlib.suppress(queue.Full):
+                    client_queue.put_nowait(json.dumps({"type": "probe_fired", "ok": bool(fired)}))
+                continue
             if kind == "latency_sample":
                 bridge.submit(session.record_latency_sample(
                     str(message.get("kind", "")), message.get("ms")))

@@ -467,6 +467,10 @@ class LiveBrowser(MutableModel):
     # readout persistent.
     _latency_rtt: deque = PrivateAttr(default_factory=lambda: deque(maxlen=512))
     _latency_click: deque = PrivateAttr(default_factory=lambda: deque(maxlen=256))
+    # Deterministic-trigger samples (see fire_repaint_probe): same bytes every
+    # time, so these ARE comparable across runs -- unlike the click ring, whose
+    # spread is dominated by what the user happened to click on.
+    _latency_probe: deque = PrivateAttr(default_factory=lambda: deque(maxlen=256))
     _selector_map: dict[int, Any] = PrivateAttr(default_factory=dict)
     _lease_touched_at: float = PrivateAttr(default=0.0)
     _screenshot_seq: int = PrivateAttr(default=0)
@@ -1027,6 +1031,48 @@ class LiveBrowser(MutableModel):
 
     # --- input ----------------------------------------------------------------
 
+    async def fire_repaint_probe(self) -> bool:
+        """Repaint a fixed band at the top of the page, for latency probing.
+
+        The measurement problem with sampling real clicks is COMPARABILITY: a
+        click on a link repaints a viewport, a click on a checkbox repaints a few
+        hundred pixels, and the resulting latencies are not comparable to each
+        other or across runs. (This is the standard critique of click-to-photon
+        as a benchmark -- the number is real but the scenario is uncontrolled.)
+
+        This paints a full-width band of a known size in a known place, so every
+        sample costs the same bytes. The viewer times the round trip itself and
+        needs no clock sync: it stamps the request and the pixel change on its
+        own clock. Colours alternate so consecutive probes always differ.
+
+        Returns False when the browser has no page to paint into (still starting,
+        or crashed), so the caller can skip the sample rather than record a lie.
+        """
+        page = self._active_page
+        if page is None or not self._is_running:
+            return False
+        try:
+            await page.evaluate(
+                """() => {
+                    let bar = document.getElementById('__latency_probe__');
+                    if (!bar) {
+                        bar = document.createElement('div');
+                        bar.id = '__latency_probe__';
+                        bar.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:60px;' +
+                                            'z-index:2147483647;pointer-events:none';
+                        document.documentElement.appendChild(bar);
+                    }
+                    // Alternate between two high-contrast colours so a probe is
+                    // always a change, even back-to-back.
+                    bar.style.background = bar.dataset.on === '1' ? '#000000' : '#ffffff';
+                    bar.dataset.on = bar.dataset.on === '1' ? '0' : '1';
+                }"""
+            )
+        except _BROWSER_ERRORS as e:
+            logger.debug("repaint probe failed on browser {} ({})", self.browser_id, e)
+            return False
+        return True
+
     async def record_latency_sample(self, kind: str, ms: float) -> None:
         """Store one viewer-reported latency sample (see the runner's inbound pump).
 
@@ -1041,6 +1087,8 @@ class LiveBrowser(MutableModel):
             self._latency_rtt.append(float(ms))
         elif kind == "click_photon":
             self._latency_click.append(float(ms))
+        elif kind == "probe":
+            self._latency_probe.append(float(ms))
 
     async def latency_snapshot(self) -> dict[str, Any]:
         """Aggregate the latency rings for ``GET /browsers/<id>/latency``.
@@ -1061,15 +1109,43 @@ class LiveBrowser(MutableModel):
 
         rtt = stats(self._latency_rtt)
         click = stats(self._latency_click)
+        probe = stats(self._latency_probe)
         if rtt is not None:
             recent = list(self._latency_rtt)[-100:]
             threshold = max(2 * rtt["p50_ms"], rtt["p50_ms"] + 30)
             rtt["spikes_recent"] = sum(1 for s in recent if s > threshold)
             rtt["spike_window"] = len(recent)
-        overhead = None
-        if rtt is not None and click is not None:
-            overhead = round(click["p50_ms"] - rtt["p50_ms"], 1)
-        return {"rtt": rtt, "click_photon": click, "overhead_ms": overhead}
+
+        # Citrix's ICA decomposition, which is the industry-standard shape for
+        # this measurement:
+        #     ICA RTT = ICA Latency + Host Delay + Endpoint Delay
+        # ICA RTT is the user-visible total (input -> pixels); ICA Latency is
+        # the network-only component. We measure those two directly and derive
+        # the rest as one combined server+client term, because splitting host
+        # from endpoint needs cooperation from the VNC server that ours does not
+        # give us -- so it is reported honestly as a single "processing" figure
+        # rather than a fabricated split.
+        #
+        # ICA RTT prefers the PROBE series when it exists: same repaint every
+        # time, hence comparable across runs. The click series is kept because
+        # it is what the user actually experienced.
+        total = probe or click
+        processing = None
+        if rtt is not None and total is not None:
+            processing = round(total["p50_ms"] - rtt["p50_ms"], 1)
+        return {
+            "rtt": rtt,
+            "click_photon": click,
+            "probe": probe,
+            "ica": {
+                "ica_rtt_ms": total["p50_ms"] if total else None,
+                "ica_rtt_source": ("probe" if probe else "click") if total else None,
+                "ica_latency_ms": rtt["p50_ms"] if rtt else None,
+                "processing_ms": processing,
+            },
+            # Retained under its old name so existing callers keep working.
+            "overhead_ms": processing,
+        }
 
     async def handle_cast_message(self, message: dict[str, Any]) -> None:
         """Handle a message from a cast socket: human input or tab control.

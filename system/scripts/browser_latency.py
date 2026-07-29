@@ -1,19 +1,37 @@
 #!/usr/bin/env python3
-"""Live-view latency readout: how close is the browser stream to the network floor?
+"""Live-view latency readout, in Citrix's ICA decomposition.
 
     python3 system/scripts/browser_latency.py [name] [--watch]
 
-Three numbers per browser, gathered by the viewer page and aggregated by the
-browser daemon (see GET /browsers/<name>/latency):
+The industry-standard shape for this measurement (Citrix HDX) splits the
+user-visible total into its causes:
 
-  rtt            a periodic timestamp echo over the cast socket -- the same
-                 network path the video rides. This is the floor.
-  click>photon   on a real click in the live view, the time until a pixel near
-                 the click visibly changes. This is what you feel. Clicks that
-                 change nothing on screen produce no sample.
-  overhead       click>photon minus rtt: the pipeline's own cost above the
-                 network. Healthy is roughly frame interval + encode + decode,
-                 ~30-80ms.
+    ICA RTT  =  ICA Latency  +  Host Delay  +  Endpoint Delay
+    (total)     (network)       (server)      (client)
+
+We measure the first two directly and report the remainder as one combined
+"processing" figure: splitting server from client needs cooperation from the
+VNC server that ours does not provide, so an honest single number beats a
+fabricated split.
+
+  ICA RTT       input -> pixels on screen. What the user feels. Graded against
+                the published Citrix thresholds (great <180ms, good <240ms).
+                Sourced from the deterministic probe when available, else from
+                real clicks.
+  ICA Latency   a periodic timestamp echo over the cast socket -- the same
+                network path the video rides. The floor; nothing beats it.
+  processing    ICA RTT minus ICA Latency: render + encode + transport-of-bytes
+                + decode + paint.
+
+Two sample series feed ICA RTT:
+
+  probe         a fixed-size repaint the daemon triggers on request. Same bytes
+                every time, so these ARE comparable across runs and settings --
+                which uncontrolled click sampling is not (the standard critique
+                of click-to-photon as a benchmark).
+  click>photon  real clicks. Not comparable run-to-run (a link repaints a
+                viewport, a checkbox a few hundred pixels) but it is ground
+                truth for what the user actually experienced.
 
 Standalone and stdlib-only on purpose: this is a HUMAN diagnostic, so it must
 run from any shell -- no venv, no MNGR_AGENT_ID (that requirement exists for the
@@ -82,25 +100,45 @@ def _browser_names() -> list[str]:
     return [b["id"] for b in payload.get("browsers", [])]
 
 
+def _grade(ica_rtt_ms: float) -> str:
+    """Citrix's published ICA RTT bands for interactive remote sessions."""
+    if ica_rtt_ms < 180:
+        return "GREAT"
+    if ica_rtt_ms < 240:
+        return "GOOD"
+    return "POOR"
+
+
+def _series(label: str, stats: dict[str, Any] | None, hint: str) -> None:
+    if stats is None:
+        print(f"  {label:<13} -- no samples yet; {hint}")
+        return
+    line = f"  {label:<13} p50 {stats['p50_ms']:7.1f}ms   p95 {stats['p95_ms']:7.1f}ms   (n={stats['n']})"
+    if "spikes_recent" in stats:
+        line += f"   spikes {stats['spikes_recent']}/{stats['spike_window']}"
+    print(line)
+
+
 def _render(name: str, payload: dict[str, Any]) -> None:
-    rtt = payload.get("rtt")
-    click = payload.get("click_photon")
-    overhead = payload.get("overhead_ms")
+    ica = payload.get("ica") or {}
+    total = ica.get("ica_rtt_ms")
+    network = ica.get("ica_latency_ms")
+    processing = ica.get("processing_ms")
+
     print(f"browser {name}")
-    if rtt is None:
-        print("  rtt           -- no samples yet; open this browser's pane and leave it open a few seconds")
+    if total is None or network is None:
+        print("  (waiting for samples -- open this browser's pane and leave it open a few seconds)")
     else:
-        print(
-            f"  rtt           p50 {rtt['p50_ms']:7.1f}ms   p95 {rtt['p95_ms']:7.1f}ms"
-            f"   (n={rtt['n']})   spikes {rtt.get('spikes_recent', 0)}/{rtt.get('spike_window', 0)}"
-        )
-    if click is None:
-        print("  click>photon  -- no samples yet; click inside the live view")
-    else:
-        print(f"  click>photon  p50 {click['p50_ms']:7.1f}ms   p95 {click['p95_ms']:7.1f}ms   (n={click['n']})")
-    if overhead is not None:
-        verdict = "at the RTT floor" if overhead <= 80 else "pipeline overhead worth investigating"
-        print(f"  overhead      {overhead:7.1f}ms  (click>photon minus rtt) -- {verdict}; healthy ~30-80ms")
+        share = f"{100 * network / total:.0f}%" if total else "?"
+        print(f"  ICA RTT       {total:7.1f}ms   [{_grade(total)}]   great <180, good <240")
+        print(f"    ICA Latency {network:7.1f}ms   network -- the floor ({share} of total)")
+        print(f"    processing  {processing:7.1f}ms   render + encode + bytes + decode + paint")
+        print(f"                (from the {ica.get('ica_rtt_source')} series)")
+
+    print("  --")
+    _series("probe", payload.get("probe"), "the pane fires one every 4s once it is open")
+    _series("click>photon", payload.get("click_photon"), "click inside the live view")
+    _series("rtt", payload.get("rtt"), "open this browser's pane")
 
 
 def main() -> int:
@@ -125,7 +163,8 @@ def main() -> int:
                     return 1
                 continue
             _render(name, payload)
-        print("note: transport is TCP; packet loss is invisible to it and shows up here as rtt spikes.")
+        print("note: transport is TCP; packet loss is invisible to it and shows up as rtt spikes.")
+        print("      probe = fixed-size repaint (comparable across runs); clicks are ground truth.")
         watching = bool(args.watch)
         if watching:
             tick.wait(2)
