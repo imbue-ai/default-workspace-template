@@ -302,6 +302,15 @@ class VncDisplay:
             "-SecurityTypes", "None",
             "-disableBasicAuth",
             "-AlwaysShared",
+            # Everything rides the websocket (TCP). KasmVNC also carries an
+            # optional WebRTC/UDP transport that we never use: the client's
+            # WebRTC toggle is off by default, no UDP port is published, and the
+            # tunnel/proxy path couldn't route it anyway. Left alone, though,
+            # the server queries a public STUN service for its own IP on every
+            # launch ("ICE: Querying public IP...") -- an external call whose
+            # answer nothing can ever reach. Pinning publicIP skips the query;
+            # the advertised candidate is self-referential and inert.
+            "-publicIP", "127.0.0.1",
         ]
 
     def start(self) -> None:
