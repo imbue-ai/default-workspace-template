@@ -18,6 +18,13 @@ export const IframePanel: m.Component<IframePanelAttrs> = {
       title,
       style: "width: 100%; height: 100%; border: none;",
       sandbox: "allow-scripts allow-same-origin allow-forms allow-popups",
+      // Clipboard access for embedded services. The browser fleet's live view
+      // reads and writes the clipboard so copy/paste crosses between the remote
+      // browser and the local machine; Permissions-Policy defaults these to
+      // `self`, which a same-origin child already satisfies, but naming them
+      // makes the grant explicit and keeps working if a service is ever served
+      // from another origin.
+      allow: "clipboard-read; clipboard-write",
     };
     if (serviceName) {
       attrs[IFRAME_PANEL_SERVICE_NAME_ATTR] = serviceName;
