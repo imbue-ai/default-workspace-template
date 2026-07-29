@@ -31,7 +31,7 @@ _OWN_ID = "agent-subagent"
 _BASE_URL = "http://127.0.0.1:8000"
 
 
-class _RecordingHttp:
+class _RecordingHttp(refresh_workspace_view.HttpClient):
     """Records every POST and answers each URL from a caller-supplied status map."""
 
     def __init__(self, status_by_url_fragment: dict[str, int | None]) -> None:
@@ -54,7 +54,7 @@ class _RecordingHttp:
         return None
 
 
-class _StubRunner:
+class _StubRunner(refresh_workspace_view.Runner):
     """Answers ``mngr ls`` with a fixed result (or raises, for the lookup-failed path)."""
 
     def __init__(
