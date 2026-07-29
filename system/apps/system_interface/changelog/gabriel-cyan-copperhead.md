@@ -6,6 +6,6 @@ The creation build log, which is supposed to cover that window, is not a reliabl
 
 Two further fixes on the same path:
 
-The "No conversation data" view captured the agent's terminal once per redraw and redrew on every capture, so an agent with no pane to capture -- exactly the case here -- turned it into an unbounded request loop, measured at roughly 170 requests per second, each shelling out to tmux. It now captures once per agent.
+The "No conversation data" view captured the agent's terminal once per redraw and redrew on every capture, so the loop only stopped if a capture came back with content. For an agent that has one it settles after a handful of requests; for one with no pane to capture it never stops, and was measured at roughly 170 requests per second, each shelling out to tmux. It now captures once per agent.
 
 A `proto_agent_created` that arrives after its agent is already registered no longer strands the panel on a false "Agent creation failed" screen. The build log is now only shown while the agent is not yet a real agent; asking for a finished creation's log gets a "Proto-agent not found" reply, which the panel used to read as a failed creation and keep on screen indefinitely.
