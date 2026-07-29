@@ -89,6 +89,16 @@ def slugify_layout_name(display_name: str) -> str:
     return slug
 
 
+def primary_agent_layout_dir(host_dir: Path, agent_id: str) -> Path:
+    """The workspace layout directory belonging to the workspace's primary agent.
+
+    The system_interface always serves a single workspace (its own primary
+    agent). Shared so every consumer of the layout dir -- and of the event logs
+    kept beside it -- resolves the same path.
+    """
+    return host_dir / "agents" / agent_id / "workspace_layout"
+
+
 def _meta_path(layout_dir: Path) -> Path:
     return layout_dir / _META_FILENAME
 
