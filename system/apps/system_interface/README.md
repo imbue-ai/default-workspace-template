@@ -65,9 +65,9 @@ if a manifest changed (`npm ci` / `uv tool install -e system/apps/system_interfa
 restarts the services agent so the editable backend re-imports the merged `.py`
 (backend), then asks every open view of the workspace to reload --
 unconditionally, since a backend-only change leaves the open page rendering what
-it had already fetched. For a backend change
-it pre-flights the merged code on a throwaway port before touching the live
-service, then polls the loopback endpoint to confirm health. If anything fails,
+it had already fetched. For a backend change it pre-flights the merged code on a
+throwaway port before touching the live service, then polls the loopback
+endpoint to confirm health. If anything fails,
 it restores the tree to `--rollback-to` as a forward revert commit, rebuilds and
 restarts from it, and re-confirms the UI is healthy -- so the served interface
 can never be left broken. The exit code reports the outcome (`0` revealed, `2`
