@@ -16,8 +16,7 @@ dependencies = [
     "playwright==1.58.0",
     "litellm>=1.88.1",
     "browser",
-    # eval worker: upload state/transcript to S3 (restic handles /mngr snapshots itself)
-    "boto3>=1.34",
+    "eval-worker",
 ]
 
 [dependency-groups]
@@ -72,6 +71,7 @@ app-watcher = { workspace = true }
 github-sync = { workspace = true }
 env-converge = { workspace = true }
 host-backup = { workspace = true }
+eval-worker = { workspace = true }
 mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }

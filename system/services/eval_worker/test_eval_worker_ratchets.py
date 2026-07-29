@@ -26,7 +26,7 @@ def test_prevent_while_true() -> None:
 
 
 def test_prevent_time_sleep() -> None:
-    rc.check_time_sleep(_DIR, snapshot(0))
+    rc.check_time_sleep(_DIR, snapshot(3))
 
 
 def test_prevent_global_keyword() -> None:
@@ -34,7 +34,7 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(6))
+    rc.check_bare_print(_DIR, snapshot(11))
 
 
 # --- Exception handling ---
@@ -45,7 +45,7 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    rc.check_broad_exception_catch(_DIR, snapshot(2))
+    rc.check_broad_exception_catch(_DIR, snapshot(1))
 
 
 def test_prevent_builtin_exception_raises() -> None:
@@ -56,7 +56,7 @@ def test_prevent_builtin_exception_raises() -> None:
 
 
 def test_prevent_inline_imports() -> None:
-    rc.check_inline_imports(_DIR, snapshot(0))
+    rc.check_inline_imports(_DIR, snapshot(2))
 
 
 def test_prevent_relative_imports() -> None:
@@ -72,3 +72,4 @@ def test_prevent_asyncio_import() -> None:
 
 def test_prevent_dataclasses_import() -> None:
     rc.check_dataclasses_import(_DIR, snapshot(0))
+

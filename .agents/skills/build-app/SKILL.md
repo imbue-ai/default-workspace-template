@@ -160,7 +160,7 @@ What gets updated:
 
   ```ini
   [program:<name>]
-  command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -415,13 +415,13 @@ For pre-existing third-party tools, do not scaffold a lib. Add a
 `forward_port.py` and then your existing start command. supervisord runs
 commands directly (no shell), so wrap any command that chains with `&&`
 in `bash -c "..."`, and prefix the whole thing with
-`python3 system/scripts/oom_tag_service.py user` so this user-created app is
+`python3 system/services/oom_priority/bin/oom_tag_service.py user` so this user-created app is
 shed before any built-in service under memory pressure (see
 `system/services/oom_priority/README.md`):
 
 ```ini
 [program:<name>]
-command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && <existing_start_command>"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && <existing_start_command>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -433,7 +433,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name docs-viewer && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -451,7 +451,7 @@ Two valid shapes:
 
   ```ini
   [program:<name>]
-  command=python3 system/scripts/oom_tag_service.py user bash system/scripts/run_<name>.sh
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash system/scripts/run_<name>.sh
   directory=/home/user/workspace
   autostart=true
   autorestart=true

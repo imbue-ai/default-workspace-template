@@ -34,7 +34,7 @@
 #   - At 3 consecutive failures a loud warning is logged; the retry cadence
 #     is unchanged (the flock and --retry-after already bound the cost).
 #
-# Test hooks (used by system/scripts/run_job_test.py): MINDS_JOB_STATE_DIR overrides
+# Test hooks (used by system/libs/automations/run_job_test.py): MINDS_JOB_STATE_DIR overrides
 # the state root; MINDS_JOB_NOW_EPOCH / MINDS_JOB_NOW_HOUR override the clock.
 set -euo pipefail
 
