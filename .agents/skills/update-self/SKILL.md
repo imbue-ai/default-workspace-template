@@ -50,7 +50,10 @@ terminal event -- exit 0 means `restic_backup_succeeded`; confirm that before
 continuing. Exit 3 means backups aren't configured
 (`tick_skipped_due_to_missing_secrets` -- no `data/.secrets/restic.env`), so there
 is **no** restore point: tell the user, and get their explicit go-ahead before
-proceeding without one. Any other non-zero exit is a failed backup attempt.
+proceeding without one. Exit 1 is a failed backup attempt; exit 2 means the
+outcome could not be observed at all (the tick may still be running, or the
+service is not writing events) -- neither confirms a restore point, so treat both
+the same way as exit 3.
 
 **Single-flight.** One pass at a time (its worker name, branch, and runtime dir
 are fixed). Check for a live one:
