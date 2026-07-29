@@ -68,3 +68,21 @@ on a blank page, but the live view accounts for only ~3 KB/s of it (the stream
 crosses loopback twice before leaving, and loopback carries far less than the
 external interface). The rest is unrelated workspace traffic, so there is
 nothing to fix in the browser stack.
+
+----
+
+The synthetic latency probe is removed; ICA RTT comes from real clicks.
+
+The idea was to fix comparability -- click sampling varies with whatever the
+user clicked -- by triggering a fixed-size repaint on a timer. Two attempts
+both reported latencies nobody experiences. Timing from the request billed the
+CDP injection path (a route no user input takes) and read ~3x the real figure;
+timing from the server's acknowledgement instead read 510ms against a
+measured 269ms total, i.e. a component larger than the whole, because the pixel
+watcher was looking at the wrong region and timing out.
+
+Anything the daemon can trigger reaches the screen by a different, slower path
+than a real click, so a synthetic probe measures a pipeline that does not exist
+for users. Removed rather than left in reporting a number that looks
+authoritative and is not. Click sampling stays: its spread is content-dependent,
+but every sample is true.

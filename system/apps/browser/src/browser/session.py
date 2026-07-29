@@ -467,13 +467,6 @@ class LiveBrowser(MutableModel):
     # readout persistent.
     _latency_rtt: deque = PrivateAttr(default_factory=lambda: deque(maxlen=512))
     _latency_click: deque = PrivateAttr(default_factory=lambda: deque(maxlen=256))
-    # Server-to-glass samples (see fire_repaint_probe): a fixed-size repaint,
-    # timed from the moment the server says the change is committed until the
-    # pixels arrive. Excludes input injection entirely, so it isolates
-    # encode + bytes + decode + paint -- the half that encoding and transport
-    # work actually moves -- and is comparable across runs because the repaint
-    # is identical every time.
-    _latency_glass: deque = PrivateAttr(default_factory=lambda: deque(maxlen=256))
     _selector_map: dict[int, Any] = PrivateAttr(default_factory=dict)
     _lease_touched_at: float = PrivateAttr(default=0.0)
     _screenshot_seq: int = PrivateAttr(default=0)
@@ -1034,48 +1027,6 @@ class LiveBrowser(MutableModel):
 
     # --- input ----------------------------------------------------------------
 
-    async def fire_repaint_probe(self) -> bool:
-        """Repaint a fixed band at the top of the page, for latency probing.
-
-        The measurement problem with sampling real clicks is COMPARABILITY: a
-        click on a link repaints a viewport, a click on a checkbox repaints a few
-        hundred pixels, and the resulting latencies are not comparable to each
-        other or across runs. (This is the standard critique of click-to-photon
-        as a benchmark -- the number is real but the scenario is uncontrolled.)
-
-        This paints a full-width band of a known size in a known place, so every
-        sample costs the same bytes. The viewer times the round trip itself and
-        needs no clock sync: it stamps the request and the pixel change on its
-        own clock. Colours alternate so consecutive probes always differ.
-
-        Returns False when the browser has no page to paint into (still starting,
-        or crashed), so the caller can skip the sample rather than record a lie.
-        """
-        page = self._active_page
-        if page is None or not self._is_running:
-            return False
-        try:
-            await page.evaluate(
-                """() => {
-                    let bar = document.getElementById('__latency_probe__');
-                    if (!bar) {
-                        bar = document.createElement('div');
-                        bar.id = '__latency_probe__';
-                        bar.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:60px;' +
-                                            'z-index:2147483647;pointer-events:none';
-                        document.documentElement.appendChild(bar);
-                    }
-                    // Alternate between two high-contrast colours so a probe is
-                    // always a change, even back-to-back.
-                    bar.style.background = bar.dataset.on === '1' ? '#000000' : '#ffffff';
-                    bar.dataset.on = bar.dataset.on === '1' ? '0' : '1';
-                }"""
-            )
-        except _BROWSER_ERRORS as e:
-            logger.debug("repaint probe failed on browser {} ({})", self.browser_id, e)
-            return False
-        return True
-
     async def record_latency_sample(self, kind: str, ms: float) -> None:
         """Store one viewer-reported latency sample (see the runner's inbound pump).
 
@@ -1090,8 +1041,6 @@ class LiveBrowser(MutableModel):
             self._latency_rtt.append(float(ms))
         elif kind == "click_photon":
             self._latency_click.append(float(ms))
-        elif kind == "glass":
-            self._latency_glass.append(float(ms))
 
     async def latency_snapshot(self) -> dict[str, Any]:
         """Aggregate the latency rings for ``GET /browsers/<id>/latency``.
@@ -1112,7 +1061,6 @@ class LiveBrowser(MutableModel):
 
         rtt = stats(self._latency_rtt)
         click = stats(self._latency_click)
-        glass = stats(self._latency_glass)
         if rtt is not None:
             recent = list(self._latency_rtt)[-100:]
             threshold = max(2 * rtt["p50_ms"], rtt["p50_ms"] + 30)
@@ -1129,11 +1077,11 @@ class LiveBrowser(MutableModel):
         # give us -- so it is reported honestly as a single "processing" figure
         # rather than a fabricated split.
         #
-        # ICA RTT comes from real clicks -- that is the user-visible total, and
-        # it is the only series that traverses the true input path. The probe
-        # deliberately does NOT feed it: the probe's repaint is triggered over
-        # CDP, so counting from the request would bill injection overhead that
-        # no user pays. The probe instead reports server-to-glass separately.
+        # ICA RTT comes from real clicks: the only series that travels the true
+        # input path (RFB -> Xvnc -> X event -> Chromium), so the only honest
+        # user-visible total. A synthetic trigger was tried and removed -- see
+        # the changelog; anything the daemon can inject takes a different,
+        # slower path and reports a latency nobody experiences.
         total = click
         processing = None
         if rtt is not None and total is not None:
@@ -1141,10 +1089,8 @@ class LiveBrowser(MutableModel):
         return {
             "rtt": rtt,
             "click_photon": click,
-            "server_to_glass": glass,
             "ica": {
                 "ica_rtt_ms": total["p50_ms"] if total else None,
-                "server_to_glass_ms": glass["p50_ms"] if glass else None,
                 "ica_latency_ms": rtt["p50_ms"] if rtt else None,
                 "processing_ms": processing,
             },
