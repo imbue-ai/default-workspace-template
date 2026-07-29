@@ -434,14 +434,24 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
 
     Best-effort and never fatal: the helper always exits 0 and reports each
     channel on stderr, which we pass through. The change is already on disk and
-    will load on the next visit regardless.
+    will load on the next visit regardless. A helper we cannot even spawn (no
+    memory to fork right after the restart) is caught here for the same reason:
+    both callers run this once the reveal -- or the rollback recovery -- has
+    already succeeded, and neither treats it as a step that can fail.
     """
-    completed = runner.run(
-        [sys.executable, str(repo_root / _REFRESH_SCRIPT)],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-    )
+    try:
+        completed = runner.run(
+            [sys.executable, str(repo_root / _REFRESH_SCRIPT)],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        sys.stderr.write(
+            f"refresh: could not run {_REFRESH_SCRIPT} ({type(exc).__name__}: {exc}); "
+            "an open view may still be showing the previous build until reloaded.\n"
+        )
+        return
     if completed.stderr:
         sys.stderr.write(completed.stderr)
 
