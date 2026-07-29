@@ -78,6 +78,8 @@ def test_deferred_install_ready_gates_on_fortress_executable(
     monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
     fortress = tmp_path / "tilion"
     monkeypatch.setattr(bsession, "_FORTRESS_EXECUTABLE", str(fortress))
+    # Isolate the Fortress gate: the display server is installed in this scenario.
+    monkeypatch.setattr(bsession, "is_vnc_available", lambda: True)
     # Missing binary: still installing.
     ready, _ = bsession.deferred_install_ready()
     assert ready is False
@@ -86,6 +88,48 @@ def test_deferred_install_ready_gates_on_fortress_executable(
     ready, _ = bsession.deferred_install_ready()
     assert ready is False
     fortress.chmod(0o755)
+    ready, reason = bsession.deferred_install_ready()
+    assert ready is True
+    assert reason == "ready"
+
+
+def test_deferred_install_ready_gates_on_display_server(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fortress installed but KasmVNC not yet: refuse at the gate, not mid-launch.
+
+    Both dependencies install asynchronously after services are up, and they can
+    land in either order -- Fortress arriving first used to let the launch through
+    to ``VncDisplay.start``, where the failure reached the viewer as an endless
+    spinner instead of a "try again" message.
+    """
+    monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
+    fortress = tmp_path / "tilion"
+    fortress.write_text("")
+    fortress.chmod(0o755)
+    monkeypatch.setattr(bsession, "_FORTRESS_EXECUTABLE", str(fortress))
+    monkeypatch.setattr(bsession, "is_vnc_available", lambda: False)
+    ready, reason = bsession.deferred_install_ready()
+    assert ready is False
+    assert "display server" in reason
+    # Both present: ready.
+    monkeypatch.setattr(bsession, "is_vnc_available", lambda: True)
+    ready, reason = bsession.deferred_install_ready()
+    assert ready is True
+    assert reason == "ready"
+
+
+def test_deferred_install_ready_skip_env_bypasses_both_gates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``BROWSER_SKIP_INSTALL_CHECK=1`` must bypass the display-server gate too.
+
+    Host/CI runs have neither Fortress nor KasmVNC installed; if the new gate did
+    not honour the escape hatch, it would fail every such run.
+    """
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    monkeypatch.setattr(bsession, "_FORTRESS_EXECUTABLE", str(tmp_path / "absent"))
+    monkeypatch.setattr(bsession, "is_vnc_available", lambda: False)
     ready, reason = bsession.deferred_install_ready()
     assert ready is True
     assert reason == "ready"
