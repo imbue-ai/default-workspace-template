@@ -316,6 +316,30 @@
 
   function sendCast(obj) { if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify(obj)); }
 
+  // KasmVNC already debounces its remote-framebuffer resize. Match the real
+  // Fortress window after the same settle period, rather than resizing during
+  // every Dockview divider-drag frame.
+  let paneResizeTimer = null;
+  let lastPaneResize = "";
+  function reportPaneSize() {
+    const id = screenFrame.dataset.browserId;
+    const { width, height } = stage.getBoundingClientRect();
+    const roundedWidth = Math.round(width), roundedHeight = Math.round(height);
+    const key = `${id}:${roundedWidth}x${roundedHeight}`;
+    if (!id || !roundedWidth || !roundedHeight || key === lastPaneResize) return;
+    lastPaneResize = key;
+    fetch(`browsers/${encodeURIComponent(id)}/resize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ width: roundedWidth, height: roundedHeight }),
+    }).catch(() => {});
+  }
+  const paneResizeObserver = new ResizeObserver(() => {
+    if (paneResizeTimer) clearTimeout(paneResizeTimer);
+    paneResizeTimer = setTimeout(reportPaneSize, 600);
+  });
+  paneResizeObserver.observe(stage);
+
   // --- the live view: KasmVNC's client in an iframe ---
   //
   // Everything that used to live here -- frame decode, coordinate scaling, mouse and
@@ -525,6 +549,8 @@
       + "&clipboard_up=1&clipboard_down=1&clipboard_seamless=1"
       + "&video_quality=10&dynamic_quality_min=3&dynamic_quality_max=7&treat_lossless=7"
       + "&framerate=60&framerate_image_mode=60&framerate_streaming_mode=60";
+    if (paneResizeTimer) clearTimeout(paneResizeTimer);
+    paneResizeTimer = setTimeout(reportPaneSize, 600);
     placeholder.style.display = "none";
   }
 
