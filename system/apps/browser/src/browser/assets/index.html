@@ -474,22 +474,23 @@
     // URL from window.location, so it has to own its prefix. A relative "../" keeps
     // this correct however the workspace is reached (locally, or through a tunnel).
     screenFrame.src = "../browser-" + encodeURIComponent(id) + "/vnc.html?autoconnect=1&reconnect=1&show_dot=1"
-      // view_clip=0 is REQUIRED alongside resize=scale, not redundant with it.
-      // applyResizeMode sets `clipViewport = resize !== 'off'`, so `scale` turns
-      // clipping ON as well as scaling -- and clipping wins on the constrained
-      // axis, showing a 1:1 crop of the framebuffer rather than the whole thing
-      // scaled down. That is the "cropped and off-centre" pane. With clipping off,
-      // the client scales the entire framebuffer to fit, aspect-preserving.
+      // resize=remote: the server framebuffer becomes the pane, so the browser
+      // viewport IS the pane -- filled, sharp, never letterboxed or cropped.
       //
-      // resize=scale, NOT resize=remote. `remote` resizes the server framebuffer to
-      // the pane, so a maximised pane doubles the pixels we encode and ships a full
-      // repaint on every size change -- cost is linear in pixels across five stages
-      // (framebuffer realloc, comparer rebuild, full-screen damage, reference copy,
-      // encode). `scale` keeps the framebuffer fixed and scales it client-side,
-      // aspect-preserving (the client picks the smaller of the two axis ratios and
-      // applies it to both), so the pane always fills without ever changing what the
-      // server encodes. It also keeps agent screenshots deterministic.
-      + "&resize=scale&view_clip=0"
+      // This was briefly changed to `scale` on the theory that a fixed framebuffer
+      // is cheaper. It is not, for the panes we actually have. The encoder works on
+      // damaged rectangles OF THE FRAMEBUFFER, so `scale` pins that framebuffer at
+      // -geometry (1280x800) forever and pays to encode and ship 1280x800 of damage
+      // even when the pane is 700x450 and the client is about to throw most of those
+      // pixels away in CSS. `remote` encodes only what is visible, which is less
+      // work whenever the pane is smaller than the framebuffer -- the common case.
+      //
+      // `remote`'s cost is per resize (RandR mode change, Chromium relayout, full
+      // repaint), not ongoing, and the client debounces it 500ms, so dragging a
+      // divider produces one resize at the end rather than one per frame. Setting
+      // resizeSession also forces scaleViewport on, so the client scales to cover
+      // the gap while the server catches up -- no flash of wrong-size content.
+      + "&resize=remote"
       // Belt-and-braces mirror of the server-side encoding flags (the server runs
       // -IgnoreClientSettingsKasm, so these mostly document intent client-side and
       // cover any cached localStorage settings). video_quality=10 ("custom") is
