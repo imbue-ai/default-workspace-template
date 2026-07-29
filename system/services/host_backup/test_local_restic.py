@@ -13,9 +13,7 @@ not have it).
 from __future__ import annotations
 
 import json
-import os
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -29,6 +27,7 @@ from host_backup.restic import (
     init_repo,
     is_repo_missing_error,
     probe_repo,
+    run_restic,
 )
 from host_backup.restic import (
     forget as restic_forget,
@@ -97,13 +96,8 @@ def test_full_backup_forget_prune_cycle(tmp_path: Path) -> None:
     )
 
     # Restic exposes the snapshot in `snapshots`:
-    snapshots = subprocess.run(
-        ["restic", "snapshots", "--json"],
-        env=_env_for_subprocess(env),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    snapshots = run_restic(("snapshots", "--json"), env_overrides=env)
+    assert snapshots.returncode == 0, snapshots.stderr
     assert snapshot_id in snapshots.stdout
 
     # Make a second backup so forget has multiple snapshots to consider.
@@ -151,36 +145,16 @@ def test_exclude_pattern_actually_skips_files(tmp_path: Path) -> None:
     assert backup_result.returncode == 0, backup_result.stderr
 
     # Listing the snapshot's files via `restic ls latest` must NOT include .venv:
-    listing = subprocess.run(
-        ["restic", "ls", "latest"],
-        env=_env_for_subprocess(env),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    listing = run_restic(("ls", "latest"), env_overrides=env)
+    assert listing.returncode == 0, listing.stderr
     assert "keep.txt" in listing.stdout
     assert ".venv" not in listing.stdout
 
 
-def _env_for_subprocess(env_overrides: dict[str, str]) -> dict[str, str]:
-    """Merge restic settings onto os.environ, the way `run_restic` does.
-
-    `env=` replaces the whole environment rather than extending it, so passing
-    only the RESTIC_* keys leaves restic without `PATH` or `HOME` -- and without
-    `HOME` it cannot locate its cache directory and every command fails.
-    """
-    return {**os.environ, **env_overrides}
-
-
 def _snapshot_ids(env: dict[str, str]) -> set[str]:
     """Return the full ids of all snapshots currently in the repo."""
-    result = subprocess.run(
-        ["restic", "snapshots", "--json"],
-        env=_env_for_subprocess(env),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = run_restic(("snapshots", "--json"), env_overrides=env)
+    assert result.returncode == 0, result.stderr
     return {entry["id"] for entry in json.loads(result.stdout)}
 
 
@@ -249,9 +223,8 @@ def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
 
     # An old restore marker (backdated 30 days via restic --time), a recent
     # restore marker, and an ordinary backup.
-    old_backup = subprocess.run(
-        [
-            "restic",
+    old_backup = run_restic(
+        (
             "backup",
             "--json",
             "--tag",
@@ -259,12 +232,10 @@ def test_age_out_forgets_only_expired_restore_markers(tmp_path: Path) -> None:
             "--time",
             "2000-01-01 00:00:00",
             str(source_dir),
-        ],
-        env=_env_for_subprocess(env),
-        capture_output=True,
-        text=True,
-        check=True,
+        ),
+        env_overrides=env,
     )
+    assert old_backup.returncode == 0, old_backup.stderr
     old_marker_id = extract_snapshot_id_from_backup_output(old_backup.stdout)
     (source_dir / "f.txt").write_text("data2")
     recent_marker_id = extract_snapshot_id_from_backup_output(

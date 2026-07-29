@@ -8,12 +8,17 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from host_backup.capabilities import BackupCapabilities, SnapshotMethod
 from host_backup.config import BackupConfig, RetentionSettings
+from host_backup.events import TICK_TERMINAL_EVENT_TYPES
 from host_backup.runner import (
     CONSECUTIVE_FAILURE_ALARM_THRESHOLD,
     ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
     _age_out_restore_markers,
+    _check_secrets_present,
+    _emit_tick_error,
     _load_config_if_changed,
     _LoopState,
     _parse_restic_timestamp,
@@ -183,6 +188,61 @@ def _read_events(events_dir: Path) -> list[dict[str, object]]:
         json.loads(line)
         for line in (events_dir / "events.jsonl").read_text().splitlines()
     ]
+
+
+def test_every_way_a_tick_ends_emits_a_terminal_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Drive each way `_run_one_tick` can end and assert the endings match the terminal set.
+
+    `host-backup-now` waits for a member of TICK_TERMINAL_EVENT_TYPES, so a tick
+    ending that emits something outside that set strands the caller until its
+    timeout. Asserting set equality (not membership) catches drift in both
+    directions: a new tick ending whose event was never added to the set, and a
+    type in the set that no tick actually emits.
+    """
+    # `_check_secrets_present` reads the relative data/.secrets/restic.env, so an
+    # empty cwd is what makes "backups are not configured" the outcome.
+    monkeypatch.chdir(tmp_path)
+    observed: set[str] = set()
+
+    def last_event_type(events_dir: Path) -> str:
+        return str(_read_events(events_dir)[-1]["type"])
+
+    # Backups not configured: the tick stops before restic ever runs.
+    state = _LoopState(_direct_capabilities())
+    state.events_dir = tmp_path / "no-secrets"
+    assert _check_secrets_present(state=state) is None
+    observed.add(last_event_type(state.events_dir))
+
+    # The snapshot step aborts the tick (OUTER_TRIGGER with no paths configured).
+    state = _LoopState(BackupCapabilities(method=SnapshotMethod.OUTER_TRIGGER))
+    state.events_dir = tmp_path / "snapshot-failed"
+    assert _take_snapshot(state=state) is None
+    observed.add(last_event_type(state.events_dir))
+
+    # restic itself fails, and succeeds.
+    for returncode, events_subdir in ((1, "restic-failed"), (0, "restic-ok")):
+        state = _LoopState(_direct_capabilities())
+        state.events_dir = tmp_path / events_subdir
+        stub = _ResticStub([_completed(returncode)])
+        _run_restic_backup(
+            state=state,
+            config=_build_config(),
+            snapshot=_direct_snapshot(),
+            env_overrides={},
+            backup_fn=stub.backup,
+            unlock_fn=stub.unlock,
+        )
+        observed.add(last_event_type(state.events_dir))
+
+    # An unhandled error caught by the loop's outer handler.
+    state = _LoopState(_direct_capabilities())
+    state.events_dir = tmp_path / "tick-error"
+    _emit_tick_error(state, ValueError("boom"))
+    observed.add(last_event_type(state.events_dir))
+
+    assert observed == TICK_TERMINAL_EVENT_TYPES
 
 
 def test_refresh_environment_record_emits_success_event(tmp_path: Path) -> None:

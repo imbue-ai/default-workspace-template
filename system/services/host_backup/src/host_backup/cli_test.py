@@ -21,22 +21,22 @@ from host_backup.events import BackupEventType, make_event, write_event
 # finishes if that regression reappears.
 _GENEROUS_TIMEOUT_SECONDS = 3.0
 
-# A prompt return happens on the waiter's first poll, before it ever sleeps.
-_PROMPT_RETURN_SECONDS = 1.0
-
 
 def _write_tick(events_dir: Path, *types: BackupEventType, tick_id: str) -> None:
     for event_type in types:
         write_event(events_dir, make_event(event_type, tick_id=tick_id))
 
 
-def _wait_from_start(events_path: Path) -> tuple[dict[str, object] | None, float]:
-    """Wait for a completion over the whole existing file, returning it and the elapsed time."""
-    start = time.monotonic()
-    completion = _wait_for_next_completion(
-        events_path, 0, start + _GENEROUS_TIMEOUT_SECONDS
+def _wait_from_start(events_path: Path) -> dict[str, object] | None:
+    """Wait for a completion over the whole existing file.
+
+    The deadline is bounded, so a waiter that does not recognise the terminal
+    event returns None here rather than hanging -- which is exactly the
+    regression each caller asserts against.
+    """
+    return _wait_for_next_completion(
+        events_path, 0, time.monotonic() + _GENEROUS_TIMEOUT_SECONDS
     )
-    return completion, time.monotonic() - start
 
 
 def test_wait_returns_promptly_when_the_tick_skips_for_missing_secrets(
@@ -49,12 +49,11 @@ def test_wait_returns_promptly_when_the_tick_skips_for_missing_secrets(
         BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS,
         tick_id="tick-skip",
     )
-    completion, elapsed = _wait_from_start(tmp_path / "events.jsonl")
+    completion = _wait_from_start(tmp_path / "events.jsonl")
     assert completion is not None
     assert (
         completion["type"] == BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value
     )
-    assert elapsed < _PROMPT_RETURN_SECONDS
     assert _exit_code_for_completion(completion) == EXIT_BACKUPS_NOT_CONFIGURED
 
 
@@ -66,10 +65,9 @@ def test_wait_returns_promptly_when_the_snapshot_step_fails(tmp_path: Path) -> N
         BackupEventType.SNAPSHOT_FAILED,
         tick_id="tick-snapshot",
     )
-    completion, elapsed = _wait_from_start(tmp_path / "events.jsonl")
+    completion = _wait_from_start(tmp_path / "events.jsonl")
     assert completion is not None
     assert completion["type"] == BackupEventType.SNAPSHOT_FAILED.value
-    assert elapsed < _PROMPT_RETURN_SECONDS
     assert _exit_code_for_completion(completion) == EXIT_BACKUP_FAILED
 
 
@@ -81,10 +79,9 @@ def test_wait_returns_promptly_when_the_tick_raises(tmp_path: Path) -> None:
         BackupEventType.TICK_ERROR,
         tick_id="tick-error",
     )
-    completion, elapsed = _wait_from_start(tmp_path / "events.jsonl")
+    completion = _wait_from_start(tmp_path / "events.jsonl")
     assert completion is not None
     assert completion["type"] == BackupEventType.TICK_ERROR.value
-    assert elapsed < _PROMPT_RETURN_SECONDS
     assert _exit_code_for_completion(completion) == EXIT_BACKUP_FAILED
 
 
@@ -99,10 +96,9 @@ def test_wait_returns_the_succeeded_event_and_ignores_mid_tick_events(
         BackupEventType.RESTIC_BACKUP_SUCCEEDED,
         tick_id="tick-ok",
     )
-    completion, elapsed = _wait_from_start(tmp_path / "events.jsonl")
+    completion = _wait_from_start(tmp_path / "events.jsonl")
     assert completion is not None
     assert completion["type"] == BackupEventType.RESTIC_BACKUP_SUCCEEDED.value
-    assert elapsed < _PROMPT_RETURN_SECONDS
     assert _exit_code_for_completion(completion) == EXIT_BACKUP_SUCCEEDED
 
 

@@ -51,6 +51,24 @@ class BackupEventType(UpperCaseStrEnum):
     TICK_ERROR = auto()
 
 
+# Every event type that ends a tick. A tick can finish without restic ever
+# running (secrets absent, or the snapshot step aborted it) and can die in the
+# loop's outer catch, so anything waiting for a tick to resolve has to treat all
+# of these as terminal -- waiting on only the restic outcomes polls until its
+# deadline for a tick that already ended. This lives beside the vocabulary, not
+# in either the emitting or the waiting module, so a new tick ending added to
+# the runner is added here too rather than silently reintroducing that stall.
+TICK_TERMINAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
+        BackupEventType.RESTIC_BACKUP_FAILED.value,
+        BackupEventType.SNAPSHOT_FAILED.value,
+        BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value,
+        BackupEventType.TICK_ERROR.value,
+    }
+)
+
+
 class BackupEvent(EventEnvelope):
     """Base envelope for every host_backup event; subclasses add payload fields."""
 

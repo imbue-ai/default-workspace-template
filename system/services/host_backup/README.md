@@ -132,7 +132,8 @@ no pointer exists yet, which is correct when the caller is the primary agent).
 
 Structured events at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`:
 - `capabilities_detected` (once at service startup)
-- `backup_started`, `snapshot_created`, `snapshot_deleted` (one per deleted
+- `backup_started`, `snapshot_created`, `snapshot_failed` (the snapshot step
+  aborted the tick before restic ran), `snapshot_deleted` (one per deleted
   snapshot -- `outer_trigger` may emit several per tick during keep-N pruning)
 - `restic_backup_succeeded`, `restic_backup_failed`
 - `backup_repeatedly_failing` (escalation alarm after N consecutive failures)

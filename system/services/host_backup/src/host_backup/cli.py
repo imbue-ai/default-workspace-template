@@ -23,25 +23,14 @@ import click
 from loguru import logger
 
 from host_backup.config import BACKUP_TOML_PATH, resolve_service_events_dir
-from host_backup.events import BACKUP_EVENT_SOURCE, BackupEventType
+from host_backup.events import (
+    BACKUP_EVENT_SOURCE,
+    TICK_TERMINAL_EVENT_TYPES,
+    BackupEventType,
+)
 
 DEFAULT_TIMEOUT_SECONDS = 1800.0  # 30 minutes
 _POLL_INTERVAL_SECONDS = 0.5
-
-# Every event type that ends a tick. A tick can finish without restic ever
-# running -- secrets absent, or the snapshot step aborted it -- and can die in
-# the loop's outer catch, so all of these have to release a waiter. Treating
-# only the restic outcomes as terminal leaves the waiter polling until its
-# deadline for a tick that already resolved.
-_TICK_TERMINAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
-    {
-        BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
-        BackupEventType.RESTIC_BACKUP_FAILED.value,
-        BackupEventType.SNAPSHOT_FAILED.value,
-        BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value,
-        BackupEventType.TICK_ERROR.value,
-    }
-)
 
 # Exit codes. "Backups are not configured" is a distinct outcome from "the
 # backup attempt failed": callers that take a backup as a precondition (e.g. the
@@ -145,7 +134,7 @@ def _wait_for_no_inflight_backup(
                 tick_id = event.get("tick_id")
                 if (
                     isinstance(tick_id, str)
-                    and event.get("type") in _TICK_TERMINAL_EVENT_TYPES
+                    and event.get("type") in TICK_TERMINAL_EVENT_TYPES
                 ):
                     pending_tick_ids.discard(tick_id)
             last_size = new_size
@@ -163,7 +152,7 @@ def _wait_for_next_completion(
         new_size = _safe_file_size(events_path)
         if new_size > last_size:
             for event in _read_new_events(events_path, last_size, new_size):
-                if event.get("type") in _TICK_TERMINAL_EVENT_TYPES:
+                if event.get("type") in TICK_TERMINAL_EVENT_TYPES:
                     return event
             last_size = new_size
         time.sleep(_POLL_INTERVAL_SECONDS)
@@ -195,7 +184,7 @@ def _scan_for_inflight_tick_ids(events_path: Path, *, max_lines: int) -> set[str
         event_type = event.get("type")
         if event_type == BackupEventType.BACKUP_STARTED.value:
             started.add(tick_id)
-        elif event_type in _TICK_TERMINAL_EVENT_TYPES:
+        elif event_type in TICK_TERMINAL_EVENT_TYPES:
             finished.add(tick_id)
     return started - finished
 
