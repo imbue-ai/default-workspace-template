@@ -65,7 +65,7 @@ AGENT_NAME="${AGENT_NAME:-$SKILL}"
 # Singleton identity + the per-run trigger. The run message is a hidden
 # slash-command (like /welcome), so the user's first visible message is always
 # the agent's own output, never the command that produced it.
-SCHEDULE_FILTER="labels.automation == \"${SKILL}\""
+AUTOMATION_FILTER="labels.automation == \"${SKILL}\""
 RUN_MESSAGE="/${SKILL}"
 
 # Settle time (seconds) between sending /clear and the run trigger, so the clear
@@ -105,7 +105,7 @@ PY
 
 # Active automation-agent ids for this skill (one per line; empty if none).
 automation_agent_ids() {
-  uv run mngr list --active --include "$SCHEDULE_FILTER" --ids --on-error continue 2>/dev/null || true
+  uv run mngr list --active --include "$AUTOMATION_FILTER" --ids --on-error continue 2>/dev/null || true
 }
 
 # Create the persistent automation agent whose first message is `/<skill>`. A brand-new
