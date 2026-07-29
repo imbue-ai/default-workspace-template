@@ -1,0 +1,7 @@
+Added `system/scripts/refresh_workspace_view.py`, the shared motion for rebuilding the user's view of the workspace after its interface changes -- above all after `mngr start --restart system-services`, which bounces the system interface underneath whatever the user has open.
+
+Nothing reloaded that view before. The Minds app only intervenes when a workspace looks unreachable for a sustained stretch, and a services restart that comes back quickly never crosses that bar, so the user was left reading the page the previous build had rendered.
+
+The helper fires two independent channels, because neither reaches every viewer. The in-workspace `reload_system_interface` broadcast reaches every attached browser, including anyone the workspace was shared with over a Cloudflare tunnel. The Minds app's `POST /api/v1/agents/<primary>/refresh` reaches only the desktop app, but drops its HTTP cache and works when the page's WebSocket never came back from the restart. Both are fire-and-forget and the script always exits 0: the change has already landed on disk, so a viewer that cannot be reached is not a reason to fail a reveal.
+
+The system-interface shell HTML is now served `Cache-Control: no-store`. It is assembled per request and names content-hashed assets, so its freshness alone decides which bundle a reloaded page runs -- and a page cannot drop its own HTTP cache, since `location.reload(true)` is a Firefox-only extension. This matters most for tunnel viewers, where an intermediary may cache anything not marked otherwise.

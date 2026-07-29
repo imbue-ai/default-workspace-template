@@ -77,22 +77,15 @@ class _RecordingRunner(reveal_mod.Runner):
 
 
 class _FakeHttp(reveal_mod.HttpClient):
-    """Returns whatever ``responder(url)`` yields for GETs; records POSTs."""
+    """Returns whatever ``responder(url)`` yields for the health-probe GETs."""
 
     def __init__(self, responder: Callable[[str], int | None]) -> None:
         self._responder = responder
         self.get_urls: list[str] = []
-        self.post_urls: list[str] = []
 
     def get_status(self, url: str, timeout: float) -> int | None:
         self.get_urls.append(url)
         return self._responder(url)
-
-    def post_json(
-        self, url: str, payload: dict, headers: dict, timeout: float
-    ) -> int | None:
-        self.post_urls.append(url)
-        return 200
 
 
 @dataclass
@@ -141,6 +134,13 @@ def _all_healthy(_url: str) -> int:
     return 200
 
 
+def _refreshed_the_view(runner: _RecordingRunner) -> bool:
+    """Whether the reveal delegated to the shared post-change refresh helper."""
+    return runner.ran(
+        sys.executable, str(_REPO / "system/scripts/refresh_workspace_view.py")
+    )
+
+
 def _is_live(url: str) -> bool:
     return url.startswith(_LIVE_BASE)
 
@@ -186,15 +186,19 @@ def test_classify_ignores_backend_test_files() -> None:
 
 
 def test_classify_ignores_unrelated_paths() -> None:
-    changes = reveal_mod.classify_changes(["README.md", "system/vendor/mngr/libs/mngr/x.py"])
+    changes = reveal_mod.classify_changes(
+        ["README.md", "system/vendor/mngr/libs/mngr/x.py"]
+    )
     assert not changes.any
 
 
 # --- happy paths ------------------------------------------------------------
 
 
-def test_frontend_only_builds_and_broadcasts_without_restart() -> None:
-    runner = _runner_with_diff("M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n")
+def test_frontend_only_builds_and_refreshes_without_restart() -> None:
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
+    )
     http = _FakeHttp(_all_healthy)
     spawner = _FakeSpawner()
 
@@ -207,7 +211,45 @@ def test_frontend_only_builds_and_broadcasts_without_restart() -> None:
         "uv", "tool", "install"
     )  # no manifest change -> no dep refresh
     assert not spawner.spawns  # no pre-flight for a frontend-only change
-    assert http.post_urls  # reload broadcast sent
+    assert _refreshed_the_view(runner)
+
+
+def test_backend_only_change_still_refreshes_the_view() -> None:
+    """A backend-only reveal must reload the open view too.
+
+    The restart swaps the API underneath a page that keeps rendering from what
+    it already fetched, and a restart quick enough not to look unreachable
+    never gets a reload from anywhere else -- so skipping it here (as the
+    frontend-gated broadcast used to) leaves the user on stale output.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert code == 0
+    assert runner.ran("mngr", "start", "--restart", "system-services")
+    assert _refreshed_the_view(runner)
+
+
+def test_refresh_runs_after_the_restart_not_before() -> None:
+    """Refreshing before the backend is back would just reload the old code."""
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+
+    _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    restart_index = next(
+        i for i, c in enumerate(runner.calls) if c[:2] == ["mngr", "start"]
+    )
+    refresh_index = next(
+        i
+        for i, c in enumerate(runner.calls)
+        if c[:1] == [sys.executable] and c[1].endswith("refresh_workspace_view.py")
+    )
+    assert restart_index < refresh_index
 
 
 def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> None:
@@ -352,7 +394,9 @@ def test_emergency_when_rollback_cannot_restore_health() -> None:
 
 
 def test_frontend_build_failure_rolls_back() -> None:
-    runner = _runner_with_diff("M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n")
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
+    )
     # First build (the reveal) fails; the recovery rebuild from known-good succeeds.
     runner.respond(
         ("npm", "run", "build"), [_Result(returncode=1, stderr="type error"), _Result()]

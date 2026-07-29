@@ -225,7 +225,9 @@ def classify_path(path: str) -> PathClass:
     - ``system_interface`` -- ``system/apps/system_interface/**``; revealed via
       ``reveal_system_interface.py`` (which owns its own manifest refresh).
     - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``; applied by
-      restarting the services agent (``mngr start --restart system-services``).
+      restarting the services agent (``mngr start --restart system-services``,
+      then ``system/scripts/refresh_workspace_view.py`` to rebuild the user's
+      view, which the restart alone leaves showing the previous build).
     - ``editable_tool`` -- ``system/vendor/mngr/**``; ``.py`` picked up live, a manifest
       change needs ``uv sync --all-packages`` / an editable reinstall.
     - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,

@@ -75,6 +75,27 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
         assert "test" in response.text
 
 
+def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> None:
+    """The shell must never be cached, or a reload cannot pick up a new build.
+
+    The built assets are content-hashed, so the shell is the only document whose
+    freshness decides which bundle a reloaded page runs. A page cannot drop its
+    own HTTP cache (``location.reload(true)`` is Firefox-only), so a cacheable
+    shell would let a reveal's reload land right back on the old interface --
+    including through a shared Cloudflare tunnel, where an intermediary may
+    cache anything not marked otherwise.
+    """
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><body>test</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "no-store"
+
+
 def test_index_returns_not_built_when_no_static(client: FlaskClient, tmp_path: Path) -> None:
     """When static dir has no index.html, show a helpful message."""
     empty_dir = tmp_path / "static"
