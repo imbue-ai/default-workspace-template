@@ -140,7 +140,19 @@ def _json_response(content: Any, status_code: int = 200) -> Response:
 
 
 def _html_response(html_content: str, status_code: int = 200) -> Response:
-    return Response(html_content, status=status_code, mimetype="text/html")
+    """An HTML response the browser must never reuse without asking.
+
+    The index page is generated per request: the base path, hostname, agent id and
+    feature flags are injected into it as meta tags. Served with no cache headers
+    at all -- as this was -- a browser is free to apply heuristic caching and keep
+    replaying a stale page, so a flag flipped on the host stayed invisible in the
+    tab (its hashed JS bundle is unchanged, so nothing else forces a refetch) until
+    someone happened to hard-refresh. The bundles under /assets are content-hashed
+    and keep their own caching; only this generated shell is pinned.
+    """
+    response = Response(html_content, status=status_code, mimetype="text/html")
+    response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
 
 
 def _inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
