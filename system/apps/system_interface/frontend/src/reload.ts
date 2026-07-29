@@ -1,12 +1,13 @@
 /**
- * Reloading the whole system interface into a freshly-built bundle.
+ * Reloading the whole system interface into the code currently on disk.
  *
- * The frontend-reveal step of the `update-system-interface` flow rebuilds the
- * (gitignored) static bundle and then broadcasts a `reload_system_interface`
- * layout op. The dockview shell handles that op by calling `reloadInterface()`,
- * which reloads the top-level page so the browser picks up the new hashed
- * assets (and any change to the shell chrome itself), transitively reloading
- * every child chat iframe.
+ * Every reveal of a changed interface ends by broadcasting a
+ * `reload_system_interface` layout op, through
+ * `system/scripts/refresh_workspace_view.py` -- for a backend-only change too,
+ * not just a rebuilt bundle. The dockview shell handles that op by calling
+ * `reloadInterface()`, which reloads the top-level page so the browser picks up
+ * the new hashed assets (and any change to the shell chrome itself),
+ * transitively reloading every child chat iframe.
  */
 
 /** Reload the top-level page that hosts the system interface.
