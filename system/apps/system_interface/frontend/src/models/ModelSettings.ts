@@ -14,13 +14,13 @@
  * state from the last click.
  *
  * When the chain drains, we re-read the settings once to reconcile the display.
- * For the model that is a read of reality, and catches a refused change. For
- * fast mode it is not: Claude Code deletes the `fastMode` key on `/fast off`
- * rather than writing false, so a running session's fast-mode state is not
- * recoverable from disk and the backend reports what it was last told to set
- * (see `_resolve_agent_fast_mode`). A refused `/fast on` therefore still
- * displays as on -- which this workspace avoids by disabling the org-level
- * eligibility check that would refuse it.
+ * For the model that is a read of reality, and catches a refused change. For fast
+ * mode it is a read of what the backend recorded when it sent the command: Claude
+ * Code deletes the `fastMode` key on `/fast off` rather than writing false, so the
+ * session's own files cannot answer, and the backend writes each change into the
+ * agent's launch settings instead (see `write_fast_mode_setting`). A `/fast on`
+ * that Claude Code refuses therefore still displays as on -- which this workspace
+ * avoids by disabling the org-level eligibility check that would refuse it.
  */
 
 import m from "mithril";

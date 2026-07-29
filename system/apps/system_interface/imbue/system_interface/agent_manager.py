@@ -49,6 +49,7 @@ from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.system_interface.fast_mode_policy import FAST_MODE_BEFORE_DECISION
 from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
 from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
 from imbue.system_interface.models import AgentCreationError
@@ -133,12 +134,9 @@ def _build_chat_create_command(
         "--label",
         "user_created=true",
         # Chat is the one interactive agent type, so it is the only one that starts
-        # fast; .mngr/settings.toml defaults every other type to standard speed. The
-        # override targets `claude` because a -S is parsed as its own config layer,
-        # without the `parent_type = "claude"` that settings.toml gives `chat` -- so
-        # only a plugin-registered type accepts a settings_overrides leaf, and `chat`
-        # inherits the value anyway. This create resolves its own config, so it never
-        # reaches any other agent.
+        # fast; .mngr/settings.toml defaults every other type to standard speed. See
+        # that file's [agent_types.claude] note for why the override targets `claude`
+        # rather than `chat`.
         "-S",
         f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}",
         "--no-connect",
@@ -647,9 +645,8 @@ class AgentManager:
         # New chats launch at the workspace's fast-mode setting: fast until the
         # user answers the prompt, then whatever they chose.
         decision = read_workspace_fast_mode_decision(get_workspace_fast_mode_decision_path(Path(work_dir)))
-        cmd = _build_chat_create_command(
-            self._mngr_binary, name, agent_id, primary_labels, decision.is_fast_mode_enabled
-        )
+        is_fast_mode_enabled = FAST_MODE_BEFORE_DECISION if decision is None else decision
+        cmd = _build_chat_create_command(self._mngr_binary, name, agent_id, primary_labels, is_fast_mode_enabled)
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
 

@@ -77,11 +77,11 @@ class SetFastModeRequest(FrozenModel):
 
 
 class WorkspaceFastModeResponse(FrozenModel):
-    """Response from GET /api/workspace/fast-mode."""
+    """Response from GET|POST /api/workspace/fast-mode."""
 
-    is_decided: bool = Field(description="Whether the user has answered the fast-mode prompt")
-    is_fast_mode_enabled: bool = Field(description="The fast-mode setting new chat agents launch with")
-    grace_turn_count: int = Field(description="User turns a chat agent runs fast before the prompt appears")
+    fast_mode: bool | None = Field(
+        description="The fast-mode setting new chat agents launch with, or null if the user has not answered yet"
+    )
 
 
 class SetWorkspaceFastModeRequest(FrozenModel):

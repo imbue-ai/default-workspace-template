@@ -7,4 +7,5 @@
 - Bootstrap parses that file directly rather than importing the system interface,
   which owns the format. Bootstrap deliberately carries almost no dependencies --
   it runs before supervisord and must stay light -- so the path is repeated on
-  both sides rather than shared.
+  both sides rather than shared. The file is a single boolean and an absent file
+  means unanswered, which keeps that duplicated parsing to a few lines.

@@ -41,12 +41,12 @@ from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.fast_mode_policy import FAST_MODE_GRACE_TURN_COUNT
-from imbue.system_interface.fast_mode_policy import UNDECIDED_FAST_MODE_DECISION
-from imbue.system_interface.fast_mode_policy import WorkspaceFastModeDecision
+from imbue.system_interface.fast_mode_policy import FastModeSettingsError
+from imbue.system_interface.fast_mode_policy import get_agent_fast_mode_write_path
 from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
 from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
-from imbue.system_interface.fast_mode_policy import resolve_launch_fast_mode
+from imbue.system_interface.fast_mode_policy import resolve_agent_fast_mode
+from imbue.system_interface.fast_mode_policy import write_fast_mode_setting
 from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.layout_ops import LayoutMutex
@@ -401,30 +401,12 @@ def _send_message_endpoint(agent_id: str) -> Response:
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
 
-def _resolve_agent_fast_mode(agent_info: AgentInfo) -> bool:
-    """Whether fast mode is on for the agent's running session.
-
-    Prefers whatever this UI last set for the agent: Claude Code deletes the
-    ``fastMode`` key on ``/fast off`` instead of writing false, so a session
-    toggled off is indistinguishable on disk from one that was never toggled.
-    With nothing sent this process lifetime, the layered settings files give the
-    value the session launched at.
-    """
-    live_fast_mode = get_state().live_fast_mode_by_agent_id.get(agent_info.id)
-    if live_fast_mode is not None:
-        return live_fast_mode
-    return resolve_launch_fast_mode(
-        claude_settings_path=agent_info.claude_config_dir / "settings.json",
-        managed_settings_path=get_managed_settings_path(agent_info.agent_state_dir),
-    )
-
-
 def _get_model_settings_endpoint(agent_id: str) -> Response:
     """Return the agent's current model + fast-mode selection for the composer picker.
 
     The model comes from the agent's Claude Code ``settings.json`` (what ``/model``
     writes). Fast mode is resolved separately because it is layered across two
-    settings files (see ``_resolve_agent_fast_mode``). ``fast_mode_supported``
+    settings files (see ``resolve_agent_fast_mode``). ``fast_mode_supported``
     reflects the current model so the frontend knows whether to surface the toggle.
     """
     agent_info = _find_agent(agent_id)
@@ -432,9 +414,13 @@ def _get_model_settings_endpoint(agent_id: str) -> Response:
         return _agent_not_found_response(agent_id)
 
     model = read_model_from_settings(agent_info.claude_config_dir / "settings.json")
+    fast_mode = resolve_agent_fast_mode(
+        claude_settings_path=agent_info.claude_config_dir / "settings.json",
+        managed_settings_path=get_managed_settings_path(agent_info.agent_state_dir),
+    )
     response = ModelSettingsResponse(
         model=model,
-        fast_mode=_resolve_agent_fast_mode(agent_info),
+        fast_mode=fast_mode,
         fast_mode_supported=supports_fast_mode(model),
         options=MODEL_OPTIONS,
     )
@@ -471,10 +457,15 @@ def _set_model_endpoint(agent_id: str) -> Response:
 def _set_fast_mode_endpoint(agent_id: str) -> Response:
     """Toggle the agent's fast mode by sending it a ``/fast on|off`` command.
 
-    Same interactive-send path as ``_set_model_endpoint``; Claude Code persists
-    the choice to its ``settings.json`` ``fastMode`` field. Fast mode is an
-    Opus-only capability, so the frontend only surfaces the toggle for Opus; this
-    endpoint does not re-check the model, matching how ``/fast`` itself behaves.
+    Same interactive-send path as ``_set_model_endpoint``, which changes the running
+    session. Claude Code does not leave a usable record of the result -- it deletes
+    the ``fastMode`` key on ``/fast off`` instead of writing false -- so the change
+    is also written into the agent's own launch settings. That is what the composer's
+    toggle reads back, and what the agent comes back with if it restarts.
+
+    Fast mode is an Opus-only capability, so the frontend only surfaces the toggle
+    for Opus; this endpoint does not re-check the model, matching how ``/fast``
+    itself behaves.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
@@ -489,10 +480,15 @@ def _set_fast_mode_endpoint(agent_id: str) -> Response:
         error = ErrorResponse(detail=f"Failed to set fast mode for agent '{agent_info.name}' (0 successful agents)")
         return _json_response(error.model_dump(), status_code=500)
 
-    # Remember what we just set: the agent's settings files will not show it (see
-    # _resolve_agent_fast_mode), so this is what keeps the composer's toggle
-    # reading correctly when the frontend reconciles after a change settles.
-    get_state().live_fast_mode_by_agent_id[agent_info.id] = set_fast_mode_request.enabled
+    write_path = get_agent_fast_mode_write_path(agent_info.claude_config_dir, agent_info.agent_state_dir)
+    try:
+        write_fast_mode_setting(write_path, set_fast_mode_request.enabled)
+    except (FastModeSettingsError, OSError) as e:
+        # The running session already took the command, so report the part that
+        # failed: the setting will revert the next time the agent launches.
+        logger.opt(exception=e).error("Failed to record fast mode for agent {} at {}", agent_info.name, write_path)
+        error = ErrorResponse(detail=f"Set fast mode for agent '{agent_info.name}' but could not record it")
+        return _json_response(error.model_dump(), status_code=500)
 
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
@@ -505,32 +501,15 @@ def _workspace_fast_mode_decision_path() -> Path | None:
     return get_workspace_fast_mode_decision_path(Path(work_dir))
 
 
-def _workspace_fast_mode_response(decision: WorkspaceFastModeDecision) -> Response:
-    """Serve a decision to the frontend, together with the grace period it gates on.
-
-    Shared by both workspace fast-mode endpoints: the frontend takes
-    ``grace_turn_count`` from whichever response it saw last, so the two must
-    report the same one.
-    """
-    response = WorkspaceFastModeResponse(
-        is_decided=decision.is_decided,
-        is_fast_mode_enabled=decision.is_fast_mode_enabled,
-        grace_turn_count=FAST_MODE_GRACE_TURN_COUNT,
-    )
-    return _json_response(response.model_dump())
-
-
 def _get_workspace_fast_mode_endpoint() -> Response:
-    """Return the workspace's fast-mode decision and the grace period length.
+    """Return the workspace's fast-mode decision, or null if it has not answered.
 
     The frontend uses this to decide whether a chat still owes the user the
-    fast-mode prompt, and after how many turns to raise it.
+    fast-mode prompt.
     """
     decision_path = _workspace_fast_mode_decision_path()
-    decision = (
-        UNDECIDED_FAST_MODE_DECISION if decision_path is None else read_workspace_fast_mode_decision(decision_path)
-    )
-    return _workspace_fast_mode_response(decision)
+    decision = None if decision_path is None else read_workspace_fast_mode_decision(decision_path)
+    return _json_response(WorkspaceFastModeResponse(fast_mode=decision).model_dump())
 
 
 def _set_workspace_fast_mode_endpoint() -> Response:
@@ -546,15 +525,14 @@ def _set_workspace_fast_mode_endpoint() -> Response:
         return _json_response(error.model_dump(), status_code=500)
 
     set_request = SetWorkspaceFastModeRequest.model_validate(request.get_json())
-    decision = WorkspaceFastModeDecision(is_decided=True, is_fast_mode_enabled=set_request.enabled)
     try:
-        write_workspace_fast_mode_decision(decision_path, decision)
+        write_workspace_fast_mode_decision(decision_path, set_request.enabled)
     except OSError as e:
         logger.opt(exception=e).error("Failed to record the workspace fast-mode decision")
         error = ErrorResponse(detail="Failed to record the fast-mode decision")
         return _json_response(error.model_dump(), status_code=500)
 
-    return _workspace_fast_mode_response(decision)
+    return _json_response(WorkspaceFastModeResponse(fast_mode=set_request.enabled).model_dump())
 
 
 def _activity_endpoint() -> Response:
@@ -1375,7 +1353,6 @@ def _destroy_agent(agent_id: str) -> Response:
     # Remove the agent from the system_interface's tracked state immediately
     # so the frontend reflects the destruction without waiting for mngr observe.
     agent_manager.remove_agent(agent_id)
-    get_state().forget_live_fast_mode(agent_id)
 
     return _json_response(DestroyAgentResponse(status="ok").model_dump())
 

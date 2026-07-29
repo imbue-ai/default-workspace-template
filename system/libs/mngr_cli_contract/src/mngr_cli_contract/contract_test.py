@@ -67,11 +67,10 @@ def test_rejects_bogus_flag() -> None:
     [
         # A field the owning section does not have.
         "agent_types.claude.no_such_field=1",
-        # A settings_overrides leaf on a custom agent type. mngr parses a -S as
-        # its own config layer, so the type is resolved without the settings
-        # file's parent_type and validated against the base agent config, which
-        # has no settings_overrides field. This is exactly why the repo's
-        # chat-create paths target `claude` instead of `chat`.
+        # A settings_overrides leaf on a custom agent type, which the base agent
+        # config has no field for. This is exactly why the repo's chat-create
+        # paths target `claude` instead of `chat` -- see the note on
+        # agent_types.claude.settings_overrides in .mngr/settings.toml.
         "agent_types.chat.settings_overrides.fastMode=false",
         # A section that does not exist at all.
         "no_such_section.key=1",

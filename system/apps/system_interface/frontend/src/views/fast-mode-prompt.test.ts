@@ -76,11 +76,7 @@ describe("countUserTurns", () => {
 
 describe("isFastModePromptOwed", () => {
   beforeEach(() => {
-    getWorkspaceFastModeMock.mockReturnValue({
-      is_decided: false,
-      is_fast_mode_enabled: true,
-      grace_turn_count: 5,
-    });
+    getWorkspaceFastModeMock.mockReturnValue({ fast_mode: null });
     getModelSettingsMock.mockReturnValue({
       model: "opus[1m]",
       fast_mode: true,
@@ -100,11 +96,7 @@ describe("isFastModePromptOwed", () => {
   });
 
   it("never asks again once the workspace has answered", () => {
-    getWorkspaceFastModeMock.mockReturnValue({
-      is_decided: true,
-      is_fast_mode_enabled: true,
-      grace_turn_count: 5,
-    });
+    getWorkspaceFastModeMock.mockReturnValue({ fast_mode: true });
     expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(false);
   });
 
@@ -122,11 +114,7 @@ describe("isFastModePromptOwed", () => {
     getWorkspaceFastModeMock.mockReturnValue(null);
     expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(false);
 
-    getWorkspaceFastModeMock.mockReturnValue({
-      is_decided: false,
-      is_fast_mode_enabled: true,
-      grace_turn_count: 5,
-    });
+    getWorkspaceFastModeMock.mockReturnValue({ fast_mode: null });
     getModelSettingsMock.mockReturnValue(null);
     expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(false);
   });

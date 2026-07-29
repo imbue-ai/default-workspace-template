@@ -29,13 +29,9 @@ function recordRequests(postedEnabled: boolean[]): void {
   mockRequest.mockImplementation((options: RequestOptions) => {
     if (options.method === "POST") {
       postedEnabled.push(options.body!.enabled);
-      return Promise.resolve({
-        is_decided: true,
-        is_fast_mode_enabled: options.body!.enabled,
-        grace_turn_count: 5,
-      });
+      return Promise.resolve({ fast_mode: options.body!.enabled });
     }
-    return Promise.resolve({ is_decided: false, is_fast_mode_enabled: true, grace_turn_count: 5 });
+    return Promise.resolve({ fast_mode: null });
   });
 }
 
@@ -71,11 +67,7 @@ describe("answering the fast-mode prompt", () => {
 
     expect(mockSetFastMode).toHaveBeenCalledWith("agent-a", false);
     expect(postedEnabled).toEqual([false]);
-    expect(workspaceFastMode.getWorkspaceFastMode()).toEqual({
-      is_decided: true,
-      is_fast_mode_enabled: false,
-      grace_turn_count: 5,
-    });
+    expect(workspaceFastMode.getWorkspaceFastMode()).toEqual({ fast_mode: false });
     expect(workspaceFastMode.getFastModePromptAgentId()).toBeNull();
   });
 
@@ -91,7 +83,7 @@ describe("answering the fast-mode prompt", () => {
     // The chat is already running fast, so there is nothing to send it.
     expect(mockSetFastMode).not.toHaveBeenCalled();
     expect(postedEnabled).toEqual([true]);
-    expect(workspaceFastMode.getWorkspaceFastMode()?.is_fast_mode_enabled).toBe(true);
+    expect(workspaceFastMode.getWorkspaceFastMode()?.fast_mode).toBe(true);
   });
 
   it("closes the question before the answer reaches the server", async () => {
@@ -103,7 +95,7 @@ describe("answering the fast-mode prompt", () => {
 
     // With the POST still in flight the decision already reads as made, so no
     // chat can raise the prompt again in the meantime.
-    expect(workspaceFastMode.getWorkspaceFastMode()?.is_decided).toBe(true);
+    expect(workspaceFastMode.getWorkspaceFastMode()?.fast_mode).toBe(false);
     expect(workspaceFastMode.getFastModePromptAgentId()).toBeNull();
   });
 });

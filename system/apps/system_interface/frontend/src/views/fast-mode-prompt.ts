@@ -19,6 +19,10 @@ import { getModelSettings } from "../models/ModelSettings";
 import { getWorkspaceFastMode, openFastModePrompt } from "../models/WorkspaceFastMode";
 import { isNonBoundaryUserMessage, parsePermissionResolution } from "./message-classification";
 
+/** How many user turns a chat runs with fast mode on before it asks whether to
+ *  keep it. The one knob for the grace period. */
+export const FAST_MODE_GRACE_TURN_COUNT = 5;
+
 /** How many turns the user has actually taken in this conversation. */
 export function countUserTurns(events: TranscriptEvent[]): number {
   let count = 0;
@@ -48,7 +52,7 @@ export function countUserTurns(events: TranscriptEvent[]): number {
  */
 export function isFastModePromptOwed(agentId: string, events: TranscriptEvent[], isAgentIdle: boolean): boolean {
   const workspaceFastMode = getWorkspaceFastMode();
-  if (workspaceFastMode === null || workspaceFastMode.is_decided) {
+  if (workspaceFastMode === null || workspaceFastMode.fast_mode !== null) {
     return false;
   }
   if (!isAgentIdle) {
@@ -58,7 +62,7 @@ export function isFastModePromptOwed(agentId: string, events: TranscriptEvent[],
   if (settings === null || !settings.fast_mode) {
     return false;
   }
-  return countUserTurns(events) >= workspaceFastMode.grace_turn_count;
+  return countUserTurns(events) >= FAST_MODE_GRACE_TURN_COUNT;
 }
 
 /** Raise the prompt if this conversation has earned it. Safe to call on every

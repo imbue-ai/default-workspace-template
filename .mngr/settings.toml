@@ -91,18 +91,20 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # speed -- this type itself (which the `worktree`, `caretaker`, and
 # `schedule_agent` create templates below select directly), the `worker` and
 # `main` types that inherit it, and the `subskill-worker` template that resolves
-# to `worker`. Fast mode buys latency at
-# a higher per-token price, which is worth it only when a human is waiting on the
-# reply. User-facing chat agents override it per create: the system
-# interface and the bootstrap both pass
+# to `worker`. Fast mode buys latency at a higher per-token price, which is worth
+# it only when a human is waiting on the reply. User-facing chat agents override
+# it per create: the system interface and the bootstrap both pass
 # `-S agent_types.claude.settings_overrides.fastMode=<bool>`, resolved from the
 # workspace's fast-mode decision (see system_interface's fast_mode_policy.py).
+#
 # That override targets `claude` rather than `chat` because a `-S` is parsed as
 # its own config layer, without the `parent_type = "claude"` this file gives
 # `chat` -- so `chat` resolves against the base agent config, which has no
 # `settings_overrides` field, and the create is rejected. `claude` is registered
 # by the claude plugin, whose config class declares it. A chat create resolves
 # its own config, so overriding the base there never reaches a worker create.
+# This is the canonical explanation; the two create paths and the CLI-contract
+# test point here rather than repeating it.
 settings_overrides__extend = {model = "opus[1m]", fastMode = false}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/scripts/claude_oom_launch.py) sets its own

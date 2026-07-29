@@ -1,74 +1,68 @@
 import json
 import os
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from loguru import logger
-from pydantic import Field
-from pydantic import ValidationError
 
-from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr_claude.claude_config import get_agent_hook_settings_path
 
-# How many complete user turns a chat agent runs with fast mode on before the
-# workspace asks whether to keep it. This is the one knob for the grace period.
-FAST_MODE_GRACE_TURN_COUNT: Final[int] = 5
-
-# Machine state, so it sits under data/.state/ next to apps.toml. JSON
-# rather than TOML because nothing authors it by hand -- the system interface is
-# the only writer, matching the workspace's other machine-written state.
+# Machine state, so it sits under data/.state/ next to apps.toml. JSON rather than
+# TOML because nothing authors it by hand -- the system interface is the only
+# writer, matching the workspace's other machine-written state.
 _DECISION_RELATIVE_PATH: Final[str] = "data/.state/fast_mode_decision.json"
 
+# The key both writers of the decision file agree on. Bootstrap parses the same
+# file without importing this module (it must stay dependency-free), so the format
+# is deliberately one boolean and nothing else.
+_DECISION_KEY: Final[str] = "is_fast_mode_enabled"
 
-class WorkspaceFastModeDecision(FrozenModel):
-    """The workspace-wide answer to the fast-mode prompt, shared by every chat agent."""
+# What a chat agent launches with before the workspace has answered the prompt.
+# The opening conversation runs fast so it feels responsive; the prompt then asks
+# whether that is worth its higher per-token price.
+FAST_MODE_BEFORE_DECISION: Final[bool] = True
 
-    is_decided: bool = Field(description="Whether the user has answered the fast-mode prompt")
-    is_fast_mode_enabled: bool = Field(description="The fast-mode setting chat agents launch with")
 
-
-# Before the user answers, chat agents launch fast so the opening conversation feels
-# responsive; the prompt then asks whether that is worth its higher per-token price.
-UNDECIDED_FAST_MODE_DECISION: Final[WorkspaceFastModeDecision] = WorkspaceFastModeDecision(
-    is_decided=False,
-    is_fast_mode_enabled=True,
-)
+class FastModeSettingsError(RuntimeError):
+    """Raised when an agent's Claude settings file cannot be updated safely."""
 
 
 def get_workspace_fast_mode_decision_path(workspace_work_dir: Path) -> Path:
     return workspace_work_dir / _DECISION_RELATIVE_PATH
 
 
-def read_workspace_fast_mode_decision(decision_path: Path) -> WorkspaceFastModeDecision:
-    """Read the recorded decision, falling back to undecided when absent or unreadable.
+def read_workspace_fast_mode_decision(decision_path: Path) -> bool | None:
+    """The workspace's recorded fast-mode answer, or None when it has not answered.
 
-    A corrupt file must not strand the workspace at whatever it last held, so this
-    falls back to the undecided default and logs loudly enough to be noticed.
+    Undecided is the file being absent, so there is no separate "decided" flag that
+    could disagree with the value. A corrupt or wrong-shaped file also reads as
+    undecided -- it must not strand the workspace at a setting nobody chose -- but
+    unlike an absent one it is logged, since falling back turns on the setting that
+    costs money.
     """
     try:
         raw = decision_path.read_text()
     except FileNotFoundError:
-        return UNDECIDED_FAST_MODE_DECISION
+        return None
     except OSError as e:
         logger.warning("Failed to read fast-mode decision at {}: {}", decision_path, e)
-        return UNDECIDED_FAST_MODE_DECISION
+        return None
     try:
-        return WorkspaceFastModeDecision.model_validate_json(raw)
-    except ValidationError as e:
-        logger.warning("Ignored malformed fast-mode decision at {}: {}", decision_path, e)
-        return UNDECIDED_FAST_MODE_DECISION
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("Ignored unparseable fast-mode decision at {}: {}", decision_path, e)
+        return None
+    is_enabled = data.get(_DECISION_KEY) if isinstance(data, dict) else None
+    if not isinstance(is_enabled, bool):
+        logger.warning("Ignored fast-mode decision at {} with no boolean {}: {}", decision_path, _DECISION_KEY, raw)
+        return None
+    return is_enabled
 
 
-def write_workspace_fast_mode_decision(decision_path: Path, decision: WorkspaceFastModeDecision) -> None:
-    """Record the decision, replacing any previous one.
-
-    Written through a temporary file in the same directory and renamed into place,
-    so a chat create reading it concurrently sees either the old decision or the
-    new one -- never a half-written file it would silently read as undecided.
-    """
-    decision_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = decision_path.with_suffix(f"{decision_path.suffix}.tmp")
-    temporary_path.write_text(decision.model_dump_json())
-    os.replace(temporary_path, decision_path)
+def write_workspace_fast_mode_decision(decision_path: Path, is_fast_mode_enabled: bool) -> None:
+    """Record the workspace's answer, replacing any previous one."""
+    _write_json_atomically(decision_path, {_DECISION_KEY: is_fast_mode_enabled})
 
 
 def read_fast_mode_setting(settings_path: Path) -> bool | None:
@@ -101,13 +95,18 @@ def read_fast_mode_setting(settings_path: Path) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-def resolve_launch_fast_mode(claude_settings_path: Path, managed_settings_path: Path) -> bool:
-    """Whether the agent's session started with fast mode on.
+def resolve_agent_fast_mode(claude_settings_path: Path, managed_settings_path: Path) -> bool:
+    """Whether fast mode is on for the agent.
 
     Claude Code layers mngr's managed ``--settings`` file at command-line precedence,
-    above the shared user settings, so a ``fastMode`` set there is what the session
-    launched with. Only when the managed file leaves it unset does the user settings
-    file decide, and an absent key there means off.
+    above the shared user settings, so a ``fastMode`` set there wins. Only when the
+    managed file leaves it unset does the user settings file decide, and an absent
+    key there means off.
+
+    This is also what the agent would come back with if it restarted, because every
+    change made through this UI is written into the same per-agent file (see
+    ``write_fast_mode_setting``) -- the running session and the next launch cannot
+    disagree.
     """
     managed_setting = read_fast_mode_setting(managed_settings_path)
     if managed_setting is not None:
@@ -116,3 +115,66 @@ def resolve_launch_fast_mode(claude_settings_path: Path, managed_settings_path: 
     if user_setting is not None:
         return user_setting
     return False
+
+
+def get_agent_fast_mode_write_path(claude_config_dir: Path, agent_state_dir: Path) -> Path:
+    """The per-agent settings file a fast-mode change must be recorded in.
+
+    mngr keeps each agent's launch settings under its state dir and re-applies them
+    on every launch, so recording a change there is what makes it outlive a restart.
+    Which file that is depends on the config mode, and mngr's own helper owns that
+    branch: shared mode has no per-agent config dir and gets the managed
+    ``--settings`` overlay, isolated mode gets the per-agent config dir's
+    ``settings.json``.
+
+    The mode is read off whether the agent's config dir is its own (inside the state
+    dir) or the host-wide shared one, because writing fast mode into the shared
+    config dir would set it for every agent on the host.
+    """
+    is_config_dir_shared = not claude_config_dir.is_relative_to(agent_state_dir)
+    return get_agent_hook_settings_path(agent_state_dir, use_env_config_dir=is_config_dir_shared)
+
+
+def write_fast_mode_setting(settings_path: Path, is_enabled: bool) -> None:
+    """Record ``fastMode`` in a Claude Code settings file, leaving its other keys intact.
+
+    This is the only durable record of the setting: Claude Code deletes the
+    ``fastMode`` key on ``/fast off`` rather than writing false, so the session's own
+    state is not recoverable from what it writes.
+
+    mngr owns the file this usually targets and rewrites it fresh on provision, which
+    happens at create and not on restart -- so a value written here survives for the
+    life of the agent. It also holds mngr's hooks, hence a patch of one key rather
+    than a replacement.
+
+    Raises ``FastModeSettingsError`` when the file exists but does not hold a JSON
+    object, rather than replacing it and silently dropping those hooks.
+    """
+    settings = _read_settings_object(settings_path)
+    settings["fastMode"] = is_enabled
+    _write_json_atomically(settings_path, settings)
+
+
+def _read_settings_object(settings_path: Path) -> dict[str, Any]:
+    """The settings file's contents as a mutable dict; empty when it does not exist yet."""
+    try:
+        raw = settings_path.read_text()
+    except FileNotFoundError:
+        return {}
+    except OSError as e:
+        raise FastModeSettingsError(f"Failed to read Claude settings at {settings_path}: {e}") from e
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise FastModeSettingsError(f"Claude settings at {settings_path} are not valid JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise FastModeSettingsError(f"Claude settings at {settings_path} are not a JSON object")
+    return data
+
+
+def _write_json_atomically(path: Path, data: dict[str, Any]) -> None:
+    """Replace ``path`` with ``data``, so a concurrent reader never sees a partial file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    temporary_path.write_text(json.dumps(data))
+    os.replace(temporary_path, path)

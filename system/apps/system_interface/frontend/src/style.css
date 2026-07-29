@@ -1913,42 +1913,9 @@ body {
   border: 1px solid var(--color-border);
   border-radius: 12px;
   padding: 24px;
-  /* Kept in sync with FAST_MODE_MODAL_WIDTH_PX, which the anchored popover
-     sets inline once it knows where it is going. */
   width: 460px;
   max-width: 90vw;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-}
-
-/* Pointed at the composer's fast-mode toggle when there is room above it;
-   without this class the overlay's flex layout centers the box instead. */
-.fast-mode-modal--anchored {
-  position: fixed;
-}
-
-.fast-mode-modal--anchored::before,
-.fast-mode-modal--anchored::after {
-  content: "";
-  position: absolute;
-  left: var(--fast-mode-arrow-left);
-  border-left: 9px solid transparent;
-  border-right: 9px solid transparent;
-  margin-left: -9px;
-}
-
-/* Two stacked triangles: the outer one continues the box's border, the inner
-   one fills it with the surface color. */
-.fast-mode-modal--anchored::before {
-  bottom: -9px;
-  border-top: 9px solid var(--color-border);
-}
-
-.fast-mode-modal--anchored::after {
-  bottom: -8px;
-  border-left-width: 8px;
-  border-right-width: 8px;
-  margin-left: -8px;
-  border-top: 8px solid var(--color-surface);
 }
 
 .fast-mode-modal-header {
