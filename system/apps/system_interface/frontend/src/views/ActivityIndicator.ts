@@ -8,16 +8,15 @@
  *   - THINKING         -> "Thinking…"
  *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness
  *
- * The TOOL_RUNNING caption is the only harness-specific bit; it is routed by the
- * agent's ``harness`` through the ``captions`` registry to that harness's peer
- * module. A null ``activity_state`` means the server has no per-agent activity
- * tracking for this agent (proto-agents, remote agents) -- the strip collapses.
+ * The TOOL_RUNNING caption is read straight off the tool call: the harness's own
+ * parser labelled it, so this view needs no notion of which harness is running.
+ * A null ``activity_state`` means the server has no per-agent activity tracking
+ * for this agent (proto-agents, remote agents) -- the strip collapses.
  */
 
 import m from "mithril";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 import { getEffectiveActivityState } from "../models/PendingMessages";
-import { toolLabelFor } from "./captions";
 
 /**
  * Find the most recent assistant tool call whose tool_call_id has no matching
@@ -55,27 +54,23 @@ export function isWorkingActivityState(state: string | null | undefined): boolea
   return state !== null && state !== undefined && WORKING_ACTIVITY_STATES.has(state);
 }
 
-/** The in-flight tool caption for the agent's harness. */
-function labelForToolCall(tc: ToolCall, harness: string): string {
-  return toolLabelFor(harness, tc);
+/** The in-flight tool caption, as labelled by the harness that produced the call. */
+function labelForToolCall(tc: ToolCall): string {
+  return tc.caption_label || "Running tool…";
 }
 
 /**
  * Pick the user-facing label for a server-derived activity state. For TOOL_RUNNING
- * we consult the transcript for the in-flight tool and caption it per harness; every
- * other state is fixed (or null = hide).
+ * we consult the transcript for the in-flight tool and use its label; every other
+ * state is fixed (or null = hide).
  */
-export function labelForActivityState(
-  state: string | null | undefined,
-  events: TranscriptEvent[],
-  harness: string,
-): string | null {
+export function labelForActivityState(state: string | null | undefined, events: TranscriptEvent[]): string | null {
   if (state === null || state === undefined) return null;
   if (state === "IDLE") return null;
   if (state === "THINKING") return "Thinking…";
   if (state === "TOOL_RUNNING") {
     const pending = pendingToolCall(events);
-    if (pending !== null) return labelForToolCall(pending, harness);
+    if (pending !== null) return labelForToolCall(pending);
     return "Running tool…";
   }
   return null;
@@ -88,21 +83,21 @@ function renderStrip(label: string, state: string | null | undefined): m.Vnode {
   ]);
 }
 
-// Minimum time a codex "Running X" caption stays up. Codex's code-mode tool calls
-// often finish (or yield) in a fraction of a second, so TOOL_RUNNING flickers past.
-// We hold the caption for this long ONLY while the agent is still working (THINKING)
-// -- the turn ending (IDLE) clears it immediately, so the indicator never lingers
-// past when it should go away.
-const CODEX_TOOL_CAPTION_MIN_MS = 700;
+// Minimum time a "Running X" caption stays up. A tool call that finishes in a
+// fraction of a second would otherwise flash past unreadably -- common for codex,
+// whose code-mode calls often yield immediately, but claude has fast tools too, so
+// this is about tool duration rather than about which harness is running. The hold
+// applies ONLY while the agent is still working (THINKING); the turn ending (IDLE)
+// clears it at once, so the indicator never lingers past when it should go away.
+const TOOL_CAPTION_MIN_MS = 700;
 
 interface ActivityIndicatorAttrs {
   agentId: string;
   events: TranscriptEvent[];
-  harness: string;
 }
 
 export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
-  // Per-mounted-panel (i.e. per-agent) debounce state for the codex tool caption.
+  // Per-mounted-panel (i.e. per-agent) debounce state for the tool caption.
   let heldToolCaption: string | null = null;
   let heldUntil = 0;
   let releaseTimer: number | null = null;
@@ -116,33 +111,31 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
 
   return {
     view(vnode) {
-      const { agentId, events, harness } = vnode.attrs;
+      const { agentId, events } = vnode.attrs;
       const state = getEffectiveActivityState(agentId);
-      const label = labelForActivityState(state, events, harness);
+      const label = labelForActivityState(state, events);
 
-      if (harness === "codex") {
-        const now = Date.now();
-        if (state === "TOOL_RUNNING" && label !== null) {
-          // Active tool -> (re)start the hold window; cancel any pending release.
-          cancelRelease();
-          heldToolCaption = label;
-          heldUntil = now + CODEX_TOOL_CAPTION_MIN_MS;
-        } else if (state === "THINKING" && heldToolCaption !== null && now < heldUntil) {
-          // Still working, but the tool cleared fast -- keep the caption up briefly so
-          // it doesn't flash, then release. Schedule a redraw at the release point.
-          if (releaseTimer === null) {
-            releaseTimer = window.setTimeout(() => {
-              releaseTimer = null;
-              heldToolCaption = null;
-              m.redraw();
-            }, heldUntil - now);
-          }
-          return renderStrip(heldToolCaption, "TOOL_RUNNING");
-        } else {
-          // IDLE / null (turn ended), window expired, or nothing held -> release now.
-          cancelRelease();
-          heldToolCaption = null;
+      const now = Date.now();
+      if (state === "TOOL_RUNNING" && label !== null) {
+        // Active tool -> (re)start the hold window; cancel any pending release.
+        cancelRelease();
+        heldToolCaption = label;
+        heldUntil = now + TOOL_CAPTION_MIN_MS;
+      } else if (state === "THINKING" && heldToolCaption !== null && now < heldUntil) {
+        // Still working, but the tool cleared fast -- keep the caption up briefly so
+        // it doesn't flash, then release. Schedule a redraw at the release point.
+        if (releaseTimer === null) {
+          releaseTimer = window.setTimeout(() => {
+            releaseTimer = null;
+            heldToolCaption = null;
+            m.redraw();
+          }, heldUntil - now);
         }
+        return renderStrip(heldToolCaption, "TOOL_RUNNING");
+      } else {
+        // IDLE / null (turn ended), window expired, or nothing held -> release now.
+        cancelRelease();
+        heldToolCaption = null;
       }
 
       if (label === null) return null;

@@ -10,8 +10,6 @@ import { openSubagentTab } from "./DockviewWorkspace";
 import type { PermissionResolution } from "./message-classification";
 import { isPermissionRequestCall, isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard } from "./permission-card";
-import { codexToolLabel } from "./captions";
-import { getAgentById } from "../models/AgentManager";
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
 // half of the classify/display split). Re-exported here so existing importers --
@@ -252,17 +250,13 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
   ]);
 }
 
-export function renderToolCallBlock(
-  toolCall: ToolCall,
-  toolResult: ToolResultEvent | null,
-  harness: string = "claude",
-): m.Vnode {
-  // Codex code mode names every operation `exec` and hides the real one in the JS,
-  // so the header uses the SAME `codexToolLabel` as the live activity caption -- one
-  // source of truth, so "Tool: exec" and the bottom "Running code" can never disagree.
-  // The raw JS program stays in the block body below (preserve-raw). Claude tools keep
-  // the generic `Tool: <name>` header.
-  const headerText = harness === "codex" ? codexToolLabel(toolCall) : `Tool: ${toolCall.tool_name}`;
+export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEvent | null): m.Vnode {
+  // The harness's parser already worked out what this call should read as -- for
+  // codex that means unwrapping an `exec` whose real operation is buried in a JS
+  // argument, which is not something this view should have to know. The raw input
+  // stays in the block body below (preserve-raw). Falls back to the tool name for
+  // events parsed before the labels existed.
+  const headerText = toolCall.header_label || `Tool: ${toolCall.tool_name}`;
   const inputText = toolCall.input_preview || "";
   const outputText = toolResult?.output || "";
   const isError = toolResult?.is_error === true;
@@ -304,7 +298,6 @@ export function renderAssistantMessageChildren(
 ): m.Children[] {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
-  const harness = getAgentById(agentId)?.harness ?? "claude";
 
   const children: m.Children[] = [];
   if (textContent) {
@@ -331,7 +324,7 @@ export function renderAssistantMessageChildren(
       children.push(m(PermissionCard, { toolCall, toolResult: result, resolution: permissionResolution }));
       continue;
     }
-    children.push(renderToolCallBlock(toolCall, result, harness));
+    children.push(renderToolCallBlock(toolCall, result));
   }
   return children;
 }

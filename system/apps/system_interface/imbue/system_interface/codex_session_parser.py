@@ -46,6 +46,8 @@ import hashlib
 import json
 from typing import Any
 
+from imbue.system_interface.codex_tool_labels import codex_tool_labels
+
 # Kept as ``codex/common_transcript`` to match the ``<harness>/common_transcript``
 # label ``claude_session_parser`` stamps -- "common" here means the normalized/common
 # event *form*, not the on-disk common-transcript file (which we do NOT read).
@@ -105,6 +107,23 @@ def _tool_call_input_preview(payload: dict[str, Any]) -> str:
     if len(text) > _MAX_INPUT_PREVIEW_LENGTH:
         return text[:_MAX_INPUT_PREVIEW_LENGTH] + "..."
     return text
+
+
+def _labelled_tool_call(call_id: str, tool_name: str, input_preview: str) -> dict[str, str]:
+    """A tool call carrying its own human labels.
+
+    Labelled here, where the harness is known, so the frontend renders a string
+    rather than having to understand that a codex ``exec`` hides its real
+    operation in a JavaScript argument.
+    """
+    header_label, caption_label = codex_tool_labels(tool_name, input_preview)
+    return {
+        "tool_call_id": call_id,
+        "tool_name": tool_name,
+        "input_preview": input_preview,
+        "header_label": header_label,
+        "caption_label": caption_label,
+    }
 
 
 def _assistant_event(timestamp: str, event_id: str, *, text: str, tool_calls: list[dict[str, str]]) -> dict[str, Any]:
@@ -269,13 +288,7 @@ def parse_codex_rollout_line(
                 timestamp,
                 event_id,
                 text="",
-                tool_calls=[
-                    {
-                        "tool_call_id": call_id,
-                        "tool_name": tool_name,
-                        "input_preview": _tool_call_input_preview(payload),
-                    }
-                ],
+                tool_calls=[_labelled_tool_call(call_id, tool_name, _tool_call_input_preview(payload))],
             )
         ]
 
@@ -315,7 +328,7 @@ def parse_codex_rollout_line(
                 timestamp,
                 call_event_id,
                 text="",
-                tool_calls=[{"tool_call_id": item_id, "tool_name": "web_search", "input_preview": input_preview}],
+                tool_calls=[_labelled_tool_call(item_id, "web_search", input_preview)],
             ),
             {
                 "timestamp": timestamp,
