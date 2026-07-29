@@ -21,11 +21,13 @@ import queue
 import socket
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import pytest
 import simple_websocket
 from browser import manifest, runner
+from browser import vnc
 from browser import session as bsession
 from browser.wsgi import make_threaded_server
 from playwright.async_api import Error as PlaywrightError
@@ -803,3 +805,39 @@ def test_hold_releases_the_lease_when_the_client_socket_dies(monkeypatch: pytest
         # finally, and the lease is released back to the human.
         conn.close()
         assert _wait_until(lambda: fake._state_tuple() == ("human", None, False), timeout=10.0)
+
+
+def test_kasmvnc_config_pins_the_launch_geometry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The written config, not the -geometry flag, is what sets the framebuffer.
+
+    vncserver builds its -geometry argument from a deriveValueSub that returns
+    ``desktop.resolution.{width,height}`` whenever those keys are defined and only
+    falls back to the flag when they are not -- and the shipped defaults file
+    always defines them, as 1024x768. So passing -geometry alone silently has no
+    effect: verified by reading the spawned Xvnc's argv, which said 1024x768 while
+    we were asking for 1280x800, and confirmed the other way by writing this
+    config and watching the same launch come up at 1280x800.
+
+    Asserted here because nothing else would notice. The flag stays in the argv
+    and the display still starts, so dropping these keys would cost the geometry
+    with no error anywhere.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(vnc.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setattr(vnc, "_KASMVNC_USER_CONFIG", home / ".vnc" / "kasmvnc.yaml")
+
+    vnc._write_kasmvnc_config()
+
+    written = (home / ".vnc" / "kasmvnc.yaml").read_text()
+    assert f"width: {vnc._SCREEN_W}" in written
+    assert f"height: {vnc._SCREEN_H}" in written
+    # Nested under desktop.resolution, which is the key path vncserver reads.
+    assert "desktop:" in written and "resolution:" in written
+    # vncserver only creates this file when absent, so ours must carry the
+    # logging block it would otherwise have written.
+    assert "logging:" in written
+
+    # Idempotent: the launch path calls this on every start.
+    vnc._write_kasmvnc_config()
+    assert (home / ".vnc" / "kasmvnc.yaml").read_text() == written

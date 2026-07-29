@@ -490,7 +490,27 @@
       // divider produces one resize at the end rather than one per frame. Setting
       // resizeSession also forces scaleViewport on, so the client scales to cover
       // the gap while the server catches up -- no flash of wrong-size content.
-      + "&resize=remote"
+      //
+      // video_quality=1 is what BOUNDS that. It reads as a quality preset
+      // ("Low" in the client's own dropdown) but it is not one here: the client
+      // never transmits it -- _sendEncodings sends jpegVideoQuality,
+      // webpVideoQuality, treatLossless and dynamicQualityMin/Max, and no
+      // videoQuality -- so the only thing it reaches is getScreenSize, where a
+      // value of 1 caps the framebuffer the client ASKS FOR at 1280 wide,
+      // aspect preserved, and lets the free CSS scale cover anything larger.
+      // Encoding quality is untouched; it comes from the server flags above,
+      // which -IgnoreClientSettingsKasm makes authoritative regardless.
+      //
+      // Measured cost of a full repaint, same page, framebuffer varied:
+      //   640x400   187 KB   5.5 ms      1280x800    750 KB  17.9 ms
+      //   800x500   285 KB  10.3 ms      1600x1000  1083 KB  25.5 ms
+      //   1024x640  456 KB  11.7 ms      1920x1200  1649 KB  36.9 ms
+      // Both are linear in pixel count (~700 KB and ~17 ms per megapixel), so
+      // an uncapped maximised pane would cost over twice a 1280x800 one. With
+      // the cap the framebuffer tracks the pane up to 1280 wide -- cheaper than
+      // a fixed 1280x800 for every smaller pane, which is the common case --
+      // and is bounded above it.
+      + "&resize=remote&video_quality=1"
       // Belt-and-braces mirror of the server-side encoding flags (the server runs
       // -IgnoreClientSettingsKasm, so these mostly document intent client-side and
       // cover any cached localStorage settings). video_quality=10 ("custom") is

@@ -170,3 +170,30 @@ browser viewport *is* the pane, filled and sharp at any size, with no letterbox
 and nothing cropped. Its cost is per resize rather than ongoing -- a mode change,
 a relayout and a full repaint -- and the client debounces that by 500ms, so
 dragging a pane divider produces one resize at the end rather than one per frame.
+
+----
+
+Resize-to-pane, bounded.
+
+The pane now sizes the remote framebuffer to itself, so the browser viewport
+*is* the pane -- filled and sharp at any size, never letterboxed or cropped --
+and `video_quality=1` bounds what that can cost. Despite the name it is not a
+quality setting here: the client never transmits it, so the only thing it
+reaches is the resolution maths, where it caps the framebuffer the client asks
+for at 1280 wide (aspect preserved) and lets the free client-side CSS scale
+cover anything larger. Encoding quality is unchanged.
+
+The cap matters because encode cost is linear in pixel count. Measured, same
+page, framebuffer varied: 640x400 costs 187 KB and 5.5 ms of server CPU per full
+repaint; 1280x800 costs 750 KB and 17.9 ms; 1920x1200 costs 1649 KB and 36.9 ms
+-- about 700 KB and 17 ms per megapixel throughout. Uncapped, a maximised pane
+would cost more than twice a 1280x800 one. Capped, the framebuffer tracks the
+pane up to 1280 wide, which is cheaper than a fixed 1280x800 for every smaller
+pane, and is bounded above it.
+
+Also fixed: the launch geometry was never actually applied. vncserver derives
+its `-geometry` argument from `desktop.resolution.{width,height}` whenever those
+config keys exist and consults the command-line flag only when they do not --
+and the shipped defaults file always defines them, as 1024x768. So every display
+has been coming up at 1024x768 while the code asked for 1280x800, silently. The
+session now writes the user config that actually controls this.
