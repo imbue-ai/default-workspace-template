@@ -22,7 +22,7 @@ config model at startup and hard-fails the command when it does not exist. Those
 are checked too, through mngr's own resolution (see ``assert_mngr_settings_valid``).
 
 This lives in its own workspace package so both repo-side pytest passes (the
-root pass and the isolated system/libs/system_interface pass, which share one
+root pass and the isolated system/apps/system_interface pass, which share one
 workspace venv) import a single copy rather than duplicating the validator.
 """
 

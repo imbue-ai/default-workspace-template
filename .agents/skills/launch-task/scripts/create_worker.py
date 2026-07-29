@@ -467,18 +467,18 @@ def _oom_priority_src() -> Path:
     hooks reach by adding its ``src`` dir to ``sys.path`` (it is not a declared
     dependency anywhere); this script does the same. We locate ``src`` by
     walking up to the repo root -- the ancestor that contains
-    ``system/libs/oom_priority/src`` -- rather than counting a fixed number of parent
+    ``system/services/oom_priority/src`` -- rather than counting a fixed number of parent
     directories, so the lookup keeps working if this script is ever relocated
     within the repo. Raises ``RuntimeError`` if it can't be found, since the
     package is always present in the repo and its absence is a real
     misconfiguration, not a condition to paper over.
     """
     for ancestor in Path(__file__).resolve().parents:
-        candidate = ancestor / "system" / "libs" / "oom_priority" / "src"
+        candidate = ancestor / "system" / "services" / "oom_priority" / "src"
         if candidate.is_dir():
             return candidate
     raise RuntimeError(
-        f"could not locate system/libs/oom_priority/src above {Path(__file__).resolve()}"
+        f"could not locate system/services/oom_priority/src above {Path(__file__).resolve()}"
         " -- the launch-task script must run from within the template repo"
     )
 

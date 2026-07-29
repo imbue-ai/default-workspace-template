@@ -53,13 +53,17 @@ dev = [
 package = false
 # browser-use pins openai==2.16.0 but litellm needs openai>=2.20.0. We drive
 # browser-use with ChatAnthropic (not the OpenAI path), so its openai pin is
-# unused at runtime; override it so the single workspace lock resolves. See system/libs/browser.
+# unused at runtime; override it so the single workspace lock resolves. See system/apps/browser.
 override-dependencies = ["openai>=2.20.0"]
 
 [tool.uv.workspace]
-# creations/* covers user-built packages (scaffolded web services, adopted
-# inspirations) so a new creation joins the workspace without editing this list.
-members = ["system/libs/bootstrap", "system/libs/cloudflare_tunnel", "system/libs/app_watcher", "system/libs/github_sync", "system/libs/env_converge", "system/libs/host_backup", "system/libs/mngr_cli_contract", "system/libs/tk_command_parsing", "system/libs/oom_priority", "system/libs/system_interface", "system/libs/browser", "creations/*"]
+# The globs cover every package in the three-way system/ split -- built-in
+# libraries, background services, and apps (built-in and user-built alike) --
+# so a newly scaffolded or adopted app joins the workspace without editing
+# this list. The terminal app is excluded: it is a shell-script wrapper around
+# the vendored mngr_ttyd plugin, not a Python package.
+members = ["system/libs/*", "system/services/*", "system/apps/*"]
+exclude = ["system/apps/terminal"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }
@@ -107,18 +111,25 @@ addopts = [
     "--timeout=10",
     "--ignore=system/vendor/mngr",
     "--ignore=system/vendor/tk",
-    # system/libs/system_interface has its own pytest config (coverage, slow-test reporting,
+    # system/apps/system_interface has its own pytest config (coverage, slow-test reporting,
     # ratchets) that conflicts with the root config; it is run from inside its own dir.
-    "--ignore=system/libs/system_interface",
+    "--ignore=system/apps/system_interface",
+    # The top-level apps and skills symlinks (discoverability shortcuts to
+    # system/apps/ and .agents/skills/) would otherwise make pytest collect
+    # every test under them a second time via the symlink path.
+    "--ignore=apps",
+    "--ignore=skills",
 ]
 
 [tool.ruff]
 target-version = "py311"
-exclude = ["system/vendor/mngr", "system/vendor/tk", "system/libs/system_interface"]
+exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface"]
 
 [tool.ruff.lint]
 select = ["F", "I", "UP006", "UP007"]
 
 [tool.pyright]
 pythonVersion = "3.11"
-exclude = ["system/vendor/mngr", "system/vendor/tk", "system/libs/system_interface"]
+# apps and skills are the top-level discoverability symlinks; excluding them
+# keeps pyright from analyzing the same files twice via the symlink paths.
+exclude = ["system/vendor/mngr", "system/vendor/tk", "system/apps/system_interface", "apps", "skills"]
