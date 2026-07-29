@@ -11,6 +11,10 @@ dependencies = [
     "simple-websocket>=1.0",
     "werkzeug>=3.0",
     "browser-use[core]==0.13.1",
+    # X focus keeping on the WM-less VNC display (see browser/focus.py): without
+    # a FocusIn, Chromium reports document.hasFocus() == false and Blink rejects
+    # every navigator.clipboard call before it checks permissions.
+    "python-xlib>=0.33",
 ]
 
 # Entry point is "browser-service", not "browser": browser-use ships its own

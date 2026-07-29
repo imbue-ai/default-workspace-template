@@ -100,7 +100,7 @@
          injects them as X events -- so native context menus, native <select>
          dropdowns and click-drag all work with no input code here. The overlays
          below stack on top of it exactly as they did over the canvas. -->
-    <iframe id="screen" title="Live browser"></iframe>
+    <iframe id="screen" title="Live browser" allow="clipboard-read; clipboard-write"></iframe>
     <div id="placeholder">Starting browser…</div>
     <div id="overlay">
       <div class="msg" id="overlaymsg">An agent has control.</div>
@@ -432,12 +432,28 @@
     // the client needs: it builds absolute /assets/... URLs and derives its websocket
     // URL from window.location, so it has to own its prefix. A relative "../" keeps
     // this correct however the workspace is reached (locally, or through a tunnel).
-    screenFrame.src = "../browser-" + encodeURIComponent(id) + "/vnc.html?autoconnect=1&resize=remote&reconnect=1&show_dot=1"
+    screenFrame.src = "../browser-" + encodeURIComponent(id) + "/vnc.html?autoconnect=1&reconnect=1&show_dot=1"
+      // resize=scale, NOT resize=remote. `remote` resizes the server framebuffer to
+      // the pane, so a maximised pane doubles the pixels we encode and ships a full
+      // repaint on every size change -- cost is linear in pixels across five stages
+      // (framebuffer realloc, comparer rebuild, full-screen damage, reference copy,
+      // encode). `scale` keeps the framebuffer fixed and scales it client-side,
+      // aspect-preserving (the client picks the smaller of the two axis ratios and
+      // applies it to both), so the pane always fills without ever changing what the
+      // server encodes. It also keeps agent screenshots deterministic.
+      + "&resize=scale"
       // Belt-and-braces mirror of the server-side encoding flags (the server runs
       // -IgnoreClientSettingsKasm, so these mostly document intent client-side and
       // cover any cached localStorage settings). video_quality=10 ("custom") is
       // LOAD-BEARING: any other preset force-overwrites the fine-grained values
       // at UI startup.
+      // The KasmVNC client disables its clipboard whenever it is framed
+      // (isInsideKasmVDI() is literally `window.self !== window.top`, and we are two
+      // iframes deep), so clipboard_up/down/seamless all default to false. Turning
+      // them on enables the server's binary clipboard -- text AND image/png, both
+      // directions -- which KasmVNC has shipped since 0.9.3 and which Xvnc backs by
+      // owning the X CLIPBOARD selection itself.
+      + "&clipboard_up=1&clipboard_down=1&clipboard_seamless=1"
       + "&video_quality=10&dynamic_quality_min=3&dynamic_quality_max=7&treat_lossless=7"
       + "&framerate=60&framerate_image_mode=60&framerate_streaming_mode=60";
     placeholder.style.display = "none";

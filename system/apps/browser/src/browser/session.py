@@ -71,6 +71,7 @@ from pydantic import PrivateAttr
 from browser import manifest as fleet_manifest
 from browser.names import generate_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
+from browser.focus import FocusKeeper
 from browser.vnc import VncDisplay, VncStartupError
 
 # browser-use phones home anonymized telemetry by default; disable it (the
@@ -460,6 +461,9 @@ class LiveBrowser(MutableModel):
     # This browser's private KasmVNC display (its X server + live-view client).
     # None before start() and after close().
     _vnc: VncDisplay | None = PrivateAttr(default=None)
+    # Holds X input focus on this browser's window (see browser/focus.py). None
+    # before start() and after close().
+    _focus: FocusKeeper | None = PrivateAttr(default=None)
     # Latency samples reported by viewers over the cast socket (see the runner's
     # inbound pump): transport RTT from the periodic echo, and click-to-photon
     # from real clicks. Ring buffers so a long-lived browser can't grow them;
@@ -521,6 +525,28 @@ class LiveBrowser(MutableModel):
         browser can be driven and the viewer shows the live page."""
         return self._lifecycle == "running"
 
+    async def _enable_clipboard(self) -> None:
+        """Give the browser a real X focus and the clipboard permissions it needs.
+
+        Both halves are required and neither substitutes for the other. Blink
+        checks document focus BEFORE permissions, so a page with permission but
+        no focus still fails; and a focused page without permission fails too.
+        Together they are what make a site's own "Copy" button work.
+
+        The permission grant is browser-scoped and applies to every origin, which
+        is what we want: this is a browser the user drives directly, not a page
+        we are sandboxing.
+        """
+        keeper = FocusKeeper(self._vnc.display)
+        keeper.start()
+        self._focus = keeper
+        cdp = await self._observer.new_browser_cdp_session()
+        await cdp.send(
+            "Browser.grantPermissions",
+            {"permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]},
+        )
+        logger.info("clipboard enabled for browser {} on {}", self.browser_id, self._vnc.display)
+
     def _start_vnc(self) -> None:
         """Bring up this browser's private KasmVNC display (see browser.vnc).
 
@@ -539,6 +565,10 @@ class LiveBrowser(MutableModel):
 
     def _stop_vnc(self) -> None:
         """Tear the display down. Idempotent; safe on a browser that never started one."""
+        keeper = self._focus
+        self._focus = None
+        if keeper is not None:
+            keeper.stop()
         display = self._vnc
         self._vnc = None
         if display is not None:
@@ -664,6 +694,7 @@ class LiveBrowser(MutableModel):
         observer.on("disconnected", self._on_disconnected)
         self._context = observer.contexts[0] if observer.contexts else await observer.new_context()
         self._context.on("page", self._on_new_page)
+        await self._enable_clipboard()
         pages = self._context.pages
         page = pages[0] if pages else await self._context.new_page()
         self._track_nav(page)

@@ -86,3 +86,33 @@ than a real click, so a synthetic probe measures a pipeline that does not exist
 for users. Removed rather than left in reporting a number that looks
 authoritative and is not. Click sampling stays: its spread is content-dependent,
 but every sample is true.
+
+----
+
+Copy and paste work between the remote browser and your machine, and the pane
+scales instead of resizing the framebuffer.
+
+**Clipboard.** KasmVNC has shipped a bidirectional binary clipboard -- text and
+`image/png`, both directions -- since 0.9.3, with Xvnc owning the X CLIPBOARD
+selection itself. It was off for one reason: the client disables its clipboard
+whenever it is framed (its check is literally `window.self !== window.top`, and
+the live view is two iframes deep). Enabling it is three query parameters.
+
+Two things were needed beyond that. The pane's iframe now carries
+`allow="clipboard-read; clipboard-write"`. And because these displays have no
+window manager, X stayed in `PointerRoot` focus mode: no window ever received a
+`FocusIn`, so Chromium reported `document.hasFocus() == false`, and Blink checks
+document focus *before* permissions -- meaning every `navigator.clipboard` call
+was rejected outright and a site's own "Copy" button did nothing. A small focus
+keeper now holds X input focus on the browser window and puts it back whenever a
+popup or dropdown takes it, and the browser is granted clipboard permission over
+CDP. Both halves are required; neither substitutes for the other.
+
+**Resize.** The pane now fills by scaling rather than by resizing the server's
+framebuffer. Growing the framebuffer would have made a maximised pane cost twice
+the pixels at every stage that scales with them -- allocation, change tracking,
+full-screen damage, the reference copy, and encoding -- and shipped a full
+repaint on every size change. Scaling keeps the framebuffer fixed and is
+aspect-preserving (the client takes the smaller of the two axis ratios and
+applies it to both), so the view fills the pane without changing what the server
+encodes. It also keeps agent screenshots a deterministic size.
