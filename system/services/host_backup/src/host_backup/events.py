@@ -51,13 +51,10 @@ class BackupEventType(UpperCaseStrEnum):
     TICK_ERROR = auto()
 
 
-# Every event type that ends a tick. A tick can finish without restic ever
-# running (secrets absent, or the snapshot step aborted it) and can die in the
-# loop's outer catch, so anything waiting for a tick to resolve has to treat all
-# of these as terminal -- waiting on only the restic outcomes polls until its
-# deadline for a tick that already ended. This lives beside the vocabulary, not
-# in either the emitting or the waiting module, so a new tick ending added to
-# the runner is added here too rather than silently reintroducing that stall.
+# Every event type that ends a tick -- including the endings that never reach
+# restic (secrets absent, snapshot step aborted) and the loop's outer catch.
+# `host-backup-now` waits for one of these, so a new way for a tick to end must
+# be added here or the command polls until its timeout for a tick that is over.
 TICK_TERMINAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
     {
         BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
