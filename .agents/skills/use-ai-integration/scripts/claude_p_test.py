@@ -245,7 +245,9 @@ def test_credentials_read_default_claude_dir_when_config_dir_env_unset(
         monkeypatch.delenv(var, raising=False)
     default_dir = tmp_path / ".claude"
     default_dir.mkdir()
-    (default_dir / "settings.json").write_text('{"env": {"ANTHROPIC_API_KEY": "sk-default-dir-key"}}')
+    (default_dir / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-default-dir-key"}}'
+    )
 
     creds = claude_p.read_workspace_ai_credentials()
 
