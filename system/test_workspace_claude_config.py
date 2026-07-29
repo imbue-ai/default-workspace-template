@@ -46,11 +46,18 @@ def _load_raw_settings() -> dict[str, Any]:
 
 
 def _iter_leaf_strings(value: Any) -> list[str]:
-    """Flatten a parsed TOML structure into its leaf string values."""
+    """Flatten a parsed TOML structure into its leaf string values and mapping keys.
+
+    Keys count as mentions too: an env table pins a var through its KEY
+    (``env = { CLAUDE_CONFIG_DIR = "/x" }``), which value-only flattening
+    would miss.
+    """
     if isinstance(value, str):
         return [value]
     if isinstance(value, dict):
-        return [leaf for child in value.values() for leaf in _iter_leaf_strings(child)]
+        return list(value.keys()) + [
+            leaf for child in value.values() for leaf in _iter_leaf_strings(child)
+        ]
     if isinstance(value, (list, tuple)):
         return [leaf for child in value for leaf in _iter_leaf_strings(child)]
     return []
