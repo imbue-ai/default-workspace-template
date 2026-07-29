@@ -27,3 +27,12 @@ server exits immediately at startup without `xkbcomp`.
 CI deliberately does not install it. The real-Chromium integration tests are
 already skipped on GitHub Actions for an unrelated reason, so an X server there
 would guard nothing.
+
+----
+
+The latency readout is a standalone script, not a fleet-CLI verb.
+
+`python3 system/scripts/browser_latency.py [name] [--watch]` -- stdlib-only, no
+venv, no `MNGR_AGENT_ID`. That requirement belongs to the fleet CLI's ownership
+verbs; a read-only diagnostic has no owner, and a human at a bare root shell is
+exactly who runs it. With no name it reports the whole fleet.
