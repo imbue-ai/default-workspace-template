@@ -93,10 +93,11 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.cli.exit_codes import EXIT_CODE_PROVIDER_INACCESSIBLE
 from imbue.mngr.utils.env_utils import parse_env_file
+from imbue.mngr_claude.claude_config import find_user_config_in_unisolated_mode
+from imbue.mngr_claude.claude_config import get_claude_config_dir
 
 logger = _loguru_logger
 
-_CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 _HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
 ANTHROPIC_API_KEY_ENV_VAR: Final[str] = "ANTHROPIC_API_KEY"
 ANTHROPIC_BASE_URL_ENV_VAR: Final[str] = "ANTHROPIC_BASE_URL"
@@ -117,7 +118,6 @@ _DISPLAY_SUFFIX_LENGTH: Final = 4
 # characters in `.claude.json`'s `customApiKeyResponses.approved` (the same
 # suffix length mngr's `approve_api_key_for_claude` records).
 _API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
-_CLAUDE_JSON_FILENAME: Final = ".claude.json"
 # Fires on the first sight of the OAuth URL in the PTY stream. This is only a
 # *trigger*: the CLI's Ink renderer hard-wraps the visible URL at the terminal
 # width (pexpect's default PTY is 80 columns) and pexpect can match mid
@@ -468,30 +468,25 @@ def read_workspace_host_id() -> str | None:
 def _resolve_claude_config_dir() -> Path:
     """Resolve the shared Claude config dir the way claude itself does.
 
-    ``$CLAUDE_CONFIG_DIR`` when set, else ``~/.claude``. In a minds workspace
-    the env var is deliberately unset everywhere (no agent or host env
-    exports it), so this resolves to the same ``~/.claude`` a bare ``claude``
-    in a workspace terminal uses.
+    ``$CLAUDE_CONFIG_DIR`` when set, else ``~/.claude`` (delegated to
+    mngr_claude's ``get_claude_config_dir``). In a minds workspace the env
+    var is deliberately unset everywhere (no agent or host env exports it),
+    so this resolves to the same ``~/.claude`` a bare ``claude`` in a
+    workspace terminal uses.
     """
-    config_dir = os.environ.get(_CLAUDE_CONFIG_DIR_ENV_VAR, "")
-    if config_dir:
-        return Path(config_dir)
-    return Path.home() / ".claude"
+    return get_claude_config_dir()
 
 
 def _resolve_claude_json_path() -> Path:
     """Locate the global claude config file (``.claude.json``) claude reads.
 
-    Mirrors claude's own resolution (and mngr_claude's
-    ``find_user_config_in_unisolated_mode``): ``$CLAUDE_CONFIG_DIR/.claude.json``
-    when the env var is set, but ``~/.claude.json`` -- BESIDE ``~/.claude/``,
-    not inside it -- when unset. Writing the approval into the wrong one of
-    the two would leave claude challenging the key.
+    Delegates to mngr_claude's ``find_user_config_in_unisolated_mode``, which
+    mirrors claude's own resolution: ``$CLAUDE_CONFIG_DIR/.claude.json`` when
+    the env var is set, but ``~/.claude.json`` -- BESIDE ``~/.claude/``, not
+    inside it -- when unset. Writing the approval into the wrong one of the
+    two would leave claude challenging the key.
     """
-    config_dir = os.environ.get(_CLAUDE_CONFIG_DIR_ENV_VAR, "")
-    if config_dir:
-        return Path(config_dir) / _CLAUDE_JSON_FILENAME
-    return Path.home() / _CLAUDE_JSON_FILENAME
+    return find_user_config_in_unisolated_mode()
 
 
 def _resolve_claude_settings_path() -> Path:
