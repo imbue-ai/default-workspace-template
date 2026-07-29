@@ -15,6 +15,7 @@ from loguru import logger as _loguru_logger
 from tk_command_parsing.parser import parse_command
 
 from imbue.system_interface.claude_auth_patterns import is_auth_error_text
+from imbue.system_interface.claude_tool_labels import claude_tool_labels
 
 logger = _loguru_logger
 
@@ -345,10 +346,15 @@ def _parse_assistant_message(
             if call_id and tool_name:
                 tool_name_by_call_id[call_id] = tool_name
 
+            # Labelled here, where the harness is known, so the frontend renders a
+            # string rather than deciding what a claude tool call should read as.
+            header_label, caption_label = claude_tool_labels(tool_name, input_preview)
             tool_call: dict[str, str] = {
                 "tool_call_id": call_id,
                 "tool_name": tool_name,
                 "input_preview": input_preview,
+                "header_label": header_label,
+                "caption_label": caption_label,
             }
             # For Agent tool calls, surface the description and subagent_type from the
             # tool input directly. These let the frontend render the rich subagent card

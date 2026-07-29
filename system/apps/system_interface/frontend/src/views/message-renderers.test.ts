@@ -311,20 +311,21 @@ describe("renderToolCallBlock header", () => {
     tool_call_id: "c1",
     tool_name: "exec",
     input_preview: 'const r = await tools.exec_command({"cmd":"ls -la ."}); text(r.output);',
+    header_label: "Tool: Bash",
   };
 
-  it("labels a codex exec header with the same text as the live caption, keeping raw JS in the body", () => {
-    const text = allText(renderToolCallBlock(execCall, null, "codex"));
-    // Header uses codexToolLabel (one source of truth with the bottom caption), not "Tool: exec".
-    expect(text).toContain("Running ls -la .");
+  it("renders the parser's header label, keeping the raw input in the body", () => {
+    const text = allText(renderToolCallBlock(execCall, null));
+    // A codex exec is headed by what it actually did, never the bare "Tool: exec".
+    expect(text).toContain("Tool: Bash");
     expect(text).not.toContain("Tool: exec");
     // preserve-raw: the JS program is still shown in the block body.
     expect(text).toContain("tools.exec_command");
   });
 
-  it("keeps the generic 'Tool: <name>' header for claude tools", () => {
+  it("falls back to 'Tool: <name>' for a call parsed before labels existed", () => {
     const bash: ToolCall = { tool_call_id: "c2", tool_name: "Bash", input_preview: "ls -la" };
-    expect(allText(renderToolCallBlock(bash, null, "claude"))).toContain("Tool: Bash");
+    expect(allText(renderToolCallBlock(bash, null))).toContain("Tool: Bash");
   });
 });
 

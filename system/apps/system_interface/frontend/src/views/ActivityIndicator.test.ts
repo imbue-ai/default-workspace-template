@@ -6,7 +6,7 @@ function userMsg(ts: string): TranscriptEvent {
   return { timestamp: ts, type: "user_message", event_id: `u-${ts}`, source: "test", role: "user", content: "hi" };
 }
 
-function toolUse(ts: string, toolName: string, callId: string, input: string): TranscriptEvent {
+function toolUse(ts: string, toolName: string, callId: string, input: string, caption?: string): TranscriptEvent {
   return {
     timestamp: ts,
     type: "assistant_message",
@@ -14,7 +14,7 @@ function toolUse(ts: string, toolName: string, callId: string, input: string): T
     source: "test",
     model: "test-model",
     text: "",
-    tool_calls: [{ tool_call_id: callId, tool_name: toolName, input_preview: input }],
+    tool_calls: [{ tool_call_id: callId, tool_name: toolName, input_preview: input, caption_label: caption }],
     stop_reason: null,
     usage: null,
     is_auth_error: false,
@@ -36,56 +36,66 @@ function toolResult(ts: string, callId: string): TranscriptEvent {
 
 describe("labelForActivityState — fixed-label states", () => {
   it("hides the indicator for null state (server has no activity tracking for this agent)", () => {
-    expect(labelForActivityState(null, [], "claude")).toBe(null);
+    expect(labelForActivityState(null, [])).toBe(null);
   });
 
   it("hides the indicator for undefined state (pre-WS-connect)", () => {
-    expect(labelForActivityState(undefined, [], "claude")).toBe(null);
+    expect(labelForActivityState(undefined, [])).toBe(null);
   });
 
   it("hides the indicator for IDLE", () => {
-    expect(labelForActivityState("IDLE", [userMsg("2026-04-28T01:00:00Z")], "codex")).toBe(null);
+    expect(labelForActivityState("IDLE", [userMsg("2026-04-28T01:00:00Z")])).toBe(null);
   });
 
   it("hides the indicator for an unknown / future state value", () => {
-    expect(labelForActivityState("SOMETHING_NEW", [], "claude")).toBe(null);
+    expect(labelForActivityState("SOMETHING_NEW", [])).toBe(null);
   });
 
-  it("returns 'Thinking…' for THINKING (harness-independent)", () => {
-    expect(labelForActivityState("THINKING", [userMsg("2026-04-28T01:00:00Z")], "claude")).toBe("Thinking…");
-    expect(labelForActivityState("THINKING", [userMsg("2026-04-28T01:00:00Z")], "codex")).toBe("Thinking…");
+  it("returns 'Thinking…' for THINKING", () => {
+    expect(labelForActivityState("THINKING", [userMsg("2026-04-28T01:00:00Z")])).toBe("Thinking…");
   });
 });
 
-describe("labelForActivityState — TOOL_RUNNING harness routing", () => {
-  it("routes to the claude caption for a claude agent", () => {
+describe("labelForActivityState — TOOL_RUNNING caption", () => {
+  // The caption is whatever the harness's parser put on the call, so this view
+  // renders the same way for every harness -- these two cases differ only in the
+  // label the backend supplied.
+  it("renders the caption the parser attached to a claude tool call", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"src/midnight.ts"}'),
+      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"src/midnight.ts"}', "Reading midnight.ts"),
     ];
-    expect(labelForActivityState("TOOL_RUNNING", events, "claude")).toBe("Reading midnight.ts");
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Reading midnight.ts");
   });
 
-  it("routes to the codex caption for a codex agent (code-mode exec)", () => {
+  it("renders the caption the parser attached to a codex code-mode exec", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "exec", "tc1", 'await tools.exec_command({"cmd":"ls -la"})'),
+      toolUse("2026-04-28T01:00:01Z", "exec", "tc1", 'await tools.exec_command({"cmd":"ls -la"})', "Running ls -la"),
     ];
-    expect(labelForActivityState("TOOL_RUNNING", events, "codex")).toBe("Running ls -la");
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running ls -la");
   });
 
   it("picks the most recent unmatched tool call, skipping resolved ones", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"old.ts"}'),
+      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"old.ts"}', "Reading old.ts"),
       toolResult("2026-04-28T01:00:02Z", "tc1"),
-      toolUse("2026-04-28T01:00:03Z", "Read", "tc2", '{"file_path":"new.ts"}'),
+      toolUse("2026-04-28T01:00:03Z", "Read", "tc2", '{"file_path":"new.ts"}', "Reading new.ts"),
     ];
-    expect(labelForActivityState("TOOL_RUNNING", events, "claude")).toBe("Reading new.ts");
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Reading new.ts");
+  });
+
+  it("falls back to 'Running tool…' for a call parsed before labels existed", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z"),
+      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"old.ts"}'),
+    ];
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running tool…");
   });
 
   it("falls back to 'Running tool…' when no pending tool call is visible yet (timing race)", () => {
-    expect(labelForActivityState("TOOL_RUNNING", [userMsg("2026-04-28T01:00:00Z")], "codex")).toBe("Running tool…");
+    expect(labelForActivityState("TOOL_RUNNING", [userMsg("2026-04-28T01:00:00Z")])).toBe("Running tool…");
   });
 });
 

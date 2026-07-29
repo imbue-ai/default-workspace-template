@@ -19,6 +19,14 @@ export interface ToolCall {
   tool_call_id: string;
   tool_name: string;
   input_preview: string;
+  // Human labels, computed by the harness's own parser: the tool's identity for
+  // the transcript block header, and verb + target for the live activity strip.
+  // They differ for claude ("Tool: Read" / "Reading foo.py") and are usually equal
+  // for codex, whose header would otherwise read a useless "Tool: exec". Rendering
+  // these is why no view needs to know which harness produced the event. Optional
+  // only for events parsed before the labels existed.
+  header_label?: string;
+  caption_label?: string;
   // For Agent tool calls: the description and subagent_type from the tool input, present
   // as soon as the call appears so the rich card can render before the subagent session is
   // linked. subagent_metadata (with the session_id for the click-through) is filled in once
