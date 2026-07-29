@@ -103,6 +103,15 @@ _NDJSON_POLL_SECONDS = 0.5
 _CAST_OUTBOUND_POLL_SECONDS = 1.0
 _CAST_INBOUND_POLL_SECONDS = 0.05
 
+# Largest single WebSocket message accepted, in bytes. Unset means UNLIMITED --
+# any peer can send an arbitrarily large frame and every hop buffers it whole,
+# which is a denial-of-service hole independent of any feature. 16 MiB is
+# generous for the largest thing that legitimately crosses this link (a
+# clipboard image; a 4K screenshot PNG is around 5 MiB) while bounding what a
+# single frame can cost. Oversized messages close the connection rather than
+# being truncated -- a silently truncated clipboard is worse than a failed one.
+_MAX_WS_MESSAGE_BYTES = 16 * 1024 * 1024
+
 # The ONE sync<->async boundary: every route reaches the async world through this
 # bridge's single background loop (see browser.loop_bridge). The manager and all
 # LiveBrowsers are constructed/driven on that loop, so their asyncio locks/events
@@ -114,7 +123,11 @@ application = Flask(__name__, static_folder=None)
 # ping_interval keeps idle cast sockets alive through the proxy chain;
 # receive_bytes raises simple_websocket's 4 KiB read buffer to match the rest
 # of the chain (fewer recv syscalls under gVisor for large inbound messages).
-application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25, "receive_bytes": 65536}
+application.config["SOCK_SERVER_OPTIONS"] = {
+    "ping_interval": 25,
+    "receive_bytes": 65536,
+    "max_message_size": _MAX_WS_MESSAGE_BYTES,
+}
 sock = Sock(application)
 
 # Init gate: cleared at import, set when startup restore finishes (always, even on

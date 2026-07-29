@@ -330,6 +330,15 @@ def _forward_backend_to_client(
 # Read buffer for a backend WebSocket leg. See _connect_backend_websocket.
 _BACKEND_WS_RECEIVE_BYTES = 65536
 
+# Largest single WebSocket message accepted, in bytes. Unset means UNLIMITED --
+# any peer can send an arbitrarily large frame and every hop buffers it whole,
+# which is a denial-of-service hole independent of any feature. 16 MiB is
+# generous for the largest thing that legitimately crosses this link (a
+# clipboard image; a 4K screenshot PNG is around 5 MiB) while bounding what a
+# single frame can cost. Oversized messages close the connection rather than
+# being truncated -- a silently truncated clipboard is worse than a failed one.
+_MAX_WS_MESSAGE_BYTES = 16 * 1024 * 1024
+
 
 def _connect_backend_websocket(ws_url: str, subprotocols: list[str] | None) -> simple_websocket.Client:
     """Open a WebSocket to the backend, trying every resolved address in turn.
@@ -372,6 +381,7 @@ def _connect_backend_websocket(ws_url: str, subprotocols: list[str] | None) -> s
                 # reassembly, and this proxy runs inside the workspace where gVisor
                 # makes every syscall several times more expensive.
                 receive_bytes=_BACKEND_WS_RECEIVE_BYTES,
+                max_message_size=_MAX_WS_MESSAGE_BYTES,
             )
         except (ConnectionRefusedError, ConnectionError, OSError, TimeoutError, ConnectionClosed) as error:
             last_error = error

@@ -100,6 +100,15 @@ _DEFAULT_TAIL_COUNT = 50
 # each connection owns its own thread, so a wedged send only stalls that thread.
 _WS_PING_INTERVAL_SECONDS = 25
 
+# Largest single WebSocket message accepted, in bytes. Unset means UNLIMITED --
+# any peer can send an arbitrarily large frame and every hop buffers it whole,
+# which is a denial-of-service hole independent of any feature. 16 MiB is
+# generous for the largest thing that legitimately crosses this link (a
+# clipboard image; a 4K screenshot PNG is around 5 MiB) while bounding what a
+# single frame can cost. Oversized messages close the connection rather than
+# being truncated -- a silently truncated clipboard is worse than a failed one.
+_MAX_WS_MESSAGE_BYTES = 16 * 1024 * 1024
+
 
 class _ReflectClientSubprotocols:
     """A WebSocket subprotocols allow-list that accepts whatever the client offers.
@@ -1583,6 +1592,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application = Flask(__name__, static_folder=None)
     application.config["SOCK_SERVER_OPTIONS"] = {
         "ping_interval": _WS_PING_INTERVAL_SECONDS,
+        "max_message_size": _MAX_WS_MESSAGE_BYTES,
         # Echo back whatever subprotocol the client offered so the WS proxy is
         # transparent (e.g. ttyd's ``tty``); see ``_ReflectClientSubprotocols``.
         "subprotocols": _ReflectClientSubprotocols(),

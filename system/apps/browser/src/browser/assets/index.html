@@ -399,6 +399,46 @@
     }, true);
   }
 
+  // --- clipboard: push the local clipboard ahead of the paste ----------------
+  //
+  // The KasmVNC client only reads the local clipboard when the canvas takes
+  // focus (checkLocalClipboard is armed by a focus change and consumed by
+  // _focusCanvas). Nothing polls. So the sequence "copy in another app, click
+  // the pane, press paste" races: the click starts an async clipboard read while
+  // the keystroke is already travelling to the remote browser, which pastes
+  // whatever was synced LAST time -- the previous clipboard entry. Waiting a
+  // moment and pasting again works, because by then the read has landed. That is
+  // exactly the reported symptom.
+  //
+  // Fix the race by not racing: push the clipboard at every moment that reliably
+  // PRECEDES a paste, so the remote side is already correct by the time any
+  // keystroke arrives. Deduplicated on content, so repeats are free.
+  //
+  // This also covers the one path that generates no local event at all -- a
+  // paste from the remote browser's own right-click menu, which is rendered in
+  // pixels and handled entirely server-side.
+  let lastPushedText = null;
+  async function pushClipboardToRemote() {
+    const rfb = screenFrame.contentWindow?.UI?.rfb;
+    if (!rfb || lifecycle !== "running" || controlOwner === "agent") return;
+    const text = await navigator.clipboard.readText();
+    if (text === lastPushedText) return;   // already there; nothing to do
+    lastPushedText = text;
+    rfb.clipboardPasteFrom(text);
+  }
+  function armClipboardSync() {
+    // Sync on every event that precedes a paste. focus/visibilitychange cover
+    // "copied elsewhere, came back"; pointerdown covers clicking into the pane
+    // before pasting. The client's own canvas-focus read still runs underneath.
+    for (const [target, event] of [
+      [window, "focus"],
+      [document, "visibilitychange"],
+      [screenFrame.contentDocument, "pointerdown"],
+    ]) {
+      target.addEventListener(event, () => { void pushClipboardToRemote(); }, true);
+    }
+  }
+
   // --- focus indicator + tips ----------------------------------------------
   //
   // While keyboard focus is inside the client iframe, every keystroke goes to
@@ -425,6 +465,7 @@
         screenFrame.contentWindow.addEventListener("focus", () => setFocused(true));
         screenFrame.contentWindow.addEventListener("blur", () => setFocused(false));
         armClickProbe(screenFrame.contentDocument);
+        armClipboardSync();
       } catch (_) { /* cross-origin only if misconfigured; the indicator just stays off */ }
     });
     // Each browser's KasmVNC is its OWN workspace service, "browser-<name>", so its
@@ -433,6 +474,13 @@
     // URL from window.location, so it has to own its prefix. A relative "../" keeps
     // this correct however the workspace is reached (locally, or through a tunnel).
     screenFrame.src = "../browser-" + encodeURIComponent(id) + "/vnc.html?autoconnect=1&reconnect=1&show_dot=1"
+      // view_clip=0 is REQUIRED alongside resize=scale, not redundant with it.
+      // applyResizeMode sets `clipViewport = resize !== 'off'`, so `scale` turns
+      // clipping ON as well as scaling -- and clipping wins on the constrained
+      // axis, showing a 1:1 crop of the framebuffer rather than the whole thing
+      // scaled down. That is the "cropped and off-centre" pane. With clipping off,
+      // the client scales the entire framebuffer to fit, aspect-preserving.
+      //
       // resize=scale, NOT resize=remote. `remote` resizes the server framebuffer to
       // the pane, so a maximised pane doubles the pixels we encode and ships a full
       // repaint on every size change -- cost is linear in pixels across five stages
@@ -441,7 +489,7 @@
       // aspect-preserving (the client picks the smaller of the two axis ratios and
       // applies it to both), so the pane always fills without ever changing what the
       // server encodes. It also keeps agent screenshots deterministic.
-      + "&resize=scale"
+      + "&resize=scale&view_clip=0"
       // Belt-and-braces mirror of the server-side encoding flags (the server runs
       // -IgnoreClientSettingsKasm, so these mostly document intent client-side and
       // cover any cached localStorage settings). video_quality=10 ("custom") is
