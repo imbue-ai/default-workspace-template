@@ -7,6 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
+  // The create POST goes through ``apiUrl``, which reads the base path from a
+  // <meta> tag. Node has no ``document``; a querySelector that finds nothing
+  // yields the "" base path, so the asserted URLs are the bare /api paths.
+  globalThis.document ??= { querySelector: () => null } as unknown as Document;
 });
 
 import { CreateBrowserModal } from "./CreateBrowserModal";
@@ -69,7 +73,6 @@ function makeModal(opts?: {
   // a test can flip this to model an open that deduped onto an existing pane.
   const acceptCreatesPane = opts?.acceptCreatesPane ?? true;
   const attrs = {
-    browserServiceUrl: "/service/browser/",
     existingBrowserNames: opts?.existingBrowserNames ?? [],
     initialName: opts?.initialName,
     initialError: opts?.initialError ?? null,
@@ -153,7 +156,7 @@ describe("CreateBrowserModal", () => {
     await vi.waitFor(() => expect(modal.calls.created).toEqual(["alex-smith"]));
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/service/browser/browsers",
+      "/api/browsers",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "alex-smith" }) }),
     );
     expect(modal.calls.failed).toEqual([]);
