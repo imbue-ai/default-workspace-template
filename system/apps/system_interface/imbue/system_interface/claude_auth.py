@@ -34,10 +34,10 @@ mixed-mode pastes (an OAuth token alongside an API key) are rejected so the
 written state is always unambiguous. The writer fully controls the managed
 keys -- switching modes deletes the other mode's keys.
 
-Every successful write restarts the mind's claude-binary agents (types
-``claude`` AND ``worker``; the ``main`` services agent is excluded -- its
-window 0 never runs a live claude, and restarting it would tear down
-supervisord and every background service). Settings-env values are read at
+Every successful write restarts the mind's claude-binary agents (every
+claude-parented type: ``claude``, ``chat``, and ``worker``; the ``main``
+services agent is excluded -- its window 0 never runs a live claude, and
+restarting it would tear down supervisord and every background service). Settings-env values are read at
 claude process start, so a restart is what makes new credentials take
 effect. Agent states are snapshotted (via ``mngr list``) before stopping:
 agents that were RUNNING mid-task get a "please continue" message after the
@@ -186,10 +186,13 @@ _MNGR_RESTART_TIMEOUT_SECONDS: Final = 600.0
 _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
 
 # Agent types whose window-0 process is a real claude binary and therefore
-# holds credentials frozen from process start. The `main` services agent is
-# deliberately absent: its window 0 sleeps forever and restarting it would
-# tear down supervisord and every background service.
-CLAUDE_BINARY_AGENT_TYPES: Final[frozenset[str]] = frozenset(("claude", "worker"))
+# holds credentials frozen from process start: every claude-parented type in
+# .mngr/settings.toml (a test asserts this set matches the settings file, so
+# a new claude-derived type cannot silently dodge auth-change restarts the
+# way `chat` briefly did when it split off from `claude`). The `main`
+# services agent is deliberately absent: its window 0 sleeps forever and
+# restarting it would tear down supervisord and every background service.
+CLAUDE_BINARY_AGENT_TYPES: Final[frozenset[str]] = frozenset(("claude", "chat", "worker"))
 _AGENT_STATE_RUNNING: Final[str] = "RUNNING"
 _AGENT_STATE_WAITING: Final[str] = "WAITING"
 
@@ -957,7 +960,7 @@ class ClaudeAuthService(MutableModel):
         """Return name + state of every claude-binary agent in the local mind.
 
         Uses `mngr list --format json` and filters to the claude-binary
-        types (``claude`` and ``worker``). This excludes the `main`-type
+        types (``claude``, ``chat``, and ``worker``). This excludes the `main`-type
         system-services agent, which has no interactive claude process to
         restart -- and whose restart would tear down every background
         service in the mind.
