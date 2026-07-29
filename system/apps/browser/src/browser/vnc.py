@@ -68,12 +68,49 @@ _PORT_BASE = int(os.environ.get("BROWSER_VNC_PORT_BASE", "6900"))
 # Ceiling on concurrent displays; well above the fleet's session cap.
 _MAX_DISPLAYS = 16
 
-# Framebuffer geometry. Matches the window size browser-use pins on the Chromium
-# session, so the page fills the framebuffer exactly and frames are never scaled.
-# The framebuffer is allocated up front and cannot grow at runtime, so this is the
-# hard ceiling on streamed resolution.
+# Framebuffer geometry at launch. This is the size the display comes up at and
+# the size an agent screenshots when no one is watching; it is NOT a ceiling.
+# The viewer runs the client in resize=remote, so as soon as a human opens the
+# pane the client asks the server to resize the framebuffer to match it, and
+# Xvnc obliges -- it advertises RRScreenSetSizeRange(32, 32, 32768, 32768) and
+# creates modes on demand. (An earlier comment here claimed the framebuffer was
+# allocated up front and could not grow. That is wrong.)
 _SCREEN_W = int(os.environ.get("BROWSER_VNC_WIDTH", "1280"))
 _SCREEN_H = int(os.environ.get("BROWSER_VNC_HEIGHT", "800"))
+
+# vncserver's own user config, which we write before launching.
+#
+# This is not optional bookkeeping: it is the ONLY way to set the launch
+# geometry. vncserver builds its -geometry argument from a deriveValueSub that
+# returns desktop.resolution.{width,height} whenever those keys are defined and
+# falls back to the -geometry FLAG only when they are not -- and the shipped
+# /usr/share/kasmvnc/kasmvnc_defaults.yaml always defines them, as 1024x768. So
+# passing -geometry on the command line does nothing at all; verified by
+# reading the spawned Xvnc's argv (it said 1024x768 while we asked for
+# 1280x800) and by the size reported in the RFB handshake.
+#
+# Config files load in order (defaults, system, user) with later files winning,
+# so writing the user config is what actually takes effect. vncserver creates
+# this file itself when absent and returns early when present, so writing it
+# first is both authoritative and idempotent -- and the logging block below is
+# what it would have written, preserved so log behaviour does not change.
+_KASMVNC_USER_CONFIG = Path.home() / ".vnc" / "kasmvnc.yaml"
+
+
+def _write_kasmvnc_config() -> None:
+    """Pin the launch geometry, which the -geometry flag cannot do. Idempotent."""
+    _KASMVNC_USER_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    _KASMVNC_USER_CONFIG.write_text(
+        "---\n"
+        "desktop:\n"
+        "  resolution:\n"
+        f"    width: {_SCREEN_W}\n"
+        f"    height: {_SCREEN_H}\n"
+        "logging:\n"
+        "  log_writer_name: all\n"
+        "  log_dest: logfile\n"
+        "  level: 100\n"
+    )
 
 _READY_TIMEOUT_S = float(os.environ.get("BROWSER_VNC_READY_TIMEOUT", "30"))
 _READY_POLL_S = 0.1
@@ -360,6 +397,9 @@ class VncDisplay:
                 "asynchronously on first boot); retry once the env-converge one-shot has run"
             )
         ensure_password_file()
+        # Must precede the launch: this is what sets the geometry, since the
+        # -geometry flag is overridden by the shipped defaults file.
+        _write_kasmvnc_config()
         logger.info("starting KasmVNC {} for browser {} (port {})", self.display, self.browser_id, self.port)
         # NOT start_new_session: the server stays in browser-service's process
         # group so supervisord's stopasgroup/killasgroup reaps it when the service
