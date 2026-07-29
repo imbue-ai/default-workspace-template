@@ -13,7 +13,7 @@ import json
 import os
 import urllib.request
 
-import eval_wait_watcher as watcher
+from eval_worker import wait_watcher as watcher
 
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 _MODEL = "claude-opus-4-8"
