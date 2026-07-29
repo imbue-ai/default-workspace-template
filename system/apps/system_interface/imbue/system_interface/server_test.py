@@ -12,6 +12,8 @@ from urllib.parse import quote
 
 import pytest
 from flask import Flask
+from flask import Response
+from flask import request as flask_request
 from flask.testing import FlaskClient
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
@@ -27,6 +29,7 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.models import AgentStateItem
+from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
@@ -1905,3 +1908,82 @@ def test_missing_non_image_path_is_not_a_download(client: FlaskClient, tmp_path:
     assert response.status_code == 200
     assert "text/html" in response.content_type
     assert "attachment" not in response.headers.get("Content-Disposition", "")
+
+
+def _build_stub_browser_backend() -> Flask:
+    """A tiny stand-in for the browser daemon's fleet API.
+
+    ``GET /browsers`` returns a fixed fleet listing; ``POST /browsers``
+    echoes the submitted name on success and rejects the reserved name
+    ``taken`` with the daemon's 409 error shape, so tests can observe both
+    the body forwarding and the status relay through the passthrough.
+    """
+    stub = Flask(__name__, static_folder=None)
+
+    def list_browsers() -> Response:
+        body = json.dumps({"browsers": [{"name": "main", "controller": None}]})
+        return Response(body, mimetype="application/json")
+
+    def create_browser() -> Response:
+        payload = json.loads(flask_request.get_data() or b"{}")
+        name = payload.get("name", "")
+        if name == "taken":
+            return Response(json.dumps({"error": "name already in use"}), status=409, mimetype="application/json")
+        return Response(json.dumps({"name": name}), status=200, mimetype="application/json")
+
+    stub.add_url_rule("/browsers", view_func=list_browsers, methods=["GET"])
+    stub.add_url_rule("/browsers", view_func=create_browser, methods=["POST"], endpoint="create_browser")
+    return stub
+
+
+def _client_with_browser_service(url: str | None) -> FlaskClient:
+    """Build a workspace app test client whose ``browser`` service points at ``url``.
+
+    ``None`` leaves the apps registry empty (browser service not registered).
+    """
+    agent_manager = AgentManager.build(WebSocketBroadcaster())
+    agent_manager._apps = [AppEntry(name="browser", url=url)] if url is not None else []
+    return create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+
+def test_get_browsers_passthrough_relays_backend_fleet() -> None:
+    """``GET /api/browsers`` forwards to the browser daemon and relays its JSON."""
+    with serve_app(_build_stub_browser_backend()) as backend:
+        test_client = _client_with_browser_service(backend.http_url)
+        response = test_client.get("/api/browsers")
+        assert response.status_code == 200
+        assert response.get_json() == {"browsers": [{"name": "main", "controller": None}]}
+
+
+def test_post_browsers_passthrough_forwards_body_and_relays_success() -> None:
+    """``POST /api/browsers`` forwards the JSON body and relays the daemon's response."""
+    with serve_app(_build_stub_browser_backend()) as backend:
+        test_client = _client_with_browser_service(backend.http_url)
+        response = test_client.post("/api/browsers", json={"name": "research"})
+        assert response.status_code == 200
+        assert response.get_json() == {"name": "research"}
+
+
+def test_post_browsers_passthrough_relays_backend_rejection() -> None:
+    """A daemon rejection (409 + error body) passes through status and body verbatim."""
+    with serve_app(_build_stub_browser_backend()) as backend:
+        test_client = _client_with_browser_service(backend.http_url)
+        response = test_client.post("/api/browsers", json={"name": "taken"})
+        assert response.status_code == 409
+        assert response.get_json() == {"error": "name already in use"}
+
+
+def test_browsers_passthrough_returns_503_when_service_not_registered() -> None:
+    """Without a registered ``browser`` service, both methods return a 503 JSON error."""
+    test_client = _client_with_browser_service(None)
+    for response in (test_client.get("/api/browsers"), test_client.post("/api/browsers", json={"name": "x"})):
+        assert response.status_code == 503
+        assert "not registered" in response.get_json()["detail"]
+
+
+def test_browsers_passthrough_returns_503_when_backend_is_unreachable() -> None:
+    """A registered but dead backend surfaces as a 503 JSON error, not a raised exception."""
+    test_client = _client_with_browser_service("http://127.0.0.1:1")
+    response = test_client.get("/api/browsers")
+    assert response.status_code == 503
+    assert "unreachable" in response.get_json()["detail"]
