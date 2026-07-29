@@ -327,18 +327,28 @@ class VncDisplay:
             # the bytes (150-300KB a full repaint) and up to ~42ms of frame
             # scheduling, per click.
             "-IgnoreClientSettingsKasm",
-            # One notch below the server's own default (8); JPEG 86 vs 100 is
-            # a ~2.5x byte cut that is near-imperceptible for text. The min
-            # and video-mode values reproduce what the client preset was
-            # already providing, so busy/scrolling behaviour is unchanged --
-            # only the first-change (click) quality and the frame clock move.
-            "-DynamicQualityMin", "3",
-            "-DynamicQualityMax", "7",
-            "-TreatLossless", "7",
+            # Measured on a real WAN session: a full repaint of an ordinary
+            # article page moved ~1.3 MB, and a nearly blank page ~175 KB. At a
+            # 1 MiB receive window and 36ms RTT that is ten-plus round trips of
+            # serialization before the last byte can land -- several hundred ms
+            # of latency that is purely payload size. Quality 6 is JPEG ~79
+            # (~30:1) against quality 9's JPEG 100 (~10:1): roughly a third of
+            # the bytes, and still comfortably readable for text. We stop at 6
+            # deliberately -- quality 5 turns on 4:2:2 chroma subsampling, which
+            # fringes coloured text.
+            "-DynamicQualityMin", "2",
+            "-DynamicQualityMax", "6",
+            "-TreatLossless", "6",
             "-FrameRate", "60",
+            # Video mode (sustained large-area change: scrolling, playback) gets
+            # a harder cut and a lower resolution cap than interactive repaints,
+            # because motion hides compression artifacts that a static page
+            # would show.
             "-MaxVideoResolution", "960x540",
-            "-JpegVideoQuality", "5",
-            "-WebpVideoQuality", "5",
+            "-JpegVideoQuality", "3",
+            "-WebpVideoQuality", "3",
+            "-VideoArea", "50",
+            "-VideoTime", "3",
         ]
 
     def start(self) -> None:

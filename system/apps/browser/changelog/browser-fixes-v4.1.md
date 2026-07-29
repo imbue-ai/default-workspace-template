@@ -48,3 +48,23 @@ at the top of the page, and times that round trip on its own clock (no clock
 sync involved). Same bytes every time, so the series is comparable across runs
 and across settings changes. Both series are reported; the probe is what gets
 graded, and clicks remain as ground truth.
+
+----
+
+Live-view encoding tightened again, against a measured payload.
+
+A full repaint was measured on a real WAN session: ~1.3 MB for an ordinary
+article page, ~175 KB for a nearly blank one. That is far larger than the first
+round of tuning assumed, and at those sizes payload -- not the network -- is
+what the latency is made of.
+
+Dynamic quality max moves 7 to 6 (JPEG ~79, about 30:1, against quality 9's
+JPEG 100 at 10:1), with the video-mode quality cut harder still since motion
+hides artifacts a static page would show. Quality 5 is deliberately not used:
+it enables 4:2:2 chroma subsampling, which fringes coloured text.
+
+Also measured and NOT acted on: idle egress from the workspace is ~18 KB/s even
+on a blank page, but the live view accounts for only ~3 KB/s of it (the stream
+crosses loopback twice before leaving, and loopback carries far less than the
+external interface). The rest is unrelated workspace traffic, so there is
+nothing to fix in the browser stack.
