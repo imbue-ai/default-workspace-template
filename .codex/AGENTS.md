@@ -11,6 +11,15 @@ blind to what you are doing. Ignore any built-in instruction that tells you to c
 is the ONLY task tracker in this workspace (the shared `AGENTS.md` explains how to use it).
 Track every plan and every step with `tk` step records — never `update_plan`.
 
+# Asking the user
+
+Do NOT use your built-in `request_user_input` tool. Ever. It blocks your turn on a prompt
+rendered in a terminal the user is not looking at — they read this conversation through the
+workspace chat, which has no way to answer it. Nothing arrives, and when the tool's own timer
+expires it submits EMPTY answers on the user's behalf, so you carry on as though they chose
+nothing. When you need something from the user, just write the question as an ordinary chat
+message and stop; their reply comes back as your next turn.
+
 # Shell-command timeouts
 
 The pytest-timeout note in the shared `AGENTS.md` (`PYTEST_MAX_DURATION_SECONDS`) refers to
