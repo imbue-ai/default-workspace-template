@@ -25,3 +25,26 @@ One trade-off worth knowing: raising the frame cap is a latency win but raises
 the byte rate for continuously animated content, where 24fps was implicitly
 rate-limiting. The quality cut more than offsets it for interactive browsing;
 on a bandwidth-starved link this is the first flag to reconsider.
+
+----
+
+The latency readout now uses Citrix's ICA decomposition, and has a
+deterministic trigger.
+
+`ICA RTT = ICA Latency + Host Delay + Endpoint Delay` is the industry-standard
+shape for this measurement. We report the user-visible total (ICA RTT) and the
+network-only component (ICA Latency) directly, and the remainder as one
+combined "processing" figure -- splitting server from client would need
+cooperation from the VNC server that ours does not provide, and an honest
+single number beats a fabricated split. ICA RTT is graded against Citrix's
+published bands: great under 180ms, good under 240ms.
+
+The bigger change is *comparability*. Sampling real clicks measures what the
+user felt, but the spread is dominated by what they happened to click -- a link
+repaints a viewport, a checkbox a few hundred pixels -- so runs cannot be
+compared, which is the standard critique of click-to-photon as a benchmark. The
+viewer now also asks the daemon, every few seconds, to repaint a fixed-size band
+at the top of the page, and times that round trip on its own clock (no clock
+sync involved). Same bytes every time, so the series is comparable across runs
+and across settings changes. Both series are reported; the probe is what gets
+graded, and clicks remain as ground truth.

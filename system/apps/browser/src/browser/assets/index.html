@@ -399,6 +399,58 @@
     }, true);
   }
 
+  // --- deterministic repaint probe -----------------------------------------
+  //
+  // The click sampler above measures what the user actually felt, but its
+  // spread is dominated by WHAT they clicked (a link repaints a viewport; a
+  // checkbox repaints a few hundred pixels), so samples are not comparable
+  // across runs. This asks the daemon to repaint a fixed-size band at the top
+  // of the page and times the round trip on this clock alone -- same bytes
+  // every time, so the series is comparable. Both are reported; this one is
+  // what the CLI grades.
+  let probeTimer = null;
+  let probeBusy = false;
+  function startProbe() {
+    if (probeTimer) return;
+    probeTimer = setInterval(() => {
+      if (probeBusy || lifecycle !== "running" || controlOwner === "agent") return;
+      const doc = screenFrame.contentDocument;
+      const canvas = doc && [...doc.querySelectorAll("canvas")]
+        .map((c) => ({ c, r: c.getBoundingClientRect() }))
+        .filter((x) => x.r.width > 500 && x.r.height > 300)
+        .map((x) => x.c)[0];
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      // A wide, short strip below the browser chrome, where the probe band
+      // lands. Full width, so no horizontal alignment is needed.
+      const band = { x: 0, y: Math.round(canvas.height * 0.12), w: canvas.width, h: 8 };
+      let before;
+      try { before = ctx.getImageData(band.x, band.y, band.w, band.h).data; } catch (_) { return; }
+      const t0 = performance.now();
+      probeBusy = true;
+      sendCast({ type: "probe_request" });
+      (function watch() {
+        const now = performance.now();
+        if (now - t0 > 3000) { probeBusy = false; return; }  // no repaint; skip the sample
+        let changed = false;
+        try {
+          const after = ctx.getImageData(band.x, band.y, band.w, band.h).data;
+          for (let i = 0; i < after.length; i += 64) {
+            if (Math.abs(after[i] - before[i]) > 24) { changed = true; break; }
+          }
+        } catch (_) { probeBusy = false; return; }
+        if (changed) {
+          probeBusy = false;
+          sendCast({ type: "latency_sample", kind: "probe", ms: now - t0 });
+          return;
+        }
+        requestAnimationFrame(watch);
+      })();
+    }, 4000);
+  }
+  function stopProbe() { if (probeTimer) { clearInterval(probeTimer); probeTimer = null; } probeBusy = false; }
+
   // --- focus indicator + tips ----------------------------------------------
   //
   // While keyboard focus is inside the client iframe, every keystroke goes to
@@ -457,10 +509,11 @@
   function connect(id) {
     browserId = id;
     castWs = new WebSocket(wsUrl("browsers/" + id + "/cast"));
-    castWs.onopen = () => startEcho();
+    castWs.onopen = () => { startEcho(); startProbe(); };
     castWs.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.type === "ping_echo" && m.t0 !== undefined) { handleEcho(m); return; }
+      if (m.type === "probe_fired") { if (!m.ok) probeBusy = false; return; }
       if (m.type === "crashed") showCrashed();
       else if (crashed) return;  // once crashed, ignore any late frames/control/tabs
       else if (m.type === "launch_failed") {
@@ -498,6 +551,7 @@
     };
     castWs.onclose = (ev) => {
       stopEcho();
+      stopProbe();
       // 1008: the browser/session no longer exists (daemon restarted or closed, or the
       // name is invalid). Terminal -- show a clear message and stop reconnecting.
       if (ev.code === 1008) {
