@@ -37,9 +37,10 @@ keys -- switching modes deletes the other mode's keys.
 Every successful write restarts the mind's claude-binary agents (every
 claude-parented type: ``claude``, ``chat``, and ``worker``; the ``main``
 services agent is excluded -- its window 0 never runs a live claude, and
-restarting it would tear down supervisord and every background service). Settings-env values are read at
-claude process start, so a restart is what makes new credentials take
-effect. Agent states are snapshotted (via ``mngr list``) before stopping:
+restarting it would tear down supervisord and every background service).
+Settings-env values are read at claude process start, so a restart is what
+makes new credentials take effect. Agent states are snapshotted (via
+``mngr list``) before stopping:
 agents that were RUNNING mid-task get a "please continue" message after the
 restart so unattended workers resume instead of silently dying; WAITING
 agents need nothing (their next user message starts them with the fresh
