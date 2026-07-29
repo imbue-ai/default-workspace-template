@@ -23,14 +23,6 @@ fabricated split.
   processing    ICA RTT minus ICA Latency: render + encode + transport-of-bytes
                 + decode + paint.
 
-  srv>glass     a fixed-size repaint the daemon triggers, timed from the moment
-                the server reports the change committed until the pixels land.
-                Excludes input injection (the daemon triggers it over CDP, a
-                path no user input takes), so it isolates encode + bytes +
-                decode + paint -- the half encoding and transport work moves --
-                and is comparable across runs because the repaint never varies.
-                Uncontrolled click sampling is not comparable: a link repaints a
-                viewport, a checkbox a few hundred pixels.
 
 Standalone and stdlib-only on purpose: this is a HUMAN diagnostic, so it must
 run from any shell -- no venv, no MNGR_AGENT_ID (that requirement exists for the
@@ -132,12 +124,8 @@ def _render(name: str, payload: dict[str, Any]) -> None:
         print(f"  ICA RTT       {total:7.1f}ms   [{_grade(total)}]   great <180, good <240")
         print(f"    ICA Latency {network:7.1f}ms   network -- the floor ({share} of total)")
         print(f"    processing  {processing:7.1f}ms   render + encode + bytes + decode + paint")
-        glass = ica.get("server_to_glass_ms")
-        if glass is not None:
-            print(f"      of which  {glass:7.1f}ms   server->glass (encode + bytes + decode + paint)")
 
     print("  --")
-    _series("srv>glass", payload.get("server_to_glass"), "the pane probes every 4s once open")
     _series("click>photon", payload.get("click_photon"), "click inside the live view")
     _series("rtt", payload.get("rtt"), "open this browser's pane")
 
@@ -165,7 +153,7 @@ def main() -> int:
                 continue
             _render(name, payload)
         print("note: transport is TCP; packet loss is invisible to it and shows up as rtt spikes.")
-        print("      srv>glass = fixed-size repaint, comparable across runs; clicks are ground truth.")
+        print("      click>photon samples only appear when you click something that repaints.")
         watching = bool(args.watch)
         if watching:
             tick.wait(2)
