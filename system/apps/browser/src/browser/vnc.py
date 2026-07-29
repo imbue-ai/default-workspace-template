@@ -45,6 +45,7 @@ work. Adding a ~200 KB WM is the fix if that becomes a problem.
 """
 
 import contextlib
+import json
 import os
 import secrets
 import shutil

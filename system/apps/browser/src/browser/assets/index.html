@@ -325,6 +325,80 @@
   // The client is attached ONCE per browser, and deliberately never on a lifecycle
   // change: reassigning src would reconnect RFB and flash the pane on every control
   // handoff. The overlays above it handle every non-running state.
+  // --- latency sampling ----------------------------------------------------
+  //
+  // Two measurements, reported to the daemon over the cast socket and read back
+  // by `agentic-browser-fleet latency`:
+  //
+  // * Transport RTT: a periodic timestamp echo over the cast socket -- the same
+  //   network path the video rides (forward/tunnel -> proxy -> daemon). NTP-style
+  //   four-timestamp math removes the server's processing time, so this is the
+  //   wire, not daemon load. This is the floor.
+  // * Click-to-photon: on a real click in the live view, the time until a pixel
+  //   near the click actually changes on the canvas. This is what the user
+  //   feels. click-to-photon minus RTT is the pipeline's own overhead.
+  let echoTimer = null;
+  function startEcho() {
+    if (echoTimer) return;
+    echoTimer = setInterval(() => sendCast({ type: "ping_echo", t0: performance.now() }), 2000);
+  }
+  function stopEcho() { if (echoTimer) { clearInterval(echoTimer); echoTimer = null; } }
+  function handleEcho(m) {
+    const t3 = performance.now();
+    const rtt = (t3 - m.t0) - (m.t2 - m.t1);  // subtract server hold time; clocks cancel
+    if (rtt >= 0 && rtt < 60000) sendCast({ type: "latency_sample", kind: "rtt", ms: rtt });
+  }
+
+  // One sample per click, first-pixel-change detection on a small patch around
+  // the click point. Clicks that change nothing on screen (a click into dead
+  // space) time out and produce no sample -- it is a sampled metric.
+  let clickProbeBusy = false;
+  // Debug counters, readable from devtools (window.__latencyProbe): how many
+  // pointerdowns the probe saw and why samples did or did not result.
+  const probeStats = { armed: 0, downs: 0, sampled: 0, last: "" };
+  window.__latencyProbe = probeStats;
+  function armClickProbe(doc) {
+    probeStats.armed += 1;
+    doc.addEventListener("pointerdown", (e) => {
+      probeStats.downs += 1;
+      if (clickProbeBusy) { probeStats.last = "busy"; return; }
+      const canvas = [...doc.querySelectorAll("canvas")]
+        .map((c) => ({ c, r: c.getBoundingClientRect() }))
+        .filter((x) => x.r.width > 500 && x.r.height > 300)
+        .map((x) => x.c)[0];
+      if (!canvas) { probeStats.last = "no-canvas"; return; }
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { probeStats.last = "no-2d"; return; }  // decoder may own the canvas
+      const r = canvas.getBoundingClientRect();
+      const sx = canvas.width / r.width, sy = canvas.height / r.height;
+      const px = Math.max(0, Math.min(canvas.width - 32, (e.clientX - r.left) * sx - 16));
+      const py = Math.max(0, Math.min(canvas.height - 32, (e.clientY - r.top) * sy - 16));
+      let before;
+      try { before = ctx.getImageData(px, py, 32, 32).data; } catch (err) { probeStats.last = "read:" + err.name; return; }
+      const t0 = performance.now();
+      clickProbeBusy = true;
+      (function watch() {
+        const now = performance.now();
+        if (now - t0 > 1500) { clickProbeBusy = false; probeStats.last = "timeout"; return; }  // nothing changed
+        let changed = false;
+        try {
+          const after = ctx.getImageData(px, py, 32, 32).data;
+          for (let i = 0; i < after.length; i += 8) {
+            if (after[i] !== before[i]) { changed = true; break; }
+          }
+        } catch (_) { clickProbeBusy = false; return; }
+        if (changed) {
+          clickProbeBusy = false;
+          probeStats.sampled += 1;
+          probeStats.last = "sampled";
+          sendCast({ type: "latency_sample", kind: "click_photon", ms: now - t0 });
+          return;
+        }
+        requestAnimationFrame(watch);
+      })();
+    }, true);
+  }
+
   // --- focus indicator + tips ----------------------------------------------
   //
   // While keyboard focus is inside the client iframe, every keystroke goes to
@@ -350,6 +424,7 @@
       try {
         screenFrame.contentWindow.addEventListener("focus", () => setFocused(true));
         screenFrame.contentWindow.addEventListener("blur", () => setFocused(false));
+        armClickProbe(screenFrame.contentDocument);
       } catch (_) { /* cross-origin only if misconfigured; the indicator just stays off */ }
     });
     // Each browser's KasmVNC is its OWN workspace service, "browser-<name>", so its
@@ -375,8 +450,10 @@
   function connect(id) {
     browserId = id;
     castWs = new WebSocket(wsUrl("browsers/" + id + "/cast"));
+    castWs.onopen = () => startEcho();
     castWs.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+      if (m.type === "ping_echo" && m.t0 !== undefined) { handleEcho(m); return; }
       if (m.type === "crashed") showCrashed();
       else if (crashed) return;  // once crashed, ignore any late frames/control/tabs
       else if (m.type === "launch_failed") {
@@ -413,6 +490,7 @@
       // m.type === "ping" -> ignore; it only keeps the proxy stream alive.
     };
     castWs.onclose = (ev) => {
+      stopEcho();
       // 1008: the browser/session no longer exists (daemon restarted or closed, or the
       // name is invalid). Terminal -- show a clear message and stop reconnecting.
       if (ev.code === 1008) {

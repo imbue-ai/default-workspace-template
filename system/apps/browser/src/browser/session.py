@@ -460,6 +460,13 @@ class LiveBrowser(MutableModel):
     # This browser's private KasmVNC display (its X server + live-view client).
     # None before start() and after close().
     _vnc: VncDisplay | None = PrivateAttr(default=None)
+    # Latency samples reported by viewers over the cast socket (see the runner's
+    # inbound pump): transport RTT from the periodic echo, and click-to-photon
+    # from real clicks. Ring buffers so a long-lived browser can't grow them;
+    # they outlive any one viewer connection, which is what makes the CLI's
+    # readout persistent.
+    _latency_rtt: deque = PrivateAttr(default_factory=lambda: deque(maxlen=512))
+    _latency_click: deque = PrivateAttr(default_factory=lambda: deque(maxlen=256))
     _selector_map: dict[int, Any] = PrivateAttr(default_factory=dict)
     _lease_touched_at: float = PrivateAttr(default=0.0)
     _screenshot_seq: int = PrivateAttr(default=0)
@@ -1019,6 +1026,50 @@ class LiveBrowser(MutableModel):
         return self.controller == "human" and self.human_pinned
 
     # --- input ----------------------------------------------------------------
+
+    async def record_latency_sample(self, kind: str, ms: float) -> None:
+        """Store one viewer-reported latency sample (see the runner's inbound pump).
+
+        ``rtt`` is the cast-socket echo round trip, measured by the viewer over the
+        SAME network path the video rides; ``click_photon`` is a real click's
+        input-to-visible-pixel-change time. Junk is dropped rather than raised --
+        the reporter is a browser page, not a trusted caller.
+        """
+        if not isinstance(ms, (int, float)) or not (0 <= ms < 60_000):
+            return
+        if kind == "rtt":
+            self._latency_rtt.append(float(ms))
+        elif kind == "click_photon":
+            self._latency_click.append(float(ms))
+
+    async def latency_snapshot(self) -> dict[str, Any]:
+        """Aggregate the latency rings for ``GET /browsers/<id>/latency``.
+
+        ``overhead_ms`` (click-to-photon p50 minus RTT p50) is the headline: it is
+        the pipeline's own cost above the network floor. ``spikes`` counts recent
+        RTT samples far above the median -- TCP hides raw packet loss, so
+        retransmit stalls surfacing as RTT spikes are its observable symptom.
+        """
+
+        def stats(samples: deque) -> dict[str, Any] | None:
+            if not samples:
+                return None
+            ordered = sorted(samples)
+            p50 = ordered[len(ordered) // 2]
+            p95 = ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]
+            return {"n": len(ordered), "p50_ms": round(p50, 1), "p95_ms": round(p95, 1)}
+
+        rtt = stats(self._latency_rtt)
+        click = stats(self._latency_click)
+        if rtt is not None:
+            recent = list(self._latency_rtt)[-100:]
+            threshold = max(2 * rtt["p50_ms"], rtt["p50_ms"] + 30)
+            rtt["spikes_recent"] = sum(1 for s in recent if s > threshold)
+            rtt["spike_window"] = len(recent)
+        overhead = None
+        if rtt is not None and click is not None:
+            overhead = round(click["p50_ms"] - rtt["p50_ms"], 1)
+        return {"rtt": rtt, "click_photon": click, "overhead_ms": overhead}
 
     async def handle_cast_message(self, message: dict[str, Any]) -> None:
         """Handle a message from a cast socket: human input or tab control.
