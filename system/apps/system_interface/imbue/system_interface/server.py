@@ -136,7 +136,26 @@ def _json_response(content: Any, status_code: int = 200) -> Response:
 
 
 def _html_response(html_content: str, status_code: int = 200) -> Response:
-    return Response(html_content, status=status_code, mimetype="text/html")
+    """Build an uncacheable HTML response for the app shell.
+
+    The shell is assembled per request (base path, hostname, agent id, and the
+    configured plugin script tags are injected into it), so it is never a
+    cacheable artifact to begin with. It is also the *only* thing standing
+    between a reload and a stale UI: the built assets it links are
+    content-hashed, so a freshly-fetched shell always names the current bundle,
+    and a cached one always names the old one.
+
+    That matters because a page cannot drop its own HTTP cache -- the
+    ``location.reload(true)`` form is a Firefox-only extension -- so
+    ``reloadInterface`` (see ``frontend/src/reload.ts``) can only reload and
+    trust the response to be fresh. ``no-store`` is what makes that trust
+    well-founded, including for viewers reaching the workspace through a
+    shared Cloudflare tunnel, where an intermediary is free to cache anything
+    we do not mark otherwise.
+    """
+    response = Response(html_content, status=status_code, mimetype="text/html")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
