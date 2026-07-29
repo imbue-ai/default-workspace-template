@@ -123,12 +123,19 @@ class _FakeSpawner(reveal_mod.Spawner):
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_live_layout(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_ambient_live_layout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Default every test to "no live layout" so preview seeding never reads the
-    developer's real mngr state. Seeding tests set MNGR_HOST_DIR / MNGR_AGENT_ID
-    themselves to point at a fake workspace under tmp_path."""
+    developer's real mngr state.
+
+    MNGR_HOST_DIR is pointed at an empty directory rather than unset: the
+    resolver falls back to ``~/.mngr`` when it is missing, which on a developer's
+    box is a real host dir full of real agents. Seeding tests repopulate this
+    host dir via ``_seed_live_layout``.
+    """
+    empty_host_dir = tmp_path / "empty-mngr-host"
+    empty_host_dir.mkdir()
+    monkeypatch.setenv("MNGR_HOST_DIR", str(empty_host_dir))
     monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
-    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
 
 
 def _runner_with_diff(name_status: str, *, dirty: bool = False) -> _RecordingRunner:
@@ -201,7 +208,9 @@ def test_classify_ignores_backend_test_files() -> None:
 
 
 def test_classify_ignores_unrelated_paths() -> None:
-    changes = reveal_mod.classify_changes(["README.md", "system/vendor/mngr/libs/mngr/x.py"])
+    changes = reveal_mod.classify_changes(
+        ["README.md", "system/vendor/mngr/libs/mngr/x.py"]
+    )
     assert not changes.any
 
 
@@ -209,7 +218,9 @@ def test_classify_ignores_unrelated_paths() -> None:
 
 
 def test_frontend_only_builds_and_broadcasts_without_restart() -> None:
-    runner = _runner_with_diff("M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n")
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
+    )
     http = _FakeHttp(_all_healthy)
     spawner = _FakeSpawner()
 
@@ -251,7 +262,9 @@ def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> Non
     assert any(_is_live(u) for u in http.get_urls)  # live health probed
 
 
-def test_preflight_boot_follows_the_live_observer_and_uses_the_strict_health_path() -> None:
+def test_preflight_boot_follows_the_live_observer_and_uses_the_strict_health_path() -> (
+    None
+):
     """The pre-flight boots beside the still-running live service, so it must follow it.
 
     Trying to run its own observer would lose the single-writer lock, and the old
@@ -398,7 +411,9 @@ def test_emergency_when_rollback_cannot_restore_health() -> None:
 
 
 def test_frontend_build_failure_rolls_back() -> None:
-    runner = _runner_with_diff("M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n")
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
+    )
     # First build (the reveal) fails; the recovery rebuild from known-good succeeds.
     runner.respond(
         ("npm", "run", "build"), [_Result(returncode=1, stderr="type error"), _Result()]
@@ -534,7 +549,9 @@ def test_preview_delegates_to_the_shared_script_with_si_specifics(
     assert _flag(argv, "--host-env") == reveal_mod.PREVIEW_HOST_ENV
     assert _flag(argv, "--unset-env") == reveal_mod.ENV_MNGR_AGENT_ID
     env_overrides = _flags(argv, "--env")
-    assert any(v.startswith(f"{reveal_mod.PREVIEW_LAYOUT_DIR_ENV}=") for v in env_overrides)
+    assert any(
+        v.startswith(f"{reveal_mod.PREVIEW_LAYOUT_DIR_ENV}=") for v in env_overrides
+    )
     assert _flag(argv, "--service-name") == reveal_mod.PREVIEW_INNER_SERVICE_NAME
     assert _flag(argv, "--preview-service-name") == reveal_mod.PREVIEW_SERVICE_NAME
     assert _flag(argv, "--preview-title") == _SLUG
@@ -579,18 +596,39 @@ def test_preview_rejects_a_work_dir_without_the_app(tmp_path: Path) -> None:
     assert not runner.argvs_starting(*_SERVE_UP)
 
 
+def _write_agent_record(host_dir: Path, agent_id: str, *, is_primary: bool) -> Path:
+    """Create one agent's state dir with the ``data.json`` mngr writes there."""
+    state_dir = host_dir / "agents" / agent_id
+    state_dir.mkdir(parents=True, exist_ok=True)
+    labels = {"is_primary": "true"} if is_primary else {"user_created": "true"}
+    (state_dir / "data.json").write_text(json.dumps({"labels": labels}))
+    return state_dir
+
+
 def _seed_live_layout(
-    monkeypatch: pytest.MonkeyPatch, host_dir: Path, agent_id: str
+    monkeypatch: pytest.MonkeyPatch,
+    host_dir: Path,
+    primary_agent_id: str = "services-agent",
+    caller_agent_id: str = "chat-agent",
 ) -> Path:
-    """Populate a fake live workspace_layout and point the env at it.
+    """Populate a fake live workspace_layout and point the env at that host dir.
+
+    Models the real two-agent shape, which is what the resolution has to get
+    right: the layout belongs to the workspace's *primary* (services) agent --
+    the ``is_primary=true`` one the system interface itself runs under -- while
+    MNGR_AGENT_ID names the ordinary chat agent that runs this script. The two
+    ids are deliberately always distinct here, because deriving the layout path
+    from MNGR_AGENT_ID landed on a directory that never exists and silently
+    seeded nothing, so every preview opened with the default tabs.
 
     Writes the two layout files the preview should copy plus the two kinds of
     non-layout state it must *not* -- the client-activity event log (a nested
     sub-tree, at the path ``client_activity.get_events_path`` really uses) and
-    the terminal banner -- and sets MNGR_HOST_DIR / MNGR_AGENT_ID so
-    ``_live_layout_dir`` resolves here.
+    the terminal banner.
     """
-    layout_dir = host_dir / "agents" / agent_id / "workspace_layout"
+    primary_state_dir = _write_agent_record(host_dir, primary_agent_id, is_primary=True)
+    _write_agent_record(host_dir, caller_agent_id, is_primary=False)
+    layout_dir = primary_state_dir / "workspace_layout"
     (layout_dir / "layouts").mkdir(parents=True)
     (layout_dir / "layouts" / "desktop.json").write_text('{"panels":["chat"]}')
     (layout_dir / "layouts_meta.json").write_text('{"last_active_slug":"desktop"}')
@@ -599,7 +637,7 @@ def _seed_live_layout(
     (events_dir / "events.jsonl").write_text('{"e":1}\n')
     (layout_dir / "terminal_banner.json").write_text('{"dismissed":true}')
     monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
-    monkeypatch.setenv("MNGR_AGENT_ID", agent_id)
+    monkeypatch.setenv("MNGR_AGENT_ID", caller_agent_id)
     return layout_dir
 
 
@@ -611,7 +649,7 @@ def test_preview_seeds_a_copy_of_only_the_live_layout_files(
     # client-activity log or terminal banner that share the same directory.
     repo_root = tmp_path / "repo"
     work_dir = _make_work_dir(repo_root)
-    _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    _seed_live_layout(monkeypatch, tmp_path / "host")
     runner = _RecordingRunner()
 
     code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=runner)
@@ -630,6 +668,30 @@ def test_preview_seeds_a_copy_of_only_the_live_layout_files(
     assert _flag(argv, "--env") == f"{reveal_mod.PREVIEW_LAYOUT_DIR_ENV}={seed_dir}"
 
 
+def test_preview_seeds_the_primary_agents_layout_not_the_callers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The live layout belongs to the is_primary services agent; the agent running
+    # this script is a different one. Give the caller a workspace_layout of its own
+    # with distinguishable content: the seed must take the primary's, since that is
+    # the only one the live system interface reads and writes. Resolving by
+    # MNGR_AGENT_ID instead is what made every preview open with default tabs.
+    repo_root = tmp_path / "repo"
+    work_dir = _make_work_dir(repo_root)
+    host_dir = tmp_path / "host"
+    _seed_live_layout(monkeypatch, host_dir)
+    caller_layouts = host_dir / "agents" / "chat-agent" / "workspace_layout" / "layouts"
+    caller_layouts.mkdir(parents=True)
+    (caller_layouts / "desktop.json").write_text('{"panels":["WRONG"]}')
+    runner = _RecordingRunner()
+
+    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=runner)
+
+    assert code == 0
+    seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
+    assert (seed_dir / "layouts" / "desktop.json").read_text() == '{"panels":["chat"]}'
+
+
 def _preview_panel_layout(service_name: str) -> str:
     """A persisted layout whose single panel is an iframe on ``service_name``."""
     return json.dumps(
@@ -642,7 +704,8 @@ def _preview_panel_layout(service_name: str) -> str:
 
 
 @pytest.mark.parametrize(
-    "service_name", [reveal_mod.PREVIEW_SERVICE_NAME, reveal_mod.PREVIEW_INNER_SERVICE_NAME]
+    "service_name",
+    [reveal_mod.PREVIEW_SERVICE_NAME, reveal_mod.PREVIEW_INNER_SERVICE_NAME],
 )
 def test_preview_does_not_seed_a_layout_that_opens_the_preview_itself(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, service_name: str
@@ -654,12 +717,14 @@ def test_preview_does_not_seed_a_layout_that_opens_the_preview_itself(
     # copied, so the layout opens empty instead of vanishing from the picker.
     repo_root = tmp_path / "repo"
     work_dir = _make_work_dir(repo_root)
-    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host")
     (layout_dir / "layouts" / "with-preview.json").write_text(
         _preview_panel_layout(service_name)
     )
 
-    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=_RecordingRunner())
+    code = reveal_mod.preview(
+        _SLUG, str(work_dir), repo_root, runner=_RecordingRunner()
+    )
 
     assert code == 0
     seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
@@ -676,12 +741,14 @@ def test_preview_drops_a_legacy_layout_that_opens_the_preview_itself(
     # directory -- a workspace that never migrated would otherwise nest itself.
     repo_root = tmp_path / "repo"
     work_dir = _make_work_dir(repo_root)
-    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host")
     (layout_dir / "layout.json").write_text(
         _preview_panel_layout(reveal_mod.PREVIEW_SERVICE_NAME)
     )
 
-    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=_RecordingRunner())
+    code = reveal_mod.preview(
+        _SLUG, str(work_dir), repo_root, runner=_RecordingRunner()
+    )
 
     assert code == 0
     seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
@@ -696,10 +763,12 @@ def test_preview_skips_a_corrupt_layout_and_says_why(
     # fired, or they go looking for a preview panel that isn't there.
     repo_root = tmp_path / "repo"
     work_dir = _make_work_dir(repo_root)
-    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host")
     (layout_dir / "layouts" / "truncated.json").write_text('{"panelParams":')
 
-    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=_RecordingRunner())
+    code = reveal_mod.preview(
+        _SLUG, str(work_dir), repo_root, runner=_RecordingRunner()
+    )
 
     assert code == 0
     seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
@@ -717,12 +786,14 @@ def test_preview_seeds_layouts_that_open_other_services(
     # is exactly what the user wants to see reproduced in the preview.
     repo_root = tmp_path / "repo"
     work_dir = _make_work_dir(repo_root)
-    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host")
     (layout_dir / "layouts" / "with-browser.json").write_text(
         _preview_panel_layout("browser")
     )
 
-    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=_RecordingRunner())
+    code = reveal_mod.preview(
+        _SLUG, str(work_dir), repo_root, runner=_RecordingRunner()
+    )
 
     assert code == 0
     seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
@@ -736,26 +807,29 @@ def test_preview_reseeds_from_scratch_on_rerun(
     # file from a prior seed must not survive into the new copy.
     repo_root = tmp_path / "repo"
     work_dir = _make_work_dir(repo_root)
-    _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    _seed_live_layout(monkeypatch, tmp_path / "host")
     seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
     seed_dir.mkdir(parents=True)
     (seed_dir / "stale.json").write_text("{}")
 
-    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=_RecordingRunner())
+    code = reveal_mod.preview(
+        _SLUG, str(work_dir), repo_root, runner=_RecordingRunner()
+    )
 
     assert code == 0
     assert not (seed_dir / "stale.json").exists()
     assert (seed_dir / "layouts_meta.json").exists()
 
 
-def test_preview_seeds_empty_when_there_is_no_live_layout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_preview_seeds_empty_and_says_so_when_there_is_no_primary_agent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # No primary agent (dev/test) -> nothing to copy; the preview still boots, just
     # to the fresh-workspace state, and the override still points at the empty copy.
+    # It must say so: an empty seed is indistinguishable on screen from a working
+    # preview, which is how a resolution bug survived a round of real use.
     repo_root = tmp_path / "repo"
     work_dir = _make_work_dir(repo_root)
-    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     runner = _RecordingRunner()
 
     code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=runner)
@@ -764,8 +838,29 @@ def test_preview_seeds_empty_when_there_is_no_live_layout(
     seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
     assert seed_dir.is_dir()
     assert list(seed_dir.iterdir()) == []
+    assert "is_primary=true" in capsys.readouterr().err
     argv = runner.argvs_starting(*_SERVE_UP)[0]
     assert _flag(argv, "--env") == f"{reveal_mod.PREVIEW_LAYOUT_DIR_ENV}={seed_dir}"
+
+
+def test_preview_reports_a_primary_agent_that_has_no_saved_layout_yet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A workspace whose user has never saved a layout is a benign empty seed, but
+    # the operator still gets told which of the two reasons it was.
+    repo_root = tmp_path / "repo"
+    work_dir = _make_work_dir(repo_root)
+    host_dir = tmp_path / "host"
+    _write_agent_record(host_dir, "services-agent", is_primary=True)
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+
+    code = reveal_mod.preview(
+        _SLUG, str(work_dir), repo_root, runner=_RecordingRunner()
+    )
+
+    assert code == 0
+    assert list(reveal_mod._preview_layout_seed_dir(repo_root, _SLUG).iterdir()) == []
+    assert "no saved layout yet" in capsys.readouterr().err
 
 
 def test_unpreview_removes_the_seeded_layout_copy(tmp_path: Path) -> None:
@@ -849,7 +944,7 @@ def test_preview_removes_the_seeded_layout_when_the_boot_fails(
     # failing path has to remove its own copy rather than leave one orphaned.
     repo_root = tmp_path / "repo"
     work_dir = _make_work_dir(repo_root)
-    _seed_live_layout(monkeypatch, tmp_path / "host", "agent-1")
+    _seed_live_layout(monkeypatch, tmp_path / "host")
     runner = _RecordingRunner()
     runner.respond(_SERVE_UP, _Result(returncode=1))
 

@@ -19,7 +19,16 @@ preview tab.
   seeds each preview from a throwaway copy of *only* the live layout files, so
   the preview opens with the user's real tabs while its own layout autosaves
   land in the copy rather than clobbering the live layout; `unpreview` removes
-  that copy.
+  that copy. The live layout is located by finding the workspace's *primary*
+  (`is_primary=true`) services agent -- the one the system interface itself runs
+  under, and the only agent that owns a `workspace_layout/` -- rather than by
+  deriving a path from the ambient `MNGR_AGENT_ID`, which names whichever agent
+  ran the script. Since the frontend hides `is_primary` agents from the agent
+  list, that is always a different agent with no layout of its own, so the
+  derived path never existed and every preview silently seeded nothing and opened
+  with default tabs. When there is genuinely nothing to seed, `preview` now says
+  which of the two reasons it was on stderr: an empty seed and a working preview
+  look identical on screen, which is precisely what hid this.
 
 - `create_worker.py` (`launch-task`) gained a `--branch` passthrough to
   `mngr create`, so the harden worker can check out and extend the branch the

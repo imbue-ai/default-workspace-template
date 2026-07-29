@@ -332,10 +332,12 @@ class AgentManager:
     # None means "nothing has gone wrong (yet)", which is not by itself proof
     # that events are flowing -- see ``_has_received_lifecycle_event``.
     _events_failure: str | None
-    # Positive evidence that the OBSERVE-mode subprocess really is streaming: a
-    # healthy observer emits a full-state snapshot within seconds of starting,
-    # while one that loses the lock exits without ever emitting. Spawning
-    # successfully is therefore not enough to call the stream alive.
+    # Positive evidence that events really are arriving, required in both modes.
+    # In OBSERVE, a healthy observer emits a full-state snapshot within seconds of
+    # starting while one that loses the lock exits without ever emitting, so
+    # spawning successfully is not enough. In FOLLOW, the follower drops every
+    # line until it has a snapshot to fold from, so starting cleanly is not
+    # enough either.
     _has_received_lifecycle_event: bool
     _creation_cg: ConcurrencyGroup
     _mngr_binary: str
@@ -452,7 +454,7 @@ class AgentManager:
         if failure is not None:
             return AgentEventsStatus(mode=self._events_mode, is_alive=False, detail=failure)
         if self._events_mode is AgentEventsMode.FOLLOW:
-            return self._build_follow_status(follower)
+            return self._build_follow_status(follower, has_received_event)
         if not has_received_event:
             return AgentEventsStatus(
                 mode=self._events_mode,
@@ -465,8 +467,18 @@ class AgentManager:
             detail="Folding live events from this instance's own 'mngr observe' subprocess.",
         )
 
-    def _build_follow_status(self, follower: ObserveEventFollower | None) -> AgentEventsStatus:
-        """Render FOLLOW-mode liveness from the follower's own view of the stream."""
+    def _build_follow_status(
+        self, follower: ObserveEventFollower | None, has_received_event: bool
+    ) -> AgentEventsStatus:
+        """Render FOLLOW-mode liveness from the follower's own view of the stream.
+
+        Requires a folded event for the same reason OBSERVE mode does. A follower
+        that started cleanly is not yet proof of anything: it drops every line
+        until it sees a full-state snapshot to fold from, so one seeded against a
+        file that has no snapshot yet sits at boot-state discovery indefinitely --
+        the frozen agent view this whole gate exists to catch, in the mode that
+        was built to fix it.
+        """
         if follower is None:
             return AgentEventsStatus(
                 mode=self._events_mode,
@@ -476,6 +488,15 @@ class AgentManager:
         follower_failure = follower.failure_detail()
         if follower_failure is not None:
             return AgentEventsStatus(mode=self._events_mode, is_alive=False, detail=follower_failure)
+        if not has_received_event:
+            return AgentEventsStatus(
+                mode=self._events_mode,
+                is_alive=False,
+                detail=(
+                    "Waiting for the first event from the observer's stream (no full-state "
+                    "snapshot has been folded yet)."
+                ),
+            )
         return AgentEventsStatus(
             mode=self._events_mode,
             is_alive=True,

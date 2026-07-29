@@ -35,9 +35,12 @@ tabs (which proxy straight through) stayed current. The fix is a new
 
 `AgentManager` now tracks whether lifecycle events are actually reaching it, in
 either mode, and a new `GET /api/health` reports it: 200 only when a fresh mngr
-discovery succeeds *and* the lifecycle stream is live, 503 otherwise. Merely
-spawning the observe subprocess does not count as live -- an observer that loses
-the lock exits without ever emitting -- so the stream is called alive only once
-an event has arrived. `/api/agents` is unchanged; it runs its own discovery,
-which is exactly why it answered 200 on an instance whose agent view was dead
-and could not serve as the health gate.
+discovery succeeds *and* the lifecycle stream is live, 503 otherwise. In both
+modes, "live" means an event has actually been folded -- merely spawning the
+observe subprocess does not count (an observer that loses the lock exits without
+ever emitting), and neither does starting a follower cleanly (it drops every
+line until it has a full-state snapshot to fold from, so one attached to a
+stream that has not emitted a snapshot sits frozen at boot-state discovery).
+`/api/agents` is unchanged; it runs its own discovery, which is exactly why it
+answered 200 on an instance whose agent view was dead and could not serve as the
+health gate.
