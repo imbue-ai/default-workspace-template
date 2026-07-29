@@ -42,10 +42,10 @@ def _restic_available() -> bool:
     return shutil.which("restic") is not None
 
 
-# Every test here drives several real restic subprocesses (init + backup +
-# forget + prune), which takes the better part of ten seconds -- past the
-# repo-global pytest timeout. Still far below restic.py's own 3600s ceiling, so
-# a genuinely wedged restic is caught here rather than hanging the suite.
+# The heaviest tests here drive several real restic subprocesses (init + backup +
+# forget + prune) and run right up against the repo-global 10s pytest timeout, so
+# the module carries its own. Still far below restic.py's own 3600s ceiling, so a
+# genuinely wedged restic is caught here rather than hanging the suite.
 _RESTIC_TEST_TIMEOUT_SECONDS = 60
 
 pytestmark = [
