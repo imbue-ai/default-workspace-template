@@ -9,7 +9,8 @@ Provisioning and utility scripts:
 - Claude Code hooks (`claude_*.sh` / `claude_*.py`), wired in
   `.claude/settings.json`.
 - Service helpers: `forward_port.py` (port registry), `layout.py` (dockview
-  layout ops), `oom_tag_service.py` and friends (memory-pressure bands),
+  layout ops), `refresh_workspace_view.py` (rebuild the user's view after the
+  interface changes), `oom_tag_service.py` and friends (memory-pressure bands),
   `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
 - Git hooks in `git_hooks/` (activated by the github-sync skill).
 - The changelog gate: `check_changelog_entries.py`.
