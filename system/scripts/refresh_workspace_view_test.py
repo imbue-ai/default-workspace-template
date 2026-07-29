@@ -188,8 +188,15 @@ def test_missing_gateway_env_skips_the_app_call_but_still_broadcasts(
     assert http.url_containing("/minds-api-proxy/") is None
 
 
-def test_primary_lookup_failure_falls_back_to_our_own_agent_id() -> None:
-    """When ``mngr ls`` cannot run, the caller is usually the primary itself."""
+def test_primary_lookup_failure_falls_back_to_our_own_agent_id(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When ``mngr ls`` cannot run, the caller is usually the primary itself.
+
+    The fallback must also say so: the POST succeeds either way, so without a
+    note a sub-agent that just refreshed some other window sees only the
+    "requested a reload" line and has no way to tell.
+    """
     runner = _StubRunner(error=OSError("mngr not found"))
     http = _RecordingHttp({})
 
@@ -198,6 +205,9 @@ def test_primary_lookup_failure_falls_back_to_our_own_agent_id() -> None:
     app_url = http.url_containing("/minds-api-proxy/")
     assert app_url is not None
     assert _OWN_ID in app_url
+    assert (
+        "could not resolve this workspace's primary agent id" in capsys.readouterr().err
+    )
 
 
 def test_primary_lookup_ignores_a_nonzero_exit() -> None:
