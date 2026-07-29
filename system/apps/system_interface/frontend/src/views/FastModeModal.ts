@@ -9,12 +9,10 @@
  * Every way out other than "Keep fast mode on" turns fast mode off -- the
  * buttons, the backdrop, and Escape -- because the cheaper outcome is the one
  * nobody can be surprised by. It is also the button the popover opens focused
- * on, and the copy says what dismissing does, so leaving is an informed choice
- * rather than an accident.
+ * on.
  */
 
 import m from "mithril";
-import { getSelectedOption } from "../models/ModelSettings";
 import { getFastModePromptAgentId, resolveFastModePrompt } from "../models/WorkspaceFastMode";
 import { computeAnchoredPosition, type AnchoredPosition } from "./fast-mode-anchor";
 import { icon } from "./icons";
@@ -97,20 +95,15 @@ export function FastModeModal(): m.Component {
                 m("h3.fast-mode-modal-title", "Keep fast mode on?"),
               ]),
               m("p.fast-mode-modal-message", [
-                `${describeModel()} is provided by Anthropic, who offers a "fast mode" in which the model
-                 works much faster but for a significantly higher price. This workspace started with it
-                 enabled to get you going faster. `,
+                "Fast Mode is 2.5x faster and 6x more expensive (",
                 m(
                   "a.fast-mode-modal-link",
                   { href: FAST_MODE_DOC_URL, target: "_blank", rel: "noopener noreferrer" },
-                  [m("span", "Anthropic's docs"), m.trust(icon("external-link", { size: 13 }))],
+                  [m("span", "learn more"), m.trust(icon("external-link", { size: 13 }))],
                 ),
+                ")",
               ]),
-              m(
-                "p.fast-mode-modal-message",
-                `You can choose whether to keep it enabled or disable it by default for this and future
-                 chats. You can always toggle fast mode using the lightning button.`,
-              ),
+              m("p.fast-mode-modal-message", "You can toggle Fast Mode at any time with the button"),
               m("div.fast-mode-modal-actions", [
                 m(
                   "button.fast-mode-modal-btn.fast-mode-modal-btn-fast",
@@ -135,15 +128,6 @@ export function FastModeModal(): m.Component {
       );
     },
   };
-}
-
-/** The chat's model by name ("The Opus 4.8 model"), or a generic stand-in while
- *  its settings have not loaded. Named rather than hardcoded because more than
- *  one model supports fast mode and the catalog changes. */
-function describeModel(): string {
-  const agentId = getFastModePromptAgentId();
-  const label = agentId === null ? null : getSelectedOption(agentId)?.label;
-  return label === null || label === undefined ? "The model this chat runs on" : `The ${label} model`;
 }
 
 function handleKeydown(event: KeyboardEvent): void {
