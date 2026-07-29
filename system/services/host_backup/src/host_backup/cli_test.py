@@ -6,6 +6,8 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from host_backup.cli import (
     EXIT_BACKUP_FAILED,
     EXIT_BACKUP_SUCCEEDED,
@@ -32,74 +34,62 @@ def _wait_from_start(events_path: Path) -> dict[str, object] | None:
 
     The deadline is bounded, so a waiter that does not recognise the terminal
     event returns None here rather than hanging -- which is exactly the
-    regression each caller asserts against.
+    regression the caller asserts against.
     """
     return _wait_for_next_completion(
         events_path, 0, time.monotonic() + _GENEROUS_TIMEOUT_SECONDS
     )
 
 
-def test_wait_returns_promptly_when_the_tick_skips_for_missing_secrets(
+@pytest.mark.parametrize(
+    ("mid_tick_events", "terminal_event", "expected_exit_code"),
+    [
+        # The reported hang: a tick that never reaches restic.
+        pytest.param(
+            (),
+            BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS,
+            EXIT_BACKUPS_NOT_CONFIGURED,
+            id="not-configured",
+        ),
+        # A snapshot failure aborts the tick before restic runs.
+        pytest.param(
+            (),
+            BackupEventType.SNAPSHOT_FAILED,
+            EXIT_BACKUP_FAILED,
+            id="snapshot-failed",
+        ),
+        # An unhandled error, recorded by the loop's outer handler.
+        pytest.param(
+            (), BackupEventType.TICK_ERROR, EXIT_BACKUP_FAILED, id="tick-error"
+        ),
+        # The happy path, which must resolve on the restic outcome rather than on
+        # the mid-tick event preceding it.
+        pytest.param(
+            (BackupEventType.SNAPSHOT_CREATED,),
+            BackupEventType.RESTIC_BACKUP_SUCCEEDED,
+            EXIT_BACKUP_SUCCEEDED,
+            id="succeeded",
+        ),
+    ],
+)
+def test_wait_ends_on_every_tick_ending_and_maps_it_to_an_exit_code(
     tmp_path: Path,
+    mid_tick_events: tuple[BackupEventType, ...],
+    terminal_event: BackupEventType,
+    expected_exit_code: int,
 ) -> None:
-    """The reported hang: a tick that never reaches restic must still end the wait."""
+    """Every way a tick can end has to end the wait and pick out its own exit code."""
     _write_tick(
         tmp_path,
         BackupEventType.BACKUP_STARTED,
-        BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS,
-        tick_id="tick-skip",
+        *mid_tick_events,
+        terminal_event,
+        tick_id="tick-under-test",
     )
     completion = _wait_from_start(tmp_path / "events.jsonl")
     assert completion is not None
-    assert (
-        completion["type"] == BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value
-    )
-    assert _exit_code_for_completion(completion) == EXIT_BACKUPS_NOT_CONFIGURED
-
-
-def test_wait_returns_promptly_when_the_snapshot_step_fails(tmp_path: Path) -> None:
-    """A snapshot failure aborts the tick before restic runs, so it is terminal too."""
-    _write_tick(
-        tmp_path,
-        BackupEventType.BACKUP_STARTED,
-        BackupEventType.SNAPSHOT_FAILED,
-        tick_id="tick-snapshot",
-    )
-    completion = _wait_from_start(tmp_path / "events.jsonl")
-    assert completion is not None
-    assert completion["type"] == BackupEventType.SNAPSHOT_FAILED.value
-    assert _exit_code_for_completion(completion) == EXIT_BACKUP_FAILED
-
-
-def test_wait_returns_promptly_when_the_tick_raises(tmp_path: Path) -> None:
-    """An unhandled error is recorded as TICK_ERROR and never followed by a restic event."""
-    _write_tick(
-        tmp_path,
-        BackupEventType.BACKUP_STARTED,
-        BackupEventType.TICK_ERROR,
-        tick_id="tick-error",
-    )
-    completion = _wait_from_start(tmp_path / "events.jsonl")
-    assert completion is not None
-    assert completion["type"] == BackupEventType.TICK_ERROR.value
-    assert _exit_code_for_completion(completion) == EXIT_BACKUP_FAILED
-
-
-def test_wait_returns_the_succeeded_event_and_ignores_mid_tick_events(
-    tmp_path: Path,
-) -> None:
-    """The happy path still resolves on RESTIC_BACKUP_SUCCEEDED, not on a mid-tick event."""
-    _write_tick(
-        tmp_path,
-        BackupEventType.BACKUP_STARTED,
-        BackupEventType.SNAPSHOT_CREATED,
-        BackupEventType.RESTIC_BACKUP_SUCCEEDED,
-        tick_id="tick-ok",
-    )
-    completion = _wait_from_start(tmp_path / "events.jsonl")
-    assert completion is not None
-    assert completion["type"] == BackupEventType.RESTIC_BACKUP_SUCCEEDED.value
-    assert _exit_code_for_completion(completion) == EXIT_BACKUP_SUCCEEDED
+    assert completion["type"] == terminal_event.value
+    assert _exit_code_for_completion(completion) == expected_exit_code
 
 
 def test_wait_times_out_when_the_tick_never_resolves(tmp_path: Path) -> None:
