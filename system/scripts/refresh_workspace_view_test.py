@@ -247,17 +247,24 @@ def test_refresh_is_never_fatal_when_both_channels_fail() -> None:
 def test_missing_gateway_env_skips_the_app_call_but_still_broadcasts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A bare mngr workspace (no desktop app) still reloads its browser viewers."""
+    """A bare mngr workspace (no desktop app) still reloads its browser viewers.
+
+    It must also not pay for the primary-agent lookup: that is a ``mngr ls``
+    subprocess with a 30s budget, and with no app attached there is nothing for
+    the id it resolves to address.
+    """
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
     http = _RecordingHttp({})
+    runner = _StubRunner()
 
     exit_code = refresh_workspace_view.refresh(
-        runner=_StubRunner(), http=http, base_url=_BASE_URL
+        runner=runner, http=http, base_url=_BASE_URL
     )
 
     assert exit_code == 0
     assert http.url_containing("/api/layout/broadcast") is not None
     assert http.url_containing("/minds-api-proxy/") is None
+    assert runner.commands == []
 
 
 def test_primary_lookup_failure_falls_back_to_our_own_agent_id(
