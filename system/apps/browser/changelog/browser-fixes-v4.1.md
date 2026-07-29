@@ -116,3 +116,37 @@ repaint on every size change. Scaling keeps the framebuffer fixed and is
 aspect-preserving (the client takes the smaller of the two axis ratios and
 applies it to both), so the view fills the pane without changing what the server
 encodes. It also keeps agent screenshots a deterministic size.
+
+----
+
+Three clipboard and resize fixes.
+
+**The pane was cropped and off-centre.** `resize=scale` alone is not enough:
+the client sets `clipViewport = resize !== 'off'`, so `scale` turns clipping ON
+as well as scaling, and clipping wins on the constrained axis -- showing a 1:1
+window into the framebuffer instead of the whole thing scaled down. Passing
+`view_clip=0` alongside it turns clipping off, so the client scales the entire
+framebuffer to fit the pane, aspect-preserving.
+
+**Pasting into the browser pasted the previous clipboard entry.** The KasmVNC
+client only reads the local clipboard when the canvas takes focus, and nothing
+polls -- so "copy elsewhere, click the pane, paste" raced: the click started an
+async clipboard read while the keystroke was already on its way, and the remote
+side pasted whatever had been synced last time. Waiting and pasting again worked
+because the read had landed by then. The viewer now pushes the local clipboard
+at every moment that reliably precedes a paste (window focus, tab becoming
+visible, and pointer-down in the pane), deduplicated on content so repeats cost
+nothing. This also covers the one path that produces no local event at all: a
+paste from the remote browser's own right-click menu.
+
+**WebSocket messages were unbounded.** No `max_message_size` was set on any of
+the three hops, so any peer could send an arbitrarily large frame and each hop
+would buffer it whole. Now capped at 16 MiB -- generous for the largest thing
+that legitimately crosses this link (a 4K screenshot PNG is around 5 MiB) while
+bounding what one frame can cost.
+
+Known ceiling, not yet addressed: copying an image **out** of the remote browser
+is capped at 1 MiB by KasmVNC itself. Xvnc declines incremental transfers as a
+requestor, and Chromium switches to incremental above exactly 1 MiB, so larger
+images are dropped with only an INFO log. Raising that needs our own transfer
+path for the oversize case.
