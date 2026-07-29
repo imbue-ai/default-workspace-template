@@ -43,31 +43,97 @@ USER_AGENT: Final[int] = 300
 WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
 
-# Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` (the most
-# expendable chat) and its expendability is re-tagged at runtime from live UI
-# activity (see the system_interface ``ChatOomPrioritizer``): the more a chat is
-# engaged with, the more protected it is, but every chat always stays strictly
-# below ``WORKER_AGENT`` (workers are shed before any chat) and strictly above the
-# service bands (a chat revives on its next message, so it is shed before a
-# service). ``chat_agent_oom_score_adj`` maps the activity signals to a value in
-# ``[CHAT_AGENT_FLOOR, CHAT_AGENT_BASE]``. Starting at the expendable end means a
-# chat that is never re-tagged (dormant, or messaged outside the UI) stays
-# maximally expendable rather than pinned to the protected floor.
-CHAT_AGENT_BASE: Final[int] = 560  # idle chat; also the chat launch band
+# Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` and is re-tagged
+# at runtime from live activity (see the system_interface ``ChatOomPrioritizer``)
+# anywhere within ``[CHAT_AGENT_FLOOR, CHAT_AGENT_STALE_CEILING]``:
+#
+#   300 CHAT_AGENT_FLOOR         a chat the user is engaged with right now
+#   560 CHAT_AGENT_BASE          idle but fresh; also the chat launch band
+#   600 WORKER_AGENT             (for reference -- not a chat band)
+#   800 CHAT_AGENT_STALE_CEILING untouched long enough to be abandoned
+#
+# The range deliberately straddles ``WORKER_AGENT``. A chat the user last touched
+# days ago is worth less than the worker their current chat just spawned: the chat
+# revives on its next message with its transcript intact (only the next message
+# pays a cold start, and history stays readable while it is down), whereas
+# shedding a running worker destroys in-flight work. The ceiling still sits below
+# ``AGENT_SUBPROCESS``, so any agent's build/test/browser subprocess is shed
+# before any agent itself.
+#
+# Starting at ``CHAT_AGENT_BASE`` rather than the floor means a chat that is never
+# re-tagged at all stays middling-expendable rather than pinned to the protected
+# floor; only a positive staleness signal pushes one past the worker band.
+CHAT_AGENT_BASE: Final[int] = 560  # idle but fresh; also the chat launch band
 CHAT_AGENT_FLOOR: Final[int] = 300  # fully-engaged chat (most protected)
+CHAT_AGENT_STALE_CEILING: Final[int] = 800  # abandoned chat (shed before a worker)
+
+# --- Chat band tunables. Every knob of the chat policy lives in this block. ---
+#
+# How much each engagement signal protects a *fresh* chat, subtracted from
+# ``CHAT_AGENT_BASE``. The recency bonus starts at its max for the most recently
+# messaged chat and decays by one step per rank.
 _CHAT_OPEN_BONUS: Final[int] = 80
 _CHAT_VISIBLE_BONUS: Final[int] = 80
 _CHAT_RECENCY_MAX_BONUS: Final[int] = 120
 _CHAT_RECENCY_STEP: Final[int] = 15
 
+_HOUR: Final[float] = 3600.0
+
+# How a chat's freshness decays with idle time: ``(idle_seconds, freshness)``
+# points in ascending idle order, linearly interpolated between neighbours and
+# flat outside the ends. 1.0 is fully fresh (today's engagement-only behaviour),
+# 0.0 fully abandoned (pinned to the stale ceiling regardless of engagement).
+# Reshape the curve by editing, adding, or removing points here -- nothing else
+# encodes the schedule.
+_CHAT_FRESHNESS_RAMP: Final[tuple[tuple[float, float], ...]] = (
+    (1 * _HOUR, 1.0),
+    (24 * _HOUR, 0.0),
+)
+
+
+def _interpolate(x: float, points: tuple[tuple[float, float], ...]) -> float:
+    """Piecewise-linear lookup of ``x`` over ascending ``(x, y)`` points.
+
+    Flat outside the outermost points: below the first, the first ``y``; above
+    the last, the last ``y``.
+    """
+    if x <= points[0][0]:
+        return points[0][1]
+    for (left_x, left_y), (right_x, right_y) in zip(points, points[1:]):
+        if x <= right_x:
+            span = right_x - left_x
+            if span <= 0:
+                return right_y
+            return left_y + (right_y - left_y) * (x - left_x) / span
+    return points[-1][1]
+
+
+def _chat_freshness(idle_seconds: float | None, is_mid_turn: bool) -> float:
+    """How fresh a chat counts as, in ``[0.0, 1.0]`` (see ``_CHAT_FRESHNESS_RAMP``).
+
+    A chat that is mid-turn is always fully fresh: it is running work right now,
+    and unlike an idle chat's revival that work is not recoverable, so age must
+    not demote it however long ago it was last messaged. Unknown idle time (no
+    engagement evidence at all) is also treated as fresh -- a chat is demoted only
+    on positive evidence that it has been abandoned.
+    """
+    if is_mid_turn or idle_seconds is None:
+        return 1.0
+    return _interpolate(idle_seconds, _CHAT_FRESHNESS_RAMP)
+
 
 def chat_agent_oom_score_adj(
-    *, is_open: bool, is_visible: bool, recency_rank: int | None
+    *,
+    is_open: bool,
+    is_visible: bool,
+    recency_rank: int | None,
+    idle_seconds: float | None,
+    is_mid_turn: bool,
 ) -> int:
     """Map a chat agent's live activity to its ``oom_score_adj``.
 
-    Lower is more protected. Starting from ``CHAT_AGENT_BASE`` (a closed,
-    stale chat), each engagement signal lowers the score:
+    Lower is more protected. Two forces move a chat within its band, starting
+    from ``CHAT_AGENT_BASE``. Engagement pulls it down:
 
     - ``is_open``: the chat has an open tab in the workspace UI.
     - ``is_visible``: the chat's tab is currently visible (implies open).
@@ -78,21 +144,32 @@ def chat_agent_oom_score_adj(
       messaged (this session) and so gets no recency bonus -- a never-messaged
       chat must not be treated as if it were the most recent.
 
-    The result is clamped to ``[CHAT_AGENT_FLOOR, CHAT_AGENT_BASE]`` so it always
-    sits strictly between the service bands and ``WORKER_AGENT``.
+    Staleness pushes it up: ``idle_seconds`` (time since the chat was last
+    engaged with by any route) scales the engagement bonuses down and lifts the
+    score toward ``CHAT_AGENT_STALE_CEILING``. Because the same freshness factor
+    scales both, engagement only ever *delays* the climb -- an abandoned chat ends
+    up at the ceiling even with a visible tab, since a shed costs it nothing but a
+    slow next message. ``is_mid_turn`` suspends the climb entirely (see
+    ``_chat_freshness``).
+
+    The result is clamped to ``[CHAT_AGENT_FLOOR, CHAT_AGENT_STALE_CEILING]``.
     """
-    recency_bonus = 0
+    engagement_bonus = 0
+    if is_open:
+        engagement_bonus += _CHAT_OPEN_BONUS
+    if is_visible:
+        engagement_bonus += _CHAT_VISIBLE_BONUS
     if recency_rank is not None:
-        recency_bonus = max(
+        engagement_bonus += max(
             0, _CHAT_RECENCY_MAX_BONUS - _CHAT_RECENCY_STEP * max(0, recency_rank)
         )
-    adj = CHAT_AGENT_BASE
-    if is_open:
-        adj -= _CHAT_OPEN_BONUS
-    if is_visible:
-        adj -= _CHAT_VISIBLE_BONUS
-    adj -= recency_bonus
-    return max(CHAT_AGENT_FLOOR, min(CHAT_AGENT_BASE, adj))
+    freshness = _chat_freshness(idle_seconds, is_mid_turn)
+    adj = round(
+        CHAT_AGENT_BASE
+        + (1.0 - freshness) * (CHAT_AGENT_STALE_CEILING - CHAT_AGENT_BASE)
+        - freshness * engagement_bonus
+    )
+    return max(CHAT_AGENT_FLOOR, min(CHAT_AGENT_STALE_CEILING, adj))
 
 
 # Supervisord service bands, keyed by the service key passed to
@@ -167,6 +244,7 @@ def shared_browser_oom_score_adj(self_assigned: int) -> int:
     clamped = max(0, min(1000, self_assigned))
     span = SHARED_BROWSER - SHARED_BROWSER_FLOOR
     return SHARED_BROWSER_FLOOR + round(clamped * span / 1000)
+
 
 # Expected band per supervisord program whose *program name* is not a
 # SERVICE_BANDS key, for the backstop listener (system/scripts/oom_tag_backstop.py).
