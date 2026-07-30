@@ -2672,25 +2672,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pcmflux"
-version = "2.0.0"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/ac/86cc0ec075eaae8eec057d1ad391c53bd3c600fd069cc9f0f5b08b868865/pcmflux-2.0.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:4f8d6a245d51c9523a4420ccdc3549f2b77b8ec88e6ca16d058a1c01c5d4f77f", size = 3497503, upload-time = "2026-07-17T17:34:34.696Z" },
-    { url = "https://files.pythonhosted.org/packages/61/ca/4b00cfa09f9c50adbc67882485fcea05cf3faf3d7ae2db37480d45d1af82/pcmflux-2.0.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:97fa0a0a8bd21defb747cf6dfb1d0b68c5e1900347b23273456f121a2c184c65", size = 3720959, upload-time = "2026-07-17T17:34:35.931Z" },
-    { url = "https://files.pythonhosted.org/packages/f2/26/164efd38f0f1280c06ed5523422735510ae0bc44559c6a3dde49381d2726/pcmflux-2.0.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:c49abe0f3ee9387dc40ca52ad96bcee7e24b7b47d978f8afb98dc9193e180252", size = 1912538, upload-time = "2026-07-17T17:34:37.453Z" },
-    { url = "https://files.pythonhosted.org/packages/b5/e2/6af30d83dd1d8532f547d60e8339f45770dd648892dd9d49a09dc87f8269/pcmflux-2.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3b73e9bce2236a86bdf1135f3b1fbc23642e04094b87b51ffaf3de4de0460dba", size = 2033427, upload-time = "2026-07-17T17:34:39.324Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/9b/e4bf1d7da63951e3ca5c9dc57a6e0e41e0275b4451d55d7bb63bfe78b39b/pcmflux-2.0.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:c092419a228ba92058b2b1982ca6190006ea8fe207463dcdfcf6a5632c57bd4d", size = 3496998, upload-time = "2026-07-17T17:34:40.662Z" },
-    { url = "https://files.pythonhosted.org/packages/6d/e5/ab80cd4d0b111bcda3cfe211a2f84b961dabaea8e1c9fb8e9118ca533e89/pcmflux-2.0.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:28ec2b33327085b00d9c5773e8093b85256837bca03257b167869c9ab4584ab1", size = 3720206, upload-time = "2026-07-17T17:34:42.13Z" },
-    { url = "https://files.pythonhosted.org/packages/13/8f/cfc355979d3b573050f31fb3f24409964df7c7450c4718dfe681bb9a1131/pcmflux-2.0.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:8195667a366f5a76ec6cfcc096e564ae3ce77bee17c20f89f858a42c8f9673ac", size = 1911988, upload-time = "2026-07-17T17:34:43.454Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/25/653ca49b0eefde185a417e80f333a61d319cc338e425bf93327c02f89b48/pcmflux-2.0.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:dc37be36026f578d7068b2ea68d39a1484051619966c608c6db29b7edc512a1a", size = 2032633, upload-time = "2026-07-17T17:34:44.963Z" },
-    { url = "https://files.pythonhosted.org/packages/78/28/a4209023b9d3420814e3d79dc179ef11eddf89b15bc1a1b15eaeb473967f/pcmflux-2.0.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:d19c1f2c9773eb3e185f92e34ff331cfb5d2546d07494332f32e8aaa8f41f647", size = 3497279, upload-time = "2026-07-17T17:34:46.265Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/69/99bb9d02fe925a0f38d9359e0761a9d38d831c293eba71654f3d29f13acf/pcmflux-2.0.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:050a8c7d7c099ee363279f085cab65e5f9891dc6ab9481a3edf64a901d276352", size = 3720558, upload-time = "2026-07-17T17:34:47.593Z" },
-    { url = "https://files.pythonhosted.org/packages/7a/95/724be40b85fe8ee64381211cbf64c09dd7668e1a81747eda383c17f3f54c/pcmflux-2.0.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:09ff0496f5e1f46b7f092cf07b3ccf7be27ef4c1d910ec29e6420f7094576e91", size = 1912333, upload-time = "2026-07-17T17:34:48.879Z" },
-    { url = "https://files.pythonhosted.org/packages/12/b0/58a9201f2110400ce6a3ed5974484acad536632e61870d387de518616bad/pcmflux-2.0.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:64fa58c7004c9719b87342fab273b50a618cf39d8021455d3df0f124d2e61d0f", size = 2033011, upload-time = "2026-07-17T17:34:50.126Z" },
-]
-
-[[package]]
 name = "pendulum"
 version = "3.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6730,7 +6711,6 @@ dependencies = [
     { name = "flask" },
     { name = "flask-sock" },
     { name = "loguru" },
-    { name = "pcmflux" },
     { name = "pixelflux" },
     { name = "python-xlib" },
     { name = "simple-websocket" },
@@ -6742,7 +6722,6 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "loguru", specifier = ">=0.7" },
-    { name = "pcmflux", specifier = ">=2.0.0" },
     { name = "pixelflux", specifier = ">=2.0.0" },
     { name = "python-xlib", specifier = ">=0.33" },
     { name = "simple-websocket", specifier = ">=1.0" },
