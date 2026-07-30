@@ -1592,6 +1592,18 @@ export function openIframeTabForAgent(agentId: string, url: string, title: strin
   });
 }
 
+/** Close the chat tab for ``agentId``.
+ *
+ *  Backs the destroyed-agent tombstone's "Close tab" button: nothing else
+ *  removes a dead agent's tab, and leaving it in place means the saved layout
+ *  resurrects it on every restore. Removing the panel drops it from the next
+ *  autosave, which is what makes the dismissal stick. */
+export function closeChatPanelForAgent(agentId: string): void {
+  if (!dockview) return;
+  const panel = dockview.panels.find((p) => p.id === chatPanelId(agentId));
+  if (panel) dockview.removePanel(panel);
+}
+
 export function openSubagentTab(agentId: string, subagentSessionId: string, description: string): void {
   if (!dockview) return;
 
