@@ -218,16 +218,23 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
 def read_view_epoch() -> str:
     """Return the epoch of the interface currently on disk, or ``""`` if unset.
 
-    An unreadable or absent file is not an error: a workspace where nothing has
-    ever been revealed has no epoch, and an empty one never triggers a reload.
-    Undecodable counts as unreadable for the same reason ``_inject_view_epoch_meta_tag``
-    escapes what it gets back -- the content is off disk, not from our writer --
-    and ``UnicodeDecodeError`` is a ``ValueError``, so ``OSError`` alone would let
-    it escape into the shell response and the WebSocket connect.
+    An absent file is not an error: a workspace where nothing has ever been
+    revealed has no epoch, and an empty one never triggers a reload. Any *other*
+    failure gets the same inert answer -- both callers would rather lose a reload
+    than raise -- but is logged, because ``""`` also means "no reveal has
+    happened", so an unreadable file disables the reconnect-reload entirely while
+    looking exactly like a fresh workspace. Undecodable counts as unreadable for
+    the same reason ``_inject_view_epoch_meta_tag`` escapes what it gets back --
+    the content is off disk, not from our writer -- and ``UnicodeDecodeError`` is
+    a ``ValueError``, so ``OSError`` alone would let it escape into the shell
+    response and the WebSocket connect.
     """
     try:
         return VIEW_EPOCH_PATH.read_text().strip()
-    except (OSError, UnicodeDecodeError):
+    except FileNotFoundError:
+        return ""
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("Could not read the view epoch at {}: {}", VIEW_EPOCH_PATH, exc)
         return ""
 
 
