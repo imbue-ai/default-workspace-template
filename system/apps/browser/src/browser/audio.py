@@ -67,34 +67,49 @@ def _stop_process(
             process.wait(timeout=_STOP_TIMEOUT)
 
 
-def _ensure_pulse() -> None:
-    with _pulse_lock:
-        if (
+def _pactl_info_ok() -> bool:
+    """Whether PulseAudio is up and answering. Any failure to even run pactl means no."""
+    try:
+        return (
             subprocess.run(
                 ["pactl", "info"], env=_pulse_env(), capture_output=True, timeout=5
             ).returncode
             == 0
-        ):
-            return
-        subprocess.run(
-            [
-                "pulseaudio",
-                "--system",
-                "--daemonize=yes",
-                "--disallow-exit",
-                "--exit-idle-time=-1",
-            ],
-            check=True,
-            timeout=10,
         )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _ensure_pulse() -> None:
+    """Start the system PulseAudio daemon if it isn't already answering.
+
+    Every failure path raises :class:`AudioStartupError` -- the daemon exiting
+    non-zero (e.g. "Daemon startup failed" under a restrictive sandbox), the binary
+    being absent, or the readiness probe timing out -- so audio startup never leaks a
+    bare ``CalledProcessError``/``OSError``. That matters because a leaked subprocess
+    error would escape the launch's audio handling entirely and strand the browser in
+    ``init``; an ``AudioStartupError`` is caught and downgraded to "no sound" instead.
+    """
+    with _pulse_lock:
+        if _pactl_info_ok():
+            return
+        try:
+            subprocess.run(
+                [
+                    "pulseaudio",
+                    "--system",
+                    "--daemonize=yes",
+                    "--disallow-exit",
+                    "--exit-idle-time=-1",
+                ],
+                check=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            raise AudioStartupError(f"PulseAudio failed to start ({e})") from e
         deadline = time.monotonic() + _READY_TIMEOUT
         while time.monotonic() < deadline:
-            if (
-                subprocess.run(
-                    ["pactl", "info"], env=_pulse_env(), capture_output=True, timeout=5
-                ).returncode
-                == 0
-            ):
+            if _pactl_info_ok():
                 return
             threading.Event().wait(0.1)
         raise AudioStartupError("PulseAudio did not become ready")
@@ -129,23 +144,31 @@ class BrowserAudio:
                 f"KasmVNC certificate is missing: {self.certificate}"
             )
         _ensure_pulse()
-        loaded = subprocess.run(
-            [
-                "pactl",
-                "load-module",
-                "module-null-sink",
-                f"sink_name={self.sink_name}",
-                "rate=44100",
-                "channels=2",
-            ],
-            env=_pulse_env(),
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        try:
+            loaded = subprocess.run(
+                [
+                    "pactl",
+                    "load-module",
+                    "module-null-sink",
+                    f"sink_name={self.sink_name}",
+                    "rate=44100",
+                    "channels=2",
+                ],
+                env=_pulse_env(),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            self.stop()
+            raise AudioStartupError(f"could not load the audio sink ({e})") from e
         self._module_index = int(loaded.stdout.strip())
-        self._sink_index = self._find_sink_index()
+        try:
+            self._sink_index = self._find_sink_index()
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            self.stop()
+            raise AudioStartupError(f"could not resolve the audio sink ({e})") from e
         self._relay = subprocess.Popen(
             [
                 str(_RELAY),
