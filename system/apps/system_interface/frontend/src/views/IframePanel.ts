@@ -21,6 +21,9 @@ export const IframePanel: m.Component<IframePanelAttrs> = {
       // origin), so allow-same-origin only lets the framed app be a normal
       // page on ITS origin -- it grants nothing on the shell's origin.
       sandbox: "allow-scripts allow-same-origin allow-forms allow-popups",
+      // Let embedded services (e.g. the browser fleet viewer) reach the user's
+      // clipboard via navigator.clipboard for copy/paste into the remote browser.
+      allow: "clipboard-read; clipboard-write",
     };
     if (serviceName) {
       attrs[IFRAME_PANEL_SERVICE_NAME_ATTR] = serviceName;

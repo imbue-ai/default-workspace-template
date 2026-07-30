@@ -942,11 +942,36 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={"workspace": "ws", "project": "proj"},
+        is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
     # The chat carries user_created so the OOM launch wrapper puts it in the
     # dynamic chat band rather than the least-protected worker/unclassified band.
     assert "user_created=true" in argv
+
+
+def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
+    """Chat is the only type that starts fast, so its create must say which way."""
+    enabled_argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={},
+        is_fast_mode_enabled=True,
+    )
+    disabled_argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={},
+        is_fast_mode_enabled=False,
+    )
+    assert "agent_types.claude.settings_overrides.fastMode=true" in enabled_argv
+    assert "agent_types.claude.settings_overrides.fastMode=false" in disabled_argv
+    # Both forms must resolve against the live mngr config model, not just parse
+    # as CLI tokens: an unresolvable -S key path fails the create outright.
+    assert_mngr_argv_valid(enabled_argv)
+    assert_mngr_argv_valid(disabled_argv)
 
 
 def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:

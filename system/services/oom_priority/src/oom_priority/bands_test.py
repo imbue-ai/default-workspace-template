@@ -18,7 +18,6 @@ _BUILTIN_SERVICE_ORDER = (
     "github-sync",
     "host-backup",
     "app-watcher",
-    "web",
 )
 
 

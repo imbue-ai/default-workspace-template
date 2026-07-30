@@ -16,6 +16,7 @@ from imbue.system_interface.layout_ops import is_broadcasting_op
 from imbue.system_interface.layout_ops import is_destroyable_terminal_session
 from imbue.system_interface.layout_ops import is_known_op
 from imbue.system_interface.layout_ops import is_mutating_op
+from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
@@ -28,6 +29,20 @@ _LOCAL_WORKSPACE_HOST = "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421"
 # The same coordinate on a (future) shared hostname: the nesting rule is
 # identical, only the base after ``host-<hex>`` is longer.
 _SHARED_WORKSPACE_HOST = "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.user.us-east.imbueminds.com"
+
+
+def test_is_sessionless_browser_ref() -> None:
+    # Bare browser ref (or an empty session) is the orphan-pane case -> rejected.
+    assert is_sessionless_browser_ref("service:browser") is True
+    assert is_sessionless_browser_ref("service:browser?session=") is True
+    assert is_sessionless_browser_ref("service:browser?foo=bar") is True
+    # A real session name is fine.
+    assert is_sessionless_browser_ref("service:browser?session=alex-smith") is False
+    # Not a browser ref (or not a service ref, or non-string) -> not our concern.
+    assert is_sessionless_browser_ref("service:web") is False
+    assert is_sessionless_browser_ref("service:browserfoo") is False
+    assert is_sessionless_browser_ref("chat:alex-smith") is False
+    assert is_sessionless_browser_ref(None) is False
 
 
 def test_known_ops_cover_the_full_surface() -> None:
