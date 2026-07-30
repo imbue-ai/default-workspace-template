@@ -68,6 +68,48 @@ def _suppress_flag_warning_banner() -> None:
             (directory / "minds-flag-warnings.json").write_text(_FLAG_WARNING_POLICY)
         except OSError:
             continue
+
+
+# PulseAudio: a system-mode daemon and one named null sink whose monitor the
+# audio pipe captures. PULSE_SINK routes the browser's output into it, so a
+# silent tab produces silence the sample-gate drops. All best-effort: audio is
+# strictly additive -- if pulse setup fails the session still streams video.
+_PULSE_SERVER = "unix:/var/run/pulse/native"
+_PULSE_SINK = "streamed_browser"
+AUDIO_SOURCE_DEVICE = f"{_PULSE_SINK}.monitor"
+
+
+def _ensure_pulse_sink() -> bool:
+    """Start the pulse daemon (idempotent) and create the null sink. Returns
+    whether the sink is available for capture; never raises."""
+    env = {**os.environ, "PULSE_SERVER": _PULSE_SERVER}
+    try:
+        info = subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5)
+        if info.returncode != 0:
+            subprocess.run(
+                ["pulseaudio", "--system", "--daemonize=yes", "--disallow-exit",
+                 "--exit-idle-time=-1", "--log-target=stderr"],
+                capture_output=True, timeout=10,
+            )
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
+                    break
+                threading.Event().wait(0.2)
+        subprocess.run(
+            ["pactl", "load-module", "module-null-sink", f"sink_name={_PULSE_SINK}",
+             "rate=48000", "channels=2"],
+            env=env, capture_output=True, timeout=10,
+        )
+        check = subprocess.run(
+            ["pactl", "list", "short", "sinks"], env=env, capture_output=True, text=True, timeout=5
+        )
+        return _PULSE_SINK in check.stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        logger.warning("pulse audio setup failed ({}); session will stream video only", error)
+        return False
+
+
 _START_URL = os.environ.get("STREAMED_BROWSER_START_URL", "https://duckduckgo.com")
 
 
@@ -104,6 +146,7 @@ class StreamedBrowserSession:
 
     def __init__(self) -> None:
         self.display: str | None = None
+        self.audio_available = False
         self._xvfb: subprocess.Popen[bytes] | None = None
         self._chromium: subprocess.Popen[bytes] | None = None
         self._lock = threading.Lock()
@@ -153,6 +196,7 @@ class StreamedBrowserSession:
                 threading.Event().wait(0.1)
             _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
             _suppress_flag_warning_banner()
+            audio_ok = _ensure_pulse_sink()
             # --no-sandbox: the service runs as root in the workspace container
             # (same constraint as the browser app and the repo's Playwright
             # guidance for runtimes without unprivileged user namespaces).
@@ -189,11 +233,17 @@ class StreamedBrowserSession:
                     f"--window-size={_INIT_W},{_INIT_H}",
                     _START_URL,
                 ],
-                env={**os.environ, "DISPLAY": display},
+                env={
+                    **os.environ,
+                    "DISPLAY": display,
+                    "PULSE_SERVER": _PULSE_SERVER,
+                    "PULSE_SINK": _PULSE_SINK,
+                },
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
             self.display = display
+            self.audio_available = audio_ok
             logger.info("streamed browser session up on {} (framebuffer {}x{}, window {}x{})", display, _FB_W, _FB_H, _INIT_W, _INIT_H)
             return display
 

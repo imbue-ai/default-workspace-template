@@ -395,6 +395,11 @@ class PixelfluxVideoPipe:
             message, self._cursor_message = self._cursor_message, None
             return message
 
+    @property
+    def condition(self) -> threading.Condition:
+        """The sender's wakeup condition; the audio pipe notifies it too."""
+        return self._condition
+
     def take_control_message(self) -> str | None:
         """The latest undelivered control frame (e.g. `res,w,h`), if any."""
         with self._condition:
@@ -420,7 +425,7 @@ class PixelfluxVideoPipe:
             self._condition.notify()
         return width, height
 
-    def next_packet(self, timeout: float) -> bytes | None:
+    def next_packet(self, timeout: float, has_extra=None) -> bytes | None:  # noqa: ANN001
         """Block until some row's stripe is admitted by its window (or timeout).
 
         Rows are scanned in y order -- with a handful of rows and per-row
@@ -432,10 +437,13 @@ class PixelfluxVideoPipe:
         deadline = time.monotonic() + timeout
         with self._condition:
             while not self._closed:
-                if self._cursor_message is not None or self._control_message is not None:
-                    # A pending cursor shape or control frame (e.g. a resize
-                    # ack) must not wait out the poll timeout: return so the
-                    # sender drains it now, ahead of any new-size stripe.
+                if (
+                    self._cursor_message is not None
+                    or self._control_message is not None
+                    or (has_extra is not None and has_extra())
+                ):
+                    # A pending cursor/control frame or audio chunk must not wait
+                    # out the poll timeout: return so the sender drains it now.
                     return None
                 for y_start in sorted(self._rows):
                     row = self._rows[y_start]
