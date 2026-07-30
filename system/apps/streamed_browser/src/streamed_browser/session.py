@@ -1,0 +1,155 @@
+"""One streamed-browser session: a private Xvfb display + a full Chromium on it.
+
+Unlike the browser app (headless Chromium + CDP + a rebuilt tab/address-bar UI),
+this streams Chromium's OWN interface as pixels: the session owns an Xvfb
+display sized to the stream, launches the workspace's Fortress Chromium
+maximized onto it, and the video pipe captures the whole display. Input lands
+at the display level (see xinput), so native menus, dropdowns and drag work
+because they are simply Chromium's.
+
+Lifecycle: created lazily by the service on first viewer connect and kept
+alive across viewer reconnects (the profile and page state persist). A dead
+Chromium or Xvfb marks the session unhealthy; the next connect replaces it.
+"""
+
+import os
+import shutil
+import socket
+import subprocess
+import threading
+import time
+from pathlib import Path
+
+from loguru import logger
+
+_FORTRESS_BINARY = "/opt/fortress/tilion-fortress/tilion"
+_SCREEN_W = int(os.environ.get("STREAMED_BROWSER_WIDTH", "1280"))
+_SCREEN_H = int(os.environ.get("STREAMED_BROWSER_HEIGHT", "800"))
+_DISPLAY_BASE = 50
+_DISPLAY_MAX = 79
+_READY_TIMEOUT = 20.0
+_PROFILE_DIR = Path("data/.apps/streamed-browser/profile")
+_START_URL = os.environ.get("STREAMED_BROWSER_START_URL", "https://duckduckgo.com")
+
+
+class SessionStartupError(RuntimeError):
+    pass
+
+
+def is_chromium_installed() -> bool:
+    """Fortress installs asynchronously on first boot (env-converge)."""
+    return os.access(_FORTRESS_BINARY, os.X_OK)
+
+
+def _display_is_free(number: int) -> bool:
+    return not Path(f"/tmp/.X{number}-lock").exists() and not Path(f"/tmp/.X11-unix/X{number}").exists()
+
+
+def _x_socket_live(number: int) -> bool:
+    path = f"/tmp/.X11-unix/X{number}"
+    if not Path(path).exists():
+        return False
+    probe = socket.socket(socket.AF_UNIX)
+    probe.settimeout(1.0)
+    try:
+        probe.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+class StreamedBrowserSession:
+    """Owns the Xvfb + Chromium pair for one streamed browser."""
+
+    def __init__(self) -> None:
+        self.display: str | None = None
+        self._xvfb: subprocess.Popen[bytes] | None = None
+        self._chromium: subprocess.Popen[bytes] | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def is_healthy(self) -> bool:
+        with self._lock:
+            return (
+                self._xvfb is not None
+                and self._xvfb.poll() is None
+                and self._chromium is not None
+                and self._chromium.poll() is None
+            )
+
+    def ensure_started(self) -> str:
+        """Start (or restart after a crash) and return the display name."""
+        with self._lock:
+            if (
+                self._xvfb is not None
+                and self._xvfb.poll() is None
+                and self._chromium is not None
+                and self._chromium.poll() is None
+                and self.display is not None
+            ):
+                return self.display
+            self._stop_locked()
+            if shutil.which("Xvfb") is None:
+                raise SessionStartupError("Xvfb is not installed in this workspace yet")
+            if not is_chromium_installed():
+                raise SessionStartupError(
+                    "Chromium (Fortress) is still installing in this workspace; try again in a minute"
+                )
+            number = next((n for n in range(_DISPLAY_BASE, _DISPLAY_MAX + 1) if _display_is_free(n)), None)
+            if number is None:
+                raise SessionStartupError("no free X display number for the streamed browser")
+            display = f":{number}"
+            self._xvfb = subprocess.Popen(
+                ["Xvfb", display, "-screen", "0", f"{_SCREEN_W}x{_SCREEN_H}x24"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            deadline = time.monotonic() + _READY_TIMEOUT
+            while not _x_socket_live(number):
+                if self._xvfb.poll() is not None or time.monotonic() > deadline:
+                    self._stop_locked()
+                    raise SessionStartupError("Xvfb did not become ready")
+                threading.Event().wait(0.1)
+            _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+            # --no-sandbox: the service runs as root in the workspace container
+            # (same constraint as the browser app and the repo's Playwright
+            # guidance for runtimes without unprivileged user namespaces).
+            self._chromium = subprocess.Popen(
+                [
+                    _FORTRESS_BINARY,
+                    "--no-sandbox",
+                    "--no-first-run",
+                    "--disable-session-crashed-bubble",
+                    "--hide-crash-restore-bubble",
+                    "--disable-dev-shm-usage",
+                    f"--user-data-dir={_PROFILE_DIR.resolve()}",
+                    "--window-position=0,0",
+                    f"--window-size={_SCREEN_W},{_SCREEN_H}",
+                    "--start-maximized",
+                    _START_URL,
+                ],
+                env={**os.environ, "DISPLAY": display},
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self.display = display
+            logger.info("streamed browser session up on {} ({}x{})", display, _SCREEN_W, _SCREEN_H)
+            return display
+
+    def _stop_locked(self) -> None:
+        for process in (self._chromium, self._xvfb):
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+        self._chromium = None
+        self._xvfb = None
+        self.display = None
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stop_locked()

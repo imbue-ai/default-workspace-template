@@ -71,9 +71,9 @@ apt-get install -y --no-install-recommends \
     bash build-essential ca-certificates cron curl earlyoom fd-find git git-lfs jq less nano \
     openssh-server procps restic ripgrep rsync sqlite3 supervisor tini tmux unison util-linux wget \
     xxd xmlstarlet
-# Runtime libraries the pixelflux wheel (browser live-view H.264 pipe) dlopens
-# at import -- without libva the whole browser-service dies on import -- plus
-# xdpyinfo, which videopipe uses to size the capture. Small enough to bake.
+# Runtime libraries the pixelflux wheel (streamed-browser H.264 pipe) dlopens
+# at import -- without libva its import raises (guarded in videopipe.py) --
+# plus xdpyinfo, which videopipe uses to size the capture. Small enough to bake.
 apt-get install -y --no-install-recommends \
     libva2 libva-drm2 libva-x11-2 x11-utils
 rm -rf /var/lib/apt/lists/*
