@@ -72,3 +72,13 @@ def test_ack_of_unknown_frame_is_harmless() -> None:
     assert not window.admits(is_keyframe=False)
     window.ack(5)
     assert window.admits(is_keyframe=False)
+
+
+def test_capture_rate_tracks_delivery_and_snaps_to_max_when_idle() -> None:
+    from streamed_browser.videopipe import target_capture_fps
+
+    assert target_capture_fps(0, 2) == 60.0  # idle -> ceiling
+    # 40 stripes over the 2s window on 2 rows = 10 fps delivered -> 1.5x + 2.
+    assert target_capture_fps(40, 2) == 17.0
+    assert target_capture_fps(4, 2) == 15.0  # floor
+    assert target_capture_fps(400, 2) == 60.0  # cap
