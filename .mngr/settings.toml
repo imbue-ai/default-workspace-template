@@ -5,6 +5,18 @@
 type = "claude"
 connect = false
 ensure_clean = false
+# Converge the venv for EVERY agent, whatever its role or harness. A fresh git
+# worktree carries no .venv (gitignored), so a worker's first `uv run` would
+# otherwise cold-build one mid-task -- lazily, with root-closure scope rather than
+# --all-packages, racing whatever the agent is already doing (intermittent
+# ModuleNotFoundError, e.g. imbue_common). Chat agents share the services agent's
+# work_dir and so are covered by the bootstrap's boot-time converge in principle,
+# but have still hit missing-package failures in practice, so they get it too.
+# Set here rather than per template because it is a property of this workspace,
+# not of any one role: the config layer resolves before templates, so it runs
+# ahead of a template's own provision commands (e.g. worker's skill install).
+# uv's baked warm cache makes this hardlink-fast when there is nothing to do.
+extra_provision_command__extend = ["uv sync --all-packages"]
 pass_env__extend = ["REMOTE_SERVICE_CONNECTOR_URL", "LATCHKEY_GATEWAY"]
 host_env__extend = [
     "IS_SANDBOX=1",
@@ -138,22 +150,6 @@ version = "2.1.207"
 # config beside it.
 isolate_local_config_dir = false
 
-# User-facing chat agents run this type -- the initial /welcome agent and every
-# "New Agent" chat both launch with `--template chat` (system/libs/bootstrap's
-# manager.py and system/apps/system_interface/.../agent_manager.py). parent_type = "claude" inherits
-# all launch config (the oom wrapper command, cli_args, pinned version, model);
-# we only add the Engineering Subordinate output style on top. fastMode is
-# deliberately NOT set here -- both chat-create paths pass it per create (see the
-# note on agent_types.claude.settings_overrides), and a value set here would
-# outrank that override.
-# Scoping it here rather than on `claude` keeps worktree/worker/main agents
-# unstyled -- only user-facing chat should talk like a subordinate. The style
-# file lives at .claude/output-styles/engineering-subordinate.md; its `name:`
-# frontmatter must match the outputStyle value below exactly.
-[agent_types.chat]
-parent_type = "claude"
-settings_overrides__extend = { outputStyle = "Engineering Subordinate" }
-
 # The "main" (services) agent type -- a plain `command` agent, NOT a claude
 # agent. No claude ever runs as this agent: window 0 only sleeps while the
 # bootstrap window (extra_window) runs supervisord, which owns every background
@@ -172,17 +168,6 @@ settings_overrides__extend = { outputStyle = "Engineering Subordinate" }
 [agent_types.main]
 parent_type = "command"
 command = "sleep infinity"
-
-# the "worker" agent type -- the default for delegated tasks
-[agent_types.worker]
-parent_type = "claude"
-# Repeat the wrapper command here, not just on [agent_types.claude]: an mngr
-# config-load bug means a child type does not inherit the parent's non-default
-# `command`, so without this a worker launches plain claude and never gets its
-# band. (load_config's final model_validate re-marks every field as set, so the
-# parent_type merge sees the worker's defaulted command and clobbers the inherited
-# one; verified live.)
-command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/claude_oom_launch.py"
 
 # the "codex" agent type -- OpenAI Codex CLI as a peer harness to claude. It is
 # its own base type (registered by the vendored imbue-mngr-codex plugin via
@@ -909,75 +894,78 @@ pass_host_env__extend = ["MNGR_PREFIX"]
 # code is already present so default-workspace-template-seed is a no-op. Same as the vultr/ovh
 # templates.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
-
 ## and these templates are for sub-agents created within the sandbox
+##
+## They come in two orthogonal kinds, stacked left to right at create time:
+##
+##   mngr create <name> -t <harness> -t <role>
+##
+## A HARNESS template sets `type` and nothing else -- it picks which agent binary
+## runs. A ROLE template says what the agent is *for* (where it works, what it is
+## told, what its environment holds) and never sets `type`, so the same role runs
+## under any harness. Keeping the two apart is what stops the template list from
+## growing as the product of harnesses and roles: adding a harness costs one
+## template, not one per role.
+##
+## Aggregate keys in a role use `__extend`, never a bare assign: templates stack,
+## and a bare assign over a key an earlier template in the stack contributed to is
+## rejected by the settings narrowing guard.
 
-# Chat template: minimal agent for additional chat sessions in the same work directory
+## --- harnesses ---
+
+# Claude Code. `[commands.create] type` already defaults to this, so `-t claude`
+# is redundant in practice -- but spelling it out keeps every create site
+# symmetric with the codex one and survives a change to that default.
+[create_templates.claude]
+type = "claude"
+
+# OpenAI Codex CLI. See [agent_types.codex] for the model/sandbox posture.
+[create_templates.codex]
+type = "codex"
+
+## --- roles ---
+
+# Chat: a user-facing conversational agent, sharing the workspace's work
+# directory (`transfer = none`) rather than taking a worktree of its own -- one
+# workspace, one work_dir, all chats in it.
+#
+# The output style is what makes chat agents talk like a subordinate while
+# workers and automations stay unstyled. `output_style` names the `name:`
+# frontmatter of a file in .agents/output-styles/ (mngr validates it at create
+# and fails loudly on a miss). It is harness-neutral: claude takes it as its
+# native `outputStyle` setting, codex -- which has no output-style concept --
+# gets the same file's body as developer instructions.
 [create_templates.chat]
-type = "chat"
+transfer = "none"
+output_style = "Engineering Subordinate"
 
-# Caretaker template: the weekly maintenance agent (the "Caretaker") -- the
-# tailored example of the generic `automation` template below. Like `chat`,
-# it is a plain `claude` agent sharing the workspace's ~/.claude config dir,
-# but it is oriented by an appended system prompt
-# to run the `caretaker` skill. It is spawned (and re-woken) by the caretaker
-# job (the /etc/cron.d/minds-caretaker entry the enable-caretaker skill
-# creates -- absent until then, weekly and findings-gated via
+# Caretaker: the weekly maintenance agent -- the tailored instance of the
+# generic `automation` role below. Spawned (and re-woken) by the caretaker job
+# (the /etc/cron.d/minds-caretaker entry the enable-caretaker skill creates --
+# absent until then, weekly and findings-gated via
 # system/services/caretaker/caretaker_check.sh once enabled) via
-# system/libs/automations/run_automation.sh, and is labelled automation=caretaker
+# system/libs/automations/run_automation.sh, and labelled automation=caretaker
 # so it can be found as a singleton (the agent surfaces its own chat tab via
 # system/scripts/layout.py after its first message).
 [create_templates.caretaker]
-type = "claude"
-env = ["MNGR_AGENT_ROLE=caretaker"]
-agent_args = [
-    "--append-system-prompt",
-    "You are the Caretaker: a maintenance agent for this workspace, woken about once a week when a scheduled check finds something worth reporting. When you are messaged to run, follow the `caretaker` skill (.agents/skills/caretaker/SKILL.md) exactly. Always speak to the user in plain, non-technical, user-experience terms. Apart from one look-only scan on your very first run -- which you always do to introduce yourself, and which never changes anything -- never scan logs or apply fixes without the permission recorded in data/.state/caretaker/permissions.md, and never apply a fix on that first run.",
-]
+transfer = "none"
+env__extend = ["MNGR_AGENT_ROLE=caretaker"]
+append_system_prompt = "You are the Caretaker: a maintenance agent for this workspace, woken about once a week when a scheduled check finds something worth reporting. When you are messaged to run, follow the `caretaker` skill (.agents/skills/caretaker/SKILL.md) exactly. Always speak to the user in plain, non-technical, user-experience terms. Apart from one look-only scan on your very first run -- which you always do to introduce yourself, and which never changes anything -- never scan logs or apply fixes without the permission recorded in data/.state/caretaker/permissions.md, and never apply a fix on that first run."
 
-# Automation template: the reusable base for any skill run on a cadence
-# (the Caretaker above is a tailored instance). system/libs/automations/
-# run_automation.sh <skill> spawns one of these per skill, labels it
-# automation=<skill>, and messages it `/<skill>` on every run -- so a new
-# automation (e.g. a morning news digest) needs only a skill plus a cron
-# entry, no new template. It is a plain `claude` agent oriented, by an
-# appended system prompt, to run whatever skill the slash-command it
-# receives names.
+# Automation: the reusable base for any skill run on a cadence (the Caretaker
+# above is a tailored instance). system/libs/automations/run_automation.sh
+# <skill> spawns one per skill, labels it automation=<skill>, and messages it
+# `/<skill>` on every run -- so a new automation (e.g. a morning news digest)
+# needs only a skill plus a cron entry, no new template.
 [create_templates.automation]
-type = "claude"
-env = ["MNGR_AGENT_ROLE=automation"]
-agent_args = [
-    "--append-system-prompt",
-    "You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: for L in desktop mobile; do python3 system/scripts/layout.py open --layout \"$L\" \"chat:$MNGR_AGENT_NAME\"; done (--layout is required; the layout the user is not on fails fast and harmlessly; best-effort -- continue if both fail). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it.",
-]
+transfer = "none"
+env__extend = ["MNGR_AGENT_ROLE=automation"]
+append_system_prompt = "You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: for L in desktop mobile; do python3 system/scripts/layout.py open --layout \"$L\" \"chat:$MNGR_AGENT_NAME\"; done (--layout is required; the layout the user is not on fails fast and harmlessly; best-effort -- continue if both fail). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."
 
-# Codex chat template: a codex agent in the same work directory (parallels
-# create_templates.chat, which is claude). Spawn from the CLI with
-# `mngr create <name> chat_codex`; the system-interface "New Codex Agent" UI
-# will target this template once wired.
-[create_templates.chat_codex]
-type = "codex"
-
-# Worktree template: agent in a new git worktree, no services by default --
-# creates its own as needed. Uses the plain `claude` type (not `main`), so
-# worktree agents run a real claude binary and share the workspace's ~/.claude
-# config dir.
-[create_templates.worktree]
-type = "claude"
-# A fresh worktree checkout carries no .venv (gitignored), so the agent's
-# first `uv run` would otherwise cold-build one mid-task -- lazily, with
-# root-closure scope rather than --all-packages, racing whatever the agent
-# is already doing (intermittent ModuleNotFoundError, e.g. imbue_common).
-# Converge it synchronously at create instead: extra provision commands run
-# with cwd = the new worktree, before the agent launches, and uv's baked
-# warm cache makes this a hardlink-fast install. Mirrors the boot-time
-# `uv sync --all-packages` the bootstrap performs for the shared work_dir.
-extra_provision_command = ["uv sync --all-packages"]
-
-# Worker template: general purpose sub agent for doing tasks reliably (and ensuring that they are verified)
-[create_templates.worker]
-type = "worker"
-extra_window = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+# Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
+# are verified), landing in its own git worktree so its work is isolated from
+# the workspace checkout until merged back.
+#
 # The stop hook stays enabled (REVIEWER_STOP_HOOK_ENABLE=1) for a single
 # purpose: its uncommitted-changes gate, which keeps a worker from ending a
 # turn with uncommitted work (that work is silently lost when the branch is
@@ -991,41 +979,15 @@ extra_window = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $
 # REVIEWER_CI_ENABLE=0: repos created from this template are isolated units --
 # the stop hook must never auto-create PRs or push to origin (the repo-level
 # .reviewer/settings.json likewise disables ci + stop_hook.fetch_and_merge).
-env = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
-# Workers land in a fresh git worktree of the workspace repo (no .venv), so
-# converge it at create like the worktree template does -- otherwise the
-# worker's first `uv run` cold-builds the venv mid-task with root-closure
-# scope. Runs with cwd = the worker's worktree, before the agent launches.
-extra_provision_command = ["uv sync --all-packages"]
-agent_args = [
-    "--dangerously-skip-permissions",
-    "--append-system-prompt",
-    "You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made.",
-]
-
-# Subskill-worker template: sub-agent for any flow that hands its worker the
-# generic harden worker -- the crystallize-creation / update-creation /
-# heal-creation lifecycle (across skills, apps, services, and the system
-# interface).
-# Inherits from `worker`, adds:
-#  - MNGR_AGENT_ROLE=worker so the harden Stop hook skips in-worker.
-#  - A pre-provision step that installs the single generic worker sub-skill from
-#    .agents/shared/worker/ into the worker's .agents/skills/ tree as
-#    `harden-worker`. The worker reads the operation + type from its task
-#    file and composes the matching references.
-[create_templates.subskill-worker]
-type = "worker"
-extra_window = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
-# Same rationale as the worker template: stop hook on for commit enforcement
-# only, autofix + architecture gates off (handled by skill prompting), CI off.
-env = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
-extra_provision_command = [
-    # Fresh worktree, no .venv -- converge before the agent launches (same
-    # rationale as the worker/worktree templates). First so the venv is ready
-    # before anything else in this list could want it.
-    "uv sync --all-packages",
-    "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills",
-]
-agent_args = [
-    "--dangerously-skip-permissions",
-]
+#
+# install_worker_skills.sh installs the single generic worker sub-skill from
+# .agents/shared/worker/ into the worker's .agents/skills/ tree as
+# `harden-worker`, which the crystallize / update / heal creation lifecycle
+# relies on. (The venv converge that used to sit here now runs for every agent
+# from [commands.create], and lands before this.)
+[create_templates.worker]
+transfer = "git-worktree"
+extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
+extra_provision_command__extend = ["bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
+append_system_prompt = "You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."

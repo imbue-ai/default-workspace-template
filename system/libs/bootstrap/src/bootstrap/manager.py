@@ -200,8 +200,8 @@ def _build_create_chat_command(
         # already exists". With --transfer none the chat agent reuses
         # the services agent's /home/user/workspace/ as its work_dir, which is what we
         # want (one workspace == one work_dir, shared across all chats).
-        "--transfer",
-        "none",
+        "--template",
+        "claude",
         "--template",
         "chat",
         "--message",

@@ -319,17 +319,17 @@ def test_read_workspace_host_id_tolerates_missing_env_and_file(
 _LIST_PAYLOAD = json.dumps(
     {
         "agents": [
-            {"name": "chat-1", "type": "chat", "state": "RUNNING"},
+            {"name": "chat-1", "type": "claude", "state": "RUNNING"},
             {"name": "system-services", "type": "main", "state": "RUNNING"},
-            {"name": "worker-1", "type": "worker", "state": "RUNNING"},
+            {"name": "worker-1", "type": "claude", "state": "RUNNING"},
             {"name": "extra-chat", "type": "claude", "state": "WAITING"},
-            {"name": "old-chat", "type": "chat", "state": "STOPPED"},
+            {"name": "old-chat", "type": "claude", "state": "STOPPED"},
         ]
     }
 )
 
 
-def test_snapshot_includes_claude_chat_and_worker_types_excludes_main(isolated_claude_config: Path) -> None:
+def test_snapshot_includes_claude_typed_agents_and_excludes_main(isolated_claude_config: Path) -> None:
     """`chat`-typed agents (the initial welcome chat and every "New Agent" chat)
     run a real claude and MUST be restarted on credential changes -- they were
     silently skipped when the `chat` type split off from `claude`."""

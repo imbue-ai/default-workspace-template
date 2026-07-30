@@ -172,16 +172,6 @@ class TerminalSessionInfo(FrozenModel):
     cwd: str = Field(description="The session's current working directory (tmux session_path)")
 
 
-class CreateWorktreeRequest(FrozenModel):
-    """Request body for creating a worktree agent."""
-
-    name: str = Field(description="Name for the new worktree agent")
-    selected_agent_id: str = Field(
-        default="",
-        description="ID of the agent whose work dir to create the worktree from",
-    )
-
-
 class CreateChatRequest(FrozenModel):
     """Request body for creating a chat agent."""
 

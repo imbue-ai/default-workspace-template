@@ -55,6 +55,25 @@ from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
+# Harness create templates. Create templates stack harness-then-role, so these name
+# the harness half; the role half (`chat`) is the same for every one of them.
+CLAUDE_HARNESS_TEMPLATE: Final[str] = "claude"
+CODEX_HARNESS_TEMPLATE: Final[str] = "codex"
+
+# The `creation_type` broadcast to the UI per harness. It still names the harness
+# because that is the distinction a user sees between the "New Agent" and "New Codex
+# Agent" menu entries -- both create the same `chat` role underneath.
+HARNESS_CREATION_TYPES: Final[dict[str, str]] = {
+    CLAUDE_HARNESS_TEMPLATE: "chat",
+    CODEX_HARNESS_TEMPLATE: "codex",
+}
+
+# The mngr agent type each harness resolves to, for the creation thread's bookkeeping.
+HARNESS_AGENT_TYPES: Final[dict[str, str]] = {
+    CLAUDE_HARNESS_TEMPLATE: "claude",
+    CODEX_HARNESS_TEMPLATE: "codex",
+}
+
 _APPS_TOML_FILENAME = "data/.state/apps.toml"
 _APPS_TOML_BASENAME = "apps.toml"
 _DEFAULT_MNGR_BINARY = "mngr"
@@ -71,19 +90,25 @@ _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
 _ASSIST_AUTO_OPEN_LABEL = "assist"
 
 
-def _build_worktree_create_command(
+def _build_chat_create_command(
     mngr_binary: str,
     name: str,
     agent_id: str,
-    current_branch: str,
-    new_branch: str,
-    parent_labels: dict[str, str],
+    primary_labels: dict[str, str],
+    harness_template: str,
+    is_fast_mode_enabled: bool,
 ) -> list[str]:
-    """Build the ``mngr create`` argv for a worktree agent.
+    """Build the ``mngr create`` argv for a chat agent on a given harness.
 
-    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without constructing an ``AgentManager`` or running a
-    subprocess (see ``agent_manager_test.py``).
+    Create templates stack harness-then-role, so every harness shares this one
+    builder: ``harness_template`` picks the binary (`claude`, `codex`, ...) and the
+    `chat` role supplies everything else -- the shared work directory and the output
+    style. Adding a harness means passing a different name here, not writing another
+    near-identical builder.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable against the
+    live CLI without constructing an ``AgentManager`` or running a subprocess (see
+    ``agent_manager_test.py``).
     """
     cmd = [
         mngr_binary,
@@ -91,83 +116,25 @@ def _build_worktree_create_command(
         name,
         "--id",
         agent_id,
-        "--transfer",
-        "git-worktree",
-        "--branch",
-        f"{current_branch}:{new_branch}",
         "--template",
-        "worktree",
-        "--label",
-        "user_created=true",
-        "--no-connect",
-    ]
-    # Inherit the project label from the parent agent. The worker belongs to its
-    # workspace by sharing the host; it carries no workspace label.
-    if "project" in parent_labels:
-        cmd.extend(["--label", f"project={parent_labels['project']}"])
-    return cmd
-
-
-def _build_chat_create_command(
-    mngr_binary: str,
-    name: str,
-    agent_id: str,
-    primary_labels: dict[str, str],
-    is_fast_mode_enabled: bool,
-) -> list[str]:
-    """Build the ``mngr create`` argv for a chat agent. Pure (see above)."""
-    cmd = [
-        mngr_binary,
-        "create",
-        name,
-        "--id",
-        agent_id,
-        "--transfer",
-        "none",
+        harness_template,
         "--template",
         "chat",
         # Tags this as a user-created agent so the OOM launch wrapper puts it in the
         # dynamic chat band (re-tagged from live UI engagement), not the worker band.
         "--label",
         "user_created=true",
-        # Chat is the one interactive agent type, so it is the only one that starts
-        # fast; .mngr/settings.toml defaults every other type to standard speed. See
-        # that file's [agent_types.claude] note for why the override targets `claude`
-        # rather than `chat`.
-        "-S",
-        f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}",
         "--no-connect",
     ]
+    # Chat is the one interactive agent type, so it is the only one that starts fast;
+    # .mngr/settings.toml defaults every other type to standard speed. Claude-specific:
+    # fast mode is a claude setting, so it is meaningless under any other harness.
+    if harness_template == CLAUDE_HARNESS_TEMPLATE:
+        cmd.extend(
+            ["-S", f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}"]
+        )
     # Inherit the project label from the primary agent. The chat agent belongs to
     # its workspace by sharing the host; it carries no workspace label.
-    if "project" in primary_labels:
-        cmd.extend(["--label", f"project={primary_labels['project']}"])
-    return cmd
-
-
-def _build_codex_create_command(
-    mngr_binary: str,
-    name: str,
-    agent_id: str,
-    primary_labels: dict[str, str],
-) -> list[str]:
-    """Build the ``mngr create`` argv for a codex chat agent. Identical to the chat
-    command except for the harness template (``chat_codex`` -> agent_types.codex).
-    Pure (see above)."""
-    cmd = [
-        mngr_binary,
-        "create",
-        name,
-        "--id",
-        agent_id,
-        "--transfer",
-        "none",
-        "--template",
-        "chat_codex",
-        "--label",
-        "user_created=true",
-        "--no-connect",
-    ]
     if "project" in primary_labels:
         cmd.extend(["--label", f"project={primary_labels['project']}"])
     return cmd
@@ -608,54 +575,13 @@ class AgentManager:
         """Generate a random agent name using mngr's name generator."""
         return str(generate_agent_name(AgentNameStyle.COOLNAME))
 
-    def create_worktree_agent(self, name: str, selected_agent_id: str) -> str:
-        """Create a new worktree agent. Returns the pre-generated agent ID."""
-        agent_id = str(AgentId())
+    def create_chat_agent(self, name: str, harness_template: str = CLAUDE_HARNESS_TEMPLATE) -> str:
+        """Create a chat agent in the primary agent's work dir on the given harness.
 
-        with self._lock:
-            work_dir = self._resolve_agent_work_dir(selected_agent_id)
-            parent = self._agents.get(selected_agent_id)
-            parent_labels = dict(parent.labels) if parent else {}
-
-        if work_dir is None:
-            msg = f"Cannot determine work directory for agent {selected_agent_id}"
-            raise AgentCreationError(msg)
-
-        current_branch = self._get_current_branch(Path(work_dir))
-        new_branch = f"mngr/{name}"
-
-        cmd = _build_worktree_create_command(
-            self._mngr_binary, name, agent_id, current_branch, new_branch, parent_labels
-        )
-
-        log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
-
-        proto_info = {
-            "agent_id": agent_id,
-            "name": name,
-            "creation_type": "worktree",
-            "parent_agent_id": None,
-        }
-        with self._lock:
-            self._proto_agents[agent_id] = proto_info
-            self._log_queues[agent_id] = log_queue
-
-        self._broadcaster.broadcast_proto_agent_created(
-            agent_id=agent_id,
-            name=name,
-            creation_type="worktree",
-            parent_agent_id=None,
-        )
-
-        labels = {"user_created": "true"}
-        if "project" in parent_labels:
-            labels["project"] = parent_labels["project"]
-        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels, "claude")
-
-        return agent_id
-
-    def create_chat_agent(self, name: str) -> str:
-        """Create a new chat agent in the primary agent's work dir. Returns the pre-generated agent ID."""
+        Returns the pre-generated agent ID. ``harness_template`` names the harness
+        create template (`claude`, `codex`, ...); the `chat` role template supplies
+        everything else, so a new harness needs no new method here.
+        """
         agent_id = str(AgentId())
 
         with self._lock:
@@ -668,17 +594,22 @@ class AgentManager:
             raise AgentCreationError(msg)
 
         # New chats launch at the workspace's fast-mode setting: fast until the
-        # user answers the prompt, then whatever they chose.
+        # user answers the prompt, then whatever they chose. Only claude reads it.
         decision = read_workspace_fast_mode_decision(get_workspace_fast_mode_decision_path(Path(work_dir)))
         is_fast_mode_enabled = FAST_MODE_BEFORE_DECISION if decision is None else decision
-        cmd = _build_chat_create_command(self._mngr_binary, name, agent_id, primary_labels, is_fast_mode_enabled)
+        cmd = _build_chat_create_command(
+            self._mngr_binary, name, agent_id, primary_labels, harness_template, is_fast_mode_enabled
+        )
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
 
+        # The creation_type the UI shows still names the harness, since that is the
+        # distinction a user sees between the two "New ... Agent" menu entries.
+        creation_type = HARNESS_CREATION_TYPES[harness_template]
         proto_info = {
             "agent_id": agent_id,
             "name": name,
-            "creation_type": "chat",
+            "creation_type": creation_type,
             "parent_agent_id": None,
         }
         with self._lock:
@@ -688,57 +619,16 @@ class AgentManager:
         self._broadcaster.broadcast_proto_agent_created(
             agent_id=agent_id,
             name=name,
-            creation_type="chat",
+            creation_type=creation_type,
             parent_agent_id=None,
         )
 
         labels: dict[str, str] = {}
         if "project" in primary_labels:
             labels["project"] = primary_labels["project"]
-        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels, "claude")
-
-        return agent_id
-
-    def create_codex_agent(self, name: str) -> str:
-        """Create a new codex chat agent in the primary agent's work dir. Returns the
-        pre-generated agent ID. Mirrors :meth:`create_chat_agent` exactly, differing
-        only in the harness template (``chat_codex``) and the ``creation_type`` tag."""
-        agent_id = str(AgentId())
-
-        with self._lock:
-            work_dir = self._resolve_agent_work_dir(self._own_agent_id)
-            primary = self._agents.get(self._own_agent_id)
-            primary_labels = dict(primary.labels) if primary else {}
-
-        if work_dir is None:
-            msg = f"Cannot determine work directory for primary agent {self._own_agent_id}"
-            raise AgentCreationError(msg)
-
-        cmd = _build_codex_create_command(self._mngr_binary, name, agent_id, primary_labels)
-
-        log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
-
-        proto_info = {
-            "agent_id": agent_id,
-            "name": name,
-            "creation_type": "codex",
-            "parent_agent_id": None,
-        }
-        with self._lock:
-            self._proto_agents[agent_id] = proto_info
-            self._log_queues[agent_id] = log_queue
-
-        self._broadcaster.broadcast_proto_agent_created(
-            agent_id=agent_id,
-            name=name,
-            creation_type="codex",
-            parent_agent_id=None,
+        self._launch_creation_thread(
+            agent_id, name, cmd, Path(work_dir), log_queue, labels, HARNESS_AGENT_TYPES[harness_template]
         )
-
-        labels: dict[str, str] = {}
-        if "project" in primary_labels:
-            labels["project"] = primary_labels["project"]
-        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels, "codex")
 
         return agent_id
 
