@@ -68,6 +68,7 @@ from playwright.async_api import Error as PlaywrightError
 from pydantic import PrivateAttr
 
 from browser import manifest as fleet_manifest
+from browser import webrtc as webrtc_transport
 from browser.names import generate_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
 
@@ -455,6 +456,14 @@ class LiveBrowser(MutableModel):
     # bridge), so _broadcast can iterate it without a lock -- the single-loop
     # serialization is the guard. Mirrors system/apps/system_interface's WebSocketBroadcaster.
     _cast_queues: list["queue.Queue[str | None]"] = PrivateAttr(default_factory=list)
+    # One WebRTC peer per cast socket that negotiated one, keyed by that socket's
+    # outbound queue (the natural per-viewer identity here; queue.Queue hashes by
+    # object identity). While a peer's media transport is up its queue sits in
+    # ``_rtc_suppressed`` and ``_broadcast`` skips JPEG "frame" messages for it --
+    # WebRTC carries the pixels, everything else (control/tabs/ping) still fans out.
+    # Both structures are touched only on the loop thread, like ``_cast_queues``.
+    _rtc_peers: dict["queue.Queue[str | None]", webrtc_transport.CastPeer] = PrivateAttr(default_factory=dict)
+    _rtc_suppressed: set["queue.Queue[str | None]"] = PrivateAttr(default_factory=set)
     _latest_frame: str | None = PrivateAttr(default=None)
     _send_in_flight: bool = PrivateAttr(default=False)
     _nav_tracked: set[Page] = PrivateAttr(default_factory=set)
@@ -1036,6 +1045,72 @@ class LiveBrowser(MutableModel):
                 await self._active_page.reload()
         except _BROWSER_ERRORS as e:
             logger.debug("cast input ignored ({})", e)
+
+    # --- WebRTC live-view signaling (see browser/webrtc.py) --------------------
+
+    async def handle_webrtc_message(self, message: dict[str, Any], client_queue: "queue.Queue[str | None]") -> None:
+        """Signal ONE viewer's WebRTC session over its cast socket.
+
+        Unlike :meth:`handle_cast_message` (broadcast-oriented input), replies here go
+        to the requesting client's own queue, so the runner passes it through. NOT
+        gated on ``_input_enabled``: a viewer watching an agent drive still needs the
+        video. Runs on the loop, like everything touching the peer/queue structures.
+        """
+        kind = message.get("type")
+        if kind == "webrtc_config":
+            enabled = webrtc_transport.webrtc_enabled() and not self._crashed
+            self._push_to_queue(
+                client_queue,
+                {
+                    "type": "webrtc_config",
+                    "enabled": enabled,
+                    "ice_servers": (await webrtc_transport.client_ice_servers()) if enabled else [],
+                },
+            )
+        elif kind == "webrtc_offer":
+            await self._answer_webrtc_offer(str(message.get("sdp", "")), client_queue)
+
+    async def _answer_webrtc_offer(self, offer_sdp: str, client_queue: "queue.Queue[str | None]") -> None:
+        """Build this viewer's peer connection and reply webrtc_answer (or webrtc_error,
+        on which the viewer falls back to the JPEG stream). A re-offer on the same
+        socket (viewer-side retry) replaces the previous peer."""
+        await self._close_rtc_peer(client_queue)
+        if not webrtc_transport.webrtc_enabled() or self._crashed:
+            self._push_to_queue(client_queue, {"type": "webrtc_error", "error": "webrtc unavailable"})
+            return
+        peer = webrtc_transport.CastPeer(
+            get_frame=lambda: self._latest_frame,
+            on_connected=lambda: self._set_rtc_suppressed(client_queue, True),
+            on_gone=lambda: self._set_rtc_suppressed(client_queue, False),
+        )
+        self._rtc_peers[client_queue] = peer
+        try:
+            answer_sdp = await peer.answer(offer_sdp)
+        except webrtc_transport.SIGNALING_ERRORS as e:
+            logger.warning("browser {} webrtc answer failed ({})", self.browser_id, e)
+            await self._close_rtc_peer(client_queue)
+            self._push_to_queue(client_queue, {"type": "webrtc_error", "error": str(e)})
+            return
+        self._push_to_queue(client_queue, {"type": "webrtc_answer", "sdp": answer_sdp})
+
+    def _set_rtc_suppressed(self, client_queue: "queue.Queue[str | None]", suppressed: bool) -> None:
+        """Toggle JPEG-frame suppression for one viewer as its media transport comes and
+        goes (CastPeer's on_connected/on_gone). On un-suppress, replay the latest frame
+        so the canvas repaints immediately even on a static page (no repaint coming)."""
+        if suppressed:
+            if client_queue in self._cast_queues:
+                self._rtc_suppressed.add(client_queue)
+            return
+        self._rtc_suppressed.discard(client_queue)
+        if client_queue in self._cast_queues and self._latest_frame is not None:
+            self._push_to_queue(client_queue, {"type": "frame", "data": self._latest_frame})
+
+    async def _close_rtc_peer(self, client_queue: "queue.Queue[str | None]") -> None:
+        """Tear down one viewer's peer (if any) and lift its frame suppression."""
+        peer = self._rtc_peers.pop(client_queue, None)
+        self._rtc_suppressed.discard(client_queue)
+        if peer is not None:
+            await peer.close()
 
     async def _apply_resize(self, message: dict[str, Any]) -> None:
         """Human/idle resized their pane: re-render the browser to fill it, clamped to
@@ -1997,6 +2072,8 @@ class LiveBrowser(MutableModel):
         respect to :meth:`_broadcast` -- no lock needed because the loop serializes it."""
         if client_queue in self._cast_queues:
             self._cast_queues.remove(client_queue)
+        # The viewer's WebRTC peer (if it negotiated one) dies with its cast socket.
+        await self._close_rtc_peer(client_queue)
 
     async def describe(self) -> dict[str, Any]:
         """Snapshot for ``GET /browsers``: id, lifecycle, owner, and the tab list.
@@ -2035,15 +2112,28 @@ class LiveBrowser(MutableModel):
         iterating it here needs no lock.
         """
         text = json.dumps(message, default=str)
+        # JPEG frames skip clients whose WebRTC transport is carrying the pixels
+        # (see _set_rtc_suppressed); control/tabs/ping still reach everyone.
+        is_frame = message.get("type") == "frame"
         for client_queue in self._cast_queues:
+            if is_frame and client_queue in self._rtc_suppressed:
+                continue
+            self._push_text(client_queue, text)
+
+    def _push_to_queue(self, client_queue: "queue.Queue[str | None]", message: dict[str, Any]) -> None:
+        """Enqueue one message for ONE cast client (same drop-oldest policy as
+        :meth:`_broadcast`); used for the per-client WebRTC signaling replies."""
+        self._push_text(client_queue, json.dumps(message, default=str))
+
+    def _push_text(self, client_queue: "queue.Queue[str | None]", text: str) -> None:
+        try:
+            client_queue.put_nowait(text)
+        except queue.Full:
             try:
+                client_queue.get_nowait()  # drop the oldest buffered frame
                 client_queue.put_nowait(text)
-            except queue.Full:
-                try:
-                    client_queue.get_nowait()  # drop the oldest buffered frame
-                    client_queue.put_nowait(text)
-                except (queue.Empty, queue.Full):
-                    pass  # a concurrent drain raced us; the client will catch up
+            except (queue.Empty, queue.Full):
+                pass  # a concurrent drain raced us; the client will catch up
 
     def _shutdown_cast_queues(self) -> None:
         """Push the ``None`` shutdown sentinel onto every connected cast queue so each
@@ -2067,6 +2157,8 @@ class LiveBrowser(MutableModel):
             self._keepalive_task.cancel()
         # Tell every cast socket to tear down (don't wait for the client to disconnect).
         self._shutdown_cast_queues()
+        for client_queue in list(self._rtc_peers):
+            await self._close_rtc_peer(client_queue)
         # Release every queued agent so none hangs on a browser being torn down: wait-queue
         # waiters unblock (their acquire returns `closed`); resume-queue agents are messaged
         # it's gone and cleared.

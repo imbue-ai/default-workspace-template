@@ -36,6 +36,11 @@
   #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
   #screen { max-width: 100%; max-height: 100%; cursor: default; }
   #screen:focus { outline: none; }
+  /* WebRTC video surface: swapped in for the JPEG canvas while the peer
+     connection carries the stream (see setRtcActive). Same layout rules as
+     #screen so the switch is invisible. */
+  #vscreen { max-width: 100%; max-height: 100%; cursor: default; display: none; }
+  #vscreen:focus { outline: none; }
   #placeholder { position: absolute; color: #777; font-size: 13px; text-align: center; padding: 0 20px; }
 
   /* Full-stage grey overlay shown while an agent has control. It sits above the
@@ -94,6 +99,7 @@
   </div>
   <div id="stage">
     <canvas id="screen" tabindex="0"></canvas>
+    <video id="vscreen" tabindex="0" autoplay playsinline muted></video>
     <div id="placeholder">Starting browser…</div>
     <div id="cliptoast"></div>
     <div id="overlay">
@@ -118,6 +124,7 @@
   const stage = document.getElementById("stage");
   const cliptoast = document.getElementById("cliptoast");
   const canvas = document.getElementById("screen");
+  const video = document.getElementById("vscreen");
   const ctx = canvas.getContext("2d");
   const placeholder = document.getElementById("placeholder");
   const tabbar = document.getElementById("tabbar");
@@ -157,6 +164,74 @@
   // the return bar shows what the human must do, until control goes back to an agent.
   let handoffReason = null, handoffAgent = null;
   let lastControlState = { owner: "human", human_pinned: false, waiting: [] };
+
+  // --- WebRTC live view (preferred transport; JPEG-over-WS is the fallback) ---
+  // Once the browser is running we offer a recvonly video peer connection over the
+  // cast socket (webrtc_config -> webrtc_offer -> webrtc_answer; see webrtc.py on
+  // the server). While it is connected the video element replaces the canvas and
+  // the server stops sending JPEG frames to this client; any failure tears it down
+  // and the canvas takes over again. After RTC_MAX_FAILURES failed attempts we stop
+  // trying and stay on JPEG (reset on each fresh cast-socket connect).
+  let pc = null, rtcActive = false, rtcRetryTimer = null, rtcFailures = 0;
+  const RTC_MAX_FAILURES = 3;
+
+  function setRtcActive(active) {
+    if (rtcActive === active) return;
+    rtcActive = active;
+    video.style.display = active ? "block" : "none";
+    canvas.style.display = active ? "none" : "";
+    if (active) placeholder.style.display = "none";
+    if (document.activeElement === (active ? canvas : video)) (active ? video : canvas).focus();
+  }
+
+  function teardownRtc(scheduleRetry) {
+    if (pc) { try { pc.close(); } catch (_) {} pc = null; }
+    if (video.srcObject) video.srcObject = null;
+    setRtcActive(false);
+    if (scheduleRetry && !rtcRetryTimer && rtcFailures < RTC_MAX_FAILURES) {
+      rtcRetryTimer = setTimeout(() => { rtcRetryTimer = null; startRtc(); }, 5000);
+    }
+  }
+
+  function startRtc() {
+    if (pc || closedForGood || crashed || lifecycle !== "running") return;
+    if (!(castWs && castWs.readyState === 1)) return;
+    if (rtcFailures >= RTC_MAX_FAILURES || typeof RTCPeerConnection === "undefined") return;
+    sendCast({ type: "webrtc_config" });  // the config reply starts the negotiation
+  }
+
+  function waitIceComplete(conn) {
+    if (conn.iceGatheringState === "complete") return Promise.resolve();
+    return new Promise((resolve) => {
+      // Don't wait forever on an unreachable TURN: send what has gathered so far
+      // (host/STUN candidates cover every directly-reachable deployment).
+      const t = setTimeout(resolve, 3000);
+      conn.addEventListener("icegatheringstatechange", () => {
+        if (conn.iceGatheringState === "complete") { clearTimeout(t); resolve(); }
+      });
+    });
+  }
+
+  async function negotiateRtc(config) {
+    if (pc || !config.enabled) return;
+    const conn = new RTCPeerConnection({ iceServers: config.ice_servers || [] });
+    pc = conn;
+    conn.addTransceiver("video", { direction: "recvonly" });
+    conn.ontrack = (ev) => { video.srcObject = ev.streams[0] || new MediaStream([ev.track]); };
+    conn.onconnectionstatechange = () => {
+      if (pc !== conn) return;  // a newer attempt superseded this one
+      const s = conn.connectionState;
+      if (s === "connected") { rtcFailures = 0; setRtcActive(true); }
+      else if (s === "failed" || s === "closed" || s === "disconnected") { rtcFailures += 1; teardownRtc(true); }
+    };
+    try {
+      await conn.setLocalDescription(await conn.createOffer());
+      await waitIceComplete(conn);  // non-trickle: ship a self-contained offer
+      if (pc !== conn) return;
+      if (!(castWs && castWs.readyState === 1)) { teardownRtc(false); return; }
+      sendCast({ type: "webrtc_offer", sdp: conn.localDescription.sdp });
+    } catch (_) { rtcFailures += 1; teardownRtc(true); }
+  }
 
   function wsUrl(path) {
     const u = new URL(path, document.baseURI);
@@ -272,6 +347,7 @@
       initOverlay.classList.remove("show");
       app.classList.remove("chrome-hidden");
       placeholder.style.display = "none";
+      startRtc();  // upgrade the live view to WebRTC (falls back to JPEG on failure)
     }
   }
 
@@ -282,6 +358,7 @@
     crashed = true;
     lifecycle = "crashed";  // keep the explicit lifecycle consistent with the overlay
     hasFrame = false;
+    teardownRtc(false);  // a dead browser streams nothing; don't retry either
     stopIdleTimer();
     overlay.classList.remove("show");
     returnBar.classList.remove("show");
@@ -346,12 +423,21 @@
   }
   new ResizeObserver(reportSize).observe(stage);
 
-  // --- coordinate scaling: canvas CSS px -> frame device px ---
+  // --- coordinate scaling: surface CSS px -> frame device px ---
+  // The active surface is the video while WebRTC carries the stream, else the
+  // canvas; both render the same source pixels, so only the element differs.
+  function surfaceEl() { return rtcActive ? video : canvas; }
+  function surfaceDims() {
+    return rtcActive ? { w: video.videoWidth, h: video.videoHeight } : { w: canvas.width, h: canvas.height };
+  }
+  // Whether the active surface has real pixels to interact with (the input gate
+  // formerly known as hasFrame).
+  function haveMedia() { return rtcActive ? video.readyState >= 2 : hasFrame; }
   function scaled(e) {
-    const r = canvas.getBoundingClientRect();
-    const sx = canvas.width / r.width;
-    const sy = canvas.height / r.height;
-    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
+    const el = surfaceEl();
+    const r = el.getBoundingClientRect();
+    const d = surfaceDims();
+    return { x: (e.clientX - r.left) * (d.w / r.width), y: (e.clientY - r.top) * (d.h / r.height) };
   }
   function modifiers(e) {
     return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
@@ -359,7 +445,7 @@
   const BUTTONS = ["left", "middle", "right"];
 
   function mouse(type, e) {
-    if (controlOwner === "agent" || !hasFrame) return;
+    if (controlOwner === "agent" || !haveMedia()) return;
     if (type === "mouseMoved") {
       const now = performance.now();
       if (now - lastMove < 30) return;  // throttle moves so they don't starve the frame stream
@@ -374,16 +460,20 @@
       modifiers: modifiers(e),
     }});
   }
-  canvas.addEventListener("mousedown", (e) => { canvas.focus(); mouse("mousePressed", e); });
-  canvas.addEventListener("mouseup", (e) => mouse("mouseReleased", e));
-  canvas.addEventListener("mousemove", (e) => mouse("mouseMoved", e));
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  canvas.addEventListener("wheel", (e) => {
-    if (controlOwner === "agent" || !hasFrame) return;
-    e.preventDefault();
-    const p = scaled(e);
-    sendCast({ type: "mouse", event: { type: "mouseWheel", x: p.x, y: p.y, button: "none", deltaX: e.deltaX, deltaY: e.deltaY, modifiers: modifiers(e) } });
-  }, { passive: false });
+  // Input listeners go on BOTH surfaces (canvas for the JPEG stream, video for
+  // WebRTC); the handlers scale against whichever is active.
+  [canvas, video].forEach((el) => {
+    el.addEventListener("mousedown", (e) => { el.focus(); mouse("mousePressed", e); });
+    el.addEventListener("mouseup", (e) => mouse("mouseReleased", e));
+    el.addEventListener("mousemove", (e) => mouse("mouseMoved", e));
+    el.addEventListener("contextmenu", (e) => e.preventDefault());
+    el.addEventListener("wheel", (e) => {
+      if (controlOwner === "agent" || !haveMedia()) return;
+      e.preventDefault();
+      const p = scaled(e);
+      sendCast({ type: "mouse", event: { type: "mouseWheel", x: p.x, y: p.y, button: "none", deltaX: e.deltaX, deltaY: e.deltaY, modifiers: modifiers(e) } });
+    }, { passive: false });
+  });
 
   // --- clipboard bridge -------------------------------------------------------
   // The remote browser runs headful with a real OS clipboard; these sync it with
@@ -408,7 +498,7 @@
     return new Blob([arr], { type: mime });
   }
 
-  function clipActive() { return controlOwner !== "agent" && hasFrame && castWs && castWs.readyState === 1; }
+  function clipActive() { return controlOwner !== "agent" && haveMedia() && castWs && castWs.readyState === 1; }
 
   // PASTE: the event's own clipboardData carries text + images with no permission
   // prompt (it's a user-initiated paste gesture). Send the raw bytes to the remote.
@@ -450,7 +540,7 @@
   document.addEventListener("cut", (e) => { if (clipActive()) { e.preventDefault(); copyFromRemote(true); } });
 
   function key(type, e) {
-    if (controlOwner === "agent" || !hasFrame) return;
+    if (controlOwner === "agent" || !haveMedia()) return;
     // Clipboard shortcuts are handled by the copy/paste/cut EVENT listeners above.
     // Let the browser's DEFAULT fire those events -- so DON'T preventDefault and
     // DON'T forward, or (a) the paste/copy event never fires and (b) the remote
@@ -470,11 +560,13 @@
       autoRepeat: e.repeat, modifiers: modifiers(e),
     }});
   }
-  // Listen on the canvas (focused by a click), so host/browser shortcuts still
+  // Listen on the surfaces (focused by a click), so host/browser shortcuts still
   // work when the browser pane isn't focused, and typing in the URL input is
   // unaffected.
-  canvas.addEventListener("keydown", (e) => key("keyDown", e));
-  canvas.addEventListener("keyup", (e) => key("keyUp", e));
+  [canvas, video].forEach((el) => {
+    el.addEventListener("keydown", (e) => key("keyDown", e));
+    el.addEventListener("keyup", (e) => key("keyUp", e));
+  });
 
   // --- controls ---
   newtabBtn.onclick = () => { showLoading(); sendCast({ type: "tab", action: "new" }); };  // server opens the home page
@@ -503,7 +595,11 @@
   function connect(id) {
     browserId = id;
     castWs = new WebSocket(wsUrl("browsers/" + id + "/cast"));
-    castWs.onopen = () => reportSize();  // send our pane size once the socket is live
+    castWs.onopen = () => {
+      reportSize();  // send our pane size once the socket is live
+      rtcFailures = 0;  // a fresh socket (daemon bounce, reconnect) earns fresh attempts
+      startRtc();  // no-op unless we already know the browser is running (reconnect)
+    };
     castWs.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.type === "crashed") showCrashed();
@@ -534,10 +630,16 @@
         setControl(lastControlState);
       }
       else if (m.type === "tabs") { if (lifecycle === "running") renderTabs(m.tabs); }  // tabs only meaningful once running
+      else if (m.type === "webrtc_config") { negotiateRtc(m); }
+      else if (m.type === "webrtc_answer") {
+        if (pc) pc.setRemoteDescription({ type: "answer", sdp: m.sdp }).catch(() => { rtcFailures += 1; teardownRtc(true); });
+      }
+      else if (m.type === "webrtc_error") { rtcFailures += 1; teardownRtc(true); }
       // m.type === "ping" -> ignore; it only keeps the proxy stream alive.
     };
     castWs.onclose = (ev) => {
       hasFrame = false;
+      teardownRtc(false);  // the server closes our peer with the socket; retry after reconnect
       // 1008: the browser/session no longer exists (daemon restarted or closed, or the
       // name is invalid). Terminal -- show a clear message and stop reconnecting.
       if (ev.code === 1008) {
