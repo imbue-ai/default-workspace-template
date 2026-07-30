@@ -1,7 +1,6 @@
 """Unit tests for the pixelflux video pipe: wire header parsing and credit flow."""
 
 import pytest
-
 from browser.videopipe import (
     FRAME_TYPE_IDR,
     WIRE_HEADER_LEN,

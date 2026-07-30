@@ -55,17 +55,14 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    # 8 broad catches, every one an intentional isolation boundary that MUST NOT let a
+    # 5 broad catches, every one an intentional isolation boundary that MUST NOT let a
     # stray error kill a long-lived thread or a best-effort side effect:
     #  - session.py (x1): run_agent() -- a browser-use Agent run fails many ways (LLM, CDP,
     #    navigation); caught at the task boundary so any failure reaches the user's chat.
     #  - xinput.py (x4): the XTEST input thread -- per-key release in the held-key sweep and
     #    release_all, the best-effort Ctrl+V paste, and the window resize. Xlib raises
     #    assorted protocol errors; none may tear down input for the whole browser.
-    #  - xclipboard.py (x3): the XFixes clipboard-monitor thread -- opening the display, the
-    #    select loop, and the on_change callback. A monitor-thread crash must be logged,
-    #    not silent, and a bad callback must not kill the monitor.
-    rc.check_broad_exception_catch(_DIR, snapshot(8))
+    rc.check_broad_exception_catch(_DIR, snapshot(5))
 
 
 def test_prevent_builtin_exception_raises() -> None:
