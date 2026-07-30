@@ -1,5 +1,6 @@
 """Tests for the Flask server."""
 
+import importlib.util
 import io
 import json
 import os
@@ -28,15 +29,18 @@ from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
+from imbue.system_interface.server import VIEW_EPOCH_PATH
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
+from imbue.system_interface.server import read_view_epoch
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
+from imbue.system_interface.testing import drain_connect_snapshot
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -94,6 +98,54 @@ def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> Non
         response = test_client.get("/")
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_index_carries_the_view_epoch_on_disk(client: FlaskClient, tmp_path: Path) -> None:
+    """The shell must name the epoch it was built from.
+
+    That is what lets a page tell later whether a reveal has landed since it
+    loaded: the server sends the current epoch on WebSocket connect, and the
+    comparison is only meaningful if the document recorded its own.
+    """
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+    epoch_path = tmp_path / "view_epoch"
+    epoch_path.write_text("abc123\n")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        with patch("imbue.system_interface.server.VIEW_EPOCH_PATH", epoch_path):
+            test_client = create_application(build_test_state()).test_client()
+            response = test_client.get("/")
+            assert response.status_code == 200
+            assert '<meta name="system-interface-view-epoch" content="abc123">' in response.text
+
+
+def test_view_epoch_is_empty_when_never_revealed(tmp_path: Path) -> None:
+    """A workspace that has never been revealed has no epoch, and that is fine.
+
+    An empty epoch must not read as a *change*, or every page in a fresh
+    workspace would reload itself on connect.
+    """
+    with patch("imbue.system_interface.server.VIEW_EPOCH_PATH", tmp_path / "absent"):
+        assert read_view_epoch() == ""
+
+
+def test_view_epoch_path_matches_the_writer() -> None:
+    """The server must read the exact file the refresh helper writes.
+
+    The two resolve the path independently (each from its own ``__file__``), so
+    nothing but this test notices if one of them moves: a mismatch is silent --
+    the helper records an epoch nobody reads, and the reconnect-reload it exists
+    to trigger simply never fires.
+    """
+    helper_path = Path(__file__).resolve().parents[5] / "system/scripts/refresh_workspace_view.py"
+    spec = importlib.util.spec_from_file_location("refresh_workspace_view", helper_path)
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    assert helper.VIEW_EPOCH_PATH == VIEW_EPOCH_PATH
 
 
 def test_index_returns_not_built_when_no_static(client: FlaskClient, tmp_path: Path) -> None:
@@ -1013,6 +1065,30 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert "apps_updated" in types
 
 
+@pytest.mark.timeout(15)
+def test_websocket_connect_reports_the_current_view_epoch(app: Flask, tmp_path: Path) -> None:
+    """Connecting must reveal the epoch on disk, read fresh at connect time.
+
+    This is the channel that reaches a browser which was disconnected when the
+    reveal happened -- the reload broadcast has no replay, and a client on
+    reconnect backoff is not there to receive it. Reading at connect (not at
+    boot) is what makes an epoch bumped mid-process-lifetime visible.
+    """
+    epoch_path = tmp_path / "view_epoch"
+    epoch_path.write_text("epoch-after-reveal\n")
+
+    with patch("imbue.system_interface.server.VIEW_EPOCH_PATH", epoch_path):
+        with serve_app(app) as served:
+            ws = open_ws(served, "/api/ws")
+            try:
+                messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(3)]
+            finally:
+                close_ws(ws)
+
+    epochs = [m["epoch"] for m in messages if m["type"] == "view_epoch"]
+    assert epochs == ["epoch-after-reveal"]
+
+
 def _next_broadcast_message(client_queue: "queue.Queue[str | None]") -> dict[str, Any]:
     """Pop the next broadcast off a fake client's queue as a parsed object."""
     raw_message = client_queue.get_nowait()
@@ -1233,8 +1309,7 @@ def test_layout_broadcast_refresh_bypasses_mutex(app: Flask) -> None:
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
         try:
-            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
-            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            drain_connect_snapshot(ws, _WS_RECEIVE_TIMEOUT)
 
             response = client.post(
                 "/api/layout/broadcast",
@@ -1265,8 +1340,7 @@ def test_layout_broadcast_reload_system_interface_emits_ws_message(app: Flask) -
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
         try:
-            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
-            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            drain_connect_snapshot(ws, _WS_RECEIVE_TIMEOUT)
 
             response = client.post(
                 "/api/layout/broadcast",
@@ -1342,9 +1416,7 @@ def test_ws_client_state_registration_enables_targeted_ops(app: Flask) -> None:
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
         try:
-            # Drain the initial snapshot messages.
-            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
-            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            drain_connect_snapshot(ws, _WS_RECEIVE_TIMEOUT)
 
             ws.send(
                 json.dumps(
