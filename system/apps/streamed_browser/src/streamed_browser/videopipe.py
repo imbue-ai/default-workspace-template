@@ -88,8 +88,8 @@ class VideoPipeError(RuntimeError):
 
 
 def is_available() -> bool:
-    """Pixelflux's native module loaded and there is an X display to capture."""
-    return PIXELFLUX_IMPORT_ERROR is None and bool(os.environ.get("DISPLAY"))
+    """Pixelflux's native module loaded (the capture display arrives per-pipe)."""
+    return PIXELFLUX_IMPORT_ERROR is None
 
 
 def display_geometry(display: str) -> tuple[int, int]:
@@ -201,8 +201,11 @@ class PixelfluxVideoPipe:
             raise VideoPipeError(
                 f"pixelflux failed to import (missing system libraries? see setup_system.sh): {PIXELFLUX_IMPORT_ERROR}"
             )
-        if not os.environ.get("DISPLAY"):
-            raise VideoPipeError("no DISPLAY to capture in this workspace")
+        # pixelflux targets whatever $DISPLAY names -- CaptureSettings has no
+        # display field -- so point the process at this pipe's display. Safe
+        # process-globally: the service owns one session, and every pipe
+        # captures that session's display.
+        os.environ["DISPLAY"] = self.display
         width, height = display_geometry(self.display)
         settings = CaptureSettings()
         settings.capture_width = width
