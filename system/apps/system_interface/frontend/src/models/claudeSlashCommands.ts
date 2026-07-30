@@ -15,9 +15,45 @@
  * Claude-specific auth code. If the chat ever gains a second agent type, this list stops being
  * universally correct -- another agent's slash commands are its own -- and the guard has to become
  * per-agent-type instead.
+ *
+ * Every entry was measured against claude 2.1.220 by sending it to a live agent and confirming
+ * both that the input box was gone afterwards and that a following message failed to send. The
+ * command's kind in Claude's own registry is NOT a reliable predictor and was not used to decide
+ * membership: plenty of commands that render an interactive component (`/model`, `/plugin`,
+ * `/theme`, `/rewind`, `/version`) leave the input box alone and send fine.
  */
 
-export const INPUT_BLOCKING_SLASH_COMMANDS: readonly string[] = ["/status"];
+/**
+ * Alias spellings are listed alongside the command they resolve to, since a user can type either
+ * and Claude treats them identically -- `/cost` and `/stats` are `/usage`, `/settings` is
+ * `/config`, `/allowed-tools` is `/permissions`, `/bashes` is `/tasks`. They are not duplicates.
+ */
+export const INPUT_BLOCKING_SLASH_COMMANDS: readonly string[] = [
+  "/add-dir",
+  "/allowed-tools",
+  "/bashes",
+  "/config",
+  "/cost",
+  "/diff",
+  "/extra-usage",
+  "/goal",
+  "/help",
+  "/hooks",
+  "/ide",
+  "/mcp",
+  "/permissions",
+  "/powerup",
+  "/privacy-settings",
+  "/release-notes",
+  "/settings",
+  "/skills",
+  "/stats",
+  "/status",
+  "/tasks",
+  "/usage",
+  "/usage-credits",
+  "/workflows",
+];
 
 /**
  * The input-blocking command this message would run, or null if it would not run one.

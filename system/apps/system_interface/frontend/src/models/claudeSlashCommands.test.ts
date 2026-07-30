@@ -27,6 +27,20 @@ describe("findInputBlockingSlashCommand", () => {
     expect(findInputBlockingSlashCommand("   ")).toBeNull();
   });
 
+  it("matches the alias spellings, which a user can type interchangeably", () => {
+    for (const alias of ["/cost", "/stats", "/settings", "/allowed-tools", "/bashes"]) {
+      expect(findInputBlockingSlashCommand(alias), alias).toBe(alias);
+    }
+  });
+
+  it("leaves commands that were measured to send fine", () => {
+    // Verified against a live claude 2.1.220 agent: these keep the input box and send normally,
+    // even though several of them render an interactive component.
+    for (const command of ["/clear", "/compact", "/model", "/plugin", "/theme", "/rewind", "/version", "/export"]) {
+      expect(findInputBlockingSlashCommand(command), command).toBeNull();
+    }
+  });
+
   it("lists every command with a leading slash and no whitespace", () => {
     for (const command of INPUT_BLOCKING_SLASH_COMMANDS) {
       expect(command).toMatch(/^\/[a-z0-9-]+$/);
