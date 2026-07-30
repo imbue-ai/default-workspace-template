@@ -642,6 +642,11 @@
     };
     castWs.onclose = (ev) => {
       stopEcho();
+      // Already in a terminal state -- launch_failed (closedForGood) or a crash left a
+      // final message/overlay up. The socket then closing is expected; do NOT resurrect
+      // the "Starting browser…" overlay or a reconnect banner over it (that is what made
+      // a failed launch flash "Browser failed to start" and then spin "loading" forever).
+      if (closedForGood || crashed) return;
       // 1008: the browser/session no longer exists (daemon restarted or closed, or the
       // name is invalid). Terminal -- show a clear message and stop reconnecting.
       if (ev.code === 1008) {

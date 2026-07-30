@@ -96,6 +96,20 @@ _SCREEN_H = int(os.environ.get("BROWSER_VNC_HEIGHT", "800"))
 # what it would have written, preserved so log behaviour does not change.
 _KASMVNC_USER_CONFIG = Path.home() / ".vnc" / "kasmvnc.yaml"
 
+# The self-signed cert+key the per-browser audio relay (browser.audio) needs for
+# its WSS endpoint. It lives beside the VNC config as ``self.pem`` -- the name and
+# location KasmVNC's own tooling uses -- and is a single PEM holding BOTH the
+# private key and the certificate, because the relay is passed one path for its
+# cert and key arguments alike.
+#
+# We generate it ourselves rather than leaning on vncserver: with SSL turned off
+# for the display (``-sslOnly 0``/``-SecurityTypes None``, since the only path in
+# is system_interface's authenticated proxy) KasmVNC never writes a certificate,
+# so the file the audio relay opens would otherwise be absent and every launch
+# would fail on ``_start_audio``.
+_CERTIFICATE_FILE = _KASMVNC_USER_CONFIG.parent / "self.pem"
+_OPENSSL_BINARY = "openssl"
+
 
 def _write_kasmvnc_config() -> None:
     """Pin the launch geometry, which the -geometry flag cannot do. Idempotent."""
@@ -193,6 +207,48 @@ def ensure_password_file() -> None:
     with contextlib.suppress(OSError):
         _PASSWORD_FILE.chmod(0o600)
     logger.info("created {} for the browser fleet's VNC sessions", _PASSWORD_FILE)
+
+
+def ensure_certificate() -> None:
+    """Create ``~/.vnc/self.pem`` (combined key+cert) if absent. Idempotent.
+
+    Required by the per-browser audio relay's WSS endpoint (see browser.audio),
+    which is handed this one path for both its certificate and its key. KasmVNC
+    does not generate it for us because the display runs with SSL disabled, so we
+    mint a long-lived self-signed cert ourselves. It is never presented to a real
+    peer -- the relay is reached only through system_interface's authenticated
+    proxy on loopback -- so a self-signed CN=localhost cert is exactly right.
+    """
+    if _CERTIFICATE_FILE.exists():
+        return
+    _CERTIFICATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(  # noqa: S603 - fixed binary, no shell
+            [
+                _OPENSSL_BINARY,
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-keyout",
+                str(_CERTIFICATE_FILE),
+                "-out",
+                str(_CERTIFICATE_FILE),
+                "-days",
+                "3650",
+                "-subj",
+                "/CN=localhost",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        raise VncStartupError(f"could not create {_CERTIFICATE_FILE}: {e}") from e
+    with contextlib.suppress(OSError):
+        _CERTIFICATE_FILE.chmod(0o600)
+    logger.info("created {} for the browser fleet's audio relay", _CERTIFICATE_FILE)
 
 
 def _lock_paths(display_num: int) -> tuple[Path, Path]:
@@ -318,7 +374,7 @@ class VncDisplay:
 
     @property
     def certificate(self) -> Path:
-        return _KASMVNC_USER_CONFIG.parent / "self.pem"
+        return _CERTIFICATE_FILE
 
     def _command(self) -> list[str]:
         # Deliberately the vncserver wrapper, not Xvnc -- see the module docstring.
@@ -405,6 +461,10 @@ class VncDisplay:
                 "asynchronously on first boot); retry once the env-converge one-shot has run"
             )
         ensure_password_file()
+        # The audio relay opens this cert as soon as the browser's audio starts
+        # (right after the display), and KasmVNC won't generate it with SSL off,
+        # so mint it here before anything downstream reaches for it.
+        ensure_certificate()
         # Must precede the launch: this is what sets the geometry, since the
         # -geometry flag is overridden by the shipped defaults file.
         _write_kasmvnc_config()

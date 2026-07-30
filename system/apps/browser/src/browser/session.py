@@ -604,13 +604,23 @@ class LiveBrowser(MutableModel):
             display.stop()
 
     def _start_audio(self) -> None:
+        """Best-effort: bring up this browser's audio, but never fail the launch for it.
+
+        A browser IS its VNC display + Chromium (see _start_vnc); audio is a secondary,
+        stream-on-demand convenience. Coupling it to the launch meant any audio hiccup --
+        a missing cert, or PulseAudio failing to come up under a restrictive sandbox --
+        took the whole browser down with an endless "starting" spinner. So a failure here
+        is logged and swallowed: the browser opens, just without sound until audio can
+        start. Every downstream use of ``self._audio`` already guards for ``None``.
+        """
         assert self._vnc is not None
         audio = BrowserAudio(self.browser_id, self._vnc.slot, self._vnc.certificate)
         try:
             audio.start()
-        except AudioStartupError:
+        except AudioStartupError as e:
             audio.stop()
-            raise
+            logger.warning("audio unavailable for browser {} ({}); launching without sound", self.browser_id, e)
+            return
         self._audio = audio
 
     def _stop_audio(self) -> None:
