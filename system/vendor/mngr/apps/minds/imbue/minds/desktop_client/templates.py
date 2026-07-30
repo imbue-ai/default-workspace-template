@@ -295,7 +295,8 @@ CATALOG: Final[Catalog] = _build_catalog()
 class InspirationWorkspaceRow(FrozenModel):
     """One pickable workspace on the Create from Inspiration page's add flow."""
 
-    agent_id: str = Field(description="The workspace agent id (drives the /goto/ href)")
+    agent_id: str = Field(description="The workspace agent id (drives the recovery-restart detour)")
+    host_id: str = Field(default="", description="The workspace host id (drives the /goto/ href); '' when unknown")
     name: str = Field(description="Display name")
     accent: str = Field(description="Accent color hex")
     liveness: str = Field(description="RUNNING, STOPPED, or UNKNOWN (drives the recovery-restart detour)")
@@ -2128,39 +2129,6 @@ def render_overlay_host_page() -> str:
 
 
 @pure
-def render_sharing_editor(
-    agent_id: str,
-    service_name: str,
-    title: str,
-    mngr_forward_origin: str = "",
-    initial_emails: list[str] | None = None,
-    has_account: bool = True,
-    accounts: Sequence[object] | None = None,
-    redirect_url: str = "",
-    ws_name: str = "",
-    account_email: str = "",
-) -> str:
-    """Render the sharing editor page used by the workspace-settings sharing flow.
-
-    ``mngr_forward_origin`` is the bare origin of the ``mngr forward`` plugin;
-    the workspace link in the page title points at ``{mngr_forward_origin}/goto/<agent>/``.
-    """
-    return CATALOG.render(
-        "pages.Sharing",
-        title=title,
-        agent_id=agent_id,
-        service_name=service_name,
-        mngr_forward_origin=mngr_forward_origin,
-        initial_emails=initial_emails or [],
-        has_account=has_account,
-        accounts=accounts or [],
-        redirect_url=redirect_url,
-        ws_name=ws_name,
-        account_email=account_email,
-    )
-
-
-@pure
 def render_ai_keys_page(
     workspace_host_id: str,
     workspace_display_name: str,
@@ -2174,35 +2142,6 @@ def render_ai_keys_page(
         workspace_display_name=workspace_display_name,
         account_email=account_email,
         error_message=error_message,
-    )
-
-
-@pure
-def render_sharing_modal_page(
-    agent_id: str,
-    service_name: str,
-    initial_emails: list[str] | None = None,
-    has_account: bool = True,
-    accounts: Sequence[object] | None = None,
-    ws_name: str = "",
-    account_email: str = "",
-) -> str:
-    """Render the centered sharing-editor modal page (``GET /sharing/<agent_id>/<service_name>/modal``).
-
-    Hosted in the shared modal WebContentsView; shows the same editor body as
-    :func:`render_sharing_editor` (the full-page browser fallback), minus the
-    linked heading and the Cancel-to-workspace-settings link (the modal is
-    dismissed via Cancel, its X, or a backdrop click).
-    """
-    return CATALOG.render(
-        "pages.SharingModal",
-        agent_id=agent_id,
-        service_name=service_name,
-        initial_emails=initial_emails or [],
-        has_account=has_account,
-        accounts=accounts or [],
-        ws_name=ws_name,
-        account_email=account_email,
     )
 
 
@@ -2250,10 +2189,11 @@ def render_workspace_settings(
 
 
 # The workspace's own web UI service -- what the desktop client shows as "the
-# workspace" and the default target of ``mngr forward``. Sharing it is what the
-# options panel offers as "Whole machine": it is an ordinary service as far as
-# the tunnel and the Cloudflare Access policy are concerned, so it needs no
-# special handling beyond being named here.
+# workspace" and the default target of ``mngr forward``. The options panel's
+# "Whole machine" entry stands in for it: under the machine-level sharing model
+# the shell is the machine's bare origin, gated by the grants document's
+# workspace scope (which admits every service), so it is never offered as a
+# per-app target.
 _WHOLE_MACHINE_SERVICE: Final[str] = "system_interface"
 
 # Registered services that are the workspace's own interfaces rather than apps
@@ -2261,8 +2201,15 @@ _WHOLE_MACHINE_SERVICE: Final[str] = "system_interface"
 # (see _split_share_targets). Singular and plural are both listed because the
 # name is whatever the in-workspace process registered, not a fixed vocabulary.
 _NON_APP_SHARE_SERVICES: Final[frozenset[str]] = frozenset(
-    {"chat", "chats", "terminal", "terminals", "browser", "browsers", "web"}
+    {"chat", "chats", "terminal", "terminals", "browser", "browsers"}
 )
+
+# A service can only be a per-app share target if its name can be a hostname
+# label: shared app links are real origins (``<name>.<machine domain>``), so a
+# name with underscores or other non-DNS characters has no origin to hand out.
+# Matches forward_port.py's validation in the workspace template (lowercase
+# alphanumerics with single hyphens).
+_DNS_SAFE_SERVICE_NAME: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 @pure
@@ -2275,15 +2222,23 @@ def _split_share_targets(servers: Sequence[str]) -> tuple[list[str], str]:
 
     Everything the workspace registers shows up in that service list, including
     the interfaces the workspace is built out of rather than apps built on top
-    of it. Those are excluded: handing someone a chat, a terminal, a browser or
-    the raw web surface is not the same act as handing them one app, and
-    offering them in the same flat list invites it by accident. The whole
-    machine remains the deliberate way to grant everything.
+    of it. Those are excluded: handing someone a chat, a terminal or a browser
+    is not the same act as handing them one app, and offering them in the same
+    flat list invites it by accident. The whole machine remains the deliberate
+    way to grant everything.
+
+    Names that cannot be a hostname label (underscores, reserved ``host-`` /
+    ``agent-`` coordinate prefixes) are excluded too: a per-app share link is a
+    real origin, and such a name has none to hand out. Those services are still
+    reachable through a whole-machine share.
     """
     app_services = [
         str(service)
         for service in servers
-        if str(service) != _WHOLE_MACHINE_SERVICE and str(service).lower() not in _NON_APP_SHARE_SERVICES
+        if str(service) != _WHOLE_MACHINE_SERVICE
+        and str(service).lower() not in _NON_APP_SHARE_SERVICES
+        and _DNS_SAFE_SERVICE_NAME.match(str(service)) is not None
+        and not str(service).startswith(("host-", "agent-"))
     ]
     return app_services, _WHOLE_MACHINE_SERVICE
 
@@ -2295,6 +2250,7 @@ def render_workspace_options_page(
     current_account: object | None,
     accounts: Sequence[object],
     servers: Sequence[str],
+    host_id: str = "",
     tab: str = "share",
     selected_target: str = "",
     account_email: str = "",
@@ -2315,6 +2271,7 @@ def render_workspace_options_page(
         "pages.WorkspaceOptions",
         agent_id=agent_id,
         ws_name=ws_name,
+        host_id=host_id,
         tab=tab,
         current_account=current_account,
         accounts=accounts,
@@ -2338,6 +2295,7 @@ def render_workspace_options_modal_page(
     current_account: object | None,
     accounts: Sequence[object],
     servers: Sequence[str],
+    host_id: str = "",
     tab: str = "share",
     selected_target: str = "",
     account_email: str = "",
@@ -2363,6 +2321,7 @@ def render_workspace_options_modal_page(
         "pages.WorkspaceOptionsModal",
         agent_id=agent_id,
         ws_name=ws_name,
+        host_id=host_id,
         tab=tab,
         anchor_x=anchor_x,
         anchor_y=anchor_y,

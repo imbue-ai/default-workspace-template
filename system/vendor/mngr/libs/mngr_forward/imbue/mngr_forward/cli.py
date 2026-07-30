@@ -262,7 +262,7 @@ def _bind_listen_socket(host: str, requested_port: int | None) -> socket.socket:
 @add_common_options
 @click.pass_context
 def forward(ctx: click.Context, **kwargs: Any) -> None:
-    """Forward web traffic to agents via <agent>.localhost subdomains [experimental]."""
+    """Forward web traffic to workspaces via [<service>.]<host-id>.localhost origins [experimental]."""
     mngr_ctx, _output_opts, opts = setup_command_context(
         ctx=ctx,
         command_name="forward",
@@ -605,6 +605,8 @@ def _seed_resolver_from_snapshot(
     agent_ids = tuple(entry.agent_id for entry in kept.agents)
     resolver.update_known_agents(agent_ids)
     for entry in kept.agents:
+        if entry.host_id:
+            resolver.set_agent_host(entry.agent_id, entry.host_id)
         if entry.ssh_info is not None:
             resolver.update_ssh_info(entry.agent_id, entry.ssh_info)
     reverse_handler.setup_for_snapshot(
@@ -690,12 +692,14 @@ def _sleep_then_open_browser(url: str, delay: float = 1.0) -> None:
 
 CommandHelpMetadata(
     key="forward",
-    one_line_description="Forward web traffic to agents via <agent>.localhost subdomains [experimental]",
+    one_line_description="Forward web traffic to workspaces via <host-id>.localhost origins [experimental]",
     synopsis="mngr forward [--service NAME | --forward-port REMOTE_PORT] [OPTIONS]",
     description="""Runs a local HTTP/WS proxy that serves
-``<agent-id>.localhost:<port>/*`` and byte-forwards each request to the
-configured backend (a service URL discovered via ``mngr observe``/``mngr event``,
-or a fixed remote port). Remote agents are reached via SSH tunnels.
+``[<service>.]<host-id>.localhost:<port>/*`` and byte-forwards each request to
+the matching backend: the bare origin goes to the configured backend (a
+service URL discovered via ``mngr observe``/``mngr event``, or a fixed remote
+port), and ``<service>.`` origins go to that agent-registered service. Remote
+agents are reached via SSH tunnels.
 
 Authentication uses a one-time login URL printed on stderr; in subprocess
 mode the same URL is also emitted on stdout as a JSONL ``login_url`` event.

@@ -57,8 +57,7 @@ excludes the whole `apps/minds` tree by path.
   `test_deploy_new_version`, `test_deploy_auto_rollback_on_broken_healthcheck`,
   `test_deploy_then_destroy_round_trip`.
 - `@pytest.mark.minds_services` (run against a pre-stood-up shared env):
-  `test_logged_in_smoke`, `test_realistic_signup_verify_signin_create_tunnel_signout`
-  (currently `skip`), `test_litellm_spend_tracking_via_local_workspace`
+  `test_logged_in_smoke`, `test_litellm_spend_tracking_via_local_workspace`
   (currently `skip`).
 
 ### 1.4 JS / Electron tests (`apps/minds/test/`)
@@ -293,7 +292,7 @@ environment today:
     through the hub-brokered loopback endpoint. The broker itself is implemented;
     the local->local half can run in the snapshot stage (proposal 2b below),
     while the remote-caller half needs a cloud host so it stays release-only.
-16. **imbue_cloud create + backup/tunnel parity** [deployment] -- already covered
+16. **imbue_cloud create + backup parity** [deployment] -- already covered
     in spirit by the `minds_deployment`/`minds_services` suites.
 
 ## Note on testability gaps

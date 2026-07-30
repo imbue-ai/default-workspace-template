@@ -33,10 +33,13 @@
   // throw before this is reached, which the poll's try/catch swallows).
   function accentSourceFromPath(pathname) {
     if (!pathname) return null;
+    // /goto/ and /recovery carry either workspace coordinate (content URLs
+    // are host-keyed); the other workspace-scoped backend routes stay
+    // agent-keyed. Accent lookups accept both (the cache is dual-keyed).
     var m =
-      pathname.match(/^\/(?:goto|workspace|sharing)\/(agent-[a-f0-9]+)(?:\/|$)/i) ||
+      pathname.match(/^\/(?:goto|workspace|sharing)\/((?:agent|host)-[a-f0-9]+)(?:\/|$)/i) ||
       pathname.match(/^\/destroying\/(agent-[a-f0-9]+)(?:\/|$)/i) ||
-      pathname.match(/^\/agents\/(agent-[a-f0-9]+)\/recovery(?:\/|$)/i);
+      pathname.match(/^\/agents\/((?:agent|host)-[a-f0-9]+)\/recovery(?:\/|$)/i);
     return m ? m[1] : null;
   }
 
@@ -300,8 +303,10 @@
     hideSidebarPanel();
   }
 
-  function selectWorkspace(agentId) {
-    navigateContent(mngrForwardOrigin + '/goto/' + agentId + '/');
+  function selectWorkspace(workspaceId) {
+    // Content URLs are host-keyed; translate an agent-keyed caller (records,
+    // breadcrumb) when the alias is known, else pass the id through.
+    navigateContent(mngrForwardOrigin + '/goto/' + toHostScopedId(workspaceId) + '/');
     closeSidebar();
   }
 
@@ -347,6 +352,20 @@
   // tick has arrived yet) leave the accent unset on this call and get
   // painted by ``renderWorkspaces`` on the next tick.
   var accentByAgentId = {};
+  // Coordinate aliases from the same SSE payload: workspace content URLs
+  // (/goto/<id>/, the workspace origins) are keyed by HOST id while minds'
+  // own records and SSE health events stay AGENT-keyed. These maps translate
+  // between the two wherever a URL-derived id meets a record-keyed cache.
+  var agentIdByHostId = {};
+  var hostIdByAgentId = {};
+  function toAgentScopedId(id) {
+    if (!id) return id;
+    return agentIdByHostId[id] || id;
+  }
+  function toHostScopedId(id) {
+    if (!id) return id;
+    return hostIdByAgentId[id] || id;
+  }
   // Tracks the agentId whose accent the chrome *wants* painted, regardless
   // of whether the SSE cache has caught up yet. The ``onAccentChanged`` path
   // (and, in browser mode, the URL poll) sets this even when the SSE
@@ -360,10 +379,18 @@
     if (!workspaces) return;
     workspaces.forEach(function (w) {
       if (!w || !w.id) return;
-      accentByAgentId[w.id] = {
+      var cached = {
         accent: typeof w.accent === 'string' ? w.accent : null,
         name: typeof w.name === 'string' ? w.name : null,
       };
+      accentByAgentId[w.id] = cached;
+      // Cache under both coordinates so accent lookups work whether the id
+      // came from a record (agent) or a content URL (host).
+      if (w.host_id) {
+        accentByAgentId[w.host_id] = cached;
+        agentIdByHostId[w.host_id] = w.id;
+        hostIdByAgentId[w.id] = w.host_id;
+      }
     });
   }
 
@@ -395,10 +422,12 @@
     var host = parsed.hostname;
     var path = parsed.pathname;
     // The workspace itself is not one of the icon-tabs' panes -- they open the
-    // options panel over it -- so neither tab is highlighted here.
-    var m = host.match(/^(agent-[a-f0-9]+)\.localhost$/i);
+    // options panel over it -- so neither tab is highlighted here. Workspace
+    // content hostnames are host-id keyed, with optional service labels in
+    // front (``<service>.<host-id>.localhost``).
+    var m = host.match(/^(?:[a-z0-9_-]+\.)*(host-[a-f0-9]+)\.localhost$/i);
     if (m) return { kind: 'workspace', agentId: m[1], activeTab: null };
-    m = path.match(/^\/goto\/(agent-[a-f0-9]+)(?:\/|$)/i);
+    m = path.match(/^\/goto\/((?:agent|host)-[a-f0-9]+)(?:\/|$)/i);
     if (m) return { kind: 'workspace', agentId: m[1], activeTab: null };
     // The browser-mode options page carries its pane in ?tab=; the standalone
     // settings page is always the settings pane.
@@ -411,7 +440,7 @@
     if (m) return { kind: 'workspace', agentId: m[1], activeTab: null, showBack: true };
     m = path.match(/^\/destroying\/(agent-[a-f0-9]+)(?:\/|$)/i);
     if (m) return { kind: 'workspace', agentId: m[1], activeTab: null };
-    m = path.match(/^\/agents\/(agent-[a-f0-9]+)\/recovery(?:\/|$)/i);
+    m = path.match(/^\/agents\/((?:agent|host)-[a-f0-9]+)\/recovery(?:\/|$)/i);
     if (m) return { kind: 'workspace', agentId: m[1], activeTab: null };
     // No back arrow on the create form: the titlebar home button is the
     // escape (back to the workspace list / welcome splash).
@@ -567,8 +596,9 @@
     if (agentId && lastDisplayedAgentId !== agentId) {
       // Genuinely different workspace -- re-arm its once-per-episode
       // recovery redirect so a still-stuck workspace bounces to recovery
-      // instead of landing on the 503 page.
-      delete redirectedAgents[agentId];
+      // instead of landing on the 503 page. (The redirect caches are
+      // agent-keyed; content URLs carry host ids, so normalize.)
+      delete redirectedAgents[toAgentScopedId(agentId)];
     }
     if (agentId) lastDisplayedAgentId = agentId;
     currentTitleAgentId = agentId || null;
@@ -602,9 +632,13 @@
   function maybeRedirectToRecovery() {
     var aid = currentTitleAgentId;
     if (!aid) return;
-    if (systemInterfaceStatusByAgent[aid] !== 'stuck') return;
-    if (redirectedAgents[aid]) return;
-    redirectedAgents[aid] = true;
+    // The displayed id is URL-derived (host-keyed); the SSE-fed status /
+    // redirect caches are agent-keyed. The recovery URL itself takes either
+    // coordinate (the backend resolves both).
+    var statusKey = toAgentScopedId(aid);
+    if (systemInterfaceStatusByAgent[statusKey] !== 'stuck') return;
+    if (redirectedAgents[statusKey]) return;
+    redirectedAgents[statusKey] = true;
     navigateContent(buildRecoveryUrl(aid));
   }
 
@@ -627,7 +661,7 @@
   // intentionally restarting it).
   function handleWorkspaceStopped(agentId) {
     if (isElectron) return;
-    if (!agentId || currentTitleAgentId !== agentId) return;
+    if (!agentId || toAgentScopedId(currentTitleAgentId) !== agentId) return;
     if (systemInterfaceStatusByAgent[agentId] === 'restarting') return;
     navigateContent('/');
   }
@@ -842,7 +876,7 @@
     // false while the content view shows the "Loading machine" proxy loader (which the stuck signal
     // doesn't cover during startup) -- while still passing the workspace id so a bug report stays
     // scoped to it even when it's down.
-    var assistAvailable = !!aid && !systemInterfaceStatusByAgent[aid] && currentWorkspaceContentReady;
+    var assistAvailable = !!aid && !systemInterfaceStatusByAgent[toAgentScopedId(aid)] && currentWorkspaceContentReady;
     if (isElectron) {
       window.minds.toggleHelp(aid, assistAvailable);
     } else {

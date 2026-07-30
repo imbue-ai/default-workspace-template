@@ -21,11 +21,15 @@ const {
 
 const BASE = 'http://localhost:8080';
 const AGENT = 'agent-0a1b2c3d4e5f';
+const HOST = 'host-0a1b2c3d4e5f';
 
-test('parseWorkspaceId matches the agent subdomain and the /goto bridge only', () => {
-  assert.equal(parseWorkspaceId(`http://${AGENT}.localhost:8080/anything`), AGENT);
-  assert.equal(parseWorkspaceId(`${BASE}/goto/${AGENT}/`), AGENT);
-  assert.equal(parseWorkspaceId(`${BASE}/goto/${AGENT}`), AGENT);
+test('parseWorkspaceId matches the workspace origins and the /goto bridge only', () => {
+  assert.equal(parseWorkspaceId(`http://${HOST}.localhost:8080/anything`), HOST);
+  // Service origins (and deeper sub-origins) belong to the same workspace.
+  assert.equal(parseWorkspaceId(`https://terminal.${HOST}.localhost:8080/`), HOST);
+  assert.equal(parseWorkspaceId(`https://deep.svc.${HOST}.localhost:8080/x`), HOST);
+  assert.equal(parseWorkspaceId(`${BASE}/goto/${HOST}/`), HOST);
+  assert.equal(parseWorkspaceId(`${BASE}/goto/${HOST}`), HOST);
   // Local / general routes are NOT workspaces.
   assert.equal(parseWorkspaceId(`${BASE}/`), null);
   assert.equal(parseWorkspaceId(`${BASE}/create`), null);
@@ -33,7 +37,7 @@ test('parseWorkspaceId matches the agent subdomain and the /goto bridge only', (
   // Workspace-SCOPED local screens are not the workspace itself (they render on
   // the chrome surface); parseWorkspaceId must not claim them.
   assert.equal(parseWorkspaceId(`${BASE}/workspace/${AGENT}/settings`), null);
-  assert.equal(parseWorkspaceId(`${BASE}/sharing/${AGENT}/code`), null);
+  assert.equal(parseWorkspaceId(`${BASE}/sharing/${AGENT}`), null);
   assert.equal(parseWorkspaceId(`${BASE}/agents/${AGENT}/recovery`), null);
   // Junk / relative.
   assert.equal(parseWorkspaceId(''), null);
@@ -41,15 +45,19 @@ test('parseWorkspaceId matches the agent subdomain and the /goto bridge only', (
 });
 
 test('parseAccentSourceAgentId is wider: it tints for workspace-scoped local screens too', () => {
-  assert.equal(parseAccentSourceAgentId(`http://${AGENT}.localhost:8080/x`), AGENT);
-  assert.equal(parseAccentSourceAgentId(`${BASE}/goto/${AGENT}/`), AGENT);
+  assert.equal(parseAccentSourceAgentId(`http://${HOST}.localhost:8080/x`), HOST);
+  assert.equal(parseAccentSourceAgentId(`https://svc.${HOST}.localhost:8080/x`), HOST);
+  assert.equal(parseAccentSourceAgentId(`${BASE}/goto/${HOST}/`), HOST);
   assert.equal(parseAccentSourceAgentId(`${BASE}/workspace/${AGENT}/settings`), AGENT);
   // The options panel's full-page twin is workspace-scoped like the rest of
   // /workspace/<id>/..., so it tints without needing its own rule.
   assert.equal(parseAccentSourceAgentId(`${BASE}/workspace/${AGENT}/options`), AGENT);
-  assert.equal(parseAccentSourceAgentId(`${BASE}/sharing/${AGENT}/code`), AGENT);
+  // Legacy sharing URLs (now redirects to the options panel) still tint.
+  assert.equal(parseAccentSourceAgentId(`${BASE}/sharing/${AGENT}`), AGENT);
   assert.equal(parseAccentSourceAgentId(`${BASE}/destroying/${AGENT}`), AGENT);
   assert.equal(parseAccentSourceAgentId(`${BASE}/agents/${AGENT}/recovery`), AGENT);
+  // Recovery reached from a content URL carries the host coordinate.
+  assert.equal(parseAccentSourceAgentId(`${BASE}/agents/${HOST}/recovery`), HOST);
   // General screens resolve to null so the titlebar drops back to neutral chrome.
   assert.equal(parseAccentSourceAgentId(`${BASE}/`), null);
   assert.equal(parseAccentSourceAgentId(`${BASE}/create`), null);
@@ -58,8 +66,9 @@ test('parseAccentSourceAgentId is wider: it tints for workspace-scoped local scr
 
 test('selectSurfaceForUrl: agent content -> content view; every trusted local page -> chrome view', () => {
   // Agent content (the ONLY thing on the content surface after the swap).
-  assert.equal(selectSurfaceForUrl(`http://${AGENT}.localhost:8080/`), SURFACE_CONTENT);
-  assert.equal(selectSurfaceForUrl(`${BASE}/goto/${AGENT}/`), SURFACE_CONTENT);
+  assert.equal(selectSurfaceForUrl(`http://${HOST}.localhost:8080/`), SURFACE_CONTENT);
+  assert.equal(selectSurfaceForUrl(`https://terminal.${HOST}.localhost:8080/`), SURFACE_CONTENT);
+  assert.equal(selectSurfaceForUrl(`${BASE}/goto/${HOST}/`), SURFACE_CONTENT);
   // Trusted local pages -- including the workspace-scoped ones, which tint the
   // titlebar but are NOT agent content -- render on the chrome surface.
   for (const path of [
@@ -72,7 +81,7 @@ test('selectSurfaceForUrl: agent content -> content view; every trusted local pa
     `/creating/${AGENT}`,
     `/workspace/${AGENT}/settings`,
     `/workspace/${AGENT}/options`,
-    `/sharing/${AGENT}/code`,
+    `/sharing/${AGENT}`,
     `/destroying/${AGENT}`,
     `/agents/${AGENT}/recovery`,
     '/auth/login',
@@ -106,7 +115,7 @@ test('isSwappableLocalPath: hub pages (including recovery) swap in place; lifecy
     `/destroying/${AGENT}`,
     '/auth/login',
     '/help',
-    `/sharing/${AGENT}/code`,
+    `/sharing/${AGENT}`,
     // The overlay-hosted variant of the options panel is never a hub page: it
     // is loaded into the overlay surface's iframe, not swapped into the shell.
     `/workspace/${AGENT}/options/modal`,

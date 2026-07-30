@@ -18,14 +18,14 @@
 </head>
 <body>
   <h1>Discovered agents</h1>
-  <p class="meta">Click an entry to navigate to <code>&lt;agent-id&gt;.localhost:{{ port }}/</code>.</p>
+  <p class="meta">Click an entry to navigate to <code>&lt;host-id&gt;.localhost:{{ port }}/</code>.</p>
   {% if not agents %}
     <p>No agents discovered yet.</p>
   {% else %}
     <ul>
       {% for entry in agents %}
         <li class="{% if entry.is_unresolved %}unresolved{% endif %}">
-          <a href="/goto/{{ entry.agent_id }}/">{{ entry.agent_id }}</a>
+          <a href="/goto/{{ entry.host_id }}/">{{ entry.agent_id }}</a>
           {% if entry.is_unresolved %}<span class="reason">{{ entry.reason }}</span>{% endif %}
         </li>
       {% endfor %}

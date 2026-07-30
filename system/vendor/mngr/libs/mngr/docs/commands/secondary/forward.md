@@ -9,12 +9,14 @@
 mngr forward [--service NAME | --forward-port REMOTE_PORT] [OPTIONS]
 ```
 
-Forward web traffic to agents via <agent>.localhost subdomains [experimental].
+Forward web traffic to workspaces via <host-id>.localhost origins [experimental].
 
 Runs a local HTTP/WS proxy that serves
-``<agent-id>.localhost:<port>/*`` and byte-forwards each request to the
-configured backend (a service URL discovered via ``mngr observe``/``mngr event``,
-or a fixed remote port). Remote agents are reached via SSH tunnels.
+``[<service>.]<host-id>.localhost:<port>/*`` and byte-forwards each request to
+the matching backend: the bare origin goes to the configured backend (a
+service URL discovered via ``mngr observe``/``mngr event``, or a fixed remote
+port), and ``<service>.`` origins go to that agent-registered service. Remote
+agents are reached via SSH tunnels.
 
 Authentication uses a one-time login URL printed on stderr; in subprocess
 mode the same URL is also emitted on stdout as a JSONL ``login_url`` event.

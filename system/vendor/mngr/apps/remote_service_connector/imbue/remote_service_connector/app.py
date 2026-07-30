@@ -1,9 +1,9 @@
 """Remote service connector, deployed as a Modal function.
 
 Exposes authenticated HTTP endpoints for managing remote services used by the
-minds desktop client: Cloudflare tunnels (`/tunnels/*`) and SuperTokens-backed
-authentication (`/auth/*`). More remote-service capabilities (e.g. creating
-remote hosts on behalf of users) will be added here over time.
+minds desktop client: SuperTokens-backed authentication (`/auth/*`), pool-host
+leasing, LiteLLM keys, R2 buckets, workspace sync, and self-hosted workspace
+sharing (`/shares/*`).
 
 This file is entirely self-contained -- it has NO imports from the monorepo.
 Only stdlib and 3rd-party packages (installed in the Modal image) are used.
@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shlex
 import threading
 import time
@@ -36,16 +37,32 @@ from typing import Final
 from typing import NoReturn
 from typing import Protocol
 from urllib.parse import quote
+from urllib.parse import unquote
+from urllib.parse import urlencode
 from uuid import UUID
 
 import httpx
+import josepy
+import jwt as pyjwt
 import modal
 import paramiko
 import psycopg2
+from acme import challenges as acme_challenges
+from acme import client as acme_client_module
+from acme import errors as acme_errors
+from acme import messages as acme_messages
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import ExtensionOID
 from fastapi import FastAPI
+from fastapi import Form
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi.responses import HTMLResponse
+from fastapi.responses import JSONResponse
+from fastapi.responses import RedirectResponse
 from paramiko.hostkeys import HostKeyEntry
 from pydantic import BaseModel
 from pydantic import Field
@@ -94,15 +111,13 @@ from supertokens_python.syncio import list_users_by_account_info
 from supertokens_python.types import RecipeUserId
 from supertokens_python.types.base import AccountInfoInput
 from tenacity import retry
-from tenacity import retry_if_exception
-from tenacity import stop_after_attempt
-from tenacity import wait_exponential
+from tenacity import retry_if_exception_type
+from tenacity import stop_after_delay
+from tenacity import wait_fixed
 
 logger = logging.getLogger(__name__)
 
 _CF_BASE_URL = "https://api.cloudflare.com/client/v4"
-TUNNEL_NAME_SEP = "--"
-KV_NAMESPACE_TITLE = "cloudflare-forwarding-defaults"
 
 _HTML_SHARED_STYLES = (
     "body{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;"
@@ -192,46 +207,6 @@ class CloudflareApiError(RuntimeError):
         self.cf_errors = errors
         messages = "; ".join(str(e.get("message", e)) for e in errors)
         super().__init__(f"Cloudflare API error ({status_code}): {messages}")
-
-
-class TunnelNotFoundError(KeyError):
-    def __init__(self, tunnel_name: str) -> None:
-        self.tunnel_name = tunnel_name
-        super().__init__(f"Tunnel not found: {tunnel_name}")
-
-
-class TunnelOwnershipError(PermissionError):
-    def __init__(self, tunnel_name: str, user_id_prefix: str) -> None:
-        self.tunnel_name = tunnel_name
-        self.user_id_prefix = user_id_prefix
-        super().__init__(f"User '{user_id_prefix}' does not own tunnel '{tunnel_name}'")
-
-
-class ServiceNotFoundError(KeyError):
-    def __init__(self, service_name: str, tunnel_name: str) -> None:
-        self.service_name = service_name
-        self.tunnel_name = tunnel_name
-        super().__init__(f"Service '{service_name}' not found on tunnel '{tunnel_name}'")
-
-
-class InvalidTunnelComponentError(ValueError):
-    def __init__(self, component_name: str, value: str, forbidden: str) -> None:
-        self.component_name = component_name
-        self.value = value
-        self.forbidden = forbidden
-        super().__init__(
-            f"{component_name} '{value}' must not contain '{forbidden}' (used as the tunnel name separator)"
-        )
-
-
-class TunnelComponentTooLongError(ValueError):
-    """Raised when a tunnel component exceeds the maximum length."""
-
-    def __init__(self, component_name: str, value: str, max_length: int) -> None:
-        self.component_name = component_name
-        self.value = value
-        self.max_length = max_length
-        super().__init__(f"{component_name} '{value}' exceeds maximum length of {max_length}")
 
 
 class InvalidHostNameError(ValueError):
@@ -391,29 +366,11 @@ class PlanNotFoundError(KeyError):
         )
 
 
-class InvalidAuthPolicyError(ValueError):
-    """Raised when an auth policy has no identity constraint (would expose the service publicly)."""
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(f"Auth policy rejected: {reason}")
-
-
 class UnknownEntitlementColumnError(ValueError):
     """Raised when an entitlements update names a column that does not exist."""
 
     def __init__(self, unknown_columns: list[str]) -> None:
         super().__init__(f"Unknown entitlement columns: {unknown_columns}")
-
-
-class ServicePolicyMissingError(RuntimeError):
-    """Raised when a service would be added with no Access policy available at all."""
-
-    def __init__(self, tunnel_name: str) -> None:
-        self.tunnel_name = tunnel_name
-        super().__init__(
-            f"Tunnel '{tunnel_name}' has no default auth policy and no owner policy could be derived; "
-            "set a default auth policy on the tunnel before adding services."
-        )
 
 
 class PoolHostCleanupError(RuntimeError):
@@ -433,53 +390,6 @@ class MissingAuthWebsiteDomainError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-class AuthPolicy(BaseModel):
-    rules: list[dict[str, Any]] = Field(description="Cloudflare Access-style policy rules")
-
-
-class CreateTunnelRequest(BaseModel):
-    agent_id: str = Field(description="The mngr agent ID for this tunnel")
-    default_auth_policy: AuthPolicy | None = Field(
-        default=None, description="Optional default auth policy for new services"
-    )
-
-
-class AddServiceRequest(BaseModel):
-    service_name: str = Field(description="User-chosen name for the service")
-    service_url: str = Field(description="Local service URL (e.g. http://localhost:8080)")
-
-
-class EnableSharingRequest(BaseModel):
-    agent_id: str = Field(description="The mngr agent ID whose tunnel hosts the service")
-    service_name: str = Field(description="User-chosen name for the service")
-    service_url: str = Field(description="Local service URL (e.g. http://localhost:8080)")
-    auth_policy: AuthPolicy = Field(description="Access policy applied to the shared service; must carry identity")
-
-
-class ServiceInfo(BaseModel):
-    service_name: str = Field(description="User-chosen service name")
-    hostname: str = Field(description="Public hostname for this service")
-    service_url: str = Field(description="Backend service URL")
-
-
-class TunnelInfo(BaseModel):
-    tunnel_name: str = Field(description="Tunnel name")
-    tunnel_id: str = Field(description="Cloudflare tunnel UUID")
-    token: str | None = Field(default=None, description="Tunnel token for cloudflared (only on create)")
-    services: list[ServiceInfo] = Field(default_factory=list, description="Configured services")
-
-
-class CreateServiceTokenRequest(BaseModel):
-    name: str = Field(description="Human-readable name for the service token")
-
-
-class ServiceTokenInfo(BaseModel):
-    token_id: str = Field(description="Cloudflare service token ID")
-    client_id: str = Field(description="Client ID for CF-Access-Client-Id header")
-    client_secret: str | None = Field(default=None, description="Client secret (only returned on creation)")
-    name: str = Field(description="Token name")
-
-
 class UserAuth(BaseModel):
     user_id_prefix: str
     # Verified email associated with the SuperTokens user, looked up at auth
@@ -488,14 +398,6 @@ class UserAuth(BaseModel):
     # when the SuperTokens user record has no email or when the lookup
     # failed -- in that case the paid-feature gate denies access.
     email: str | None = None
-
-
-class TunnelTokenAuth(BaseModel):
-    tunnel_id: str
-    tunnel_name: str
-
-
-AuthResult = UserAuth | TunnelTokenAuth
 
 
 # -- Host pool models --
@@ -725,8 +627,6 @@ class StorageRecheckResponse(BaseModel):
 # endpoint validates entitlement names against it.
 QUOTA_ENTITLEMENT_NAMES: tuple[str, ...] = (
     "max_remote_workspaces",
-    "max_tunnels",
-    "max_services_per_tunnel",
     "max_buckets",
     "max_total_bucket_bytes",
     "monthly_llm_spend_usd",
@@ -742,8 +642,6 @@ class PlanEntitlements(BaseModel):
     """The quota values a plan grants (also the per-user entitlement values)."""
 
     max_remote_workspaces: int = Field(description="Max concurrent pool-host leases (running or stopped)")
-    max_tunnels: int = Field(description="Max Cloudflare tunnels")
-    max_services_per_tunnel: int = Field(description="Max forwarded services per tunnel")
     max_buckets: int = Field(description="Max R2 buckets")
     max_total_bucket_bytes: int = Field(description="Max total bytes across all the account's buckets")
     monthly_llm_spend_usd: float = Field(description="Monthly LLM spend cap in USD (rolling; 0 disables key minting)")
@@ -754,7 +652,6 @@ class AccountUsage(BaseModel):
     """Live usage numbers for the account, one per quota entitlement."""
 
     remote_workspaces: int = Field(description="Current pool-host leases")
-    tunnels: int = Field(description="Current Cloudflare tunnels")
     buckets: int = Field(description="Current R2 buckets")
     total_bucket_bytes: int = Field(description="Total bytes across the account's buckets (live REST usage)")
     llm_spend_usd_this_period: float = Field(description="LiteLLM aggregate spend in the current budget period")
@@ -805,35 +702,14 @@ def cf_check(response: httpx.Response) -> dict[str, Any]:
     return data
 
 
-def cf_list_all_pages(client: httpx.Client, url: str, params: dict[str, str]) -> list[dict[str, Any]]:
-    all_results: list[dict[str, Any]] = []
-    page = 1
-    while True:
-        paginated = {**params, "page": str(page), "per_page": "100"}
-        response = client.get(url, params=paginated)
-        data = cf_check(response)
-        results: list[dict[str, Any]] = data["result"]
-        all_results.extend(results)
-        total_count = data.get("result_info", {}).get("total_count", len(results))
-        if len(all_results) >= total_count:
-            break
-        page += 1
-    return all_results
-
-
-# --- Tunnel operations ---
-
-
 # Env var the deployed connector reads at startup to identify which
 # minds env it belongs to. The value is pushed by ``minds env deploy``
 # into the per-tier ``litellm-connector-<tier>`` Modal Secret. For
 # dev-tier deploys this is the per-developer dev env name (e.g.
 # ``josh-3``); for tier deploys it's the tier itself (``staging`` /
-# ``production``). Used to tag every Cloudflare tunnel the connector
-# creates so the destroy-side can enumerate + delete only the tunnels
-# belonging to a specific minds env -- without it, deleting tunnels
-# would have to walk every tunnel on the dev-tier CF account
-# (potentially clobbering other devs' tunnels).
+# ``production``). Used to scope the slice-box reconcile audit to this
+# env's stamped slices, so the hourly cron is safe on a bare-metal box
+# shared by multiple dev envs.
 _MINDS_ENV_NAME_VAR = "MINDS_ENV_NAME"
 
 
@@ -841,208 +717,10 @@ def _current_minds_env_name() -> str:
     """Return the value of ``MINDS_ENV_NAME`` or empty string.
 
     Empty when the deploy didn't push one (e.g. a pre-this-branch
-    deploy). Callers must treat the empty case as "no env tag" -- the
-    tunnel will still be creatable, just without env-aware destroy
-    cleanup metadata.
+    deploy); the slice reconcile then skips rather than auditing with
+    an unscoped view.
     """
     return os.environ.get(_MINDS_ENV_NAME_VAR, "")
-
-
-def cf_create_tunnel(client: httpx.Client, account_id: str, name: str) -> dict[str, Any]:
-    """Create a Cloudflare tunnel + tag it with the minds env name in metadata.
-
-    The ``metadata`` field on ``cfd_tunnel`` POST accepts arbitrary
-    string-keyed values; we shove ``{"env": "<minds-env-name>"}`` in so
-    ``minds env destroy`` can later filter the tier's tunnels by env.
-    Empty env_name still creates the tunnel (back-compat with older
-    connector deploys); destroy then filters by exact match, so empty
-    means "doesn't match any env" -- the operator can clean those up
-    manually.
-    """
-    body: dict[str, Any] = {"name": name, "config_src": "cloudflare"}
-    env_name = _current_minds_env_name()
-    if env_name:
-        body["metadata"] = {"env": env_name}
-    response = client.post(f"/accounts/{account_id}/cfd_tunnel", json=body)
-    return cf_check(response)["result"]
-
-
-def cf_list_tunnels(client: httpx.Client, account_id: str, include_prefix: str = "") -> list[dict[str, Any]]:
-    params: dict[str, str] = {"is_deleted": "false"}
-    if include_prefix:
-        params["include_prefix"] = include_prefix
-    return cf_list_all_pages(client, f"/accounts/{account_id}/cfd_tunnel", params)
-
-
-def cf_get_tunnel_by_name(client: httpx.Client, account_id: str, name: str) -> dict[str, Any] | None:
-    params: dict[str, str] = {"is_deleted": "false", "name": name}
-    response = client.get(f"/accounts/{account_id}/cfd_tunnel", params=params)
-    for tunnel in cf_check(response)["result"]:
-        if tunnel["name"] == name:
-            return tunnel
-    return None
-
-
-def cf_get_tunnel_by_id(client: httpx.Client, account_id: str, tunnel_id: str) -> dict[str, Any] | None:
-    response = client.get(f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}")
-    try:
-        data = cf_check(response)
-        return data["result"]
-    except CloudflareApiError as exc:
-        if exc.status_code == 404:
-            return None
-        raise
-
-
-def cf_get_tunnel_token(client: httpx.Client, account_id: str, tunnel_id: str) -> str:
-    response = client.get(f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/token")
-    return cf_check(response)["result"]
-
-
-def cf_delete_tunnel(client: httpx.Client, account_id: str, tunnel_id: str) -> None:
-    cf_check(client.delete(f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}"))
-
-
-def cf_get_tunnel_config(client: httpx.Client, account_id: str, tunnel_id: str) -> dict[str, Any]:
-    response = client.get(f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations")
-    return cf_check(response)["result"]
-
-
-def cf_put_tunnel_config(client: httpx.Client, account_id: str, tunnel_id: str, config: dict[str, Any]) -> None:
-    cf_check(client.put(f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations", json=config))
-
-
-# --- DNS operations ---
-
-
-def cf_create_cname(client: httpx.Client, zone_id: str, name: str, target: str) -> dict[str, Any]:
-    response = client.post(
-        f"/zones/{zone_id}/dns_records",
-        json={"type": "CNAME", "name": name, "content": target, "proxied": True, "ttl": 1},
-    )
-    return cf_check(response)["result"]
-
-
-def cf_list_dns_records(client: httpx.Client, zone_id: str, name: str = "") -> list[dict[str, Any]]:
-    params: dict[str, str] = {"type": "CNAME"}
-    if name:
-        params["name"] = name
-    return cf_list_all_pages(client, f"/zones/{zone_id}/dns_records", params)
-
-
-def cf_delete_dns_record(client: httpx.Client, zone_id: str, record_id: str) -> None:
-    cf_check(client.delete(f"/zones/{zone_id}/dns_records/{record_id}"))
-
-
-# --- Access operations ---
-
-
-def _is_transient_cloudflare_access_error(exc: BaseException) -> bool:
-    """Whether a Cloudflare Access failure is worth retrying after a short wait.
-
-    Cloudflare's Access control plane is eventually consistent around
-    application deletion: recreating (or mutating) an app for a hostname whose
-    previous app was deleted seconds earlier intermittently makes the API
-    itself fail with its generic ``access.api.error.internal_server_error``
-    (code 10001). Those 5xx responses are transient -- the same call succeeds
-    once the teardown settles -- so the Access operations retry them.
-    """
-    return isinstance(exc, CloudflareApiError) and exc.status_code >= 500
-
-
-_retry_transient_access_errors = retry(
-    retry=retry_if_exception(_is_transient_cloudflare_access_error),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=4),
-    reraise=True,
-)
-
-
-@_retry_transient_access_errors
-def cf_create_access_app(
-    client: httpx.Client,
-    account_id: str,
-    hostname: str,
-    app_name: str,
-    allowed_idps: list[str] | None = None,
-) -> dict[str, Any]:
-    body: dict[str, Any] = {
-        "name": app_name,
-        "domain": hostname,
-        "type": "self_hosted",
-        "session_duration": "24h",
-    }
-    if allowed_idps is not None:
-        body["allowed_idps"] = allowed_idps
-    response = client.post(
-        f"/accounts/{account_id}/access/apps",
-        json=body,
-    )
-    return cf_check(response)["result"]
-
-
-@_retry_transient_access_errors
-def cf_delete_access_app(client: httpx.Client, account_id: str, app_id: str) -> None:
-    cf_check(client.delete(f"/accounts/{account_id}/access/apps/{app_id}"))
-
-
-@_retry_transient_access_errors
-def cf_get_access_app_by_domain(client: httpx.Client, account_id: str, hostname: str) -> dict[str, Any] | None:
-    response = client.get(f"/accounts/{account_id}/access/apps")
-    data = cf_check(response)
-    for app_item in data["result"]:
-        if app_item.get("domain") == hostname:
-            return app_item
-    return None
-
-
-@_retry_transient_access_errors
-def cf_list_access_policies(client: httpx.Client, account_id: str, app_id: str) -> list[dict[str, Any]]:
-    response = client.get(f"/accounts/{account_id}/access/apps/{app_id}/policies")
-    return cf_check(response)["result"]
-
-
-@_retry_transient_access_errors
-def cf_create_access_policy(
-    client: httpx.Client, account_id: str, app_id: str, policy: dict[str, Any]
-) -> dict[str, Any]:
-    response = client.post(f"/accounts/{account_id}/access/apps/{app_id}/policies", json=policy)
-    return cf_check(response)["result"]
-
-
-@_retry_transient_access_errors
-def cf_update_access_policy(
-    client: httpx.Client, account_id: str, app_id: str, policy_id: str, policy: dict[str, Any]
-) -> dict[str, Any]:
-    response = client.put(f"/accounts/{account_id}/access/apps/{app_id}/policies/{policy_id}", json=policy)
-    return cf_check(response)["result"]
-
-
-@_retry_transient_access_errors
-def cf_delete_access_policy(client: httpx.Client, account_id: str, app_id: str, policy_id: str) -> None:
-    cf_check(client.delete(f"/accounts/{account_id}/access/apps/{app_id}/policies/{policy_id}"))
-
-
-# --- Service token operations ---
-
-
-def cf_create_service_token(
-    client: httpx.Client, account_id: str, name: str, duration: str = "8760h"
-) -> dict[str, Any]:
-    response = client.post(
-        f"/accounts/{account_id}/access/service_tokens",
-        json={"name": name, "duration": duration},
-    )
-    return cf_check(response)["result"]
-
-
-def cf_list_service_tokens(client: httpx.Client, account_id: str) -> list[dict[str, Any]]:
-    response = client.get(f"/accounts/{account_id}/access/service_tokens")
-    return cf_check(response)["result"]
-
-
-def cf_delete_service_token(client: httpx.Client, account_id: str, token_id: str) -> None:
-    cf_check(client.delete(f"/accounts/{account_id}/access/service_tokens/{token_id}"))
 
 
 # --- R2 bucket + account-token operations ---
@@ -1282,241 +960,19 @@ def build_r2_bucket_token_policies(
     ]
 
 
-# --- Workers KV operations ---
-
-
-def cf_kv_list_namespaces(client: httpx.Client, account_id: str) -> list[dict[str, Any]]:
-    response = client.get(f"/accounts/{account_id}/storage/kv/namespaces")
-    return cf_check(response)["result"]
-
-
-def cf_kv_create_namespace(client: httpx.Client, account_id: str, title: str) -> dict[str, Any]:
-    response = client.post(f"/accounts/{account_id}/storage/kv/namespaces", json={"title": title})
-    return cf_check(response)["result"]
-
-
-def cf_kv_get(client: httpx.Client, account_id: str, namespace_id: str, key: str) -> str | None:
-    response = client.get(f"/accounts/{account_id}/storage/kv/namespaces/{namespace_id}/values/{key}")
-    if response.status_code == 404:
-        return None
-    response.raise_for_status()
-    return response.text
-
-
-def cf_kv_put(client: httpx.Client, account_id: str, namespace_id: str, key: str, value: str) -> None:
-    response = client.put(
-        f"/accounts/{account_id}/storage/kv/namespaces/{namespace_id}/values/{key}",
-        content=value,
-        headers={"Content-Type": "text/plain"},
-    )
-    cf_check(response)
-
-
-def cf_kv_delete(client: httpx.Client, account_id: str, namespace_id: str, key: str) -> None:
-    response = client.delete(f"/accounts/{account_id}/storage/kv/namespaces/{namespace_id}/values/{key}")
-    cf_check(response)
-
-
-def cf_kv_ensure_namespace(client: httpx.Client, account_id: str, title: str) -> str:
-    """Find or create a KV namespace by title. Returns the namespace ID."""
-    namespaces = cf_kv_list_namespaces(client, account_id)
-    for ns in namespaces:
-        if ns["title"] == title:
-            return ns["id"]
-    result = cf_kv_create_namespace(client, account_id, title)
-    return result["id"]
-
-
-# ---------------------------------------------------------------------------
-# Naming helpers
-# ---------------------------------------------------------------------------
-
-
-_MAX_USER_ID_PREFIX_LENGTH = 22
-_MAX_SERVICE_NAME_LENGTH = 21
-_AGENT_ID_PREFIX_LENGTH = 16
-
-
-def truncate_agent_id(agent_id: str) -> str:
-    """Truncate an agent ID to a short prefix for use in hostnames.
-
-    Strips the "agent-" prefix (if present) and takes the first 16 hex chars.
-    16 chars of hex provides sufficient uniqueness per user.
-    """
-    raw = agent_id.removeprefix("agent-")
-    return raw[:_AGENT_ID_PREFIX_LENGTH]
-
-
-def _validate_user_id_prefix(user_id_prefix: str) -> None:
-    if TUNNEL_NAME_SEP in user_id_prefix:
-        raise InvalidTunnelComponentError("User ID prefix", user_id_prefix, TUNNEL_NAME_SEP)
-    if len(user_id_prefix) > _MAX_USER_ID_PREFIX_LENGTH:
-        raise TunnelComponentTooLongError("User ID prefix", user_id_prefix, _MAX_USER_ID_PREFIX_LENGTH)
-
-
-def _validate_service_name(service_name: str) -> None:
-    if TUNNEL_NAME_SEP in service_name:
-        raise InvalidTunnelComponentError("Service name", service_name, TUNNEL_NAME_SEP)
-    if len(service_name) > _MAX_SERVICE_NAME_LENGTH:
-        raise TunnelComponentTooLongError("Service name", service_name, _MAX_SERVICE_NAME_LENGTH)
-
-
-def make_tunnel_name(user_id_prefix: str, agent_id: str) -> str:
-    _validate_user_id_prefix(user_id_prefix)
-    short_id = truncate_agent_id(agent_id)
-    return f"{user_id_prefix}{TUNNEL_NAME_SEP}{short_id}"
-
-
-def make_hostname(service_name: str, agent_id: str, user_id_prefix: str, domain: str) -> str:
-    _validate_service_name(service_name)
-    short_id = truncate_agent_id(agent_id)
-    return f"{service_name}--{short_id}--{user_id_prefix}.{domain}"
-
-
-def extract_agent_id_prefix(tunnel_name: str, user_id_prefix: str) -> str:
-    """Extract the truncated agent ID prefix from a tunnel name."""
-    prefix = f"{user_id_prefix}{TUNNEL_NAME_SEP}"
-    if not tunnel_name.startswith(prefix):
-        raise TunnelOwnershipError(tunnel_name, user_id_prefix)
-    return tunnel_name[len(prefix) :]
-
-
-def extract_service_name(hostname: str, agent_id_prefix: str, user_id_prefix: str, domain: str) -> str | None:
-    expected_suffix = f"--{agent_id_prefix}--{user_id_prefix}.{domain}"
-    if not hostname.endswith(expected_suffix):
-        return None
-    return hostname[: -len(expected_suffix)]
-
-
-def extract_user_id_prefix_from_tunnel_name(tunnel_name: str) -> str:
-    """Extract the user-id-prefix portion from a tunnel name."""
-    parts = tunnel_name.split(TUNNEL_NAME_SEP, 1)
-    return parts[0]
-
-
-# ---------------------------------------------------------------------------
-# Ingress config helpers
-# ---------------------------------------------------------------------------
-
-
-def non_catchall_rules(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [r for r in rules if "hostname" in r]
-
-
-def wrap_ingress(rules: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"config": {"ingress": list(rules) + [{"service": "http_status:404"}]}}
-
-
-# ---------------------------------------------------------------------------
-# Auth policy helpers
-# ---------------------------------------------------------------------------
-
-
-def policy_to_cf_rules(policy: AuthPolicy) -> list[dict[str, Any]]:
-    """Convert our AuthPolicy format to Cloudflare Access policy create/update format."""
-    cf_policies = []
-    for rule in policy.rules:
-        cf_policies.append(
-            {
-                "name": "Policy rule",
-                "decision": rule.get("action", "allow"),
-                "include": rule.get("include", []),
-                "precedence": len(cf_policies) + 1,
-            }
-        )
-    return cf_policies
-
-
-def cf_policies_to_auth_policy(cf_policies: list[dict[str, Any]]) -> AuthPolicy:
-    """Convert Cloudflare Access policies back to our AuthPolicy format."""
-    rules = []
-    for p in cf_policies:
-        rules.append(
-            {
-                "action": p.get("decision", "allow"),
-                "include": p.get("include", []),
-            }
-        )
-    return AuthPolicy(rules=rules)
-
-
-# Cloudflare Access include-rule types that constrain access to specific
-# identities. Anything outside this set (``everyone``, ``ip``, ...) would let
-# a policy make a service publicly reachable, which we do not allow -- Access
-# service tokens are the one sanctioned non-identity path and they are managed
-# by the dedicated service-token endpoint, never through AuthPolicy bodies.
-_IDENTITY_INCLUDE_KEYS: Final = frozenset({"email", "email_domain", "login_method", "group"})
-
-
-def validate_auth_policy_has_identity(policy: AuthPolicy) -> None:
-    """Reject any auth policy that would leave a service publicly reachable.
-
-    Every policy must carry at least one rule, and every rule's ``include``
-    list must be non-empty with only identity-constraining entry types.
-    Raises :class:`InvalidAuthPolicyError` otherwise.
-    """
-    if not policy.rules:
-        raise InvalidAuthPolicyError("policy must contain at least one rule")
-    for rule in policy.rules:
-        include = rule.get("include")
-        if not isinstance(include, list) or not include:
-            raise InvalidAuthPolicyError("every rule must have a non-empty 'include' list")
-        for entry in include:
-            if not isinstance(entry, dict) or len(entry) != 1:
-                raise InvalidAuthPolicyError(f"malformed include entry: {entry!r}")
-            (entry_type,) = entry.keys()
-            if entry_type not in _IDENTITY_INCLUDE_KEYS:
-                raise InvalidAuthPolicyError(
-                    f"include type '{entry_type}' is not an identity constraint "
-                    f"(allowed: {sorted(_IDENTITY_INCLUDE_KEYS)})"
-                )
-
-
-def owner_email_auth_policy(email: str) -> AuthPolicy:
-    """The fallback Access policy: allow only the tunnel owner's verified email."""
-    return AuthPolicy(rules=[{"action": "allow", "include": [{"email": {"email": email}}]}])
-
-
 # ---------------------------------------------------------------------------
 # Cloudflare operations protocol
 # ---------------------------------------------------------------------------
 
 
 class CloudflareOps(Protocol):
-    """Abstraction over Cloudflare API calls used by ForwardingCtx."""
+    """Abstraction over the Cloudflare API calls used by the R2 bucket endpoints and sweeps.
 
-    def create_tunnel(self, name: str) -> dict[str, Any]: ...
-    def list_tunnels(self, include_prefix: str = "") -> list[dict[str, Any]]: ...
-    def get_tunnel_by_name(self, name: str) -> dict[str, Any] | None: ...
-    def get_tunnel_by_id(self, tunnel_id: str) -> dict[str, Any] | None: ...
-    def get_tunnel_token(self, tunnel_id: str) -> str: ...
-    def delete_tunnel(self, tunnel_id: str) -> None: ...
-    def get_tunnel_config(self, tunnel_id: str) -> dict[str, Any]: ...
-    def put_tunnel_config(self, tunnel_id: str, config: dict[str, Any]) -> None: ...
-    def create_cname(self, name: str, target: str) -> dict[str, Any]: ...
-    def list_dns_records(self, name: str = "") -> list[dict[str, Any]]: ...
-    def delete_dns_record(self, record_id: str) -> None: ...
-    def create_access_app(
-        self, hostname: str, app_name: str, allowed_idps: list[str] | None = None
-    ) -> dict[str, Any]: ...
-    def delete_access_app(self, app_id: str) -> None: ...
-    def get_access_app_by_domain(self, hostname: str) -> dict[str, Any] | None: ...
-    def list_access_policies(self, app_id: str) -> list[dict[str, Any]]: ...
-    def create_access_policy(self, app_id: str, policy: dict[str, Any]) -> dict[str, Any]: ...
-    def update_access_policy(self, app_id: str, policy_id: str, policy: dict[str, Any]) -> dict[str, Any]: ...
-    def delete_access_policy(self, app_id: str, policy_id: str) -> None: ...
-    def kv_get(self, key: str) -> str | None: ...
-    def kv_put(self, key: str, value: str) -> None: ...
-    def kv_delete(self, key: str) -> None: ...
-    def create_service_token(self, name: str) -> dict[str, Any]: ...
-    def list_service_tokens(self) -> list[dict[str, Any]]: ...
-    def delete_service_token(self, token_id: str) -> None: ...
+    R2 bucket + bucket-scoped-token operations share one authenticated client
+    + account_id; the genuinely-different concern (the key-metadata DB) lives
+    behind the separate KeyStore abstraction below.
+    """
 
-    # R2 bucket + bucket-scoped-token operations. These are folded into the
-    # CloudflareOps surface (rather than a parallel R2Ops abstraction) because
-    # they are just more Cloudflare REST calls sharing the same authenticated
-    # client + account_id; the genuinely-different concern (the key-metadata DB)
-    # lives behind the separate KeyStore abstraction below.
     account_id: str
 
     def create_bucket(self, name: str) -> dict[str, Any]: ...
@@ -1535,99 +991,17 @@ class CloudflareOps(Protocol):
 class HttpCloudflareOps:
     """CloudflareOps implementation backed by real Cloudflare HTTP API calls."""
 
-    def __init__(self, api_token: str, account_id: str, zone_id: str) -> None:
+    def __init__(self, api_token: str, account_id: str) -> None:
         self.client = httpx.Client(
             base_url=_CF_BASE_URL,
             headers={"Authorization": f"Bearer {api_token}"},
             timeout=30.0,
         )
         self.account_id = account_id
-        self.zone_id = zone_id
-        self._kv_namespace_id: str | None = None
         # Per-container cache of R2 permission-group UUIDs, looked up lazily.
         # Looked up at runtime (not hard-coded) because the connector runs
         # against different Cloudflare accounts across deploy environments.
         self._r2_permission_group_id_by_access: dict[str, str] = {}
-
-    def _ensure_kv_namespace(self) -> str:
-        if self._kv_namespace_id is None:
-            self._kv_namespace_id = cf_kv_ensure_namespace(self.client, self.account_id, KV_NAMESPACE_TITLE)
-        return self._kv_namespace_id
-
-    def create_tunnel(self, name: str) -> dict[str, Any]:
-        return cf_create_tunnel(self.client, self.account_id, name)
-
-    def list_tunnels(self, include_prefix: str = "") -> list[dict[str, Any]]:
-        return cf_list_tunnels(self.client, self.account_id, include_prefix=include_prefix)
-
-    def get_tunnel_by_name(self, name: str) -> dict[str, Any] | None:
-        return cf_get_tunnel_by_name(self.client, self.account_id, name)
-
-    def get_tunnel_by_id(self, tunnel_id: str) -> dict[str, Any] | None:
-        return cf_get_tunnel_by_id(self.client, self.account_id, tunnel_id)
-
-    def get_tunnel_token(self, tunnel_id: str) -> str:
-        return cf_get_tunnel_token(self.client, self.account_id, tunnel_id)
-
-    def delete_tunnel(self, tunnel_id: str) -> None:
-        cf_delete_tunnel(self.client, self.account_id, tunnel_id)
-
-    def get_tunnel_config(self, tunnel_id: str) -> dict[str, Any]:
-        return cf_get_tunnel_config(self.client, self.account_id, tunnel_id)
-
-    def put_tunnel_config(self, tunnel_id: str, config: dict[str, Any]) -> None:
-        cf_put_tunnel_config(self.client, self.account_id, tunnel_id, config)
-
-    def create_cname(self, name: str, target: str) -> dict[str, Any]:
-        return cf_create_cname(self.client, self.zone_id, name, target)
-
-    def list_dns_records(self, name: str = "") -> list[dict[str, Any]]:
-        return cf_list_dns_records(self.client, self.zone_id, name=name)
-
-    def delete_dns_record(self, record_id: str) -> None:
-        cf_delete_dns_record(self.client, self.zone_id, record_id)
-
-    def create_access_app(self, hostname: str, app_name: str, allowed_idps: list[str] | None = None) -> dict[str, Any]:
-        return cf_create_access_app(self.client, self.account_id, hostname, app_name, allowed_idps=allowed_idps)
-
-    def delete_access_app(self, app_id: str) -> None:
-        cf_delete_access_app(self.client, self.account_id, app_id)
-
-    def get_access_app_by_domain(self, hostname: str) -> dict[str, Any] | None:
-        return cf_get_access_app_by_domain(self.client, self.account_id, hostname)
-
-    def list_access_policies(self, app_id: str) -> list[dict[str, Any]]:
-        return cf_list_access_policies(self.client, self.account_id, app_id)
-
-    def create_access_policy(self, app_id: str, policy: dict[str, Any]) -> dict[str, Any]:
-        return cf_create_access_policy(self.client, self.account_id, app_id, policy)
-
-    def update_access_policy(self, app_id: str, policy_id: str, policy: dict[str, Any]) -> dict[str, Any]:
-        return cf_update_access_policy(self.client, self.account_id, app_id, policy_id, policy)
-
-    def delete_access_policy(self, app_id: str, policy_id: str) -> None:
-        cf_delete_access_policy(self.client, self.account_id, app_id, policy_id)
-
-    def kv_get(self, key: str) -> str | None:
-        ns_id = self._ensure_kv_namespace()
-        return cf_kv_get(self.client, self.account_id, ns_id, key)
-
-    def kv_put(self, key: str, value: str) -> None:
-        ns_id = self._ensure_kv_namespace()
-        cf_kv_put(self.client, self.account_id, ns_id, key, value)
-
-    def kv_delete(self, key: str) -> None:
-        ns_id = self._ensure_kv_namespace()
-        cf_kv_delete(self.client, self.account_id, ns_id, key)
-
-    def create_service_token(self, name: str) -> dict[str, Any]:
-        return cf_create_service_token(self.client, self.account_id, name)
-
-    def list_service_tokens(self) -> list[dict[str, Any]]:
-        return cf_list_service_tokens(self.client, self.account_id)
-
-    def delete_service_token(self, token_id: str) -> None:
-        cf_delete_service_token(self.client, self.account_id, token_id)
 
     def _r2_permission_group_id(self, access: str) -> str:
         if access not in self._r2_permission_group_id_by_access:
@@ -1679,365 +1053,15 @@ class HttpCloudflareOps:
 
 
 # ---------------------------------------------------------------------------
-# Forwarding service (business logic)
+# Shared Cloudflare ops holder
 # ---------------------------------------------------------------------------
 
 
 class ForwardingCtx:
-    """Holds the Cloudflare ops abstraction and domain config. Created once per container."""
+    """Thin holder of the Cloudflare ops abstraction. Created once per container."""
 
-    def __init__(self, ops: CloudflareOps, domain: str, allowed_idps: list[str] | None = None) -> None:
+    def __init__(self, ops: CloudflareOps) -> None:
         self.ops = ops
-        self.domain = domain
-        self.allowed_idps = allowed_idps
-
-    def verify_ownership(self, tunnel_name: str, user_id_prefix: str) -> None:
-        if not tunnel_name.startswith(f"{user_id_prefix}{TUNNEL_NAME_SEP}"):
-            raise TunnelOwnershipError(tunnel_name, user_id_prefix)
-
-    def get_tunnel_or_raise(self, tunnel_name: str) -> dict[str, Any]:
-        tunnel = self.ops.get_tunnel_by_name(tunnel_name)
-        if tunnel is None:
-            raise TunnelNotFoundError(tunnel_name)
-        return tunnel
-
-    def resolve_tunnel_name_by_id(self, tunnel_id: str) -> str:
-        """Look up tunnel name from tunnel ID."""
-        tunnel = self.ops.get_tunnel_by_id(tunnel_id)
-        if tunnel is None:
-            raise TunnelNotFoundError(tunnel_id)
-        return tunnel["name"]
-
-    def create_tunnel(
-        self,
-        user_id_prefix: str,
-        agent_id: str,
-        default_auth_policy: AuthPolicy | None = None,
-        # Applied as the tunnel's default policy only when no default is stored
-        # yet (idempotent re-creates must not clobber a user-set default).
-        fallback_auth_policy: AuthPolicy | None = None,
-    ) -> TunnelInfo:
-        name = make_tunnel_name(user_id_prefix, agent_id)
-        existing = self.ops.get_tunnel_by_name(name)
-        if existing is not None:
-            tid = existing["id"]
-            token = self.ops.get_tunnel_token(tid)
-            services = self._list_services(tid, name, user_id_prefix)
-            # Update the default auth policy if provided (may have been missing
-            # from the original creation or may need updating)
-            if default_auth_policy is not None:
-                self.ops.kv_put(name, default_auth_policy.model_dump_json())
-            elif fallback_auth_policy is not None and self.ops.kv_get(name) is None:
-                self.ops.kv_put(name, fallback_auth_policy.model_dump_json())
-            else:
-                # A stored default already exists (or no fallback was given);
-                # an idempotent re-create must not clobber it.
-                pass
-            return TunnelInfo(tunnel_name=name, tunnel_id=tid, token=token, services=services)
-
-        result = self.ops.create_tunnel(name)
-        tid = result["id"]
-        token = self.ops.get_tunnel_token(tid)
-        self.ops.put_tunnel_config(tid, wrap_ingress([]))
-
-        effective_policy = default_auth_policy if default_auth_policy is not None else fallback_auth_policy
-        if effective_policy is not None:
-            self.ops.kv_put(name, effective_policy.model_dump_json())
-
-        return TunnelInfo(tunnel_name=name, tunnel_id=tid, token=token, services=[])
-
-    def list_tunnels(self, user_id_prefix: str) -> list[TunnelInfo]:
-        prefix = f"{user_id_prefix}{TUNNEL_NAME_SEP}"
-        tunnels = self.ops.list_tunnels(include_prefix=prefix)
-        result: list[TunnelInfo] = []
-        for t in tunnels:
-            name = t["name"]
-            if not name.startswith(prefix):
-                continue
-            tid = t["id"]
-            services = self._list_services(tid, name, user_id_prefix)
-            result.append(TunnelInfo(tunnel_name=name, tunnel_id=tid, services=services))
-        return result
-
-    def get_tunnel_for_agent(self, user_id_prefix: str, agent_id: str) -> TunnelInfo | None:
-        """Resolve the caller's tunnel for a single agent in O(1) Cloudflare calls.
-
-        minds always knows the exact tunnel name it wants
-        (``<user_id_prefix>--<agent-prefix>``), so this resolves the tunnel via
-        Cloudflare's server-side name filter (:func:`cf_get_tunnel_by_name`)
-        plus a single config fetch -- 2 Cloudflare calls regardless of how
-        many tunnels the account owns. Contrast with :meth:`list_tunnels`,
-        which enumerates every tunnel under the user prefix and fetches each
-        one's config (O(n) calls). Returns ``None`` when the user has no
-        tunnel for the agent yet.
-        """
-        name = make_tunnel_name(user_id_prefix, agent_id)
-        tunnel = self.ops.get_tunnel_by_name(name)
-        if tunnel is None:
-            return None
-        tid = tunnel["id"]
-        services = self._list_services(tid, name, user_id_prefix)
-        return TunnelInfo(tunnel_name=name, tunnel_id=tid, services=services)
-
-    def delete_tunnel(self, tunnel_name: str, user_id_prefix: str) -> None:
-        self.verify_ownership(tunnel_name, user_id_prefix)
-        tunnel = self.get_tunnel_or_raise(tunnel_name)
-        tid = tunnel["id"]
-        config = self.ops.get_tunnel_config(tid)
-        for rule in non_catchall_rules(config.get("config", {}).get("ingress", [])):
-            hostname = rule.get("hostname", "")
-            if hostname:
-                self._delete_access_app_for_hostname(hostname)
-                self._delete_dns_by_name(hostname)
-        self.ops.put_tunnel_config(tid, wrap_ingress([]))
-        self.ops.delete_tunnel(tid)
-        self._kv_delete_safe(tunnel_name)
-
-    def add_service(
-        self,
-        tunnel_name: str,
-        user_id_prefix: str,
-        service_name: str,
-        service_url: str,
-        # The Access policy applied when the tunnel has no stored default --
-        # typically allow-only-the-owner's-email. When both this and the KV
-        # default are absent the add is refused: a service must never go up
-        # without an Access Application.
-        fallback_policy: AuthPolicy | None = None,
-        # When provided, the authoritative policy for this service's Access
-        # Application: it wins over the stored tunnel default, and on a
-        # re-add it REPLACES a pre-existing app's policies. The combined
-        # enable-sharing path passes this so the caller's requested ACL
-        # always lands in the same call that brings the service up.
-        service_policy: AuthPolicy | None = None,
-    ) -> ServiceInfo:
-        self.verify_ownership(tunnel_name, user_id_prefix)
-        tunnel = self.get_tunnel_or_raise(tunnel_name)
-        tid = tunnel["id"]
-        agent_id = extract_agent_id_prefix(tunnel_name, user_id_prefix)
-        hostname = make_hostname(service_name, agent_id, user_id_prefix, self.domain)
-
-        # Resolve the Access policy up front and create the Access Application
-        # BEFORE any exposure exists (DNS/ingress). A failure here aborts the
-        # add outright, so a failed Access call can never leave a service
-        # publicly reachable.
-        stored_default = self.ops.kv_get(tunnel_name)
-        if service_policy is not None:
-            policy: AuthPolicy | None = service_policy
-        elif stored_default is not None:
-            policy = AuthPolicy.model_validate_json(stored_default)
-        else:
-            policy = fallback_policy
-        if policy is None:
-            raise ServicePolicyMissingError(tunnel_name)
-        created_access_app_id: str | None = None
-        is_dns_created_here = False
-        try:
-            existing_access_app = self.ops.get_access_app_by_domain(hostname)
-            if existing_access_app is None:
-                access_app = self.ops.create_access_app(hostname, f"cf-fwd-{hostname}", allowed_idps=self.allowed_idps)
-                created_access_app_id = access_app["id"]
-                for cf_policy in policy_to_cf_rules(policy):
-                    self.ops.create_access_policy(access_app["id"], cf_policy)
-            elif service_policy is not None:
-                # An explicit service policy replaces whatever the pre-existing
-                # app carried, so a re-enable always ends at the requested ACL.
-                for existing_policy in self.ops.list_access_policies(existing_access_app["id"]):
-                    self.ops.delete_access_policy(existing_access_app["id"], existing_policy["id"])
-                for cf_policy in policy_to_cf_rules(service_policy):
-                    self.ops.create_access_policy(existing_access_app["id"], cf_policy)
-            else:
-                # A pre-existing app means the service was configured before (with a
-                # possibly customized policy) -- leave it untouched on re-add.
-                pass
-
-            cname_target = f"{tid}.cfargotunnel.com"
-            existing_dns = self.ops.list_dns_records(name=hostname)
-            if not existing_dns:
-                self.ops.create_cname(hostname, cname_target)
-                is_dns_created_here = True
-            elif existing_dns[0].get("content") != cname_target:
-                raise CloudflareApiError(
-                    status_code=409,
-                    errors=[
-                        {
-                            "message": (
-                                f"DNS record for {hostname} already exists pointing to "
-                                f"{existing_dns[0].get('content')!r}, not {cname_target!r}"
-                            )
-                        }
-                    ],
-                )
-            else:
-                # CNAME already points at this tunnel; idempotent re-add.
-                pass
-            config = self.ops.get_tunnel_config(tid)
-            rules = [
-                r
-                for r in non_catchall_rules(config.get("config", {}).get("ingress", []))
-                if r.get("hostname") != hostname
-            ]
-            rules.append(
-                {
-                    "hostname": hostname,
-                    "service": service_url,
-                    "originRequest": {"noTLSVerify": True},
-                }
-            )
-            self.ops.put_tunnel_config(tid, wrap_ingress(rules))
-        except (CloudflareApiError, httpx.HTTPError):
-            # Roll back only what this call created (never a pre-existing DNS
-            # record or Access App) so a half-added service leaves nothing
-            # behind -- in particular nothing publicly reachable.
-            if created_access_app_id is not None:
-                self._delete_access_app_for_hostname(hostname)
-            if is_dns_created_here:
-                self._delete_dns_by_name(hostname)
-            raise
-
-        return ServiceInfo(service_name=service_name, hostname=hostname, service_url=service_url)
-
-    def remove_service(self, tunnel_name: str, user_id_prefix: str, service_name: str) -> None:
-        self.verify_ownership(tunnel_name, user_id_prefix)
-        tunnel = self.get_tunnel_or_raise(tunnel_name)
-        tid = tunnel["id"]
-        agent_id = extract_agent_id_prefix(tunnel_name, user_id_prefix)
-        hostname = make_hostname(service_name, agent_id, user_id_prefix, self.domain)
-        config = self.ops.get_tunnel_config(tid)
-        rules = non_catchall_rules(config.get("config", {}).get("ingress", []))
-        new_rules = [r for r in rules if r.get("hostname") != hostname]
-        if len(new_rules) == len(rules):
-            raise ServiceNotFoundError(service_name, tunnel_name)
-        self.ops.put_tunnel_config(tid, wrap_ingress(new_rules))
-        self._delete_access_app_for_hostname(hostname)
-        self._delete_dns_by_name(hostname)
-
-    def get_tunnel_auth(self, tunnel_name: str) -> AuthPolicy | None:
-        """Get the default auth policy for a tunnel from KV."""
-        raw = self.ops.kv_get(tunnel_name)
-        if raw is None:
-            return None
-        return AuthPolicy.model_validate_json(raw)
-
-    def set_tunnel_auth(self, tunnel_name: str, policy: AuthPolicy) -> None:
-        """Set the default auth policy for a tunnel in KV."""
-        self.ops.kv_put(tunnel_name, policy.model_dump_json())
-
-    def get_service_auth(self, tunnel_name: str, user_id_prefix: str, service_name: str) -> AuthPolicy | None:
-        """Get the auth policy for a specific service from its Access Application."""
-        agent_id = extract_agent_id_prefix(tunnel_name, user_id_prefix)
-        hostname = make_hostname(service_name, agent_id, user_id_prefix, self.domain)
-        access_app = self.ops.get_access_app_by_domain(hostname)
-        if access_app is None:
-            return None
-        policies = self.ops.list_access_policies(access_app["id"])
-        return cf_policies_to_auth_policy(policies)
-
-    def set_service_auth(self, tunnel_name: str, user_id_prefix: str, service_name: str, policy: AuthPolicy) -> None:
-        """Set the auth policy for a specific service on its Access Application."""
-        agent_id = extract_agent_id_prefix(tunnel_name, user_id_prefix)
-        hostname = make_hostname(service_name, agent_id, user_id_prefix, self.domain)
-        access_app = self.ops.get_access_app_by_domain(hostname)
-        if access_app is None:
-            access_app = self.ops.create_access_app(hostname, f"cf-fwd-{service_name}", allowed_idps=self.allowed_idps)
-
-        existing_policies = self.ops.list_access_policies(access_app["id"])
-        for ep in existing_policies:
-            self.ops.delete_access_policy(access_app["id"], ep["id"])
-
-        for cf_policy in policy_to_cf_rules(policy):
-            self.ops.create_access_policy(access_app["id"], cf_policy)
-
-    def list_services(self, tunnel_name: str, user_id_prefix: str) -> list[ServiceInfo]:
-        """List all services on a tunnel."""
-        self.verify_ownership(tunnel_name, user_id_prefix)
-        tunnel = self.get_tunnel_or_raise(tunnel_name)
-        return self._list_services(tunnel["id"], tunnel_name, user_id_prefix)
-
-    def _list_services(self, tunnel_id: str, tunnel_name: str, user_id_prefix: str) -> list[ServiceInfo]:
-        agent_id = extract_agent_id_prefix(tunnel_name, user_id_prefix)
-        config = self.ops.get_tunnel_config(tunnel_id)
-        rules = non_catchall_rules(config.get("config", {}).get("ingress", []))
-        services: list[ServiceInfo] = []
-        for rule in rules:
-            hostname = rule.get("hostname", "")
-            svc_url = rule.get("service", "")
-            svc_name = extract_service_name(hostname, agent_id, user_id_prefix, self.domain)
-            if svc_name is not None:
-                services.append(ServiceInfo(service_name=svc_name, hostname=hostname, service_url=svc_url))
-        return services
-
-    def _delete_dns_by_name(self, hostname: str) -> None:
-        records = self.ops.list_dns_records(name=hostname)
-        for record in records:
-            self.ops.delete_dns_record(record["id"])
-
-    def _delete_access_app_for_hostname(self, hostname: str) -> None:
-        try:
-            access_app = self.ops.get_access_app_by_domain(hostname)
-            if access_app is not None:
-                self.ops.delete_access_app(access_app["id"])
-        except (CloudflareApiError, httpx.HTTPError) as exc:
-            logger.warning("Failed to delete Access Application for %s: %s", hostname, exc)
-
-    def _kv_delete_safe(self, key: str) -> None:
-        try:
-            self.ops.kv_delete(key)
-        except (CloudflareApiError, httpx.HTTPError) as exc:
-            logger.warning("Failed to delete KV entry for %s: %s", key, exc)
-
-    def create_service_token(self, tunnel_name: str, user_id_prefix: str, name: str) -> ServiceTokenInfo:
-        """Create a Cloudflare Access service token and add it to all existing services on the tunnel.
-
-        The service token can be used for programmatic access via
-        CF-Access-Client-Id and CF-Access-Client-Secret headers.
-        """
-        self.verify_ownership(tunnel_name, user_id_prefix)
-        result = self.ops.create_service_token(name)
-        token_id = result["id"]
-        client_id = result["client_id"]
-        client_secret = result["client_secret"]
-
-        # Add a non_identity policy for this service token to all existing services
-        tunnel = self.get_tunnel_or_raise(tunnel_name)
-        config = self.ops.get_tunnel_config(tunnel["id"])
-        rules = non_catchall_rules(config.get("config", {}).get("ingress", []))
-        for rule in rules:
-            hostname = rule.get("hostname", "")
-            try:
-                access_app = self.ops.get_access_app_by_domain(hostname)
-                if access_app is not None:
-                    self.ops.create_access_policy(
-                        access_app["id"],
-                        {
-                            "name": f"Service token: {name}",
-                            "decision": "non_identity",
-                            "include": [{"service_token": {"token_id": token_id}}],
-                            "precedence": 10,
-                        },
-                    )
-            except (CloudflareApiError, httpx.HTTPError) as exc:
-                logger.warning("Failed to add service token policy for %s: %s", hostname, exc)
-
-        return ServiceTokenInfo(
-            token_id=token_id,
-            client_id=client_id,
-            client_secret=client_secret,
-            name=name,
-        )
-
-    def list_service_tokens(self) -> list[ServiceTokenInfo]:
-        """List all service tokens in the account."""
-        tokens = self.ops.list_service_tokens()
-        return [
-            ServiceTokenInfo(
-                token_id=t["id"],
-                client_id=t["client_id"],
-                client_secret=None,
-                name=t["name"],
-            )
-            for t in tokens
-        ]
 
 
 # ---------------------------------------------------------------------------
@@ -2045,55 +1069,16 @@ class ForwardingCtx:
 # ---------------------------------------------------------------------------
 
 
-def authenticate_request(request: Request, ops: CloudflareOps) -> AuthResult:
-    """Authenticate a request. Returns UserAuth or TunnelTokenAuth.
+def authenticate_request(request: Request) -> UserAuth:
+    """Authenticate a request via its SuperTokens JWT Bearer token.
 
-    Supports two Bearer-token auth methods:
-    1. Base64-encoded Cloudflare tunnel token (held by the agent, scoped to one tunnel).
-    2. SuperTokens JWT (a signed-in user's session, identified by their user-id prefix).
+    Raises ``HTTPException(401)`` when the Bearer credentials are missing or
+    the token is not a valid SuperTokens session for a verified-email user.
     """
     auth_header = request.headers.get("authorization", "")
-
     if not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer credentials")
-
-    token = auth_header[7:]
-    # Try tunnel token first.
-    tunnel_token_exc: HTTPException | None = None
-    try:
-        return _authenticate_tunnel_token(token, ops)
-    except HTTPException as exc:
-        tunnel_token_exc = exc
-    # Only try SuperTokens JWT if it is configured; otherwise preserve the
-    # original tunnel-token auth error so callers receive a meaningful message.
-    if not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
-        assert tunnel_token_exc is not None
-        raise tunnel_token_exc
-    # If SuperTokens also fails, raise the SuperTokens error since the
-    # token is clearly a JWT (not a base64 tunnel token).
-    try:
-        return _authenticate_supertokens(token)
-    except HTTPException as st_exc:
-        raise st_exc from None
-
-
-def _authenticate_tunnel_token(token: str, ops: CloudflareOps) -> TunnelTokenAuth:
-    """Validate a tunnel token. Returns TunnelTokenAuth with tunnel_id and tunnel_name."""
-    try:
-        decoded = base64.b64decode(token).decode("utf-8")
-        token_data = json.loads(decoded)
-    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=401, detail="Malformed tunnel token") from exc
-
-    tunnel_id = token_data.get("t")
-    if not tunnel_id:
-        raise HTTPException(status_code=401, detail="Invalid tunnel token: missing tunnel ID")
-
-    tunnel = ops.get_tunnel_by_id(tunnel_id)
-    if tunnel is None:
-        raise HTTPException(status_code=401, detail="Invalid tunnel token: tunnel not found")
-
-    return TunnelTokenAuth(tunnel_id=tunnel_id, tunnel_name=tunnel["name"])
+    return _authenticate_supertokens(auth_header[7:])
 
 
 _USER_ID_PREFIX_LENGTH = 16
@@ -2217,24 +1202,6 @@ def _get_user_id_from_access_token(token: str) -> str:
     if session is None:
         raise HTTPException(status_code=401, detail="Invalid or expired SuperTokens session")
     return session.get_user_id()
-
-
-def require_user_auth(auth: AuthResult) -> UserAuth:
-    """Require a signed-in user session. Raises 403 for tunnel-token callers."""
-    if isinstance(auth, TunnelTokenAuth):
-        raise HTTPException(status_code=403, detail="This operation requires a signed-in user session")
-    return auth
-
-
-def require_tunnel_access(auth: AuthResult, tunnel_name: str) -> str:
-    """Require access to a specific tunnel. Returns the user_id_prefix.
-    A signed-in user can access any of their own tunnels. A tunnel token can
-    only access the one tunnel it belongs to."""
-    if isinstance(auth, UserAuth):
-        return auth.user_id_prefix
-    if auth.tunnel_name != tunnel_name:
-        raise HTTPException(status_code=403, detail=f"Token does not grant access to tunnel '{tunnel_name}'")
-    return extract_user_id_prefix_from_tunnel_name(tunnel_name)
 
 
 # Env var holding the cache TTL (in seconds) for paid-status lookups. The
@@ -2385,10 +1352,10 @@ def require_ally_eligible(
 # Env var holding the single fixed API key that authenticates the operator
 # admin endpoints: the paid-list CRUD (``/paid/*``), the account admin API
 # (``/admin/accounts/*``), and the on-demand sweeps (``/admin/sweep/*``).
-# Distinct from the SuperTokens / tunnel-token auth used by every other
-# route: those routes reject this key, and the admin routes reject
-# SuperTokens JWTs / tunnel tokens. Folded into the ``supertokens-<env>``
-# Modal secret (see .minds/template/supertokens.sh).
+# Distinct from the SuperTokens auth used by every other route: those
+# routes reject this key, and the admin routes reject SuperTokens JWTs.
+# Folded into the ``supertokens-<env>`` Modal secret (see
+# .minds/template/supertokens.sh).
 _ADMIN_KEY_ENV = "MINDS_ADMIN_KEY"
 
 # Deprecated spelling of ``_ADMIN_KEY_ENV`` from when the key only guarded the
@@ -2477,8 +1444,6 @@ class AccountEntitlements(PlanEntitlements):
     def quota_values(self) -> PlanEntitlements:
         return PlanEntitlements(
             max_remote_workspaces=self.max_remote_workspaces,
-            max_tunnels=self.max_tunnels,
-            max_services_per_tunnel=self.max_services_per_tunnel,
             max_buckets=self.max_buckets,
             max_total_bucket_bytes=self.max_total_bucket_bytes,
             monthly_llm_spend_usd=self.monthly_llm_spend_usd,
@@ -2762,6 +1727,943 @@ def get_litellm_user_spend(
 
 
 # ---------------------------------------------------------------------------
+# Self-hosted sharing (share records, relay tokens, frps plugin auth)
+#
+# Replaces the Cloudflare tunnel/Access sharing model (blueprint/sharing-redesign).
+# A shared workspace lives at
+# ``<service>.<host-id>.<user-label>.<region>.<content-domain>``: the bare
+# ``<host-id>.<user-label>.<region>.<content-domain>`` is the workspace shell,
+# and ``<user-label>.<region>.<content-domain>`` is the registrable-site
+# boundary (the Public-Suffix-List entry is ``<region>.<content-domain>``).
+# The workspace's frpc registers the bare domain plus its wildcard on a relay,
+# so any service (at any sub-origin depth) routes without per-service DNS or
+# per-service authorization at the relay. Ids are full and untruncated: host
+# ids are ``host-<32hex>`` and the user label is the SuperTokens user id with
+# hyphens stripped (the same normalization ``derive_user_id_prefix`` applies,
+# without the truncation). Both are opaque and non-secret (they appear in
+# Certificate Transparency logs).
+# ---------------------------------------------------------------------------
+
+_SHARE_HOST_ID_RE = re.compile(r"^host-[a-f0-9]{32}$")
+_SHARE_USER_LABEL_RE = re.compile(r"^[a-f0-9]{32}$")
+_SHARE_DNS_LABEL_RE = re.compile(r"^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+# Per-user quota: how many workspaces one user may have shared at once. Services
+# are free (one relay tunnel carries all of a workspace's services), so there is
+# no per-service cap.
+DEFAULT_MAX_SHARED_WORKSPACES_PER_USER = 50
+
+_RELAY_TOKEN_BYTES = 32
+
+_FRPS_LOGIN_OP = "Login"
+_FRPS_NEW_PROXY_OP = "NewProxy"
+
+# frpc carries its relay token in the client metadata map under this key
+# (``metadatas.relay_token`` in frpc.toml). Login ops receive the map as
+# ``content.metas``; NewProxy ops receive it nested under ``content.user.metas``.
+_FRPS_RELAY_TOKEN_META_KEY = "relay_token"
+
+# OVH datacenter code prefix -> region code. us1 is west (Hillsboro), us2 is
+# east (Vint Hill). A datacenter that maps to a region with no configured relay
+# endpoint (and any unknown datacenter) falls back to SHARE_DEFAULT_REGION.
+_SHARE_DATACENTER_REGION_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("US-WEST", "us1"),
+    ("US-EAST", "us2"),
+)
+
+
+class InvalidShareCoordinateError(ValueError):
+    """Raised when a host id, user label, or region is not a valid hostname coordinate."""
+
+
+class ShareQuotaExceededError(RuntimeError):
+    """Raised when enabling a share would exceed the per-user shared-workspace quota."""
+
+    def __init__(self, current: int, limit: int) -> None:
+        self.current = current
+        self.limit = limit
+        super().__init__(f"user already has {current} shared workspaces (max {limit})")
+
+
+class ShareNotFoundError(KeyError):
+    """Raised when the caller has no share record for the requested host id."""
+
+    def __init__(self, host_id: str) -> None:
+        self.host_id = host_id
+        super().__init__(f"No share found for host '{host_id}'")
+
+
+class MissingShareConfigError(RuntimeError):
+    """Raised when a required sharing env var (from the sharing-<env> Modal secret) is unset."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(
+            f"Sharing is not configured on this server: {name} is unset. "
+            f"Populate it in the tier's `sharing` Vault entry (pushed as the sharing-<env> Modal secret)."
+        )
+
+
+class ShareCoordinate(BaseModel):
+    """The hostname coordinates of one shared workspace."""
+
+    host_id: str
+    user_label: str
+    region: str
+    content_domain: str
+
+    @property
+    def workspace_domain(self) -> str:
+        """The bare workspace origin / registrable base, e.g. ``host-<hex>.<user-label>.<region>.<domain>``."""
+        return f"{self.host_id}.{self.user_label}.{self.region}.{self.content_domain}"
+
+    @property
+    def vhost_wildcard(self) -> str:
+        """The wildcard the relay's frps registers for this workspace's services."""
+        return f"*.{self.workspace_domain}"
+
+    @property
+    def registrable_site(self) -> str:
+        """The per-user registrable site (the Public-Suffix-List-backed isolation boundary)."""
+        return f"{self.user_label}.{self.region}.{self.content_domain}"
+
+
+def derive_share_user_label(user_id: str) -> str:
+    """Normalize a SuperTokens user id (a UUID) into its hostname label: hyphens stripped, 32 hex.
+
+    UUIDs are never hyphenated in hostnames or ids anywhere else in the system,
+    so the label form matches ``derive_user_id_prefix``'s normalization (without
+    the truncation). Raises for anything that is not a UUID-shaped id.
+    """
+    label = user_id.replace("-", "").lower()
+    if _SHARE_USER_LABEL_RE.match(label) is None:
+        raise InvalidShareCoordinateError(f"user id must be a UUID (32 hex after stripping hyphens), got {user_id!r}")
+    return label
+
+
+def make_share_coordinate(host_id: str, user_label: str, region: str, content_domain: str) -> ShareCoordinate:
+    """Build a validated :class:`ShareCoordinate`.
+
+    Every component must be a legal hostname label (or label run) so the
+    resulting workspace domain is a valid, cert-issuable hostname.
+    """
+    if _SHARE_HOST_ID_RE.match(host_id) is None:
+        raise InvalidShareCoordinateError(f"host id must be 'host-<32hex>', got {host_id!r}")
+    if _SHARE_USER_LABEL_RE.match(user_label) is None:
+        raise InvalidShareCoordinateError(f"user label must be 32 hex characters, got {user_label!r}")
+    if _SHARE_DNS_LABEL_RE.match(region) is None:
+        raise InvalidShareCoordinateError(f"region must be a DNS label, got {region!r}")
+    domain_labels = content_domain.split(".")
+    if not all(_SHARE_DNS_LABEL_RE.match(label) is not None for label in domain_labels):
+        raise InvalidShareCoordinateError(
+            f"content domain must be dot-joined lowercase DNS labels, got {content_domain!r}"
+        )
+    return ShareCoordinate(host_id=host_id, user_label=user_label, region=region, content_domain=content_domain)
+
+
+def generate_relay_token() -> str:
+    """Mint a fresh opaque relay token (URL-safe, returned to the workspace once)."""
+    return secrets.token_urlsafe(_RELAY_TOKEN_BYTES)
+
+
+def hash_relay_token(token: str) -> str:
+    """Hash a relay token for storage / lookup (the plaintext is never stored)."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def check_share_quota(current_active_share_count: int, max_shared_workspaces_per_user: int) -> None:
+    """Raise :class:`ShareQuotaExceededError` if one more active share would exceed the cap."""
+    if current_active_share_count >= max_shared_workspaces_per_user:
+        raise ShareQuotaExceededError(current=current_active_share_count, limit=max_shared_workspaces_per_user)
+
+
+def _require_share_env(name: str) -> str:
+    value = os.environ.get(name, "")
+    if not value:
+        raise MissingShareConfigError(name)
+    return value
+
+
+def share_content_domain() -> str:
+    """The content domain apex workspace hostnames live under (e.g. ``imbueminds.com``)."""
+    return _require_share_env("SHARE_CONTENT_DOMAIN")
+
+
+def parse_relay_endpoint_map(raw: str) -> dict[str, str]:
+    """Parse ``SHARE_RELAY_ENDPOINTS`` (``us1=relay-us1.example.com:7000,us2=...``) into region -> endpoint."""
+    endpoint_by_region: dict[str, str] = {}
+    for entry in raw.split(","):
+        stripped_entry = entry.strip()
+        if not stripped_entry:
+            continue
+        region, separator, endpoint = stripped_entry.partition("=")
+        if not separator or not region.strip() or not endpoint.strip():
+            raise MissingShareConfigError(f"SHARE_RELAY_ENDPOINTS (malformed entry {stripped_entry!r})")
+        endpoint_by_region[region.strip()] = endpoint.strip()
+    if not endpoint_by_region:
+        raise MissingShareConfigError("SHARE_RELAY_ENDPOINTS")
+    return endpoint_by_region
+
+
+def share_relay_endpoint_map() -> dict[str, str]:
+    """Region code -> relay tunnel-control endpoint (``host:port`` the workspace's frpc dials)."""
+    return parse_relay_endpoint_map(_require_share_env("SHARE_RELAY_ENDPOINTS"))
+
+
+def resolve_share_region(datacenter: str | None) -> str:
+    """Pick the region code for a share: the host's datacenter's region when a relay exists there, else the default.
+
+    ``datacenter`` is the pool host's OVH DC code (e.g. ``US-EAST-VA``), or None
+    for hosts the connector has no record of (local workspaces). Dev tiers
+    configure a single region (the dev env's suffix), so every share lands there
+    regardless of datacenter.
+    """
+    endpoint_by_region = share_relay_endpoint_map()
+    default_region = _require_share_env("SHARE_DEFAULT_REGION")
+    if datacenter:
+        datacenter_upper = datacenter.upper()
+        for prefix, region in _SHARE_DATACENTER_REGION_PREFIXES:
+            if datacenter_upper.startswith(prefix) and region in endpoint_by_region:
+                return region
+    if default_region not in endpoint_by_region:
+        raise MissingShareConfigError(f"SHARE_RELAY_ENDPOINTS (missing default region {default_region!r})")
+    return default_region
+
+
+class FrpsAuthDecision(BaseModel):
+    """The reply the connector returns to the frps server plugin.
+
+    ``reject`` rejects the operation with ``reject_reason``; otherwise the
+    operation proceeds unchanged (``unchange = True``). frps calls this only for
+    ``Login`` and ``NewProxy`` -- never for visitor connections -- so a shared
+    workspace's actual traffic never reaches the connector.
+    """
+
+    reject: bool
+    reject_reason: str = ""
+    unchange: bool = True
+
+
+def _frps_allow() -> FrpsAuthDecision:
+    return FrpsAuthDecision(reject=False, unchange=True)
+
+
+def _frps_reject(reason: str) -> FrpsAuthDecision:
+    return FrpsAuthDecision(reject=True, reject_reason=reason, unchange=True)
+
+
+def decide_frps_new_proxy(workspace_domain: str, claimed_custom_domains: list[str]) -> FrpsAuthDecision:
+    """Authorize an frps ``NewProxy``: the claimed customDomains must be exactly
+    this workspace's own bare domain and/or its wildcard, nothing else.
+
+    This is what stops workspace X's frpc from registering workspace Y's
+    hostname on the shared relay: the token resolves to X's domain, and any
+    claim outside X's own ``{workspace_domain, *.workspace_domain}`` is
+    rejected.
+    """
+    allowed = {workspace_domain.lower(), f"*.{workspace_domain.lower()}"}
+    if not claimed_custom_domains:
+        return _frps_reject("NewProxy claimed no custom domains")
+    for domain in claimed_custom_domains:
+        if domain.lower() not in allowed:
+            return _frps_reject(f"custom domain {domain!r} is not owned by this workspace token")
+    return _frps_allow()
+
+
+def _extract_frps_relay_token(op: str, content: dict[str, Any]) -> str | None:
+    """Pull the relay token out of an frps plugin op's metadata map.
+
+    Login ops carry the frpc client metadata at ``content.metas``; NewProxy (and
+    other proxy-scoped) ops nest it under ``content.user.metas``. These shapes
+    are verified against frp 0.70.1 (the pinned relay release): a Login body is
+    ``{op, content: {metas: {relay_token}, ...}}`` and a NewProxy body is
+    ``{op, content: {user: {metas: {relay_token}}, custom_domains: [...], ...}}``.
+    """
+    if op == _FRPS_LOGIN_OP:
+        metas = content.get("metas")
+    else:
+        user = content.get("user")
+        metas = user.get("metas") if isinstance(user, dict) else None
+    if not isinstance(metas, dict):
+        return None
+    token = metas.get(_FRPS_RELAY_TOKEN_META_KEY)
+    if isinstance(token, str) and token:
+        return token
+    return None
+
+
+def _extract_frps_custom_domains(content: dict[str, Any]) -> list[str]:
+    domains = content.get("custom_domains")
+    if not isinstance(domains, list):
+        return []
+    return [domain for domain in domains if isinstance(domain, str)]
+
+
+# Columns every share SELECT returns, so row-to-dict projection stays in one place.
+_SHARE_COLUMNS = "host_id, user_id, region, workspace_domain, state, created_at, updated_at, last_tunnel_login_at"
+_SHARE_COLUMN_NAMES = tuple(name.strip() for name in _SHARE_COLUMNS.split(","))
+
+
+def _share_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+    """Project a ``_SHARE_COLUMNS`` row into a dict, stringifying timestamps."""
+    share = dict(zip(_SHARE_COLUMN_NAMES, row, strict=False))
+    for timestamp_column in ("created_at", "updated_at", "last_tunnel_login_at"):
+        value = share.get(timestamp_column)
+        share[timestamp_column] = str(value) if value is not None else None
+    return share
+
+
+class ShareStore(Protocol):
+    """Abstraction over the shares / relay_tokens / issued_certs tables so endpoints are unit-testable."""
+
+    def count_active_shares(self, user_label: str, exclude_host_id: str) -> int: ...
+    def get_share(self, host_id: str, user_label: str) -> dict[str, Any] | None: ...
+    def list_shares(self, user_label: str) -> list[dict[str, Any]]: ...
+    def activate_share(self, coordinate: ShareCoordinate) -> None: ...
+    def deactivate_share(self, host_id: str, user_label: str) -> None: ...
+    def replace_relay_token(self, host_id: str, user_label: str, token_hash: str) -> None: ...
+    def delete_relay_tokens(self, host_id: str, user_label: str) -> None: ...
+    def find_share_by_token_hash(self, token_hash: str) -> dict[str, Any] | None: ...
+    def find_active_share_by_workspace_domain(self, workspace_domain: str) -> dict[str, Any] | None: ...
+    def record_tunnel_login(self, host_id: str, user_label: str) -> None: ...
+    def get_pool_host_datacenter(self, host_id: str) -> str | None: ...
+    def get_latest_cert_not_after(self, workspace_domain: str) -> str | None: ...
+    def record_issued_cert(
+        self,
+        workspace_domain: str,
+        host_id: str,
+        user_label: str,
+        ca_name: str,
+        cert_chain_pem: str,
+        sans_json: str,
+        not_after: str,
+    ) -> None: ...
+
+
+class PostgresShareStore:
+    """ShareStore backed by the connector's existing Neon DB."""
+
+    def count_active_shares(self, user_label: str, exclude_host_id: str) -> int:
+        conn = _get_pool_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM shares WHERE user_id = %s AND state = 'active' AND host_id <> %s",
+                    (user_label, exclude_host_id),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        return int(row[0]) if row is not None else 0
+
+    def get_share(self, host_id: str, user_label: str) -> dict[str, Any] | None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {_SHARE_COLUMNS} FROM shares WHERE host_id = %s AND user_id = %s",
+                    (host_id, user_label),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        return _share_row_to_dict(row) if row is not None else None
+
+    def list_shares(self, user_label: str) -> list[dict[str, Any]]:
+        conn = _get_pool_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {_SHARE_COLUMNS} FROM shares WHERE user_id = %s ORDER BY created_at",
+                    (user_label,),
+                )
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+        return [_share_row_to_dict(row) for row in rows]
+
+    def activate_share(self, coordinate: ShareCoordinate) -> None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO shares (host_id, user_id, region, workspace_domain, state) "
+                        "VALUES (%s, %s, %s, %s, 'active') "
+                        "ON CONFLICT (host_id, user_id) DO UPDATE SET "
+                        "region = EXCLUDED.region, workspace_domain = EXCLUDED.workspace_domain, "
+                        "state = 'active', updated_at = NOW()",
+                        (coordinate.host_id, coordinate.user_label, coordinate.region, coordinate.workspace_domain),
+                    )
+        finally:
+            conn.close()
+
+    def deactivate_share(self, host_id: str, user_label: str) -> None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE shares SET state = 'inactive', updated_at = NOW() WHERE host_id = %s AND user_id = %s",
+                        (host_id, user_label),
+                    )
+        finally:
+            conn.close()
+
+    def replace_relay_token(self, host_id: str, user_label: str, token_hash: str) -> None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM relay_tokens WHERE host_id = %s AND user_id = %s",
+                        (host_id, user_label),
+                    )
+                    cur.execute(
+                        "INSERT INTO relay_tokens (token_hash, host_id, user_id) VALUES (%s, %s, %s)",
+                        (token_hash, host_id, user_label),
+                    )
+        finally:
+            conn.close()
+
+    def delete_relay_tokens(self, host_id: str, user_label: str) -> None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM relay_tokens WHERE host_id = %s AND user_id = %s",
+                        (host_id, user_label),
+                    )
+        finally:
+            conn.close()
+
+    def find_share_by_token_hash(self, token_hash: str) -> dict[str, Any] | None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT s.host_id, s.user_id, s.region, s.workspace_domain, s.state "
+                    "FROM relay_tokens rt JOIN shares s ON s.host_id = rt.host_id AND s.user_id = rt.user_id "
+                    "WHERE rt.token_hash = %s",
+                    (token_hash,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        return {
+            "host_id": row[0],
+            "user_id": row[1],
+            "region": row[2],
+            "workspace_domain": row[3],
+            "state": row[4],
+        }
+
+    def find_active_share_by_workspace_domain(self, workspace_domain: str) -> dict[str, Any] | None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {_SHARE_COLUMNS} FROM shares WHERE workspace_domain = %s AND state = 'active'",
+                    (workspace_domain,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        return _share_row_to_dict(row) if row is not None else None
+
+    def record_tunnel_login(self, host_id: str, user_label: str) -> None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE shares SET last_tunnel_login_at = NOW(), updated_at = NOW() "
+                        "WHERE host_id = %s AND user_id = %s",
+                        (host_id, user_label),
+                    )
+        finally:
+            conn.close()
+
+    def get_pool_host_datacenter(self, host_id: str) -> str | None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT region FROM pool_hosts WHERE host_id = %s ORDER BY created_at DESC LIMIT 1",
+                    (host_id,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
+
+    def get_latest_cert_not_after(self, workspace_domain: str) -> str | None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT not_after FROM issued_certs WHERE workspace_domain = %s ORDER BY not_after DESC LIMIT 1",
+                    (workspace_domain,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        return str(row[0]) if row is not None else None
+
+    def record_issued_cert(
+        self,
+        workspace_domain: str,
+        host_id: str,
+        user_label: str,
+        ca_name: str,
+        cert_chain_pem: str,
+        sans_json: str,
+        not_after: str,
+    ) -> None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO issued_certs "
+                        "(workspace_domain, host_id, user_id, ca_name, cert_chain_pem, sans, not_after) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        (workspace_domain, host_id, user_label, ca_name, cert_chain_pem, sans_json, not_after),
+                    )
+        finally:
+            conn.close()
+
+
+@functools.cache
+def get_share_store() -> ShareStore:
+    return PostgresShareStore()
+
+
+def _require_share_user(request: Request) -> tuple[str, str]:
+    """Authenticate a share endpoint caller and return (full SuperTokens user id, verified email).
+
+    Share endpoints need the FULL user id (its hyphen-stripped form is a
+    hostname label), which ``authenticate_request`` discards. A verified email
+    is still required, exactly like every other user-authenticated endpoint.
+    """
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer credentials")
+    token = auth_header[7:]
+    user_id = _get_user_id_from_access_token(token)
+    email = _default_email_getter(user_id)
+    if email is None:
+        raise HTTPException(status_code=401, detail="Email not verified")
+    return user_id, email
+
+
+def _require_frps_plugin_secret(provided: str) -> None:
+    """Authenticate an frps server-plugin callback against the fixed shared secret.
+
+    The secret lives only in the relays' rendered ``frps.toml`` (delivered from
+    Vault at provision time) and in the ``sharing-<env>`` Modal secret -- never
+    in the desktop app or in workspaces. Raises 403 when the server has no
+    secret configured (the plugin endpoint is disabled), 401 on mismatch.
+    """
+    expected = os.environ.get("FRPS_AUTH_SECRET", "")
+    if not expected:
+        raise HTTPException(status_code=403, detail="frps plugin auth is not enabled on this server")
+    if not hmac.compare_digest(provided.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Invalid frps plugin secret")
+
+
+class CreateShareRequest(BaseModel):
+    host_id: str = Field(description="The workspace's host coordinate (host-<32hex>) to share")
+
+
+class FrpsAuthRequest(BaseModel):
+    """The frps server-plugin op envelope: ``{version, op, content}``."""
+
+    op: str
+    content: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# ACME DNS-01 issuance for shared workspaces
+#
+# The workspace generates its TLS key and sends a CSR (the private key never
+# leaves the container); the connector -- sole custodian of the Cloudflare DNS
+# credential -- completes the DNS-01 challenges and returns the signed chain.
+# CAs are tried in the configured order (ACME_CA_LIST), each optionally with
+# External Account Binding (ZeroSSL / Google Trust Services), so issuance
+# survives one CA's rate limits or outage.
+# ---------------------------------------------------------------------------
+
+_ACME_USER_AGENT = "imbue-remote-service-connector"
+_ACME_ACCOUNT_KEY_BITS = 2048
+_ACME_MIN_CSR_RSA_BITS = 2048
+_ACME_FINALIZE_DEADLINE_SECONDS = 120
+_ACME_TXT_PROPAGATION_TIMEOUT_SECONDS = 90
+_ACME_TXT_POLL_INTERVAL_SECONDS = 3
+_ACME_TXT_RECORD_TTL_SECONDS = 60
+_DNS_OVER_HTTPS_URL = "https://cloudflare-dns.com/dns-query"
+
+
+class InvalidCsrError(ValueError):
+    """Raised when a workspace's CSR is malformed or claims the wrong names."""
+
+
+class AcmeIssuanceError(RuntimeError):
+    """Raised when every configured ACME CA failed to issue the certificate."""
+
+
+class AcmeCaConfig(BaseModel):
+    """One entry of the ordered ACME CA list, with optional EAB credentials."""
+
+    name: str
+    directory_url: str
+    eab_kid: str | None = None
+    eab_hmac_key: str | None = None
+
+
+def parse_acme_ca_list(raw: str) -> list[tuple[str, str]]:
+    """Parse ``ACME_CA_LIST`` (``letsencrypt=https://...,zerossl=https://...``) into ordered (name, url) pairs."""
+    pairs: list[tuple[str, str]] = []
+    for entry in raw.split(","):
+        stripped_entry = entry.strip()
+        if not stripped_entry:
+            continue
+        name, separator, directory_url = stripped_entry.partition("=")
+        if not separator or not name.strip() or not directory_url.strip():
+            raise MissingShareConfigError(f"ACME_CA_LIST (malformed entry {stripped_entry!r})")
+        pairs.append((name.strip(), directory_url.strip()))
+    if not pairs:
+        raise MissingShareConfigError("ACME_CA_LIST")
+    return pairs
+
+
+def acme_ca_configs_from_env() -> list[AcmeCaConfig]:
+    """The ordered CA list from env, each with its EAB credentials (``ACME_EAB_KID_<NAME>`` / ``ACME_EAB_HMAC_<NAME>``)."""
+    configs: list[AcmeCaConfig] = []
+    for name, directory_url in parse_acme_ca_list(_require_share_env("ACME_CA_LIST")):
+        env_suffix = re.sub(r"[^A-Z0-9]", "_", name.upper())
+        eab_kid = os.environ.get(f"ACME_EAB_KID_{env_suffix}", "")
+        eab_hmac_key = os.environ.get(f"ACME_EAB_HMAC_{env_suffix}", "")
+        configs.append(
+            AcmeCaConfig(
+                name=name,
+                directory_url=directory_url,
+                eab_kid=eab_kid or None,
+                eab_hmac_key=eab_hmac_key or None,
+            )
+        )
+    return configs
+
+
+def validate_share_csr(csr_pem: str, workspace_domain: str) -> None:
+    """Validate a workspace's CSR: parseable, self-signature valid, sane key, and exactly the share's SANs.
+
+    The SAN set must be exactly ``{workspace_domain, *.workspace_domain}`` --
+    anything else would let a workspace request a certificate for names its
+    relay token does not own.
+    """
+    try:
+        csr = x509.load_pem_x509_csr(csr_pem.encode("utf-8"))
+    except ValueError as exc:
+        raise InvalidCsrError(f"CSR is not valid PEM: {exc}") from exc
+    if not csr.is_signature_valid:
+        raise InvalidCsrError("CSR signature is invalid")
+    public_key = csr.public_key()
+    if isinstance(public_key, rsa.RSAPublicKey):
+        if public_key.key_size < _ACME_MIN_CSR_RSA_BITS:
+            raise InvalidCsrError(f"CSR RSA key must be >= {_ACME_MIN_CSR_RSA_BITS} bits, got {public_key.key_size}")
+    elif isinstance(public_key, ec.EllipticCurvePublicKey):
+        pass
+    else:
+        raise InvalidCsrError("CSR public key must be RSA or ECDSA")
+    try:
+        san_extension = csr.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+    except x509.ExtensionNotFound as exc:
+        raise InvalidCsrError("CSR has no subjectAltName extension") from exc
+    claimed_names = set(san_extension.value.get_values_for_type(x509.DNSName))
+    expected_names = {workspace_domain, f"*.{workspace_domain}"}
+    if claimed_names != expected_names:
+        raise InvalidCsrError(f"CSR SANs must be exactly {sorted(expected_names)}, got {sorted(claimed_names)}")
+
+
+def extract_cert_chain_metadata(cert_chain_pem: str) -> tuple[str, list[str]]:
+    """Return (leaf not_after ISO timestamp, leaf SANs) from a PEM chain (leaf first)."""
+    try:
+        leaf = x509.load_pem_x509_certificate(cert_chain_pem.encode("utf-8"))
+    except ValueError as exc:
+        raise AcmeIssuanceError(f"CA returned an unparseable certificate chain: {exc}") from exc
+    san_extension = leaf.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+    sans = list(san_extension.value.get_values_for_type(x509.DNSName))
+    return leaf.not_valid_after_utc.isoformat(), sans
+
+
+class Dns01Ops(Protocol):
+    """The two DNS operations DNS-01 issuance needs, so tests can fake them."""
+
+    def create_txt_record(self, record_name: str, content: str) -> str: ...
+    def delete_txt_record(self, record_id: str) -> None: ...
+
+
+class CloudflareDns01Ops:
+    """Dns01Ops against the content domain's Cloudflare zone (same token/zone as the rest of the connector).
+
+    Plain-class ``__init__`` holding an ``httpx.Client``, matching this
+    self-contained file's other ops implementations (``HttpCloudflareOps``);
+    the connector deliberately avoids the monorepo's pydantic base classes.
+    """
+
+    def __init__(self, api_token: str, zone_id: str) -> None:
+        self._zone_id = zone_id
+        self._client = httpx.Client(
+            base_url=_CF_BASE_URL,
+            headers={"Authorization": f"Bearer {api_token}"},
+            timeout=30.0,
+        )
+
+    def create_txt_record(self, record_name: str, content: str) -> str:
+        response = self._client.post(
+            f"/zones/{self._zone_id}/dns_records",
+            json={"type": "TXT", "name": record_name, "content": content, "ttl": _ACME_TXT_RECORD_TTL_SECONDS},
+        )
+        return str(cf_check(response)["result"]["id"])
+
+    def delete_txt_record(self, record_id: str) -> None:
+        response = self._client.delete(f"/zones/{self._zone_id}/dns_records/{record_id}")
+        cf_check(response)
+
+
+@functools.cache
+def get_dns01_ops() -> Dns01Ops:
+    return CloudflareDns01Ops(
+        api_token=os.environ["CLOUDFLARE_API_TOKEN"],
+        zone_id=os.environ["CLOUDFLARE_ZONE_ID"],
+    )
+
+
+class AcmeAccountStore(Protocol):
+    """Abstraction over the acme_accounts table so issuance is unit-testable."""
+
+    def get_account(self, ca_name: str, directory_url: str) -> dict[str, Any] | None: ...
+    def save_account(
+        self, ca_name: str, directory_url: str, account_key_pem: str, account_uri: str, eab_kid: str | None
+    ) -> None: ...
+
+
+class PostgresAcmeAccountStore:
+    """AcmeAccountStore backed by the connector's existing Neon DB."""
+
+    def get_account(self, ca_name: str, directory_url: str) -> dict[str, Any] | None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT account_key_pem, account_uri FROM acme_accounts WHERE ca_name = %s AND directory_url = %s",
+                    (ca_name, directory_url),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        return {"account_key_pem": row[0], "account_uri": row[1]}
+
+    def save_account(
+        self, ca_name: str, directory_url: str, account_key_pem: str, account_uri: str, eab_kid: str | None
+    ) -> None:
+        conn = _get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    # ON CONFLICT DO NOTHING: two concurrent first-issuance
+                    # calls for the same CA both create an ACME account and race
+                    # to INSERT; the loser must no-op rather than raise an
+                    # IntegrityError that would surface as an unhandled 500.
+                    cur.execute(
+                        "INSERT INTO acme_accounts (ca_name, directory_url, account_key_pem, account_uri, eab_kid) "
+                        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (ca_name, directory_url) DO NOTHING",
+                        (ca_name, directory_url, account_key_pem, account_uri, eab_kid),
+                    )
+        finally:
+            conn.close()
+
+
+@functools.cache
+def get_acme_account_store() -> AcmeAccountStore:
+    return PostgresAcmeAccountStore()
+
+
+class _TxtNotPropagatedError(RuntimeError):
+    """Internal: the expected TXT values are not yet visible; tenacity retries the probe."""
+
+
+def _query_txt_values_via_doh(record_name: str) -> set[str]:
+    """Resolve a TXT record via DNS-over-HTTPS (authoritative through Cloudflare's resolver)."""
+    response = httpx.get(
+        _DNS_OVER_HTTPS_URL,
+        params={"name": record_name, "type": "TXT"},
+        headers={"accept": "application/dns-json"},
+        timeout=10.0,
+    )
+    response.raise_for_status()
+    answers = response.json().get("Answer") or []
+    return {str(answer.get("data", "")).strip('"') for answer in answers}
+
+
+@retry(
+    retry=retry_if_exception_type((_TxtNotPropagatedError, httpx.HTTPError)),
+    stop=stop_after_delay(_ACME_TXT_PROPAGATION_TIMEOUT_SECONDS),
+    wait=wait_fixed(_ACME_TXT_POLL_INTERVAL_SECONDS),
+    reraise=True,
+)
+def _wait_for_txt_propagation(expected_values_by_record_name: dict[str, set[str]]) -> None:
+    """Poll public DNS until every challenge TXT record is visible.
+
+    ACME servers validate a DNS-01 challenge only once per answer, so
+    answering before the record resolves would fail the whole order.
+    """
+    for record_name, expected_values in expected_values_by_record_name.items():
+        visible_values = _query_txt_values_via_doh(record_name)
+        if not expected_values <= visible_values:
+            raise _TxtNotPropagatedError(f"TXT {record_name} not fully propagated yet")
+
+
+def _load_acme_account_key(account_key_pem: str) -> josepy.JWKRSA:
+    private_key = serialization.load_pem_private_key(account_key_pem.encode("utf-8"), password=None)
+    if not isinstance(private_key, rsa.RSAPrivateKey):
+        raise AcmeIssuanceError("stored ACME account key is not an RSA private key")
+    return josepy.JWKRSA(key=private_key)
+
+
+def _generate_acme_account_key() -> tuple[josepy.JWKRSA, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=_ACME_ACCOUNT_KEY_BITS)
+    account_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    return josepy.JWKRSA(key=private_key), account_key_pem
+
+
+def _acme_client_for_ca(ca: AcmeCaConfig, account_store: AcmeAccountStore) -> acme_client_module.ClientV2:
+    """Build an ACME client with a registered account for one CA, creating and persisting the account on first use."""
+    existing = account_store.get_account(ca.name, ca.directory_url)
+    if existing is not None:
+        account_key = _load_acme_account_key(str(existing["account_key_pem"]))
+        registration = acme_messages.RegistrationResource(
+            body=acme_messages.Registration(),
+            uri=str(existing["account_uri"]),
+        )
+        network = acme_client_module.ClientNetwork(account_key, account=registration, user_agent=_ACME_USER_AGENT)
+        directory = acme_client_module.ClientV2.get_directory(ca.directory_url, network)
+        return acme_client_module.ClientV2(directory, net=network)
+
+    account_key, account_key_pem = _generate_acme_account_key()
+    network = acme_client_module.ClientNetwork(account_key, user_agent=_ACME_USER_AGENT)
+    directory = acme_client_module.ClientV2.get_directory(ca.directory_url, network)
+    client = acme_client_module.ClientV2(directory, net=network)
+    external_account_binding = None
+    if ca.eab_kid and ca.eab_hmac_key:
+        external_account_binding = acme_messages.ExternalAccountBinding.from_data(
+            account_public_key=account_key.public_key(),
+            kid=ca.eab_kid,
+            hmac_key=ca.eab_hmac_key,
+            directory=directory,
+        )
+    registration_resource = client.new_account(
+        acme_messages.NewRegistration.from_data(
+            terms_of_service_agreed=True,
+            external_account_binding=external_account_binding,
+        )
+    )
+    account_store.save_account(ca.name, ca.directory_url, account_key_pem, str(registration_resource.uri), ca.eab_kid)
+    return client
+
+
+def _issue_certificate_with_ca(
+    ca: AcmeCaConfig,
+    csr_pem: str,
+    dns_ops: Dns01Ops,
+    account_store: AcmeAccountStore,
+) -> str:
+    """Run one CA's full DNS-01 order for the CSR and return the PEM chain."""
+    client = _acme_client_for_ca(ca, account_store)
+    order = client.new_order(csr_pem.encode("utf-8"))
+    created_record_ids: list[str] = []
+    try:
+        # Publish every authorization's TXT record first, then wait for all of
+        # them at once (one propagation wait instead of one per name).
+        challenge_bodies: list[Any] = []
+        expected_values_by_record_name: dict[str, set[str]] = {}
+        for authorization in order.authorizations:
+            dns_challenge_body = None
+            for challenge_body in authorization.body.challenges:
+                if isinstance(challenge_body.chall, acme_challenges.DNS01):
+                    dns_challenge_body = challenge_body
+                    break
+            if dns_challenge_body is None:
+                raise AcmeIssuanceError(
+                    f"{ca.name} offered no dns-01 challenge for {authorization.body.identifier.value}"
+                )
+            validation_value = dns_challenge_body.chall.validation(client.net.key)
+            record_name = dns_challenge_body.chall.validation_domain_name(authorization.body.identifier.value)
+            record_id = dns_ops.create_txt_record(record_name, validation_value)
+            created_record_ids.append(record_id)
+            expected_values_by_record_name.setdefault(record_name, set()).add(validation_value)
+            challenge_bodies.append(dns_challenge_body)
+        _wait_for_txt_propagation(expected_values_by_record_name)
+        for challenge_body in challenge_bodies:
+            client.answer_challenge(challenge_body, challenge_body.chall.response(client.net.key))
+        deadline = datetime.now() + timedelta(seconds=_ACME_FINALIZE_DEADLINE_SECONDS)
+        finalized_order = client.poll_and_finalize(order, deadline=deadline)
+    finally:
+        for record_id in created_record_ids:
+            try:
+                dns_ops.delete_txt_record(record_id)
+            except (httpx.HTTPError, CloudflareApiError) as exc:
+                logger.warning("Failed to clean up ACME challenge TXT record %s: %s", record_id, exc)
+    fullchain_pem = finalized_order.fullchain_pem
+    if not fullchain_pem:
+        raise AcmeIssuanceError(f"{ca.name} finalized the order but returned no certificate chain")
+    return str(fullchain_pem)
+
+
+def issue_share_certificate(
+    csr_pem: str,
+    dns_ops: Dns01Ops,
+    account_store: AcmeAccountStore,
+    ca_configs: list[AcmeCaConfig],
+) -> tuple[str, str]:
+    """Issue a certificate for a validated share CSR, trying each configured CA in order.
+
+    Returns ``(cert_chain_pem, ca_name)`` from the first CA that succeeds.
+    """
+    last_error: Exception | None = None
+    for ca in ca_configs:
+        try:
+            return _issue_certificate_with_ca(ca, csr_pem, dns_ops, account_store), ca.name
+        except (
+            AcmeIssuanceError,
+            acme_errors.Error,
+            httpx.HTTPError,
+            _TxtNotPropagatedError,
+            CloudflareApiError,
+            OSError,
+        ) as exc:
+            logger.warning("ACME issuance via %s failed: %s", ca.name, exc)
+            last_error = exc
+    raise AcmeIssuanceError("every configured ACME CA failed to issue the certificate") from last_error
+
+
+class IssueShareCertRequest(BaseModel):
+    csr_pem: str = Field(description="PEM CSR for exactly the share's workspace domain + wildcard")
+
+
+# ---------------------------------------------------------------------------
 # Shared context
 # ---------------------------------------------------------------------------
 
@@ -2771,11 +2673,8 @@ def get_ctx() -> ForwardingCtx:
     ops = HttpCloudflareOps(
         api_token=os.environ["CLOUDFLARE_API_TOKEN"],
         account_id=os.environ["CLOUDFLARE_ACCOUNT_ID"],
-        zone_id=os.environ["CLOUDFLARE_ZONE_ID"],
     )
-    raw_idps = os.environ.get("CLOUDFLARE_ALLOWED_IDPS", "")
-    allowed_idps = [s.strip() for s in raw_idps.split(",") if s.strip()] or None
-    return ForwardingCtx(ops=ops, domain=os.environ["CLOUDFLARE_DOMAIN"], allowed_idps=allowed_idps)
+    return ForwardingCtx(ops=ops)
 
 
 def raise_as_http(exc: Exception) -> NoReturn:
@@ -2788,16 +2687,6 @@ def raise_as_http(exc: Exception) -> NoReturn:
         # error so the client retries rather than treating the lease as gone.
         logger.error("Pool host cleanup error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    if isinstance(exc, TunnelNotFoundError):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if isinstance(exc, TunnelOwnershipError):
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    if isinstance(exc, ServiceNotFoundError):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if isinstance(exc, InvalidTunnelComponentError):
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if isinstance(exc, TunnelComponentTooLongError):
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if isinstance(exc, InvalidPaidListEntryError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if isinstance(exc, InvalidR2BucketNameError):
@@ -2840,10 +2729,29 @@ def raise_as_http(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if isinstance(exc, PlanNotFoundError):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if isinstance(exc, InvalidAuthPolicyError):
+    if isinstance(exc, InvalidShareCoordinateError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if isinstance(exc, ServicePolicyMissingError):
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, ShareNotFoundError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, ShareQuotaExceededError):
+        # Same shape as QuotaExceededError so clients surface it uniformly.
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "quota_exceeded",
+                "entitlement": "max_shared_workspaces",
+                "limit": exc.limit,
+                "current": exc.current,
+                "message": str(exc),
+            },
+        ) from exc
+    if isinstance(exc, MissingShareConfigError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if isinstance(exc, InvalidCsrError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, AcmeIssuanceError):
+        logger.error("ACME issuance failed: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     logger.error("Unexpected error in endpoint handler", exc_info=exc)
     raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -3272,307 +3180,437 @@ def get_version() -> dict[str, str]:
     }
 
 
-def count_user_tunnels(ops: CloudflareOps, user_id_prefix: str) -> int:
-    """Count the user's tunnels.
-
-    Shared by the tunnel quota check (``POST /tunnels``) and the ``/account``
-    usage display so the two can never drift.
-    """
-    prefix = f"{user_id_prefix}{TUNNEL_NAME_SEP}"
-    return len([t for t in ops.list_tunnels(include_prefix=prefix) if t["name"].startswith(prefix)])
+# ---------------------------------------------------------------------------
+# Self-hosted sharing endpoints
+# ---------------------------------------------------------------------------
 
 
-def enforce_tunnel_quota_for_new_tunnel(
-    ops: CloudflareOps, user_id_prefix: str, tunnel_name: str, entitlements: AccountEntitlements
-) -> None:
-    """Refuse creating ``tunnel_name`` when it does not exist yet and the account is at ``max_tunnels``.
+@web_app.post("/shares")
+def create_share(request: Request, body: CreateShareRequest) -> dict[str, object]:
+    """Enable sharing for one workspace: create (or reactivate) its share and mint a fresh relay token.
 
-    Idempotent re-creates of an existing tunnel are always allowed, so the
-    count is only checked when the tunnel is absent. Shared by ``POST
-    /tunnels`` and ``POST /sharing/enable`` so the two enforcement points
-    cannot drift.
-    """
-    if ops.get_tunnel_by_name(tunnel_name) is not None:
-        return
-    current = count_user_tunnels(ops, user_id_prefix)
-    if current >= entitlements.max_tunnels:
-        raise_quota_exceeded("max_tunnels", entitlements.max_tunnels, current, "tunnels")
-
-
-@web_app.post("/tunnels")
-def create_tunnel(request: Request, body: CreateTunnelRequest) -> dict[str, object]:
-    """Create a tunnel (idempotent) and return its info with token.
-
-    Enforces the account's tunnel quota (idempotent re-creates of an existing
-    tunnel are always allowed), validates any provided default auth policy,
-    and -- when none is provided -- installs an allow-only-the-owner's-email
-    default so services added later are never publicly reachable.
+    Returns the workspace domain, the relay endpoint the workspace's frpc
+    should dial, and the plaintext relay token -- returned exactly once here
+    and never stored (only its hash is). Re-sharing an already-shared
+    workspace reuses the share row and rotates the token.
     """
     with handle_endpoint_errors():
-        ctx = get_ctx()
-        auth = authenticate_request(request, ctx.ops)
-        user = require_user_auth(auth)
-        entitlements = resolve_entitlements_for_user(request, user)
-        if body.default_auth_policy is not None:
-            validate_auth_policy_has_identity(body.default_auth_policy)
-        tunnel_name = make_tunnel_name(user.user_id_prefix, body.agent_id)
-        enforce_tunnel_quota_for_new_tunnel(ctx.ops, user.user_id_prefix, tunnel_name, entitlements)
-        fallback = owner_email_auth_policy(user.email) if user.email else None
-        return ctx.create_tunnel(
-            user.user_id_prefix,
-            body.agent_id,
-            default_auth_policy=body.default_auth_policy,
-            fallback_auth_policy=fallback,
-        ).model_dump()
+        user_id, _email = _require_share_user(request)
+        user_label = derive_share_user_label(user_id)
+        store = get_share_store()
+        datacenter = store.get_pool_host_datacenter(body.host_id)
+        region = resolve_share_region(datacenter)
+        coordinate = make_share_coordinate(
+            host_id=body.host_id,
+            user_label=user_label,
+            region=region,
+            content_domain=share_content_domain(),
+        )
+        active_share_count = store.count_active_shares(user_label, exclude_host_id=body.host_id)
+        check_share_quota(active_share_count, DEFAULT_MAX_SHARED_WORKSPACES_PER_USER)
+        store.activate_share(coordinate)
+        relay_token = generate_relay_token()
+        store.replace_relay_token(body.host_id, user_label, hash_relay_token(relay_token))
+        return {
+            "host_id": coordinate.host_id,
+            "workspace_domain": coordinate.workspace_domain,
+            "region": region,
+            "relay_endpoint": share_relay_endpoint_map()[region],
+            "relay_token": relay_token,
+        }
 
 
-@web_app.get("/tunnels")
-def list_tunnels(request: Request) -> list[dict[str, object]]:
-    """List all tunnels belonging to the authenticated user."""
+@web_app.get("/shares")
+def list_shares(request: Request) -> dict[str, object]:
+    """List all of the caller's share records (active and inactive)."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
-        return [t.model_dump() for t in get_ctx().list_tunnels(user.user_id_prefix)]
+        user_id, _email = _require_share_user(request)
+        user_label = derive_share_user_label(user_id)
+        return {"shares": get_share_store().list_shares(user_label)}
 
 
-@web_app.get("/tunnels/by-agent/{agent_id}")
-def get_tunnel_for_agent(request: Request, agent_id: str) -> dict[str, object] | None:
-    """Resolve the authenticated user's tunnel for ``agent_id`` (O(1) lookup).
+@web_app.delete("/shares/{host_id}")
+def delete_share(request: Request, host_id: str) -> dict[str, object]:
+    """Disable sharing for one workspace: deactivate the share and delete its relay token.
 
-    Uses Cloudflare's server-side name filter plus one config fetch (2
-    Cloudflare calls) instead of the O(n) ``GET /tunnels`` path that
-    enumerates every tunnel and fetches each one's config. The static
-    ``by-agent`` prefix can never collide with a real ``{tunnel_name}``
-    (those always contain the ``--`` separator), so there is no ambiguity
-    with the other ``/tunnels/*`` routes.
-
-    Returns HTTP 200 with ``null`` when the user has no tunnel for the agent
-    yet (rather than 404). This is deliberate: a client hitting a connector
-    that predates this endpoint gets FastAPI's generic 404-for-unknown-route,
-    so reserving 404 exclusively for "endpoint absent" lets the client tell
-    "this connector is too old, fall back to enumerating ``GET /tunnels``"
-    apart from "the endpoint works and there is simply no tunnel" (200 null).
+    The share row is kept (state ``inactive``) for audit and fast re-share;
+    the relay token is deleted, so the relay rejects the workspace's next
+    tunnel Login/reconnect.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
-        tunnel = get_ctx().get_tunnel_for_agent(user.user_id_prefix, agent_id)
-        return tunnel.model_dump() if tunnel is not None else None
+        user_id, _email = _require_share_user(request)
+        user_label = derive_share_user_label(user_id)
+        store = get_share_store()
+        share = store.get_share(host_id, user_label)
+        if share is None:
+            raise ShareNotFoundError(host_id)
+        store.deactivate_share(host_id, user_label)
+        store.delete_relay_tokens(host_id, user_label)
+        return {"host_id": host_id, "state": "inactive"}
 
 
-@web_app.delete("/tunnels/{tunnel_name}")
-def delete_tunnel(request: Request, tunnel_name: str) -> dict[str, str]:
-    """Delete a tunnel and all its associated DNS records, Access Applications, ingress rules, and KV entries.
+@web_app.get("/shares/{host_id}/status")
+def get_share_status(request: Request, host_id: str) -> dict[str, object]:
+    """Report one share's state for the sharing UI: domain, tunnel liveness signal, cert expiry."""
+    with handle_endpoint_errors():
+        user_id, _email = _require_share_user(request)
+        user_label = derive_share_user_label(user_id)
+        store = get_share_store()
+        share = store.get_share(host_id, user_label)
+        if share is None:
+            raise ShareNotFoundError(host_id)
+        relay_endpoint = share_relay_endpoint_map().get(str(share["region"]))
+        cert_not_after = store.get_latest_cert_not_after(str(share["workspace_domain"]))
+        return {
+            "host_id": share["host_id"],
+            "workspace_domain": share["workspace_domain"],
+            "region": share["region"],
+            "state": share["state"],
+            "relay_endpoint": relay_endpoint,
+            "last_tunnel_login_at": share["last_tunnel_login_at"],
+            "cert_not_after": cert_not_after,
+        }
 
-    Idempotent at the HTTP layer -- a second DELETE on an already-gone
-    tunnel returns 200 with ``status: already_deleted`` rather than
-    404. Clients retrying after a transient error therefore don't have
-    to special-case ``404 Not Found``.
+
+@web_app.post("/frps/auth/{plugin_secret}")
+def frps_auth(plugin_secret: str, body: FrpsAuthRequest) -> dict[str, object]:
+    """Authorize an frps server-plugin operation (``Login`` / ``NewProxy``) for a relay.
+
+    The relay's frps calls this for every workspace tunnel connect and hostname
+    claim, authenticated by the shared secret embedded in its rendered plugin
+    URL path. The presented relay token must resolve to an active share, and a
+    ``NewProxy`` may only claim that share's own bare domain and wildcard.
+    Operations other than the two we subscribe to are allowed unchanged --
+    frps should not be configured to send them, and rejecting an unexpected op
+    would break the tunnel for no security gain.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        _require_frps_plugin_secret(plugin_secret)
+        relay_token = _extract_frps_relay_token(body.op, body.content)
+        if relay_token is None:
+            return _frps_reject("missing relay token").model_dump()
+        store = get_share_store()
+        share = store.find_share_by_token_hash(hash_relay_token(relay_token))
+        if share is None or share["state"] != "active":
+            return _frps_reject("unknown or inactive relay token").model_dump()
+        if body.op == _FRPS_LOGIN_OP:
+            store.record_tunnel_login(str(share["host_id"]), str(share["user_id"]))
+            return _frps_allow().model_dump()
+        if body.op == _FRPS_NEW_PROXY_OP:
+            claimed_domains = _extract_frps_custom_domains(body.content)
+            return decide_frps_new_proxy(str(share["workspace_domain"]), claimed_domains).model_dump()
+        return _frps_allow().model_dump()
+
+
+@web_app.post("/shares/cert")
+def issue_share_cert(request: Request, body: IssueShareCertRequest) -> dict[str, object]:
+    """Sign a shared workspace's CSR via ACME DNS-01 and return the chain.
+
+    Authenticated by the share's relay token (Bearer), so only the workspace
+    that holds the token can obtain certificates -- and only for exactly its
+    own workspace domain + wildcard (enforced against the CSR's SANs). Used
+    for both first issuance and renewal; the workspace keeps its private key.
+    """
+    with handle_endpoint_errors():
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.lower().startswith("bearer "):
+            raise HTTPException(status_code=401, detail="Missing Bearer credentials")
+        relay_token = auth_header[7:]
+        store = get_share_store()
+        share = store.find_share_by_token_hash(hash_relay_token(relay_token))
+        if share is None or share["state"] != "active":
+            raise HTTPException(status_code=401, detail="Unknown or inactive relay token")
+        workspace_domain = str(share["workspace_domain"])
+        validate_share_csr(body.csr_pem, workspace_domain)
+        cert_chain_pem, ca_name = issue_share_certificate(
+            csr_pem=body.csr_pem,
+            dns_ops=get_dns01_ops(),
+            account_store=get_acme_account_store(),
+            ca_configs=acme_ca_configs_from_env(),
+        )
+        not_after, sans = extract_cert_chain_metadata(cert_chain_pem)
+        store.record_issued_cert(
+            workspace_domain=workspace_domain,
+            host_id=str(share["host_id"]),
+            user_label=str(share["user_id"]),
+            ca_name=ca_name,
+            cert_chain_pem=cert_chain_pem,
+            sans_json=json.dumps(sans),
+            not_after=not_after,
+        )
+        return {
+            "cert_chain_pem": cert_chain_pem,
+            "ca_name": ca_name,
+            "not_after": not_after,
+            "sans": sans,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Accounts broker (share login handoff)
+#
+# Served at the accounts domain (Modal custom domain; dev tiers use the plain
+# connector URL). A visitor hitting a shared workspace without a session is
+# 302'd here by the workspace gateway; after browser login the broker mints a
+# 60-second RS256 handoff JWT audience-bound to that one workspace domain and
+# redirects to the gateway's callback, which verifies it against the JWKS
+# published below. The broker's own session is a host-scoped HttpOnly cookie
+# carrying the SuperTokens access token, so subsequent shares authorize
+# silently while it is valid.
+#
+# NOTE: this is a hand-rolled minimal login page reusing the connector's
+# existing SuperTokens proxy calls, not the SuperTokens prebuilt UI the
+# sharing-redesign spec sketched -- the connector deliberately does not mount
+# the SuperTokens middleware, and one small form is easier to keep correct.
+# ---------------------------------------------------------------------------
+
+_BROKER_SSO_COOKIE_NAME = "imbue_sso_session"
+# The SSO cookie carries only the SuperTokens ACCESS token (the refresh token
+# is not persisted), so a session outlives the cookie's max-age only as long as
+# that access token stays valid (~1h): _broker_session_user resolves it live
+# and returns None once it expires, bouncing the visitor back to the login
+# page. Set the cookie lifetime to match that reality rather than advertise a
+# multi-day SSO the access token cannot honor; a refresh-token-backed longer
+# SSO is a deliberate follow-up.
+_BROKER_SSO_COOKIE_MAX_AGE_SECONDS = 3600
+_BROKER_HANDOFF_TOKEN_TTL_SECONDS = 60
+_BROKER_HANDOFF_ALGORITHM = "RS256"
+
+_BROKER_LOGIN_PAGE_TEMPLATE = (
+    "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+    "<title>Sign in - Imbue</title>" + _HTML_SHARED_STYLES + "</head><body><div class='card'>"
+    "<h1>Sign in to Imbue</h1>"
+    "<p>Sign in to open the workspace that was shared with you.</p>"
+    "{error_block}"
+    "<form method='post' action='/share/session'>"
+    "<input type='hidden' name='next' value='{next_value}'>"
+    "<p><input type='email' name='email' placeholder='Email' required autofocus "
+    "style='width:100%;padding:8px'></p>"
+    "<p><input type='password' name='password' placeholder='Password' required "
+    "style='width:100%;padding:8px'></p>"
+    "<p><button type='submit' name='mode' value='signin' style='padding:8px 16px'>Sign in</button> "
+    "<button type='submit' name='mode' value='signup' style='padding:8px 16px'>Create account</button></p>"
+    "</form></div></body></html>"
+)
+
+_BROKER_VERIFY_EMAIL_PAGE = (
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Verify your email - Imbue</title>"
+    + _HTML_SHARED_STYLES
+    + "</head><body><div class='card'><h1>Check your inbox</h1>"
+    "<p>We sent a verification link to your email address. Verify it, then reload the "
+    "shared workspace link you were given.</p></div></body></html>"
+)
+
+
+def _broker_signing_key() -> rsa.RSAPrivateKey:
+    """The broker's RS256 signing key from the sharing-<env> Modal secret."""
+    key_pem = _require_share_env("BROKER_JWT_SIGNING_KEY_PEM")
+    try:
+        private_key = serialization.load_pem_private_key(key_pem.encode("utf-8"), password=None)
+    except ValueError as exc:
+        raise MissingShareConfigError("BROKER_JWT_SIGNING_KEY_PEM (not a valid PEM private key)") from exc
+    if not isinstance(private_key, rsa.RSAPrivateKey):
+        raise MissingShareConfigError("BROKER_JWT_SIGNING_KEY_PEM (must be an RSA private key)")
+    return private_key
+
+
+def _broker_key_id(public_key: rsa.RSAPublicKey) -> str:
+    """A stable key id derived from the public key, published in the JWKS and stamped into token headers."""
+    spki_der = public_key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return hashlib.sha256(spki_der).hexdigest()[:16]
+
+
+def _base64url_uint(value: int) -> str:
+    raw = value.to_bytes((value.bit_length() + 7) // 8, "big")
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def build_broker_jwks(public_key: rsa.RSAPublicKey) -> dict[str, Any]:
+    """The JWKS document workspace gateways verify handoff tokens against."""
+    numbers = public_key.public_numbers()
+    return {
+        "keys": [
+            {
+                "kty": "RSA",
+                "use": "sig",
+                "alg": _BROKER_HANDOFF_ALGORITHM,
+                "kid": _broker_key_id(public_key),
+                "n": _base64url_uint(numbers.n),
+                "e": _base64url_uint(numbers.e),
+            }
+        ]
+    }
+
+
+def mint_share_handoff_token(
+    signing_key: rsa.RSAPrivateKey,
+    user_id: str,
+    email: str,
+    machine_domain: str,
+    nonce: str,
+) -> str:
+    """Mint the 60-second, single-audience JWT the gateway's callback consumes."""
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "aud": machine_domain,
+        "jti": secrets.token_urlsafe(16),
+        "nonce": nonce,
+        "iat": now,
+        "exp": now + timedelta(seconds=_BROKER_HANDOFF_TOKEN_TTL_SECONDS),
+    }
+    return pyjwt.encode(
+        payload,
+        signing_key,
+        algorithm=_BROKER_HANDOFF_ALGORITHM,
+        headers={"kid": _broker_key_id(signing_key.public_key())},
+    )
+
+
+def _broker_session_user(request: Request) -> tuple[str, str] | None:
+    """Resolve the broker SSO cookie to (user_id, verified email), or None when absent/invalid/unverified."""
+    access_token = request.cookies.get(_BROKER_SSO_COOKIE_NAME, "")
+    if not access_token or not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
+        return None
+    try:
+        user_id = _get_user_id_from_access_token(access_token)
+    except HTTPException:
+        return None
+    email = _default_email_getter(user_id)
+    if email is None:
+        return None
+    return user_id, email
+
+
+def _sanitize_broker_path(candidate: str) -> str:
+    """Clamp a redirect target to a same-host path (no scheme/host smuggling)."""
+    if candidate.startswith("/") and not candidate.startswith("//") and not candidate.startswith("/\\"):
+        return candidate
+    return "/"
+
+
+def _render_broker_login_page(next_path: str, error_message: str) -> HTMLResponse:
+    error_block = f"<p style='color:#b91c1c'>{error_message}</p>" if error_message else ""
+    # str.replace, not str.format: the shared styles block contains CSS braces.
+    page = _BROKER_LOGIN_PAGE_TEMPLATE.replace("{error_block}", error_block).replace(
+        "{next_value}", quote(next_path, safe="")
+    )
+    status_code = 401 if error_message else 200
+    return HTMLResponse(content=page, status_code=status_code)
+
+
+@web_app.get("/share/login")
+def broker_login_page(request: Request) -> HTMLResponse:
+    """The broker's minimal sign-in / sign-up page."""
+    next_path = _sanitize_broker_path(request.query_params.get("next", "/"))
+    return _render_broker_login_page(next_path, "")
+
+
+@web_app.post("/share/session", response_model=None)
+def broker_create_session(
+    email: str = Form(...),
+    password: str = Form(...),
+    mode: str = Form(...),
+    next_target: str = Form("/", alias="next"),
+) -> HTMLResponse | RedirectResponse:
+    """Sign in (or up) via the browser form, set the SSO cookie, and continue to the authorize URL."""
+    with handle_endpoint_errors():
+        _require_supertokens_configured()
+        next_path = _sanitize_broker_path(unquote(next_target))
+        stripped_email = email.strip()
+        if not stripped_email or not password:
+            return _render_broker_login_page(next_path, "Email and password are required.")
         try:
-            get_ctx().delete_tunnel(tunnel_name, user.user_id_prefix)
-        except HTTPException as exc:
-            if exc.status_code == 404:
-                return {"status": "already_deleted"}
-            raise
-        return {"status": "deleted"}
-
-
-def _service_quota_and_owner_email(request: Request, auth: AuthResult, tunnel_name: str) -> tuple[int, str | None]:
-    """Resolve the services-per-tunnel limit and the owner's email for either auth kind.
-
-    User auth resolves (lazily creating) the caller's entitlements row and
-    uses their verified email. Tunnel-token auth only knows the tunnel-name
-    prefix: it reads the row by prefix (created earlier, at user-authed tunnel
-    creation) and looks the owner's email up from SuperTokens; a missing row
-    falls back to the explorer plan's limit with no derivable owner email.
-    """
-    if isinstance(auth, UserAuth):
-        entitlements = resolve_entitlements_for_user(request, auth)
-        return entitlements.max_services_per_tunnel, auth.email
-    prefix = extract_user_id_prefix_from_tunnel_name(tunnel_name)
-    store = get_entitlements_store()
-    row = store.get_entitlements_by_prefix(prefix)
-    if row is not None:
-        entitlements = AccountEntitlements(**row)
-        return entitlements.max_services_per_tunnel, _default_email_getter(entitlements.user_id)
-    plan = store.get_plan(_PLAN_EXPLORER)
-    if plan is None:
-        raise PlanNotFoundError(_PLAN_EXPLORER)
-    return int(plan["max_services_per_tunnel"]), None
-
-
-def enforce_service_quota(existing_services: list[ServiceInfo], service_name: str, limit: int) -> None:
-    """Refuse adding ``service_name`` when the tunnel is at ``limit`` services.
-
-    Re-adding an existing service is always allowed. Shared by ``POST
-    /tunnels/{tunnel_name}/services`` and ``POST /sharing/enable`` so the two
-    enforcement points cannot drift.
-    """
-    if service_name in {s.service_name for s in existing_services}:
-        return
-    if len(existing_services) >= limit:
-        raise_quota_exceeded("max_services_per_tunnel", limit, len(existing_services), "services on this tunnel")
-
-
-@web_app.post("/tunnels/{tunnel_name}/services")
-def add_service(request: Request, tunnel_name: str, body: AddServiceRequest) -> dict[str, object]:
-    """Add a service to a tunnel. Works with both user and tunnel-token auth.
-
-    Enforces the services-per-tunnel quota (re-adding an existing service is
-    always allowed) and guarantees the service comes up behind a Cloudflare
-    Access Application -- falling back to an owner-email-only policy when the
-    tunnel has no stored default, and refusing outright when no policy can be
-    derived at all.
-    """
-    with handle_endpoint_errors():
-        ctx = get_ctx()
-        auth = authenticate_request(request, ctx.ops)
-        user_id_prefix = require_tunnel_access(auth, tunnel_name)
-        limit, owner_email = _service_quota_and_owner_email(request, auth, tunnel_name)
-        enforce_service_quota(ctx.list_services(tunnel_name, user_id_prefix), body.service_name, limit)
-        fallback = owner_email_auth_policy(owner_email) if owner_email else None
-        return ctx.add_service(
-            tunnel_name,
-            user_id_prefix,
-            body.service_name,
-            body.service_url,
-            fallback_policy=fallback,
-        ).model_dump()
-
-
-@web_app.delete("/tunnels/{tunnel_name}/services/{service_name}")
-def remove_service(request: Request, tunnel_name: str, service_name: str) -> dict[str, str]:
-    """Remove a service from a tunnel. Works with both user and tunnel-token auth."""
-    with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user_id_prefix = require_tunnel_access(auth, tunnel_name)
-        get_ctx().remove_service(tunnel_name, user_id_prefix, service_name)
-        return {"status": "deleted"}
-
-
-@web_app.get("/tunnels/{tunnel_name}/services")
-def list_services(request: Request, tunnel_name: str) -> list[dict[str, object]]:
-    """List services on a tunnel. Works with both user and tunnel-token auth."""
-    with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user_id_prefix = require_tunnel_access(auth, tunnel_name)
-        return [s.model_dump() for s in get_ctx().list_services(tunnel_name, user_id_prefix)]
-
-
-@web_app.get("/tunnels/{tunnel_name}/auth")
-def get_tunnel_auth(request: Request, tunnel_name: str) -> dict[str, object]:
-    """Get the default auth policy for a tunnel."""
-    with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        require_user_auth(auth)
-        policy = get_ctx().get_tunnel_auth(tunnel_name)
-        if policy is None:
-            return {"rules": []}
-        return policy.model_dump()
-
-
-@web_app.put("/tunnels/{tunnel_name}/auth")
-def set_tunnel_auth(request: Request, tunnel_name: str, body: AuthPolicy) -> dict[str, str]:
-    """Set the default auth policy for a tunnel. Identity-less policies are rejected."""
-    with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        require_user_auth(auth)
-        validate_auth_policy_has_identity(body)
-        get_ctx().set_tunnel_auth(tunnel_name, body)
-        return {"status": "updated"}
-
-
-@web_app.get("/tunnels/{tunnel_name}/services/{service_name}/auth")
-def get_service_auth(request: Request, tunnel_name: str, service_name: str) -> dict[str, object]:
-    """Get the auth policy for a specific service."""
-    with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
-        policy = get_ctx().get_service_auth(tunnel_name, user.user_id_prefix, service_name)
-        if policy is None:
-            return {"rules": []}
-        return policy.model_dump()
-
-
-@web_app.post("/tunnels/{tunnel_name}/service-tokens")
-def create_service_token_endpoint(
-    request: Request, tunnel_name: str, body: CreateServiceTokenRequest
-) -> dict[str, object]:
-    """Create a service token for programmatic access to this tunnel's services."""
-    with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
-        token = get_ctx().create_service_token(tunnel_name, user.user_id_prefix, body.name)
-        return token.model_dump()
-
-
-@web_app.get("/tunnels/{tunnel_name}/service-tokens")
-def list_service_tokens_endpoint(request: Request, tunnel_name: str) -> list[dict[str, object]]:
-    """List service tokens. Note: secrets are not returned."""
-    with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        require_user_auth(auth)
-        return [t.model_dump() for t in get_ctx().list_service_tokens()]
-
-
-@web_app.put("/tunnels/{tunnel_name}/services/{service_name}/auth")
-def set_service_auth(request: Request, tunnel_name: str, service_name: str, body: AuthPolicy) -> dict[str, str]:
-    """Set the auth policy for a specific service. Identity-less policies are rejected."""
-    with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
-        validate_auth_policy_has_identity(body)
-        get_ctx().set_service_auth(tunnel_name, user.user_id_prefix, service_name, body)
-        return {"status": "updated"}
-
-
-@web_app.post("/sharing/enable")
-def enable_sharing_endpoint(request: Request, body: EnableSharingRequest) -> dict[str, object]:
-    """Enable (or update) sharing for one service in a single call.
-
-    Collapses the client's previous create-tunnel + add-service +
-    set-service-auth sequence -- three round trips, each paying CLI and
-    network overhead -- into one request: ensure the tunnel exists
-    (idempotent), add the service with the caller's Access policy applied
-    directly to its Access Application (replacing a pre-existing app's
-    policies on re-enable), and return the resulting tunnel (with token)
-    plus the service info, so the caller needs no follow-up status reads.
-
-    Enforces the same quotas as the individual endpoints: the tunnel count
-    when a new tunnel would be created, and services-per-tunnel when a new
-    service would be added.
-    """
-    with handle_endpoint_errors():
-        ctx = get_ctx()
-        auth = authenticate_request(request, ctx.ops)
-        user = require_user_auth(auth)
-        entitlements = resolve_entitlements_for_user(request, user)
-        validate_auth_policy_has_identity(body.auth_policy)
-        tunnel_name = make_tunnel_name(user.user_id_prefix, body.agent_id)
-        enforce_tunnel_quota_for_new_tunnel(ctx.ops, user.user_id_prefix, tunnel_name, entitlements)
-        fallback = owner_email_auth_policy(user.email) if user.email else None
-        tunnel_info = ctx.create_tunnel(
-            user.user_id_prefix,
-            body.agent_id,
-            default_auth_policy=None,
-            fallback_auth_policy=fallback,
+            if mode == "signup":
+                signup_result = ep_sign_up(tenant_id=_AUTH_TENANT_ID, email=stripped_email, password=password)
+                if isinstance(signup_result, EmailAlreadyExistsError):
+                    return _render_broker_login_page(next_path, "An account with this email already exists.")
+                if not isinstance(signup_result, EPSignUpOkResult):
+                    return _render_broker_login_page(next_path, "Sign-up failed.")
+                user = signup_result.user
+            else:
+                signin_result = ep_sign_in(tenant_id=_AUTH_TENANT_ID, email=stripped_email, password=password)
+                if isinstance(signin_result, WrongCredentialsError):
+                    return _render_broker_login_page(next_path, "Incorrect email or password.")
+                if not isinstance(signin_result, EPSignInOkResult):
+                    return _render_broker_login_page(next_path, "Sign-in failed.")
+                user = signin_result.user
+            recipe_user_id = user.login_methods[0].recipe_user_id if user.login_methods else RecipeUserId(user.id)
+            is_verified = is_email_verified(recipe_user_id=recipe_user_id, email=stripped_email)
+            tokens = _build_session_tokens(user.id)
+            if not is_verified:
+                send_email_verification_email(
+                    tenant_id=_AUTH_TENANT_ID,
+                    user_id=user.id,
+                    recipe_user_id=recipe_user_id,
+                    email=stripped_email,
+                )
+        except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+            logger.error("SuperTokens SDK error during broker login", exc_info=exc)
+            return _render_broker_login_page(next_path, "Sign-in is temporarily unavailable.")
+        if not is_verified:
+            response: HTMLResponse | RedirectResponse = HTMLResponse(content=_BROKER_VERIFY_EMAIL_PAGE)
+        else:
+            response = RedirectResponse(url=next_path, status_code=303)
+        response.set_cookie(
+            key=_BROKER_SSO_COOKIE_NAME,
+            value=tokens.access_token,
+            max_age=_BROKER_SSO_COOKIE_MAX_AGE_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            path="/",
         )
-        # ``create_tunnel`` already returned the tunnel's current services
-        # (empty for a fresh tunnel), so no extra Cloudflare fetch is needed.
-        enforce_service_quota(tunnel_info.services, body.service_name, entitlements.max_services_per_tunnel)
-        service = ctx.add_service(
-            tunnel_name,
-            user.user_id_prefix,
-            body.service_name,
-            body.service_url,
-            fallback_policy=fallback,
-            service_policy=body.auth_policy,
+        return response
+
+
+@web_app.get("/share/authorize")
+def broker_authorize(request: Request) -> RedirectResponse:
+    """Authorize a visit to one shared workspace: require a session, then hand off a short-lived token.
+
+    Redirect chain: gateway -> here (login if needed) -> gateway's
+    ``/_auth/callback`` with the minted JWT. ``state`` is the gateway's
+    nonce, echoed both as a query param and inside the token so the callback
+    can bind the response to its own pending request.
+    """
+    with handle_endpoint_errors():
+        machine_domain = request.query_params.get("machine_domain", "").lower()
+        state = request.query_params.get("state", "")
+        next_path = _sanitize_broker_path(request.query_params.get("next", "/"))
+        if not machine_domain or not state:
+            raise HTTPException(status_code=400, detail="machine_domain and state are required")
+        session_user = _broker_session_user(request)
+        if session_user is None:
+            login_next = (
+                f"/share/authorize?{urlencode({'machine_domain': machine_domain, 'next': next_path, 'state': state})}"
+            )
+            return RedirectResponse(url=f"/share/login?next={quote(login_next, safe='')}", status_code=302)
+        user_id, session_email = session_user
+        share = get_share_store().find_active_share_by_workspace_domain(machine_domain)
+        if share is None:
+            raise HTTPException(status_code=404, detail="No active share for this domain")
+        handoff_token = mint_share_handoff_token(
+            signing_key=_broker_signing_key(),
+            user_id=user_id,
+            email=session_email,
+            machine_domain=machine_domain,
+            nonce=state,
         )
-        return {"tunnel": tunnel_info.model_dump(), "service": service.model_dump()}
+        callback_query = urlencode({"token": handoff_token, "state": state, "next": next_path})
+        return RedirectResponse(url=f"https://{machine_domain}/_auth/callback?{callback_query}", status_code=302)
+
+
+@web_app.get("/share/jwks.json")
+def broker_jwks() -> JSONResponse:
+    """The broker's public signing keys; workspace gateways verify handoff tokens against this."""
+    with handle_endpoint_errors():
+        jwks = build_broker_jwks(_broker_signing_key().public_key())
+        return JSONResponse(content=jwks, headers={"Cache-Control": "public, max-age=300"})
 
 
 # ---------------------------------------------------------------------------
@@ -3591,8 +3629,7 @@ def lease_host(request: Request, body: LeaseHostRequest) -> dict[str, object]:
     they count against the quota too.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         entitlements = resolve_entitlements_for_user(request, user)
         conn = _get_pool_db_connection()
         try:
@@ -3738,8 +3775,7 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
     Ownership is still enforced -- a row leased by another user returns 403.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         conn = _get_pool_db_connection()
         try:
             with conn.cursor() as cur:
@@ -3822,8 +3858,7 @@ def rename_host(request: Request, host_db_id: UUID, body: RenameHostRequest) -> 
     request model against mngr's SafeName regex.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         conn = _get_pool_db_connection()
         try:
             with conn.cursor() as cur:
@@ -3854,8 +3889,7 @@ def rename_host(request: Request, host_db_id: UUID, body: RenameHostRequest) -> 
 def list_leased_hosts(request: Request) -> list[dict[str, object]]:
     """List all hosts currently leased by the authenticated user."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         conn = _get_pool_db_connection()
         try:
             with conn.cursor() as cur:
@@ -4115,8 +4149,7 @@ def create_litellm_key(request: Request, body: CreateKeyRequest) -> dict[str, ob
     budgets remain entirely caller-controlled.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         entitlements = resolve_entitlements_for_user(request, user)
         if entitlements.monthly_llm_spend_usd <= 0:
             raise QuotaExceededError(
@@ -4155,8 +4188,7 @@ def create_litellm_key(request: Request, body: CreateKeyRequest) -> dict[str, ob
 def list_litellm_keys(request: Request) -> list[dict[str, object]]:
     """List all LiteLLM virtual keys owned by the authenticated user."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = _get_user_id_from_access_token(token)
 
@@ -4197,8 +4229,7 @@ def list_litellm_keys(request: Request) -> list[dict[str, object]]:
 def get_litellm_key_info(request: Request, key_id: str) -> dict[str, object]:
     """Get info (including spend and budget) for a specific LiteLLM key."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = _get_user_id_from_access_token(token)
 
@@ -4224,8 +4255,7 @@ def get_litellm_key_info(request: Request, key_id: str) -> dict[str, object]:
 def update_litellm_key_budget(request: Request, key_id: str, body: UpdateBudgetRequest) -> dict[str, object]:
     """Update the budget for a LiteLLM key owned by the authenticated user."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = _get_user_id_from_access_token(token)
 
@@ -4250,8 +4280,7 @@ def update_litellm_key_budget(request: Request, key_id: str, body: UpdateBudgetR
 def delete_litellm_key(request: Request, key_id: str) -> dict[str, object]:
     """Delete a LiteLLM key owned by the authenticated user."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = _get_user_id_from_access_token(token)
 
@@ -4836,8 +4865,7 @@ def _workspace_record_is_active(user_id: str, host_id: str) -> bool:
 def create_bucket_endpoint(request: Request, body: CreateBucketRequest) -> dict[str, object]:
     """Create an R2 bucket for the caller and mint its single key (returned inline)."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         entitlements = resolve_entitlements_for_user(request, user)
         owner_user_id = _get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
         ops = get_ctx().ops
@@ -4882,8 +4910,7 @@ def create_bucket_endpoint(request: Request, body: CreateBucketRequest) -> dict[
 def list_buckets_endpoint(request: Request) -> list[dict[str, object]]:
     """List all R2 buckets owned by the caller."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         ops = get_ctx().ops
         endpoint = r2_s3_endpoint(ops.account_id)
         return [
@@ -4896,8 +4923,7 @@ def list_buckets_endpoint(request: Request) -> list[dict[str, object]]:
 def get_bucket_endpoint(request: Request, name: str) -> dict[str, object]:
     """Return metadata for one of the caller's buckets (keys come from the keys endpoints)."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         ops = get_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, name)
         if not _owned_bucket_exists(ops, user.user_id_prefix, full_name):
@@ -4914,8 +4940,7 @@ def delete_bucket_endpoint(request: Request, name: str) -> dict[str, str]:
     live workspace's backups can never be deleted.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         owner_user_id = _get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
         ops = get_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, name)
@@ -4946,8 +4971,7 @@ def roll_bucket_key_endpoint(request: Request, name: str) -> dict[str, object]:
     a legacy bucket), a fresh key is minted instead.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         owner_user_id = _get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
         ops = get_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, name)
@@ -4986,8 +5010,7 @@ def roll_bucket_key_endpoint(request: Request, name: str) -> dict[str, object]:
 def list_bucket_keys_endpoint(request: Request, name: str) -> list[dict[str, object]]:
     """List the caller's keys scoped to one bucket."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         owner_user_id = _get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
         full_name = make_bucket_name(user.user_id_prefix, name)
         rows = get_key_store().list_keys(owner_user_id, full_name)
@@ -4998,8 +5021,7 @@ def list_bucket_keys_endpoint(request: Request, name: str) -> list[dict[str, obj
 def list_all_bucket_keys_endpoint(request: Request) -> list[dict[str, object]]:
     """List all of the caller's bucket keys across every bucket."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         owner_user_id = _get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
         rows = get_key_store().list_keys(owner_user_id, None)
         return [_key_info_from_row(row).model_dump() for row in rows]
@@ -5009,8 +5031,7 @@ def list_all_bucket_keys_endpoint(request: Request) -> list[dict[str, object]]:
 def delete_bucket_key_endpoint(request: Request, access_key_id: str) -> dict[str, str]:
     """Revoke one of the caller's bucket keys (by Access Key ID) and drop its DB row."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         owner_user_id = _get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
         store = get_key_store()
         row = store.get_key(access_key_id)
@@ -5041,8 +5062,7 @@ def create_storage_cleanup_grant(request: Request) -> dict[str, object]:
     """
     with handle_endpoint_errors():
         ops = get_ctx().ops
-        auth = authenticate_request(request, ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         entitlements = resolve_entitlements_for_user(request, user)
         key_store = get_key_store()
         grant_store = get_grant_store()
@@ -5094,8 +5114,7 @@ def recheck_storage_enforcement(request: Request) -> dict[str, object]:
     """
     with handle_endpoint_errors():
         ops = get_ctx().ops
-        auth = authenticate_request(request, ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         entitlements = resolve_entitlements_for_user(request, user)
         key_store = get_key_store()
         grant_store = get_grant_store()
@@ -5841,8 +5860,7 @@ def _decode_size_capped_base64(field_name: str, encoded: str, max_bytes: int) ->
 
 def _sync_caller(request: Request) -> tuple[UserAuth, str]:
     """Authenticate a sync endpoint call; returns (user auth, full user_id)."""
-    auth = authenticate_request(request, get_ctx().ops)
-    user = require_user_auth(auth)
+    user = authenticate_request(request)
     return user, _get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
 
 
@@ -6004,25 +6022,22 @@ def _summarize_owner_bucket_usage(ops: CloudflareOps, user_id_prefix: str) -> tu
 def compute_account_usage(ops: CloudflareOps, user_id_prefix: str, user_id: str) -> AccountUsage:
     """Compute the account's live usage numbers, querying the upstream sources concurrently.
 
-    The three network-backed sources (Cloudflare tunnel count, per-bucket
-    REST usage, LiteLLM spend) are independent and run concurrently; the two
-    DB-backed counts stay on the request thread because the stores' psycopg2
-    connections are not shared-safe across threads. Bucket byte counts come
-    from the real-time per-bucket REST usage endpoint (bounded by the
-    account's bucket quota, itself read concurrently).
+    The network-backed sources (per-bucket REST usage, LiteLLM spend) are
+    independent and run concurrently; the two DB-backed counts stay on the
+    request thread because the stores' psycopg2 connections are not
+    shared-safe across threads. Bucket byte counts come from the real-time
+    per-bucket REST usage endpoint (bounded by the account's bucket quota,
+    itself read concurrently).
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        tunnel_count_future = pool.submit(count_user_tunnels, ops, user_id_prefix)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         bucket_summary_future = pool.submit(_summarize_owner_bucket_usage, ops, user_id_prefix)
         llm_spend_future = pool.submit(get_litellm_user_spend, user_id)
         leased_host_count = _count_leased_hosts(user_id_prefix)
         active_sync_count = _count_active_sync_records(user_id)
         bucket_count, total_bucket_bytes = bucket_summary_future.result()
         spend, reset_at = llm_spend_future.result()
-        tunnel_count = tunnel_count_future.result()
     return AccountUsage(
         remote_workspaces=leased_host_count,
-        tunnels=tunnel_count,
         buckets=bucket_count,
         total_bucket_bytes=total_bucket_bytes,
         llm_spend_usd_this_period=spend,
@@ -6041,8 +6056,7 @@ def get_account(request: Request) -> dict[str, object]:
     """
     with handle_endpoint_errors():
         ops = get_ctx().ops
-        auth = authenticate_request(request, ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = _get_user_id_from_access_token(token)
         entitlements = ensure_account_entitlements(
@@ -6085,8 +6099,7 @@ def set_account_plan(request: Request, body: SetPlanRequest) -> dict[str, object
     paid-listed email.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         entitlements = resolve_entitlements_for_user(request, user)
         if body.plan == entitlements.plan_name:
             return {"plan_name": entitlements.plan_name, "entitlements": entitlements.quota_values().model_dump()}
@@ -6981,7 +6994,15 @@ _MIN_CONTAINERS = int(os.environ.get("MINDS_CONNECTOR_MIN_CONTAINERS", "0"))
 _SCALEDOWN_WINDOW = int(os.environ.get("MINDS_CONNECTOR_SCALEDOWN_WINDOW", "0"))
 
 image = modal.Image.debian_slim().pip_install(
-    "fastapi[standard]", "httpx", "supertokens-python", "psycopg2-binary", "paramiko", "tenacity"
+    "fastapi[standard]",
+    "httpx",
+    "supertokens-python",
+    "psycopg2-binary",
+    "paramiko",
+    "tenacity",
+    "acme",
+    "josepy",
+    "pyjwt",
 )
 app = modal.App(name=f"rsc-{_DEPLOY_ENV}", image=image)
 
@@ -7102,6 +7123,7 @@ def _connector_secrets() -> list[modal.Secret]:
         modal.Secret.from_name(f"neon-{_DEPLOY_ENV}-{_MINDS_DEPLOY_ID}"),
         modal.Secret.from_name(f"pool-ssh-{_DEPLOY_ENV}-{_MINDS_DEPLOY_ID}"),
         modal.Secret.from_name(f"litellm-connector-{_DEPLOY_ENV}-{_MINDS_DEPLOY_ID}"),
+        modal.Secret.from_name(f"sharing-{_DEPLOY_ENV}-{_MINDS_DEPLOY_ID}"),
         modal.Secret.from_dict({"MNGR_DEPLOY_ENV": _DEPLOY_ENV, _MINDS_DEPLOY_ID_ENV_VAR: _MINDS_DEPLOY_ID}),
     ]
 

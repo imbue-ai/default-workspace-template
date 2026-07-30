@@ -1665,8 +1665,6 @@ class _PlanInfoImbueCloudCli(FakeImbueCloudCli):
             "available_plans": ["ally", "explorer"],
             "entitlements": {
                 "max_remote_workspaces": 2,
-                "max_tunnels": 50,
-                "max_services_per_tunnel": 10,
                 "max_buckets": 5,
                 "max_total_bucket_bytes": 50 * 1024**3,
                 "monthly_llm_spend_usd": 0.0,
@@ -1674,7 +1672,6 @@ class _PlanInfoImbueCloudCli(FakeImbueCloudCli):
             },
             "usage": {
                 "remote_workspaces": 1,
-                "tunnels": 3,
                 "buckets": 2,
                 "total_bucket_bytes": int(1.5 * 1024**3),
                 "llm_spend_usd_this_period": 12.345,
@@ -1868,78 +1865,24 @@ def test_accounts_modal_lists_logged_in_accounts(tmp_path: Path) -> None:
     assert 'data-open-plan="user-test-123"' in body
 
 
-def _create_sharing_test_client(tmp_path: Path) -> tuple[FlaskClient, FileAuthStore, str]:
-    """Client whose session store has a machine associated with a signed-in account.
+def test_sharing_urls_redirect_to_the_options_panels_share_tab(tmp_path: Path) -> None:
+    """Legacy /sharing/<id> URLs land on the Share machine pane, not a 404.
 
-    The sharing editor only renders its editor body (rather than the Associate
-    prompt) when the machine has an account, so the association is seeded
-    through a record store over the same data dir before the app's own store
-    is built.
+    The standalone sharing editor is gone -- the workspace options panel's
+    Share tab is the one sharing surface -- but its URLs were handed out, so
+    they redirect. A service segment picks that share target.
     """
+    client, auth_store = _create_test_client_with_stores(tmp_path)
+    _authenticate_client(client, auth_store)
     agent_id = str(AgentId.generate())
-    cli = make_fake_imbue_cloud_cli()
-    cli.add_account(user_id="user-share-1", email="sharer@example.com")
-    seed_store = make_session_store_for_test(tmp_path, cli=cli)
-    seed_store.associate_created_workspace(
-        user_id="user-share-1",
-        agent_id=agent_id,
-        host_id=str(HostId.generate()),
-        display_name="my-workspace",
-        color=None,
-        is_cloud_row=False,
-    )
-    client, auth_store = _create_test_client_with_stores(tmp_path, cli=cli)
-    return client, auth_store, agent_id
 
+    response = client.get(f"/sharing/{agent_id}")
+    assert response.status_code == 302
+    assert response.headers["Location"] == f"/workspace/{agent_id}/options?tab=share"
 
-def test_sharing_modal_requires_auth(tmp_path: Path) -> None:
-    """The centered sharing modal page requires authentication."""
-    client, _ = _create_test_client_with_stores(tmp_path)
-    response = client.get("/sharing/agent-0123abc/web/modal")
-    assert response.status_code == 403
-
-
-def test_sharing_modal_renders_editor_in_overlay(tmp_path: Path) -> None:
-    """GET /sharing/<id>/<svc>/modal renders the shared sharing-editor body
-    inside the centered overlay chrome (backdrop + closeModal-based dismissal).
-    Nothing in the modal may navigate the overlay iframe to a full page: the
-    heading names are plain text (no /goto or /accounts links) and Cancel
-    dismisses the modal instead of linking back to workspace settings."""
-    client, auth_store, agent_id = _create_sharing_test_client(tmp_path)
-    _authenticate_client(client, auth_store)
-    response = client.get(f"/sharing/{agent_id}/web/modal")
-    assert response.status_code == 200
-    body = response.text
-    # The shared editor body (SharingEditor.jinja) and its external JS.
-    assert 'id="sharing-config"' in body
-    assert "/_static/sharing.js" in body
-    # Modal chrome: dim backdrop over a transparent body, dismissed through
-    # the Electron modal host (with a plain-page fallback).
-    assert 'id="sharing-modal-backdrop"' in body
-    assert "window.minds.closeModal" in body
-    # The heading is plain text -- no workspace /goto link, no /accounts link --
-    # and sharing.js keeps its rebuilt heading link-free via data-plain-links.
-    assert "/goto/" not in body
-    assert 'href="/accounts"' not in body
-    assert 'data-plain-links="true"' in body
-    # Cancel dismisses the modal; there is no ButtonLink back to settings.
-    assert f'href="/workspace/{agent_id}/settings"' not in body
-    assert "dismissSharingModal()" in body
-
-
-def test_sharing_page_renders_full_page_fallback(tmp_path: Path) -> None:
-    """The full /sharing page (the browser-mode fallback) still renders the
-    editor with its linked heading and the Cancel link to machine settings."""
-    client, auth_store, agent_id = _create_sharing_test_client(tmp_path)
-    _authenticate_client(client, auth_store)
-    response = client.get(f"/sharing/{agent_id}/web")
-    assert response.status_code == 200
-    body = response.text
-    assert 'id="sharing-config"' in body
-    assert "/_static/sharing.js" in body
-    assert f"/goto/{agent_id}/" in body
-    assert f'href="/workspace/{agent_id}/settings"' in body
-    assert 'id="sharing-modal-backdrop"' not in body
+    service_response = client.get(f"/sharing/{agent_id}/frontend")
+    assert service_response.status_code == 302
+    assert service_response.headers["Location"] == f"/workspace/{agent_id}/options?tab=share&target=frontend"
 
 
 def test_workspace_settings_page_requires_auth(tmp_path: Path) -> None:
@@ -3589,25 +3532,26 @@ def test_destroyed_workspaces_delete_backup_unknown_agent_shows_error(tmp_path: 
     assert "No destroyed machine found" in response.text
 
 
-def test_resolve_destroying_for_landing_deletes_the_workspaces_tunnel(tmp_path: Path) -> None:
-    """Destroying a machine tears down its Cloudflare tunnel.
+def test_resolve_destroying_for_landing_deletes_the_machines_share(tmp_path: Path) -> None:
+    """Destroying a machine tears down its machine share.
 
-    Nothing downstream of ``mngr destroy`` knows the tunnel exists, so without
-    this the tunnel outlives every identifier that could find it: it keeps a
-    proxied hostname answering and counts against a quota measured in
-    machines ever created rather than live ones.
+    Nothing downstream of ``mngr destroy`` knows the share exists, so without
+    this the share outlives every identifier that could find it: it keeps a
+    relay hostname reserved and counts against a quota measured in machines
+    ever created rather than live ones.
     """
     paths = WorkspacePaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
-    _write_dead_destroy_dir(paths, agent_id, HostId.generate())
+    host_id = HostId.generate()
+    _write_dead_destroy_dir(paths, agent_id, host_id)
     cli = make_fake_imbue_cloud_cli()
     cli.add_account(user_id="user-1", email="a@b.com")
-    cli.add_tunnel(account="a@b.com", agent_id=str(agent_id))
+    cli.add_share(account="a@b.com", host_id=str(host_id))
     session_store = make_session_store_for_test(tmp_path, cli=cli)
     session_store.associate_created_workspace(
         user_id="user-1",
         agent_id=str(agent_id),
-        host_id=str(HostId.generate()),
+        host_id=str(host_id),
         display_name="doomed",
         color=None,
         is_cloud_row=False,
@@ -3616,28 +3560,29 @@ def test_resolve_destroying_for_landing_deletes_the_workspaces_tunnel(tmp_path: 
 
     _resolve_destroying_for_landing(paths, backend_resolver, session_store, cli)
 
-    assert cli.deleted_tunnel_names == [f"fake--{str(agent_id)[:16]}"]
-    assert cli.find_tunnel_for_agent(account="a@b.com", agent_id=str(agent_id)) is None
+    assert cli.deleted_share_host_ids == [str(host_id)]
+    assert cli.get_share_status(account="a@b.com", host_id=str(host_id)) is None
 
 
-def test_resolve_destroying_for_landing_tombstones_even_if_the_tunnel_delete_fails(tmp_path: Path) -> None:
-    """A Cloudflare hiccup must not leave the machine stuck in the UI.
+def test_resolve_destroying_for_landing_tombstones_even_if_the_share_delete_fails(tmp_path: Path) -> None:
+    """A connector hiccup must not leave the machine stuck in the UI.
 
-    A tunnel that survives is litter; a machine that cannot be retired is a
+    A share that survives is litter; a machine that cannot be retired is a
     stuck row the user cannot clear.
     """
     paths = WorkspacePaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
-    _write_dead_destroy_dir(paths, agent_id, HostId.generate())
+    host_id = HostId.generate()
+    _write_dead_destroy_dir(paths, agent_id, host_id)
     cli = make_fake_imbue_cloud_cli()
     cli.add_account(user_id="user-1", email="a@b.com")
-    # No tunnel registered, and the lookup itself blows up.
-    cli.is_auth_list_failing = False
+    # The share lookup itself blows up; teardown must still proceed.
+    cli.is_share_lookup_failing = True
     session_store = make_session_store_for_test(tmp_path, cli=cli)
     session_store.associate_created_workspace(
         user_id="user-1",
         agent_id=str(agent_id),
-        host_id=str(HostId.generate()),
+        host_id=str(host_id),
         display_name="doomed",
         color=None,
         is_cloud_row=False,

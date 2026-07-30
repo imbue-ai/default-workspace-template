@@ -86,12 +86,6 @@ contextBridge.exposeInMainWorld('minds', {
   // renderer) before building the /accounts/<id>/plan-modal URL.
   openAccountPlan: (userId) => ipcRenderer.send('open-account-plan', userId),
   openSigninModal: (returnTo, mode) => ipcRenderer.send('open-signin-modal', returnTo, mode),
-  // Open the sharing editor as a centered overlay modal, called by the
-  // workspace-settings page's "Manage sharing" buttons (a trusted local page on
-  // the chrome surface). main re-validates both ids before building the URL.
-  openSharingModal: (agentId, serviceName) =>
-    ipcRenderer.send('open-sharing-modal', agentId, serviceName),
-
   // Workspace options panel (the tabbed Share / Settings panel docked under
   // the titlebar). ``tab`` is 'share' or 'settings'; ``anchor`` is the
   // titlebar icon-tab strip's viewport rect { x, y, width, height } so the

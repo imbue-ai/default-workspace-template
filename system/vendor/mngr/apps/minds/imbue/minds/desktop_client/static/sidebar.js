@@ -31,13 +31,13 @@
     else window.location = url;
   }
 
-  function selectWorkspace(agentId) {
-    navigate(mngrForwardOrigin + '/goto/' + agentId + '/');
+  function selectWorkspace(workspaceHostId) {
+    navigate(mngrForwardOrigin + '/goto/' + workspaceHostId + '/');
   }
 
-  function openInNewWindow(agentId) {
+  function openInNewWindow(workspaceHostId) {
     if (isElectron && window.minds.openWorkspaceInNewWindow) {
-      window.minds.openWorkspaceInNewWindow(agentId);
+      window.minds.openWorkspaceInNewWindow(workspaceHostId);
     }
   }
 
@@ -68,9 +68,13 @@
         // withOpenNew:true (Electron supports multi-window) and lets the
         // parent container's flex gap own the spacing. Clicks / hover /
         // context-menu are handled by the delegated document listeners below.
+        // The current-workspace id pushed by main.js is host-keyed (it is
+        // parsed from content URLs); scope ids from accent pushes may be
+        // agent-keyed (workspace-scoped backend screens). Match either.
+        var currentId = currentScopeAgentId || currentWorkspaceId;
         container.appendChild(
           window.mindsSidebarRow.buildRow(w, {
-            isCurrent: w.id === (currentScopeAgentId || currentWorkspaceId),
+            isCurrent: currentId !== null && (w.id === currentId || w.host_id === currentId),
             withOpenNew: true,
           }),
         );
@@ -86,8 +90,12 @@
     // A create attempt row's id is a create attempt id, not an agent id: it opens the
     // create attempt detail page (live progress / interrupted retry / failed error).
     if (row.getAttribute('data-create-attempt-state')) { navigate('/creating/' + agentId); return; }
-    if (target.closest('[data-open-new]')) { openInNewWindow(agentId); return; }
-    selectWorkspace(agentId);
+    // Workspace content URLs are keyed by host id (falling back to the agent
+    // id when the host coordinate is unknown, which then 404s at the plugin
+    // exactly like a not-yet-discovered workspace would).
+    var workspaceHostId = row.getAttribute('data-host-id') || agentId;
+    if (target.closest('[data-open-new]')) { openInNewWindow(workspaceHostId); return; }
+    selectWorkspace(workspaceHostId);
   }
   document.addEventListener('click', function (e) {
     if (e.target.closest('#sidebar-new-workspace')) {

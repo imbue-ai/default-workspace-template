@@ -6,6 +6,7 @@ import ssl
 from cryptography import x509
 
 from imbue.mngr_forward.tls import InMemoryTLSConfig
+from imbue.mngr_forward.tls import _is_covered_by_static_sans
 from imbue.mngr_forward.tls import build_server_ssl_context
 from imbue.mngr_forward.tls import generate_self_signed_cert
 
@@ -13,9 +14,10 @@ from imbue.mngr_forward.tls import generate_self_signed_cert
 def test_generate_self_signed_cert_has_expected_sans() -> None:
     """The cert must cover `localhost`, `*.localhost`, and `127.0.0.1`.
 
-    `*.localhost` is required for the `agent-<id>.localhost` workspace
-    subdomains (the wildcard does not match the bare `localhost` label, so both
+    `*.localhost` is required for the bare `host-<id>.localhost` workspace
+    origins (the wildcard does not match the bare `localhost` label, so both
     entries are needed); `127.0.0.1` covers loopback probes that dial the IP.
+    Nested service origins are covered by per-SNI minting, not this cert.
     """
     cert_pem, key_pem = generate_self_signed_cert()
     assert b"BEGIN CERTIFICATE" in cert_pem
@@ -28,8 +30,12 @@ def test_generate_self_signed_cert_has_expected_sans() -> None:
     assert ipaddress.ip_address("127.0.0.1") in ip_addresses
 
 
-def _negotiate_alpn(server_context: ssl.SSLContext, client_offers: list[str]) -> str | None:
-    """Drive a full TLS handshake in-memory (no sockets) and return the server's ALPN choice."""
+def _handshake(
+    server_context: ssl.SSLContext,
+    client_offers: list[str],
+    server_hostname: str,
+) -> tuple[ssl.SSLObject, ssl.SSLObject]:
+    """Drive a full TLS handshake in-memory (no sockets); return (client, server)."""
     client_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     client_context.check_hostname = False
     client_context.verify_mode = ssl.CERT_NONE
@@ -37,7 +43,7 @@ def _negotiate_alpn(server_context: ssl.SSLContext, client_offers: list[str]) ->
 
     client_in, client_out = ssl.MemoryBIO(), ssl.MemoryBIO()
     server_in, server_out = ssl.MemoryBIO(), ssl.MemoryBIO()
-    client = client_context.wrap_bio(client_in, client_out, server_hostname="localhost")
+    client = client_context.wrap_bio(client_in, client_out, server_hostname=server_hostname)
     server = server_context.wrap_bio(server_in, server_out, server_side=True)
 
     # Pump both directions until both sides finish the handshake. A bounded loop
@@ -53,7 +59,22 @@ def _negotiate_alpn(server_context: ssl.SSLContext, client_offers: list[str]) ->
                 peer_in.write(pending)
         if client.selected_alpn_protocol() is not None and server.selected_alpn_protocol() is not None:
             break
+    return client, server
+
+
+def _negotiate_alpn(server_context: ssl.SSLContext, client_offers: list[str]) -> str | None:
+    _client, server = _handshake(server_context, client_offers, server_hostname="localhost")
     return server.selected_alpn_protocol()
+
+
+def _served_dns_names(server_context: ssl.SSLContext, server_hostname: str) -> list[str]:
+    """Handshake against ``server_hostname`` and return the served cert's DNS SANs."""
+    client, _server = _handshake(server_context, ["http/1.1"], server_hostname=server_hostname)
+    cert_der = client.getpeercert(binary_form=True)
+    assert cert_der is not None
+    certificate = x509.load_der_x509_certificate(cert_der)
+    san = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    return list(san.get_values_for_type(x509.DNSName))
 
 
 def test_build_server_ssl_context_negotiates_h2_when_offered() -> None:
@@ -69,6 +90,39 @@ def test_build_server_ssl_context_falls_back_to_http1_for_ws_clients() -> None:
     cert_pem, key_pem = generate_self_signed_cert()
     context = build_server_ssl_context(cert_pem, key_pem)
     assert _negotiate_alpn(context, ["http/1.1"]) == "http/1.1"
+
+
+def test_static_cert_served_for_bare_workspace_origin() -> None:
+    """One-label ``host-<hex>.localhost`` names are covered by the static ``*.localhost`` SAN."""
+    cert_pem, key_pem = generate_self_signed_cert()
+    context = build_server_ssl_context(cert_pem, key_pem)
+    served = _served_dns_names(context, "host-0123456789abcdef0123456789abcdef.localhost")
+    assert set(served) == {"localhost", "*.localhost"}
+
+
+def test_sni_minting_covers_nested_service_origin() -> None:
+    """A nested service origin gets a cert minted for that exact hostname on handshake."""
+    cert_pem, key_pem = generate_self_signed_cert()
+    context = build_server_ssl_context(cert_pem, key_pem)
+    hostname = "terminal.host-0123456789abcdef0123456789abcdef.localhost"
+    assert _served_dns_names(context, hostname) == [hostname]
+
+
+def test_sni_minting_covers_arbitrary_depth() -> None:
+    """Deep sub-origins (multi-origin apps) are also minted per exact hostname."""
+    cert_pem, key_pem = generate_self_signed_cert()
+    context = build_server_ssl_context(cert_pem, key_pem)
+    hostname = "uuid1234.openvscode.host-0123456789abcdef0123456789abcdef.localhost"
+    assert _served_dns_names(context, hostname) == [hostname]
+    # A second handshake for the same name serves the cached cert unchanged.
+    assert _served_dns_names(context, hostname) == [hostname]
+
+
+def test_is_covered_by_static_sans() -> None:
+    assert _is_covered_by_static_sans("localhost")
+    assert _is_covered_by_static_sans("host-abc.localhost")
+    assert not _is_covered_by_static_sans("svc.host-abc.localhost")
+    assert not _is_covered_by_static_sans("example.com")
 
 
 def test_in_memory_tls_config_enables_ssl_and_returns_context() -> None:

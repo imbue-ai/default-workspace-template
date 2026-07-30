@@ -377,6 +377,11 @@ class ForwardStreamManager(MutableModel):
             self._setup_agent(AgentId(agent_id_str))
 
     def _setup_agent(self, agent_id: AgentId) -> None:
+        agent = self._aggregator.get_agent_by_id().get(str(agent_id))
+        if agent is not None:
+            # Hostnames name hosts, so the resolver needs the host coordinate
+            # to route ``host-<hex>.localhost`` requests back to this agent.
+            self.resolver.set_agent_host(agent_id, str(agent.host_id))
         ssh_info = self._ssh_for_agent(agent_id)
         if ssh_info is not None:
             self.resolver.update_ssh_info(agent_id, ssh_info)

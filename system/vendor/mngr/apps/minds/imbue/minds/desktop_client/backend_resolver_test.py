@@ -719,6 +719,30 @@ def test_list_restorable_workspace_ids_keeps_workspace_after_discovery_loss(tmp_
     assert resolver.list_restorable_workspace_ids() == (agent,)
 
 
+def test_list_restorable_workspace_host_ids_carries_the_host_coordinate(tmp_path: Path) -> None:
+    """The restorable set's host coordinates mirror the agent-keyed set, live and last-good.
+
+    Persisted window URLs are host-keyed (``/goto/<host-id>/``), so the restore
+    filter needs the host coordinate for exactly the same workspaces the
+    agent-keyed set recognizes -- including one that discovery has lost but the
+    last-good topology remembers.
+    """
+    topology_path = tmp_path / "last_good_agent_topology.json"
+    host = HostId.generate()
+    agent = AgentId.generate()
+    resolver = MngrCliBackendResolver(last_good_agents_path=topology_path)
+    resolver.update_agents(
+        ParsedAgentsResult(agent_ids=(agent,), discovered_agents=(_primary_system_services_agent(host, agent),))
+    )
+    assert resolver.list_restorable_workspace_host_ids() == (str(host),)
+
+    # Discovery loses the host (empty snapshot); the host coordinate survives
+    # via the last-good topology, just like the agent coordinate does.
+    resolver.update_agents(ParsedAgentsResult())
+    assert resolver.list_restorable_workspace_ids() == (agent,)
+    assert resolver.list_restorable_workspace_host_ids() == (str(host),)
+
+
 def test_list_restorable_workspace_ids_unions_live_and_last_good(tmp_path: Path) -> None:
     """The restorable set is the union of last-good and a freshly-discovered (not-yet-remembered) machine."""
     topology_path = tmp_path / "last_good_agent_topology.json"

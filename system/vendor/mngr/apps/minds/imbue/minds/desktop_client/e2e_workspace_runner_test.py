@@ -13,7 +13,7 @@ from imbue.minds.desktop_client.e2e_workspace_runner import _wait_for_workspace_
 
 # A workspace-ready URL (matches the agent-subdomain pattern) and a still-pending
 # backend URL (does not), used to drive the waiter's success/failure branches.
-_READY_URL = "http://agent-deadbeef.localhost:8080/"
+_READY_URL = "http://host-0123456789abcdef0123456789abcdef.localhost:8080/"
 _PENDING_URL = "http://localhost:8080/create"
 
 
@@ -56,7 +56,7 @@ class _FakeCreatingPage:
 
     After the content-in-chrome split the ready workspace opens on a *separate*
     content-view page, so the waiter scans ``browser.contexts[*].pages`` for the
-    one that reached the ``agent-<id>.localhost`` URL, and watches THIS page's
+    one that reached the ``host-<id>.localhost`` URL, and watches THIS page's
     ``#failure-view`` for the failure branch. ``urls`` / ``is_visible_results``
     are consumed one entry per poll iteration; the final entry repeats. An
     ``is_visible_results`` entry that is an exception is raised, simulating an
@@ -119,7 +119,7 @@ def test_wait_returns_for_https_workspace_url() -> None:
     The ready-check must recognize that scheme, not just http -- otherwise the
     waiter never sees the machine as ready and times out even though it loaded.
     """
-    https_ready_url = "https://agent-deadbeef.localhost:8421/"
+    https_ready_url = "https://host-0123456789abcdef0123456789abcdef.localhost:8421/"
     workspace = _FakeContentPage(urls=[https_ready_url])
     creating = _FakeCreatingPage(urls=[_PENDING_URL], is_visible_results=[False], candidate_pages=[workspace])
     result = _wait_for_workspace_ready_or_failure(

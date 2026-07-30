@@ -74,7 +74,9 @@ _INBOX_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(r"^http://localhost:\d+
 # scheme is ``https`` when the proxy serves TLS + HTTP/2 (the default) and
 # ``http`` otherwise, so accept both. (The bare minds backend origin stays
 # plain ``http`` -- see ``_BACKEND_ORIGIN_PATTERN``.)
-_AGENT_SUBDOMAIN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^https?://agent-[a-f0-9]+\.localhost:\d+(?:/|$)")
+_AGENT_SUBDOMAIN_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^https?://(?:[a-z0-9_-]+\.)*host-[a-f0-9]+\.localhost:\d+(?:/|$)"
+)
 
 # Default env tier when nothing is activated. Staging's ``client.toml`` is
 # committed under apps/minds/imbue/minds/config/envs/staging/ so callers
@@ -969,7 +971,9 @@ def create_workspace_via_electron(
 
 _FLOW_SHOT_DIR: Final[Path] = Path("/tmp/minds-electron-flow")
 _CHAT_INPUT_SELECTOR: Final[str] = "textarea.message-input-textbox"
-_TERMINAL_IFRAME_SELECTOR: Final[str] = 'iframe[src*="/service/terminal/"]'
+# Terminal panels are cross-origin iframes at the terminal service's own
+# origin (service-per-origin): https://terminal.host-<hex>.localhost:<port>/.
+_TERMINAL_IFRAME_SELECTOR: Final[str] = 'iframe[src^="https://terminal."], iframe[src^="http://terminal."]'
 # The DEFAULT_WORKSPACE_TEMPLATE bootstrap creates the initial chat agent asynchronously after the
 # dockview first renders (it shows "Waiting for initial chat agent..." until
 # then), so the chat input can take a while to appear on a fresh first boot.
@@ -1088,13 +1092,38 @@ def drive_create_docker_imbue_workspace(
     return workspace_page
 
 
-def _agent_id_from_subdomain(url: str) -> str:
-    """Extract the ``agent-<hex>`` workspace id from an ``agent-<hex>.localhost`` URL."""
+def _host_id_from_subdomain(url: str) -> str:
+    """Extract the ``host-<hex>`` workspace coordinate from a workspace-origin URL."""
     if _AGENT_SUBDOMAIN_PATTERN.match(url) is None:
-        raise WorkspaceFlowError(f"Not an agent-subdomain URL: {url!r}")
-    # host is e.g. ``agent-<hex>.localhost:<port>``; the id is the first label.
-    host = url.split("://", 1)[1].split("/", 1)[0]
-    return host.split(".", 1)[0]
+        raise WorkspaceFlowError(f"Not a workspace-origin URL: {url!r}")
+    # host is e.g. ``[<service>.]host-<hex>.localhost:<port>``; the workspace
+    # coordinate is the ``host-`` label.
+    netloc = url.split("://", 1)[1].split("/", 1)[0]
+    for label in netloc.split("."):
+        if label.startswith("host-"):
+            return label
+    raise WorkspaceFlowError(f"No host-<hex> label in workspace-origin URL: {url!r}")
+
+
+def _agent_id_for_host(content_page: Page, backend_origin: str, host_id: str) -> str:
+    """Resolve the agent id for ``host_id`` via ``GET /api/v1/workspaces``.
+
+    Content URLs carry the host coordinate while the v1 API and the settings
+    routes are agent-keyed, so the flow needs this translation once.
+    """
+    content_page.goto(backend_origin + "/", wait_until="domcontentloaded")
+    rows = content_page.evaluate(
+        """(args) =>
+            fetch(args.origin + '/api/v1/workspaces')
+              .then((r) => (r.ok ? r.json() : []))
+              .then((body) => (Array.isArray(body.workspaces) ? body.workspaces : body))
+        """,
+        {"origin": backend_origin},
+    )
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and row.get("host_id") == host_id and row.get("agent_id"):
+            return str(row["agent_id"])
+    raise WorkspaceFlowError(f"No workspace with host id {host_id!r} in /api/v1/workspaces")
 
 
 def _send_message_and_await_reply(page: Page, token: str) -> None:
@@ -1310,8 +1339,10 @@ def run_full_workspace_flow(
                     browser, content_page, default_workspace_template_path, workspace_name
                 )
                 results["STEP 1 create"] = "PASS"
-                agent_id = _agent_id_from_subdomain(workspace_page.url)
-                logger.info("Machine agent id (from subdomain): {}", agent_id)
+                workspace_host_id = _host_id_from_subdomain(workspace_page.url)
+                logger.info("Machine host id (from subdomain): {}", workspace_host_id)
+                agent_id = _agent_id_for_host(content_page, backend_origin, workspace_host_id)
+                logger.info("Machine agent id (via /api/v1/workspaces): {}", agent_id)
 
                 _run_flow_step(
                     results,

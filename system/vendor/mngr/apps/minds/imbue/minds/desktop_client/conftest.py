@@ -24,7 +24,7 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudSyncConflictCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import LiteLLMKeyMaterial
-from imbue.minds.desktop_client.imbue_cloud_cli import TunnelInfo
+from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
 from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
@@ -55,8 +55,8 @@ class FakeImbueCloudCli(ImbueCloudCli):
 
     The ``mngr_caller`` defaults to a :class:`RecordingMngrCaller` (rather than
     the process-wide warm-process caller) so any code that reaches through
-    ``cli.mngr_caller`` -- e.g. the tunnel-token injection in the sharing flow --
-    is a fast in-memory no-op instead of spawning a real ``mngr`` process.
+    ``cli.mngr_caller`` is a fast in-memory no-op instead of spawning a real
+    ``mngr`` process.
     """
 
     mngr_caller: MngrCaller = Field(default_factory=RecordingMngrCaller)
@@ -68,11 +68,15 @@ class FakeImbueCloudCli(ImbueCloudCli):
         default=False,
         description="When True, auth_list raises ImbueCloudCliError (simulates a transient subprocess failure)",
     )
-    tunnels_by_account: dict[str, dict[str, str]] = Field(
-        default_factory=dict, description="account email -> {agent_id: tunnel_name}"
+    shares_by_account: dict[str, dict[str, str]] = Field(
+        default_factory=dict, description="account email -> {host_id: share state}"
     )
-    deleted_tunnel_names: list[str] = Field(
-        default_factory=list, description="Every tunnel name delete_tunnel was called with, in order"
+    deleted_share_host_ids: list[str] = Field(
+        default_factory=list, description="Every host id delete_share was called with, in order"
+    )
+    is_share_lookup_failing: bool = Field(
+        default=False,
+        description="When True, get_share_status raises ImbueCloudCliError (simulates a connector hiccup)",
     )
 
     def auth_list(self) -> list[ImbueCloudAuthAccount]:
@@ -114,22 +118,28 @@ class FakeImbueCloudCli(ImbueCloudCli):
     def remove_account(self, user_id: str) -> None:
         self.accounts_to_return = [a for a in self.accounts_to_return if a.user_id != user_id]
 
-    # -- In-memory tunnels (drives the teardown tests) --
+    # -- In-memory machine shares (drives the teardown tests) --
 
-    def add_tunnel(self, account: str, agent_id: str) -> None:
-        self.tunnels_by_account.setdefault(account, {})[agent_id] = f"fake--{agent_id[:16]}"
+    def add_share(self, account: str, host_id: str) -> None:
+        self.shares_by_account.setdefault(account, {})[host_id] = "active"
 
-    def find_tunnel_for_agent(self, account: str, agent_id: str) -> TunnelInfo | None:
-        tunnel_name = self.tunnels_by_account.get(account, {}).get(agent_id)
-        if tunnel_name is None:
+    def get_share_status(self, *, account: str, host_id: str) -> ShareCliInfo | None:
+        if self.is_share_lookup_failing:
+            raise ImbueCloudCliError("fake transient share lookup failure")
+        state = self.shares_by_account.get(account, {}).get(host_id)
+        if state is None:
             return None
-        return TunnelInfo(tunnel_name=tunnel_name, tunnel_id=f"id-{tunnel_name}")
+        return ShareCliInfo(
+            host_id=host_id,
+            workspace_domain=f"{host_id}.owner1234.us1.shares.example",
+            region="us1",
+            state=state,
+            relay_endpoint="relay-us1.shares.example:7000",
+        )
 
-    def delete_tunnel(self, account: str, tunnel_name: str) -> None:
-        self.deleted_tunnel_names.append(tunnel_name)
-        for agent_id, name in list(self.tunnels_by_account.get(account, {}).items()):
-            if name == tunnel_name:
-                del self.tunnels_by_account[account][agent_id]
+    def delete_share(self, *, account: str, host_id: str) -> None:
+        self.deleted_share_host_ids.append(host_id)
+        self.shares_by_account.get(account, {}).pop(host_id, None)
 
     # -- In-memory storage-cleanup backend (drives the backup-trim tests) --
 

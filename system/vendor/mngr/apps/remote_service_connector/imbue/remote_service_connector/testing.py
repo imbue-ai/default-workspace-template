@@ -58,16 +58,6 @@ class FakeCloudflareOps:
     """In-memory fake implementing the CloudflareOps protocol for testing."""
 
     def __init__(self) -> None:
-        self.tunnels: dict[str, dict[str, Any]] = {}
-        self.tunnel_configs: dict[str, dict[str, Any]] = {}
-        self.dns_records: list[dict[str, Any]] = []
-        self.access_apps: dict[str, dict[str, Any]] = {}
-        self.access_policies: dict[str, list[dict[str, Any]]] = {}
-        self.kv_store: dict[str, str] = {}
-        self._next_tunnel_id = 1
-        self._next_record_id = 1
-        self._next_access_app_id = 1
-        self._next_policy_id = 1
         # R2 state
         self.account_id = "test-account"
         self.buckets: dict[str, dict[str, Any]] = {}
@@ -83,148 +73,12 @@ class FakeCloudflareOps:
         # usage_bytes_by_bucket, so tests can model the analytics window peak
         # diverging from live REST usage (the confirm-before-downgrade path).
         self.graphql_usage_bytes_by_bucket: dict[str, int] | None = None
-        # Failure-injection knobs: the next create_access_app /
-        # create_access_policy / delete_bucket_token call raises, exercising
-        # the add-service rollback and sweep revoke-retry paths. While
+        # Failure-injection knobs: the next delete_bucket_token call raises,
+        # exercising the sweep revoke-retry paths. While
         # fail_bucket_usage_reads is set, every per-bucket REST usage read
         # raises (the sweep/gate fail-open paths).
-        self.fail_next_create_access_app = False
-        self.fail_next_create_access_policy = False
         self.fail_next_delete_bucket_token = False
         self.fail_bucket_usage_reads = False
-
-    def create_tunnel(self, name: str) -> dict[str, Any]:
-        tunnel_id = f"tunnel-{self._next_tunnel_id}"
-        self._next_tunnel_id += 1
-        tunnel = {"id": tunnel_id, "name": name}
-        self.tunnels[tunnel_id] = tunnel
-        return tunnel
-
-    def list_tunnels(self, include_prefix: str = "") -> list[dict[str, Any]]:
-        results = list(self.tunnels.values())
-        if include_prefix:
-            results = [t for t in results if t["name"].startswith(include_prefix)]
-        return results
-
-    def get_tunnel_by_name(self, name: str) -> dict[str, Any] | None:
-        for tunnel in self.tunnels.values():
-            if tunnel["name"] == name:
-                return tunnel
-        return None
-
-    def get_tunnel_by_id(self, tunnel_id: str) -> dict[str, Any] | None:
-        return self.tunnels.get(tunnel_id)
-
-    def get_tunnel_token(self, tunnel_id: str) -> str:
-        return f"token-for-{tunnel_id}"
-
-    def delete_tunnel(self, tunnel_id: str) -> None:
-        self.tunnels.pop(tunnel_id, None)
-        self.tunnel_configs.pop(tunnel_id, None)
-
-    def get_tunnel_config(self, tunnel_id: str) -> dict[str, Any]:
-        return self.tunnel_configs.get(tunnel_id, {"config": {"ingress": [{"service": "http_status:404"}]}})
-
-    def put_tunnel_config(self, tunnel_id: str, config: dict[str, Any]) -> None:
-        self.tunnel_configs[tunnel_id] = config
-
-    def create_cname(self, name: str, target: str) -> dict[str, Any]:
-        for existing in self.dns_records:
-            if existing["name"] == name:
-                raise CloudflareApiError(
-                    status_code=400,
-                    errors=[{"code": 81053, "message": "An A, AAAA, or CNAME record with that host already exists."}],
-                )
-        record_id = f"record-{self._next_record_id}"
-        self._next_record_id += 1
-        record = {"id": record_id, "name": name, "content": target, "type": "CNAME"}
-        self.dns_records.append(record)
-        return record
-
-    def list_dns_records(self, name: str = "") -> list[dict[str, Any]]:
-        if name:
-            return [r for r in self.dns_records if r["name"] == name]
-        return list(self.dns_records)
-
-    def delete_dns_record(self, record_id: str) -> None:
-        self.dns_records = [r for r in self.dns_records if r["id"] != record_id]
-
-    def create_access_app(self, hostname: str, app_name: str, allowed_idps: list[str] | None = None) -> dict[str, Any]:
-        if self.fail_next_create_access_app:
-            self.fail_next_create_access_app = False
-            raise CloudflareApiError(status_code=500, errors=[{"message": "simulated Access API failure"}])
-        app_id = f"access-app-{self._next_access_app_id}"
-        self._next_access_app_id += 1
-        access_app: dict[str, Any] = {"id": app_id, "domain": hostname, "name": app_name}
-        if allowed_idps is not None:
-            access_app["allowed_idps"] = allowed_idps
-        self.access_apps[app_id] = access_app
-        self.access_policies[app_id] = []
-        return access_app
-
-    def delete_access_app(self, app_id: str) -> None:
-        self.access_apps.pop(app_id, None)
-        self.access_policies.pop(app_id, None)
-
-    def get_access_app_by_domain(self, hostname: str) -> dict[str, Any] | None:
-        for access_app in self.access_apps.values():
-            if access_app["domain"] == hostname:
-                return access_app
-        return None
-
-    def list_access_policies(self, app_id: str) -> list[dict[str, Any]]:
-        return list(self.access_policies.get(app_id, []))
-
-    def create_access_policy(self, app_id: str, policy: dict[str, Any]) -> dict[str, Any]:
-        if self.fail_next_create_access_policy:
-            self.fail_next_create_access_policy = False
-            raise CloudflareApiError(status_code=500, errors=[{"message": "simulated Access policy failure"}])
-        policy_id = f"policy-{self._next_policy_id}"
-        self._next_policy_id += 1
-        stored = {**policy, "id": policy_id}
-        if app_id not in self.access_policies:
-            self.access_policies[app_id] = []
-        self.access_policies[app_id].append(stored)
-        return stored
-
-    def update_access_policy(self, app_id: str, policy_id: str, policy: dict[str, Any]) -> dict[str, Any]:
-        policies = self.access_policies.get(app_id, [])
-        for i, p in enumerate(policies):
-            if p["id"] == policy_id:
-                policies[i] = {**policy, "id": policy_id}
-                return policies[i]
-        return {**policy, "id": policy_id}
-
-    def delete_access_policy(self, app_id: str, policy_id: str) -> None:
-        if app_id in self.access_policies:
-            self.access_policies[app_id] = [p for p in self.access_policies[app_id] if p["id"] != policy_id]
-
-    def kv_get(self, key: str) -> str | None:
-        return self.kv_store.get(key)
-
-    def kv_put(self, key: str, value: str) -> None:
-        self.kv_store[key] = value
-
-    def kv_delete(self, key: str) -> None:
-        self.kv_store.pop(key, None)
-
-    def create_service_token(self, name: str) -> dict[str, Any]:
-        token_id = f"svc-token-{self._next_policy_id}"
-        self._next_policy_id += 1
-        return {
-            "id": token_id,
-            "client_id": f"client-{token_id}",
-            "client_secret": f"secret-{token_id}",
-            "name": name,
-        }
-
-    def list_service_tokens(self) -> list[dict[str, Any]]:
-        return []
-
-    def delete_service_token(self, token_id: str) -> None:
-        pass
-
-    # -- R2 bucket + token operations --
 
     def create_bucket(self, name: str) -> dict[str, Any]:
         if name in self.buckets:
@@ -367,21 +221,12 @@ class FakeForwardingCtx(ForwardingCtx):
     fake: FakeCloudflareOps
 
 
-def make_fake_forwarding_ctx(
-    domain: str = "example.com",
-    allowed_idps: list[str] | None = None,
-) -> FakeForwardingCtx:
+def make_fake_forwarding_ctx() -> FakeForwardingCtx:
     """Create a FakeForwardingCtx for testing."""
     fake = FakeCloudflareOps()
-    ctx = FakeForwardingCtx(ops=fake, domain=domain, allowed_idps=allowed_idps)
+    ctx = FakeForwardingCtx(ops=fake)
     ctx.fake = fake
     return ctx
-
-
-def make_fake_tunnel_token(tunnel_id: str) -> str:
-    """Create a fake tunnel token (base64-encoded JSON) for testing."""
-    token_data = json.dumps({"a": "test-account", "t": tunnel_id, "s": "test-secret"})
-    return base64.b64encode(token_data.encode()).decode()
 
 
 # ---------------------------------------------------------------------------
@@ -1378,6 +1223,129 @@ class FakeCursor:
         elif query_lower.startswith("delete from account_key_bundles"):
             self._backend.sync_bundle_by_user.pop(params[0], None)
 
+        elif query_lower.startswith("select count(*) from shares"):
+            user_label, exclude_host_id = params
+            active_count = sum(
+                1
+                for share in self._backend.share_rows
+                if share["user_id"] == user_label
+                and share["state"] == "active"
+                and share["host_id"] != exclude_host_id
+            )
+            self._results = [(active_count,)]
+
+        elif query_lower.startswith("insert into shares"):
+            host_id, user_label, region, workspace_domain = params
+            self._backend.upsert_share(host_id, user_label, region, workspace_domain)
+
+        elif "from shares where host_id = %s and user_id = %s" in query_lower:
+            share = self._backend.find_share(params[0], params[1])
+            if share is not None:
+                self._results = [self._backend.share_tuple(share)]
+
+        elif "from shares where workspace_domain = %s and state = 'active'" in query_lower:
+            for share in self._backend.share_rows:
+                if share["workspace_domain"] == params[0] and share["state"] == "active":
+                    self._results = [self._backend.share_tuple(share)]
+                    break
+
+        elif "from shares where user_id = %s" in query_lower:
+            self._results = [
+                self._backend.share_tuple(share) for share in self._backend.share_rows if share["user_id"] == params[0]
+            ]
+
+        elif query_lower.startswith("update shares set state = 'inactive'"):
+            deactivated_share = self._backend.find_share(params[0], params[1])
+            if deactivated_share is not None:
+                deactivated_share["state"] = "inactive"
+                deactivated_share["updated_at"] = _SHARE_ROW_UPDATED_AT
+
+        elif query_lower.startswith("update shares set last_tunnel_login_at"):
+            logged_in_share = self._backend.find_share(params[0], params[1])
+            if logged_in_share is not None:
+                logged_in_share["last_tunnel_login_at"] = _SHARE_ROW_UPDATED_AT
+                logged_in_share["updated_at"] = _SHARE_ROW_UPDATED_AT
+
+        elif query_lower.startswith("delete from relay_tokens"):
+            host_id, user_label = params
+            self._backend.relay_token_rows = [
+                token_row
+                for token_row in self._backend.relay_token_rows
+                if not (token_row["host_id"] == host_id and token_row["user_id"] == user_label)
+            ]
+
+        elif query_lower.startswith("insert into relay_tokens"):
+            token_hash, host_id, user_label = params
+            self._backend.relay_token_rows.append(
+                {"token_hash": token_hash, "host_id": host_id, "user_id": user_label}
+            )
+
+        elif "from relay_tokens rt join shares s" in query_lower:
+            for token_row in self._backend.relay_token_rows:
+                if token_row["token_hash"] == params[0]:
+                    joined_share = self._backend.find_share(token_row["host_id"], token_row["user_id"])
+                    if joined_share is not None:
+                        self._results = [
+                            (
+                                joined_share["host_id"],
+                                joined_share["user_id"],
+                                joined_share["region"],
+                                joined_share["workspace_domain"],
+                                joined_share["state"],
+                            )
+                        ]
+                    break
+
+        elif query_lower.startswith("select region from pool_hosts"):
+            for pool_row in self._backend.pool_rows:
+                if pool_row.host_id_str == params[0]:
+                    self._results = [(pool_row.region,)]
+                    break
+
+        elif query_lower.startswith("insert into issued_certs"):
+            workspace_domain, host_id, user_label, ca_name, cert_chain_pem, sans_json, not_after = params
+            self._backend.issued_cert_rows.append(
+                {
+                    "workspace_domain": workspace_domain,
+                    "host_id": host_id,
+                    "user_id": user_label,
+                    "ca_name": ca_name,
+                    "cert_chain_pem": cert_chain_pem,
+                    "sans": sans_json,
+                    "not_after": not_after,
+                }
+            )
+
+        elif query_lower.startswith("select account_key_pem, account_uri from acme_accounts"):
+            for account_row in self._backend.acme_account_rows:
+                if account_row["ca_name"] == params[0] and account_row["directory_url"] == params[1]:
+                    self._results = [(account_row["account_key_pem"], account_row["account_uri"])]
+                    break
+
+        elif query_lower.startswith("insert into acme_accounts"):
+            ca_name, directory_url, account_key_pem, account_uri, eab_kid = params
+            self._backend.acme_account_rows.append(
+                {
+                    "ca_name": ca_name,
+                    "directory_url": directory_url,
+                    "account_key_pem": account_key_pem,
+                    "account_uri": account_uri,
+                    "eab_kid": eab_kid,
+                }
+            )
+
+        elif query_lower.startswith("select not_after from issued_certs"):
+            matching_not_afters = sorted(
+                (
+                    cert_row["not_after"]
+                    for cert_row in self._backend.issued_cert_rows
+                    if cert_row["workspace_domain"] == params[0]
+                ),
+                reverse=True,
+            )
+            if matching_not_afters:
+                self._results = [(matching_not_afters[0],)]
+
         else:
             pass
 
@@ -1433,6 +1401,21 @@ def _make_fake_connection(backend: "FakePoolBackend") -> FakeConnection:
 _PAID_ENTRY_CREATED_AT = "2026-01-01T00:00:00+00:00"
 _PAID_ENTRY_UPDATED_AT = "2026-01-02T00:00:00+00:00"
 
+_SHARE_ROW_CREATED_AT = "2026-01-01T00:00:00+00:00"
+_SHARE_ROW_UPDATED_AT = "2026-01-02T00:00:00+00:00"
+
+# Column order of the app's _SHARE_COLUMNS projection.
+_SHARE_COLUMN_NAMES = (
+    "host_id",
+    "user_id",
+    "region",
+    "workspace_domain",
+    "state",
+    "created_at",
+    "updated_at",
+    "last_tunnel_login_at",
+)
+
 
 class FakePoolBackend:
     """In-memory pool database replacement for testing host pool + paid-list endpoints."""
@@ -1460,6 +1443,60 @@ class FakePoolBackend:
     # Orphan-bucket first-seen stamps (bucket_name -> datetime), mirroring the
     # orphan_backup_buckets table.
     orphan_stamps: dict[str, datetime]
+    # Self-hosted sharing stores, mirroring the shares / relay_tokens /
+    # issued_certs tables. Share rows are dicts keyed by _SHARE_COLUMN_NAMES;
+    # token rows carry token_hash / host_id / user_id; cert rows carry
+    # workspace_domain / not_after.
+    share_rows: list[dict[str, Any]]
+    relay_token_rows: list[dict[str, Any]]
+    issued_cert_rows: list[dict[str, Any]]
+    acme_account_rows: list[dict[str, Any]]
+
+    def add_share(
+        self,
+        host_id: str,
+        user_label: str,
+        region: str,
+        workspace_domain: str,
+        state: str = "active",
+    ) -> None:
+        """Seed a share row (bypassing the endpoint), defaulting to active."""
+        self.upsert_share(host_id, user_label, region, workspace_domain)
+        seeded = self.find_share(host_id, user_label)
+        assert seeded is not None
+        seeded["state"] = state
+
+    def upsert_share(self, host_id: str, user_label: str, region: str, workspace_domain: str) -> None:
+        """Mirror the endpoint's INSERT ... ON CONFLICT (host_id, user_id) upsert."""
+        existing = self.find_share(host_id, user_label)
+        if existing is not None:
+            existing["region"] = region
+            existing["workspace_domain"] = workspace_domain
+            existing["state"] = "active"
+            existing["updated_at"] = _SHARE_ROW_UPDATED_AT
+            return
+        self.share_rows.append(
+            {
+                "host_id": host_id,
+                "user_id": user_label,
+                "region": region,
+                "workspace_domain": workspace_domain,
+                "state": "active",
+                "created_at": _SHARE_ROW_CREATED_AT,
+                "updated_at": _SHARE_ROW_CREATED_AT,
+                "last_tunnel_login_at": None,
+            }
+        )
+
+    def find_share(self, host_id: str, user_label: str) -> dict[str, Any] | None:
+        for share in self.share_rows:
+            if share["host_id"] == host_id and share["user_id"] == user_label:
+                return share
+        return None
+
+    def share_tuple(self, share: dict[str, Any]) -> tuple[Any, ...]:
+        """Project a stored share row into the SELECT column order PostgresShareStore uses."""
+        return tuple(share.get(name) for name in _SHARE_COLUMN_NAMES)
 
     def add_paid_domain(self, domain: str, is_paid: bool = True) -> None:
         """Seed a paid-domains row (lowercased), defaulting to active."""
@@ -1775,6 +1812,10 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend.sync_insert_race_winner = None
     backend.sync_update_returns_no_row = False
     backend.orphan_stamps = {}
+    backend.share_rows = []
+    backend.relay_token_rows = []
+    backend.issued_cert_rows = []
+    backend.acme_account_rows = []
     return backend
 
 
@@ -1912,8 +1953,6 @@ def make_fake_orphan_bucket_store() -> InMemoryOrphanBucketStore:
 # Canonical plan values matching the committed deploy.toml [plans] blocks.
 EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 2,
-    "max_tunnels": 50,
-    "max_services_per_tunnel": 10,
     "max_buckets": 5,
     "max_total_bucket_bytes": 50 * 1024**3,
     "monthly_llm_spend_usd": 0.0,
@@ -1921,8 +1960,6 @@ EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
 }
 ALLY_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 10,
-    "max_tunnels": 50,
-    "max_services_per_tunnel": 10,
     "max_buckets": 20,
     "max_total_bucket_bytes": 500 * 1024**3,
     "monthly_llm_spend_usd": 1000.0,

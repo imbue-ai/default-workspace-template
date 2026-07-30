@@ -1,4 +1,4 @@
-{#def agent_id, ws_name, tab="share", anchor_x=240, anchor_y=5, anchor_height=28, current_account=None, accounts=[], app_services=[], whole_service="system_interface", selected_target="", account_email="", has_account=False, is_leased_imbue_cloud=False, current_color="#0b292b", is_stale=False, palette={}, selected_group="general" #}
+{#def agent_id, ws_name, host_id="", tab="share", anchor_x=240, anchor_y=5, anchor_height=28, current_account=None, accounts=[], app_services=[], whole_service="system_interface", selected_target="", account_email="", has_account=False, is_leased_imbue_cloud=False, current_color="#0b292b", is_stale=False, palette={}, selected_group="general" #}
 {#
   The workspace options panel as an overlay-hosted modal: the Share machine and
   Machine settings tabs, docked under the titlebar's workspace icon-tabs.
@@ -39,7 +39,7 @@
                          :anchor_x="anchor_x" :anchor_y="anchor_y" :anchor_height="anchor_height"
                          :accent="current_color">
     <div data-wsopt-panel="share" class="flex-1 min-h-0 flex-col {{ 'flex' if tab == 'share' else 'hidden' }}">
-      <WorkspaceShareSection :panel_scroll="True" :agent_id="agent_id" :ws_name="ws_name"
+      <WorkspaceShareSection :panel_scroll="True" :agent_id="agent_id" :host_id="host_id" :ws_name="ws_name"
                              :account_email="account_email" :has_account="has_account"
                              :accounts="accounts" :app_services="app_services"
                              :whole_service="whole_service" :selected_target="selected_target" />

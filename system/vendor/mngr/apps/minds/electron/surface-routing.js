@@ -6,19 +6,21 @@
 // route each navigation to the right WebContentsView: an untrusted agent URL to
 // the content view, a trusted local page to the chrome view.
 
-// Extract the workspace (agent) id a URL identifies, or null. Two shapes count
+// Extract the workspace (host) id a URL identifies, or null. Two shapes count
 // as "this URL IS a workspace":
-//   - the final workspace subdomain `agent-<id>.localhost:PORT/...`
-//   - the auth-bridge `localhost:PORT/goto/<agent-id>/` (the pending state
-//     before the subdomain cookie is installed). Recognising it lets
+//   - the workspace origins `[<service>.]host-<id>.localhost:PORT/...` (the
+//     bare origin is the shell; service labels are that workspace's other
+//     registered services, all keyed by the same host id)
+//   - the auth-bridge `localhost:PORT/goto/<host-id>/` (the pending state
+//     before the workspace-domain cookie is installed). Recognising it lets
 //     findBundleForWorkspace de-dupe clicks during the redirect window.
 function parseWorkspaceId(url) {
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    const hostMatch = parsed.hostname.match(/^(agent-[a-f0-9]+)\.localhost$/i);
+    const hostMatch = parsed.hostname.match(/^(?:[a-z0-9_-]+\.)*(host-[a-f0-9]+)\.localhost$/i);
     if (hostMatch) return hostMatch[1];
-    const pathMatch = parsed.pathname.match(/^\/goto\/(agent-[a-f0-9]+)(?:\/|$)/i);
+    const pathMatch = parsed.pathname.match(/^\/goto\/(host-[a-f0-9]+)(?:\/|$)/i);
     return pathMatch ? pathMatch[1] : null;
   } catch {
     return null;
@@ -44,12 +46,15 @@ function parseAccentSourceAgentId(url) {
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    const hostMatch = parsed.hostname.match(/^(agent-[a-f0-9]+)\.localhost$/i);
+    // Content URLs are host-keyed; the workspace-scoped backend screens stay
+    // agent-keyed. Both coordinates tint the titlebar (the chrome's accent
+    // cache is dual-keyed off the workspaces payload).
+    const hostMatch = parsed.hostname.match(/^(?:[a-z0-9_-]+\.)*(host-[a-f0-9]+)\.localhost$/i);
     if (hostMatch) return hostMatch[1];
     const pathMatch =
-      parsed.pathname.match(/^\/(?:goto|workspace|sharing)\/(agent-[a-f0-9]+)(?:\/|$)/i) ||
+      parsed.pathname.match(/^\/(?:goto|workspace|sharing)\/((?:agent|host)-[a-f0-9]+)(?:\/|$)/i) ||
       parsed.pathname.match(/^\/destroying\/(agent-[a-f0-9]+)(?:\/|$)/i) ||
-      parsed.pathname.match(/^\/agents\/(agent-[a-f0-9]+)\/recovery(?:\/|$)/i);
+      parsed.pathname.match(/^\/agents\/((?:agent|host)-[a-f0-9]+)\/recovery(?:\/|$)/i);
     return pathMatch ? pathMatch[1] : null;
   } catch {
     return null;
@@ -99,8 +104,9 @@ function isSwappableLocalPath(pathname) {
     // Recovery flips to/from the workspace wrapper constantly while a
     // workspace flaps; swapping it keeps the titlebar from blinking on every
     // hop. Its poll loops carry minds:page-teardown guards (see
-    // _RECOVERY_SCRIPT in templates.py).
-    || /^\/agents\/agent-[a-f0-9]+\/recovery$/i.test(pathname)
+    // _RECOVERY_SCRIPT in templates.py). It accepts either workspace
+    // coordinate (content URLs are host-keyed).
+    || /^\/agents\/(?:agent|host)-[a-f0-9]+\/recovery$/i.test(pathname)
   );
 }
 

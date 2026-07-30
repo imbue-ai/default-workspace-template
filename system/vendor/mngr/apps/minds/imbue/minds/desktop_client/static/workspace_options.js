@@ -209,22 +209,66 @@
   });
 
   // -- Share machine pane ---------------------------------------------------
+  //
+  // Sharing is machine-level under the self-hosted relay: ONE share per
+  // machine (one tunnel, one domain, one grants document), where the grants
+  // document carries a workspace-level allow-list (admits every service) plus
+  // optional per-service lists (each admits only that one service's origin).
+  // The pane keeps the per-target mental model -- pick "Whole machine" or one
+  // app, manage who can reach it, get its link -- and maps each target onto
+  // one scope of the grants document:
+  //
+  //   Whole machine  <->  the ``workspace`` scope   (link: the machine domain)
+  //   app <name>     <->  ``services.<name>``       (link: <name>.<machine domain>)
+  //
+  // A target is "on" exactly when its scope grants anyone (the owner is always
+  // written into an enabled scope, so enabling with nobody else added still
+  // works). The machine's share exists while ANY scope is on: enabling the
+  // first target provisions the share (relay token, cert, tunnel -- the slow
+  // path the provisioning notice narrates); disabling the last one deletes it.
+  // Everything in between is a grants-document rewrite the workspace's
+  // gateway picks up per-request, with no tunnel restart.
+  //
+  // One GET returns the whole document, so every target's state is known at
+  // once (no per-target status subprocesses). Writes PUT the whole document
+  // too, so they are queued and serialized: two targets edited back-to-back
+  // must not race each other with full-document replaces.
 
   var configEl = document.getElementById('ws-share-config');
   if (!configEl) return;
   var config = JSON.parse(configEl.textContent);
   var agentId = config.agentId;
+  // Machine-sharing endpoints are keyed by host id; the agent id is the
+  // fallback when the host coordinate is unknown (the read then reports
+  // "not shared", matching the pre-discovery state of the workspace).
+  var shareHostId = config.hostId || agentId;
   var wholeService = config.wholeService;
   var ownerEmail = config.accountEmail || '';
+  var shareApiBase = '/api/v1/machines/' + encodeURIComponent(shareHostId) + '/sharing';
 
-  // Per-target state, filled lazily on first selection:
-  //   { loaded, failed, enabled, url, emails, isLive }
-  // ``emails`` excludes the owner, which is always implicitly first and is
-  // never removable (the account owns the tunnel). ``failed`` is deliberately
-  // NOT ``loaded``: a status read that never landed must not masquerade as a
-  // read that came back "sharing is off", or enabling from that pane would
-  // replace an access policy nobody ever saw.
+  // Machine-level share state, loaded once for every target:
+  //   loaded  -- the grants document came back (targets are renderable)
+  //   failed  -- the read never landed; deliberately NOT ``loaded`` (a status
+  //              read that never landed must not masquerade as "sharing is
+  //              off", or enabling from that pane would replace an access
+  //              policy nobody ever saw)
+  //   enabled -- the machine share exists (some scope grants someone)
+  //   url     -- the machine's public URL (per-target links derive from it)
+  //   isLive  -- the shared hostname has answered a readiness probe
+  var machine = { loaded: false, failed: false, enabled: false, url: '', isLive: false };
+
+  // Per-target scope state: ``enabled`` (the scope grants someone) and
+  // ``entries`` (emails and bare domains, owner excluded -- the owner is
+  // implicitly first and never removable). While a target is off its entries
+  // are only staged locally; enabling publishes them.
   var stateByTarget = {};
+
+  // Grants scopes for services that are NOT rendered as targets (a service
+  // granted from outside this pane, or one no longer registered). Preserved
+  // verbatim through every write so a full-document replace cannot silently
+  // drop access that was never on screen.
+  var extraServiceGrants = {};
+
   var currentTarget = config.selectedTarget || wholeService;
   var readinessTimer = null;
   // Which target ``readinessTimer`` belongs to, so re-rendering the same
@@ -233,8 +277,17 @@
   // The full-page twin is in the shell's in-place swap set, so its document
   // outlives the page: without this, each visit would leave another live
   // delegated handler (whose stale closure rewrites the ACL and re-PUTs the
-  // Access policy) plus a readiness poll still hitting the server.
+  // grants document) plus a readiness poll still hitting the server.
   var isPageTornDown = false;
+
+  // Every rendered target, so document builds cover targets that are not
+  // currently selected (their scopes must survive a write made from another
+  // target's pane).
+  var knownTargets = [];
+  Array.prototype.forEach.call(document.querySelectorAll('[data-share-target]'), function (button) {
+    if (knownTargets.indexOf(button.dataset.shareTarget) < 0) knownTargets.push(button.dataset.shareTarget);
+  });
+  if (knownTargets.indexOf(wholeService) < 0) knownTargets.push(wholeService);
 
   function el(id) { return document.getElementById(id); }
 
@@ -244,25 +297,15 @@
 
   function targetSubtitle(service) {
     return service === wholeService
-      ? 'Give access to everything in this machine.'
+      ? 'Give access to everything in this machine, including every app.'
       : 'Give access only to this app on its own.';
   }
 
   function stateFor(service) {
     if (!stateByTarget[service]) {
-      stateByTarget[service] = { loaded: false, failed: false, enabled: false, url: '', emails: [], isLive: false };
+      stateByTarget[service] = { enabled: false, entries: [] };
     }
     return stateByTarget[service];
-  }
-
-  // A completed write tells us this target's state as authoritatively as a read
-  // does, so it clears any earlier read failure. Without this a write that
-  // landed while the state was still unknown would leave ``loaded`` false and
-  // renderTarget would show neither the Enable control nor the link -- a blank
-  // pane reporting nothing at all.
-  function markKnown(state) {
-    state.loaded = true;
-    state.failed = false;
   }
 
   function showError(message) {
@@ -279,7 +322,7 @@
 
   // ``fetch`` only rejects on network failure -- a 4xx/5xx response is a
   // successful Promise. Wrap it so callers treat transport errors and
-  // server-side errors uniformly (same contract as sharing.js).
+  // server-side errors uniformly.
   function requestWithErrorCheck(url, options) {
     return fetch(url, options).then(function (response) {
       if (response.ok) return response;
@@ -295,22 +338,29 @@
     });
   }
 
-  function sharingUrlFor(service) {
-    return '/api/v1/workspaces/' + encodeURIComponent(agentId) + '/sharing/' + encodeURIComponent(service);
+  function isEmailEntry(entry) {
+    return entry.indexOf('@') >= 0;
   }
 
-  function createAclRow(email, isOwner) {
+  function createAclRow(entry, isOwner) {
     var row = document.createElement('div');
     row.className = 'flex items-center justify-between gap-2 rounded-md border border-subtle bg-fill-subtle px-3 py-2';
 
     var label = document.createElement('span');
     label.className = 'type-body text-primary truncate';
-    label.textContent = email;
+    label.textContent = entry;
     if (isOwner) {
       var suffix = document.createElement('span');
       suffix.className = 'text-tertiary';
       suffix.textContent = ' (you)';
       label.appendChild(suffix);
+    } else if (!isEmailEntry(entry)) {
+      // A bare entry grants a whole email domain; say so on the row rather
+      // than leaving it to read as a typo of an address.
+      var domainSuffix = document.createElement('span');
+      domainSuffix.className = 'text-tertiary';
+      domainSuffix.textContent = ' (anyone at this domain)';
+      label.appendChild(domainSuffix);
     }
     row.appendChild(label);
 
@@ -319,11 +369,11 @@
       removeBtn.type = 'button';
       removeBtn.className = 'shrink-0 inline-flex h-6 w-6 items-center justify-center rounded-md ' +
         'text-tertiary hover:bg-fill-hover hover:text-important cursor-pointer transition-colors';
-      // aria-label carries the whole affordance, as it does for sharing.js's
-      // remove button: tooltip_triggers.js binds ``data-tooltip`` once at load,
-      // so a row built here -- long after that pass -- could never get one.
-      removeBtn.setAttribute('aria-label', 'Remove ' + email);
-      removeBtn.dataset.removeEmail = email;
+      // aria-label carries the whole affordance: tooltip_triggers.js binds
+      // ``data-tooltip`` once at load, so a row built here -- long after that
+      // pass -- could never get one.
+      removeBtn.setAttribute('aria-label', 'Remove ' + entry);
+      removeBtn.dataset.removeEmail = entry;
       // The icon markup mirrors Icon16's ``close`` glyph; the path data lives
       // in templates.py and cannot be reached from JS, so the shape is
       // inlined here (the one place JS renders an icon).
@@ -356,15 +406,117 @@
     var state = stateFor(currentTarget);
     listEl.textContent = '';
     if (ownerEmail) listEl.appendChild(createAclRow(ownerEmail, true));
-    state.emails.forEach(function (email) {
-      listEl.appendChild(createAclRow(email, false));
+    state.entries.forEach(function (entry) {
+      listEl.appendChild(createAclRow(entry, false));
     });
   }
 
-  function finalEmails() {
-    var state = stateFor(currentTarget);
+  // One scope of the grants document, from a target's staged entries. The
+  // owner's email is always written into an enabled scope: the gateway has no
+  // implicit owner bypass, and the owner losing access to their own machine's
+  // share would be surprising.
+  function grantListFor(service) {
     var emails = ownerEmail ? [ownerEmail] : [];
-    return emails.concat(state.emails);
+    var emailDomains = [];
+    stateFor(service).entries.forEach(function (entry) {
+      if (isEmailEntry(entry)) {
+        if (emails.indexOf(entry) < 0) emails.push(entry);
+      } else if (emailDomains.indexOf(entry) < 0) {
+        emailDomains.push(entry);
+      }
+    });
+    return { emails: emails, email_domains: emailDomains };
+  }
+
+  // The full grants document as it should be after this write. ``overrides``
+  // maps a target to true/false to enable/disable it as part of the same
+  // write (the scope flags flip only once the server confirms).
+  function buildGrantsDocument(overrides) {
+    overrides = overrides || {};
+    function isOn(service) {
+      return Object.prototype.hasOwnProperty.call(overrides, service) ? overrides[service] : stateFor(service).enabled;
+    }
+    var doc = { workspace: { emails: [], email_domains: [] }, services: {} };
+    knownTargets.forEach(function (service) {
+      if (!isOn(service)) return;
+      if (service === wholeService) doc.workspace = grantListFor(service);
+      else doc.services[service] = grantListFor(service);
+    });
+    Object.keys(extraServiceGrants).forEach(function (name) {
+      doc.services[name] = extraServiceGrants[name];
+    });
+    return doc;
+  }
+
+  function documentGrantsAnyone(doc) {
+    if (doc.workspace.emails.length || doc.workspace.email_domains.length) return true;
+    return Object.keys(doc.services).some(function (name) {
+      var scope = doc.services[name];
+      return (scope.emails || []).length > 0 || (scope.email_domains || []).length > 0;
+    });
+  }
+
+  function scopeEntries(scope) {
+    var entries = [];
+    ((scope && scope.emails) || []).forEach(function (email) {
+      if (email !== ownerEmail) entries.push(email);
+    });
+    ((scope && scope.email_domains) || []).forEach(function (domain) {
+      entries.push(domain);
+    });
+    return entries;
+  }
+
+  function scopeGrantsAnyone(scope) {
+    return !!scope && ((scope.emails || []).length > 0 || (scope.email_domains || []).length > 0);
+  }
+
+  // Adopt a sharing document from the server (a GET, or any write's
+  // response) as the authoritative state. Scopes absent from the document are
+  // off, but their locally staged entries are kept: staging happens before a
+  // scope exists server-side at all.
+  function syncFromDocument(data) {
+    machine.enabled = !!(data && data.enabled);
+    machine.url = (data && data.url) || '';
+    var grants = (data && data.grants) || {};
+    var services = grants.services || {};
+    knownTargets.forEach(function (service) {
+      var scope = service === wholeService ? grants.workspace : services[service];
+      var state = stateFor(service);
+      if (scopeGrantsAnyone(scope)) {
+        state.enabled = true;
+        state.entries = scopeEntries(scope);
+      } else {
+        state.enabled = false;
+      }
+    });
+    extraServiceGrants = {};
+    Object.keys(services).forEach(function (name) {
+      if (knownTargets.indexOf(name) >= 0) return;
+      if (!scopeGrantsAnyone(services[name])) return;
+      extraServiceGrants[name] = {
+        emails: (services[name].emails || []).slice(),
+        email_domains: (services[name].email_domains || []).slice(),
+      };
+    });
+    machine.loaded = true;
+    machine.failed = false;
+  }
+
+  // The link each target hands out: the machine's own URL for the whole
+  // machine, the service's own origin (its label in front of the machine
+  // domain) for an app. Derived, never stored -- a service registered while
+  // shared is reachable immediately, so its link must not wait on anything.
+  function targetUrl(service) {
+    if (!machine.url) return '';
+    if (service === wholeService) return machine.url;
+    var host;
+    try {
+      host = new URL(machine.url).host;
+    } catch (_) {
+      return '';
+    }
+    return 'https://' + service + '.' + host + '/';
   }
 
   // The status line under the editor, for a wait whose own control is not on
@@ -381,11 +533,8 @@
   }
 
   // Which slow write each target has in flight, keyed by service rather than
-  // held in one flag for the pane. A single flag went stale the moment the user
-  // started a write and switched targets: the new target inherited the old
-  // one's spinner and locked editor, and the wait it described was not even
-  // happening there. Every target now shows its own truth, and coming back to
-  // one with a write still running finds it still busy.
+  // held in one flag for the pane, so every target shows its own truth and
+  // coming back to one with a write still running finds it still busy.
   var pendingByTarget = {};
 
   function startPending(service, kind) {
@@ -398,6 +547,21 @@
   function endPending(service) {
     delete pendingByTarget[service];
     if (service === currentTarget) renderTarget();
+  }
+
+  // Writes replace the whole grants document, so they are strictly
+  // serialized: each builds its request body only when its turn comes, on top
+  // of whatever the previous write left behind. Without this, two targets
+  // edited back-to-back would race full-document replaces and the loser's
+  // change would vanish.
+  var writeChain = Promise.resolve();
+
+  function enqueueWrite(makeRequest) {
+    var result = writeChain.then(makeRequest, makeRequest);
+    // The chain itself swallows failures (each write reports its own);
+    // returning ``result`` keeps them visible to the write's own caller.
+    writeChain = result.then(function () {}, function () {});
+    return result;
   }
 
   // Paint the current target's in-flight write (if any).
@@ -419,17 +583,16 @@
     var enableStatus = el('ws-share-enable-status');
     if (enableStatus) enableStatus.classList.toggle('hidden', kind !== 'enable');
     if (kind === 'disable') setBusyLine(true, 'Stopping sharing and revoking the link...');
-    // An email edit changes the list rather than any one button, so its wait
-    // goes to the status line too.
+    // An access-list edit changes the list rather than any one button, so its
+    // wait goes to the status line too.
     else setBusyLine(kind === 'emails', 'Updating who can open this link...');
-    // A target whose status never loaded cannot be edited either (see below).
-    setEditable(stateFor(currentTarget).loaded && !kind);
+    // A pane whose status never loaded cannot be edited either (see below).
+    setEditable(machine.loaded && !kind);
   }
 
-  // A target whose status never loaded has no Enable control on screen, so an
-  // address added there could not be published -- and the next read would
-  // overwrite it from the server without a word. Lock the editor instead of
-  // letting the user stage something that quietly goes nowhere.
+  // While the document is unloaded (or its read failed) no control that would
+  // write a policy is offered: an address staged against a document nobody
+  // ever saw could replace grants invisibly.
   function setEditable(isEditable) {
     ['ws-share-add-btn', 'ws-share-new-email'].forEach(function (id) {
       var node = el(id);
@@ -463,7 +626,7 @@
     var loadingEl = el('ws-share-loading');
     // A failed read is done loading but is NOT loaded: the error line stands in
     // for the pane, and no control that would write a policy is offered.
-    if (loadingEl) loadingEl.classList.toggle('hidden', state.loaded || state.failed);
+    if (loadingEl) loadingEl.classList.toggle('hidden', machine.loaded || machine.failed);
     // A disable takes the link away the moment it is asked for, rather than
     // leaving a link on screen that is already being revoked. Neither row shows
     // while it runs -- the status line below carries the wait, and the Enable
@@ -471,82 +634,70 @@
     var isDisabling = pendingByTarget[currentTarget] === 'disable';
     var enableRow = el('ws-share-enable-row');
     if (enableRow) {
-      var showEnable = state.loaded && !state.enabled && !isDisabling;
+      var showEnable = machine.loaded && !state.enabled && !isDisabling;
       enableRow.classList.toggle('hidden', !showEnable);
       enableRow.classList.toggle('flex', showEnable);
     }
     var urlRow = el('ws-share-url-row');
     if (urlRow) {
-      var showUrl = state.loaded && state.enabled && !isDisabling;
+      var showUrl = machine.loaded && state.enabled && !isDisabling;
       urlRow.classList.toggle('hidden', !showUrl);
       // The row's layout classes only apply once it is not hidden; ``hidden``
       // and ``flex`` would otherwise fight (see Badge.jinja's note).
       urlRow.classList.toggle('flex', showUrl);
     }
     var urlEl = el('ws-share-url');
-    if (urlEl) urlEl.textContent = state.url || '';
+    if (urlEl) urlEl.textContent = targetUrl(currentTarget) || '';
     var provisioningEl = el('ws-share-provisioning');
     // Also gone while a disable runs: the link this notice is about has already
-    // come off screen, so explaining that Cloudflare is still publishing it
+    // come off screen, so explaining that the share is still provisioning
     // describes something the user can no longer see.
-    if (provisioningEl) provisioningEl.classList.toggle('hidden', !isAwaitingLink(state) || isDisabling);
+    if (provisioningEl) provisioningEl.classList.toggle('hidden', !isAwaitingLink(currentTarget) || isDisabling);
     renderAcl();
     applyPending();
     // A visible notice always has a poll behind it, or it would never clear.
     // The reverse is allowed on purpose: a disable in flight hides the notice
-    // but leaves the poll running, because a DELETE that fails leaves the
+    // but leaves the poll running, because a delete that fails leaves the
     // target still enabled and still awaiting its link -- and the notice has to
     // come back with the poll still under it.
     ensureReadinessPolling();
   }
 
-  // A target is waiting on Cloudflare exactly when it has a published link that
-  // has not answered a readiness probe yet. The poll keys off this alone; the
-  // notice reads it too but additionally hides while a disable is in flight
-  // (see renderTarget), so the notice can never appear without a poll.
-  function isAwaitingLink(state) {
-    return state.loaded && state.enabled && !state.isLive && !!state.url;
+  // A target is waiting on provisioning exactly when it has a link that has
+  // not answered a readiness probe yet. Readiness is machine-level (one
+  // tunnel, one cert), so every enabled target waits and clears together.
+  function isAwaitingLink(service) {
+    return machine.loaded && stateFor(service).enabled && !machine.isLive && !!machine.url;
   }
 
-  function loadTarget(service) {
-    var state = stateFor(service);
-    if (state.loaded) {
-      renderTarget();
-      return;
-    }
-    state.failed = false;
+  function loadMachine() {
+    machine.failed = false;
     renderTarget();
-    requestWithErrorCheck(sharingUrlFor(service), { method: 'GET' })
+    requestWithErrorCheck(shareApiBase, { method: 'GET' })
       .then(function (response) { return response.json(); })
       .then(function (data) {
-        var policyEmails = (data && data.policy && data.policy.emails) || [];
-        state.enabled = !!(data && data.enabled);
-        state.url = (data && data.url) || '';
-        state.emails = policyEmails.filter(function (email) { return email !== ownerEmail; });
-        // An already-published link is assumed live: the provisioning wait only
-        // applies to a hostname this session just created.
-        state.isLive = state.enabled;
-        state.loaded = true;
-        if (service === currentTarget) renderTarget();
+        syncFromDocument(data);
+        // An already-published link is assumed live: the provisioning wait
+        // only applies to a share this session just created.
+        machine.isLive = machine.enabled;
+        renderTarget();
       })
       .catch(function (error) {
-        state.failed = true;
-        if (service === currentTarget) {
-          renderTarget();
-          showError('Could not load sharing status: ' + error.message + ' -- select this target again to retry.');
-        }
+        machine.failed = true;
+        renderTarget();
+        showError('Could not load sharing status: ' + error.message + ' -- select a target again to retry.');
       });
   }
 
   function selectTarget(service) {
     if (service === currentTarget) {
       // Re-clicking the selected target is the retry affordance for a status
-      // read that failed -- a workspace whose only target is the whole machine
-      // has nothing else to click. The email input is left alone: the user may
+      // read that failed -- a machine whose only target is the whole machine
+      // has nothing else to click. The input is left alone: the user may
       // have typed into it while the read was failing.
-      if (!stateFor(service).failed) return;
+      if (!machine.failed) return;
       clearError();
-      loadTarget(service);
+      loadMachine();
       return;
     }
     clearError();
@@ -557,7 +708,11 @@
     currentTarget = service;
     var input = el('ws-share-new-email');
     if (input) input.value = '';
-    loadTarget(service);
+    if (machine.failed) {
+      loadMachine();
+      return;
+    }
+    renderTarget();
   }
 
   Array.prototype.forEach.call(document.querySelectorAll('[data-share-target]'), function (button) {
@@ -582,43 +737,43 @@
     document.removeEventListener('click', onRemoveEmailClick);
   }, { once: true });
 
-  function removeEmail(email) {
+  function removeEmail(entry) {
     var state = stateFor(currentTarget);
-    state.emails = state.emails.filter(function (existing) { return existing !== email; });
+    state.entries = state.entries.filter(function (existing) { return existing !== entry; });
     renderAcl();
     // While sharing is off the list is only staged locally -- "Enable sharing"
-    // publishes it. Once it is on, every change is a live policy replace.
-    if (state.enabled) persistEmails();
+    // publishes it. Once it is on, every change is a live grants replace.
+    if (state.enabled) persistEntries();
   }
 
   window.wsShareAddEmail = function () {
     var input = el('ws-share-new-email');
     if (!input) return;
-    var email = (input.value || '').trim();
-    if (!email) return;
+    var entry = (input.value || '').trim();
+    if (!entry) return;
     var state = stateFor(currentTarget);
-    if (email !== ownerEmail && state.emails.indexOf(email) < 0) state.emails.push(email);
+    if (entry !== ownerEmail && state.entries.indexOf(entry) < 0) state.entries.push(entry);
     input.value = '';
     clearError();
     renderAcl();
-    if (state.enabled) persistEmails();
+    if (state.enabled) persistEntries();
   };
 
-  function persistEmails() {
+  function putGrantsDocument(overrides) {
+    return requestWithErrorCheck(shareApiBase, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildGrantsDocument(overrides)),
+    }).then(function (response) { return response.json(); });
+  }
+
+  function persistEntries() {
     clearError();
     var service = currentTarget;
     startPending(service, 'emails');
-    requestWithErrorCheck(sharingUrlFor(service), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ emails: finalEmails() }),
-    })
-      .then(function (response) { return response.json(); })
+    enqueueWrite(function () { return putGrantsDocument({}); })
       .then(function (data) {
-        var state = stateFor(service);
-        markKnown(state);
-        state.enabled = true;
-        if (data && data.url) state.url = data.url;
+        syncFromDocument(data);
         endPending(service);
         if (service === currentTarget) renderTarget();
       })
@@ -632,18 +787,15 @@
     clearError();
     var service = currentTarget;
     startPending(service, 'enable');
-    requestWithErrorCheck(sharingUrlFor(service), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ emails: finalEmails() }),
-    })
-      .then(function (response) { return response.json(); })
+    enqueueWrite(function () { return putGrantsDocument(makeOverride(service, true)); })
       .then(function (data) {
-        var state = stateFor(service);
-        markKnown(state);
-        state.enabled = true;
-        state.url = (data && data.url) || '';
-        state.isLive = false;
+        // Whether this enable created the machine share (slow: relay token,
+        // cert, tunnel) or joined an existing one (instant: the wildcard cert
+        // and vhost already cover every service origin) decides whether the
+        // link needs the provisioning wait.
+        var isFirstShare = !machine.enabled;
+        syncFromDocument(data);
+        if (isFirstShare) machine.isLive = false;
         endPending(service);
         // renderTarget arms the readiness poll for whichever target is on
         // screen; if the user switched away mid-request, selecting this one
@@ -656,7 +808,13 @@
       });
   };
 
-  // The readiness poll is NOT called off up front: a DELETE that fails leaves
+  function makeOverride(service, isOn) {
+    var overrides = {};
+    overrides[service] = isOn;
+    return overrides;
+  }
+
+  // The readiness poll is NOT called off up front: a delete that fails leaves
   // the target still enabled and still awaiting its link, and a poll stopped
   // ahead of that failure would strand the "not live yet" notice with nothing
   // behind it. renderTarget stops the poll on success, when the state actually
@@ -665,13 +823,35 @@
     clearError();
     var service = currentTarget;
     startPending(service, 'disable');
-    requestWithErrorCheck(sharingUrlFor(service), { method: 'DELETE' })
-      .then(function () {
-        var state = stateFor(service);
-        markKnown(state);
-        state.enabled = false;
-        state.url = '';
-        state.isLive = false;
+    enqueueWrite(function () {
+      // Turning off the last target unshares the machine (the relay token
+      // dies and live viewers are cut); otherwise the scope is dropped from
+      // the grants document and every other target stays reachable.
+      var remaining = buildGrantsDocument(makeOverride(service, false));
+      if (!documentGrantsAnyone(remaining)) {
+        return requestWithErrorCheck(shareApiBase, { method: 'DELETE' })
+          .then(function () { return null; });
+      }
+      return requestWithErrorCheck(shareApiBase, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(remaining),
+      }).then(function (response) { return response.json(); });
+    })
+      .then(function (data) {
+        if (data === null) {
+          machine.enabled = false;
+          machine.url = '';
+          machine.isLive = false;
+          machine.loaded = true;
+          machine.failed = false;
+          knownTargets.forEach(function (target) { stateFor(target).enabled = false; });
+          extraServiceGrants = {};
+        } else {
+          syncFromDocument(data);
+        }
+        // The scope is off either way; its staged entries stay for a re-enable.
+        stateFor(service).enabled = false;
         endPending(service);
         if (service === currentTarget) renderTarget();
       })
@@ -732,18 +912,18 @@
   }
 
   window.wsShareCopyUrl = function () {
-    var state = stateFor(currentTarget);
-    if (!state.url) return;
+    var url = targetUrl(currentTarget);
+    if (!url) return;
     clearError();
-    navigator.clipboard.writeText(state.url).then(flashCopied).catch(function (error) {
+    navigator.clipboard.writeText(url).then(flashCopied).catch(function (error) {
       showError('Could not copy the link: ' + error.message);
     });
   };
 
-  // Cloudflare publishes a (re)created hostname at its edge a minute or two
-  // after the tunnel accepts it, so a link opened immediately after enabling
-  // 404s. Poll fast at first, then back off, and stop warning at the deadline
-  // rather than pretending success forever.
+  // A freshly-created share takes a little while to come up end to end: the
+  // workspace generates its key, the connector completes the ACME certificate,
+  // and the tunnel dials the relay. Poll fast at first, then back off, and
+  // stop warning at the deadline rather than pretending success forever.
   var READINESS_FAST_INTERVAL_MS = 2000;
   var READINESS_SLOW_INTERVAL_MS = 5000;
   var READINESS_FAST_PHASE_MS = 30 * 1000;
@@ -762,18 +942,17 @@
   // so re-selecting a target enabled earlier in this session resumes its poll
   // instead of leaving the "not live yet" notice up forever.
   function ensureReadinessPolling() {
-    var state = stateFor(currentTarget);
-    if (!isAwaitingLink(state)) {
+    if (!isAwaitingLink(currentTarget)) {
       stopReadinessPolling();
       return;
     }
     if (pollingService === currentTarget) return;
-    startReadinessPolling(currentTarget, state.url);
+    startReadinessPolling(currentTarget);
   }
 
-  function startReadinessPolling(service, url) {
+  function startReadinessPolling(service) {
     stopReadinessPolling();
-    if (!url || isPageTornDown) return;
+    if (isPageTornDown) return;
     pollingService = service;
     var startedAt = Date.now();
 
@@ -782,14 +961,14 @@
       if (isSuperseded()) return;
       var elapsed = Date.now() - startedAt;
       if (elapsed > READINESS_DEADLINE_MS) {
-        markLive(service);
+        markLive();
         return;
       }
-      fetch(sharingUrlFor(service) + '/readiness?url=' + encodeURIComponent(url))
+      fetch(shareApiBase + '/readiness')
         .then(function (response) { return response.json(); })
         .then(function (data) {
           if (data && data.ready) {
-            markLive(service);
+            markLive();
             return;
           }
           schedule(elapsed);
@@ -812,10 +991,12 @@
     schedule(0);
   }
 
-  function markLive(service) {
-    stateFor(service).isLive = true;
-    if (service === currentTarget) renderTarget();
+  // Readiness is machine-level: one tunnel and one certificate answer for
+  // every target's link, so going live clears the notice everywhere at once.
+  function markLive() {
+    machine.isLive = true;
+    renderTarget();
   }
 
-  loadTarget(currentTarget);
+  loadMachine();
 })();

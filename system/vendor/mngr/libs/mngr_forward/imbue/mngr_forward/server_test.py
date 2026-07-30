@@ -33,6 +33,11 @@ from imbue.mngr_forward.ssh_tunnel import RemoteSSHInfo
 from imbue.mngr_forward.ssh_tunnel import SSHTunnelError
 from imbue.mngr_forward.ssh_tunnel import SSHTunnelManager
 
+# The workspace host every test agent runs on: requests route by the
+# ``host-<hex>.localhost`` Host header, and the resolver maps it back to the
+# agent via ``set_agent_host``.
+_TEST_HOST_ID = "host-" + "0123456789abcdef0123456789abcdef"
+
 
 @pytest.fixture
 def app_setup(tmp_path: Path) -> tuple[TestClient, FileAuthStore, ForwardResolver]:
@@ -145,14 +150,14 @@ def test_http2_goto_authenticated_redirects_to_https_subdomain(
     """With ``use_http2`` on, the /goto bridge sends the browser to an https subdomain URL."""
     client, store, _resolver = http2_app_setup
     cookie = create_session_cookie(store.get_signing_key())
-    valid_agent_id = "agent-" + "0" * 31 + "a"
+    valid_host_id = "host-" + "0" * 31 + "a"
     response = client.get(
-        f"/goto/{valid_agent_id}/",
+        f"/goto/{valid_host_id}/",
         cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie},
     )
     assert response.status_code == 302
     location = response.headers["location"]
-    assert location.startswith(f"https://{valid_agent_id}.localhost:18421/_subdomain_auth?token=")
+    assert location.startswith(f"https://{valid_host_id}.localhost:18421/_subdomain_auth?token=")
 
 
 def test_http2_subdomain_unauthenticated_html_redirects_to_https_goto(tmp_path: Path) -> None:
@@ -161,6 +166,7 @@ def test_http2_subdomain_unauthenticated_html_redirects_to_https_goto(tmp_path: 
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     agent_id = AgentId()
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     resolver.update_services(agent_id, {"system_interface": "http://stub-backend"})
     tunnel_manager = SSHTunnelManager()
     envelope_writer = EnvelopeWriter(output=io.StringIO())
@@ -174,7 +180,9 @@ def test_http2_subdomain_unauthenticated_html_redirects_to_https_goto(tmp_path: 
         listen_port=listen_port,
         use_http2=True,
     )
-    with TestClient(app, base_url=f"https://{agent_id}.localhost:{listen_port}", follow_redirects=False) as client:
+    with TestClient(
+        app, base_url=f"https://{_TEST_HOST_ID}.localhost:{listen_port}", follow_redirects=False
+    ) as client:
         response = client.get(
             "/",
             headers={
@@ -183,7 +191,7 @@ def test_http2_subdomain_unauthenticated_html_redirects_to_https_goto(tmp_path: 
             },
         )
     assert response.status_code == 302
-    assert response.headers["Location"] == f"https://localhost:{listen_port}/goto/{agent_id}/"
+    assert response.headers["Location"] == f"https://localhost:{listen_port}/goto/{_TEST_HOST_ID}/?next=%2F"
 
 
 def test_http2_subdomain_auth_bridge_sets_secure_cookie(tmp_path: Path) -> None:
@@ -201,12 +209,12 @@ def test_http2_subdomain_auth_bridge_sets_secure_cookie(tmp_path: Path) -> None:
         listen_port=18421,
         use_http2=True,
     )
-    valid_agent_id = "agent-" + "0" * 31 + "a"
-    token = create_subdomain_auth_token(signing_key=auth_store.get_signing_key(), agent_id=valid_agent_id)
+    valid_host_id = "host-" + "0" * 31 + "a"
+    token = create_subdomain_auth_token(signing_key=auth_store.get_signing_key(), workspace_host_id=valid_host_id)
     with TestClient(app, follow_redirects=False) as client:
         response = client.get(
             f"/_subdomain_auth?token={token}&next=/",
-            headers={"host": f"{valid_agent_id}.localhost:18421"},
+            headers={"host": f"{valid_host_id}.localhost:18421"},
         )
     assert response.status_code == 302
     set_cookie = response.headers["set-cookie"]
@@ -263,7 +271,7 @@ def test_goto_unauthenticated_redirects_to_root(
     app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
 ) -> None:
     client, _store, _resolver = app_setup
-    response = client.get("/goto/agent-deadbeef/")
+    response = client.get("/goto/host-deadbeef/")
     assert response.status_code == 302
     assert response.headers["location"] == "/"
 
@@ -273,15 +281,15 @@ def test_goto_authenticated_redirects_to_subdomain_with_token(
 ) -> None:
     client, store, _resolver = app_setup
     cookie = create_session_cookie(store.get_signing_key())
-    # Use a 32-hex AgentId so the AgentId() validator accepts it.
-    valid_agent_id = "agent-" + "0" * 31 + "a"
+    # Use a 32-hex id so the HostId() validator accepts it.
+    valid_host_id = "host-" + "0" * 31 + "a"
     response = client.get(
-        f"/goto/{valid_agent_id}/",
+        f"/goto/{valid_host_id}/",
         cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie},
     )
     assert response.status_code == 302
     location = response.headers["location"]
-    assert location.startswith(f"http://{valid_agent_id}.localhost:18421/_subdomain_auth?token=")
+    assert location.startswith(f"http://{valid_host_id}.localhost:18421/_subdomain_auth?token=")
     assert "next=%2F" in location
 
 
@@ -291,9 +299,9 @@ def test_goto_rejects_protocol_relative_next(
     """`/goto/<agent>/?next=//evil.com` must be sanitized to `/`, not propagated as-is."""
     client, store, _resolver = app_setup
     cookie = create_session_cookie(store.get_signing_key())
-    valid_agent_id = "agent-" + "0" * 31 + "a"
+    valid_host_id = "host-" + "0" * 31 + "a"
     response = client.get(
-        f"/goto/{valid_agent_id}/?next=//evil.com/path",
+        f"/goto/{valid_host_id}/?next=//evil.com/path",
         cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie},
     )
     assert response.status_code == 302
@@ -322,12 +330,12 @@ def test_subdomain_auth_bridge_rejects_protocol_relative_next(tmp_path: Path) ->
         listen_host="127.0.0.1",
         listen_port=18421,
     )
-    valid_agent_id = "agent-" + "0" * 31 + "a"
-    token = create_subdomain_auth_token(signing_key=auth_store.get_signing_key(), agent_id=valid_agent_id)
+    valid_host_id = "host-" + "0" * 31 + "a"
+    token = create_subdomain_auth_token(signing_key=auth_store.get_signing_key(), workspace_host_id=valid_host_id)
     with TestClient(app, follow_redirects=False) as client:
         response = client.get(
             f"/_subdomain_auth?token={token}&next=//evil.com/path",
-            headers={"host": f"{valid_agent_id}.localhost:18421"},
+            headers={"host": f"{valid_host_id}.localhost:18421"},
         )
     assert response.status_code == 302
     assert response.headers["location"] == "/"
@@ -385,6 +393,7 @@ def test_subdomain_unauthenticated_html_redirects_to_goto_bridge(tmp_path: Path)
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     agent_id = AgentId()
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     resolver.update_services(agent_id, {"system_interface": "http://stub-backend"})
     tunnel_manager = SSHTunnelManager()
     envelope_writer = EnvelopeWriter(output=io.StringIO())
@@ -397,7 +406,7 @@ def test_subdomain_unauthenticated_html_redirects_to_goto_bridge(tmp_path: Path)
         listen_host="127.0.0.1",
         listen_port=listen_port,
     )
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:{listen_port}", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:{listen_port}", follow_redirects=False) as client:
         response = client.get(
             "/",
             headers={
@@ -409,7 +418,7 @@ def test_subdomain_unauthenticated_html_redirects_to_goto_bridge(tmp_path: Path)
         )
 
     assert response.status_code == 302
-    assert response.headers["Location"] == f"http://localhost:{listen_port}/goto/{agent_id}/"
+    assert response.headers["Location"] == f"http://localhost:{listen_port}/goto/{_TEST_HOST_ID}/?next=%2F"
 
 
 def test_subdomain_unauthenticated_non_html_returns_403(tmp_path: Path) -> None:
@@ -423,6 +432,7 @@ def test_subdomain_unauthenticated_non_html_returns_403(tmp_path: Path) -> None:
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     agent_id = AgentId()
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     resolver.update_services(agent_id, {"system_interface": "http://stub-backend"})
     tunnel_manager = SSHTunnelManager()
     envelope_writer = EnvelopeWriter(output=io.StringIO())
@@ -434,7 +444,7 @@ def test_subdomain_unauthenticated_non_html_returns_403(tmp_path: Path) -> None:
         listen_host="127.0.0.1",
         listen_port=18421,
     )
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         response = client.get(
             "/api/something",
             headers={
@@ -460,6 +470,7 @@ def test_subdomain_forward_strips_session_cookie_before_proxying_to_backend(tmp_
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     agent_id = AgentId()
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     resolver.update_services(agent_id, {"system_interface": "http://stub-backend"})
     tunnel_manager = SSHTunnelManager()
     envelope_writer = EnvelopeWriter(output=io.StringIO())
@@ -482,7 +493,7 @@ def test_subdomain_forward_strips_session_cookie_before_proxying_to_backend(tmp_
 
     mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture), follow_redirects=False)
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         # Replace the lifespan-created http_client with one whose transport we
         # control. Local agents (``ssh_info is None``) use ``app.state.http_client``
         # directly -- no SSH tunnel client to override.
@@ -518,6 +529,7 @@ def test_subdomain_forward_strips_session_cookie_when_only_session_cookie_presen
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     agent_id = AgentId()
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     resolver.update_services(agent_id, {"system_interface": "http://stub-backend"})
     tunnel_manager = SSHTunnelManager()
     envelope_writer = EnvelopeWriter(output=io.StringIO())
@@ -540,7 +552,7 @@ def test_subdomain_forward_strips_session_cookie_when_only_session_cookie_presen
 
     mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture), follow_redirects=False)
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/whatever",
@@ -594,6 +606,7 @@ def test_subdomain_forward_routes_loopback_without_tunnel_to_recovery(
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     agent_id = AgentId()
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     resolver.update_services(agent_id, {"system_interface": loopback_url})
     tunnel_manager = SSHTunnelManager()
     envelope_output = io.StringIO()
@@ -617,7 +630,7 @@ def test_subdomain_forward_routes_loopback_without_tunnel_to_recovery(
 
     mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture), follow_redirects=False)
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/whatever",
@@ -645,6 +658,7 @@ def test_subdomain_forward_allows_loopback_fallback_when_opted_in(tmp_path: Path
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     agent_id = AgentId()
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     resolver.update_services(agent_id, {"system_interface": "http://127.0.0.1:8000"})
     tunnel_manager = SSHTunnelManager()
     envelope_writer = EnvelopeWriter(output=io.StringIO())
@@ -668,7 +682,7 @@ def test_subdomain_forward_allows_loopback_fallback_when_opted_in(tmp_path: Path
 
     mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture), follow_redirects=False)
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/whatever",
@@ -686,6 +700,7 @@ def test_subdomain_forward_returns_retry_page_on_backend_connect_error(tmp_path:
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     agent_id = AgentId()
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     # Non-loopback URL so we don't trip the loopback-refusal path; the
     # retry-page behaviour is independent of that check.
     resolver.update_services(agent_id, {"system_interface": "http://stub-backend"})
@@ -708,7 +723,7 @@ def test_subdomain_forward_returns_retry_page_on_backend_connect_error(tmp_path:
 
     mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_refuse), follow_redirects=False)
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         html_response = client.get(
             "/",
@@ -752,6 +767,7 @@ def _make_forward_app_with_capture(
     auth_store = FileAuthStore(data_directory=tmp_path)
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     resolver.update_services(agent_id, {"system_interface": "http://stub-backend"})
     tunnel_manager = SSHTunnelManager()
     envelope_output = io.StringIO()
@@ -793,7 +809,7 @@ def test_subdomain_forward_emits_system_interface_backend_failure_on_5xx(tmp_pat
         backend_status=503,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/state",
@@ -828,7 +844,7 @@ def test_subdomain_forward_does_not_emit_failure_on_2xx(tmp_path: Path) -> None:
         backend_status=200,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/state",
@@ -859,7 +875,7 @@ def test_subdomain_forward_emits_error_response_on_404(tmp_path: Path) -> None:
         backend_status=404,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/agents/agent-deadbeef/screen",
@@ -896,7 +912,7 @@ def test_subdomain_forward_emits_error_response_regardless_of_method(tmp_path: P
         backend_status=404,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.post(
             "/api/agents/agent-deadbeef/message",
@@ -933,7 +949,7 @@ def test_subdomain_forward_emits_error_response_on_application_500(tmp_path: Pat
         backend_status=500,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/state",
@@ -973,7 +989,7 @@ def test_subdomain_forward_emits_system_interface_backend_failure_on_sse_startup
         raise_error=httpx.RemoteProtocolError,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/events",
@@ -1007,7 +1023,7 @@ def test_subdomain_forward_returns_plain_503_for_non_html_on_connect_failure(tmp
         raise_error=httpx.ConnectError,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/state",
@@ -1041,7 +1057,7 @@ def test_subdomain_forward_emits_system_interface_backend_failure_on_sse_startup
         raise_error=httpx.ConnectTimeout,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/events",
@@ -1081,7 +1097,7 @@ def test_subdomain_forward_emits_system_interface_backend_failure_on_non_sse_tim
         raise_error=httpx.ConnectTimeout,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         app.state.http_client = mock_client
         response = client.get(
             "/api/state",
@@ -1125,6 +1141,7 @@ def test_subdomain_forward_emits_failure_on_ssh_tunnel_setup_error(tmp_path: Pat
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     agent_id = AgentId()
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     # Non-loopback URL + ssh_info so the handler takes the SSH-tunnel path.
     resolver.update_services(agent_id, {"system_interface": "http://stub-backend:8000"})
     resolver.update_ssh_info(
@@ -1143,7 +1160,7 @@ def test_subdomain_forward_emits_failure_on_ssh_tunnel_setup_error(tmp_path: Pat
         preauth_cookie_value=preauth,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421", follow_redirects=False) as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         html_response = client.get(
             "/",
             headers={
@@ -1186,6 +1203,7 @@ def test_subdomain_forward_websocket_emits_failure_on_ssh_tunnel_setup_error(tmp
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
     agent_id = AgentId()
     resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
     # Non-loopback URL + ssh_info so the handler takes the SSH-tunnel path,
     # where the failing tunnel manager raises during tunnel setup.
     resolver.update_services(agent_id, {"system_interface": "http://stub-backend:8000"})
@@ -1205,7 +1223,7 @@ def test_subdomain_forward_websocket_emits_failure_on_ssh_tunnel_setup_error(tmp
         preauth_cookie_value=preauth,
     )
 
-    with TestClient(app, base_url=f"http://{agent_id}.localhost:18421") as client:
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421") as client:
         # ``websocket_connect`` ignores ``base_url`` and builds the URL against
         # ``ws://testserver``, so the agent subdomain must be in the URL itself
         # for the handler to route on the right host header. The handler closes
@@ -1213,7 +1231,7 @@ def test_subdomain_forward_websocket_emits_failure_on_ssh_tunnel_setup_error(tmp
         # WebSocketDisconnect on connect.
         with pytest.raises(WebSocketDisconnect):
             with client.websocket_connect(
-                f"ws://{agent_id}.localhost:18421/api/ws",
+                f"ws://{_TEST_HOST_ID}.localhost:18421/api/ws",
                 headers={"cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}"},
             ):
                 pass
@@ -1228,6 +1246,186 @@ def test_subdomain_forward_websocket_emits_failure_on_ssh_tunnel_setup_error(tmp
     payload = envelope["payload"]
     assert payload["type"] == "system_interface_backend_failure"
     assert payload["reason"] == "CONNECT_ERROR"
+
+
+def test_service_origin_routes_to_named_service_backend(tmp_path: Path) -> None:
+    """A ``<service>.host-<hex>.localhost`` origin forwards to that service's registered URL."""
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    agent_id = AgentId()
+    resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
+    resolver.update_services(
+        agent_id,
+        {"system_interface": "http://stub-shell", "terminal": "http://stub-terminal"},
+    )
+    tunnel_manager = SSHTunnelManager()
+    envelope_writer = EnvelopeWriter(output=io.StringIO())
+    preauth = "preauth-service-origin"
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=tunnel_manager,
+        envelope_writer=envelope_writer,
+        listen_host="127.0.0.1",
+        listen_port=18421,
+        preauth_cookie_value=preauth,
+    )
+
+    captured: list[httpx.Request] = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, content=b"ok")
+
+    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture), follow_redirects=False)
+
+    with TestClient(
+        app, base_url=f"http://terminal.{_TEST_HOST_ID}.localhost:18421", follow_redirects=False
+    ) as client:
+        app.state.http_client = mock_client
+        response = client.get(
+            "/ws-info",
+            headers={"cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}"},
+        )
+
+    assert response.status_code == 200
+    assert len(captured) == 1
+    assert str(captured[0].url).startswith("http://stub-terminal/")
+
+
+def test_deep_service_origin_routes_to_owning_service(tmp_path: Path) -> None:
+    """Deeper labels (``sub.svc.host-<hex>.localhost``) route to the same service."""
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    agent_id = AgentId()
+    resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
+    resolver.update_services(agent_id, {"svc": "http://stub-svc"})
+    tunnel_manager = SSHTunnelManager()
+    envelope_writer = EnvelopeWriter(output=io.StringIO())
+    preauth = "preauth-deep-origin"
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=tunnel_manager,
+        envelope_writer=envelope_writer,
+        listen_host="127.0.0.1",
+        listen_port=18421,
+        preauth_cookie_value=preauth,
+    )
+
+    captured: list[httpx.Request] = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, content=b"ok")
+
+    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture), follow_redirects=False)
+
+    with TestClient(
+        app, base_url=f"http://deep.svc.{_TEST_HOST_ID}.localhost:18421", follow_redirects=False
+    ) as client:
+        app.state.http_client = mock_client
+        response = client.get(
+            "/asset.js",
+            headers={"cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}"},
+        )
+
+    assert response.status_code == 200
+    assert len(captured) == 1
+    assert str(captured[0].url).startswith("http://stub-svc/")
+
+
+def test_service_origin_unregistered_service_serves_loading_page(tmp_path: Path) -> None:
+    """An unknown-but-plausible service label serves the auto-retrying loader, not a 404."""
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    agent_id = AgentId()
+    resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
+    resolver.update_services(agent_id, {"system_interface": "http://stub-shell"})
+    tunnel_manager = SSHTunnelManager()
+    envelope_writer = EnvelopeWriter(output=io.StringIO())
+    preauth = "preauth-unregistered"
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=tunnel_manager,
+        envelope_writer=envelope_writer,
+        listen_host="127.0.0.1",
+        listen_port=18421,
+        preauth_cookie_value=preauth,
+    )
+
+    with TestClient(app, base_url=f"http://notyet.{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
+        response = client.get(
+            "/",
+            headers={
+                "cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}",
+                "accept": "text/html",
+            },
+        )
+
+    assert response.status_code == 503
+    assert "Loading workspace" in response.text
+
+
+def test_goto_with_service_param_redirects_to_service_origin(
+    app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
+) -> None:
+    """The /goto/ bridge carries the service label chain so the bounce lands on the exact origin."""
+    client, store, _resolver = app_setup
+    cookie = create_session_cookie(store.get_signing_key())
+    valid_host_id = "host-" + "0" * 31 + "a"
+    response = client.get(
+        f"/goto/{valid_host_id}/?service=deep.svc&next=/panel",
+        cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie},
+    )
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith(f"http://deep.svc.{valid_host_id}.localhost:18421/_subdomain_auth?token=")
+    assert "next=%2Fpanel" in location
+
+
+def test_goto_rejects_invalid_service_labels(
+    app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
+) -> None:
+    """Crafted ``service`` values that are not valid labels must 404, not redirect."""
+    client, store, _resolver = app_setup
+    cookie = create_session_cookie(store.get_signing_key())
+    valid_host_id = "host-" + "0" * 31 + "a"
+    response = client.get(
+        f"/goto/{valid_host_id}/?service=EVIL",
+        cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie},
+    )
+    assert response.status_code == 404
+
+
+def test_subdomain_auth_bridge_sets_workspace_domain_cookie(tmp_path: Path) -> None:
+    """The bridge cookie is domain-scoped so one hop covers the shell and every service origin."""
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    tunnel_manager = SSHTunnelManager()
+    envelope_writer = EnvelopeWriter(output=io.StringIO())
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=tunnel_manager,
+        envelope_writer=envelope_writer,
+        listen_host="127.0.0.1",
+        listen_port=18421,
+    )
+    valid_host_id = "host-" + "0" * 31 + "a"
+    token = create_subdomain_auth_token(signing_key=auth_store.get_signing_key(), workspace_host_id=valid_host_id)
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.get(
+            f"/_subdomain_auth?token={token}&next=/",
+            headers={"host": f"svc.{valid_host_id}.localhost:18421"},
+        )
+    assert response.status_code == 302
+    set_cookie = response.headers["set-cookie"].lower()
+    assert f"domain={valid_host_id}.localhost" in set_cookie
 
 
 def test_select_ws_receive_payload_selects_by_value_not_key() -> None:

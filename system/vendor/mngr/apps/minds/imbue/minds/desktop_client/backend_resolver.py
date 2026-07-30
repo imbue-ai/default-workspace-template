@@ -126,6 +126,25 @@ class BackendResolverInterface(MutableModel, ABC):
         """
         return self.list_known_workspace_ids()
 
+    def list_restorable_workspace_host_ids(self) -> tuple[str, ...]:
+        """Host coordinates (``host-<hex>``) of the restorable workspaces.
+
+        Workspace content URLs -- and therefore the window URLs Electron
+        persists (``/goto/<host-id>/``) -- are keyed by host id, while
+        :meth:`list_restorable_workspace_ids` stays agent-keyed. The restore
+        filter needs both coordinates to recognize a persisted window.
+
+        Default: the display-info host ids of the restorable agents. Only
+        real ``host-`` coordinates are returned -- placeholder host ids (e.g.
+        the interface default's ``localhost``) are not URL coordinates.
+        """
+        host_ids: set[str] = set()
+        for agent_id in self.list_restorable_workspace_ids():
+            display_info = self.get_agent_display_info(agent_id)
+            if display_info is not None and display_info.host_id.startswith("host-"):
+                host_ids.add(display_info.host_id)
+        return tuple(sorted(host_ids))
+
     def get_host_state(self, host_id: HostId) -> HostState | None:
         """Return the last-known lifecycle state of a host, or None if unknown.
 
@@ -1136,6 +1155,28 @@ class MngrCliBackendResolver(BackendResolverInterface):
                     if str(record.agent_name) == SYSTEM_SERVICES_AGENT_NAME:
                         ids.add(record.agent_id)
             return tuple(ids)
+
+    def list_restorable_workspace_host_ids(self) -> tuple[str, ...]:
+        """Host coordinates of the restorable workspaces (see :meth:`list_restorable_workspace_ids`).
+
+        Mirrors that method's union exactly, in host coordinates: the hosts of
+        live ``is_primary`` agents that are not observed DESTROYED, plus the
+        last-good topology's hosts whose records include the system-services
+        agent. Persisted window URLs are host-keyed (``/goto/<host-id>/``), so
+        the restore filter needs this set alongside the agent-keyed one.
+        """
+        with self._lock:
+            host_state_by_host_id = self._agents_result.host_state_by_host_id
+            host_ids: set[str] = {
+                str(agent.host_id)
+                for agent in self._agents_result.discovered_agents
+                if "is_primary" in agent.labels
+                and host_state_by_host_id.get(str(agent.host_id)) is not HostState.DESTROYED
+            }
+            for host_id_str, records in self._last_good_agents_by_host.items():
+                if any(str(record.agent_name) == SYSTEM_SERVICES_AGENT_NAME for record in records):
+                    host_ids.add(host_id_str)
+            return tuple(sorted(host_ids))
 
     def get_host_state(self, host_id: HostId) -> HostState | None:
         """Return the host's lifecycle state, preferring a fresh optimistic override.

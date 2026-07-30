@@ -105,6 +105,7 @@ addopts = [
   "--cov=imbue.slack_exporter",
   "--cov=imbue.remote_service_connector",
   "--cov=imbue.apt_mirror",
+  "--cov=imbue.share_relay",
   "--cov=imbue.concurrency_group",
   "--cov=imbue.modal_proxy",
   "--cov=imbue.mngr_wait",

@@ -106,6 +106,10 @@
         ? 'is-remote text-secondary opacity-60 cursor-default'
         : ('cursor-pointer text-primary' + (isCurrent ? ' is-current bg-fill-active' : ' hover:bg-fill-hover')));
     row.setAttribute('data-agent-id', workspace.id);
+    // Workspace content URLs (/goto/<host-id>/) are keyed by host id; rows
+    // carry both coordinates so click handlers can navigate by host id while
+    // record-keyed actions (context menu, destroy) keep the agent id.
+    if (workspace.host_id) row.setAttribute('data-host-id', workspace.host_id);
     if (createAttemptState) row.setAttribute('data-create-attempt-state', createAttemptState);
 
     var dot = document.createElement('span');

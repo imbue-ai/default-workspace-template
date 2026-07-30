@@ -38,7 +38,6 @@ from imbue.minds.desktop_client.templates import render_login_page
 from imbue.minds.desktop_client.templates import render_login_redirect_page
 from imbue.minds.desktop_client.templates import render_overlay_host_page
 from imbue.minds.desktop_client.templates import render_recovery_page
-from imbue.minds.desktop_client.templates import render_sharing_editor
 from imbue.minds.desktop_client.templates import render_sidebar_page
 from imbue.minds.desktop_client.templates import render_workspace_backup_history
 from imbue.minds.desktop_client.templates import render_workspace_options_modal_page
@@ -281,20 +280,6 @@ def test_render_workspace_settings_pill_not_selected_for_palette_color() -> None
     )
     assert 'aria-checked="true"' in html
     assert "is-selected" not in html
-
-
-def test_render_sharing_editor_workspace_link_interpolates_agent_id() -> None:
-    # Regression: the workspace <Link href="...{{ }}..."> must interpolate
-    # (component quoted-attribute interpolation does not happen in JinjaX).
-    html = render_sharing_editor(
-        agent_id=str(_AGENT_A),
-        service_name="svc",
-        title="Share",
-        mngr_forward_origin="http://localhost:8421",
-        ws_name="ws",
-    )
-    assert f"/goto/{_AGENT_A}/" in html
-    assert "{{" not in html
 
 
 def test_render_landing_page_with_no_agents_shows_empty_state() -> None:
@@ -3511,7 +3496,7 @@ def test_unlinking_an_account_is_confirmed_first() -> None:
     assert 'id="unlink-cancel-btn"' in html
     assert 'id="unlink-confirm-btn"' in html
     # The dialog names the consequence, not just the action.
-    assert "removes all sharing" in html
+    assert "stops all sharing" in html
 
 
 def test_workspace_options_modal_passes_the_accent_to_the_tab_strip() -> None:
@@ -3622,16 +3607,31 @@ def test_workspace_options_settings_groups_use_the_designed_icons() -> None:
 
 
 def test_workspace_share_targets_exclude_the_workspaces_own_interfaces() -> None:
-    # Chat / terminal / browser / web are what the workspace is made of, not
-    # apps to hand out one at a time; the whole machine is the deliberate way
-    # to grant everything. Real apps beside them still appear.
+    # Chat / terminal / browser are what the workspace is made of, not apps to
+    # hand out one at a time; the whole machine is the deliberate way to grant
+    # everything. Real apps beside them still appear -- including one named
+    # "web", which is an ordinary user service and gets no special-casing.
     html = _options_modal(
         tab="share",
         servers=("terminal", "browser", "chat", "web", "newsreader", "system_interface"),
     )
     assert 'data-share-target="newsreader"' in html
+    assert 'data-share-target="web"' in html
     assert 'data-share-target="system_interface"' in html
-    for excluded in ("terminal", "browser", "chat", "web"):
+    for excluded in ("terminal", "browser", "chat"):
+        assert f'data-share-target="{excluded}"' not in html
+
+
+def test_workspace_share_targets_exclude_names_that_cannot_be_a_hostname_label() -> None:
+    # A per-app share link is a real origin (<name>.<machine domain>), so a
+    # name that cannot be a hostname label has no origin to hand out; the
+    # reserved coordinate prefixes would collide with the host label itself.
+    html = _options_modal(
+        tab="share",
+        servers=("my_tool", "Mixed-Case", "host-0123abcd", "agent-0123abcd", "good-app", "system_interface"),
+    )
+    assert 'data-share-target="good-app"' in html
+    for excluded in ("my_tool", "Mixed-Case", "host-0123abcd", "agent-0123abcd"):
         assert f'data-share-target="{excluded}"' not in html
 
 
@@ -3741,13 +3741,6 @@ def test_every_surface_rendering_associate_loads_its_script() -> None:
             agent_id=str(_AGENT_A),
             ws_name="ws",
             current_account=None,
-            accounts=(account,),
-        ),
-        render_sharing_editor(
-            agent_id=str(_AGENT_A),
-            service_name="frontend",
-            title="Share",
-            has_account=False,
             accounts=(account,),
         ),
     ]

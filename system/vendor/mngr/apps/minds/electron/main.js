@@ -253,13 +253,46 @@ function workspaceUrlForAgent(agentId) {
   if (!agentId) return null;
   const origin = mngrForwardBaseUrl || backendBaseUrl;
   if (!origin) return null;
-  return `${origin}/goto/${encodeURIComponent(agentId)}/`;
+  // The plugin's /goto/ route is host-keyed; agent-keyed callers (legacy
+  // persisted entries, record-keyed surfaces) are translated when the alias
+  // is known.
+  return `${origin}/goto/${encodeURIComponent(toHostScopedWorkspaceId(agentId))}/`;
 }
 
-function findBundleForWorkspace(agentId) {
-  if (!agentId) return null;
+// Coordinate aliases from the SSE ``workspaces`` payload: content URLs (and
+// therefore ``bundle.currentWorkspaceId``) are HOST-keyed while minds records
+// and SSE events stay AGENT-keyed. ``sameWorkspaceId`` compares two ids in
+// either coordinate.
+const workspaceHostIdByAgentId = new Map();
+const workspaceAgentIdByHostId = new Map();
+function sameWorkspaceId(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return workspaceHostIdByAgentId.get(a) === b || workspaceAgentIdByHostId.get(a) === b;
+}
+
+// Content URLs (and the plugin's /goto/ route) are host-keyed; translate an
+// agent-keyed id when the alias is known, else pass the id through.
+function toHostScopedWorkspaceId(workspaceId) {
+  if (!workspaceId) return workspaceId;
+  return workspaceHostIdByAgentId.get(workspaceId) || workspaceId;
+}
+
+// Refresh the agent<->host alias maps from a workspaces payload row set
+// (the initial chrome state at startup, and every SSE ``workspaces`` tick).
+function updateWorkspaceAliasMaps(workspaces) {
+  for (const w of workspaces) {
+    if (w && w.id && w.host_id) {
+      workspaceHostIdByAgentId.set(String(w.id), String(w.host_id));
+      workspaceAgentIdByHostId.set(String(w.host_id), String(w.id));
+    }
+  }
+}
+
+function findBundleForWorkspace(workspaceId) {
+  if (!workspaceId) return null;
   for (const b of bundles) {
-    if (!b.window.isDestroyed() && b.currentWorkspaceId === agentId) return b;
+    if (!b.window.isDestroyed() && sameWorkspaceId(b.currentWorkspaceId, workspaceId)) return b;
   }
   return null;
 }
@@ -272,10 +305,10 @@ function findBundleForWorkspace(agentId) {
 // One window owns a workspace's whole scope: opening the workspace while its
 // settings are open elsewhere (or vice versa) routes to that window instead of
 // splitting the scope across two windows.
-function findBundleForWorkspaceScope(agentId) {
-  if (!agentId) return null;
+function findBundleForWorkspaceScope(workspaceId) {
+  if (!workspaceId) return null;
   for (const b of bundles) {
-    if (!b.window.isDestroyed() && b.currentAccentAgentId === agentId) return b;
+    if (!b.window.isDestroyed() && sameWorkspaceId(b.currentAccentAgentId, workspaceId)) return b;
   }
   return null;
 }
@@ -396,11 +429,11 @@ function updateAllOsTitles() {
 // shutdown). Shared by the workspace-destroyed handler and the landing-page
 // Stop handler. (At most one window exists per workspace, so this affects at
 // most one window in practice.)
-function detachWindowsForWorkspace(agentId) {
-  if (!agentId) return;
+function detachWindowsForWorkspace(workspaceId) {
+  if (!workspaceId) return;
   const affected = [];
   for (const b of bundles) {
-    if (!b.window.isDestroyed() && b.currentWorkspaceId === agentId) {
+    if (!b.window.isDestroyed() && sameWorkspaceId(b.currentWorkspaceId, workspaceId)) {
       affected.push(b);
     }
   }
@@ -1487,11 +1520,11 @@ function hideBundleContentView(bundle) {
 // Whether the bundle's content view currently HOLDS ``agentId``'s page
 // (committed on its subdomain / auth bridge), visible or hidden. The hidden
 // case is the parked-workspace state navigateBundle reveals without a reload.
-function contentViewHoldsWorkspace(bundle, agentId) {
-  if (!bundle || !agentId) return false;
+function contentViewHoldsWorkspace(bundle, workspaceId) {
+  if (!bundle || !workspaceId) return false;
   const view = bundle.contentView;
   if (!view || view.webContents.isDestroyed()) return false;
-  return parseWorkspaceId(view.webContents.getURL()) === agentId;
+  return sameWorkspaceId(parseWorkspaceId(view.webContents.getURL()), workspaceId);
 }
 
 // Whether the chrome view currently hosts a live backend-served shell document
@@ -1893,7 +1926,6 @@ function overlayIdForUrl(url) {
   if (pathname === '/settings/ai-keys') return 'ai-keys';
   if (pathname === '/accounts/modal') return 'accounts';
   if (/^\/accounts\/[A-Za-z0-9._-]+\/plan-modal$/.test(pathname)) return 'account-plan';
-  if (/^\/sharing\/agent-[a-f0-9]+\/[^/]+\/modal$/i.test(pathname)) return 'sharing';
   if (/^\/workspace\/agent-[a-f0-9]+\/options\/modal$/i.test(pathname)) return 'ws-options';
   return null;
 }
@@ -2260,21 +2292,10 @@ function openAccountPlanModal(bundle, userId) {
   openModal(bundle, backendBaseUrl + '/accounts/' + userId + '/plan-modal');
 }
 
-// Open the sharing editor as a centered modal in the shared overlay. Both ids
-// are validated to conservative server-issued shapes (mirroring the content
-// relay's allowlist; never trust the renderer) before being packed into the
-// /sharing/<agent>/<service>/modal URL.
-function openSharingModal(bundle, agentId, serviceName) {
-  if (!bundle || bundle.window.isDestroyed() || !backendBaseUrl) return;
-  if (typeof agentId !== 'string' || !/^agent-[a-f0-9]{1,64}$/i.test(agentId)) return;
-  if (typeof serviceName !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(serviceName)) return;
-  openModal(bundle, backendBaseUrl + '/sharing/' + agentId + '/' + serviceName + '/modal');
-}
-
 // URL for the workspace options panel -- the tabbed Share / Settings overlay
 // docked under the titlebar, hosted on the shared warm overlay surface like
-// every other modal. The agent id is validated to the same server-issued shape
-// openSharingModal enforces (never trust the renderer), and ``tab`` to the two
+// every other modal. The agent id is validated to a conservative server-issued
+// shape (never trust the renderer), and ``tab`` to the two
 // tabs the panel actually has; anything else falls back to 'share' rather than
 // forwarding renderer text into the URL.
 //
@@ -2771,7 +2792,9 @@ function toRelativeBackendUrl(url) {
 function parseRecoveryPageAgentId(url) {
   if (!url) return null;
   try {
-    const match = new URL(url).pathname.match(/^\/agents\/(agent-[a-f0-9]+)\/recovery(?:\/|$)/i);
+    // Recovery accepts either workspace coordinate: minds' own screens link
+    // it agent-keyed, while the content-URL-derived redirect passes host ids.
+    const match = new URL(url).pathname.match(/^\/agents\/((?:agent|host)-[a-f0-9]+)\/recovery(?:\/|$)/i);
     return match ? match[1] : null;
   } catch {
     return null;
@@ -2794,8 +2817,11 @@ function parseRecoveryPageAgentId(url) {
 // re-enters recovery through the normal unhealthy-redirect with fresh
 // parameters if it is still down. Everything else persists as home ("/").
 function toPersistedContentUrl(url) {
-  const agentId = parseWorkspaceId(url) || parseRecoveryPageAgentId(url);
-  if (agentId) return `/goto/${encodeURIComponent(agentId)}/`;
+  const workspaceId = parseWorkspaceId(url) || parseRecoveryPageAgentId(url);
+  // Persist host-keyed: content URLs already are, but a recovery URL reached
+  // from a minds screen carries the agent coordinate. The alias maps are
+  // populated while the app runs, so translation at persist time is reliable.
+  if (workspaceId) return `/goto/${encodeURIComponent(toHostScopedWorkspaceId(workspaceId))}/`;
   // Anything that is not a workspace persists as the workspace-list home
   // page. Restoring an arbitrary page verbatim can strand the user on a
   // context-free dead end at next launch (e.g. a Method Not Allowed page
@@ -2805,11 +2831,27 @@ function toPersistedContentUrl(url) {
   return toRelativeBackendUrl(url) ? '/' : null;
 }
 
+// Persisted state written by pre-service-per-origin builds is agent-keyed
+// (``/goto/<agent-id>/``); ``parseWorkspaceId`` no longer matches that shape.
+// The restore helpers recognize it so those windows migrate (translated to
+// the host coordinate by ``workspaceUrlForAgent``) instead of restoring to a
+// dead URL the plugin 404s.
+function parseLegacyGotoAgentId(url) {
+  if (!url) return null;
+  try {
+    const match = new URL(url).pathname.match(/^\/goto\/(agent-[a-f0-9]+)(?:\/|$)/i);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
 // Inverse of ``toPersistedContentUrl``: turn a persisted entry's ``url`` back
-// into a loadable absolute URL. Workspace entries (``/goto/<agent>/``) are
-// rebuilt through ``workspaceUrlForAgent`` so the bridge targets the CURRENT
-// run's mngr_forward origin; other entries resolve against the minds backend.
-// A persisted recovery-page URL (written by a build that predates the
+// into a loadable absolute URL. Workspace entries (``/goto/<workspace-id>/``)
+// are rebuilt through ``workspaceUrlForAgent`` so the bridge targets the
+// CURRENT run's mngr_forward origin (and legacy agent-keyed entries are
+// translated to the host coordinate); other entries resolve against the minds
+// backend. A persisted recovery-page URL (written by a build that predates the
 // recovery-aware ``toPersistedContentUrl``) is restored as its workspace too,
 // so its embedded stale-origin ``return_to`` is never navigated to.
 // Persisted urls are backend-relative, so resolve to absolute BEFORE parsing
@@ -2817,9 +2859,10 @@ function toPersistedContentUrl(url) {
 // (yielding null) on a bare relative path.
 function toRestoredContentUrl(entry) {
   const absolute = toAbsoluteUrl(entry.url);
-  const agentId = parseWorkspaceId(absolute) || parseRecoveryPageAgentId(absolute);
-  if (agentId) {
-    const workspaceUrl = workspaceUrlForAgent(agentId);
+  const workspaceId =
+    parseWorkspaceId(absolute) || parseRecoveryPageAgentId(absolute) || parseLegacyGotoAgentId(absolute);
+  if (workspaceId) {
+    const workspaceUrl = workspaceUrlForAgent(workspaceId);
     if (workspaceUrl) return workspaceUrl;
   }
   return absolute;
@@ -2916,15 +2959,19 @@ function filterRestorableUrls(state, knownAgentIdsSet) {
     // names its workspace too; ``toRestoredContentUrl`` restores it AS that
     // workspace, so it must be dead-workspace-filtered like the workspace.
     const absolute = toAbsoluteUrl(entry.url);
-    const agentId = parseWorkspaceId(absolute) || parseRecoveryPageAgentId(absolute);
-    // A workspace window can only be restored if its agent is known to exist
-    // (live workspaces UNION the persisted last-good topology). Drop workspace
-    // entries whose agent isn't in that set -- and, when the set is null
-    // (NOTHING is known: empty live AND empty last-good), drop every workspace
-    // entry, because restoring a workspace URL against an unknown topology can
-    // only render the workspace-recovery "unresponsive" page. Non-workspace
-    // screens (home, settings, ...) carry no agent id and always pass through.
-    if (agentId && (!knownAgentIdsSet || !knownAgentIdsSet.has(agentId))) {
+    const workspaceId =
+      parseWorkspaceId(absolute) || parseRecoveryPageAgentId(absolute) || parseLegacyGotoAgentId(absolute);
+    // A workspace window can only be restored if its workspace is known to
+    // exist (live workspaces UNION the persisted last-good topology; the set
+    // carries both coordinates, matching the host-keyed id parsed from a
+    // persisted content URL as well as an agent-keyed recovery or legacy
+    // entry). Drop entries whose workspace isn't in that set -- and, when the
+    // set is null (NOTHING is known: empty live AND empty last-good), drop
+    // every workspace entry, because restoring a workspace URL against an
+    // unknown topology can only render the workspace-recovery "unresponsive"
+    // page. Non-workspace screens (home, settings, ...) carry no workspace id
+    // and always pass through.
+    if (workspaceId && (!knownAgentIdsSet || !knownAgentIdsSet.has(workspaceId))) {
       continue; // workspace no longer exists (or none are known), skip silently
     }
     results.push(entry);
@@ -2987,6 +3034,9 @@ function handleChromeSSEEvent(evt) {
       name: w.name ? String(w.name) : '',
       account: w.account ? String(w.account) : '',
     }));
+    // Refresh the agent<->host alias maps that let ``sameWorkspaceId`` match
+    // host-keyed content URLs against agent-keyed records and events.
+    updateWorkspaceAliasMaps(evt.workspaces);
     const newIds = new Set(workspaceList.map((w) => w.id));
     // Anything currently in destroying state stays in the ever-seen set so
     // we can recognize it as a real destroy once it later disappears from
@@ -3016,7 +3066,7 @@ function handleChromeSSEEvent(evt) {
       // doesn't auto-navigate.
       for (const b of bundles) {
         if (b.window.isDestroyed()) continue;
-        if (b.currentAccentAgentId === oldId) {
+        if (sameWorkspaceId(b.currentAccentAgentId, oldId)) {
           updateBundleAccentAgentId(b, null);
         }
       }
@@ -3701,8 +3751,10 @@ function fetchInitialChromeState(timeoutMs = 25000) {
   // We resolve on the first snapshot even though discovery may still be mid-sweep
   // (providers enumerate at different speeds): window restore filters against
   // ``restorableWorkspaceIds`` -- the live workspaces UNION the persisted last-good
-  // topology -- so a workspace that hasn't been re-discovered yet is still kept,
-  // and a window is never dropped just because the snapshot is partial.
+  // topology, carrying BOTH coordinates of each workspace (agent ids and host
+  // ids; persisted window URLs are host-keyed) -- so a workspace that hasn't
+  // been re-discovered yet is still kept, and a window is never dropped just
+  // because the snapshot is partial.
   //
   // The timeout only fires when NO snapshot arrives at all. It must comfortably
   // exceed the connect-time snapshot's slowest blocking step: the backend computes
@@ -4208,10 +4260,18 @@ async function startBackendWithRetry() {
           name: w.name ? String(w.name) : '',
           account: w.account ? String(w.account) : '',
         }));
+        // Seed the agent<->host alias maps before restore runs: legacy
+        // agent-keyed persisted entries are translated to host-keyed /goto/
+        // URLs through ``workspaceUrlForAgent``, and early ``sameWorkspaceId``
+        // checks fire before the chrome view's SSE relay starts feeding
+        // updates.
+        updateWorkspaceAliasMaps(chromeState.workspaces);
       }
 
       // Filter restored windows against the backend's *restorable* workspace ids
-      // -- live workspaces UNION the persisted last-good topology -- rather than
+      // -- live workspaces UNION the persisted last-good topology, in BOTH
+      // coordinates (agent ids and host ids: persisted window URLs are
+      // host-keyed while older persisted state is agent-keyed) -- rather than
       // the live list alone. The last-good entries keep a window whose workspace
       // exists but a slow provider hasn't re-listed yet this session (e.g. local
       // docker lagging the cloud provider on cold start); absence from an
@@ -4696,14 +4756,6 @@ ipcMain.on('open-account-plan', (event, userId) => {
   if (sender) openAccountPlanModal(sender, userId);
 });
 
-// Open the sharing-editor modal. The workspace-settings page -- a trusted local
-// page on the chrome surface -- calls this via window.minds; openSharingModal
-// re-validates both ids (never trust the renderer).
-ipcMain.on('open-sharing-modal', (event, agentId, serviceName) => {
-  const sender = getBundleFromEvent(event);
-  if (sender) openSharingModal(sender, agentId, serviceName);
-});
-
 // Open the tabbed workspace options panel (Share / Settings) as an overlay
 // modal. The titlebar's icon-tab strip -- a trusted chrome-surface page calling
 // window.minds -- sends the agent id, the tab to lead with, and the strip's own
@@ -4921,7 +4973,9 @@ ipcMain.handle('show-file-picker', async (event, options) => {
 ipcMain.on('show-workspace-context-menu', (event, agentId, x, y) => {
   const bundle = getBundleFromEvent(event);
   if (!bundle || !agentId) return;
-  const isCurrent = bundle.currentWorkspaceId === agentId;
+  const isCurrent = sameWorkspaceId(bundle.currentWorkspaceId, agentId);
+  // ``workspaceUrlForAgent`` translates the agent-keyed sender id to the
+  // host coordinate the /goto/ route needs.
   const workspaceUrl = workspaceUrlForAgent(agentId);
   const template = [];
   // Don't offer "Open in new window" if the sender's window is already on this workspace.
@@ -5006,7 +5060,7 @@ ipcMain.on('close-workspace-windows', (_event, agentId) => {
   if (!agentId) return;
   for (const b of bundles) {
     if (b.window.isDestroyed()) continue;
-    if (b.currentWorkspaceId === agentId) {
+    if (sameWorkspaceId(b.currentWorkspaceId, agentId)) {
       b.window.close();
     }
   }

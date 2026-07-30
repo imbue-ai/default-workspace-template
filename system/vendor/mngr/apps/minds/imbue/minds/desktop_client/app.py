@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Collection
+from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -14,6 +15,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
+from urllib.parse import quote
 from urllib.parse import urlparse
 
 import httpx
@@ -111,7 +113,7 @@ from imbue.minds.desktop_client.responses import make_streaming_response
 from imbue.minds.desktop_client.responses import safe_local_redirect_path
 from imbue.minds.desktop_client.session_store import AccountSession
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
-from imbue.minds.desktop_client.sharing_handler import delete_tunnel_for_agent
+from imbue.minds.desktop_client.sharing_handler import delete_share_for_host
 from imbue.minds.desktop_client.state import DesktopClientState
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.state import set_state
@@ -152,8 +154,6 @@ from imbue.minds.desktop_client.templates import render_recovery_page
 from imbue.minds.desktop_client.templates import render_request_error_page
 from imbue.minds.desktop_client.templates import render_settings_modal_page
 from imbue.minds.desktop_client.templates import render_settings_page
-from imbue.minds.desktop_client.templates import render_sharing_editor
-from imbue.minds.desktop_client.templates import render_sharing_modal_page
 from imbue.minds.desktop_client.templates import render_sidebar_page
 from imbue.minds.desktop_client.templates import render_welcome_page
 from imbue.minds.desktop_client.templates import render_workspace_backup_history
@@ -716,7 +716,15 @@ def _handle_help_page() -> Response:
     ``/assist`` chat; the titlebar only sets it when the displayed workspace is healthy, so the
     agent-help option stays disabled on a loading/stuck workspace (whose chat couldn't be reached).
     """
-    workspace_agent_id = request.args.get("workspace", "")
+    # The titlebar passes the displayed workspace's URL coordinate, which is
+    # host-keyed; normalize to the agent id minds' records (and the /assist
+    # spawn) are keyed by. An unresolvable coordinate degrades to unscoped.
+    raw_workspace_id = request.args.get("workspace", "")
+    state = get_state()
+    resolved_workspace_agent_id = _resolve_workspace_coordinate_to_agent_id(
+        raw_workspace_id, state.backend_resolver, _iter_workspace_records(state)
+    )
+    workspace_agent_id = str(resolved_workspace_agent_id) if resolved_workspace_agent_id is not None else ""
     assist_available = request.args.get("assist") == "1"
     description = request.args.get("description", "")
     # An in-workspace agent's escalation opens this modal via the open_help flow with
@@ -1368,6 +1376,7 @@ def _handle_inspiration_create_page() -> Response:
         workspace_rows.append(
             InspirationWorkspaceRow(
                 agent_id=str(aid),
+                host_id=str(info.host_id) if info is not None else "",
                 name=name,
                 accent=_resolved_workspace_color(backend_resolver, aid),
                 liveness=liveness_by_agent_id.get(str(aid), "UNKNOWN"),
@@ -1520,15 +1529,15 @@ def _finalize_destroyed_workspace(
     if session_store is not None and session_store.record_store is not None:
         found = session_store.record_store.find_active_record(str(agent_id))
         if found is not None:
-            owner_user_id, _record = found
+            owner_user_id, record = found
             owner_email = session_store.get_account_email(owner_user_id)
             if owner_email is not None:
-                # Destroying the host does not touch the account's Cloudflare
-                # tunnel -- nothing downstream of `mngr destroy` knows it
-                # exists. Left behind it keeps a proxied hostname answering and
-                # counts against a quota measured in workspaces ever created,
+                # Destroying the host does not touch the account's machine
+                # share -- nothing downstream of `mngr destroy` knows it
+                # exists. Left behind it keeps a relay hostname reserved and
+                # counts against a quota measured in machines ever created,
                 # so it must go before the record that names it is tombstoned.
-                delete_tunnel_for_agent(imbue_cloud_cli, owner_email, agent_id)
+                delete_share_for_host(imbue_cloud_cli, owner_email, record.host_id)
                 session_store.record_store.tombstone_record(owner_user_id, owner_email, str(agent_id))
             else:
                 logger.warning(
@@ -1761,11 +1770,17 @@ def _handle_chrome_events() -> Response:
             last_destroying_ids = _destroying_agent_ids(paths, backend_resolver)
             last_remote_states = _build_remote_tile_states(backend_resolver, session_store)
             last_account_payload = _build_account_launcher_payload(session_store)
-            # The agent ids the shell may restore windows to: live workspaces plus
-            # any from the persisted last-good topology not yet re-discovered this
-            # session. Lets restore decline to drop a window whose workspace is
-            # merely absent from a slow/partial cold-start snapshot.
-            last_restorable_ids = [str(aid) for aid in backend_resolver.list_restorable_workspace_ids()]
+            # The workspace ids the shell may restore windows to: live workspaces
+            # plus any from the persisted last-good topology not yet re-discovered
+            # this session. Lets restore decline to drop a window whose workspace
+            # is merely absent from a slow/partial cold-start snapshot. Carries
+            # BOTH coordinates of each workspace: persisted window URLs are
+            # host-keyed (``/goto/<host-id>/``, from content URLs) while older
+            # persisted state and minds' records are agent-keyed, and the shell's
+            # restore filter does plain membership checks.
+            last_restorable_ids = [str(aid) for aid in backend_resolver.list_restorable_workspace_ids()] + [
+                str(hid) for hid in backend_resolver.list_restorable_workspace_host_ids()
+            ]
             yield "data: {}\n\n".format(
                 json.dumps(
                     {
@@ -2183,6 +2198,11 @@ def _build_workspace_list(
         accent = _resolved_workspace_color(backend_resolver, aid)
         entry: dict[str, str] = {
             "id": str(aid),
+            # Workspace content URLs (``/goto/<host-id>/`` and the
+            # ``host-<hex>.localhost`` origins) are keyed by host id; the UI
+            # needs both coordinates to navigate and to match either back to
+            # this row.
+            "host_id": str(info.host_id) if info is not None else "",
             "name": ws_name,
             "accent": accent,
         }
@@ -2346,14 +2366,66 @@ def _ssh_command_for_agent(backend_resolver: BackendResolverInterface, agent_id:
     return f"ssh -i {ssh_info.key_path} -p {ssh_info.port} {ssh_info.user}@{ssh_info.host}"
 
 
+def _iter_workspace_records(state: DesktopClientState) -> Iterator[ReplicaRecord]:
+    """Yield every account's workspace records from the session store's replica."""
+    session_store = state.session_store
+    record_store = session_store.record_store if session_store is not None else None
+    if session_store is None or record_store is None:
+        return
+    for account in session_store.list_accounts():
+        yield from record_store.list_records(str(account.user_id))
+
+
+def _resolve_workspace_coordinate_to_agent_id(
+    workspace_id: str,
+    backend_resolver: BackendResolverInterface,
+    workspace_records: Iterable[ReplicaRecord],
+) -> AgentId | None:
+    """Map a workspace coordinate -- an agent id or a host id -- to the agent id.
+
+    Workspace content URLs carry host ids (``/goto/<host-id>/``, the
+    ``host-<hex>.localhost`` origins), so surfaces that derive a workspace from
+    a content URL (the Electron recovery redirect, restored windows) arrive
+    here with a host id; minds' own records stay agent-keyed. Falls back to
+    ``workspace_records`` (pass ``_iter_workspace_records`` so records are only
+    listed on a miss) so a stopped host that discovery no longer reports still
+    resolves.
+    """
+    if workspace_id.startswith("agent-"):
+        try:
+            return AgentId(workspace_id)
+        except ValueError:
+            return None
+    if not workspace_id.startswith("host-"):
+        return None
+    for aid in backend_resolver.list_active_workspace_ids():
+        display_info = backend_resolver.get_agent_display_info(aid)
+        if display_info is not None and str(display_info.host_id) == workspace_id:
+            return aid
+    for record in workspace_records:
+        if record.host_id == workspace_id and record.agent_id:
+            return AgentId(record.agent_id)
+    return None
+
+
 def _handle_recovery_page(
     agent_id: str,
 ) -> Response:
-    """Render the workspace-recovery page (shown by the 503 redirect or by direct nav)."""
+    """Render the workspace-recovery page (shown by the 503 redirect or by direct nav).
+
+    ``agent_id`` accepts either workspace coordinate: the agent id (minds'
+    own records) or the host id (content-URL-derived navigation).
+    """
     if not _is_request_authenticated():
         return make_html_response(content=render_login_page(), status_code=403)
-    aid = AgentId(agent_id)
-    tracker: SystemInterfaceHealthTracker | None = get_state().system_interface_health_tracker
+    state = get_state()
+    resolved_aid = _resolve_workspace_coordinate_to_agent_id(
+        agent_id, state.backend_resolver, _iter_workspace_records(state)
+    )
+    if resolved_aid is None:
+        return make_html_response(content="Unknown workspace", status_code=404)
+    aid = resolved_aid
+    tracker: SystemInterfaceHealthTracker | None = state.system_interface_health_tracker
     initial_status = tracker.get_health(aid).value if tracker is not None else AgentHealth.HEALTHY.value
     initial_error = (tracker.get_last_restart_error(aid) or "") if tracker is not None else ""
     # Whether an in-flight restart is start-only (a possible-no-op entry
@@ -3275,6 +3347,9 @@ class _WorkspaceContext(FrozenModel):
     current_account: object | None = Field(description="The account this workspace is associated with, if any.")
     accounts: tuple[object, ...] = Field(description="Every signed-in account, offered by the Associate prompt.")
     servers: tuple[str, ...] = Field(description="The service names this workspace has registered.")
+    host_id: str = Field(
+        description="The machine's host-<hex> coordinate (keys the sharing API); empty when unknown."
+    )
     account_email: str = Field(description="The associated account's email, empty when unassociated.")
     has_account: bool = Field(description="Whether the workspace is associated with an account at all.")
     is_leased_imbue_cloud: bool = Field(
@@ -3311,6 +3386,26 @@ def _recorded_workspace_name(session_store: MultiAccountSessionStore | None, age
     return fallback_name or agent_id
 
 
+def _workspace_host_coordinate(
+    info: AgentDisplayInfo | None,
+    session_store: MultiAccountSessionStore | None,
+    agent_id: str,
+) -> str:
+    """The machine's ``host-<hex>`` coordinate, or '' when it cannot be determined.
+
+    Discovery is authoritative; the workspace record covers a stopped (and so
+    undiscovered) workspace, whose share can still be inspected and revoked.
+    """
+    if info is not None and str(info.host_id).startswith("host-"):
+        return str(info.host_id)
+    record_store = session_store.record_store if session_store else None
+    if record_store is not None:
+        found = record_store.find_active_record(agent_id)
+        if found is not None and found[1].host_id.startswith("host-"):
+            return found[1].host_id
+    return ""
+
+
 def _build_workspace_context(agent_id: str) -> _WorkspaceContext:
     """Gather the context shared by every per-workspace surface.
 
@@ -3342,6 +3437,7 @@ def _build_workspace_context(agent_id: str) -> _WorkspaceContext:
         current_account=current_account,
         accounts=tuple(accounts),
         servers=tuple(str(service) for service in backend_resolver.list_services_for_agent(parsed_agent_id)),
+        host_id=_workspace_host_coordinate(info, session_store, agent_id),
         account_email=current_account.email if current_account else "",
         has_account=current_account is not None,
         is_leased_imbue_cloud=_is_leased_imbue_cloud_workspace(backend_resolver, agent_id),
@@ -3398,6 +3494,7 @@ def _handle_workspace_options(agent_id: str) -> Response:
     html = render_workspace_options_page(
         agent_id=agent_id,
         ws_name=context.ws_name,
+        host_id=context.host_id,
         current_account=context.current_account,
         accounts=context.accounts,
         servers=context.servers,
@@ -3427,6 +3524,7 @@ def _handle_workspace_options_modal(agent_id: str) -> Response:
     html = render_workspace_options_modal_page(
         agent_id=agent_id,
         ws_name=context.ws_name,
+        host_id=context.host_id,
         current_account=context.current_account,
         accounts=context.accounts,
         servers=context.servers,
@@ -3681,80 +3779,20 @@ def _handle_requests_auto_open() -> Response:
     return make_response(status_code=200, content='{"ok": true}', media_type="application/json")
 
 
-def _resolve_ws_name_and_account(
+def _handle_sharing_redirect(
     agent_id: str,
-    backend_resolver: BackendResolverInterface,
-) -> tuple[str, str, bool, list[AccountSession]]:
-    """Resolve workspace name, account email, has_account flag, and accounts list."""
-    parsed_id = AgentId(agent_id)
-    ws_name = backend_resolver.get_workspace_name(parsed_id) or ""
-    if not ws_name:
-        info = backend_resolver.get_agent_display_info(parsed_id)
-        ws_name = info.agent_name if info else agent_id
-    session_store: MultiAccountSessionStore | None = get_state().session_store
-    account = session_store.get_account_for_workspace(agent_id) if session_store else None
-    account_email = account.email if account else ""
-    has_account = account is not None
-    accounts = session_store.list_accounts() if session_store else []
-    return ws_name, account_email, has_account, accounts
-
-
-def _handle_sharing_page(
-    agent_id: str,
-    service_name: str,
+    service_name: str = "",
 ) -> Response:
-    """Render the sharing editor page for direct editing (from workspace settings)."""
-    if not _is_request_authenticated():
-        return make_response(status_code=403, content="Not authenticated")
+    """Redirect a legacy sharing-editor URL to the options panel's Share tab.
 
-    backend_resolver = get_state().backend_resolver
-    ws_name, account_email, has_account, accounts = _resolve_ws_name_and_account(
-        agent_id,
-        backend_resolver,
-    )
-
-    html = render_sharing_editor(
-        agent_id=agent_id,
-        service_name=service_name,
-        title=f"Sharing: {service_name}",
-        mngr_forward_origin=_get_mngr_forward_origin(),
-        has_account=has_account,
-        accounts=accounts,
-        redirect_url=f"/sharing/{agent_id}/{service_name}",
-        ws_name=ws_name,
-        account_email=account_email,
-    )
-    return make_html_response(content=html)
-
-
-def _handle_sharing_modal(
-    agent_id: str,
-    service_name: str,
-) -> Response:
-    """Render the sharing editor as the centered overlay modal (Electron; the full page is the browser fallback).
-
-    Same context as :func:`_handle_sharing_page`; the empty ``redirect_url``
-    (via the template default) makes the Associate flow reload in place, which
-    is the modal-safe behavior.
+    The standalone editor is gone -- the Share machine pane in the workspace
+    options panel is the one sharing surface -- but its URLs were handed out
+    (workspace settings links, permission-request approvals), so they land on
+    the replacement instead of a 404. A service segment picks that target.
     """
-    if not _is_request_authenticated():
-        return make_response(status_code=403, content="Not authenticated")
-
-    backend_resolver = get_state().backend_resolver
-    ws_name, account_email, has_account, accounts = _resolve_ws_name_and_account(
-        agent_id,
-        backend_resolver,
-    )
-
-    html = render_sharing_modal_page(
-        agent_id=agent_id,
-        service_name=service_name,
-        has_account=has_account,
-        accounts=accounts,
-        ws_name=ws_name,
-        account_email=account_email,
-    )
-    return make_html_response(content=html)
+    # The old /modal spelling is a rendering variant, not a share target.
+    target = f"&target={quote(service_name)}" if service_name and service_name != "modal" else ""
+    return make_redirect_response(f"/workspace/{quote(agent_id)}/options?tab=share{target}", status_code=302)
 
 
 def _handle_request_grant(
@@ -4103,11 +4141,15 @@ def create_desktop_client(
     app.add_url_rule("/requests/<request_id>/grant", view_func=_handle_request_grant, methods=["POST"])
     app.add_url_rule("/requests/<request_id>/deny", view_func=_handle_request_deny, methods=["POST"])
 
-    # Sharing editor routes (used by both request approval and direct editing).
-    # /modal is the same editor hosted in the shared overlay surface (Electron);
-    # the plain route stays as the browser-mode full page.
-    app.add_url_rule("/sharing/<agent_id>/<service_name>", view_func=_handle_sharing_page)
-    app.add_url_rule("/sharing/<agent_id>/<service_name>/modal", view_func=_handle_sharing_modal)
+    # Legacy sharing-editor URLs redirect to the options panel's Share tab
+    # (the /modal spelling included -- an overlay that lands there follows the
+    # redirect into the browser-mode page, which still renders the pane).
+    app.add_url_rule("/sharing/<agent_id>", view_func=_handle_sharing_redirect)
+    app.add_url_rule(
+        "/sharing/<agent_id>/<service_name>",
+        view_func=_handle_sharing_redirect,
+        endpoint="sharing_redirect_service",
+    )
 
     # Agent create-attempt routes. The create form now submits to POST
     # /api/v1/workspaces and /creating/<id> polls the v1 operations resource, so
@@ -4214,10 +4256,17 @@ def _run_system_interface_health_probe_loop(
     ) as probe_client:
         while not root_concurrency_group.is_shutting_down():
             for aid in tracker.snapshot_probe_targets():
+                # Workspace origins are keyed by host id; an agent whose host
+                # coordinate discovery hasn't supplied yet cannot be probed and
+                # counts as failing (matching what the plugin would answer).
+                display_info = backend_resolver.get_agent_display_info(aid)
+                if display_info is None or not display_info.host_id:
+                    tracker.record_probe_failure(aid)
+                    continue
                 probe_status = probe_workspace_through_plugin(
                     mngr_forward_port=mngr_forward_port,
                     preauth_cookie=mngr_forward_preauth_cookie,
-                    agent_id=aid,
+                    workspace_host_id=str(display_info.host_id),
                     probe_timeout_seconds=_WORKSPACE_PROBE_TIMEOUT_SECONDS,
                     client=probe_client,
                 )
