@@ -199,11 +199,10 @@ def _install_fake_latchkey(
 ) -> None:
     """Put a stub ``latchkey`` on PATH that mimics the real curl passthrough.
 
-    The real ``latchkey curl`` forwards its arguments to ``curl`` and passes
-    curl's exit code, stdout and stderr back. The stub honors the two arguments
-    the fetch depends on -- ``--output <file>`` for the body and ``--write-out
-    %{http_code}`` for the status on stdout -- so the test exercises the actual
-    subprocess call rather than a stand-in for it.
+    The real ``latchkey curl`` forwards its arguments to ``curl`` and passes curl's
+    exit code, stdout and stderr back. The stub honors the two the fetch depends on
+    -- ``--output <file>`` for the body and ``--write-out %{http_code}`` for the
+    status on stdout -- so the test exercises the actual subprocess call.
     """
     directory.mkdir(parents=True, exist_ok=True)
     script = directory / "latchkey"
@@ -228,12 +227,11 @@ def _init_workspace_repo(
 ) -> None:
     """Init a workspace repo whose HEAD carries local work on top of ``merged_tags``.
 
-    Models the shape every real workspace has and that a single-commit fixture
-    cannot: a template base it was created from (``merged_tags``, ancestors of
-    ``HEAD``), its own commits on top, and releases upstream has cut since on a
-    line that has *not* been merged (``unmerged_tags``). Both sets are visible to
-    ``git tag --list``, so target selection sees them all while the
-    already-merged check can still tell them apart.
+    A template base it was created from (``merged_tags``, ancestors of ``HEAD``),
+    its own commits on top, and releases upstream has cut since on a line that has
+    *not* been merged (``unmerged_tags``). Both sets are visible to ``git tag
+    --list``, so target selection sees them all while the already-merged check can
+    still tell them apart.
     """
 
     def _git(*args: str) -> None:
@@ -273,10 +271,8 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
     """A 403 is the *likelier* old-app signal and must get the same message as a 404.
 
     The route and the gateway grant that reaches it ship together, so an app old
-    enough to lack the route is also old enough to lack the grant -- and the
-    gateway denies before the app is ever asked. Landing this in the generic
-    "returned HTTP {status}" branch would give the most common old-app case the
-    least actionable wording.
+    enough to lack the route is also old enough to lack the grant -- and the gateway
+    denies before the app is ever asked.
     """
     _install_fake_latchkey(
         monkeypatch, tmp_path, body='{"error": "request not permitted"}', status="403"
@@ -347,9 +343,8 @@ def test_resolve_target_cli_reads_the_ceiling_from_the_app(
     approval message tells the user about.
 
     The workspace sits *behind* the ceiling (created from 0.3.5, app on 0.3.9), so
-    the capped target is a real update and the pass proceeds. Being capped is not
-    the same as having nothing to gain -- the fixture has to keep those apart, or
-    it would be asserting the already-merged refusal's territory instead.
+    the capped target is a real update and the pass proceeds -- otherwise this
+    would be asserting the already-merged refusal's territory instead.
     """
     repo = tmp_path / "repo"
     _init_workspace_repo(
@@ -388,10 +383,9 @@ def test_resolve_target_cli_refuses_when_the_app_caps_it_at_the_release_it_is_on
     """The case the ceiling exists for, from the seat of a workspace already at it.
 
     Created from 0.3.9, app on 0.3.9, 0.4.0 upstream. Tag selection alone resolves
-    0.3.9 -- the release the workspace *is* -- and would run a whole backup, worker
-    and validation pass to merge nothing while never telling the user why 0.4.0
-    was not on offer. The refusal has to name the app, because updating the app is
-    the one action that gets them 0.4.0.
+    0.3.9 -- the release the workspace *is* -- so without the refusal a whole
+    backup, worker and validation pass merges nothing. It has to name the app,
+    because updating the app is the one action that gets them 0.4.0.
     """
     repo = tmp_path / "repo"
     _init_workspace_repo(
@@ -446,8 +440,7 @@ def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
     """An override names a ref explicitly, and that rule outranks saving a no-op merge.
 
     Blocking here would make ``--override`` unusable for the one case it is most
-    needed in -- re-running a landing that half-finished -- so the already-merged
-    refusal is deliberately confined to the path where the flow picked the target.
+    needed in: re-running a landing that half-finished.
     """
     repo = tmp_path / "repo"
     _init_workspace_repo(
@@ -955,10 +948,9 @@ def test_held_back_is_false_when_the_app_imposes_no_cap() -> None:
     """A dev app caps nothing, so a gap can never be the ceiling's doing.
 
     A dev build reports a *branch*, not nothing, so `ceiling="main"` -- and not
-    `None` -- is the shape the CLI actually produces here. It reaches `False` by
-    a different route than a `None` ceiling does: the branch parses to no
-    version, so the selection was never bounded and `latest_available` is the
-    resolved ref. Both routes are asserted.
+    `None` -- is the shape the CLI actually produces here. It reaches `False` by a
+    different route than a `None` ceiling does: the branch parses to no version, so
+    the selection was never bounded. Both routes are asserted.
     """
     assert (
         update_self.is_held_back_by_ceiling(
@@ -988,8 +980,7 @@ def test_prerelease_ceiling_caps_rather_than_disabling_the_cap() -> None:
     """An app on a release candidate is a real app and must still cap its workspaces.
 
     Parsing the ceiling as "not a stable tag, therefore no ceiling" would let a
-    workspace on an rc app update arbitrarily far past it -- the exact outcome
-    the ceiling exists to prevent, reached by the guard meant to enforce it.
+    workspace on an rc app update arbitrarily far past it.
     """
     tags = ["minds-v0.3.9", "minds-v0.4.0", "minds-v0.4.1"]
     # Semver: 0.4.0-rc1 precedes 0.4.0, so 0.4.0 itself is above this ceiling.

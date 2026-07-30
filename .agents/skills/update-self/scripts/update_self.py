@@ -16,31 +16,24 @@ validation depth, reveal by change class). This script owns the parts that are
     ceiling when it cannot be proven to sit at or below it.
 
     The ceiling exists because a workspace's template ships the code the outer
-    app talks to (the system interface, the vendored ``mngr``). Updating past the
-    app's own release would leave the workspace speaking a protocol its app does
-    not know. The ceiling is read from the app itself (``GET /api/v1/app/version``,
+    app talks to (the system interface, the vendored ``mngr``), so updating past
+    the app's own release would leave the workspace speaking a protocol its app
+    does not know. It is read from the app itself (``GET /api/v1/app/version``,
     baseline-allowed through the latchkey gateway, no grant needed); when it
     cannot be read the command **fails** rather than silently updating uncapped.
 
     The output also carries ``held_back_by_ceiling`` -- whether the ceiling, and
     not the user, is why a newer release was not taken -- alongside
     ``latest_available``, the newest stable tag upstream *ignoring* the ceiling
-    (``null`` if there is none) and so the release that flag names. The judgement
-    is made here rather than left to the agent, both because the two refs also
-    differ when an ``--override`` picked an *older* tag (nobody's app held that
-    back) and because the alternative is eyeballing a tag listing, which is
-    sorted lexically and includes prereleases.
+    (``null`` if there is none) and so the release that flag names.
 
-    A default target the workspace is **already on** is a refusal too: tag
-    selection is a pure function of the tag names and the ceiling, so on its own
-    it will happily "update" to the release the workspace was created from. The
-    command therefore also asks git whether the chosen ref is already an ancestor
-    of ``HEAD`` and refuses when it is, rather than spending a backup, a worker,
-    and a validation run on a merge that changes nothing. This is what makes the
-    ceiling bite for a workspace sitting *at* it: with a newer release upstream
-    the refusal names the app as the reason it cannot be had, and without one it
-    is a plain "already up to date". A workspace *behind* the ceiling still
-    updates to it -- being capped is not the same as having nothing to gain.
+    A default target the workspace is **already on** is a refusal too: the command
+    asks git whether the chosen ref is already an ancestor of ``HEAD``, rather
+    than spending a backup, a worker, and a validation run on a merge that changes
+    nothing. This is what makes the ceiling bite for a workspace sitting *at* it:
+    with a newer release upstream the refusal names the app as the reason it
+    cannot be had, and without one it is a plain "already up to date". A workspace
+    *behind* the ceiling still updates to it.
 
 ``classify-merge``
     Split the files upstream changed into the reconciled **merged** set (local
@@ -75,9 +68,9 @@ only pretend to cover. The worker reference owns that recipe.
 The git-touching subcommands are thin wrappers over the pure functions below
 (``pick_latest_stable_tag``, ``resolve_target``, ``classify_path``,
 ``classify_merge``), which carry all the logic and are covered by
-``update_self_test.py``. ``fetch_app_template_ref`` is the one impure helper, and
-is kept to the narrow job of turning a ``latchkey curl`` result into either a ref
-string or a ``CeilingUnavailableError``.
+``update_self_test.py``. ``fetch_app_template_ref`` is the one impure helper, kept
+to the narrow job of turning a ``latchkey curl`` result into either a ref string or
+a ``CeilingUnavailableError``.
 """
 
 from __future__ import annotations
@@ -110,10 +103,8 @@ class NoUpdateTargetError(ValueError):
     """Raised when no ref to update to could be chosen.
 
     A refusal, not a fault: the workspace is fine, there is simply nothing it may
-    update to right now -- no stable tag upstream, every one above the app's
-    ceiling, or the one it may take already merged. Distinct from a plain
-    ``ValueError`` so the CLI can render exactly this case as a one-line
-    explanation and let a genuine bug keep its traceback.
+    update to right now. Distinct from a plain ``ValueError`` so the CLI can render
+    this case as a one-line explanation and let a genuine bug keep its traceback.
     """
 
 
@@ -128,8 +119,7 @@ class ResolvedTarget(NamedTuple):
     is carried here and caps nothing. ``None`` means no ceiling was supplied at
     all, which only a direct caller does. ``exceeds_ceiling`` marks an override the
     ceiling could not vouch for: newer than the app, or a branch/commit carrying no
-    version to compare. A prerelease tag compares fine and is not flagged for being
-    one. The default (no-override) path never sets it.
+    version to compare; the default (no-override) path never sets it.
     """
 
     ref: str
@@ -146,9 +136,8 @@ class Version(NamedTuple):
 
     ``release_rank`` is 0 for a prerelease and 1 for the release it precedes, so
     ``0.4.0-rc1 < 0.4.0``; ``prerelease`` then breaks ties among prereleases of
-    the same version. ``release_rank`` is redundant with ``prerelease`` being
-    empty, but it has to be a *field* rather than a property: only a field
-    participates in the comparison that places a prerelease below its release.
+    the same version. It has to be a *field* rather than a property derived from an
+    empty ``prerelease``: only a field participates in the comparison.
     """
 
     major: int
@@ -186,16 +175,14 @@ def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
 def parse_version(tag: str) -> Version | None:
     """Return the :class:`Version` of any ``minds-v*`` tag, prerelease included.
 
-    Every release tag parses, prereleases included, because a *ceiling* is a
-    different question from a *candidate*: an app on ``minds-v0.4.0-rc1`` is a
-    real app with a real version, and its workspaces should be capped by it
-    rather than left uncapped. Candidate selection asks the separate question
-    via :attr:`Version.is_stable`, so a prerelease still never wins the default
+    Prereleases parse because a *ceiling* is a different question from a
+    *candidate*: an app on ``minds-v0.4.0-rc1`` has a real version and should cap
+    its workspaces. Candidate selection asks the separate question via
+    :attr:`Version.is_stable`, so a prerelease still never wins the default
     "latest stable" pick.
 
-    Ordering follows semver: a prerelease sorts below its own release, so
-    ``0.4.0-rc1 < 0.4.0``, and a ceiling of ``minds-v0.4.0-rc1`` therefore admits
-    ``minds-v0.3.9`` but not ``minds-v0.4.0``.
+    Ordering follows semver: a prerelease sorts below its own release, so a ceiling
+    of ``minds-v0.4.0-rc1`` admits ``minds-v0.3.9`` but not ``minds-v0.4.0``.
 
     Returns ``None`` only for something that is not a release tag at all (a
     branch name, a bare commit) -- there is genuinely no version to compare.
@@ -223,11 +210,10 @@ def pick_latest_stable_tag(
     ``minds-v0.3.9``.
 
     ``ceiling`` bounds the selection to tags at or below it, so a workspace never
-    picks a template newer than the app driving it. The ceiling is parsed with
-    :func:`parse_version`, so an app on a *prerelease* (``minds-v0.4.0-rc1``) caps
-    just as well as one on a stable release -- it is a real app with a real
-    version. Only a ceiling that is not a release tag at all (a dev app reporting
-    a branch) means no ceiling, because there is genuinely nothing to compare.
+    picks a template newer than the app driving it. It is parsed with
+    :func:`parse_version`, so an app on a *prerelease* caps just as well as one on
+    a stable release; only a ceiling that is not a release tag at all (a dev app
+    reporting a branch) means no ceiling.
 
     Candidates are still filtered to *stable* tags: capping by a prerelease does
     not make one selectable.
@@ -257,9 +243,7 @@ def is_held_back_by_ceiling(
     Only true when the flow chose the target itself. With an explicit override the
     user picked the ref, so a gap between it and ``latest_available`` is their own
     doing; reporting "your app held this back" there blames the app for the user's
-    choice (an ``--override`` to an *older* tag would otherwise trip it every
-    time). Deciding this here rather than having the lead compare two tags keeps
-    the judgement in tested code, where the rest of the target logic lives.
+    choice (an ``--override`` to an *older* tag would otherwise trip it every time).
     """
     if has_override or ceiling is None or latest_available is None:
         return False
@@ -270,10 +254,9 @@ def _is_within_ceiling(ref: str, ceiling: str | None) -> bool:
     """Whether ``ref`` is provably a release at or below ``ceiling``.
 
     Both sides go through :func:`parse_version`, so a prerelease on either side
-    compares properly rather than being written off. False only for something
-    with no version at all -- a branch or a bare commit -- where the ceiling
-    genuinely cannot vouch for the ref and the flow should surface it rather than
-    assume it is safe. True when there is no ceiling to enforce.
+    compares properly rather than being written off. False for something with no
+    version at all -- a branch or a bare commit -- where the ceiling genuinely
+    cannot vouch for the ref. True when there is no ceiling to enforce.
     """
     ceiling_version = parse_version(ceiling) if ceiling is not None else None
     if ceiling_version is None:
@@ -343,10 +326,6 @@ def already_current_message(
     between them and it, so the message has to say so -- updating the app is the
     action that unblocks them. Not held back: the workspace is simply current,
     and there is nothing to do.
-
-    ``is_held_back`` comes from :func:`is_held_back_by_ceiling` rather than being
-    re-derived from ``ref`` vs ``latest_available`` here, so the two places that
-    speak about the ceiling cannot disagree about when it is to blame.
     """
     if is_held_back:
         return (
@@ -369,19 +348,14 @@ _MINDS_APP_VERSION_URL = "http://latchkey-self.invalid/minds-api-proxy/api/v1/ap
 
 # Bounds the gateway round-trip, at the house network default (the style guide's
 # 60s, matching this repo's other ``latchkey curl``, ``github_sync``'s
-# ``_LATCHKEY_CURL_TIMEOUT_SECONDS``). Deliberately generous rather than sharp:
-# this is the one call that refuses the *entire* update when it fails, so a
-# timeout that fires on a merely slow answer costs far more than waiting does.
+# ``_LATCHKEY_CURL_TIMEOUT_SECONDS``).
 _APP_VERSION_TIMEOUT_SECONDS = 60
 
 # Statuses that mean "this app predates the version route", not "something went
-# wrong". 404 is the obvious one. 403 matters just as much and is in fact the
-# *likelier* of the two: the route and the gateway permission that reaches it
-# (``minds-app-version-read``) ship in the same release, so an app old enough to
-# lack the route is also old enough to lack the grant -- and the gateway denies
-# an ungranted request before the app ever sees it. Both must land on the "update
-# your app" message; leaving 403 in the generic branch would give the most common
-# case the least useful wording.
+# wrong". 404 is the obvious one; 403 is in fact the *likelier* of the two, since
+# the route and the gateway permission that reaches it (``minds-app-version-read``)
+# ship in the same release, so an app old enough to lack the route also lacks the
+# grant -- and the gateway denies an ungranted request before the app ever sees it.
 _APP_TOO_OLD_STATUSES = frozenset({"403", "404"})
 
 
@@ -390,8 +364,7 @@ class CeilingUnavailableError(Exception):
 
     Never downgraded to "no ceiling": an app that cannot answer is very often an
     app too old to *have* this route, which is exactly the case the ceiling
-    protects against. Proceeding uncapped here would skip the check precisely
-    when it matters most.
+    protects against.
     """
 
 
@@ -680,7 +653,7 @@ def _is_already_merged(ref: str, repo_root: Path) -> bool:
     Cannot use :func:`_git` (``check=True``): exit 1 is the ordinary "not an
     ancestor" answer, not a failure. Any other code is a real git error -- a ref
     that does not resolve, or no ``HEAD`` at all -- and is raised rather than read
-    as "not merged", which would silently skip the check.
+    as "not merged".
     """
     result = subprocess.run(
         ["git", "merge-base", "--is-ancestor", ref, "HEAD"],
@@ -712,8 +685,6 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     if not args.local_tags:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
-    # The ceiling is fetched here rather than passed in by the caller so it cannot
-    # be skipped by forgetting a flag; ``--ceiling`` exists to pin it by hand.
     ceiling = args.ceiling if args.ceiling is not None else fetch_app_template_ref()
     target = resolve_target(args.override, tags, remote=args.remote, ceiling=ceiling)
     latest_available = pick_latest_stable_tag(tags)
@@ -724,8 +695,7 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
         has_override=args.override is not None,
     )
     # Only the default path: an override was asked for by name, and the rule that
-    # it is never silently blocked outranks saving a no-op merge. The lead sees
-    # the ref it named and can say "you are already on that" itself.
+    # it is never silently blocked outranks saving a no-op merge.
     if args.override is None and _is_already_merged(target.ref, repo_root):
         raise NoUpdateTargetError(
             already_current_message(
@@ -971,9 +941,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return args.func(args)
     except (CeilingUnavailableError, NoUpdateTargetError) as e:
-        # These two carry the "why you cannot update right now" explanation the
-        # lead relays to the user, so print the message alone -- a traceback would
-        # bury it and read as a crash rather than a refusal.
+        # These carry the "why you cannot update right now" explanation the lead
+        # relays to the user, so print the message alone: a traceback would bury it
+        # and read as a crash rather than a refusal.
         print(f"error: {e}", file=sys.stderr)
         return 1
 
