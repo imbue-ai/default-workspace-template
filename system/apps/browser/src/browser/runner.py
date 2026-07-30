@@ -66,10 +66,18 @@ from browser.session import (
     anthropic_key_status,
     deferred_install_ready,
 )
+from browser.videopipe import PixelfluxVideoPipe, VideoPipeError
+from browser.videopipe import is_available as is_video_pipe_available
 from browser.wsgi import make_threaded_server
 
 ROOT_PATH = os.environ.get("ROOT_PATH", "")
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
+_VIDEO_HTML = Path(__file__).parent / "assets" / "video.html"
+
+# How long the video sender waits for an admitted frame before re-checking the
+# connection; short enough that a closed socket is noticed promptly.
+_VIDEO_SEND_POLL_SECONDS = 1.0
+_VIDEO_ACK_POLL_SECONDS = 0.05
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 _STARTUP_ERRORS = (BrowserStartupError, PlaywrightError, RuntimeError, OSError, ConnectionError)
@@ -868,6 +876,70 @@ def cast_socket(ws: Any, browser_id: str) -> None:
         bridge.run(session.unregister_cast_queue(client_queue), timeout=_ROUTE_TIMEOUT)
 
 
+def video_page() -> Response:
+    return Response(_VIDEO_HTML.read_text(), mimetype="text/html")
+
+
+def _video_ack_pump(ws: Any, pipe: PixelfluxVideoPipe, stop_event: threading.Event) -> None:
+    """Read viewer acks on a dedicated thread (see videopipe: credit flow control)."""
+    try:
+        while not stop_event.is_set():
+            data = ws.receive(timeout=_VIDEO_ACK_POLL_SECONDS)
+            if data is None or isinstance(data, bytes):
+                continue
+            try:
+                message = json.loads(data)
+                frame_id = int(message["ack"])
+            except (ValueError, TypeError, KeyError):
+                continue
+            pipe.ack(frame_id)
+    except ConnectionClosed:
+        pass
+    finally:
+        stop_event.set()
+
+
+def video_socket(ws: Any, browser_id: str) -> None:
+    """One pixelflux H.264 viewer (see browser.videopipe). Close codes mirror the
+    cast socket: 1013 retryable (not up yet / pipe unavailable), 1008 terminal."""
+    resolved = _resolve_sync_for_ws(browser_id)
+    if resolved is None:
+        if is_valid_browser_name(browser_id):
+            ws.close(1013)
+        else:
+            ws.close(1008)
+        return
+    if not is_video_pipe_available():
+        ws.close(1013)  # encoder still installing (env.d) or no DISPLAY yet
+        return
+    pipe = PixelfluxVideoPipe(browser_id, os.environ["DISPLAY"])
+    try:
+        pipe.start()
+    except VideoPipeError as error:
+        logger.warning("video pipe failed to start for browser {} ({})", browser_id, error)
+        ws.close(1011)
+        return
+    stop_event = threading.Event()
+    ack_pump = threading.Thread(
+        target=_video_ack_pump,
+        kwargs={"ws": ws, "pipe": pipe, "stop_event": stop_event},
+        name=f"browser-video-acks-{browser_id}",
+        daemon=True,
+    )
+    ack_pump.start()
+    try:
+        while not stop_event.is_set():
+            packet = pipe.next_packet(timeout=_VIDEO_SEND_POLL_SECONDS)
+            if packet is not None:
+                ws.send(packet)
+    except ConnectionClosed:
+        pass
+    finally:
+        stop_event.set()
+        pipe.stop()
+        ack_pump.join(timeout=5)
+
+
 def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
     """Resolve a browser for the cast socket; None on any KeyError/startup error."""
     try:
@@ -881,6 +953,7 @@ def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
 
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
+    application.add_url_rule("/video", view_func=video_page, methods=["GET"])
     application.add_url_rule("/health", view_func=health, methods=["GET"])
     application.add_url_rule("/init-status", view_func=init_status, methods=["GET"])
     application.add_url_rule("/key-status", view_func=key_status, methods=["GET"])
@@ -904,6 +977,7 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_copy, methods=["GET"], endpoint="clipboard_copy")
     application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_paste, methods=["POST"], endpoint="clipboard_paste")
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
+    sock.route("/browsers/<string:browser_id>/video")(video_socket)
 
 
 _register_routes()
