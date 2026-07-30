@@ -16,7 +16,20 @@ const mocks = vi.hoisted(() => {
     key: () => null,
     length: 0,
   } as Storage;
-  return { sendMessage: vi.fn(async () => {}) };
+  // The notice registers a document keydown listener for Escape; capture it so a test can fire it.
+  const listeners = new Map<string, ((event: unknown) => void)[]>();
+  globalThis.document ??= {
+    addEventListener: (type: string, fn: (event: unknown) => void) => {
+      listeners.set(type, [...(listeners.get(type) ?? []), fn]);
+    },
+    removeEventListener: (type: string, fn: (event: unknown) => void) => {
+      listeners.set(
+        type,
+        (listeners.get(type) ?? []).filter((f) => f !== fn),
+      );
+    },
+  } as unknown as Document;
+  return { sendMessage: vi.fn(async () => {}), listeners };
 });
 
 vi.mock("../models/Response", () => ({
@@ -144,6 +157,31 @@ describe("MessageInput send guard", () => {
     const text = renderedText(after);
     expect(text).toContain("/exit can't be sent from chat");
     expect(text).toContain("You can still send it from the agent's terminal.");
+  });
+
+  it("dismisses the notice on Escape", async () => {
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "/status");
+    // Run the overlay's oncreate so the keydown listener registers, as mithril would on mount.
+    const overlay = findByClass(after, "custom-url-dialog-overlay");
+    (overlay?.attrs?.oncreate as (() => void) | undefined)?.();
+
+    const keydownHandlers = mocks.listeners.get("keydown") ?? [];
+    expect(keydownHandlers.length, "notice should register a keydown listener").toBeGreaterThan(0);
+    keydownHandlers.forEach((handler) => handler({ key: "Escape" }));
+
+    const reRendered = component.view!({ attrs: { agentId: "agent-1" } } as never);
+    expect(renderedText(reRendered)).not.toContain("can't be sent from chat");
+  });
+
+  it("removes the keydown listener when the notice goes away", async () => {
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "/status");
+    const overlay = findByClass(after, "custom-url-dialog-overlay");
+    (overlay?.attrs?.oncreate as (() => void) | undefined)?.();
+    const registered = (mocks.listeners.get("keydown") ?? []).length;
+    (overlay?.attrs?.onremove as (() => void) | undefined)?.();
+    expect((mocks.listeners.get("keydown") ?? []).length).toBe(registered - 1);
   });
 
   it("does not carry the notice over to another agent", async () => {

@@ -87,6 +87,16 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
     messageTextareaElement?.focus();
   }
 
+  // The declined-command notice has nothing focusable to hang an onkeydown off, so Escape comes
+  // from a document listener while it is open (as the image lightbox does). Stable reference, for
+  // the same reason as the dropdown handler below.
+  function handleDeclinedNoticeKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      declinedSlashCommand = null;
+      m.redraw();
+    }
+  }
+
   // Stable reference (defined once for the component's life) so the dropdown's
   // add/removeEventListener pair to the same function -- a per-render closure
   // would leak a listener each time the dropdown reopens.
@@ -415,6 +425,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         return m(
           "div.custom-url-dialog-overlay",
           {
+            oncreate() {
+              document.addEventListener("keydown", handleDeclinedNoticeKeydown);
+            },
+            onremove() {
+              document.removeEventListener("keydown", handleDeclinedNoticeKeydown);
+            },
             onclick(e: MouseEvent) {
               if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
                 dismissDeclinedCommandNotice();
@@ -432,7 +448,16 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               m("h3.custom-url-dialog-title", `${command} can't be sent from chat`),
               m("p.logout-notice-body", "You can still send it from the agent's terminal."),
               m("div.custom-url-dialog-actions", [
-                m("button.custom-url-dialog-cancel", { onclick: () => dismissDeclinedCommandNotice() }, "OK"),
+                m(
+                  "button.custom-url-dialog-cancel",
+                  {
+                    // Focus it so Enter and Space dismiss too, and so the notice is reachable
+                    // without a mouse.
+                    oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
+                    onclick: () => dismissDeclinedCommandNotice(),
+                  },
+                  "OK",
+                ),
               ]),
             ],
           ),
