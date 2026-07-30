@@ -461,7 +461,12 @@ class PixelfluxVideoPipe:
         """
         if self._rtt_ewma is None or self._rtt_min is None:
             return
-        wanted_limit = max(_CREDIT_LIMIT, min(_CREDIT_LIMIT_MAX, int(self._current_fps * self._rtt_ewma) + 1))
+        # Size the window against a FIXED reference rate, not the live AIMD
+        # rate: a high-RTT viewer lowers delivered fps, and a window sized
+        # from that shrinks, lowering fps further -- a measured death spiral
+        # to the floor. 30fps is the experience the window should be able to
+        # carry when the encoder has content for it.
+        wanted_limit = max(_CREDIT_LIMIT, min(_CREDIT_LIMIT_MAX, int(30.0 * self._rtt_ewma) + 1))
         for row in self._rows.values():
             row.window.limit = wanted_limit
         inflation = self._rtt_ewma - self._rtt_min
