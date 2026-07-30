@@ -5,6 +5,7 @@ description = "Live Chromium with human-in-the-loop control and a browser-use ag
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "aiortc>=1.9",
     "flask>=3.0",
     "flask-sock>=0.7",
     "oom-priority",

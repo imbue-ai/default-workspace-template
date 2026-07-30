@@ -36,6 +36,14 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   the live browser and, when an agent is driving, a grey "Agent has control"
   overlay with a "Take control" button; the agent's trace lives in the agent's
   output, not the tab.
+- **WebRTC live view** (`src/browser/webrtc.py`): once a browser is running the
+  viewer upgrades the stream to real video over an RTCPeerConnection (signaled
+  over the cast WebSocket), bypassing the WS proxy; the JPEG stream stays as the
+  automatic fallback. Client ICE/TURN credentials are minted per session by
+  `BROWSER_TURN_ICE_ENDPOINT` (a trusted service holding the TURN key -- for
+  Cloudflare TURN this also tags usage per user for billing), or set statically
+  via `BROWSER_TURN_URLS`/`BROWSER_TURN_USERNAME`/`BROWSER_TURN_PASSWORD`;
+  with neither, STUN only. `BROWSER_WEBRTC_DISABLED=1` turns the path off.
 - **Persistence**: the fleet survives a workspace stop/restart. Each browser gets
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`
   (Tier A -- on the workspace volume), so cookies/logins/history come back; Chromium

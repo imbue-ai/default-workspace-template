@@ -763,7 +763,7 @@ def cmd_clipboard_paste(browser_id: str) -> Response:
 
 
 def _cast_inbound_pump(
-    ws: Any, session: LiveBrowser, stop_event: threading.Event
+    ws: Any, session: LiveBrowser, client_queue: Any, stop_event: threading.Event
 ) -> None:
     """Read inbound cast messages on a dedicated thread until the socket closes.
 
@@ -774,19 +774,27 @@ def _cast_inbound_pump(
     supports send and receive from different threads. Each inbound JSON message is
     dispatched to the loop via the bridge; commands are skipped while initializing
     (a human can't grab a half-restored fleet).
+
+    ``client_queue`` is this socket's own outbound queue: WebRTC signaling replies
+    (config/answer) go to the ONE requesting viewer, not the broadcast fan-out.
     """
     try:
         while not stop_event.is_set():
             data = ws.receive(timeout=_CAST_INBOUND_POLL_SECONDS)
             if data is None:
                 continue  # poll timeout; re-check the stop flag and keep reading
-            if not _init_done.is_set():
-                continue  # the view streams read-only until the gate opens
             try:
                 message = json.loads(data)
             except (ValueError, TypeError):
                 continue
             kind = message.get("type")
+            if isinstance(kind, str) and kind.startswith("webrtc_"):
+                # WebRTC signaling is allowed during fleet init (it only touches this
+                # browser's own peer state, never ownership) and needs the client queue.
+                bridge.run(session.handle_webrtc_message(message, client_queue), timeout=_ROUTE_TIMEOUT)
+                continue
+            if not _init_done.is_set():
+                continue  # the view streams read-only until the gate opens
             if kind == "take_control":
                 bridge.run(session.take_control(), timeout=_ROUTE_TIMEOUT)
             elif kind == "return_to_agents":
@@ -846,7 +854,7 @@ def cast_socket(ws: Any, browser_id: str) -> None:
     stop_event = threading.Event()
     inbound = threading.Thread(
         target=_cast_inbound_pump,
-        kwargs={"ws": ws, "session": session, "stop_event": stop_event},
+        kwargs={"ws": ws, "session": session, "client_queue": client_queue, "stop_event": stop_event},
         name=f"browser-cast-inbound-{browser_id}",
         daemon=True,
     )
