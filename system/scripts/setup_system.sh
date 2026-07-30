@@ -33,7 +33,6 @@ fi
 # Pinned versions (single source of truth; override via env if needed). Keep
 # CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
 : "${TTYD_VERSION:=1.7.7}"
-: "${CLOUDFLARED_VERSION:=2026.3.0}"
 : "${UV_VERSION:=0.11.7}"
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
 : "${MODAL_VERSION:=1.4.2}"
@@ -46,9 +45,9 @@ fi
 # Install a downloaded binary atomically: fetch to a temp file beside the target,
 # then rename(2) it into place. A plain `curl -o <dest>` truncates <dest> in
 # place, which fails with ETXTBSY when <dest> is a currently-running executable --
-# e.g. re-provisioning a live workspace whose `terminal` service is running ttyd,
-# or whose cloudflared tunnel is active (this is what the update-self reveal flow
-# does, and `set -e` then aborts the whole script). rename(2) over a busy
+# e.g. re-provisioning a live workspace whose `terminal` service is running ttyd
+# (this is what the update-self reveal flow does, and `set -e` then aborts the
+# whole script). rename(2) over a busy
 # executable is allowed: running processes keep the old inode while new execs pick
 # up the replacement, so download-then-mv is safe to re-run on a live host. The
 # temp file shares <dest>'s directory so the mv is a same-filesystem atomic rename,
@@ -120,13 +119,9 @@ rm /tmp/restic.bz2
 ttyd_arch="$(uname -m)"
 install_downloaded_binary "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${ttyd_arch}" /usr/local/bin/ttyd
 
-# cloudflared for Cloudflare tunnel support.
-cloudflared_arch="$(dpkg --print-architecture)"
-install_downloaded_binary "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${cloudflared_arch}" /usr/local/bin/cloudflared
-
 # GitHub CLI as a pinned, sha256-verified GitHub-release tarball. gh is not in
 # Debian, and a third-party apt repo would escape the snapshot-pinned mirror,
-# so it installs like ttyd/cloudflared: fixed version, checksummed download.
+# so it installs like ttyd: fixed version, checksummed download.
 gh_arch="$(uname -m)"
 case "${gh_arch}" in
     x86_64) gh_goarch="amd64"; gh_sha256="83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60" ;;

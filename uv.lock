@@ -27,7 +27,6 @@ members = [
     "app-watcher",
     "bootstrap",
     "browser",
-    "cloudflare-tunnel",
     "default-workspace-template",
     "env-converge",
     "github-sync",
@@ -764,11 +763,6 @@ wheels = [
 ]
 
 [[package]]
-name = "cloudflare-tunnel"
-version = "0.1.0"
-source = { editable = "system/services/cloudflare_tunnel" }
-
-[[package]]
 name = "cloudpickle"
 version = "3.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -989,7 +983,6 @@ dependencies = [
     { name = "bootstrap" },
     { name = "boto3" },
     { name = "browser" },
-    { name = "cloudflare-tunnel" },
     { name = "env-converge" },
     { name = "github-sync" },
     { name = "host-backup" },
@@ -1022,7 +1015,6 @@ requires-dist = [
     { name = "bootstrap", editable = "system/libs/bootstrap" },
     { name = "boto3", specifier = ">=1.34" },
     { name = "browser", editable = "system/apps/browser" },
-    { name = "cloudflare-tunnel", editable = "system/services/cloudflare_tunnel" },
     { name = "env-converge", editable = "system/services/env_converge" },
     { name = "github-sync", editable = "system/libs/github_sync" },
     { name = "host-backup", editable = "system/services/host_backup" },

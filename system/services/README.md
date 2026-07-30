@@ -6,8 +6,6 @@ the workspace running -- backing it up, keeping tunnels alive, watching state
 
 - `app_watcher/` - Watches the app registry (`data/.state/apps.toml`) and
   writes server events for discovery.
-- `cloudflare_tunnel/` - Runs the Cloudflare tunnel for global access when a
-  tunnel token is present.
 - `share_gateway/` - The self-hosted sharing stack: while share materials are
   present it terminates the share's TLS in-container (caddy), enforces the
   owner's grants on every request, and keeps the outbound relay tunnel (frpc)

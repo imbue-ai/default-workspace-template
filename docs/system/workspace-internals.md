@@ -55,7 +55,7 @@ one app lives in that app's folder and is named `<app>-<role>`.
   `browser/`, and every user-built app; registered in the uv workspace via the
   `system/apps/*` member glob
 - `system/services/` - Standalone background services (`app_watcher/`,
-  `cloudflare_tunnel/`, `share_gateway/`, `host_backup/`, `env_converge/`, `oom_priority/`)
+  `share_gateway/`, `host_backup/`, `env_converge/`, `oom_priority/`)
 - `system/libs/` - Support libraries, including `bootstrap/` (first-boot
   setup, then launches supervisord to supervise the apps and services)
 - `data/` - Gitignored workspace data: documents and project folders, uploads,

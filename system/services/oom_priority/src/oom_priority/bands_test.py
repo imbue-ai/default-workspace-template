@@ -14,7 +14,6 @@ from oom_priority import bands
 _BUILTIN_SERVICE_ORDER = (
     "terminal",
     "system_interface",
-    "cloudflared",
     "share-gateway",
     "github-sync",
     "host-backup",
@@ -142,7 +141,9 @@ def test_browser_remap_lands_inside_the_band_and_preserves_chromes_order() -> No
     # sit inside the browser band's range -- i.e. above every agent subprocess.
     remapped = [bands.shared_browser_oom_score_adj(v) for v in (0, 200, 300, 1000)]
     assert remapped == sorted(remapped)
-    assert len(set(remapped)) == len(remapped), "Chrome's gradation must survive the remap"
+    assert len(set(remapped)) == len(remapped), (
+        "Chrome's gradation must survive the remap"
+    )
     for value in remapped:
         assert bands.SHARED_BROWSER_FLOOR <= value <= bands.SHARED_BROWSER
     assert bands.AGENT_SUBPROCESS < bands.SHARED_BROWSER_FLOOR < bands.SHARED_BROWSER

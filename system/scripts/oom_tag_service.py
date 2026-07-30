@@ -10,7 +10,7 @@ inherited across fork/exec by children), then ``exec``s the real command with it
 arguments untouched. Mirrors ``claude_oom_launch.py`` (self-tag, then exec).
 
 The first argument is a service key from ``oom_priority.bands.SERVICE_BANDS``.
-Built-in services pass their own name (``system_interface``, ``cloudflared``,
+Built-in services pass their own name (``system_interface``, ``share-gateway``,
 ...); user-created services pass ``user`` so they are shed before any built-in
 service under memory pressure. An unknown key is tagged with the user-service
 band (with a warning), the same as ``user``: an unrecognized service must

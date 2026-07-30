@@ -538,7 +538,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
 
   - A **pinned-toolchain bump** in `setup_system.sh` /
     `install_secret_scanners.sh` (canonically `LATCHKEY_VERSION`, but also `UV_`,
-    `MODAL_`, `TTYD_`, `CLOUDFLARED_`, scanner pins) does **not** reach the live
+    `MODAL_`, `TTYD_`, `CADDY_`, `FRP_`, scanner pins) does **not** reach the live
     workspace on its own -- the globally-installed CLI stays at the old version
     until a rebuild. Apply it live by re-running the provisioner:
 
