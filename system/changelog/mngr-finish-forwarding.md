@@ -1,0 +1,1 @@
+Wire the new `share_gateway` service into the system: a supervisord program (`share-gateway`, gated on share materials like `cloudflared` is on its token), pinned sha256-verified `caddy` 2.11.4 and `frpc` 0.70.1 binaries in `setup_system.sh`, a `share-gateway` OOM band, the Dockerfile manifest layer, and workspace-member registration in the root pyproject.

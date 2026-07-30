@@ -68,6 +68,7 @@ COPY pyproject.toml uv.lock /home/user/workspace/
 COPY system/services/app_watcher/pyproject.toml /home/user/workspace/system/services/app_watcher/pyproject.toml
 COPY system/libs/bootstrap/pyproject.toml /home/user/workspace/system/libs/bootstrap/pyproject.toml
 COPY system/services/cloudflare_tunnel/pyproject.toml /home/user/workspace/system/services/cloudflare_tunnel/pyproject.toml
+COPY system/services/share_gateway/pyproject.toml /home/user/workspace/system/services/share_gateway/pyproject.toml
 COPY system/libs/github_sync/pyproject.toml /home/user/workspace/system/libs/github_sync/pyproject.toml
 COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/apps/system_interface/pyproject.toml
 

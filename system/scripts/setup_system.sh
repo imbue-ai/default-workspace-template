@@ -38,6 +38,8 @@ fi
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"
+: "${CADDY_VERSION:=2.11.4}"
+: "${FRP_VERSION:=0.70.1}"
 : "${LATCHKEY_VERSION:=3.1.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
@@ -137,6 +139,36 @@ tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_${gh_goarch}/bin/gh"
 mv -f "/tmp/gh_${GH_VERSION}_linux_${gh_goarch}/bin/gh" /usr/local/bin/gh
 chmod 0755 /usr/local/bin/gh
 rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${gh_goarch}"
+
+# caddy + frpc for the self-hosted sharing stack (the share-gateway service):
+# caddy terminates a shared workspace's TLS in-container; frpc is the outbound
+# tunnel to the region's relay. Neither is in Debian's snapshot mirror, so both
+# install like gh: fixed version, checksummed GitHub-release tarball.
+caddy_arch="$(uname -m)"
+case "${caddy_arch}" in
+    x86_64) caddy_goarch="amd64"; caddy_sha256="527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9" ;;
+    aarch64) caddy_goarch="arm64"; caddy_sha256="52d42ae12b3462097e9868da6dfed3c9648ae12edd3b3638102312af84cb6904" ;;
+    *) echo "Unsupported architecture for caddy: ${caddy_arch}" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${caddy_goarch}.tar.gz" -o /tmp/caddy.tar.gz
+echo "${caddy_sha256}  /tmp/caddy.tar.gz" | sha256sum -c -
+tar -xzf /tmp/caddy.tar.gz -C /tmp caddy
+mv -f /tmp/caddy /usr/local/bin/caddy
+chmod 0755 /usr/local/bin/caddy
+rm -f /tmp/caddy.tar.gz
+
+frp_arch="$(uname -m)"
+case "${frp_arch}" in
+    x86_64) frp_goarch="amd64"; frp_sha256="333da23d1b9009d7c01638e9ba38cf4600f7d37d393f854e96ee1396adefa9a6" ;;
+    aarch64) frp_goarch="arm64"; frp_sha256="3990f396a9a490ee7f0e5f355287750ed41520064ed999eab443b5e9a78d773d" ;;
+    *) echo "Unsupported architecture for frp: ${frp_arch}" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${frp_goarch}.tar.gz" -o /tmp/frp.tar.gz
+echo "${frp_sha256}  /tmp/frp.tar.gz" | sha256sum -c -
+tar -xzf /tmp/frp.tar.gz -C /tmp "frp_${FRP_VERSION}_linux_${frp_goarch}/frpc"
+mv -f "/tmp/frp_${FRP_VERSION}_linux_${frp_goarch}/frpc" /usr/local/bin/frpc
+chmod 0755 /usr/local/bin/frpc
+rm -rf /tmp/frp.tar.gz "/tmp/frp_${FRP_VERSION}_linux_${frp_goarch}"
 
 # uv (pinned). Installs to /root/.local/bin.
 curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
