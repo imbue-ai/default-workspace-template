@@ -132,27 +132,27 @@
       <div class="flex flex-col gap-4">
         <div>
           <p class="type-heading-lg text-primary">Large heading</p>
-          <p class="type-helper text-tertiary font-mono mt-0.5">type-heading-lg -- 24 / bold</p>
+          <p class="type-helper text-tertiary font-mono mt-0.5">type-heading-lg — 24 / bold</p>
         </div>
         <div>
           <p class="type-heading text-primary">Regular heading</p>
-          <p class="type-helper text-tertiary font-mono mt-0.5">type-heading -- 18 / semibold</p>
+          <p class="type-helper text-tertiary font-mono mt-0.5">type-heading — 18 / semibold</p>
         </div>
         <div>
           <p class="type-label text-primary">Label</p>
-          <p class="type-helper text-tertiary font-mono mt-0.5">type-label -- 14 / semibold</p>
+          <p class="type-helper text-tertiary font-mono mt-0.5">type-label — 14 / semibold</p>
         </div>
         <div>
-          <p class="type-body text-primary">Body -- the default readable paragraph text on a surface.</p>
-          <p class="type-helper text-tertiary font-mono mt-0.5">type-body -- 14 / regular</p>
+          <p class="type-body text-primary">Body — the default readable paragraph text on a surface.</p>
+          <p class="type-helper text-tertiary font-mono mt-0.5">type-body — 14 / regular</p>
         </div>
         <div>
-          <p class="type-helper text-primary">Helper -- captions, hints, and metadata sit at this size.</p>
-          <p class="type-helper text-tertiary font-mono mt-0.5">type-helper -- 12 / regular</p>
+          <p class="type-helper text-primary">Helper — captions, hints, and metadata sit at this size.</p>
+          <p class="type-helper text-tertiary font-mono mt-0.5">type-helper — 12 / regular</p>
         </div>
         <div>
           <p class="type-section text-secondary">Section title</p>
-          <p class="type-helper text-tertiary font-mono mt-0.5">type-section -- 12 / semibold / all caps</p>
+          <p class="type-helper text-tertiary font-mono mt-0.5">type-section — 12 / semibold / all caps</p>
         </div>
       </div>
     </section>
@@ -537,7 +537,7 @@
         <div class="flex flex-col items-center text-center">
           <div class="w-16 h-16 bg-fill-active rounded-xl"></div>
           <code class="type-helper font-mono text-secondary mt-1">rounded-xl (16px)</code>
-          <span class="type-helper text-secondary">reserved -- largest surfaces</span>
+          <span class="type-helper text-secondary">reserved — largest surfaces</span>
         </div>
         <div class="flex flex-col items-center text-center">
           <div class="w-16 h-16 bg-fill-active rounded-full"></div>
@@ -607,7 +607,7 @@
        system: though each is a JinjaX component, the set is a shared
        primitive ramp like the color / type tokens above. #}
     <section id="icons-16" class="scroll-mt-8 mb-6">
-      <h2 class="type-heading text-primary mb-1">Icons -- 16px (Icon16)</h2>
+      <h2 class="type-heading text-primary mb-1">Icons — 16px (Icon16)</h2>
       <div class="flex flex-wrap items-start gap-4 text-primary mt-4">
         <div class="flex flex-col items-start gap-1 w-16">
           <Icon16 name="menu" />
@@ -728,7 +728,7 @@
     </section>
 
     <section id="icons-12" class="scroll-mt-8 mb-6">
-      <h2 class="type-heading text-primary mb-1">Icons -- 12x12 chrome glyphs (Icon12)</h2>
+      <h2 class="type-heading text-primary mb-1">Icons — 12x12 chrome glyphs (Icon12)</h2>
       <div class="dark bg-surface-primary border border-default rounded-lg p-4 flex items-start gap-4 text-secondary mt-4">
         <div class="flex flex-col items-start gap-1 w-16">
           <Icon12 name="minimize" />
@@ -810,7 +810,7 @@
         </div>
         {% endfor %}
       </div>
-      <div class="mt-1 type-helper text-secondary font-mono">TitlebarButton.jinja + .titlebar-surface (app.css) -- 1/2/1 flex sections center the title; contrast derived from --titlebar-bg via lch</div>
+      <div class="mt-1 type-helper text-secondary font-mono">TitlebarButton.jinja + .titlebar-surface (app.css) — 1/2/1 flex sections center the title; contrast derived from --titlebar-bg via lch</div>
     </section>
 
     {# Notification badge. One component (Badge.jinja), two shapes: the count
@@ -839,7 +839,7 @@
           </TitlebarButton>
         </div>
       </div>
-      <div class="mt-1 type-helper text-secondary font-mono">templates/Badge.jinja (titlebar count: Chrome.jinja :: #requests-badge)</div>
+      <div class="mt-1 type-helper text-secondary font-mono">templates/Badge.jinja</div>
     </section>
 
     {# Window controls (only rendered on non-mac in real chrome) #}
@@ -869,7 +869,7 @@
       <h2 class="type-heading text-primary mb-2">Sidebar items</h2>
       <div id="styleguide-sidebar-rows"
            class="dark w-[280px] flex flex-col gap-0.5 p-1 rounded-lg border border-subtle bg-surface-primary overflow-hidden"></div>
-      <div class="mt-1 type-helper text-secondary font-mono">window.mindsSidebarRow.buildRow (sidebar_workspace_row.js) -- the one row builder shared by static/sidebar.js + static/chrome.js; SidebarBottom.jinja supplies the "New machine" / "Manage account(s)" rows below the machine list.</div>
+      <div class="mt-1 type-helper text-secondary font-mono">window.mindsSidebarRow.buildRow (sidebar_workspace_row.js) — the one row builder shared by static/sidebar.js + static/chrome.js; SidebarBottom.jinja supplies the "New machine" / "Manage account(s)" rows below the machine list.</div>
     </section>
 
     {# Accent spine. The left stripe is the only surface in the catalog that
@@ -892,7 +892,7 @@
     <section id="form-controls" class="scroll-mt-8 mb-6">
       <h2 class="type-heading text-primary mb-2">Form controls (TextInput / Select / Textarea)</h2>
       <div class="flex flex-col gap-3">
-        <TextInput name="styleguide-accent-input" placeholder="TextInput -- click to focus" />
+        <TextInput name="styleguide-accent-input" placeholder="TextInput — click to focus" />
         <div class="flex items-center gap-2">
           <Select name="styleguide-select" width="w-48">
             <option>Option A</option>
@@ -946,7 +946,7 @@
 
     {# Buttons #}
     <section id="buttons" class="scroll-mt-8 mb-6">
-      <h2 class="type-heading text-primary mb-2">Buttons -- variants</h2>
+      <h2 class="type-heading text-primary mb-2">Buttons — variants</h2>
       <div class="flex flex-wrap items-center gap-2">
         <Button variant="primary">Primary</Button>
         <Button variant="secondary">Secondary</Button>
@@ -959,7 +959,7 @@
 
     {# Button sizes #}
     <section id="button-sizes" class="scroll-mt-8 mb-6">
-      <h2 class="type-heading text-primary mb-2">Buttons -- sizes</h2>
+      <h2 class="type-heading text-primary mb-2">Buttons — sizes</h2>
       <div class="flex flex-col gap-3">
         <div class="flex flex-wrap items-center gap-2">
           <Button variant="primary" size="md">Default (md)</Button>
@@ -996,7 +996,7 @@
        over this pattern when the affordance is a real navigation --
        keyboard focus and accessibility are cleaner on a plain anchor. #}
     <section id="button-links" class="scroll-mt-8 mb-6">
-      <h2 class="type-heading text-primary mb-2">Buttons -- link style (via extra=)</h2>
+      <h2 class="type-heading text-primary mb-2">Buttons — link style (via extra=)</h2>
       <div class="flex flex-wrap items-center gap-4">
         <Button variant="ghost"
                 extra="!p-0 !bg-transparent !type-helper !text-accent hover:!bg-transparent hover:underline">
@@ -1030,7 +1030,7 @@
       <h2 class="type-heading text-primary mb-2">Cards</h2>
       <div class="flex flex-col gap-2">
         <Card>
-          <span class="type-body text-primary">Default block card -- caller arranges children.</span>
+          <span class="type-body text-primary">Default block card — caller arranges children.</span>
         </Card>
         <Card layout="row-spread">
           <span class="font-semibold text-primary">my-service</span>
@@ -1065,7 +1065,7 @@
       <div class="flex gap-4 items-stretch" role="radiogroup" aria-label="Preset card demo">
         <PresetCard preset="demo-a" selected extra="flex-1">
           <span class="type-heading text-primary">Selected</span>
-          <span class="type-body text-secondary">aria-checked="true" -- accent outline, no tint.</span>
+          <span class="type-body text-secondary">aria-checked="true" — accent outline, no tint.</span>
         </PresetCard>
         <PresetCard preset="demo-b" extra="flex-1">
           <span class="type-heading text-primary">Unselected</span>

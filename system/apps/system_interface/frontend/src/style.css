@@ -1379,8 +1379,8 @@ body {
   flex-shrink: 0;
 }
 
-/* The resolved receipt: badge, title, and the right-aligned verdict on one
-   compact line. */
+/* The resolved receipt, all on one compact line: badge, title, the verdict
+   right beside the title, and the raw toggle at the right edge. */
 .permission-request-receipt {
   margin-top: 10px;
   display: flex;
@@ -1389,7 +1389,6 @@ body {
 }
 
 .permission-request-receipt-title {
-  flex: 1;
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
@@ -1399,7 +1398,13 @@ body {
   white-space: nowrap;
 }
 
-/* The verdict at the right of the receipt row. Approved reads in the accent
+/* The raw toggle inside the receipt row, kept at the right edge. */
+.permission-request-receipt-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* The verdict beside the receipt title. Approved reads in the accent
    green; denied reads neutral (a decision, not an error). */
 .permission-request-verdict {
   display: inline-flex;

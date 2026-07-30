@@ -13,6 +13,7 @@ Jinja2 macros + ``{% extends %}`` to JinjaX components.
 """
 
 import html
+import json
 import os
 import re
 from collections.abc import Collection
@@ -65,6 +66,14 @@ from imbue.mngr_forward.loading_page import LOADING_CARD_CSS
 from imbue.mngr_forward.loading_page import render_loading_card
 
 TEMPLATE_DIR: Final[Path] = Path(__file__).resolve().parent / "templates"
+
+# Service names that ship a brand mark in static/service_icons/<name>.svg,
+# resolved once at import so templates can fall back to a generic glyph for
+# services without one (the directory is packaged with the wheel alongside the
+# rest of static/).
+_SERVICE_ICON_NAMES: Final[frozenset[str]] = frozenset(
+    icon.stem for icon in (Path(__file__).resolve().parent / "static" / "service_icons").glob("*.svg")
+)
 
 # Shared Tailwind class strings for the three button components
 # (Button.jinja, ButtonLink.jinja, ButtonSubmit.jinja). Exposed as JinjaX
@@ -162,6 +171,10 @@ _ICONS_16: Final[Mapping[str, str]] = {
     "share": '<path d="M9.78225 1.44141C10.0122 1.35145 10.2738 1.4114 10.4414 1.59278L15.4405 7.00391C15.6532 7.23415 15.6527 7.58953 15.4395 7.81934L10.4405 13.208C10.2726 13.3889 10.011 13.4485 9.78127 13.3584C9.55172 13.2682 9.40041 13.0465 9.40041 12.7998V10.04C7.84575 10.1878 6.30604 10.8831 4.98537 11.7168C3.50242 12.653 2.35808 13.7236 1.87209 14.2412L1.87112 14.2402C1.75059 14.3697 1.59344 14.4597 1.41994 14.4951C1.2432 14.5312 1.05947 14.5098 0.895531 14.4346C0.731549 14.3593 0.595769 14.2337 0.507836 14.0762C0.419903 13.9186 0.384182 13.7367 0.406273 13.5576H0.40725C0.667763 11.3166 2.21196 9.13775 4.04592 7.54297C5.68193 6.12036 7.67022 5.05919 9.40041 4.85059V2C9.40041 1.75301 9.55223 1.53141 9.78225 1.44141ZM10.6006 5.41114C10.6006 5.74242 10.3323 6.01061 10.001 6.01075C8.5585 6.01075 6.56212 6.94567 4.83401 8.44825C3.45889 9.644 2.35133 11.1163 1.85354 12.5898C2.48514 12.023 3.34266 11.3348 4.34475 10.7022C5.92057 9.70737 7.91948 8.81055 10.001 8.81055C10.3321 8.81069 10.6004 9.07906 10.6006 9.41016V11.2705L14.1817 7.41016L10.6006 3.53321V5.41114Z"/>',
     "box": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></g>',
     "link": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><path d="M8 12h8"/></g>',
+    # Lucide-derived stroked glyph (same 2/3 scale trick as panels-top-left).
+    # Used by the Permissions icon-tab in the titlebar breadcrumb and the
+    # Permissions pane heading.
+    "key": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></g>',
     "copy": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></g>',
     "info": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></g>',
     "cloud": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></g>',
@@ -273,6 +286,7 @@ def _build_catalog() -> Catalog:
             "ADD_ACCOUNT_OPTION_VALUE": ADD_ACCOUNT_OPTION_VALUE,
             "ICONS_16": _ICONS_16,
             "ICONS_12": _ICONS_12,
+            "SERVICE_ICON_NAMES": _SERVICE_ICON_NAMES,
             # Resolved per render so the page only boots the frontend Sentry SDK
             # when the user has enabled error reporting (returns None otherwise).
             # See _frontend_sentry_browser_payload, imbue/minds/utils/sentry/frontend.py,
@@ -960,55 +974,38 @@ def render_request_error_page(title: str, message: str) -> str:
 
 @pure
 def render_inbox_page(
-    cards: Sequence[Mapping[str, str]],
+    pending: Sequence[Mapping[str, str]],
     selected_id: str = "",
     detail_html: str = "",
     is_empty: bool = False,
-    auto_open: bool = True,
-    keep_open: bool = False,
 ) -> str:
-    """Render the full inbox modal page served by ``GET /inbox``.
+    """Render the permission-request popup page served by ``GET /inbox``.
 
-    ``cards`` is the initial left-list content (most-recent-first).
-    ``selected_id`` highlights one card; ``detail_html`` is the
-    pre-rendered right-pane fragment (handler detail, unavailable
-    fragment, or empty). ``is_empty`` is True when there are no
-    pending requests and the layout collapses to a centered message.
-    ``auto_open`` is the initial state of the "Auto-open on new
-    request" checkbox in the inbox header. ``keep_open`` is True only
-    when the user intentionally opened the whole inbox (via the
-    Requests button); when False, resolving a request via Approve/Deny
-    dismisses the whole window instead of advancing to the next
-    pending request.
+    ``pending`` is the pending-request metadata (dicts with ``id``,
+    ``ws_name``, ``accent``), most-recent-first -- the queue the popup
+    advances through. ``selected_id`` is the request being shown;
+    ``detail_html`` its pre-rendered handler fragment (or the
+    unavailable fragment). ``is_empty`` renders the caught-up state.
+    The metadata is serialized here so the shell script can read it
+    from an ``application/json`` block without any inline templating.
     """
     return CATALOG.render(
         "pages.Inbox",
-        cards=cards,
+        pending=pending,
         selected_id=selected_id,
         detail_html=detail_html,
         is_empty=is_empty,
-        auto_open=auto_open,
-        keep_open=keep_open,
+        pending_json=json.dumps([dict(meta) for meta in pending]),
     )
 
 
 @pure
-def render_inbox_list_fragment(
-    cards: Sequence[Mapping[str, str]],
-    selected_id: str = "",
-) -> str:
-    """Render the inbox left-list fragment served by ``GET /inbox/list``."""
-    return CATALOG.render("InboxList", cards=cards, selected_id=selected_id)
-
-
-@pure
 def render_inbox_unavailable_fragment(message: str = "") -> str:
-    """Render the inbox right-pane "no longer available" fragment.
+    """Render the popup's "no longer available" fragment.
 
     Returned by ``GET /inbox/detail/<id>`` when the id is unknown or
-    already resolved; also innerHTML-swapped into the right pane by the
-    inbox shell JS when an SSE event resolves the currently-selected
-    item.
+    already resolved; also innerHTML-swapped into the popup's pane by
+    the shell JS when an SSE event resolves the shown request.
 
     ``message`` is an optional supporting sentence rendered under the
     fragment's heading. When empty (the default), only the heading is
@@ -2103,7 +2100,7 @@ def warm_template_caches() -> None:
         render_sidebar_page,
         render_overlay_host_page,
         lambda: render_help_page(workspace_agent_id=""),
-        lambda: render_inbox_page(cards=()),
+        lambda: render_inbox_page(pending=()),
     ):
         try:
             render()
@@ -2303,12 +2300,19 @@ def render_workspace_options_page(
     is_stale: bool = False,
     has_account: bool = False,
     selected_group: str = "general",
+    permissions_view: object | None = None,
+    waiting_requests: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """Render the browser-mode workspace options page (``GET /workspace/<agent_id>/options``).
 
-    The full-page twin of the docked panel: the same Share machine / Machine
-    Settings panes without the overlay chrome, since outside Electron the
-    titlebar's icon-tabs navigate instead of opening an overlay.
+    The full-page twin of the docked panel: the same Permissions / Share
+    machine / Machine Settings panes without the overlay chrome, since outside
+    Electron the titlebar's icon-tabs navigate instead of opening an overlay.
+
+    ``permissions_view`` is the Permissions pane's
+    :class:`~imbue.minds.desktop_client.latchkey.permission_toggles.WorkspacePermissionsView`,
+    or ``None`` when the latchkey gateway is unavailable (the pane then renders
+    its unavailable notice).
     """
     app_services, whole_service = _split_share_targets(servers)
     return CATALOG.render(
@@ -2328,6 +2332,8 @@ def render_workspace_options_page(
         is_stale=is_stale,
         palette=WORKSPACE_PALETTE,
         selected_group=selected_group,
+        permissions_view=permissions_view,
+        waiting_requests=waiting_requests,
     )
 
 
@@ -2349,6 +2355,8 @@ def render_workspace_options_modal_page(
     is_stale: bool = False,
     has_account: bool = False,
     selected_group: str = "general",
+    permissions_view: object | None = None,
+    waiting_requests: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """Render the workspace options panel (``GET /workspace/<agent_id>/options/modal``).
 
@@ -2357,6 +2365,9 @@ def render_workspace_options_modal_page(
     the Electron main process. Supplying it docks the panel under that strip and
     draws the tab strip in its place; omitting it -- there is no such strip
     outside a workspace -- centers the panel and drops the tabs.
+
+    ``permissions_view`` feeds the Permissions pane; ``None`` renders its
+    unavailable notice (see :func:`render_workspace_options_page`).
     """
     app_services, whole_service = _split_share_targets(servers)
     return CATALOG.render(
@@ -2379,6 +2390,8 @@ def render_workspace_options_modal_page(
         is_stale=is_stale,
         palette=WORKSPACE_PALETTE,
         selected_group=selected_group,
+        permissions_view=permissions_view,
+        waiting_requests=waiting_requests,
     )
 
 

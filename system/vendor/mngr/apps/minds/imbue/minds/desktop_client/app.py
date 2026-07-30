@@ -85,6 +85,11 @@ from imbue.minds.desktop_client.latchkey.permission_overview import revoke_file_
 from imbue.minds.desktop_client.latchkey.permission_overview import revoke_service_account_for_all_workspaces
 from imbue.minds.desktop_client.latchkey.permission_overview import revoke_service_account_for_workspace
 from imbue.minds.desktop_client.latchkey.permission_overview import revoke_workspace_verb_for_workspace
+from imbue.minds.desktop_client.latchkey.permission_toggles import PermissionToggleError
+from imbue.minds.desktop_client.latchkey.permission_toggles import WorkspacePermissionsView
+from imbue.minds.desktop_client.latchkey.permission_toggles import apply_connector_toggle
+from imbue.minds.desktop_client.latchkey.permission_toggles import apply_self_toggle
+from imbue.minds.desktop_client.latchkey.permission_toggles import build_workspace_permissions_view
 from imbue.minds.desktop_client.mind_liveness import compute_mind_liveness_by_agent_id
 from imbue.minds.desktop_client.mind_liveness import get_shutdown_capable_workspace_agent_ids
 from imbue.minds.desktop_client.minds_config import MindsConfig
@@ -98,6 +103,10 @@ from imbue.minds.desktop_client.region_preference import IMBUE_CLOUD_PROVIDER_KE
 from imbue.minds.desktop_client.region_preference import VULTR_PROVIDER_KEY
 from imbue.minds.desktop_client.region_preference import known_regions_for_provider
 from imbue.minds.desktop_client.report_collector import submit_bug_report_from_body
+from imbue.minds.desktop_client.request_events import LatchkeyAccountsPermissionRequestEvent
+from imbue.minds.desktop_client.request_events import LatchkeyFileSharingPermissionRequestEvent
+from imbue.minds.desktop_client.request_events import LatchkeyPredefinedPermissionRequestEvent
+from imbue.minds.desktop_client.request_events import LatchkeyWorkspacePermissionRequestEvent
 from imbue.minds.desktop_client.request_events import RequestEvent
 from imbue.minds.desktop_client.request_events import RequestInbox
 from imbue.minds.desktop_client.request_events import RequestType
@@ -140,7 +149,6 @@ from imbue.minds.desktop_client.templates import render_destroyed_workspaces_row
 from imbue.minds.desktop_client.templates import render_destroying_page
 from imbue.minds.desktop_client.templates import render_dev_styleguide_page
 from imbue.minds.desktop_client.templates import render_help_page
-from imbue.minds.desktop_client.templates import render_inbox_list_fragment
 from imbue.minds.desktop_client.templates import render_inbox_page
 from imbue.minds.desktop_client.templates import render_inbox_unavailable_fragment
 from imbue.minds.desktop_client.templates import render_inspiration_create_page
@@ -1784,14 +1792,7 @@ def _handle_chrome_events() -> Response:
             yield "data: {}\n\n".format(json.dumps({"type": "providers_state", **last_providers_data}))
             inbox: RequestInbox | None = get_state().request_inbox
             last_requests_payload = _build_requests_payload(inbox, backend_resolver)
-            # ``auto_open`` is bundled with the requests payload (rather than
-            # its own SSE event) so the Electron shell sees both atomically
-            # when deciding whether to auto-open the panel.
-            minds_config: MindsConfig | None = get_state().minds_config
-            auto_open = minds_config.get_auto_open_requests_panel() if minds_config else True
-            yield "data: {}\n\n".format(
-                json.dumps({"type": "requests", **last_requests_payload, "auto_open": auto_open})
-            )
+            yield "data: {}\n\n".format(json.dumps({"type": "requests", **last_requests_payload}))
 
             # Agents for which a STUCK redirect has already been emitted on this
             # connection, so a steadily-STUCK workspace is redirected exactly once
@@ -1952,10 +1953,7 @@ def _handle_chrome_events() -> Response:
                 # still pushes an update and the panel refreshes.
                 if current_requests_payload != last_requests_payload:
                     last_requests_payload = current_requests_payload
-                    auto_open = minds_config.get_auto_open_requests_panel() if minds_config else True
-                    yield "data: {}\n\n".format(
-                        json.dumps({"type": "requests", **current_requests_payload, "auto_open": auto_open})
-                    )
+                    yield "data: {}\n\n".format(json.dumps({"type": "requests", **current_requests_payload}))
         finally:
             event_broadcaster.unsubscribe(broadcast_queue, change_event)
             if isinstance(backend_resolver, MngrCliBackendResolver):
@@ -3370,9 +3368,14 @@ def _handle_workspace_settings(
     return make_html_response(content=html)
 
 
+# The panes the workspace options surfaces offer, in tab-strip order.
+_OPTIONS_TABS: Final[frozenset[str]] = frozenset({"permissions", "share", "settings"})
+
+
 def _requested_options_tab() -> str:
     """The pane the options surfaces should open on. Anything unrecognized is Share."""
-    return "settings" if request.args.get("tab") == "settings" else "share"
+    tab = request.args.get("tab", "")
+    return tab if tab in _OPTIONS_TABS else "share"
 
 
 # The Machine settings groups, as WorkspaceSettingsSections renders them.
@@ -3390,8 +3393,91 @@ def _requested_settings_group() -> str:
     return group if group in _SETTINGS_GROUPS else "general"
 
 
+def _build_waiting_requests_for_workspace(agent_id: str) -> list[Mapping[str, str]]:
+    """Build the "Waiting on you" rows for one workspace's Permissions pane.
+
+    Every displayable pending permission request filed by this workspace's
+    agents (matched by workspace name -- latchkey requests are filed by the
+    ``system-services`` sibling, which resolves to the same workspace),
+    oldest first. Each row carries the ``id`` (opens the review popup), a
+    ``title`` matching the popup's headline, the agent's ``reason``, and
+    the ``service_name`` whose brand mark leads the row (empty for the
+    non-service kinds, which fall back to their category glyph).
+    """
+    inbox: RequestInbox | None = get_state().request_inbox
+    backend_resolver: BackendResolverInterface = get_state().backend_resolver
+    handler = _find_predefined_permission_handler()
+    try:
+        parsed_agent_id = AgentId(agent_id)
+    except ValueError:
+        return []
+    ws_name = backend_resolver.get_workspace_name(parsed_agent_id) or ""
+    if not ws_name:
+        return []
+    rows: list[Mapping[str, str]] = []
+    # Pending requests come most-recent-first; the strip reads oldest first
+    # (the request the agent has been blocked on longest leads).
+    for req in reversed(_displayable_pending_requests(inbox, backend_resolver)):
+        req_ws_name = backend_resolver.get_workspace_name(AgentId(req.agent_id)) or ""
+        if req_ws_name != ws_name:
+            continue
+        title = "Permission request"
+        reason = ""
+        service_name = ""
+        if isinstance(req, LatchkeyPredefinedPermissionRequestEvent):
+            reason = req.rationale
+            info = handler.services_catalog.get_by_scope(req.scope) if handler is not None else None
+            if info is not None:
+                title = info.display_name
+                service_name = info.name
+            else:
+                title = req.scope
+        elif isinstance(req, LatchkeyFileSharingPermissionRequestEvent):
+            title = "Local files"
+            reason = req.rationale
+        elif isinstance(req, LatchkeyWorkspacePermissionRequestEvent):
+            title = "Other machines"
+            reason = req.rationale
+        elif isinstance(req, LatchkeyAccountsPermissionRequestEvent):
+            title = "Device accounts"
+            reason = req.rationale
+        rows.append(
+            {
+                "id": str(req.event_id),
+                "title": title,
+                "reason": reason,
+                "service_name": service_name,
+            }
+        )
+    return rows
+
+
+def _build_workspace_permissions_view_or_none(agent_id: str) -> WorkspacePermissionsView | None:
+    """Build the Permissions pane's view, or ``None`` when it cannot be loaded.
+
+    ``None`` covers every unavailable case -- no predefined-permission handler
+    wired (tests, degraded startup), an unresolvable workspace host, or an
+    unreachable latchkey gateway -- and renders as the pane's unavailable
+    notice, mirroring ``_build_app_settings_context``.
+    """
+    handler = _find_predefined_permission_handler()
+    if handler is None:
+        return None
+    try:
+        return build_workspace_permissions_view(
+            backend_resolver=get_state().backend_resolver,
+            gateway_client=handler.gateway_client,
+            services_catalog=handler.services_catalog,
+            latchkey=handler.latchkey,
+            workspace_agent_id=agent_id,
+        )
+    except (PermissionToggleError, LatchkeyGatewayClientError) as e:
+        logger.warning("Could not build the workspace permissions view for {}: {}", agent_id, e)
+        return None
+
+
 def _handle_workspace_options(agent_id: str) -> Response:
-    """Render the browser-mode workspace options page (Share machine / Machine settings)."""
+    """Render the browser-mode workspace options page (Permissions / Share machine / Machine settings)."""
     if not _is_request_authenticated():
         return make_response(status_code=403, content="Not authenticated")
     context = _build_workspace_context(agent_id)
@@ -3409,6 +3495,8 @@ def _handle_workspace_options(agent_id: str) -> Response:
         current_color=context.current_color,
         is_stale=context.is_stale,
         has_account=context.has_account,
+        permissions_view=_build_workspace_permissions_view_or_none(agent_id),
+        waiting_requests=_build_waiting_requests_for_workspace(agent_id),
     )
     return make_html_response(content=html)
 
@@ -3441,8 +3529,122 @@ def _handle_workspace_options_modal(agent_id: str) -> Response:
         current_color=context.current_color,
         is_stale=context.is_stale,
         has_account=context.has_account,
+        permissions_view=_build_workspace_permissions_view_or_none(agent_id),
+        waiting_requests=_build_waiting_requests_for_workspace(agent_id),
     )
     return make_html_response(content=html)
+
+
+# The Permissions pane's toggle routes. Each flip posts the single toggled
+# permission plus its new state; the server recomputes the affected rule's
+# COMPLETE permission set from the current file and writes that back (the
+# gateway's permissions extension always receives the full set, never a diff).
+# Recomputing server-side is what keeps a buggy or hostile page from clobbering
+# the unrelated baseline permissions that share the ``latchkey-self`` rule.
+
+
+def _toggle_field_errors(body: Mapping[str, Any], required_strings: Sequence[str]) -> Response | None:
+    """400 when a toggle body is missing its string fields or a boolean ``enabled``."""
+    missing = [field for field in required_strings if not isinstance(body.get(field), str) or not body.get(field)]
+    if missing:
+        return _json_error(f"{', '.join(required_strings)} are required.", status_code=400)
+    if not isinstance(body.get("enabled"), bool):
+        return _json_error("enabled must be a boolean.", status_code=400)
+    return None
+
+
+def _apply_permission_toggle(toggle: Callable[..., object], **kwargs: Any) -> Response:
+    """Run a toggle call and map its outcome to an HTTP response (mirrors ``_apply_revoke``)."""
+    try:
+        toggle(**kwargs)
+    except PermissionToggleError as e:
+        return _json_error(str(e), status_code=400)
+    except LatchkeyGatewayClientError as e:
+        logger.warning("Could not apply the permission toggle through the latchkey gateway: {}", e)
+        return _json_error(f"Could not apply the change through the latchkey gateway: {e}", status_code=502)
+    return make_response(content='{"status": "ok"}', media_type="application/json")
+
+
+def _handle_workspace_permission_connector_toggle(agent_id: str) -> Response:
+    """Flip one connector permission (POST /workspace/<agent_id>/permissions/connector-toggle).
+
+    Body: ``{"scope": "...", "account": "...", "permission": "...", "enabled": bool}``
+    (the unnamed default account is the empty string). The full permission set
+    for the ``(scope, account)`` rule is recomputed server-side; turning the
+    last permission off deletes the rule.
+    """
+    prelude = _revoke_prelude()
+    if isinstance(prelude, Response):
+        return prelude
+    body, handler = prelude
+    field_error = _toggle_field_errors(body, ("scope", "permission"))
+    if field_error is not None or "account" not in body:
+        return field_error or _json_error("scope, permission and account are required.", status_code=400)
+    return _apply_permission_toggle(
+        apply_connector_toggle,
+        backend_resolver=get_state().backend_resolver,
+        gateway_client=handler.gateway_client,
+        services_catalog=handler.services_catalog,
+        latchkey=handler.latchkey,
+        workspace_agent_id=agent_id,
+        scope=str(body["scope"]),
+        account=str(body.get("account", "")),
+        permission=str(body["permission"]),
+        enabled=bool(body["enabled"]),
+    )
+
+
+def _handle_workspace_permission_self_toggle(agent_id: str) -> Response:
+    """Flip one ``latchkey-self`` toggle (POST /workspace/<agent_id>/permissions/self-toggle).
+
+    Body: ``{"permission": "...", "enabled": bool}`` where the permission is a
+    ``minds-file-server-*`` (Local files) or ``minds-workspaces-*`` (Other
+    machines) name. The whole ``latchkey-self`` rule is rewritten with the
+    recomputed full list; unrelated baseline permissions are preserved.
+    """
+    prelude = _revoke_prelude()
+    if isinstance(prelude, Response):
+        return prelude
+    body, handler = prelude
+    field_error = _toggle_field_errors(body, ("permission",))
+    if field_error is not None:
+        return field_error
+    return _apply_permission_toggle(
+        apply_self_toggle,
+        backend_resolver=get_state().backend_resolver,
+        gateway_client=handler.gateway_client,
+        latchkey=handler.latchkey,
+        workspace_agent_id=agent_id,
+        permission=str(body["permission"]),
+        enabled=bool(body["enabled"]),
+    )
+
+
+def _handle_workspace_permission_revoke_all(agent_id: str) -> Response:
+    """Revoke one connector account's grants for this workspace only.
+
+    Route: POST /workspace/<agent_id>/permissions/connector-revoke-all. Body:
+    ``{"service_name": "...", "account": "..."}``. The Permissions pane's
+    "Revoke all" action; same effect as the settings page's per-workspace
+    revoke.
+    """
+    prelude = _revoke_prelude()
+    if isinstance(prelude, Response):
+        return prelude
+    body, handler = prelude
+    service_name = str(body.get("service_name", ""))
+    if not service_name or "account" not in body:
+        return _json_error("service_name and account are required.", status_code=400)
+    return _apply_revoke(
+        revoke_service_account_for_workspace,
+        backend_resolver=get_state().backend_resolver,
+        gateway_client=handler.gateway_client,
+        services_catalog=handler.services_catalog,
+        latchkey=handler.latchkey,
+        workspace_agent_id=agent_id,
+        service_name=service_name,
+        account=str(body.get("account", "")),
+    )
 
 
 def _handle_workspace_backup_history(agent_id: str) -> Response:
@@ -3461,28 +3663,26 @@ def _handle_workspace_backup_history(agent_id: str) -> Response:
     return make_html_response(content=html)
 
 
-# -- Inbox routes --
+# -- Permission-request popup routes --
 
 
-def _build_inbox_cards() -> list[Mapping[str, str]]:
-    """Build the inbox card dicts for the current pending requests.
+def _build_pending_request_metas() -> list[Mapping[str, str]]:
+    """Build the pending-request metadata the popup's queue and eyebrow read.
 
-    Each card carries the fields the InboxList JinjaX component reads:
-    ``id``, ``kind_label``, ``ws_name``, ``display_name``, ``accent``.
-    Order matches ``RequestInbox.get_pending_requests`` --
-    most-recent-first.
+    Each entry carries ``id``, ``ws_name``, and ``accent``. Order matches
+    ``RequestInbox.get_pending_requests`` -- most-recent-first -- which is
+    the order the popup advances through.
     """
     inbox: RequestInbox | None = get_state().request_inbox
     backend_resolver: BackendResolverInterface = get_state().backend_resolver
     pending = _displayable_pending_requests(inbox, backend_resolver)
-    handlers: tuple[RequestEventHandler, ...] = get_state().request_event_handlers
-    # Map ws_name -> "homepage agent id" so the card accent matches the
+    # Map ws_name -> "homepage agent id" so the eyebrow accent matches the
     # color the homepage tile and the titlebar use for that workspace
     # name. Each minds workspace owns two sibling mngr agents -- a
     # user-facing claude agent + a ``system-services`` agent. Latchkey
     # permission requests are filed by ``system-services``, so
     # ``req.agent_id`` is the sibling-not-shown-on-homepage. Computing
-    # accent off the homepage agent's id keeps the inbox color in sync
+    # accent off the homepage agent's id keeps the popup color in sync
     # with the rest of the UI. Falls back to the default workspace color
     # if no discovered agent claims that workspace (e.g. a freshly-arrived
     # request whose host hasn't been re-discovered yet).
@@ -3491,45 +3691,30 @@ def _build_inbox_cards() -> list[Mapping[str, str]]:
         wn = backend_resolver.get_workspace_name(aid)
         if wn and wn not in primary_agent_id_by_ws_name:
             primary_agent_id_by_ws_name[wn] = str(aid)
-    cards: list[Mapping[str, str]] = []
+    metas: list[Mapping[str, str]] = []
     for req in pending:
-        handler = find_handler_for_event(handlers, req)
-        if handler is not None:
-            kind_label = handler.kind_label()
-            display_name = handler.display_name_for_event(req)
-        else:
-            # Fall through: unknown request type. Should never happen in
-            # practice -- a request without a registered handler can't be
-            # rendered or resolved -- but we still surface it in the
-            # inbox so the user sees something is wrong.
-            kind_label = "request"
-            display_name = ""
         parsed_id = AgentId(req.agent_id)
         ws_name = backend_resolver.get_workspace_name(parsed_id) or ""
         if not ws_name:
             info = backend_resolver.get_agent_display_info(parsed_id)
             ws_name = info.agent_name if info else req.agent_id[:16]
-        # Inbox card accent mirrors the homepage tile's accent for the
-        # workspace the request belongs to. ``primary_agent_id_by_ws_name``
-        # comes from the resolver's current snapshot, so the primary id
-        # is always a freshly-stringified AgentId -- reparsing through
-        # AgentId is safe.
+        # ``primary_agent_id_by_ws_name`` comes from the resolver's current
+        # snapshot, so the primary id is always a freshly-stringified
+        # AgentId -- reparsing through AgentId is safe.
         primary_agent_id_str = primary_agent_id_by_ws_name.get(ws_name)
         accent = (
             _resolved_workspace_color(backend_resolver, AgentId(primary_agent_id_str))
             if primary_agent_id_str is not None
             else DEFAULT_WORKSPACE_COLOR
         )
-        cards.append(
+        metas.append(
             {
                 "id": str(req.event_id),
-                "kind_label": kind_label,
                 "ws_name": ws_name,
-                "display_name": display_name,
                 "accent": accent,
             }
         )
-    return cards
+    return metas
 
 
 def _resolve_inbox_selection(
@@ -3538,12 +3723,11 @@ def _resolve_inbox_selection(
 ) -> tuple[str, str]:
     """Resolve ``?selected=<id>`` to ``(selected_id, detail_html)``.
 
-    Returns the id that should be highlighted in the left list and the
-    HTML to embed in the right pane. Falls back to the first pending
-    request when ``selected_id`` is empty; returns an "unavailable"
-    fragment when the id is unknown or already resolved. ``selected_id``
-    is the empty string if the inbox is empty or no item could be
-    resolved.
+    Returns the id of the request the popup should show and the HTML to
+    embed in its pane. Falls back to the first pending request when
+    ``selected_id`` is empty; returns an "unavailable" fragment when the
+    id is unknown or already resolved. ``selected_id`` is the empty
+    string if nothing is pending or no item could be resolved.
     """
     inbox: RequestInbox | None = get_state().request_inbox
     if inbox is None:
@@ -3585,38 +3769,26 @@ def _resolve_inbox_selection(
 
 
 def _handle_inbox_page() -> Response:
-    """Render the full inbox modal page (``GET /inbox``)."""
+    """Render the permission-request popup page (``GET /inbox``).
+
+    The popup shows one request at a time (``?selected=<id>``, defaulting
+    to the first pending one) and advances through the pending queue as
+    requests resolve; the queue metadata rides along for the shell JS.
+    """
     if not _is_request_authenticated():
         return make_html_response(content="<p>Not authenticated</p>")
     backend_resolver = get_state().backend_resolver
-    cards = _build_inbox_cards()
+    pending = _build_pending_request_metas()
     selected_query = request.args.get("selected", "")
     selected_id, detail_html = _resolve_inbox_selection(selected_query, backend_resolver)
-    minds_config: MindsConfig | None = get_state().minds_config
-    auto_open = minds_config.get_auto_open_requests_panel() if minds_config else True
-    # ``keep_open=1`` is set only when the user intentionally opens the whole
-    # inbox via the Requests button; without it (notification click, workspace
-    # relay, or auto-open on a new request), resolving a request dismisses the
-    # whole window rather than advancing to an unrelated stale request.
-    keep_open = request.args.get("keep_open") == "1"
     return make_html_response(
         content=render_inbox_page(
-            cards=cards,
+            pending=pending,
             selected_id=selected_id,
             detail_html=detail_html,
-            is_empty=len(cards) == 0,
-            auto_open=auto_open,
-            keep_open=keep_open,
+            is_empty=len(pending) == 0,
         )
     )
-
-
-def _handle_inbox_list_fragment() -> Response:
-    """Return the left-list fragment (``GET /inbox/list``)."""
-    if not _is_request_authenticated():
-        return make_html_response(content="<p>Not authenticated</p>")
-    cards = _build_inbox_cards()
-    return make_html_response(content=render_inbox_list_fragment(cards=cards, selected_id=""))
 
 
 def _handle_inbox_detail_fragment(
@@ -3662,23 +3834,6 @@ def _handle_inbox_detail_fragment(
             mngr_forward_origin=_get_mngr_forward_origin(),
         )
     )
-
-
-def _handle_requests_auto_open() -> Response:
-    """Toggle the auto-open setting for the inbox modal.
-
-    The route URL and on-disk setting key keep ``requests-panel`` /
-    ``auto_open_requests_panel`` for backward compatibility (see
-    :class:`MindsConfig`); "panel" here now refers to the inbox modal.
-    """
-    if not _is_request_authenticated():
-        return make_response(status_code=403, content='{"error":"Not authenticated"}', media_type="application/json")
-    minds_config: MindsConfig | None = get_state().minds_config
-    if minds_config is not None:
-        body = request.get_json(silent=True, force=True)
-        enabled = body.get("enabled", True) if isinstance(body, dict) else True
-        minds_config.set_auto_open_requests_panel(bool(enabled))
-    return make_response(status_code=200, content='{"ok": true}', media_type="application/json")
 
 
 def _resolve_ws_name_and_account(
@@ -4091,15 +4246,30 @@ def create_desktop_client(
     app.add_url_rule("/workspace/<agent_id>/settings", view_func=_handle_workspace_settings)
     app.add_url_rule("/workspace/<agent_id>/options", view_func=_handle_workspace_options)
     app.add_url_rule("/workspace/<agent_id>/options/modal", view_func=_handle_workspace_options_modal)
+    # The options panel's Permissions pane: single-toggle flips (the server
+    # recomputes the full permission set) and the per-connection revoke-all.
+    app.add_url_rule(
+        "/workspace/<agent_id>/permissions/connector-toggle",
+        view_func=_handle_workspace_permission_connector_toggle,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/workspace/<agent_id>/permissions/self-toggle",
+        view_func=_handle_workspace_permission_self_toggle,
+        methods=["POST"],
+    )
+    app.add_url_rule(
+        "/workspace/<agent_id>/permissions/connector-revoke-all",
+        view_func=_handle_workspace_permission_revoke_all,
+        methods=["POST"],
+    )
     # Full backup-history page, reached from the settings page's
     # "View all N backups" footer.
     app.add_url_rule("/workspace/<agent_id>/backups", view_func=_handle_workspace_backup_history)
 
     # Request inbox routes
     app.add_url_rule("/inbox", view_func=_handle_inbox_page)
-    app.add_url_rule("/inbox/list", view_func=_handle_inbox_list_fragment)
     app.add_url_rule("/inbox/detail/<request_id>", view_func=_handle_inbox_detail_fragment)
-    app.add_url_rule("/_chrome/requests-auto-open", view_func=_handle_requests_auto_open, methods=["POST"])
     app.add_url_rule("/requests/<request_id>/grant", view_func=_handle_request_grant, methods=["POST"])
     app.add_url_rule("/requests/<request_id>/deny", view_func=_handle_request_deny, methods=["POST"])
 

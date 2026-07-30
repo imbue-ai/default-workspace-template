@@ -1,11 +1,13 @@
-{#def request_id #}
+{#def request_id, approve_label="Approve" #}
 {#
   The form wrapper used inside an inbox detail fragment. Action
   targets /requests/<request_id>/grant. The content slot is the form
   body (the backend-specific input controls). Approve/Deny buttons
   live in this component; Approve starts disabled and is enabled by
   the inbox shell's ``updateApproveState`` once any
-  name="permissions" input is checked.
+  name="permissions" input is checked. ``approve_label`` swaps the
+  Approve caption (the predefined dialog uses "Sign in & approve"
+  when clicking Approve will open a browser sign-in).
 
   While an approval is in flight (a browser sign-in, a follow-up grant,
   etc.), the inbox shell disables BOTH buttons and swaps the Approve
@@ -24,7 +26,7 @@
     <Button id="permissions-deny-btn" variant="danger" onclick="submitPermissionDeny()">Deny</Button>
     <ButtonSubmit id="permissions-approve-btn" variant="success" disabled>
       <span id="permissions-approve-spinner" class="hidden"><Spinner size="sm" tone="inverse" /></span>
-      <span id="permissions-approve-label">Approve</span>
+      <span id="permissions-approve-label">{{ approve_label }}</span>
     </ButtonSubmit>
   </div>
 </form>

@@ -22,6 +22,15 @@ from imbue.mngr.primitives import AgentId
 
 _MNGR_MESSAGE_TIMEOUT_SECONDS: Final[float] = 30.0
 
+# Delivery retry schedule for :meth:`MngrMessageSender.send`. A resolution
+# message races the agent's own lifecycle: the user can approve or deny while
+# the agent is stopped or mid-restart (a propagate cycle, a host recovery),
+# and a message that simply vanishes then leaves the chat card stuck on
+# "Review & respond" and the agent never resuming. Retrying with backoff for
+# a couple of minutes covers those windows; an agent that stays down longer
+# genuinely cannot be nudged, and the give-up is logged loudly.
+_SEND_RETRY_DELAYS_SECONDS: Final[tuple[float, ...]] = (2.0, 5.0, 10.0, 20.0, 30.0, 60.0)
+
 
 @pure
 def stdout_reports_message_delivered(stdout: str) -> bool:
@@ -74,16 +83,26 @@ class MngrMessageSender(MutableModel):
     concurrency_group: ConcurrencyGroup = Field(
         description="App concurrency group on which :meth:`send` dispatches the (non-blocking) delivery thread.",
     )
+    retry_delays_seconds: tuple[float, ...] = Field(
+        default=_SEND_RETRY_DELAYS_SECONDS,
+        description="Backoff schedule between delivery attempts; injectable so tests avoid real waits.",
+    )
 
     model_config = {"arbitrary_types_allowed": True, "frozen": False, "extra": "forbid"}
 
     def send(self, agent_id: AgentId, text: str) -> None:
-        """Fire-and-forget nudge: dispatch the message without blocking the caller.
+        """Dispatch the message without blocking the caller, retrying until it lands.
 
-        The send runs on a thread tracked by :attr:`concurrency_group` and never raises -- failures are logged.
+        The send runs on a thread tracked by :attr:`concurrency_group` and
+        never raises -- failures are logged. Delivery is judged from the
+        structured output (see :meth:`deliver`), and undelivered attempts are
+        retried on the :data:`_SEND_RETRY_DELAYS_SECONDS` backoff schedule so
+        a resolution that races the agent's lifecycle (stopped, mid-restart)
+        still reaches it -- the chat's verdict badge and the agent's resume
+        both ride on this one message.
         """
         self.concurrency_group.start_new_thread(
-            self.try_send,
+            self._send_with_retries,
             args=(str(agent_id), text),
             name="mngr-message-send",
             is_checked=False,
@@ -91,6 +110,30 @@ class MngrMessageSender(MutableModel):
                 "mngr message send to agent {} failed: {}", agent_id, exc
             ),
         )
+
+    def _send_with_retries(self, target: str, text: str) -> bool:
+        """Deliver ``text`` to ``target``, retrying with backoff; return whether it landed.
+
+        The between-attempt waits ride the concurrency group's shutdown
+        event, so an app shutdown interrupts the backoff immediately instead
+        of the retry thread pinning the graceful-exit window open.
+        """
+        if self.deliver(target, text):
+            return True
+        for delay_seconds in self.retry_delays_seconds:
+            if self.concurrency_group.shutdown_event.wait(timeout=delay_seconds):
+                logger.info("mngr message retry to target {} abandoned: shutting down", target)
+                return False
+            if self.deliver(target, text):
+                logger.info("mngr message to target {} delivered after retry", target)
+                return True
+        logger.error(
+            "mngr message to target {} was never delivered (agent unavailable for the whole retry "
+            "window); the agent will not learn its permission request was resolved until it is next "
+            "spoken to",
+            target,
+        )
+        return False
 
     def try_send(self, target: str, text: str) -> bool:
         """Send a message to ``target`` (an agent id or name); return whether it succeeded.

@@ -1,8 +1,8 @@
 {#def agent_id, tab, anchor_x=None, anchor_y=None, anchor_height=None, accent="" #}
 {#
-  The workspace-options panel: the overlay chrome shared by the Share machine
-  and Machine settings tabs. Hosted in the shared overlay WebContentsView by
-  pages.WorkspaceOptionsModal.
+  The workspace-options panel: the overlay chrome shared by the Permissions,
+  Share machine and Machine settings tabs. Hosted in the shared overlay
+  WebContentsView by pages.WorkspaceOptionsModal.
 
   It has two presentations, chosen by whether an anchor was supplied.
 
@@ -31,6 +31,7 @@
   switching keeps the pane state and never flashes the overlay.
 #}
 {%- set _tabs = [
+  ("permissions", "key", "Permissions"),
   ("share", "share", "Share machine"),
   ("settings", "settings", "Machine settings"),
 ] -%}

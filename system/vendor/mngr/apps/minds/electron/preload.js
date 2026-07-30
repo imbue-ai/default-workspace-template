@@ -45,8 +45,10 @@ contextBridge.exposeInMainWorld('minds', {
   // (anchor a 38px-tall element at the top-left, nudged 24px left and 2px below it).
   toggleSidebar: (anchor) => ipcRenderer.send('toggle-sidebar', anchor),
 
-  // Requests inbox modal (opened from the titlebar's inbox button).
-  toggleInbox: () => ipcRenderer.send('toggle-inbox'),
+  // Open the permission-request popup pre-selected on a request. Used by the
+  // Permissions pane's "Waiting on you" rows; main re-validates the id
+  // (same channel the workspace content view's chat-card relay uses).
+  openRequestPopup: (requestId) => ipcRenderer.send('open-request-modal', requestId),
 
   // Get-help modal (report a bug). ``agentId`` is the currently-displayed
   // workspace id (or '' on a general screen) so the help page can scope its
@@ -147,8 +149,6 @@ contextBridge.exposeInMainWorld('minds', {
   // Multi-window workspace actions
   openWorkspaceInNewWindow: (agentId) =>
     ipcRenderer.send('open-workspace-in-new-window', agentId),
-  navigateToRequest: (agentId, eventId) =>
-    ipcRenderer.send('navigate-to-request', agentId, eventId),
   showWorkspaceContextMenu: (agentId, x, y) =>
     ipcRenderer.send('show-workspace-context-menu', agentId, x, y),
   // ``contentReady`` is whether the content view is showing a reachable

@@ -210,16 +210,16 @@
             <div class="flex items-center gap-2">
               <FormLabel target="backup-provider-select">Keep my backups in</FormLabel>
               <select id="backup-provider-select" class="h-[34px] px-3 rounded-full type-body bg-surface-secondary text-primary">
-                <option value="IMBUE_CLOUD" {% if not has_account %}disabled{% endif %}>Imbue Cloud (recommended){% if not has_account %} -- requires an account{% endif %}</option>
+                <option value="IMBUE_CLOUD" {% if not has_account %}disabled{% endif %}>Imbue Cloud (recommended){% if not has_account %} — requires an account{% endif %}</option>
                 <option value="API_KEY" {% if not has_account %}selected{% endif %}>My own cloud storage (advanced)</option>
-                <option value="NONE">Nowhere -- turn backups off</option>
+                <option value="NONE">Nowhere — turn backups off</option>
               </select>
             </div>
             <div id="backup-api-key-row" class="hidden">
               <FormLabel target="backup-api-key-env-input">Connection details for your storage</FormLabel>
               <p class="type-helper text-tertiary mb-1 max-w-[560px]">
                 Paste the restic environment variables for your storage, one KEY=VALUE per line.
-                Leave out RESTIC_PASSWORD -- minds manages the encryption password for you.
+                Leave out RESTIC_PASSWORD — minds manages the encryption password for you.
               </p>
               <textarea id="backup-api-key-env-input" rows="4" spellcheck="false"
                         class="w-full px-3 py-2 rounded-md type-body font-mono bg-surface-secondary text-primary"

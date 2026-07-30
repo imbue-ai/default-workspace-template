@@ -2057,17 +2057,31 @@ def test_workspace_options_falls_back_to_general_for_an_unknown_group(tmp_path: 
 
 
 def test_workspace_options_page_is_the_browser_fallback(tmp_path: Path) -> None:
-    """The full page renders both panes without the overlay chrome, defaulting to Share."""
+    """The full page renders every pane without the overlay chrome, defaulting to Share."""
     client, auth_store = _create_test_client_with_stores(tmp_path)
     _authenticate_client(client, auth_store)
     agent_id = AgentId()
     # An unrecognized tab is not an error -- it lands on Share.
-    response = client.get(f"/workspace/{agent_id}/options?tab=permissions")
+    response = client.get(f"/workspace/{agent_id}/options?tab=bogus")
     assert response.status_code == 200
     body = response.text
     assert not is_workspace_options_pane_hidden(body, "share")
     assert is_workspace_options_pane_hidden(body, "settings")
+    assert is_workspace_options_pane_hidden(body, "permissions")
     assert 'id="ws-options-backdrop"' not in body
+
+
+def test_workspace_options_page_opens_on_the_permissions_pane(tmp_path: Path) -> None:
+    """``?tab=permissions`` opens the Permissions pane (the other panes ship hidden)."""
+    client, auth_store = _create_test_client_with_stores(tmp_path)
+    _authenticate_client(client, auth_store)
+    agent_id = AgentId()
+    response = client.get(f"/workspace/{agent_id}/options?tab=permissions")
+    assert response.status_code == 200
+    body = response.text
+    assert not is_workspace_options_pane_hidden(body, "permissions")
+    assert is_workspace_options_pane_hidden(body, "share")
+    assert is_workspace_options_pane_hidden(body, "settings")
 
 
 def test_inbox_requires_auth(tmp_path: Path) -> None:
@@ -2079,24 +2093,14 @@ def test_inbox_requires_auth(tmp_path: Path) -> None:
 
 
 def test_inbox_empty_state(tmp_path: Path) -> None:
-    """With no pending requests, the inbox renders the empty-state placeholder
-    and applies the ``is-empty`` body class for the centered-message layout."""
+    """With no pending requests, the popup renders the caught-up message."""
     client, auth_store = _create_test_client_with_stores(tmp_path)
     _authenticate_client(client, auth_store)
     response = client.get("/inbox")
     assert response.status_code == 200
     body = response.text
-    assert "No pending requests" in body
-    # The ``is-empty`` class must be on the ``inbox-body`` element itself.
-    # The substring appears unconditionally inside the page's <style> block
-    # (rules keyed on ``inbox-body.is-empty``), so target the opening tag's
-    # attribute span specifically.
-    tag_start = body.find('id="inbox-body"')
-    tag_end = body.find(">", tag_start)
-    assert tag_start != -1
-    assert "is-empty" in body[tag_start:tag_end]
-    # Should not include any inbox-card markup when empty.
-    assert 'class="inbox-card' not in body
+    assert "You're all caught up" in body
+    assert 'id="request-popup"' in body
 
 
 class _InboxStubLatchkeyHandler(RequestEventHandler):
@@ -2168,9 +2172,9 @@ def _build_inbox_test_app(
     return client, auth_store
 
 
-def test_inbox_master_detail_renders_first_pending_by_default(tmp_path: Path) -> None:
-    """With pending requests but no ``?selected``, the inbox auto-selects the
-    first (most-recent) pending item and renders its detail in the right pane."""
+def test_inbox_popup_renders_first_pending_by_default(tmp_path: Path) -> None:
+    """With pending requests but no ``?selected``, the popup shows the first
+    (most-recent) pending request and carries the queue metadata."""
     agent_id = str(AgentId())
     event = create_latchkey_predefined_permission_request_event(
         agent_id=agent_id, scope="slack-api", rationale="Need to post status updates"
@@ -2182,17 +2186,19 @@ def test_inbox_master_detail_renders_first_pending_by_default(tmp_path: Path) ->
     assert response.status_code == 200
     body = response.text
 
-    # The list contains a card with the event's id as a data attribute.
-    assert f'data-request-id="{event.event_id}"' in body
-    # The empty-state placeholder must not be present when the inbox has
-    # pending items.
-    assert "No pending requests" not in body
-    # The right-pane detail fragment was composed server-side and includes
-    # the rationale.
+    # The queue metadata block carries the event id for the shell JS.
+    assert 'id="inbox-pending-data"' in body
+    assert str(event.event_id) in body
+    # The caught-up state must not be present when something is pending.
+    assert "You're all caught up" not in body
+    # The detail fragment was composed server-side and includes the rationale.
     assert "Need to post status updates" in body
+    # The eyebrow names the asking workspace with its accent dot.
+    assert 'id="request-popup-ws-name"' in body
+    assert 'id="request-popup-ws-dot"' in body
 
 
-def test_inbox_preselects_query_param(tmp_path: Path) -> None:
+def test_inbox_popup_preselects_query_param(tmp_path: Path) -> None:
     """``?selected=<id>`` of a pending request renders that detail."""
     agent_id = str(AgentId())
     first = create_latchkey_predefined_permission_request_event(
@@ -2208,18 +2214,15 @@ def test_inbox_preselects_query_param(tmp_path: Path) -> None:
     response = client.get(f"/inbox?selected={first.event_id}")
     assert response.status_code == 200
     body = response.text
-    # The selected card carries the ``is-selected`` class.
-    assert "is-selected" in body
-    assert f'data-request-id="{first.event_id}"' in body
-    # The server-rendered detail shows the selected request's rationale, not
-    # the default-first-pending one.
+    # The popup shows the selected request's rationale, not the
+    # default-first-pending one.
     assert "first request" in body
     assert "second request" not in body
 
 
-def test_inbox_stale_selected_renders_unavailable(tmp_path: Path) -> None:
-    """``?selected=<unknown_id>`` keeps the list intact and surfaces an
-    unavailable message in the right pane."""
+def test_inbox_popup_stale_selected_renders_unavailable(tmp_path: Path) -> None:
+    """``?selected=<unknown_id>`` surfaces the unavailable message while the
+    queue metadata still lists the legitimate pending request."""
     agent_id = str(AgentId())
     event = create_latchkey_predefined_permission_request_event(
         agent_id=agent_id, scope="slack-api", rationale="ongoing"
@@ -2230,41 +2233,15 @@ def test_inbox_stale_selected_renders_unavailable(tmp_path: Path) -> None:
     response = client.get("/inbox?selected=evt-unknown-id")
     assert response.status_code == 200
     body = response.text
-    # The right pane shows the "no longer available" message...
     assert "no longer available" in body
-    # ...but the list still includes the legitimate pending card so the
-    # user can pick another item.
-    assert f'data-request-id="{event.event_id}"' in body
+    assert str(event.event_id) in body
 
 
-def test_inbox_list_fragment_returns_just_the_list(tmp_path: Path) -> None:
-    """``GET /inbox/list`` returns the left-list fragment without a full HTML doc."""
-    agent_id = str(AgentId())
-    event = create_latchkey_predefined_permission_request_event(
-        agent_id=agent_id, scope="slack-api", rationale="for testing"
-    )
-    request_inbox = RequestInbox().add_request(event)
-    client, _ = _build_inbox_test_app(tmp_path, request_inbox)
-
-    response = client.get("/inbox/list")
-    assert response.status_code == 200
-    body = response.text
-    assert f'data-request-id="{event.event_id}"' in body
-    # Fragment-only: no <html>, no <body>, no backdrop.
-    assert "<html" not in body
-    assert "<body" not in body
-    assert "inbox-backdrop" not in body
-
-
-def test_inbox_list_fragment_empty_returns_placeholder(tmp_path: Path) -> None:
-    """``GET /inbox/list`` with no pending requests returns the placeholder."""
+def test_inbox_list_route_removed(tmp_path: Path) -> None:
+    """The drawer's left-list fragment route is gone with the drawer."""
     client, auth_store = _create_test_client_with_stores(tmp_path)
     _authenticate_client(client, auth_store)
-    response = client.get("/inbox/list")
-    assert response.status_code == 200
-    body = response.text
-    assert "inbox-empty-placeholder" in body
-    assert "No pending requests" in body
+    assert client.get("/inbox/list").status_code == 404
 
 
 def test_inbox_detail_fragment_returns_just_the_detail(tmp_path: Path) -> None:
@@ -2299,45 +2276,28 @@ def test_inbox_detail_fragment_for_unknown_id_returns_unavailable_200(tmp_path: 
     assert "no longer available" in response.text
 
 
-def test_inbox_auto_open_checkbox_reflects_config(tmp_path: Path) -> None:
-    """The header checkbox is pre-checked when the config has auto-open enabled."""
+def test_requests_auto_open_route_removed(tmp_path: Path) -> None:
+    """The drawer's auto-open toggle route is gone; the popup always auto-opens."""
     client, auth_store = _create_test_client_with_stores(tmp_path)
     _authenticate_client(client, auth_store)
-    # Default (no config write): auto-open is True, checkbox is checked.
-    response = client.get("/inbox")
-    body = response.text
-    assert 'id="inbox-auto-open"' in body
-    assert "checked" in body[body.find('id="inbox-auto-open"') : body.find(">", body.find('id="inbox-auto-open"'))]
-
-    # Flip the setting to False and confirm the checkbox renders unchecked.
-    config = MindsConfig(data_dir=tmp_path)
-    config.set_auto_open_requests_panel(False)
-    response = client.get("/inbox")
-    body = response.text
-    tag_start = body.find('id="inbox-auto-open"')
-    tag_end = body.find(">", tag_start)
-    assert "checked" not in body[tag_start:tag_end]
+    assert client.post("/_chrome/requests-auto-open", json={"enabled": False}).status_code == 404
 
 
-def test_inbox_shell_reapplies_selection_after_list_refresh(tmp_path: Path) -> None:
-    """The inbox shell JS re-applies the highlight after an SSE-driven list refresh.
+def test_inbox_shell_advances_when_shown_request_resolves_elsewhere(tmp_path: Path) -> None:
+    """The popup shell JS reconciles its queue from SSE ``requests`` events.
 
-    Regression guard: ``/inbox/list`` is selection-agnostic and always
-    renders with ``selected_id=""``. When an SSE ``requests`` event arrives
-    and ``fetchListFragment()`` rebuilds the list innerHTML, the previously
-    highlighted card loses its ``.is-selected`` class. If the selection is
-    still in the new pending set, the shell must call
-    ``setSelectedCard(currentId)`` to restore the highlight; otherwise the
-    user sees their selection visibly disappear despite not changing it.
+    Regression guard: when the shown request resolves on another surface
+    (another window, another device), its id drops out of the SSE payload
+    and the shell must advance to the next pending request or dismiss --
+    never leave a stale form on screen.
     """
     client, auth_store = _create_test_client_with_stores(tmp_path)
     _authenticate_client(client, auth_store)
     response = client.get("/inbox")
     assert response.status_code == 200
     body = response.text
-    # The SSE handler must call setSelectedCard(currentId) in the
-    # "selection still pending" branch.
-    assert "setSelectedCard(currentId)" in body
+    # The SSE handler advances (or closes) when the shown id vanishes.
+    assert "advanceAfterResolution(currentId)" in body
 
 
 def test_inbox_shell_disables_both_buttons_and_spins_during_approval(tmp_path: Path) -> None:

@@ -472,6 +472,106 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
   font-size: 0.95em;
 }
 
+/*
+ * Toggle switch (the Permissions pane's per-permission control). A plain
+ * <button role="switch" aria-checked> whose knob is a ::after pseudo-element,
+ * so workspace_permissions.js only flips aria-checked and never touches
+ * classes. Colors ride the theme tokens: accent track when on, subtle fill
+ * when off; disabled rows fade rather than disappear so a non-restorable
+ * grant is still legible. Sized against the 16px icon grid (36x20 track,
+ * 16px knob) to sit on a type-body row without stretching it.
+ */
+.perm-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border: none;
+  border-radius: 9999px;
+  background: var(--c-fill-active);
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.perm-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--c-surface-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 150ms ease;
+}
+.perm-switch[aria-checked="true"] {
+  background: var(--c-accent);
+}
+.perm-switch[aria-checked="true"]::after {
+  transform: translateX(16px);
+}
+.perm-switch:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* A flip whose POST is still in flight: keep the control visibly busy so a
+   second click (ignored by the page script) reads as "wait", not "broken". */
+.perm-switch.is-busy {
+  opacity: 0.6;
+  cursor: progress;
+}
+.perm-switch:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+/*
+ * Checkbox-backed variant of the toggle switch, for form controls: a real
+ * ``<input type="checkbox">`` (so FormData semantics -- name/value/checked,
+ * and disabled inputs being omitted from submission -- are untouched) drawn
+ * as the same 36x20 track + knob. Used by the grant dialog's Adjust editor,
+ * whose wildcard row disables the other switches while checked; a disabled
+ * switch dims like the button variant.
+ */
+.perm-switch-input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  border: none;
+  border-radius: 9999px;
+  background: var(--c-fill-active);
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.perm-switch-input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--c-surface-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 150ms ease;
+}
+.perm-switch-input:checked {
+  background: var(--c-accent);
+}
+.perm-switch-input:checked::after {
+  transform: translateX(16px);
+}
+.perm-switch-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.perm-switch-input:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
 .spinner {
   border: 2px solid var(--c-border-subtle);
   border-top-color: var(--c-text-primary);

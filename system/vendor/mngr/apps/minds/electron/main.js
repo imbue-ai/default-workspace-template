@@ -122,13 +122,6 @@ const CHROME_CRASHED_PAGE_FILE = path.join(__dirname, 'chrome-crashed.html');
 const CHROME_LOAD_MAX_RETRIES = 2;
 const CHROME_LOAD_RETRY_DELAY_MS = 500;
 
-// Coalesce rapid SSE-triggered list refreshes when the inbox modal is open. A
-// burst of requests events (count 1 -> 2 -> 3 within a few ms) would otherwise
-// re-post the chrome-event multiple times in flight; the inbox shell would
-// queue several /inbox/list fetches and waste backend HTTP load by
-// (open windows) x (events).
-const INBOX_LIST_REFRESH_DEBOUNCE_MS = 50;
-
 // -- Per-window bundle registry --
 const bundles = new Set();
 const mruWindows = []; // most recently focused first
@@ -624,10 +617,6 @@ function wireBundleWindowEvents(bundle) {
     // set and we must not overwrite it with a progressively shrinking snapshot
     // as the teardown closes each window.
     if (!isShuttingDown) saveSessionState();
-    if (bundle.inboxListReloadTimer) {
-      clearTimeout(bundle.inboxListReloadTimer);
-      bundle.inboxListReloadTimer = null;
-    }
     const views = [bundle.chromeView, bundle.contentView, bundle.modalView];
     for (const view of views) {
       if (!view) continue;
@@ -681,7 +670,6 @@ function createBundle() {
     // rect). Gates updateBundleBounds so a resize doesn't clobber that rect with
     // the full-window modal bounds.
     tooltipVisible: false,
-    inboxListReloadTimer: null,
     // Which surface the LATEST navigateBundle call targeted ('chrome' |
     // 'content'). The surfaces' did-navigate handlers only apply their state
     // bookkeeping when their surface is the intended one, so a slow load from
@@ -2161,10 +2149,6 @@ function closeModal(bundle) {
   // Tell the warm overlay host to hide its overlays. The host page itself stays
   // loaded (warm) so the next open is instant; only the hosted iframes hide.
   sendOverlayCommand(bundle, { type: 'hide-all' });
-  if (bundle.inboxListReloadTimer) {
-    clearTimeout(bundle.inboxListReloadTimer);
-    bundle.inboxListReloadTimer = null;
-  }
 }
 
 function inboxUrlFor(query) {
@@ -2271,12 +2255,12 @@ function openSharingModal(bundle, agentId, serviceName) {
   openModal(bundle, backendBaseUrl + '/sharing/' + agentId + '/' + serviceName + '/modal');
 }
 
-// URL for the workspace options panel -- the tabbed Share / Settings overlay
-// docked under the titlebar, hosted on the shared warm overlay surface like
-// every other modal. The agent id is validated to the same server-issued shape
-// openSharingModal enforces (never trust the renderer), and ``tab`` to the two
-// tabs the panel actually has; anything else falls back to 'share' rather than
-// forwarding renderer text into the URL.
+// URL for the workspace options panel -- the tabbed Permissions / Share /
+// Settings overlay docked under the titlebar, hosted on the shared warm
+// overlay surface like every other modal. The agent id is validated to the
+// same server-issued shape openSharingModal enforces (never trust the
+// renderer), and ``tab`` to the tabs the panel actually has; anything else
+// falls back to 'share' rather than forwarding renderer text into the URL.
 //
 // ``anchor`` is the titlebar icon-tab strip's viewport-relative rect. The chrome
 // view (where the strip lives) and the overlay view share window coordinate
@@ -2292,7 +2276,7 @@ function workspaceOptionsUrlFor(agentId, tab, anchor) {
   if (!backendBaseUrl) return null;
   if (typeof agentId !== 'string' || !/^agent-[a-f0-9]{1,64}$/i.test(agentId)) return null;
   const params = new URLSearchParams();
-  params.set('tab', tab === 'settings' ? 'settings' : 'share');
+  params.set('tab', tab === 'settings' || tab === 'permissions' ? tab : 'share');
   if (isUsableAnchorRect(anchor)) {
     params.set('x', Math.round(anchor.x).toString());
     params.set('y', Math.round(anchor.y).toString());
@@ -2317,34 +2301,36 @@ function isUsableAnchorRect(rect) {
   return rect.width > 0 && rect.height > 0;
 }
 
-function isInboxModalOpen(bundle) {
-  if (!bundle || !bundle.modalVisible) return false;
-  if (!bundle.modalUrl) return false;
-  // Compare path only -- the query (?selected=) may differ between auto-open
-  // and selection-driven loads.
-  try {
-    const u = new URL(bundle.modalUrl);
-    return u.pathname === '/inbox';
-  } catch {
-    return false;
-  }
-}
-
-function openInbox(bundle, query) {
+// Open the permission-request popup (the /inbox page) over this window. The
+// popup shows the newest pending request (or ``?selected=<id>``) and advances
+// through the pending queue itself, dismissing when nothing is left -- there
+// is no titlebar entry point; it opens on a genuinely new request (auto-open)
+// or from a review affordance (a chat card, a Permissions-pane waiting row).
+// ``stacked`` keeps the modal underneath mounted (the displaced-modal detour;
+// see openRequestPopupOver).
+function openInbox(bundle, query, stacked) {
   if (!bundle || bundle.window.isDestroyed()) return;
   const url = inboxUrlFor(query || '');
   if (!url) return;
-  openModal(bundle, url);
+  openModal(bundle, url, !!stacked);
 }
 
-function toggleInbox(bundle) {
+// Open the request popup pre-selected on ``requestId``, treating it as a
+// DETOUR when another modal is up: the Permissions pane's "Waiting on you"
+// rows live in the workspace-options panel, and reviewing a request from
+// there must hand back to that panel when the popup closes -- not drop the
+// user on whatever sat behind the overlay. Mirrors openSigninModal: the open
+// modal is remembered as displaced (never the popup itself, so re-opens
+// can't arm a self-restoring loop) and the popup opens stacked over it. The
+// popup's close paths route through the dismissal IPCs, which put the panel
+// back (with a re-render when a request was resolved, so its waiting strip
+// updates).
+function openRequestPopupOver(bundle, requestId) {
   if (!bundle || bundle.window.isDestroyed()) return;
-  if (isInboxModalOpen(bundle)) closeModal(bundle);
-  // ``keep_open=1`` marks this as an intentional open of the whole inbox
-  // (the Requests button), so resolving a request advances to the next
-  // pending one rather than dismissing the window. Notification-click and
-  // auto-open paths omit it, so they close after Approve/Deny.
-  else openInbox(bundle, '?keep_open=1');
+  const openUrl = bundle.modalVisible ? bundle.modalUrl : null;
+  const displacedUrl = openUrl && overlayIdForUrl(openUrl) !== 'inbox' ? openUrl : null;
+  rememberDisplacedModal(bundle, displacedUrl);
+  openInbox(bundle, '?selected=' + encodeURIComponent(requestId), !!displacedUrl);
 }
 
 // -- Get-help modal (per-bundle) --
@@ -2395,25 +2381,6 @@ function toggleHelp(bundle, agentId, assistAvailable) {
   if (!bundle || bundle.window.isDestroyed()) return;
   if (isHelpModalOpen(bundle)) closeModal(bundle);
   else openHelp(bundle, agentId, undefined, assistAvailable);
-}
-
-// Coalesce rapid SSE-triggered chrome-event posts so the inbox shell
-// doesn't queue several /inbox/list fetches when a burst of requests
-// events arrives in quick succession.
-function scheduleInboxListRefresh(bundle, evt) {
-  if (!bundle || bundle.window.isDestroyed()) return;
-  if (!isInboxModalOpen(bundle)) return;
-  if (bundle.inboxListReloadTimer) {
-    clearTimeout(bundle.inboxListReloadTimer);
-  }
-  bundle.inboxListReloadTimer = setTimeout(() => {
-    bundle.inboxListReloadTimer = null;
-    if (!bundle || bundle.window.isDestroyed()) return;
-    if (!bundle.modalView || !bundle.modalVisible) return;
-    if (bundle.modalView.webContents.isDestroyed()) return;
-    // Per-frame so the event reaches the inbox iframe, not just the host frame.
-    sendToOverlayFrames(bundle, 'chrome-event', evt);
-  }, INBOX_LIST_REFRESH_DEBOUNCE_MS);
 }
 
 function sendCurrentWorkspaceToBundleViews(bundle) {
@@ -3075,39 +3042,22 @@ function handleChromeSSEEvent(evt) {
   } else if (evt.type === 'requests') {
     const prevIds = latestChromeState.requestIds || [];
     const newIds = Array.isArray(evt.request_ids) ? evt.request_ids.map(String) : [];
-    const newCount = evt.count || 0;
-    // Backend defaults auto_open to true; treat a missing field the same way.
-    const autoOpen = evt.auto_open !== false;
-    // Diff the pending *set* (ordered ids), not the count, so a swap at
-    // constant size still refreshes the inbox list. Auto-open keys off a
-    // genuinely new id appearing (not a count increase, which is blind to
-    // replacements), so approving/denying never reopens an inbox the user
-    // closed.
+    // The popup opens on a genuinely new id appearing (not a count
+    // increase, which is blind to replacements), so approving/denying
+    // never reopens a popup the user closed.
     const prevSet = new Set(prevIds);
     const hasNewRequest = newIds.some((id) => !prevSet.has(id));
-    const idsChanged = newIds.length !== prevIds.length || hasNewRequest;
     latestChromeState.requestIds = newIds;
-    latestChromeState.requestCount = newCount;
-    const shouldAutoOpen = autoOpen && hasNewRequest;
-    // When the inbox modal is already open in a bundle, forward the
-    // chrome-event to its shell JS (debounced) so the master list
-    // re-fetches its fragment; otherwise, on a genuinely new id, open it.
-    //
-    // The auto-open is gated on ``!b.modalVisible`` (not just
-    // ``!isInboxModalOpen``) because the sidebar now shares ``modalView``:
-    // auto-opening the inbox while the sidebar (or any other modal) is open
-    // would ``loadURL`` the inbox over it, silently yanking the user's open
-    // menu out from under them. When a modal is already up we leave it
-    // alone; the titlebar requests badge still updates live (via the
-    // broadcastChromeEvent below), and the next genuinely-new request (or
-    // the user closing the modal and clicking the bell) surfaces the inbox.
-    if (idsChanged || shouldAutoOpen) {
+    latestChromeState.requestCount = evt.count || 0;
+    // The open is gated on ``!b.modalVisible`` because every modal shares
+    // ``modalView``: opening the popup while the sidebar (or any other
+    // modal, including an already-open request popup) is up would
+    // ``loadURL`` over it, yanking the user's context. An open popup
+    // reconciles its own queue from the chrome-event broadcast below; the
+    // next genuinely-new request surfaces the popup once the modal closes.
+    if (hasNewRequest) {
       for (const b of bundles) {
-        if (shouldAutoOpen && !b.modalVisible) {
-          openInbox(b, '');
-        } else if (isInboxModalOpen(b)) {
-          scheduleInboxListRefresh(b, evt);
-        }
+        if (!b.modalVisible) openInbox(b, '');
       }
     }
   } else if (evt.type === 'open_help') {
@@ -4560,10 +4510,6 @@ ipcMain.on('toggle-sidebar', (event, anchor) => {
   toggleSidebar(getBundleFromEvent(event), anchor);
 });
 
-ipcMain.on('toggle-inbox', (event) => {
-  toggleInbox(getBundleFromEvent(event));
-});
-
 ipcMain.on('toggle-help', (event, agentId, assistAvailable) => {
   toggleHelp(getBundleFromEvent(event), agentId, assistAvailable);
 });
@@ -4596,17 +4542,7 @@ ipcMain.on('open-workspace-in-new-window', (event, agentId) => {
   if (bundle) closeModal(bundle);
 });
 
-ipcMain.on('navigate-to-request', (event, _agentId, eventId) => {
-  if (!eventId) return;
-  // Open the inbox modal pre-selected on the target request. Keeps the user's
-  // workspace exactly as they left it -- closing the inbox returns them to
-  // their work with no context lost, and no window switching. The
-  // sender-supplied agent id is deliberately ignored: the inbox is global.
-  const sender = getBundleFromEvent(event);
-  if (sender) openInbox(sender, '?selected=' + encodeURIComponent(eventId));
-});
-
-// Open the inbox modal pre-selected on a request on behalf of the (otherwise
+// Open the request popup pre-selected on a request on behalf of the (otherwise
 // unprivileged) workspace content view. Only content-relay-preload.js can
 // emit this channel -- the page itself never sees ipcRenderer -- and it does
 // so only for an allowlisted `minds:open-request-modal` postMessage. We
@@ -4615,7 +4551,7 @@ ipcMain.on('navigate-to-request', (event, _agentId, eventId) => {
 ipcMain.on('open-request-modal', (event, requestId) => {
   if (typeof requestId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(requestId)) return;
   const sender = getBundleFromEvent(event);
-  if (sender) openInbox(sender, '?selected=' + encodeURIComponent(requestId));
+  if (sender) openRequestPopupOver(sender, requestId);
 });
 
 // Open the get-help / report-a-bug modal on behalf of the (otherwise

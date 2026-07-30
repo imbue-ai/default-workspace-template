@@ -1,36 +1,29 @@
-{#def display_name, ws_name, agent_id, rationale, header_display_name_html="", rationale_label_html="" #}
+{#def display_name, rationale, service_name="", icon_name="box" #}
 {#
-  Permissions dialog header: h1 ("Permission request: <name>"), a line
-  saying that approving grants only the specific permissions listed, and
-  the rationale card ("<workspace> says: ...").
+  Permissions dialog header: a 32px service-mark tile next to the display
+  name, an optional content slot (the predefined dialog places its account
+  picker there, between the title and the reason), and the "Reason"
+  section carrying the agent's rationale. The requesting workspace is
+  named by the inbox shell's eyebrow, so the header no longer repeats it.
 
-  ``header_display_name_html`` and ``rationale_label_html`` are optional
-  Markup overrides for backends that want fancier rendering (e.g. a
-  boxed monospace pill for a file path). When empty, the defaults are
-  plain text.
+  ``service_name`` is the raw catalog service name; when it ships a brand
+  mark (see the ``SERVICE_ICON_NAMES`` catalog global) the tile shows it,
+  otherwise the tile falls back to the ``icon_name`` glyph from Icon16.
 #}
-<h1 class="type-heading-lg text-primary pr-8">
-  Permission request:
-  {% if header_display_name_html %}
-    {{ header_display_name_html }}
-  {% else %}
-    <span class="font-bold">{{ display_name }}</span>
-  {% endif %}
-</h1>
-
-{# Say what approving actually does, so the list below reads as a set of #}
-{# specific grants rather than blanket access. #}
-<p class="type-body text-secondary mt-2">
-  You grant specific permissions: the agent gets only what you approve here, and nothing else.
-</p>
-
-<Card extra="mt-6">
-  <div>
-    {% if rationale_label_html %}
-      {{ rationale_label_html }}
+<div class="flex items-center gap-3">
+  <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-subtle">
+    {% if service_name and service_name in SERVICE_ICON_NAMES %}
+      <img src="/_static/service_icons/{{ service_name }}.svg" alt="" class="w-4 h-4" />
     {% else %}
-      <p class="type-label text-primary mb-1">{{ ws_name or agent_id }} says:</p>
+      <Icon16 :name="icon_name" />
     {% endif %}
-    <p class="type-body italic whitespace-pre-wrap">{{ rationale }}</p>
   </div>
-</Card>
+  <h2 class="type-heading text-primary">{{ display_name }}</h2>
+</div>
+
+{{ content }}
+
+<div class="mt-4">
+  <h3 class="type-section text-tertiary">Reason</h3>
+  <p class="mt-1 type-body text-primary whitespace-pre-wrap">{{ rationale }}</p>
+</div>

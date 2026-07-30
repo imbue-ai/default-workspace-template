@@ -1334,24 +1334,13 @@ def test_render_chrome_page_titlebar_reserves_mac_traffic_lights_with_spacer() -
     assert "w-[72px]" not in html_other
 
 
-def test_render_chrome_page_requests_badge_is_inline_count() -> None:
-    # The titlebar's inbox button (right cluster) carries the pending-request
-    # badge: the Badge count pill sat inline beside the inbox icon (gap-[3px]
-    # row), not a dot overlapping the icon's corner. It carries the type-badge
-    # pill role and no absolute positioning (chrome.js fills the count text +
-    # toggles the native `hidden` attribute from the global SSE requests count).
+def test_render_chrome_page_has_no_requests_button() -> None:
+    # The titlebar's Requests/inbox button and its count badge are gone:
+    # pending permission requests surface only as the auto-opening request
+    # popup (pages/Inbox.jinja), so the chrome carries no inbox entry point.
     html = render_chrome_page()
-    assert 'id="requests-toggle"' in html
-    assert 'id="requests-badge"' in html
-    assert "type-badge" in html
-    assert "gap-[3px]" in html
-    # No corner overlay: the badge no longer pins itself to the top-right.
-    assert "top-0.5 right-0.5" not in html
-    # Hidden at rest via the native `hidden` ATTRIBUTE, not a `hidden` class: the
-    # pill bakes in `inline-flex`, which beats the `.hidden` utility, so a class
-    # would leave a stray "0" showing. Match the bare attribute on the pill.
-    assert 'id="requests-badge" hidden>' in html
-    assert 'id="requests-badge" class="hidden"' not in html
+    assert 'id="requests-toggle"' not in html
+    assert 'id="requests-badge"' not in html
 
 
 def test_render_chrome_page_drops_title_swatch_and_seam_border() -> None:
@@ -1452,7 +1441,7 @@ def test_edge_to_edge_surfaces_opt_out_of_scrollbar_gutter() -> None:
     assert opted_out in render_overlay_host_page()
     assert opted_out in render_sidebar_page()
     assert opted_out in render_help_page(workspace_agent_id="")
-    assert opted_out in render_inbox_page(cards=())
+    assert opted_out in render_inbox_page(pending=())
     # Local pages scroll inside the local-page-scroll card (whose own stable
     # gutter absorbs classic-scrollbar layout shifts) rather than the document.
     assert opted_out in render_landing_page(accessible_agent_ids=())
@@ -3083,13 +3072,13 @@ def test_badge_count_caps_at_99_plus() -> None:
 
 
 def test_badge_class_and_id_pass_through() -> None:
-    # The titlebar requests badge relies on id + the chrome.js-toggled `hidden`
-    # class flowing through onto the badge's root span. ``**{...}`` is required
-    # because ``class`` is a reserved word; ty flags the dict[str, str] unpack as
-    # possibly feeding render's typed ``caller`` kwarg, which it never does here.
-    badge_attrs = {"id": "requests-badge", "class": "hidden absolute top-0.5 right-0.5"}
+    # Consumers rely on id + class flowing through onto the badge's root
+    # span. ``**{...}`` is required because ``class`` is a reserved word; ty
+    # flags the dict[str, str] unpack as possibly feeding render's typed
+    # ``caller`` kwarg, which it never does here.
+    badge_attrs = {"id": "example-badge", "class": "hidden absolute top-0.5 right-0.5"}
     html = CATALOG.render("Badge", **badge_attrs)  # ty: ignore[invalid-argument-type]
-    assert 'id="requests-badge"' in html
+    assert 'id="example-badge"' in html
     assert "hidden" in html
     assert "absolute" in html
 

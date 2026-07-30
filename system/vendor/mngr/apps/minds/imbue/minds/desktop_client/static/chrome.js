@@ -371,7 +371,8 @@
   //
   // The left cluster's shape is a pure function of the content view's current
   // URL: a workspace-scoped screen shows the "/ workspace-name" breadcrumb
-  // plus the Share machine / Machine settings icon-tabs, highlighted only when
+  // plus the Permissions / Share machine / Machine settings icon-tabs,
+  // highlighted only when
   // the visible screen IS one of those panes (on the workspace itself neither
   // is, since the tabs open the docked options panel over it rather than
   // navigating); a non-workspace full page shows
@@ -403,7 +404,11 @@
     // The browser-mode options page carries its pane in ?tab=; the standalone
     // settings page is always the settings pane.
     m = path.match(/^\/workspace\/(agent-[a-f0-9]+)\/options$/i);
-    if (m) return { kind: 'workspace', agentId: m[1], activeTab: parsed.searchParams.get('tab') === 'settings' ? 'settings' : 'share' };
+    if (m) {
+      var optionsTab = parsed.searchParams.get('tab');
+      if (optionsTab !== 'settings' && optionsTab !== 'permissions') optionsTab = 'share';
+      return { kind: 'workspace', agentId: m[1], activeTab: optionsTab };
+    }
     m = path.match(/^\/workspace\/(agent-[a-f0-9]+)(?:\/|$)/i);
     if (m) return { kind: 'workspace', agentId: m[1], activeTab: 'settings' };
     // Sharing is reached from workspace settings, so it gets the back arrow.
@@ -435,22 +440,6 @@
     if (path === '/welcome') return { kind: 'welcome' };
     if (path === '/help') return { kind: 'page', pageLabel: 'Get help', showBack: true };
     return { kind: 'home' };
-  }
-
-  function updateRequestsBadge(count) {
-    var badge = document.getElementById('requests-badge');
-    if (!badge) return;
-    if (count > 0) {
-      // The badge is the Badge.jinja count pill; mirror its 99+ cap here.
-      badge.textContent = count > 99 ? '99+' : String(count);
-      badge.hidden = false;
-    } else {
-      // Hide via the native `hidden` attribute, not a `hidden` class: the pill
-      // bakes in `inline-flex`, which beats the `.hidden` utility in the
-      // cascade (so a `hidden` class would leave a stray "0" showing). The
-      // `[hidden]` base rule is `display: none !important`, which wins.
-      badge.hidden = true;
-    }
   }
 
   function applyTitlebarContext() {
@@ -500,7 +489,7 @@
         }
         nameEl.dataset.agentId = ctx.agentId;
       }
-      ['share', 'settings'].forEach(function (tab) {
+      ['permissions', 'share', 'settings'].forEach(function (tab) {
         var btn = document.getElementById('ws-tab-' + tab);
         if (!btn) return;
         var isActive = ctx.activeTab === tab;
@@ -636,7 +625,7 @@
   document.getElementById('workspace-switcher-btn').onclick = toggleSidebar;
   document.getElementById('home-btn').onclick = function () { navigateContent('/'); };
   document.getElementById('back-btn').onclick = goBack;
-  // The two workspace icon-tabs open the docked options panel. In Electron the
+  // The workspace icon-tabs open the docked options panel. In Electron the
   // panel is an overlay that draws its own tab strip exactly over this one, so
   // it needs the strip's viewport rect (same anchor trick as the workspace
   // switcher). In browser mode there is no overlay surface, so they navigate
@@ -655,16 +644,9 @@
       navigateContent('/workspace/' + currentCrumbAgentId + '/options?tab=' + tab);
     }
   }
+  document.getElementById('ws-tab-permissions').onclick = function () { openWorkspaceOptions('permissions'); };
   document.getElementById('ws-tab-share').onclick = function () { openWorkspaceOptions('share'); };
   document.getElementById('ws-tab-settings').onclick = function () { openWorkspaceOptions('settings'); };
-
-  document.getElementById('requests-toggle').onclick = function () {
-    // ``keep_open=1`` marks this as an intentional open of the whole inbox,
-    // so resolving a request advances to the next pending one rather than
-    // dismissing the window (notification-driven opens omit it and close).
-    if (isElectron) window.minds.toggleInbox();
-    else navigateContent('/inbox?keep_open=1');
-  };
 
   // Electron-mode setup for the CURRENT page body: the agent-wrapper hides its
   // iframe (the content is a separate WebContentsView) and the browser-mode
@@ -1000,7 +982,6 @@
         // may only now be known (cold start, rename).
         applyTitlebarContext();
       }
-      if (data.type === 'requests') updateRequestsBadge(data.count);
       if (data.type === 'system_interface_status') handleSystemInterfaceStatus(data.agent_id, data.status);
       if (data.type === 'workspace_stopped') handleWorkspaceStopped(data.agent_id);
     } catch (e) {}
