@@ -111,84 +111,42 @@ export function openPermissionRequest(requestId: string): void {
   window.parent.postMessage({ type: "minds:open-request-modal", requestId }, "*");
 }
 
-/** Small lock glyph shown in the permission-request card heading and button. */
-function renderLockIcon(): m.Vnode {
-  return m.trust(icon("lock", { size: 14, className: "permission-request-icon" }));
+/** The lock glyph at a given pixel size (eyebrow 13, receipt badge 14, body badge 16). */
+function renderLockIcon(size: number): m.Vnode {
+  return m.trust(icon("lock", { size, className: "permission-request-icon" }));
 }
 
-/** The card heading: "Permission request: File access" for a file-sharing
- *  request; "Permission request: Workspace management" for a workspace request
- *  (acting on the user's other Minds workspaces -- rendered heading-only, with
- *  no "Requesting" detail line for now); "Permission request: <service>" for a
- *  predefined request once the gateway catalog has resolved the scope to a
- *  friendly service name; otherwise plain "Permission request" (the scope still
- *  shows on the "Requesting" line). */
-function permissionHeading(details: PermissionRequestDetails | null, scopeInfo: ScopeInfo | null): string {
-  if (details?.requestType === "file-sharing") return "Permission request: File access";
-  if (details?.requestType === "workspace") return "Permission request: Workspace management";
-  if (details?.scope && scopeInfo) return `Permission request: ${scopeInfo.display_name}`;
+/** The card title: what's being asked for, in a few words. "Local files" for a
+ *  file-sharing request; "Other machines" for a workspace request (acting on the
+ *  user's other Minds workspaces); "Device accounts" for an accounts request;
+ *  the friendly service name for a predefined request once the gateway catalog
+ *  resolves (the raw scope until then); otherwise plain "Permission request".
+ *  The specifics live in the review modal and the raw disclosure. */
+function permissionTitle(details: PermissionRequestDetails | null, scopeInfo: ScopeInfo | null): string {
+  if (details?.requestType === "file-sharing") return "Local files";
+  if (details?.requestType === "workspace") return "Other machines";
+  if (details?.requestType === "accounts") return "Device accounts";
+  if (details?.scope) return scopeInfo?.display_name ?? details.scope;
   return "Permission request";
 }
 
-/** A hyphenated token (a permission name, scope, or path) wrapped so it never
- *  breaks mid-name -- line breaks fall between tokens, not inside them. */
-function renderRequestToken(text: string): m.Vnode {
-  return m("span", { class: "permission-request-token" }, text);
-}
-
-/** A requested permission name that reveals its description in a CSS tooltip
- *  centered over the name on hover/focus. `data-tooltip` carries the description
- *  (the bubble is `::after content: attr(data-tooltip)`) and doubles as the
- *  accessible label. Also a no-break token (see `.permission-request-perm`). */
-function renderPermissionName(name: string, description: string): m.Vnode {
-  return m("span", { class: "permission-request-perm", "data-tooltip": description, tabindex: "0" }, name);
-}
-
-/** The value for the "Requesting" line: the permissions on a service scope, or
- *  an access mode on a path. Each permission name and the scope/path render as
- *  no-break tokens so a long hyphenated name never wraps mid-name; once the
- *  gateway catalog resolves, a described permission also becomes hoverable for
- *  its description. Null when there's nothing specific to show. */
-function permissionRequestingValue(
-  details: PermissionRequestDetails | null,
-  scopeInfo: ScopeInfo | null,
-): m.Children | null {
-  if (details === null) return null;
-  if (details.scope) {
-    if (details.permissions.length === 0) return renderRequestToken(details.scope);
-    const nodes: m.Children[] = [];
-    details.permissions.forEach((name, index) => {
-      if (index > 0) nodes.push(", ");
-      const description = scopeInfo?.permissions.find((permission) => permission.name === name)?.description ?? null;
-      nodes.push(description ? renderPermissionName(name, description) : renderRequestToken(name));
-    });
-    nodes.push(" on ");
-    nodes.push(renderRequestToken(details.scope));
-    return nodes;
-  }
-  if (details.path) {
-    return [`${details.access ?? "access"} on `, renderRequestToken(details.path)];
-  }
-  return null;
-}
-
-/** A small glyph for the resolved-request verdict: a check (granted), a cross
+/** A small glyph for the resolved-request verdict: a check (approved), a cross
  *  (denied), or an exclamation (error / couldn't complete). */
 function renderVerdictIcon(resolution: PermissionResolution): m.Vnode {
   const name: IconName = resolution === "granted" ? "check" : resolution === "denied" ? "close" : "alert";
-  return m.trust(icon(name, { size: 14, className: "permission-request-verdict-icon" }));
+  return m.trust(icon(name, { size: 13, className: "permission-request-verdict-icon" }));
 }
 
 /** The label shown beside the verdict icon. "error" reads as "Couldn't
  *  complete" -- the request didn't finish, distinct from a deny decision. */
 function verdictLabel(resolution: PermissionResolution): string {
-  if (resolution === "granted") return "Granted";
+  if (resolution === "granted") return "Approved";
   if (resolution === "denied") return "Denied";
   return "Couldn't complete";
 }
 
-/** The resolved verdict badge shown in place of the action button once the
- *  request is resolved (granted, denied, or could-not-complete). */
+/** The resolved verdict shown at the right of the receipt row (approved,
+ *  denied, or could-not-complete). */
 function renderPermissionVerdict(resolution: PermissionResolution): m.Vnode {
   return m("div", { class: `permission-request-verdict permission-request-verdict--${resolution}` }, [
     renderVerdictIcon(resolution),
@@ -196,20 +154,54 @@ function renderPermissionVerdict(resolution: PermissionResolution): m.Vnode {
   ]);
 }
 
+/** The eyebrow row every card state shares: a small lock + "Permission request". */
+function renderEyebrow(): m.Vnode {
+  return m("div", { class: "permission-request-eyebrow" }, [renderLockIcon(13), m("span", "Permission request")]);
+}
+
+/** The plain-text "Show raw request" / "Hide raw request" toggle, or null when
+ *  there's no raw text to disclose. */
+function renderRawToggle(rawText: string, rawOpen: boolean, onToggleRaw: () => void): m.Vnode | null {
+  if (!rawText) return null;
+  return m(
+    "button",
+    {
+      class: "permission-request-raw-toggle",
+      type: "button",
+      onclick(e: Event) {
+        e.preventDefault();
+        e.stopPropagation();
+        onToggleRaw();
+      },
+    },
+    rawOpen ? "Hide raw request" : "Show raw request",
+  );
+}
+
+/** The raw request/response block, shown full-width when the toggle is open. */
+function renderRawBlock(rawText: string, rawOpen: boolean): m.Vnode | null {
+  if (!rawText || !rawOpen) return null;
+  return m("div", { class: "permission-request-raw" }, m("pre", m("code", rawText)));
+}
+
 /**
  * Pure renderer for the permission card, given the already-parsed request
  * `details`, the resolved gateway `scopeInfo` (or null before it lands), the
- * user's `resolution` (or null while pending), and the `rawText` for the
- * disclosure. The live `PermissionCard` component computes these once and calls
- * here; tests call it directly with an injected `scopeInfo`.
+ * user's `resolution` (or null while pending), the `rawText` for the raw
+ * disclosure, and the disclosure's open state (`rawOpen` + `onToggleRaw`,
+ * owned by the live component). The live `PermissionCard` component computes
+ * these once and calls here; tests call it directly with an injected
+ * `scopeInfo`.
  *
- * `resolution` reflects the user's decision once it lands: the action button is
- * replaced by a Granted/Denied verdict. While no decision has landed and
- * `details` is null, `hasResult` picks between the two buttonless states: the
- * result hasn't arrived yet (still waiting), or it arrived but no request id
- * could be read from it (so the card says so honestly instead of waiting
- * forever). The button appears once the result carries a request_id and the
- * request is still awaiting a decision.
+ * Three states, all under the same eyebrow row:
+ *   - Resolved (`resolution` non-null): a compact one-line receipt -- badge,
+ *     title, and the Approved / Denied / Couldn't-complete verdict.
+ *   - Pending and parsed (`details` non-null): badge, title, the agent's
+ *     rationale, and a solid "Review & respond" button that opens the modal.
+ *   - Pending and unparsed (`details` null): `hasResult` picks between the two
+ *     buttonless status lines -- the result hasn't arrived yet (still
+ *     waiting), or it arrived but no request id could be read from it (so the
+ *     card says so honestly instead of waiting forever).
  */
 export function renderPermissionCard(
   details: PermissionRequestDetails | null,
@@ -217,76 +209,84 @@ export function renderPermissionCard(
   resolution: PermissionResolution | null,
   rawText: string,
   hasResult: boolean,
+  rawOpen: boolean,
+  onToggleRaw: () => void,
 ): m.Vnode {
-  const requesting = permissionRequestingValue(details, scopeInfo);
+  const title = permissionTitle(details, scopeInfo);
+  const rawToggle = renderRawToggle(rawText, rawOpen, onToggleRaw);
+  const rawBlock = renderRawBlock(rawText, rawOpen);
+
+  if (resolution !== null) {
+    return m("div", { class: "permission-request" }, [
+      renderEyebrow(),
+      m("div", { class: "permission-request-receipt" }, [
+        m("div", { class: "permission-request-badge permission-request-badge--sm" }, renderLockIcon(14)),
+        m("div", { class: "permission-request-receipt-title" }, title),
+        renderPermissionVerdict(resolution),
+      ]),
+      rawToggle ? m("div", { class: "permission-request-toggle-row" }, rawToggle) : null,
+      rawBlock,
+    ]);
+  }
+
+  if (details === null) {
+    return m("div", { class: "permission-request" }, [
+      renderEyebrow(),
+      m(
+        "div",
+        { class: "permission-request-status" },
+        hasResult
+          ? "Couldn't read this request from the tool output. If it's still pending, you can respond to it directly in the Minds app."
+          : "Waiting for the request to register…",
+      ),
+      rawToggle ? m("div", { class: "permission-request-toggle-row" }, rawToggle) : null,
+      rawBlock,
+    ]);
+  }
 
   return m("div", { class: "permission-request" }, [
-    m("div", { class: "permission-request-heading" }, [
-      renderLockIcon(),
-      m("span", { class: "permission-request-title" }, permissionHeading(details, scopeInfo)),
+    renderEyebrow(),
+    m("div", { class: "permission-request-body" }, [
+      m("div", { class: "permission-request-badge" }, renderLockIcon(16)),
+      m("div", { class: "permission-request-info" }, [
+        m("div", { class: "permission-request-title" }, title),
+        details.rationale ? m("div", { class: "permission-request-reason" }, details.rationale) : null,
+      ]),
     ]),
-    resolution === null && details === null
-      ? m(
-          "div",
-          { class: "permission-request-status" },
-          hasResult
-            ? "Couldn't read this request from the tool output. If it's still pending, you can respond to it directly in the Minds app."
-            : "Waiting for the request to register…",
-        )
-      : null,
-    requesting
-      ? m("div", { class: "permission-request-detail" }, [
-          m("span", { class: "permission-request-detail-label" }, "Requesting"),
-          m("code", { class: "permission-request-detail-value" }, requesting),
-        ])
-      : null,
-    details?.rationale
-      ? m("div", { class: "permission-request-detail permission-request-reason" }, [
-          m("span", { class: "permission-request-detail-label" }, "Reason"),
-          m("span", { class: "permission-request-reason-value" }, details.rationale),
-        ])
-      : null,
-    resolution !== null
-      ? m("div", { class: "permission-request-actions" }, renderPermissionVerdict(resolution))
-      : details !== null
-        ? m("div", { class: "permission-request-actions" }, [
-            m(
-              "button",
-              {
-                class: "permission-request-button",
-                type: "button",
-                onclick(e: Event) {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openPermissionRequest(details.requestId);
-                },
-              },
-              [renderLockIcon(), m("span", "Review & respond")],
-            ),
-          ])
-        : null,
-    rawText
-      ? m("details", { class: "permission-request-raw" }, [
-          m("summary", "Show raw request"),
-          m("pre", m("code", rawText)),
-        ])
-      : null,
+    m("div", { class: "permission-request-actions" }, [
+      m(
+        "button",
+        {
+          class: "permission-request-button",
+          type: "button",
+          onclick(e: Event) {
+            e.preventDefault();
+            e.stopPropagation();
+            openPermissionRequest(details.requestId);
+          },
+        },
+        "Review & respond",
+      ),
+      rawToggle,
+    ]),
+    rawBlock,
   ]);
 }
 
 /**
  * The live permission-request card. Parses the request once, resolves its
- * service scope to the gateway catalog (service display name + permission
- * descriptions) -- a cache-guarded async lookup, so the card first renders with
- * the raw scope and updates once the catalog resolves -- and delegates to
- * `renderPermissionCard`. Predefined requests have a scope to resolve;
- * file-sharing requests don't.
+ * service scope to the gateway catalog (the service display name shown as the
+ * card title) -- a cache-guarded async lookup, so the card first renders with
+ * the raw scope and updates once the catalog resolves -- holds the raw
+ * disclosure's open/closed state, and delegates to `renderPermissionCard`.
+ * Predefined requests have a scope to resolve; file-sharing requests don't.
  */
 export function PermissionCard(): m.Component<{
   toolCall: ToolCall;
   toolResult: ToolResultEvent | null;
   resolution: PermissionResolution | null;
 }> {
+  let rawOpen = false;
   return {
     view(vnode) {
       const { toolCall, toolResult, resolution } = vnode.attrs;
@@ -295,7 +295,9 @@ export function PermissionCard(): m.Component<{
       const rawInput = toolCall.input_preview || "";
       const rawOutput = toolResult?.output || "";
       const rawText = rawOutput ? `${rawInput}\n\n${rawOutput}` : rawInput;
-      return renderPermissionCard(details, scopeInfo, resolution, rawText, toolResult !== null);
+      return renderPermissionCard(details, scopeInfo, resolution, rawText, toolResult !== null, rawOpen, () => {
+        rawOpen = !rawOpen;
+      });
     },
   };
 }
