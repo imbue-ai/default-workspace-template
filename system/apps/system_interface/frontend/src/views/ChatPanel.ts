@@ -10,6 +10,7 @@
 import m from "mithril";
 import { isSlotClaimed } from "../slots";
 import {
+  clearConversationNotFound,
   fetchBackfillEvents,
   fetchForwardEvents,
   fetchWindowAtOffset,
@@ -30,7 +31,13 @@ import { OVERSCAN_PX } from "./row-measurement";
 import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
-import { getAgentById, getProtoAgents } from "../models/AgentManager";
+import {
+  addAgentsUpdatedListener,
+  getAgentById,
+  getProtoAgents,
+  removeAgentsUpdatedListener,
+  type AgentsUpdatedListener,
+} from "../models/AgentManager";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../base-path";
@@ -88,6 +95,13 @@ const JUMP_GAP_EVENTS = 120;
 // scale with it and so are independent of it; only the loaded window's small
 // residual (measured height vs count * this) is affected.
 const ESTIMATED_EVENT_HEIGHT_PX = 160;
+// Minimum spacing between two automatic screen captures for the same agent. The
+// capture is driven from the render path, and every completed request triggers a
+// global mithril redraw, so an uncached outcome makes the pair self-sustaining
+// (the observed 404 storm was ~30 requests a second, running even while the tab
+// was hidden). Caching the outcome plus this floor bounds it to one request per
+// half-minute; the explicit Retry button covers the "I fixed it, look again" case.
+const SCREEN_RECAPTURE_INTERVAL_MS = 30_000;
 
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
@@ -228,11 +242,15 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
   }
 
-  // Screen capture state (shown when agent has no conversation)
+  // Screen capture state (shown when agent has no conversation). ``screenSettledAtMs``
+  // records when the last attempt finished, whichever way it went: an *error* has to
+  // be cached exactly like content, or the render path refires the request on the
+  // next redraw forever (see SCREEN_RECAPTURE_INTERVAL_MS).
   let screenContent: string | null = null;
   let screenError: string | null = null;
   let screenLoading = false;
   let screenAgentId: string | null = null;
+  let screenSettledAtMs: number | null = null;
 
   // Proto-agent log state
   let logWs: WebSocket | null = null;
@@ -242,28 +260,47 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   let logError: string | null = null;
   let logAgentId: string | null = null;
 
-  async function fetchScreenCapture(agentId: string): Promise<void> {
-    if (screenAgentId === agentId && (screenContent !== null || screenLoading)) {
+  /**
+   * Capture the agent's terminal screen for the "no conversation data" placeholder.
+   *
+   * Called from the render path, so it must be a no-op for every redraw that
+   * follows a settled attempt -- success OR failure. ``force`` is the user-driven
+   * Retry, which bypasses the interval but not an in-flight request.
+   */
+  function fetchScreenCapture(agentId: string, force: boolean): void {
+    if (screenAgentId !== agentId) {
+      screenAgentId = agentId;
+      screenContent = null;
+      screenError = null;
+      screenSettledAtMs = null;
+      screenLoading = false;
+    }
+    if (screenLoading) {
       return;
     }
-    screenAgentId = agentId;
+    if (!force && screenSettledAtMs !== null && Date.now() - screenSettledAtMs < SCREEN_RECAPTURE_INTERVAL_MS) {
+      return;
+    }
     screenLoading = true;
-    screenContent = null;
-    screenError = null;
-    try {
-      const result = await m.request<{ screen: string | null; error?: string }>({
+    void m
+      .request<{ screen: string | null; error?: string }>({
         method: "GET",
         url: apiUrl("/api/agents/:agentId/screen"),
         params: { agentId, scrollback: "true" },
+      })
+      .then((result) => {
+        screenContent = result.screen;
+        screenError = result.error ?? null;
+      })
+      .catch(() => {
+        screenContent = null;
+        screenError = "Failed to capture screen";
+      })
+      .finally(() => {
+        screenLoading = false;
+        screenSettledAtMs = Date.now();
+        m.redraw();
       });
-      screenContent = result.screen;
-      screenError = result.error ?? null;
-    } catch {
-      screenError = "Failed to capture screen";
-    } finally {
-      screenLoading = false;
-      m.redraw();
-    }
   }
 
   function connectLogWs(agentId: string): void {
@@ -376,6 +413,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
   }
 
+  // Guards the not-found recovery below against re-firing on every snapshot when
+  // the agent is listed but its transcript keeps 404ing: one reload per stretch of
+  // presence, re-armed the next time the agent goes missing.
+  let recoveryAttemptedWhilePresent = false;
+
   function ensureAgentLoaded(agentId: string): void {
     if (agentId === currentAgentId) {
       return;
@@ -384,8 +426,35 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     currentAgentId = agentId;
     scroll.reset();
     backfillInFlight = false;
+    recoveryAttemptedWhilePresent = false;
     loadAgent(agentId);
   }
+
+  /**
+   * React to an ``agents_updated`` snapshot.
+   *
+   * ``ensureAgentLoaded`` never refetches for an agent id it already loaded, so a
+   * 404 -- which the server also returns during the window where the ``mngr
+   * observe`` pipeline is restarting -- otherwise wedges the panel until a hard
+   * page reload. The agent reappearing in a snapshot is the signal that the 404
+   * was transient, so clear the marker and reload the transcript once.
+   */
+  const agentsUpdatedListener: AgentsUpdatedListener = () => {
+    const agentId = currentAgentId;
+    if (agentId === null) {
+      return;
+    }
+    if (getAgentById(agentId) === undefined) {
+      recoveryAttemptedWhilePresent = false;
+      return;
+    }
+    if (!isConversationNotFound(agentId) || recoveryAttemptedWhilePresent) {
+      return;
+    }
+    recoveryAttemptedWhilePresent = true;
+    clearConversationNotFound(agentId);
+    void loadAgent(agentId);
+  };
 
   /**
    * Keep the loaded window in step with the scroll position. Three cases, all
@@ -492,6 +561,54 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     scroll.applyScrollPosition(element);
   }
 
+  /**
+   * The agent exists but has no transcript -- typically a Claude session that
+   * crashed on startup, where the raw terminal output is the only diagnostic.
+   *
+   * The capture is only attempted while the agent is still in the known-agent
+   * list. For an agent that is gone the endpoint has nothing to capture and
+   * answers 404, which is what turned a stale tab in a restored layout into a
+   * request storm; the tombstone path below covers that case instead.
+   */
+  function renderNoConversation(agentId: string): m.Vnode {
+    const agentIsKnown = getAgentById(agentId) !== undefined;
+    if (agentIsKnown) {
+      fetchScreenCapture(agentId, false);
+    }
+    return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
+      m("p", { class: "text-lg font-semibold text-text-primary" }, "No conversation data"),
+      m("p", { class: "text-text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
+      agentIsKnown
+        ? screenLoading
+          ? m("p", { class: "text-text-secondary" }, "Loading terminal output...")
+          : screenContent
+            ? m(
+                "pre",
+                {
+                  class:
+                    "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono whitespace-pre",
+                },
+                screenContent,
+              )
+            : screenError
+              ? m("p", { class: "text-text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
+              : null
+        : null,
+      agentIsKnown
+        ? m(
+            "button",
+            {
+              type: "button",
+              class: "chat-placeholder-btn",
+              disabled: screenLoading,
+              onclick: () => fetchScreenCapture(agentId, true),
+            },
+            "Retry",
+          )
+        : null,
+    ]);
+  }
+
   function renderMessages(agentId: string): m.Vnode {
     // Reset here so the loading overlay (keyed on a positive value) stays hidden
     // for every path that doesn't render the windowed list; the windowed path
@@ -525,25 +642,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     manageStreamConnection(agentId);
 
     if (isConversationNotFound(agentId)) {
-      fetchScreenCapture(agentId);
-      return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
-        m("p", { class: "text-lg font-semibold text-text-primary" }, "No conversation data"),
-        m("p", { class: "text-text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
-        screenLoading
-          ? m("p", { class: "text-text-secondary" }, "Loading terminal output...")
-          : screenContent
-            ? m(
-                "pre",
-                {
-                  class:
-                    "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono whitespace-pre",
-                },
-                screenContent,
-              )
-            : screenError
-              ? m("p", { class: "text-text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
-              : null,
-      ]);
+      return renderNoConversation(agentId);
     }
 
     if (loading) {
@@ -682,7 +781,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   return {
+    oninit() {
+      addAgentsUpdatedListener(agentsUpdatedListener);
+    },
+
     onremove() {
+      removeAgentsUpdatedListener(agentsUpdatedListener);
       disconnectLogWs();
       scroll.detach();
       if (currentAgentId !== null) {

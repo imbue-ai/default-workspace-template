@@ -265,6 +265,26 @@ body {
   border: none;
 }
 
+/* Action button on the chat placeholders (no-conversation retry, tombstone close). */
+.chat-placeholder-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  cursor: pointer;
+}
+
+.chat-placeholder-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.chat-placeholder-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .chat-agent-terminal-link {
   margin-top: 6px;
   text-align: center;

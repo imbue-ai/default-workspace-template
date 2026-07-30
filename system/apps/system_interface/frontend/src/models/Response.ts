@@ -394,6 +394,18 @@ export function isConversationNotFound(agentId: string): boolean {
   return notFoundAgentIds.has(agentId);
 }
 
+/**
+ * Drop the not-found marker for an agent so the next ``fetchEvents`` is treated
+ * as a fresh load. Callers use this when the agent reappears in an
+ * ``agents_updated`` snapshot: a 404 can come from a genuinely destroyed agent
+ * OR from a momentary gap while the ``mngr observe`` pipeline restarts, and only
+ * the latter recovers. Clearing before the refetch also lets the SSE stream be
+ * reconnected immediately instead of staying torn down for one more redraw.
+ */
+export function clearConversationNotFound(agentId: string): void {
+  notFoundAgentIds.delete(agentId);
+}
+
 export function getEventsForAgent(agentId: string): TranscriptEvent[] {
   return storeByAgent[agentId]?.events ?? [];
 }
