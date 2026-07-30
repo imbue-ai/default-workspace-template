@@ -1,3 +1,4 @@
+import html
 import json
 import os
 import queue
@@ -86,6 +87,23 @@ _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 logger = _loguru_logger
 
 STATIC_DIRECTORY = Path(__file__).parent / "static"
+
+# Bumped by ``system/scripts/refresh_workspace_view.py`` whenever the interface
+# on disk changes. Served into the shell (so a page records the epoch it loaded
+# with) and sent on WebSocket connect (so a page that reconnects to a newer
+# epoch reloads itself). That pairing is what makes a reveal reach a browser
+# whose socket was down for the restart: the reload broadcast is a live fan-out
+# with no replay, and a client on reconnect backoff is not connected to receive
+# it. Deliberately not the server's own boot id -- that would reload every open
+# page on any unrelated restart, including a crash-loop, taking unsent chat
+# drafts with it.
+#
+# Resolved from this file, like STATIC_DIRECTORY above and like the writer's own
+# resolution -- not from the cwd, so the two cannot disagree just because
+# something was launched from elsewhere (the failure would be invisible: an
+# epoch nobody reads reloads nobody). ``test_view_epoch_path_matches_the_writer``
+# pins the two together.
+VIEW_EPOCH_PATH = Path(__file__).resolve().parents[5] / "data/.state/view_epoch"
 
 _FRONTEND_NOT_BUILT_HTML = (
     "<html><body><p>Frontend not built. Run <code>npm run build</code> in <code>frontend/</code>.</p></body></html>"
@@ -197,6 +215,30 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
+def read_view_epoch() -> str:
+    """Return the epoch of the interface currently on disk, or ``""`` if unset.
+
+    An unreadable or absent file is not an error: a workspace where nothing has
+    ever been revealed has no epoch, and an empty one never triggers a reload.
+    """
+    try:
+        return VIEW_EPOCH_PATH.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _inject_view_epoch_meta_tag(html_content: str) -> str:
+    """Inject the epoch this document was built from, for the frontend to keep.
+
+    Escaped because this one is read off disk rather than generated here: our own
+    writer emits a hex token, but nothing structurally stops the file from
+    holding a quote that would end the attribute early.
+    """
+    epoch = html.escape(read_view_epoch(), quote=True)
+    meta_tag = f'<meta name="system-interface-view-epoch" content="{epoch}">'
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
     if index_path.exists():
@@ -206,6 +248,7 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
+        html_content = _inject_view_epoch_meta_tag(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _html_response(html_content)
@@ -1180,6 +1223,10 @@ def _run_ws_broadcast_loop(
                 }
             )
         )
+        # Read per connection, not once at boot: a reveal bumps the epoch while
+        # this process keeps running, and the client reconnecting afterwards is
+        # exactly the one that needs the new value.
+        websocket.send(json.dumps({"type": "view_epoch", "epoch": read_view_epoch()}))
 
         for proto in agent_manager.get_proto_agents():
             websocket.send(json.dumps({"type": "proto_agent_created", **proto}))
