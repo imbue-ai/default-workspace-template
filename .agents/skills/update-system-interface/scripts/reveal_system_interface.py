@@ -114,10 +114,10 @@ FRONTEND_BUILD_INDEX = f"{APP_DIR}/imbue/system_interface/static/index.html"
 TOOL_NAME = "system-interface"
 
 # The shared post-change refresh motion, repo-relative. Owns *how* a changed
-# interface is revealed to whoever is looking (which channels, in what order,
-# what is fatal); this script only decides *when*. Shared with the other flows
-# that restart the services agent (``update-app``, ``update-self``), so they
-# cannot drift on that policy. Stdlib-only, so it runs under our interpreter.
+# interface is revealed to whoever is looking (which channels, what is fatal);
+# this script only decides *when*. Shared with the other flows that restart the
+# services agent (``update-app``, ``update-self``), so they cannot drift on that
+# policy. Stdlib-only, so it runs under our interpreter.
 _REFRESH_SCRIPT = "system/scripts/refresh_workspace_view.py"
 
 # Pre-merge preview: the deterministic boot + teardown of a previewable instance
@@ -427,11 +427,10 @@ def _preflight_ok(
 def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
     """Ask every open view of this workspace to reload the changed interface.
 
-    Delegates to the shared ``refresh_workspace_view.py`` helper, which fires
-    both the in-workspace reload broadcast (reaching browsers we cannot address
-    directly, including shared tunnel viewers) and the Minds app's refresh
-    endpoint (which additionally drops the app's HTTP cache and works when the
-    frontend's WebSocket never came back from the restart).
+    Delegates to the shared ``refresh_workspace_view.py`` helper, which bumps the
+    on-disk view epoch (so a browser reconnecting later reloads itself) and fires
+    the in-workspace reload broadcast plus the Minds app's refresh endpoint (which
+    additionally drops the app's HTTP cache).
 
     Best-effort and never fatal: the helper always exits 0 and reports each
     channel on stderr, which we pass through. The change is already on disk and

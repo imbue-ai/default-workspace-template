@@ -74,10 +74,19 @@ can never be left broken. The exit code reports the outcome (`0` revealed, `2`
 rolled back, `3` emergency, `1` precondition error).
 
 That reload is delegated to `system/scripts/refresh_workspace_view.py`, the shared
-helper every flow that restarts the services agent uses. It fires two channels,
-because neither reaches every viewer: a `reload_system_interface` op, and the Minds
-app's own refresh endpoint (which additionally drops the app's HTTP cache, and lands
-even when the page's WebSocket never came back from the restart).
+helper every flow that restarts the services agent uses. It fires three channels,
+because none of them reaches every viewer:
+
+- The **view epoch** (`data/.state/view_epoch`), bumped on disk. The server injects
+  it into the app shell and sends it on every WebSocket connect; a page that
+  reconnects carrying an older epoch reloads itself. This is the channel that does
+  not need anything to be up, so the helper never waits for the restart -- and it
+  is the only one that reaches a browser that was disconnected, or shut, when the
+  reveal landed.
+- The `reload_system_interface` **broadcast**, which reloads everyone attached right
+  now. A live fan-out with no replay: it reaches nobody if the server is down or its
+  clients are still on reconnect backoff, which is what the epoch covers.
+- The **Minds app's refresh endpoint**, which additionally drops the app's HTTP cache.
 
 The `reload_system_interface` op goes to the loopback-only
 `/api/layout/broadcast` endpoint, which relays a `layout_op` WebSocket message;
