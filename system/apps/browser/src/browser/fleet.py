@@ -193,7 +193,7 @@ def _resolve_active_layout() -> tuple[bool, str | None]:
       connected client's layout, else None (reachable but nothing to place it on).
     """
     root = _repo_root()
-    script = root / "scripts" / "layout.py"
+    script = root / "system" / "scripts" / "layout.py"
     if not script.exists():
         return (False, None)
     result = subprocess.run(
