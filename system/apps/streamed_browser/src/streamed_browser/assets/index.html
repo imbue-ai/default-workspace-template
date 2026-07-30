@@ -13,12 +13,22 @@
     padding: 4px 10px; border-radius: 6px; pointer-events: none; transition: opacity .3s;
   }
   #status.hidden { opacity: 0; }
+  #clipchip {
+    position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+    background: rgba(20,20,20,.9); color: #ddd; font: 12px system-ui, sans-serif;
+    padding: 4px 12px; border-radius: 14px; pointer-events: none;
+    transition: opacity .2s; opacity: 0;
+  }
+  #clipchip.show { opacity: 1; }
+  #clipchip.err { background: #7a1f1f; color: #fff; }
+  #clipchip.ok { background: #1f5c33; color: #fff; }
 </style>
 </head>
 <body>
 <div id="wrap">
   <div id="status">connecting…</div>
   <canvas id="screen" tabindex="0"></canvas>
+  <div id="clipchip"></div>
 </div>
 <script>
 "use strict";
@@ -160,6 +170,14 @@ function connect() {
       if (event.data.startsWith("cursor,")) {
         const [, hotX, hotY, png] = event.data.split(",");
         canvas.style.cursor = `url(data:image/png;base64,${png}) ${hotX} ${hotY}, default`;
+      } else if (event.data.startsWith("clip,txt,")) {
+        const bytes = Uint8Array.from(atob(event.data.slice(9)), (c) => c.charCodeAt(0));
+        writeLocalText(new TextDecoder().decode(bytes));
+      } else if (event.data.startsWith("clip,out,")) {
+        const [, , mime] = event.data.split(",");  // fetch the bytes over HTTP (may be >1MiB)
+        fetch(new URL("clipboard/out", document.baseURI))
+          .then((r) => r.blob()).then((blob) => writeLocalImage(blob, mime))
+          .catch(() => showChip("Copy failed", "err"));
       }
       return;
     }
@@ -300,9 +318,20 @@ canvas.addEventListener("wheel", (e) => {
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 canvas.addEventListener("keydown", (e) => {
-  // Cmd-combos stay LOCAL: on the remote Linux Chromium, Super+key does
-  // almost nothing, and swallowing them breaks Mac muscle memory (and the
-  // Minds app's own shortcuts) whenever the pane has focus.
+  // Clipboard shortcuts are intercepted, not forwarded: paste reads the LOCAL
+  // clipboard and pushes it to the remote; copy/cut trigger a remote copy and
+  // let the copy-out monitor deliver the result to the local clipboard. This
+  // makes Cmd (Mac) and Ctrl both work regardless of the remote being Linux.
+  const mod = e.metaKey || e.ctrlKey;
+  const k = e.key.toLowerCase();
+  if (mod && k === "v") { e.preventDefault(); pasteIntoRemote(); return; }
+  if (mod && (k === "c" || k === "x")) {
+    e.preventDefault();
+    remoteCtrlCombo(k === "c" ? 0x0063 : 0x0078);  // c / x
+    showChip(k === "c" ? "Copying…" : "Cutting…", "");
+    return;
+  }
+  // Other Cmd-combos stay LOCAL (Mac muscle memory, Minds shortcuts).
   if (e.metaKey) return;
   const keysym = keysymFor(e);
   if (keysym === null) return;
@@ -324,6 +353,75 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) { but
 // Held-key heartbeat (Selkies kh): report the full held set so the server can
 // release anything whose keyup got lost in transit.
 setInterval(() => sendInput("kh" + [...heldKeysyms].map((k) => "," + k).join("")), 2000);
+
+// --- clipboard (paste in / copy out, text + images, with a chip) -------------
+const CLIP_MAX_BYTES = 10 * 1024 * 1024;
+const clipchip = document.getElementById("clipchip");
+let chipTimer = null;
+function showChip(text, kind) {
+  clipchip.textContent = text;
+  clipchip.className = "show" + (kind ? " " + kind : "");
+  clearTimeout(chipTimer);
+  if (kind === "ok" || kind === "err") chipTimer = setTimeout(() => { clipchip.className = ""; }, 2200);
+}
+function remoteCtrlCombo(keysym) {
+  sendInput("kd,65507"); sendInput("kd," + keysym); sendInput("ku," + keysym); sendInput("ku,65507");
+}
+
+async function pasteIntoRemote() {
+  showChip("Pasting…", "");
+  try {
+    // Prefer read() (covers images); fall back to readText().
+    let blob = null, mime = "text/plain";
+    try {
+      for (const item of await navigator.clipboard.read()) {
+        const imgType = item.types.find((t) => t.startsWith("image/"));
+        if (imgType) { blob = await item.getType(imgType); mime = "image/png"; break; }
+        if (item.types.includes("text/plain")) { blob = await item.getType("text/plain"); mime = "text/plain"; }
+      }
+    } catch (_) { /* read() unsupported/denied -> text path */ }
+    if (blob === null) {
+      const text = await navigator.clipboard.readText();
+      if (!text) { clipchip.className = ""; return; }
+      blob = new Blob([text], { type: "text/plain" });
+    }
+    if (blob.size > CLIP_MAX_BYTES) { showChip("Paste payload too large", "err"); return; }
+    const resp = await fetch(new URL("clipboard/paste", document.baseURI),
+      { method: "POST", headers: { "Content-Type": mime }, body: blob });
+    if (resp.status === 413) { showChip("Paste payload too large", "err"); return; }
+    showChip(resp.ok ? "Pasted" : "Paste failed", resp.ok ? "ok" : "err");
+  } catch (_) { showChip("Paste failed", "err"); }
+}
+
+// Local clipboard WRITE with a deferred retry: programmatic writes need the
+// document focused, and a server-pushed copy can arrive while the user is
+// elsewhere -- queue it and flush on the next focus.
+let pendingWrite = null;
+function flushPendingWrite() { if (pendingWrite) { const w = pendingWrite; pendingWrite = null; w(); } }
+window.addEventListener("focus", flushPendingWrite);
+function writeLocalText(text) {
+  const doWrite = () => navigator.clipboard.writeText(text)
+    .then(() => showChip("Copied from remote", "ok"))
+    .catch(() => { pendingWrite = doWrite; });
+  doWrite();
+}
+async function writeLocalImage(blob, mime) {
+  // Chromium's clipboard only writes image/png; transcode anything else.
+  let png = blob;
+  if (mime !== "image/png") {
+    try {
+      const bmp = await createImageBitmap(blob);
+      const c = document.createElement("canvas");
+      c.width = bmp.width; c.height = bmp.height;
+      c.getContext("2d").drawImage(bmp, 0, 0);
+      png = await new Promise((res) => c.toBlob(res, "image/png"));
+    } catch (_) { showChip("Copy failed", "err"); return; }
+  }
+  const doWrite = () => navigator.clipboard.write([new ClipboardItem({ "image/png": png })])
+    .then(() => showChip("Image copied from remote", "ok"))
+    .catch(() => { pendingWrite = doWrite; });
+  doWrite();
+}
 
 // --- resize: make the remote browser fill the pane, on settle ----------------
 // The pane IS the monitor: send its exact pixel size (even-aligned for H.264),

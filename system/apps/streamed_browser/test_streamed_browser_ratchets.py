@@ -56,9 +56,12 @@ def test_prevent_broad_exception_catch() -> None:
     # arbitrary Xlib protocol error from a window/key changing under it, or the
     # user is left with a stuck key or a dead input thread), one in
     # videopipe.py's stop_capture guard, and one in audiopipe.py's stop_capture
-    # guard (both native-thread teardowns that have wedged in testing and must
-    # never take the service down). Each logs; none silences.
-    rc.check_broad_exception_catch(_DIR, snapshot(5))
+    # guard, one in audiopipe.py's stop_capture guard (native-thread teardowns
+    # that have wedged in testing), one in xinput.py's paste injection, and
+    # three in xclipboard.py's monitor (Xlib raises assorted connection/protocol
+    # errors; the monitor thread and its callback must survive any of them or
+    # copy-out silently dies). Each logs; none silences.
+    rc.check_broad_exception_catch(_DIR, snapshot(9))
 
 
 def test_prevent_builtin_exception_raises() -> None:

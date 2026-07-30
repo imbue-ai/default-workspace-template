@@ -18,7 +18,9 @@ Flask + flask-sock, thread-per-connection -- the same shape as the other
 workspace apps; there is no async world here at all.
 """
 
+import base64
 import os
+from collections import deque
 import socket as socket_module
 import threading
 import time
@@ -36,6 +38,7 @@ from streamed_browser.audiopipe import is_available as is_audio_available
 from streamed_browser.session import AUDIO_SOURCE_DEVICE, SessionStartupError, StreamedBrowserSession, is_chromium_installed
 from streamed_browser.videopipe import PixelfluxVideoPipe, VideoPipeError
 from streamed_browser.videopipe import is_available as is_pipe_available
+from streamed_browser.xclipboard import ClipboardError, ClipboardMonitor, set_clipboard
 from streamed_browser.xinput import InputRouter
 
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
@@ -50,6 +53,23 @@ _HEARTBEAT_SECONDS = 0.25
 
 application = Flask(__name__, static_folder=None)
 application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
+# Paste-in bodies (images) can be large; cap so a giant paste returns 413
+# before the body is read into memory rather than wedging Chromium. 10 MiB
+# matches xclipboard's read cap and the client pre-check.
+_CLIPBOARD_MAX_BYTES = 10 * 1024 * 1024
+application.config["MAX_CONTENT_LENGTH"] = _CLIPBOARD_MAX_BYTES
+# Copied-out payload stashed for GET /clipboard/out (one slot, newest wins),
+# and the monitor that fills it; both keyed to the live session.
+_clip_lock = threading.Lock()
+_clip_out: dict[str, object] = {"data": b"", "mime": "text/plain"}
+_clip_monitor: ClipboardMonitor | None = None
+# The current viewer's outbound control queue (small text signals to the
+# client); set on connect, cleared on disconnect.
+_clip_sink: dict[str, object] = {"send": None}
+# Text small enough to inline over the WS control channel; larger text and all
+# images route through GET /clipboard/out to stay well under the 1 MiB frame
+# cap that would otherwise tear down the video socket.
+_CLIP_INLINE_TEXT_MAX = 200 * 1024
 sock = Sock(application)
 
 
@@ -127,6 +147,70 @@ def _set_nodelay(ws: Any) -> None:
         logger.debug("could not set TCP_NODELAY on stream socket ({})", error)
 
 
+def _on_remote_clipboard(data: bytes, mime: str) -> None:
+    """A copy happened in the remote browser (XFixes fired): stash it for the
+    GET, and signal the connected viewer. Small text inlines over the control
+    channel; images and large text ride the GET so no >1 MiB WS frame can tear
+    down the video socket."""
+    with _clip_lock:
+        _clip_out["data"] = data
+        _clip_out["mime"] = mime
+        send = _clip_sink["send"]
+        if send is None:
+            return
+        if mime.startswith("text/") and len(data) <= _CLIP_INLINE_TEXT_MAX:
+            send("clip,txt," + base64.b64encode(data).decode("ascii"))
+        else:
+            send(f"clip,out,{mime},{len(data)}")
+
+
+def _ensure_clipboard_monitor(display: str) -> None:
+    """Start (once per session display) the XFixes copy-out monitor."""
+    global _clip_monitor
+    with _clip_lock:
+        if _clip_monitor is not None and _clip_monitor.display == display:
+            return
+        if _clip_monitor is not None:
+            _clip_monitor.close()
+        _clip_monitor = ClipboardMonitor(display, _on_remote_clipboard)
+    _clip_monitor.start()
+
+
+def clipboard_paste() -> Response:
+    """Paste-in: set the remote CLIPBOARD from the POST body, then inject Ctrl+V.
+
+    Flask already rejected bodies over MAX_CONTENT_LENGTH with 413 before this
+    runs, so the payload is bounded. The X selection is set BEFORE the paste
+    keystroke, and clipboard sets are recorded so the copy-out monitor doesn't
+    echo them back."""
+    with _clip_lock:
+        display = _clip_sink["display"]
+        router = _clip_sink["router"]
+    if display is None or router is None:
+        return jsonify({"error": "no active session"}), 409
+    data = request.get_data()
+    if not data:
+        return jsonify({"error": "empty clipboard"}), 400
+    mime = (request.headers.get("Content-Type") or "text/plain").split(";")[0].strip()
+    try:
+        set_clipboard(display, data, mime)
+        if _clip_monitor is not None:
+            _clip_monitor.note_written(data)
+        router.paste()
+    except ClipboardError as error:
+        logger.warning("clipboard paste failed ({})", error)
+        return jsonify({"error": "paste failed"}), 500
+    return jsonify({"ok": True})
+
+
+def clipboard_out() -> Response:
+    """Copy-out: the bytes of the last remote copy, in their native mime."""
+    with _clip_lock:
+        data = _clip_out["data"]
+        mime = _clip_out["mime"]
+    return Response(data, mimetype=mime)
+
+
 def stream_socket(ws: Any) -> None:
     """One viewer: bring the session up, then pump frames out and input in."""
     _set_nodelay(ws)
@@ -144,6 +228,12 @@ def stream_socket(ws: Any) -> None:
         ws.close(1011)
         return
     router = InputRouter(display)
+    _ensure_clipboard_monitor(display)
+    clip_queue: deque[str] = deque(maxlen=32)
+    with _clip_lock:
+        _clip_sink["send"] = clip_queue.append
+        _clip_sink["display"] = display
+        _clip_sink["router"] = router
     # Audio is strictly additive: gate on pcmflux being importable AND the
     # session's null sink existing. A start failure leaves video untouched.
     audio_pipe: AudioPipe | None = None
@@ -175,6 +265,9 @@ def stream_socket(ws: Any) -> None:
             if cursor_message is not None:
                 ws.send(cursor_message)
                 last_send = time.monotonic()
+            while clip_queue:
+                ws.send(clip_queue.popleft())
+                last_send = time.monotonic()
             if audio_pipe is not None:
                 for chunk in audio_pipe.drain():
                     ws.send(chunk)
@@ -190,6 +283,11 @@ def stream_socket(ws: Any) -> None:
         pass
     finally:
         stop_event.set()
+        with _clip_lock:
+            if _clip_sink["send"] == clip_queue.append:
+                _clip_sink["send"] = None
+                _clip_sink["display"] = None
+                _clip_sink["router"] = None
         if audio_pipe is not None:
             audio_pipe.stop()
         pipe.stop()
@@ -199,6 +297,8 @@ def stream_socket(ws: Any) -> None:
 
 application.add_url_rule("/", view_func=index, methods=["GET"])
 application.add_url_rule("/health", view_func=health, methods=["GET"])
+application.add_url_rule("/clipboard/paste", view_func=clipboard_paste, methods=["POST"])
+application.add_url_rule("/clipboard/out", view_func=clipboard_out, methods=["GET"])
 sock.route("/stream")(stream_socket)
 
 
