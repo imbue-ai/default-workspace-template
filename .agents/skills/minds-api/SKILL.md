@@ -45,7 +45,10 @@ appears in `GET /api/v1/workspaces` if you need to self-reference.
 
 ## Getting access for a specific workspace (latchkey permissions)
 
-Only the schema endpoint is allowed by default. Every `/api/v1/workspaces/...`
+Only two endpoints are allowed by default: the schema above, and `GET
+/api/v1/app/version` (the newest workspace-template ref the running Minds app
+supports -- what `update-self` caps itself against). Every
+`/api/v1/workspaces/...`
 call is gated by the `minds-workspaces` detent scope, with one permission per
 verb. The **targeted** verbs are granted *per workspace*, so you ask for access
 to one specific workspace at a time.
