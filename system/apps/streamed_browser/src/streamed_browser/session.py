@@ -81,26 +81,42 @@ AUDIO_SOURCE_DEVICE = f"{_PULSE_SINK}.monitor"
 
 def _ensure_pulse_sink() -> bool:
     """Start the pulse daemon (idempotent) and create the null sink. Returns
-    whether the sink is available for capture; never raises."""
+    whether the sink is available for capture; never raises.
+
+    Launched with -n (load only our modules) and an anonymous-auth native
+    socket at a fixed path: running system-mode pulse as root otherwise leaves
+    the socket group-gated, which rejects our own pactl/pcmflux clients with
+    "Access denied". The null sink is loaded at launch so it exists before
+    Chromium's first audio use.
+    """
     env = {**os.environ, "PULSE_SERVER": _PULSE_SERVER}
     try:
-        info = subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5)
-        if info.returncode != 0:
-            subprocess.run(
-                ["pulseaudio", "--system", "--daemonize=yes", "--disallow-exit",
-                 "--exit-idle-time=-1", "--log-target=stderr"],
-                capture_output=True, timeout=10,
+        if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode != 0:
+            os.makedirs("/var/run/pulse", exist_ok=True)
+            # Foreground daemon as a detached background process (its own
+            # session, so it survives this call but supervisord's killasgroup
+            # still reaps it on service stop). --daemonize=yes double-forks and
+            # trips over a stale PID file in this container; a plain Popen does
+            # not. The sink loads at launch via -L, before Chromium's first use.
+            subprocess.Popen(
+                ["pulseaudio", "--system", "--daemonize=no", "--disallow-exit",
+                 "--exit-idle-time=-1", "--log-target=stderr", "-n",
+                 "-L", "module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native",
+                 "-L", f"module-null-sink sink_name={_PULSE_SINK} rate=48000 channels=2"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
                 if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
                     break
                 threading.Event().wait(0.2)
-        subprocess.run(
-            ["pactl", "load-module", "module-null-sink", f"sink_name={_PULSE_SINK}",
-             "rate=48000", "channels=2"],
-            env=env, capture_output=True, timeout=10,
-        )
+        else:
+            # Daemon already up (a prior session): ensure the sink is present.
+            subprocess.run(
+                ["pactl", "load-module", "module-null-sink", f"sink_name={_PULSE_SINK}",
+                 "rate=48000", "channels=2"],
+                env=env, capture_output=True, timeout=10,
+            )
         check = subprocess.run(
             ["pactl", "list", "short", "sinks"], env=env, capture_output=True, text=True, timeout=5
         )
