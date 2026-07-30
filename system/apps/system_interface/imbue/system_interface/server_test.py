@@ -39,8 +39,8 @@ from imbue.system_interface.server import read_view_epoch
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
-from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import drain_connect_snapshot
+from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
