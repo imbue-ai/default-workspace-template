@@ -98,6 +98,33 @@ class VideoPipeError(RuntimeError):
     pass
 
 
+# Closed-loop capture rate (the Salsify idea: the encoder should not outrun the
+# transport). The credit window caps DELIVERY at the path's real rate, but the
+# encoder ticks open-loop -- measured on a live workspace it encoded 60/s while
+# ~10/s were deliverable, burning a full core on frames the mailbox discarded.
+# The controller retunes pixelflux's live capture rate to track the measured
+# ack rate, with headroom so a recovering path can speed back up.
+_RATE_MIN_FPS = 15.0
+_RATE_MAX_FPS = float(os.environ.get("BROWSER_VIDEO_FPS", "60"))
+_RATE_WINDOW_SECONDS = 2.0
+_RATE_HEADROOM = 1.5
+_RATE_RETUNE_THRESHOLD_FPS = 4.0
+
+
+def target_capture_fps(acked_stripes_in_window: int, row_count: int) -> float:
+    """The capture rate warranted by the last window's delivered stripes.
+
+    Zero deliveries means idle (damage-driven capture costs nothing while
+    static), so snap back to the ceiling and the next interaction gets the
+    low-latency tick. Otherwise: delivered full-frame rate, plus headroom to
+    probe upward, clamped. Pure, for tests.
+    """
+    if acked_stripes_in_window == 0:
+        return _RATE_MAX_FPS
+    frame_rate = acked_stripes_in_window / _RATE_WINDOW_SECONDS / max(1, row_count)
+    return max(_RATE_MIN_FPS, min(_RATE_MAX_FPS, frame_rate * _RATE_HEADROOM + 2.0))
+
+
 def is_available() -> bool:
     """Pixelflux's native module loaded (the capture display arrives per-pipe)."""
     return PIXELFLUX_IMPORT_ERROR is None
@@ -206,6 +233,9 @@ class PixelfluxVideoPipe:
         self._cursor_message: str | None = None
         self._closed = False
         self._last_idr_request = 0.0
+        self._ack_times: list[float] = []
+        self._current_fps = _RATE_MAX_FPS
+        self._last_retune = 0.0
         self.frames_captured = 0
         self.frames_dropped = 0
 
@@ -310,6 +340,18 @@ class PixelfluxVideoPipe:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return None
+                # Idle snap-back: retuning otherwise only happens on acks, so a
+                # quiet stream would stay at a low tick and the next interaction
+                # would pay its latency. Idle capture at the ceiling costs
+                # nothing (damage-driven).
+                now = time.monotonic()
+                if (
+                    self._current_fps < _RATE_MAX_FPS
+                    and (not self._ack_times or now - self._ack_times[-1] > _RATE_WINDOW_SECONDS)
+                    and self._capture is not None
+                ):
+                    self._current_fps = _RATE_MAX_FPS
+                    self._capture.update_framerate(_RATE_MAX_FPS)
                 self._condition.wait(timeout=remaining)
             return None
 
@@ -322,7 +364,23 @@ class PixelfluxVideoPipe:
             row.window.ack(frame_id)
             if row.window.needs_keyframe:
                 self._request_idr_locked()
+            self._retune_capture_rate_locked()
             self._condition.notify()
+
+    def _retune_capture_rate_locked(self) -> None:
+        """Track the delivered rate with the capture tick, at most once a second."""
+        now = time.monotonic()
+        self._ack_times.append(now)
+        if now - self._last_retune < 1.0:
+            return
+        self._last_retune = now
+        cutoff = now - _RATE_WINDOW_SECONDS
+        self._ack_times = [t for t in self._ack_times if t >= cutoff]
+        wanted = target_capture_fps(len(self._ack_times), len(self._rows))
+        if abs(wanted - self._current_fps) >= _RATE_RETUNE_THRESHOLD_FPS and self._capture is not None:
+            self._current_fps = wanted
+            self._capture.update_framerate(wanted)
+            logger.debug("video pipe {} capture rate retuned to {:.0f}fps", self.browser_id, wanted)
 
     def _request_idr_locked(self) -> None:
         now = time.monotonic()
