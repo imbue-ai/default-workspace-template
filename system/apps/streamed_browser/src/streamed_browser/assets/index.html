@@ -146,6 +146,17 @@ function connect() {
   socket.onmessage = (event) => {
     lastAnything = performance.now();
     if (typeof event.data === "string") {
+      if (event.data.startsWith("res,")) {
+        // Realized capture size. Stripe y-offsets move when the height changes,
+        // so every per-row decoder is stale: close them all and hard-set the
+        // canvas to the new size (the forced keyframe repaints immediately).
+        const [, w, h] = event.data.split(",");
+        for (const y in rows) { try { rows[y].decoder?.close(); } catch (_) {} }
+        for (const y in rows) delete rows[y];
+        canvas.width = parseInt(w, 10);
+        canvas.height = parseInt(h, 10);
+        return;
+      }
       if (event.data.startsWith("cursor,")) {
         const [, hotX, hotY, png] = event.data.split(",");
         canvas.style.cursor = `url(data:image/png;base64,${png}) ${hotX} ${hotY}, default`;
@@ -263,6 +274,28 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) { but
 // Held-key heartbeat (Selkies kh): report the full held set so the server can
 // release anything whose keyup got lost in transit.
 setInterval(() => sendInput("kh" + [...heldKeysyms].map((k) => "," + k).join("")), 2000);
+
+// --- resize: make the remote browser fill the pane, on settle ----------------
+// The pane IS the monitor: send its exact pixel size (even-aligned for H.264),
+// debounced so one resize fires per gesture, not per drag-frame. The server
+// resizes the window + capture region and echoes the realized size via `res,`,
+// which resets our canvas and decoders. During the drag, object-fit:contain
+// scales the last frame -- no mid-drag churn.
+let resizeTimer = null;
+let lastSentSize = "";
+function sendPaneSize() {
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(320, Math.round(rect.width) & ~1);
+  const h = Math.max(240, Math.round(rect.height) & ~1);
+  const key = w + "," + h;
+  if (key === lastSentSize) return;
+  lastSentSize = key;
+  sendInput("r," + key);
+}
+new ResizeObserver(() => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(sendPaneSize, 150);
+}).observe(document.documentElement);
 
 if (!("VideoDecoder" in window)) {
   status.textContent = "WebCodecs is not available in this browser";

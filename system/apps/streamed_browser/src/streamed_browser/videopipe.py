@@ -124,6 +124,12 @@ _PAINTOVER_CRF = int(os.environ.get("BROWSER_VIDEO_PAINTOVER_CRF", "18"))
 # stillness at full tick.
 _PAINTOVER_TRIGGER_FRAMES = 30
 
+# Initial capture size (matches the session's cold-start window). The viewer
+# sends its real pane size on connect, so the capture re-targets within ~150ms;
+# this only avoids a wrong-size first frame.
+_INIT_CAPTURE_W = int(os.environ.get("STREAMED_BROWSER_WIDTH", "1280"))
+_INIT_CAPTURE_H = int(os.environ.get("STREAMED_BROWSER_HEIGHT", "800"))
+
 
 class VideoPipeError(RuntimeError):
     pass
@@ -281,6 +287,13 @@ class PixelfluxVideoPipe:
         self._condition = threading.Condition()
         self._rows: dict[int, _StripeRow] = {}
         self._cursor_message: str | None = None
+        self._control_message: str | None = None
+        # Capture-region bounds (the framebuffer cap) and the currently-expected
+        # stripe width, so stale old-geometry stripes landing after a resize are
+        # dropped instead of polluting the row map.
+        self._cap_w = 0
+        self._cap_h = 0
+        self._expected_w = _INIT_CAPTURE_W
         self._closed = False
         self._last_idr_request = 0.0
         self._current_fps = _RATE_MAX_FPS
@@ -305,7 +318,11 @@ class PixelfluxVideoPipe:
         # process-globally: the service owns one session, and every pipe
         # captures that session's display.
         os.environ["DISPLAY"] = self.display
-        width, height = display_geometry(self.display)
+        # The framebuffer size is the hard cap for any capture region.
+        self._cap_w, self._cap_h = display_geometry(self.display)
+        width = min(_INIT_CAPTURE_W, self._cap_w)
+        height = min(_INIT_CAPTURE_H, self._cap_h)
+        self._expected_w = width
         settings = pixelflux_module.CaptureSettings()
         settings.capture_width = width
         settings.capture_height = height
@@ -337,11 +354,16 @@ class PixelfluxVideoPipe:
         packet = bytes(frame)
         try:
             _, y_start, _, is_idr = parse_wire_header(packet)
-        except VideoPipeError as error:
+        except VideoPipeError as error:  # noqa: F841  (handled just below)
             logger.warning("video pipe {} dropped malformed packet ({})", self.browser_id, error)
             return
         with self._condition:
             self.frames_captured += 1
+            stripe_w = (packet[6] << 8) | packet[7]
+            if stripe_w != self._expected_w:
+                # A stripe encoded at the pre-resize width: drop it so the row
+                # map never mixes geometries (the client resets on `res,`).
+                return
             row = self._rows.setdefault(y_start, _StripeRow())
             if row.mailbox is not None and row.mailbox_is_idr and not is_idr:
                 # STICKY IDR: an unsent keyframe is the row's recovery -- letting
@@ -373,6 +395,31 @@ class PixelfluxVideoPipe:
             message, self._cursor_message = self._cursor_message, None
             return message
 
+    def take_control_message(self) -> str | None:
+        """The latest undelivered control frame (e.g. `res,w,h`), if any."""
+        with self._condition:
+            message, self._control_message = self._control_message, None
+            return message
+
+    def set_capture_region(self, width: int, height: int) -> tuple[int, int]:
+        """Re-target the capture (and thus the encoded frame) to width x height,
+        clamped to the framebuffer and to even dimensions (H.264/I420). Returns
+        the applied size. The row map is reset (stripe y-offsets move when the
+        height changes) and a fresh keyframe is forced so every new row opens
+        clean; the viewer is told the realized size via a `res,` control frame."""
+        width = max(2, min(width - (width % 2), self._cap_w))
+        height = max(2, min(height - (height % 2), self._cap_h))
+        with self._condition:
+            if self._capture is None:
+                return width, height
+            self._capture.update_capture_region(0, 0, width, height)
+            self._capture.request_idr_frame()
+            self._expected_w = width
+            self._rows.clear()
+            self._control_message = f"res,{width},{height}"
+            self._condition.notify()
+        return width, height
+
     def next_packet(self, timeout: float) -> bytes | None:
         """Block until some row's stripe is admitted by its window (or timeout).
 
@@ -385,10 +432,10 @@ class PixelfluxVideoPipe:
         deadline = time.monotonic() + timeout
         with self._condition:
             while not self._closed:
-                if self._cursor_message is not None:
-                    # A pending cursor shape must not wait out the poll timeout
-                    # (up to 1s of hover-feedback lag on a static screen):
-                    # return so the sender's cursor check runs now.
+                if self._cursor_message is not None or self._control_message is not None:
+                    # A pending cursor shape or control frame (e.g. a resize
+                    # ack) must not wait out the poll timeout: return so the
+                    # sender drains it now, ahead of any new-size stripe.
                     return None
                 for y_start in sorted(self._rows):
                     row = self._rows[y_start]
