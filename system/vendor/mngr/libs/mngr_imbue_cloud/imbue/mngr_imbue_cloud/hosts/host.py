@@ -277,7 +277,7 @@ class ImbueCloudHost(Host):
         self._write_agent_env_file(agent, agent_env)
         anthropic_api_key = agent_env.get("ANTHROPIC_API_KEY") or self.get_env_vars().get("ANTHROPIC_API_KEY")
         if anthropic_api_key:
-            patch_command = _build_patch_claude_config_command(anthropic_api_key, agent.id)
+            patch_command = _build_patch_claude_config_command(anthropic_api_key, agent.id, self.host_dir)
             result = self.execute_idempotent_command(patch_command)
             if not result.success:
                 raise ClaudeConfigPatchError(
@@ -285,12 +285,9 @@ class ImbueCloudHost(Host):
                 )
 
 
-def _build_patch_claude_config_command(litellm_key: str, agent_id: AgentId) -> str:
-    """Build a python one-liner that patches the agent's claude config to approve the new key.
-
-    Mirrors ``_build_patch_claude_config_command`` in minds' agent_creator.py.
-    """
-    claude_config_path = f"/mngr/agents/{agent_id}/plugin/claude/anthropic/.claude.json"
+def _build_patch_claude_config_command(litellm_key: str, agent_id: AgentId, host_dir: Path) -> str:
+    """Build a python one-liner that patches the agent's claude config to approve the new key."""
+    claude_config_path = f"{host_dir}/agents/{agent_id}/plugin/claude/anthropic/.claude.json"
     key_suffix = litellm_key[-20:]
     return (
         'python3 -c "'

@@ -26,6 +26,7 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.minds.bootstrap import MindsRoot
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthFailedCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthSession
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
@@ -77,6 +78,36 @@ class AuthResult(FrozenModel):
     needs_email_verification: bool = Field(default=False)
 
 
+# Shown when an auth call fails for a reason the connector never got to judge
+# (subprocess crash, connector unreachable, malformed response). ``str(exc)``
+# for those is the traceback-free "auth signin failed (exit 1); see the desktop
+# client logs for details" -- the right thing in a log, unusable in a sign-in
+# form -- and the full detail is already logged by ``_expect_success``.
+_UNAVAILABLE_AUTH_SERVICE_MESSAGE: Final[str] = (
+    "We could not reach the Imbue sign-in service. Check your internet connection and try again."
+)
+
+
+def _user_facing_auth_message(exc: ImbueCloudCliError) -> str:
+    """Return copy safe to render in the auth UI for a failed plugin auth call."""
+    if isinstance(exc, ImbueCloudAuthFailedCliError):
+        return exc.auth_message
+    logger.warning("Auth call failed without a structured connector verdict: {}", exc)
+    return _UNAVAILABLE_AUTH_SERVICE_MESSAGE
+
+
+def _auth_result_from_cli_error(exc: ImbueCloudCliError) -> AuthResult:
+    """Translate a failed ``mngr imbue_cloud auth ...`` call into a UI-ready result.
+
+    A structured rejection carries the connector's own verdict (status +
+    message), which the sign-in page keys off to show real copy -- notably its
+    ``WRONG_CREDENTIALS`` branch. Anything else is an infrastructure failure and
+    gets generic, actionable copy instead of the raw CLI failure string.
+    """
+    status = exc.auth_status if isinstance(exc, ImbueCloudAuthFailedCliError) else "ERROR"
+    return AuthResult(status=status, message=_user_facing_auth_message(exc))
+
+
 class _AuthBackendShim(MutableModel):
     """Adapt ``ImbueCloudCli`` to the API shape the route handlers expect.
 
@@ -99,7 +130,7 @@ class _AuthBackendShim(MutableModel):
         try:
             session_obj = self._cli.auth_signup(email, password)
         except ImbueCloudCliError as exc:
-            return AuthResult(status="ERROR", message=str(exc))
+            return _auth_result_from_cli_error(exc)
         return AuthResult(
             status="OK",
             user=AuthUser(
@@ -114,7 +145,7 @@ class _AuthBackendShim(MutableModel):
         try:
             session_obj = self._cli.auth_signin(email, password)
         except ImbueCloudCliError as exc:
-            return AuthResult(status="ERROR", message=str(exc))
+            return _auth_result_from_cli_error(exc)
         return AuthResult(
             status="OK",
             user=AuthUser(
@@ -234,6 +265,9 @@ def _store_session_from_auth_result(
     minds_config: MindsConfig | None = get_state().minds_config
     if minds_config is not None and minds_config.get_default_account_id() is None:
         minds_config.set_default_account_id(result.user.user_id)
+    # Woken after the default-account write, so a re-derive picks up the whole
+    # new identity rather than racing the account this signin just defaulted to.
+    wake_chrome_event_streams()
 
     # Explicit signin -- always re-enable the provider entry, even if the
     # user previously clicked Disable on it in the providers panel.
@@ -286,7 +320,7 @@ def _auth_error_response(exc: AuthBackendError | ImbueCloudCliError) -> Response
 # enable the remote (Imbue Cloud) compute preset. Used when no explicit
 # ``?message=`` is supplied alongside a ``return_to``.
 _REMOTE_SIGNIN_EXPLAINER: Final[str] = (
-    "Sign in or create an Imbue account to run your workspace on Imbue Cloud. "
+    "Sign in or create an Imbue account to run your machine on Imbue Cloud. "
     "You can also go back and run it directly on your computer."
 )
 
@@ -294,9 +328,15 @@ _REMOTE_SIGNIN_EXPLAINER: Final[str] = (
 def _handle_auth_page() -> Response:
     """Render the sign-up or sign-in page.
 
-    /auth/signup always defaults to sign-up mode. /auth/login defaults
-    to sign-in mode (unless the user has never signed in before, in
-    which case it shows sign-up as a convenience).
+    Which tab leads is decided by the route alone: ``/auth/signup`` leads
+    with sign-up, ``/auth/login`` with sign-in. Every caller of
+    ``/auth/login`` is an affordance the user pressed that says "sign in"
+    ("Log in", "Sign in again", "Back to sign in"), so that request is
+    honored verbatim -- guessing from local state would hand the sign-up
+    form to a returning user signing in on a new machine, which is exactly
+    the population that has no local state. Entry points that mean
+    "get me an account" link to ``/auth/signup``; the tabs still flip
+    client-side either way.
 
     An optional ``?message=`` query parameter is rendered as a banner on
     the page (e.g. the Electron shell appends one explaining why the user
@@ -403,6 +443,7 @@ def signout_user_via_plugin(user_id: str) -> None:
         logger.warning("No mirrored account for user {}; skipping plugin signout", user_id[:8])
     session_store.invalidate_identity_cache()
     _kick_sync_scheduler()
+    wake_chrome_event_streams()
     if signed_out_email and unset_imbue_cloud_provider_for_account(
         signed_out_email, root=MindsRoot.from_environment()
     ):
@@ -487,13 +528,26 @@ def _handle_signin_modal_page() -> Response:
     sign-in prompt covers the whole window, including the title bar. The
     optional ``?return_to=`` (validated as a safe local path) is where a
     successful sign-in lands the content view; it defaults to the create
-    screen, the modal's original caller. The optional ``?mode=signin`` leads
-    with the sign-in tab (for callers labeled "Log In"); anything else keeps
-    the sign-up default.
+    screen, the modal's original caller. The optional ``?mode=signin``
+    leads with the sign-in tab, for the callers whose label promises exactly
+    that (the home screen's "Log in" launcher, the welcome splash's "Already
+    have an account? Sign in"). Every other caller -- the create flow, "Add
+    account" -- has no such promise to keep and gets the sign-up default.
     """
     return_to = safe_local_redirect_path(request.args.get("return_to")) or "/create"
     default_to_signup = request.args.get("mode") != "signin"
-    return make_html_response(render_signin_modal_page(return_to=return_to, default_to_signup=default_to_signup))
+    # ``?restore=1`` means this sign-in displaced another modal (the workspace
+    # options panel), which the shell will put back. Handing back is only safe
+    # once the one-time error-reporting consent has been answered: while it is
+    # outstanding /post-login forces every destination to "/" so the gate is
+    # answered first, and a restored panel would cover it.
+    minds_config = get_state().minds_config
+    can_restore = request.args.get("restore") == "1" and (
+        minds_config is None or minds_config.get_error_reporting_consent_given()
+    )
+    return make_html_response(
+        render_signin_modal_page(return_to=return_to, default_to_signup=default_to_signup, can_restore=can_restore)
+    )
 
 
 def _handle_check_email_page() -> Response:
@@ -594,7 +648,10 @@ def _run_oauth_subprocess(
             flow_id,
             _OAuthFlowStatus(
                 state="error",
-                error=str(exc),
+                # The frontend renders this verbatim in the auth page's error
+                # box, so it gets the same treatment as an email/password
+                # failure rather than the raw CLI failure string.
+                error=_user_facing_auth_message(exc),
                 deadline=time.monotonic() + _OAUTH_FLOW_TTL_SECONDS,
             ),
         )
@@ -846,6 +903,18 @@ def _kick_sync_scheduler() -> None:
     scheduler = get_state().sync_scheduler
     if scheduler is not None:
         scheduler.kick()
+
+
+def wake_chrome_event_streams() -> None:
+    """Make every open window re-read the account state after an auth change.
+
+    The chrome-events stream carries the signed-in identity on each
+    ``workspaces`` frame, but only re-derives it when its loop wakes. Auth
+    changes originate on a Flask request thread and move nothing the resolver
+    watches, so without this nudge the home screen's account launcher would
+    keep the signed-out account's label until the loop's next idle timeout.
+    """
+    get_state().chrome_event_broadcaster.wake_subscribers()
 
 
 def create_supertokens_blueprint() -> Blueprint:

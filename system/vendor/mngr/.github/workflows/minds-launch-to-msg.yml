@@ -47,6 +47,156 @@ permissions:
   id-token: write
 
 jobs:
+  # Keep default-workspace-template's vendored mngr equal to the mngr SHA this run
+  # verifies. The desktop binary runs the mngr SHA; the in-VM agent imports the
+  # template's system/vendor/mngr. When they diverge the agent's mngr can reject a
+  # field the binary renamed and the workspace never comes up -- a failure that
+  # presents as a frontend hang. Syncing here, before check_should_run freezes the
+  # template SHA, means the pair this run verifies is the pair that exists on both
+  # mains: the push is what makes it true, not a local edit the run throws away.
+  #
+  # Only the unattended main-vs-main run pushes. A dispatch that names a
+  # commit_sha / template_ref / template_url is verifying something specific, and
+  # must never move dwt main onto that branch's mngr.
+  sync_vendor:
+    runs-on: ubuntu-latest
+    # The minds_release_gh Vault role is gated on this environment's OIDC claim.
+    environment: minds-release
+    outputs:
+      mngr_sha: ${{ steps.resolve.outputs.mngr_sha }}
+      mngr_ref: ${{ steps.resolve.outputs.mngr_ref }}
+      did_push: ${{ steps.sync.outputs.did_push }}
+    steps:
+      - name: resolve the mngr ref being verified
+        id: resolve
+        run: |
+          set -euo pipefail
+          resolve_ref() {
+            local url="$1" ref="$2" sha=""
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$ref"
+              return
+            fi
+            sha=$(git ls-remote "$url" "refs/tags/$ref^{}" | awk '{print $1; exit}')
+            [[ -z "$sha" ]] && sha=$(git ls-remote "$url" "refs/heads/$ref" "refs/tags/$ref" | awk '{print $1; exit}')
+            echo "$sha"
+          }
+          MNGR_REF='${{ inputs.commit_sha }}'
+          if [[ -z "$MNGR_REF" ]]; then
+            MNGR_REF='${{ github.ref_name }}'
+            MNGR_SHA='${{ github.sha }}'
+          else
+            MNGR_SHA=$(resolve_ref 'https://github.com/${{ github.repository }}.git' "$MNGR_REF")
+          fi
+          if [[ -z "$MNGR_SHA" ]]; then
+            echo "::error::failed to resolve mngr ref '$MNGR_REF'"
+            exit 1
+          fi
+          # Every input empty and triggered from the default branch: the pair is
+          # main vs main, so the sync has a well-defined target.
+          if [[ -z '${{ inputs.commit_sha }}' && -z '${{ inputs.template_ref }}' \
+             && -z '${{ inputs.template_url }}' && '${{ github.ref }}' == 'refs/heads/main' ]]; then
+            echo "should_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_sync=false" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "mngr_sha=$MNGR_SHA"
+            echo "mngr_ref=$MNGR_REF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fetch dwt vendor-sync key from Vault
+        if: steps.resolve.outputs.should_sync == 'true'
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: minds_release_gh
+          secrets: |
+            minds/release/DWT_VENDOR_SYNC_KEY_B64
+
+      - name: checkout the mngr SHA to archive
+        if: steps.resolve.outputs.should_sync == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.resolve.outputs.mngr_sha }}
+
+      - name: sync system/vendor/mngr into default-workspace-template main
+        id: sync
+        if: steps.resolve.outputs.should_sync == 'true'
+        env:
+          MNGR_SHA: ${{ steps.resolve.outputs.mngr_sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DWT_VENDOR_SYNC_KEY_B64:-}" ]]; then
+            echo "::error::DWT_VENDOR_SYNC_KEY_B64 not injected from Vault"
+            exit 1
+          fi
+          workdir="$(mktemp -d)"
+          echo "SYNC_WORKDIR=$workdir" >> "$GITHUB_ENV"
+          printf '%s' "$DWT_VENDOR_SYNC_KEY_B64" | base64 -d > "$workdir/id"
+          chmod 600 "$workdir/id"
+          export GIT_SSH_COMMAND="ssh -i $workdir/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone --quiet git@github.com:imbue-ai/default-workspace-template.git "$workdir/dwt"
+          cd "$workdir/dwt"
+          git config user.name "mngr vendor sync"
+          git config user.email "vendor-sync@imbue.com"
+
+          # Re-derive from a fresh main on every attempt rather than rebasing a
+          # prepared commit: `git archive` of a fixed SHA is byte-deterministic, so
+          # replaying it onto whatever main now is always yields the same tree and
+          # a concurrent push can never produce a conflict to resolve.
+          did_push=false
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            rm -rf system/vendor/mngr
+            mkdir -p system/vendor/mngr
+            git -C "$GITHUB_WORKSPACE" archive "$MNGR_SHA" | tar -x -C system/vendor/mngr
+            git add -A system/vendor/mngr
+            if git diff --cached --quiet; then
+              echo "vendor already equals mngr $MNGR_SHA -- nothing to push"
+              break
+            fi
+            git commit -q -m "system/vendor/mngr: refresh from mngr $MNGR_SHA"
+            if git push --quiet origin HEAD:main; then
+              echo "pushed vendor refresh for mngr $MNGR_SHA (attempt $attempt)"
+              did_push=true
+              break
+            fi
+            echo "push rejected (attempt $attempt); main moved -- re-deriving"
+            if [[ "$attempt" == 3 ]]; then
+              echo "::error::could not push the vendor refresh after 3 attempts"
+              exit 1
+            fi
+          done
+          echo "did_push=$did_push" >> "$GITHUB_OUTPUT"
+          {
+            echo "## vendor sync"
+            echo ""
+            if [[ "$did_push" == true ]]; then
+              echo "- pushed \`system/vendor/mngr\` refresh to default-workspace-template main from mngr \`${MNGR_SHA:0:12}\`"
+            else
+              echo "- no change: default-workspace-template's vendored mngr already equals \`${MNGR_SHA:0:12}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: report skipped sync
+        if: steps.resolve.outputs.should_sync != 'true'
+        run: |
+          {
+            echo "## vendor sync"
+            echo ""
+            echo "- skipped: this run names an explicit mngr / template input, so it verifies a specific pair rather than main vs main"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: shred key material
+        if: always()
+        run: |
+          if [[ -n "${SYNC_WORKDIR:-}" && -d "$SYNC_WORKDIR" ]]; then
+            find "$SYNC_WORKDIR" -type f -name id -exec shred -u {} + 2>/dev/null || true
+            rm -rf "$SYNC_WORKDIR"
+          fi
+          echo "key material removed"
+
   # Free Linux job with two roles. (1) Freeze point: resolves the mngr and
   # DEFAULT_WORKSPACE_TEMPLATE inputs (branch / tag / SHA) to full SHAs exactly once; downstream
   # jobs consume the `mngr_sha` / `default_workspace_template_sha` outputs, never the raw inputs,
@@ -56,6 +206,9 @@ jobs:
   # -- no download).
   check_should_run:
     runs-on: ubuntu-latest
+    # The template SHA must be frozen AFTER sync_vendor's push, so the pair this
+    # run verifies includes the vendor refresh rather than the state before it.
+    needs: sync_vendor
     outputs:
       should_run: ${{ steps.decide.outputs.should_run }}
       pair_key:   ${{ steps.compute.outputs.pair_key }}
@@ -81,16 +234,11 @@ jobs:
             [[ -z "$sha" ]] && sha=$(git ls-remote "$url" "refs/heads/$ref" "refs/tags/$ref" | awk '{print $1; exit}')
             echo "$sha"
           }
-          # Empty commit_sha -> the trigger commit (for schedule, the default
-          # branch HEAD), labeled with the trigger branch so slack/summaries
-          # show `main (<sha>)` rather than a bare SHA.
-          MNGR_REF='${{ inputs.commit_sha }}'
-          if [[ -z "$MNGR_REF" ]]; then
-            MNGR_REF='${{ github.ref_name }}'
-            MNGR_SHA='${{ github.sha }}'
-          else
-            MNGR_SHA=$(resolve_ref 'https://github.com/${{ github.repository }}.git' "$MNGR_REF")
-          fi
+          # Resolved once in sync_vendor, which needed it to pick the tree to
+          # archive; reused here so the two jobs cannot disagree about what is
+          # being verified.
+          MNGR_REF='${{ needs.sync_vendor.outputs.mngr_ref }}'
+          MNGR_SHA='${{ needs.sync_vendor.outputs.mngr_sha }}'
           DEFAULT_WORKSPACE_TEMPLATE_REF='${{ inputs.template_ref }}'
           [[ -z "$DEFAULT_WORKSPACE_TEMPLATE_REF" ]] && DEFAULT_WORKSPACE_TEMPLATE_REF='main'
           DEFAULT_WORKSPACE_TEMPLATE_REPO_URL='${{ inputs.template_url }}'

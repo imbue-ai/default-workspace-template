@@ -1,5 +1,13 @@
 # Swap primary agent
 
+> **Historical note:** the services/chat split described here landed and remains,
+> but the shared-config-dir mechanism has since been superseded. The `main`
+> services agent is now a plain `command`-type agent (not claude-typed), the
+> bootstrap no longer writes `CLAUDE_CONFIG_DIR` to the host env, and every
+> claude in a workspace resolves claude's own default `~/.claude` (the env var
+> is unset workspace-wide). See the default-workspace-template's
+> `system/test_workspace_claude_config.py` for the current invariants.
+
 ## Overview
 
 - Today the minds "primary" agent does two unrelated jobs: it runs the bootstrap + services manager *and* is the user's first chat interface (a normal `claude` TUI in window 0 of the tmux session). Destroying or restarting it tears down services along with the chat.

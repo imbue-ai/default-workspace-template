@@ -12,6 +12,7 @@ exclude-newer = "2026-06-04T00:00:00Z"
 
 [manifest]
 members = [
+    "apt-mirror",
     "concurrency-group",
     "imbue",
     "imbue-common",
@@ -51,6 +52,7 @@ members = [
     "imbue-mngr-vultr",
     "imbue-mngr-wait",
     "minds",
+    "mngr-minds-eval",
     "modal-litellm",
     "modal-proxy",
     "overlay",
@@ -248,6 +250,33 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/07/12/3e4389e5920b4c1763390c6d371162f3784f86f85cd6d6c1bfe68eef14e2/apscheduler-3.11.2.tar.gz", hash = "sha256:2a9966b052ec805f020c8c4c3ae6e6a06e24b1bf19f2e11d91d8cca0473eef41", size = 108683, upload-time = "2025-12-22T00:39:34.884Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9f/64/2e54428beba8d9992aa478bb8f6de9e4ecaa5f8f513bcfd567ed7fb0262d/apscheduler-3.11.2-py3-none-any.whl", hash = "sha256:ce005177f741409db4e4dd40a7431b76feb856b9dd69d57e0da49d6715bfd26d", size = 64439, upload-time = "2025-12-22T00:39:33.303Z" },
+]
+
+[[package]]
+name = "apt-mirror"
+version = "0.1.0"
+source = { editable = "apps/apt_mirror" }
+dependencies = [
+    { name = "boto3" },
+    { name = "click" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "imbue-mngr" },
+    { name = "loguru" },
+    { name = "pydantic" },
+    { name = "tenacity" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", specifier = ">=1.34" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "imbue-common", editable = "libs/imbue_common" },
+    { name = "imbue-mngr", editable = "libs/mngr" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "tenacity", specifier = ">=8.0" },
 ]
 
 [[package]]
@@ -2469,6 +2498,7 @@ name = "imbue-mngr-imbue-cloud"
 version = "0.1.6"
 source = { editable = "libs/mngr_imbue_cloud" }
 dependencies = [
+    { name = "boto3" },
     { name = "click" },
     { name = "click-option-group" },
     { name = "concurrency-group" },
@@ -2487,6 +2517,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "boto3" },
     { name = "click" },
     { name = "click-option-group" },
     { name = "concurrency-group", editable = "libs/concurrency_group" },
@@ -2564,12 +2595,14 @@ source = { editable = "libs/mngr_lima" }
 dependencies = [
     { name = "imbue-mngr" },
     { name = "pyyaml" },
+    { name = "tenacity" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "imbue-mngr", editable = "libs/mngr" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "tenacity", specifier = ">=8.0" },
 ]
 
 [[package]]
@@ -3409,6 +3442,7 @@ dependencies = [
     { name = "imbue-mngr" },
     { name = "imbue-mngr-aws" },
     { name = "imbue-mngr-forward" },
+    { name = "imbue-mngr-imbue-cloud" },
     { name = "imbue-mngr-latchkey" },
     { name = "imbue-mngr-vps" },
     { name = "itsdangerous" },
@@ -3426,6 +3460,7 @@ dependencies = [
     { name = "tenacity" },
     { name = "tomlkit" },
     { name = "traceback-with-variables" },
+    { name = "tzlocal" },
     { name = "werkzeug" },
     { name = "wsgidav" },
 ]
@@ -3446,6 +3481,7 @@ requires-dist = [
     { name = "imbue-mngr", editable = "libs/mngr" },
     { name = "imbue-mngr-aws", editable = "libs/mngr_aws" },
     { name = "imbue-mngr-forward", editable = "libs/mngr_forward" },
+    { name = "imbue-mngr-imbue-cloud", editable = "libs/mngr_imbue_cloud" },
     { name = "imbue-mngr-latchkey", editable = "libs/mngr_latchkey" },
     { name = "imbue-mngr-vps", editable = "libs/mngr_vps" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
@@ -3463,8 +3499,26 @@ requires-dist = [
     { name = "tenacity" },
     { name = "tomlkit", specifier = ">=0.12.0" },
     { name = "traceback-with-variables", specifier = ">=2.0" },
+    { name = "tzlocal", specifier = ">=5" },
     { name = "werkzeug", specifier = ">=3.0" },
     { name = "wsgidav", specifier = ">=4.3" },
+]
+
+[[package]]
+name = "mngr-minds-eval"
+version = "0.1.0"
+source = { editable = "apps/mngr_minds_eval" }
+dependencies = [
+    { name = "anthropic" },
+    { name = "boto3" },
+    { name = "modal" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anthropic", specifier = ">=0.40" },
+    { name = "boto3", specifier = ">=1.34" },
+    { name = "modal", specifier = ">=1.0" },
 ]
 
 [[package]]
@@ -4876,7 +4930,6 @@ name = "remote-service-connector"
 version = "0.1.0"
 source = { editable = "apps/remote_service_connector" }
 dependencies = [
-    { name = "boto3" },
     { name = "click" },
     { name = "fastapi", extra = ["standard"] },
     { name = "httpx" },
@@ -4892,7 +4945,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "boto3", specifier = ">=1.34" },
     { name = "click", specifier = ">=8.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27.0" },

@@ -25,7 +25,7 @@
   The titlebar CONTEXT can likewise be rendered server-side so the first paint
   already shows the right breadcrumb instead of flashing the bare home state
   until chrome.js derives it: ``crumb_workspace_name`` + ``crumb_agent_id`` +
-  ``active_tab`` ('workspace' | 'settings') pre-open the workspace crumb, or
+  ``active_tab`` ('share' | 'settings') pre-open the workspace crumb, or
   ``page_label`` pre-fills the "/ page-name" crumb; ``show_back`` unhides the
   contextual back arrow. chrome.js re-derives the same values from the URL at
   boot (idempotent -- no visual change), and owns every later update.
@@ -53,32 +53,32 @@
   {% set _body_class = body_class if body_class else "font-sans antialiased" %}
   {% set _body_style = body_style if body_style else "background-color: var(--titlebar-bg, var(--c-surface-primary));" %}
 {% else %}
-  {# Local pages: neutral page surface, and the body content sits below the
-     fixed 38px titlebar (which is out of flow). pt-[38px] pairs with a page's
-     own ``min-h-[calc(100dvh_-_38px)]`` centering so the centered content lands
-     in the region below the titlebar rather than behind it. #}
-  {% set _body_class = (body_class if body_class else "bg-surface-primary text-primary font-sans antialiased") ~ " pt-[38px]" %}
-  {% set _body_style = body_style %}
+  {# Local pages render inside #local-page-scroll -- a scrollable white card
+     with the workspace content surface's exact shape (4px insets, 12px
+     radius) -- so Settings/Home look like the workspace view, with the
+     titlebar color bleeding around the card exactly as it does around a
+     workspace. The document is viewport-locked (see _html_class below), so
+     the document scrollbar never exists, the titlebar never shifts with
+     gutter differences between pages, and a page's scrollbar (and scroll
+     position) is torn out with the page on every in-place swap. Pages center
+     with ``min-h-full`` against the card's fixed height. #}
+  {% set _body_class = body_class if body_class else "text-primary font-sans antialiased" %}
+  {% set _body_style = body_style if body_style else "background-color: var(--titlebar-bg, var(--c-surface-primary));" %}
 {% endif %}
 {% if accent %}
   {# Server-side accent: seed --titlebar-bg on the body so the titlebar's very
      first paint is workspace-tinted. chrome.js takes over live updates. #}
   {% set _body_style = _body_style ~ " --titlebar-bg: " ~ accent ~ ";" %}
 {% endif %}
-{# The agent content surface (pages.Chrome) is edge-to-edge, so it opts out of
-   the global stable scrollbar gutter; scrolling local pages keep the gutter to
-   avoid a sideways layout shift when a classic scrollbar appears. #}
-{% set _html_class = "no-scrollbar-gutter agent-surface" if is_agent_content_surface else "" %}
+{# BOTH modes are edge-to-edge, viewport-locked documents (the document lock
+   lives in app.css as a universal ``html, body`` rule; local pages scroll
+   inside #local-page-scroll), so both opt out of the document scrollbar
+   gutter -- the titlebar spans the full window width on every page and its
+   right-edge buttons never shift. #}
+{% set _html_class = "no-scrollbar-gutter" %}
 {% set _head %}
 <style>
   /* Things that can't easily be expressed as Tailwind utilities. */
-  /* Viewport lock for the agent content surface. Keyed off the html class
-     (rather than emitted conditionally) because the swap engine replaces the
-     html/body classes on every in-place hub swap but never touches the head:
-     a conditional rule would leak the previous page's mode across swaps
-     (e.g. leaving a workspace wrapper's overflow:hidden on the Home page,
-     making it unscrollable). */
-  html.agent-surface, html.agent-surface body { height: 100%; overflow: hidden; }
   #minds-titlebar { -webkit-app-region: drag; }
   #minds-titlebar button { -webkit-app-region: no-drag; }
   /* When the inbox modal (or any modal hosted in the main process's
@@ -89,6 +89,12 @@
      `modal-state-changed` over IPC and chrome.js toggles the
      ``modal-open`` body class accordingly. */
   body.modal-open #minds-titlebar { -webkit-app-region: no-drag; }
+  /* The docked workspace-options panel renders its own tab strip at this
+     strip's exact window rect (chrome.js measures it and main packs it into
+     the panel's URL). Hide ours while that panel is up or the two would
+     ghost through each other -- by visibility, so the crumb keeps its box
+     and the rect the panel was given stays true. */
+  body.ws-options-open #ws-tab-strip > button { visibility: hidden; }
 </style>
 {%- if head %}
 {{ head }}
@@ -162,13 +168,22 @@
       </TitlebarButton>
       <div id="ws-crumb" class="flex items-center min-w-0"{% if not crumb_agent_id %} hidden{% endif %}>
         <span class="type-label text-tertiary px-0.5" aria-hidden="true">/</span>
-        <TitlebarButton id="workspace-switcher-btn" aria-label="Switch workspace" data-tooltip="Switch workspace" variant="crumb" extra="gap-1 min-w-0">
+        <TitlebarButton id="workspace-switcher-btn" aria-label="Switch machine" data-tooltip="Switch machine" variant="crumb" extra="gap-1 min-w-0">
           <span id="workspace-switcher-name" class="type-label truncate max-w-[180px]"{% if crumb_agent_id %} data-agent-id="{{ crumb_agent_id }}"{% endif %}>{{ crumb_workspace_name }}</span>
           <Icon16 name="chevron-down-small" extra="shrink-0 text-tertiary" />
         </TitlebarButton>
         <span class="type-label text-tertiary px-0.5" aria-hidden="true">/</span>
-        <TitlebarButton id="ws-tab-workspace" aria-label="Workspace" data-tooltip="Workspace" :tone="'default' if active_tab == 'workspace' else 'muted'" :extra="'ml-1 bg-fill-active' if active_tab == 'workspace' else 'ml-1'" :aria-current="'page' if active_tab == 'workspace' else false"><Icon16 name="panels-top-left" /></TitlebarButton>
-        <TitlebarButton id="ws-tab-settings" aria-label="Workspace Settings" data-tooltip="Workspace Settings" :tone="'default' if active_tab == 'settings' else 'muted'" :extra="'ml-1 bg-fill-active' if active_tab == 'settings' else 'ml-1'" :aria-current="'page' if active_tab == 'settings' else false"><Icon16 name="settings" /></TitlebarButton>
+        {# The two icon-tabs open the docked workspace-options panel (Share
+           machine / Machine settings). They live in one measurable wrapper
+           because the panel draws its own tab strip at this strip's exact
+           window rect -- chrome.js measures #ws-tab-strip and hands the rect
+           to main, which packs it into the panel's URL. While that panel is
+           open the buttons here are hidden (visibility, so the crumb does not
+           reflow) or they would ghost through behind the panel's own tabs. #}
+        <div id="ws-tab-strip" class="flex items-center gap-1 ml-1">
+          <TitlebarButton id="ws-tab-share" aria-label="Share machine" data-tooltip="Share machine" :tone="'default' if active_tab == 'share' else 'muted'" :extra="'bg-fill-active' if active_tab == 'share' else ''" :aria-current="'page' if active_tab == 'share' else false"><Icon16 name="share" /></TitlebarButton>
+          <TitlebarButton id="ws-tab-settings" aria-label="Machine settings" data-tooltip="Machine settings" :tone="'default' if active_tab == 'settings' else 'muted'" :extra="'bg-fill-active' if active_tab == 'settings' else ''" :aria-current="'page' if active_tab == 'settings' else false"><Icon16 name="settings" /></TitlebarButton>
+        </div>
       </div>
       <div id="page-crumb" class="flex items-center gap-0.5 min-w-0"{% if not page_label %} hidden{% endif %}>
         <span class="type-label text-tertiary px-0.5" aria-hidden="true">/</span>
@@ -213,8 +228,27 @@
      (and #local-page-scripts) in place for hub-page navigation, leaving the
      titlebar + switcher + shell scripts untouched. ``display: contents`` keeps
      it layout-transparent so pages whose body classes flex-center their
-     content (Creating, Welcome, ...) are unaffected by the extra wrapper. #}
+     content (Creating, Welcome, ...) are unaffected by the extra wrapper.
+
+     On local pages the content additionally sits inside #local-page-scroll,
+     the page's own scroll container pinned below the fixed titlebar (its
+     position/geometry live in app.css so the whole treatment is in one
+     place). Living inside the swappable root, it -- and its scrollbar/scroll
+     position -- is removed with the page on every swap. On a workspace-scoped
+     page (accent showing) it is the inset rounded "inner card" so the native
+     scrollbar sits at the card's edge inside the colorful border; on a neutral
+     (all-white) page it is full-bleed to the window ("outer box") so the
+     scrollbar hugs the window's right edge -- a constant distance from
+     whichever box the user perceives. The agent surface keeps the bare root
+     (its content is the fixed mirror + iframe). #}
   <div id="local-page-root" style="display: contents">
+    {%- if is_agent_content_surface %}
     {{ content }}
+    {%- else %}
+    <div id="local-page-scroll"
+         class="bg-surface-primary overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
+      {{ content }}
+    </div>
+    {%- endif %}
   </div>
 </Base>

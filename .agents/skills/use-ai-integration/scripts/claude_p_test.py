@@ -232,6 +232,28 @@ def test_credentials_fall_back_to_settings_without_snapshot(
     assert creds.base_url is None
 
 
+def test_credentials_read_default_claude_dir_when_config_dir_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With CLAUDE_CONFIG_DIR unset -- the workspace-wide default since the
+    ~/.claude cutover -- the resolver reads the shared ~/.claude/settings.json
+    instead of skipping settings entirely."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    default_dir = tmp_path / ".claude"
+    default_dir.mkdir()
+    (default_dir / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-default-dir-key"}}'
+    )
+
+    creds = claude_p.read_workspace_ai_credentials()
+
+    assert creds.api_key == "sk-default-dir-key"
+
+
 def test_credentials_never_take_oauth_token_from_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
