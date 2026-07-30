@@ -3,7 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
-import { openPermissionRequest, parsePermissionRequest, renderPermissionCard } from "./permission-card";
+import {
+  PermissionCard,
+  noteShellPermissionResolution,
+  openPermissionRequest,
+  parsePermissionRequest,
+  renderPermissionCard,
+  shellPermissionResolutionFor,
+} from "./permission-card";
 
 function makeToolCall(inputPreview: string): ToolCall {
   return {
@@ -376,5 +383,65 @@ describe("openPermissionRequest", () => {
       vi.unstubAllGlobals();
     }
     expect(postMessage).toHaveBeenCalledWith({ type: "minds:open-request-modal", requestId: "req-123" }, "*");
+  });
+});
+
+describe("shell permission resolutions", () => {
+  it("rejects malformed payloads without recording anything", () => {
+    expect(noteShellPermissionResolution(null)).toBe(false);
+    expect(noteShellPermissionResolution("minds:permission-request-resolved")).toBe(false);
+    expect(noteShellPermissionResolution({ type: "minds:permission-request-resolved" })).toBe(false);
+    expect(
+      noteShellPermissionResolution({ type: "minds:open-request-modal", requestId: "req-a", resolution: "granted" }),
+    ).toBe(false);
+    expect(
+      noteShellPermissionResolution({
+        type: "minds:permission-request-resolved",
+        requestId: "",
+        resolution: "granted",
+      }),
+    ).toBe(false);
+    expect(
+      noteShellPermissionResolution({
+        type: "minds:permission-request-resolved",
+        requestId: "req-a",
+        resolution: "error",
+      }),
+    ).toBe(false);
+    expect(shellPermissionResolutionFor("req-a")).toBeNull();
+  });
+
+  it("records a well-formed verdict", () => {
+    expect(
+      noteShellPermissionResolution({
+        type: "minds:permission-request-resolved",
+        requestId: "req-recorded",
+        resolution: "denied",
+      }),
+    ).toBe(true);
+    expect(shellPermissionResolutionFor("req-recorded")).toBe("denied");
+  });
+
+  it("flips the live card to the shell's verdict before the transcript resolution lands", () => {
+    // The shell (the Minds review popup) reported this request granted; the
+    // transcript walk hasn't classified a resolution yet (`resolution: null`),
+    // but the card should already render the Approved receipt.
+    noteShellPermissionResolution({
+      type: "minds:permission-request-resolved",
+      requestId: "fs-1",
+      resolution: "granted",
+    });
+    const card = PermissionCard();
+    const vnode = card.view({
+      attrs: {
+        toolCall: makeToolCall(PERMISSION_INPUT),
+        toolResult: makeResult(FILE_SHARING_OUTPUT),
+        resolution: null,
+      },
+    } as unknown as Parameters<typeof card.view>[0]);
+    const verdict = findByClass(vnode, "permission-request-verdict");
+    expect(verdict).not.toBeNull();
+    expect(textOf(verdict)).toBe("Approved");
+    expect(findReviewButton(vnode)).toBeNull();
   });
 });
