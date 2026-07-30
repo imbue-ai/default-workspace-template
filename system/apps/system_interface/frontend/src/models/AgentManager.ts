@@ -4,8 +4,7 @@
  */
 
 import m from "mithril";
-import { apiUrl, getLoadedViewEpoch } from "../base-path";
-import { reloadInterface, shouldReloadForEpoch } from "../reload";
+import { apiUrl } from "../base-path";
 import { ReconnectBackoff } from "./backoff";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
 import { parseJsonMessage } from "./ws-json";
@@ -126,13 +125,6 @@ type WsEvent =
       layout_slug: string;
       display_name: string;
       target_client_id: string | null;
-    }
-  | {
-      // The epoch of the interface currently on disk, sent on every connect.
-      // Newer than the one this page loaded with means a reveal landed while we
-      // were away, so we reload into it (see `reload.ts`).
-      type: "view_epoch";
-      epoch: string;
     };
 
 /** Layout registry / sync events pushed over the WebSocket. */
@@ -323,13 +315,6 @@ function handleEvent(event: WsEvent): void {
           displayName: event.display_name,
           targetClientId: event.target_client_id,
         });
-      }
-      break;
-    case "view_epoch":
-      // Handled here rather than through a listener: this reloads the page, so
-      // there is nothing for a view to render in response.
-      if (shouldReloadForEpoch(event.epoch, getLoadedViewEpoch())) {
-        reloadInterface();
       }
       break;
   }

@@ -8,26 +8,22 @@ that view: the Minds app only intervenes when a workspace looks *unreachable*
 for a sustained stretch, and a services restart that comes back quickly never
 crosses that bar.
 
-Three channels, because no one of them reaches every viewer:
-
-view epoch (``data/.state/view_epoch``)
-    Bumped on disk, so it does not care whether anything is up yet. The system
-    interface serves it into the app shell and sends it on every WebSocket
-    connect; a page that reconnects carrying an older epoch reloads itself.
-    This is what covers the browser whose socket was down for the restart --
-    or shut entirely -- and it is why nothing here waits for the server.
+Two channels, because neither reaches every viewer:
 
 ``reload_system_interface`` broadcast (the workspace's own WebSocket)
-    Reloads every browser attached *right now*, including anyone the user
-    shared the workspace with over a Cloudflare tunnel. A live fan-out with no
-    replay: fired at a server that is down, or at one whose clients are still
-    on reconnect backoff, it simply reaches nobody. That is not a loss -- the
-    epoch above catches those clients when they reconnect -- it just makes the
-    reload immediate for those already there.
+    Reaches every *browser* attached to the system interface, including anyone
+    the user shared the workspace with over a Cloudflare tunnel. Best-effort by
+    nature: it is a live fan-out with no replay, so it reaches whoever is
+    connected at that instant and nobody else. After a services restart that is
+    often nobody -- browsers reconnect on exponential backoff -- so treat it as
+    a bonus rather than the guarantee.
 
 ``POST /api/v1/agents/<primary>/refresh`` (the Minds app, via the gateway)
-    Reaches only the desktop app, but does what neither of the above can: it
-    drops the workspace session's HTTP cache before reloading.
+    Reaches only the desktop app, but does not go through the workspace server
+    at all, so it works while that server is still coming back. It also drops
+    the workspace session's HTTP cache before reloading. This is the channel
+    that actually covers the common case: a user looking at the workspace in
+    the Minds app.
 
 Every outcome is reported on stderr and the exit code is always 0. The change
 has already landed on disk; failing a reveal because the user had the window
@@ -47,8 +43,8 @@ Environment:
     LATCHKEY_GATEWAY,           Gateway address + credentials mngr injects into
     LATCHKEY_GATEWAY_PASSWORD,  the agent environment. All three must be present
     LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE
-                                to reach the Minds app; the other two channels
-                                still run without them.
+                                to reach the Minds app; the broadcast still runs
+                                without them.
 """
 
 from __future__ import annotations
@@ -59,8 +55,6 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-import uuid
-from pathlib import Path
 from typing import Sequence
 
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
@@ -73,20 +67,6 @@ ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
 ENV_GATEWAY_PERMISSIONS = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 
 RELOAD_OP = "reload_system_interface"
-
-# Resolved from this file rather than the cwd: callers run us straight after a
-# restart, from wherever they happen to be. Read by ``server.py``, which resolves
-# the same path from its own location; ``test_view_epoch_path_matches_the_writer``
-# pins the two together.
-#
-# This therefore names the checkout *this copy of the script* lives in, which is
-# the served one for every caller that can reach here -- the reveal script and
-# the update flows all edit and restart the live service, which is only coherent
-# from the workspace's own checkout. Same shape of handoff as ``forward_port.py``
-# writing ``data/.state/apps.toml`` for the server to read, though that one
-# resolves its path from the cwd rather than from itself.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-VIEW_EPOCH_PATH = _REPO_ROOT / "data/.state/view_epoch"
 
 # The two refresh POSTs are courtesies on a path the caller is blocking on, so
 # they get a short leash: a wedged desktop app or frontend must not stall a
@@ -141,29 +121,6 @@ def _describe(status: int | None) -> str:
     return "was unreachable" if status is None else f"returned {status}"
 
 
-def bump_view_epoch(epoch_path: Path) -> bool:
-    """Record that the interface on disk has changed. Returns whether it stuck.
-
-    Written via a temporary file and ``os.replace`` so a reader never sees a
-    half-written epoch: the system interface reads this on every WebSocket
-    connect, including while we are writing it.
-    """
-    epoch = uuid.uuid4().hex
-    temporary_path = epoch_path.with_name(f"{epoch_path.name}.{os.getpid()}.tmp")
-    try:
-        epoch_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path.write_text(f"{epoch}\n")
-        os.replace(temporary_path, epoch_path)
-    except OSError as exc:
-        sys.stderr.write(
-            f"refresh: could not record the new interface epoch at {epoch_path} "
-            f"({type(exc).__name__}: {exc}); a browser that reconnects later will "
-            "not know to reload itself.\n"
-        )
-        return False
-    return True
-
-
 def resolve_primary_agent_id(runner: Runner) -> str:
     """Return this workspace's primary agent id, or ``""`` if it cannot be found.
 
@@ -175,7 +132,7 @@ def resolve_primary_agent_id(runner: Runner) -> str:
     def unresolved(reason: str) -> str:
         sys.stderr.write(
             f"refresh: could not resolve this workspace's primary agent id ({reason}); "
-            "skipping the Minds app refresh (the other channels still ran).\n"
+            "skipping the Minds app refresh (the reload broadcast still went out).\n"
         )
         return ""
 
@@ -215,8 +172,9 @@ def broadcast_reload(http: HttpClient, base_url: str) -> bool:
     if status == 200:
         return True
     sys.stderr.write(
-        f"refresh: reload broadcast to the workspace server {_describe(status)}; an "
-        "attached browser will reload when it reconnects rather than right now.\n"
+        f"refresh: reload broadcast to the workspace server {_describe(status)}; any "
+        "attached browser (including a shared tunnel viewer) may still be showing "
+        "the previous build.\n"
     )
     return False
 
@@ -226,9 +184,12 @@ def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
 
     Returns whether the app accepted the request. Absent gateway env means we are
     not running under a Minds desktop app at all (a bare ``mngr`` workspace, a
-    test harness), which is not a failure. The primary-agent lookup happens after
-    that check: it is a subprocess with a 30s budget, and there is nothing to
-    address it to when no app is attached.
+    test harness), which is not a failure -- the broadcast alone is the whole
+    story there.
+
+    The primary-agent lookup happens after that env check, not before: it is a
+    subprocess with a 30s budget, and there is nothing to address it to when no
+    app is attached.
     """
     gateway = os.environ.get(ENV_GATEWAY, "")
     password = os.environ.get(ENV_GATEWAY_PASSWORD, "")
@@ -236,7 +197,7 @@ def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
     if not gateway or not password or not permissions:
         sys.stderr.write(
             "refresh: latchkey gateway env not set; skipping the Minds app refresh "
-            "(the other channels still ran).\n"
+            "(the reload broadcast still went out).\n"
         )
         return False
     primary_agent_id = resolve_primary_agent_id(runner)
@@ -266,21 +227,16 @@ def refresh(
     runner: Runner,
     http: HttpClient,
     base_url: str | None = None,
-    epoch_path: Path = VIEW_EPOCH_PATH,
 ) -> int:
-    """Fire all three channels. Always returns 0 -- see the module docstring."""
+    """Fire both channels. Always returns 0 -- see the module docstring."""
     resolved_base = (
         base_url or os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL)
     ).rstrip("/")
-    # First, and unconditionally: this is the only channel that does not need
-    # anything to be up, and the only one that reaches a viewer who is not
-    # looking right now.
-    epoch_ok = bump_view_epoch(epoch_path)
-    # Independent of each other and of the epoch: each reaches viewers the
-    # others cannot, and a failure of one says nothing about the rest.
+    # Independent and unconditional: each reaches viewers the other cannot, and
+    # a failure of one says nothing about the other.
     broadcast_ok = broadcast_reload(http, resolved_base)
     app_ok = request_app_refresh(http, runner)
-    if epoch_ok or broadcast_ok or app_ok:
+    if broadcast_ok or app_ok:
         sys.stderr.write("refresh: requested a reload of this workspace's view.\n")
     else:
         sys.stderr.write(
