@@ -122,6 +122,17 @@ class StreamedBrowserSession:
                 [
                     _FORTRESS_BINARY,
                     "--no-sandbox",
+                    # A/B-measured on the live workspace: SwiftShader GPU-process
+                    # compositing burned 0.4-0.7 cores emulating a GPU for a 2D
+                    # page; software compositing keeps WebGL (Fortress's
+                    # fingerprint surface) while roughly halving Chromium's CPU.
+                    "--disable-gpu-compositing",
+                    # Wheel scrolling: a ~300ms 60fps animation per click is
+                    # unrenderable at the delivered frame rate -- it reads as
+                    # lag, floods the encoder, and delays settled (readable)
+                    # content. Jump scrolling lands in 1-2 damage frames.
+                    "--disable-smooth-scrolling",
+                    "--wm-window-animations-disabled",
                     "--no-first-run",
                     "--disable-session-crashed-bubble",
                     "--hide-crash-restore-bubble",

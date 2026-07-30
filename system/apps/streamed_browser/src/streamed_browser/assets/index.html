@@ -134,7 +134,11 @@ function connect() {
         row.decoder = null;
       },
     });
-    created.configure({ codec: "avc1.42C028", optimizeForLatency: true });
+    // prefer-software: at stripe resolution software decode is 1-3ms and
+    // strictly 1-in-1-out; hardware decoders may buffer frames after a
+    // keyframe despite optimizeForLatency (w3c/webcodecs#732), and with acks
+    // fired on decoder OUTPUT any buffering throttles the credit loop.
+    created.configure({ codec: "avc1.42C028", optimizeForLatency: true, hardwareAcceleration: "prefer-software" });
     return created;
   }
 
@@ -200,7 +204,18 @@ function sendPointer(event, mask, scrollMagnitude) {
   sendInput(`m,${pos.x},${pos.y},${mask},${scrollMagnitude || 0}`);
 }
 
-canvas.addEventListener("pointermove", (e) => sendPointer(e, buttonMask, 0));
+// Coalesce pointer moves to one per animation frame: every raw move would
+// otherwise cost an XTest inject + Chromium hit-test on the loaded server.
+let pendingMove = null;
+canvas.addEventListener("pointermove", (e) => {
+  if (pendingMove === null) {
+    requestAnimationFrame(() => {
+      if (pendingMove !== null) sendPointer(pendingMove, buttonMask, 0);
+      pendingMove = null;
+    });
+  }
+  pendingMove = e;
+});
 canvas.addEventListener("pointerdown", (e) => {
   canvas.focus();
   canvas.setPointerCapture(e.pointerId);

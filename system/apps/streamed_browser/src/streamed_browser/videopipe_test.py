@@ -34,12 +34,23 @@ def test_parse_wire_header_rejects_short_and_foreign_packets() -> None:
 
 def test_credit_window_blocks_at_limit_and_reopens_on_ack() -> None:
     window = CreditWindow(limit=2)
-    assert window.admits(is_keyframe=True)
-    window.note_sent_keyframe(1)
+    assert window.admits(is_keyframe=False) or window.admits(is_keyframe=True)
+    window.note_sent(1)
     window.note_sent(2)
     assert not window.admits(is_keyframe=False)
     assert not window.admits(is_keyframe=True)  # credit, not keyframes, is the gate
     window.ack(1)
+    assert window.admits(is_keyframe=False)
+
+
+def test_unacked_keyframe_consumes_the_whole_window() -> None:
+    # Stripes vary ~25x in bytes; an IDR must monopolize the window until it
+    # lands, or "bounded bytes in flight" fails exactly at recovery time.
+    window = CreditWindow(limit=2)
+    window.note_sent_keyframe(7)
+    assert not window.admits(is_keyframe=False)
+    assert not window.admits(is_keyframe=True)
+    window.ack(7)
     assert window.admits(is_keyframe=False)
 
 
@@ -65,6 +76,21 @@ def test_dropped_delta_requires_keyframe_to_resume() -> None:
     assert window.admits(is_keyframe=False)
 
 
+def test_sticky_idr_survives_later_deltas_in_the_mailbox() -> None:
+    # A delta overwriting an unsent IDR re-broke the row's chain and looped
+    # into >=0.4s recovery cycles (probe-verified dominant freeze mechanism).
+    from streamed_browser.videopipe import PixelfluxVideoPipe
+
+    pipe = PixelfluxVideoPipe("test", ":0")
+    idr = _packet(1, FRAME_TYPE_IDR)
+    delta = _packet(2, 0x00)
+    pipe._on_frame(idr)
+    pipe._on_frame(delta)  # must NOT displace the pending keyframe
+    delivered = pipe.next_packet(timeout=0.1)
+    assert delivered == idr
+    assert pipe.frames_dropped == 1
+
+
 def test_ack_of_unknown_frame_is_harmless() -> None:
     window = CreditWindow(limit=1)
     window.note_sent(5)
@@ -74,10 +100,15 @@ def test_ack_of_unknown_frame_is_harmless() -> None:
     assert window.admits(is_keyframe=False)
 
 
-def test_capture_rate_aimd_backs_off_on_drops_and_recovers_without() -> None:
+def test_capture_rate_steps_to_delivered_on_drops_and_climbs_gently() -> None:
     from streamed_browser.videopipe import target_capture_fps
 
-    assert target_capture_fps(60.0, dropped_in_interval=5) == 36.0  # multiplicative decrease
-    assert target_capture_fps(20.0, dropped_in_interval=1) == 15.0  # floored
-    assert target_capture_fps(36.0, dropped_in_interval=0) == 46.0  # additive increase
-    assert target_capture_fps(60.0, dropped_in_interval=0) == 60.0  # capped
+    # Drops with a measured delivered rate: converge to delivered * 1.2 in one step.
+    assert target_capture_fps(60.0, dropped_in_interval=5, delivered_fps=10.0) == 12.0
+    # Drops with nothing delivered: multiplicative fallback.
+    assert target_capture_fps(60.0, dropped_in_interval=5, delivered_fps=0.0) == 36.0
+    # Floor.
+    assert target_capture_fps(10.0, dropped_in_interval=1, delivered_fps=1.0) == 8.0
+    # Drop-free: gentle additive climb, capped.
+    assert target_capture_fps(36.0, dropped_in_interval=0, delivered_fps=20.0) == 39.0
+    assert target_capture_fps(60.0, dropped_in_interval=0, delivered_fps=30.0) == 60.0

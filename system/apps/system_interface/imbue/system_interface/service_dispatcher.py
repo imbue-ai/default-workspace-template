@@ -361,6 +361,15 @@ def _connect_backend_websocket(ws_url: str, subprotocols: list[str] | None) -> s
     raise ConnectionError(f"no addresses resolved for backend WebSocket {host}:{port}")
 
 
+def _tune_proxy_socket(websocket: Any) -> None:
+    """Interactive streams ride this proxy: never let Nagle hold a message tail
+    (10-40ms of delayed-ACK interaction per sub-MSS message otherwise)."""
+    try:
+        websocket.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except (OSError, AttributeError):
+        logger.trace("could not set TCP_NODELAY on a proxied websocket")
+
+
 def _handle_service_websocket(
     client_websocket: Any,
     service_name: str,
@@ -386,6 +395,8 @@ def _handle_service_websocket(
 
     try:
         backend_ws = _connect_backend_websocket(ws_url, subprotocols or None)
+        _tune_proxy_socket(backend_ws)
+        _tune_proxy_socket(client_websocket)
     except (ConnectionRefusedError, ConnectionError, OSError, TimeoutError, ConnectionClosed) as connection_error:
         logger.debug("Backend WebSocket connection failed for service {}: {}", service_name, connection_error)
         try:
