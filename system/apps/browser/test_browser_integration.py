@@ -841,3 +841,30 @@ def test_kasmvnc_config_pins_the_launch_geometry(monkeypatch: pytest.MonkeyPatch
     # Idempotent: the launch path calls this on every start.
     vnc._write_kasmvnc_config()
     assert (home / ".vnc" / "kasmvnc.yaml").read_text() == written
+
+
+def test_ensure_certificate_mints_a_combined_key_and_cert(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The audio relay's WSS cert must exist, and hold BOTH the key and the cert.
+
+    KasmVNC does not generate it (the display runs with SSL off), so the launch
+    path mints it. The relay is handed this one path for both its certificate and
+    its key arguments, so a single PEM carrying only the certificate -- or only the
+    key -- would make the relay exit and fail the whole browser launch. Regression
+    for exactly that: a missing ~/.vnc/self.pem killed every launch, not just audio.
+    """
+    cert = tmp_path / ".vnc" / "self.pem"
+    monkeypatch.setattr(vnc, "_CERTIFICATE_FILE", cert)
+
+    assert not cert.exists()
+    vnc.ensure_certificate()
+
+    body = cert.read_text()
+    assert "-----BEGIN PRIVATE KEY-----" in body
+    assert "-----BEGIN CERTIFICATE-----" in body
+    # Idempotent: the launch path calls this on every start, and re-minting would
+    # hand a live browser a cert the already-connected relay never loaded.
+    first = cert.read_bytes()
+    vnc.ensure_certificate()
+    assert cert.read_bytes() == first
