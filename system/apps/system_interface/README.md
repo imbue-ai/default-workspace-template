@@ -50,6 +50,10 @@ as sub-commands:
   of the live UI. No fetch, no re-checkout, no rebuild, and without merging or
   touching the served tree. (For a worker's work_dir, resolve it from
   `mngr ls --include 'name=="<name>"' --format json` -> `agents[0].work_dir`.)
+  The preview is launched with both of its own service names marked
+  self-referential, so the `si-preview` tab that the copied layout almost always
+  contains (it stays open for the whole editing pass) explains itself inside the
+  preview instead of proxying back into the frame around it.
 - `preview-refresh --slug <name>` re-boots the preview's inner app on its existing
   port to pick up a backend edit/rebuild during the live loop, without disturbing
   the wrapper frame or the user's tab (a frontend-only round needs no bounce --
@@ -100,7 +104,11 @@ overrides that location and wins even when `MNGR_AGENT_ID` is set. The
 live layout, so the preview tab opens with the user's real tabs while
 its own autosaves land in the copy instead of the live layout. It is
 read off the per-app config rather than the process env, so two servers
-sharing one process each resolve their own layout dir.
+sharing one process each resolve their own layout dir. The copy is
+verbatim -- including a layout that opens the preview tab itself, which
+the previewed instance handles via
+`SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES` (see below) rather than the
+copy dropping it.
 
 Each browser client picks its layout on first connect by user agent
 (mobile browsers get `mobile`, everything else `desktop`), remembers
@@ -116,6 +124,24 @@ Chat messages sent through the UI (and every layout switch) are logged
 to `workspace_layout/events/client_activity/events.jsonl` with the
 sending client's id, device kind, and active layout, so agents can
 attribute a request to a client via `layout.py context`.
+
+## Self-referential services
+
+`SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES`
+(`Config.system_interface_self_referential_services`, a comma-separated
+list) names services that resolve back to *this* instance. The service
+dispatcher serves a short explanatory page for them instead of
+forwarding, and refuses the matching WebSocket upgrade.
+
+It is empty for the workspace's own system interface, which is not
+reachable as a `/service/<name>/` at all. Only the live-editing preview
+sets it, to its own `si-preview` / `si-preview-app` names: the layout it
+boots from is a verbatim copy of the user's, which normally contains the
+`si-preview` tab, and rendering that tab inside the preview would proxy
+back to the wrapper framing it -- an unbounded chain of iframes, each
+loading a whole system interface. Refusing at this layer keeps the rest
+of the copied layout exactly as the user has it, which neither dropping
+the layout nor rewriting dockview's serialized grid would.
 
 ## Driving the workspace layout from an agent
 

@@ -47,12 +47,18 @@ preview tab.
   every system-interface worker to implement the brief, which on a harden-only
   handoff meant redoing work the user had already signed off on.
 
-- The preview no longer seeds a saved layout that itself opens a preview panel.
-  Such a layout made the preview render *itself* (its inner app resolves
-  `service:si-preview` against the same live registry, so the panel proxies back
-  to the wrapper framing it). The layout stays registered and simply opens empty.
-  A `preview` that fails to boot now also removes the layout copy it had already
-  seeded, instead of leaving it for an `unpreview` that is never coming.
+- The layout copy is verbatim, including a layout that opens the preview tab
+  itself -- which is nearly all of them, since that tab stays open for the whole
+  editing pass. Rendering it would make the preview show *itself* (its inner app
+  resolves `service:si-preview` against the same live registry, so the panel
+  proxies back to the wrapper framing it, unboundedly). The previewed instance
+  refuses that instead, via the new
+  `SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES`: that one tab shows a line saying
+  it is the preview you are already looking at, and the rest of the layout is
+  exactly as the user has it. Consequently `preview` needs no tab bookkeeping
+  before a re-run, and the skill's "close the tab first" step is gone.
+  A `preview` that fails to boot removes the layout copy it had already seeded,
+  instead of leaving it for an `unpreview` that is never coming.
 
 - The preview and the reveal pre-flight now **follow** the live agent-lifecycle
   event stream instead of competing for it. Both boot a second system interface

@@ -265,6 +265,55 @@ setTimeout(function() {{ location.reload(); }}, {interval});
 
 
 @pure
+def generate_self_referential_service_html(service_name: ServiceName) -> str:
+    """The page shown in place of a service that resolves back to this instance.
+
+    Proxying such a service would nest this instance inside itself, so the tab
+    gets this instead. It deliberately explains *why* the tab is not showing what
+    the user expects, because the alternative -- a blank or erroring tab sitting
+    in the middle of an otherwise-faithful layout -- reads as the preview being
+    broken. It does not auto-retry (unlike the backend-loading page): nothing
+    about this resolves by waiting.
+    """
+    return """<!DOCTYPE html>
+<html>
+<head>
+<title>{service}</title>
+<style>
+body {{
+  font-family: system-ui, -apple-system, sans-serif;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  margin: 0;
+  padding: 0 24px;
+  text-align: center;
+  color: rgb(136, 136, 136);
+  background: rgb(26, 26, 26);
+}}
+p {{
+  margin: 0;
+  max-width: 32rem;
+  line-height: 1.5;
+}}
+.detail {{
+  margin-top: 10px;
+  font-size: 14px;
+  color: rgb(100, 100, 100);
+}}
+</style>
+</head>
+<body>
+<p>This tab is the preview you are already looking at.</p>
+<p class="detail">Opening <code>{service}</code> in here would nest the preview
+inside itself, so it is left out. Every other tab is the real thing.</p>
+</body>
+</html>""".format(service=service_name)
+
+
+@pure
 def rewrite_proxied_html(
     html_content: str,
     service_name: ServiceName,

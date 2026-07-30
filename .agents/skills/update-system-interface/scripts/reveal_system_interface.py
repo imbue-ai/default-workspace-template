@@ -44,7 +44,10 @@ specifics -- boot ``uv run system-interface`` from an already-built
 ``--work-dir`` on a free port; point layout persistence at a throwaway copy of
 the live layout (``SYSTEM_INTERFACE_LAYOUT_DIR``) so the preview renders the
 user's real tabs while its autosaves land in the copy, with MNGR_AGENT_ID also
-dropped as a guard against clobbering the live ``layout.json``; keep agent
+dropped as a guard against clobbering the live ``layout.json``; declare the two
+preview service names self-referential
+(``SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES``) so the preview tab that layout
+almost always contains explains itself rather than nesting; keep agent
 discovery; source agent lifecycle events by *following* the live observer rather
 than running a second one (``SYSTEM_INTERFACE_AGENT_EVENTS_MODE=FOLLOW``, since
 ``mngr observe`` is single-writer per mngr host dir); probe ``/api/health``,
@@ -174,10 +177,9 @@ PREVIEW_HOST_ENV = "SYSTEM_INTERFACE_HOST"
 PREVIEW_LAYOUT_DIR_ENV = "SYSTEM_INTERFACE_LAYOUT_DIR"
 _PREVIEW_LAYOUT_SEED_ROOT = "data/.state/si-preview-layout"
 _WORKSPACE_LAYOUT_SUBDIR = "workspace_layout"
-# The slug registry (display names + last-active slug), which carries no panels
-# and so is copied verbatim rather than filtered like the layout contents.
-_LAYOUT_REGISTRY_FILENAME = "layouts_meta.json"
-_SEEDED_LAYOUT_ENTRIES = ("layouts", _LAYOUT_REGISTRY_FILENAME, "layout.json")
+# What gets copied: the per-slug layout contents, the slug registry (display names
+# + last-active slug), and any un-migrated legacy single-layout file.
+_SEEDED_LAYOUT_ENTRIES = ("layouts", "layouts_meta.json", "layout.json")
 ENV_MNGR_HOST_DIR = "MNGR_HOST_DIR"
 # The layout belongs to the workspace's *primary* agent -- the services agent
 # supervisord (and therefore the live system interface) runs under, which mngr
@@ -189,17 +191,19 @@ ENV_MNGR_HOST_DIR = "MNGR_HOST_DIR"
 # bootstrap's _read_main_agent_labels.
 _AGENT_DATA_FILENAME = "data.json"
 _PRIMARY_AGENT_LABEL = "is_primary"
-# A seeded layout that itself contains a preview panel would make the preview
-# render *itself*: the inner app resolves ``service:si-preview`` against the same
-# live app registry, so the panel proxies back to the wrapper that frames
-# it -- infinitely nested iframes. The documented flow closes the tab before any
-# re-preview, but that is ordering, not a guarantee (a layout can autosave with
-# the tab open, or an abandoned pass can leave one behind), so the seed drops any
-# layout content referencing a preview service. The layout stays *registered* in
-# the copied ``layouts_meta.json`` and merely opens empty -- exactly the
-# has-no-content-yet state the server already models for a freshly-created
-# layout, so nothing downstream sees a missing slug.
-_PREVIEW_SERVICE_NAMES = frozenset({PREVIEW_SERVICE_NAME, PREVIEW_INNER_SERVICE_NAME})
+
+# The seeded layout will nearly always contain the preview tab itself -- it stays
+# open across the whole editing pass, so any re-``preview`` copies a layout that
+# has it. Rendering it would make the preview show *itself*: the inner app
+# resolves ``service:si-preview`` against the same live app registry, so the panel
+# proxies back to the wrapper that frames it, and each nested iframe loads another
+# full system interface. Telling the previewed instance that those two service
+# names resolve to itself makes it serve a one-line explanation in that tab
+# instead. That keeps the rest of the layout exactly as the user has it, which
+# neither dropping the layout (their real tabs vanish) nor editing dockview's
+# serialized grid by hand (fragile, and a malformed grid renders blank) manages.
+PREVIEW_SELF_REFERENTIAL_SERVICES_ENV = "SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES"
+_PREVIEW_SERVICE_NAMES = (PREVIEW_SERVICE_NAME, PREVIEW_INNER_SERVICE_NAME)
 
 # How a throwaway second instance sources agent lifecycle events. ``mngr observe``
 # is single-writer per mngr host dir (an exclusive flock), and this box's live
@@ -853,54 +857,8 @@ def _preview_layout_seed_dir(repo_root: Path, slug: str) -> Path:
     return repo_root / _PREVIEW_LAYOUT_SEED_ROOT / _preview_instance_name(slug)
 
 
-def _layout_seed_refusal_reason(path: Path) -> str | None:
-    """Why this persisted layout file must not be seeded, or None to seed it.
-
-    Two independent reasons, kept distinct so the operator is told the true one:
-
-    - It opens a panel on one of the preview services. Read from the dockview
-      ``panelParams`` map, whose ``serviceName`` is what a service iframe is
-      addressed by; seeding it would render the preview inside itself.
-    - It is not readable layout JSON. The server could not render it either, so
-      declining to seed loses nothing and keeps the failure mode on the safe
-      side -- but it is a corrupt file in the *live* workspace, which is worth
-      saying out loud rather than blaming on the nesting guard.
-    """
-    try:
-        content = json.loads(path.read_text())
-    except OSError as exc:
-        return f"it could not be read ({exc})"
-    except ValueError as exc:
-        # json.JSONDecodeError is a ValueError subclass.
-        return f"it is not valid JSON ({exc})"
-    if not isinstance(content, dict):
-        return "its contents are not a JSON object"
-    panel_params = content.get("panelParams")
-    if not isinstance(panel_params, dict):
-        return None
-    opens_preview = any(
-        isinstance(params, dict) and params.get("serviceName") in _PREVIEW_SERVICE_NAMES
-        for params in panel_params.values()
-    )
-    if opens_preview:
-        return "it opens a preview panel, which would render the preview inside itself"
-    return None
-
-
-def _seed_layout_file(source: Path, destination: Path) -> None:
-    """Copy one persisted layout file unless something disqualifies it."""
-    reason = _layout_seed_refusal_reason(source)
-    if reason is not None:
-        sys.stderr.write(
-            f"preview: not seeding {source.name} -- {reason}; that layout opens "
-            "empty.\n"
-        )
-        return
-    shutil.copy2(source, destination)
-
-
 def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
-    """Copy the live layout files into a fresh throwaway dir and return it.
+    """Copy the live layout files verbatim into a fresh throwaway dir; return it.
 
     Re-seeded from scratch on every ``preview`` call, since the live layout is
     the source of truth at preview time. When there is no live layout to copy the
@@ -910,10 +868,12 @@ def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
     as a working preview; that silence is what hid the primary-agent resolution
     bug (see ``_live_layout_dir``) through a whole round of real use.
 
-    ``layouts_meta.json`` (the slug registry) is copied verbatim, while each
-    layout's *content* is filtered through ``_seed_layout_file`` -- so a layout
-    that would nest the preview inside itself stays registered but opens empty,
-    rather than disappearing from the picker.
+    Every layout is copied as-is, including one that opens the preview tab
+    itself -- which, in the editing loop, is nearly all of them, since that tab
+    stays open across the whole pass. The nesting that would cause is refused by
+    the previewed instance instead (``system_interface_self_referential_services``
+    below), which is the only place that can do it without either editing
+    dockview's serialized grid by hand or silently dropping the user's real tabs.
     """
     seed_dir = _preview_layout_seed_dir(repo_root, slug)
     shutil.rmtree(seed_dir, ignore_errors=True)
@@ -936,17 +896,16 @@ def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
     for entry in _SEEDED_LAYOUT_ENTRIES:
         source = live_dir / entry
         if source.is_dir():
-            # The per-slug layout contents; each is filtered independently.
+            # The per-slug layout contents. Copied file-by-file rather than with
+            # copytree so a nested sub-tree under the same dir could never ride
+            # along; today only flat ``<slug>.json`` files live here.
             destination_dir = seed_dir / entry
             destination_dir.mkdir(parents=True, exist_ok=True)
             for layout_file in sorted(source.iterdir()):
                 if layout_file.is_file():
-                    _seed_layout_file(layout_file, destination_dir / layout_file.name)
-        elif source.exists():
-            if entry == _LAYOUT_REGISTRY_FILENAME:
-                shutil.copy2(source, seed_dir / entry)
-            else:
-                _seed_layout_file(source, seed_dir / entry)
+                    shutil.copy2(layout_file, destination_dir / layout_file.name)
+        elif source.is_file():
+            shutil.copy2(source, seed_dir / entry)
     return seed_dir
 
 
@@ -965,13 +924,16 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
     free port; point layout persistence at a throwaway copy of the live layout
     (``SYSTEM_INTERFACE_LAYOUT_DIR``) so the preview renders the user's real tabs
     while its autosaves land in the copy, and additionally drop MNGR_AGENT_ID as a
-    belt-and-suspenders guard against clobbering the live ``layout.json``; keep
-    discovery so real conversations still render; run in FOLLOW mode so the
-    preview reads the live observer's agent lifecycle stream instead of trying to
-    start a second observer it cannot get the lock for; probe ``/api/health``,
-    which stays red unless that stream really is feeding the preview; register
-    the inner app and the labeled wrapper frame. The shared script owns the ports,
-    the process/service teardown, and the state file.
+    belt-and-suspenders guard against clobbering the live ``layout.json``; declare
+    its own two service names self-referential
+    (``SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES``) so the preview tab the seeded
+    layout almost always contains renders an explanation instead of nesting the
+    preview inside itself; keep discovery so real conversations still render; run
+    in FOLLOW mode so the preview reads the live observer's agent lifecycle stream
+    instead of trying to start a second observer it cannot get the lock for; probe
+    ``/api/health``, which stays red unless that stream really is feeding the
+    preview; register the inner app and the labeled wrapper frame. The shared
+    script owns the ports, the process/service teardown, and the state file.
 
     Because the health gate is strict, a preview whose lifecycle stream cannot be
     established does not come up at all -- the shared script tears the partial
@@ -1033,6 +995,11 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             f"{PREVIEW_LAYOUT_DIR_ENV}={seed_dir}",
             "--env",
             f"{PREVIEW_AGENT_EVENTS_MODE_ENV}={FOLLOW_AGENT_EVENTS_MODE}",
+            "--env",
+            (
+                f"{PREVIEW_SELF_REFERENTIAL_SERVICES_ENV}="
+                f"{','.join(_PREVIEW_SERVICE_NAMES)}"
+            ),
             "--unset-env",
             ENV_MNGR_AGENT_ID,
             "--health-path",
