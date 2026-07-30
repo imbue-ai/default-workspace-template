@@ -75,7 +75,10 @@ _CREDIT_LIMIT = 2
 # cannot afford.
 _IDR_REQUEST_MIN_INTERVAL = 0.4
 
-_CAPTURE_FPS = float(os.environ.get("BROWSER_VIDEO_FPS", "30"))
+# 60, not 30: the capture loop is a fixed tick nothing wakes early, so every
+# screen change waits half a tick on average before being seen -- ~8ms at 60
+# vs ~17ms at 30. Encode stays damage-driven, so an idle screen costs the same.
+_CAPTURE_FPS = float(os.environ.get("BROWSER_VIDEO_FPS", "60"))
 _VIDEO_CRF = int(os.environ.get("BROWSER_VIDEO_CRF", "25"))
 # Paint-over: after this many static frames pixelflux re-encodes the settled
 # screen at the lower (better) CRF, which is what keeps text readable after a
@@ -217,6 +220,10 @@ class PixelfluxVideoPipe:
         settings.video_crf = _VIDEO_CRF
         settings.use_paint_over_quality = True
         settings.video_paintover_crf = _PAINTOVER_CRF
+        # Default 15 damaged frames before the settled screen re-encodes at the
+        # crisp CRF -- seconds of soft text after every scroll at damage-driven
+        # rates. 5 makes text sharpen almost immediately after motion stops.
+        settings.paint_over_trigger_frames = 5
         capture = ScreenCapture()
         capture.start_capture(self._on_frame, settings)
         self._capture = capture
