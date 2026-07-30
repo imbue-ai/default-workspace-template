@@ -111,17 +111,31 @@ tk ready > /tmp/migrate-inflight.txt
 grep "migrate-workspace" /tmp/migrate-inflight.txt
 ```
 
-**Back up both sides.** Here, and on the source over SSH:
+**Back up both sides -- in the background.** A backup runs for minutes, and
+nothing in Steps 4 and 5 depends on one, so start both (`run_in_background:
+true`) and carry on detecting the layout and building the inventory while they
+run. Collect them before Step 6, which dispatches the first thing that writes
+anything.
 
 ```bash
-uv run host-backup-now
-ssh -i /tmp/mind_key -p <port> <user>@<host> 'cd <source-repo-root> && uv run host-backup-now'
+uv run host-backup-now --timeout 600
+ssh -i /tmp/mind_key -p <port> <user>@<host> \
+    'cd <source-repo-root> && uv run host-backup-now --timeout 600'
 ```
 
+**Bound both waits explicitly.** An older `host-backup-now` ends its wait only on
+a restic outcome, so a tick that never reaches restic -- most likely one skipped
+for missing secrets -- leaves it polling for its full 30-minute default and then
+exiting 2 having printed nothing. That version is what a `pre-declutter` source
+runs; see [references/pre-declutter-layout.md](references/pre-declutter-layout.md)
+("The 30-minute `host-backup-now` hang") for the events-log fallback that reads
+the tick's real outcome.
+
 Confirm each prints `restic_backup_succeeded`. If the *source* reports
-`tick_skipped_due_to_missing_secrets`, it has no restore point: tell the user
-plainly and get their explicit go-ahead. This is a warning, not a gate -- the
-migration only ever reads the source.
+`tick_skipped_due_to_missing_secrets` -- or times out having printed nothing,
+which on an old source means the same thing until you check the events log -- it
+has no restore point: tell the user plainly and get their explicit go-ahead. This
+is a warning, not a gate -- the migration only ever reads the source.
 
 **Is this workspace actually fresh?** Compare its own tree against its own
 template base. If nothing but the template base is there, proceed silently. If it
@@ -227,7 +241,12 @@ it.
 
 ## 6. Dispatch the worker
 
-Open the tracking ticket, write the task file, launch, and background-poll.
+**First, collect Step 3's backups.** The worker is the first step that writes
+anything, so this is where a restore point has to exist. If either is still
+running, wait for it; if the source's had no restore point to take, you have
+already settled that with the user.
+
+Then open the tracking ticket, write the task file, launch, and background-poll.
 
 ```bash
 mkdir -p data/.tasks/migrate-workspace

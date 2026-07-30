@@ -216,6 +216,51 @@ built.
 - **`check-app-errors`.** Scans `/var/log/supervisor/` for real errors -- a clean
   exit code does not mean a service is healthy.
 
+## The 30-minute `host-backup-now` hang
+
+Step 3 backs up the source over SSH. On a pre-declutter source that command can
+sit for half an hour and then fail, **even though the backup tick it triggered
+finished seconds in**.
+
+The command waits by tailing the service's events log, and the version shipped
+in `minds-v0.3.9` and earlier treats only `restic_backup_succeeded` /
+`restic_backup_failed` as ending a tick. A tick can end without restic ever
+running, and then neither event is ever written:
+
+- `tick_skipped_due_to_missing_secrets` -- no `restic.env`, i.e. backups were
+  never configured. **This is the likely case here**, and it is exactly the
+  outcome Step 3 tells you to watch for. An old workspace that predates backup
+  provisioning has no `restic.env` at all.
+- `snapshot_failed` -- the snapshot step aborted the tick before restic.
+- `tick_error` -- the loop's outer handler caught something.
+
+In each case the tick is over, but the waiter polls to its 30-minute default
+`--timeout` and exits 2 having printed nothing at all. The same blind spot
+affects the in-flight wait that runs *first*, so a source whose last tick ended
+in `snapshot_failed` looks permanently mid-backup.
+
+So pass a short `--timeout`, and when it expires read the tick's real outcome off
+the events log rather than believing the silence:
+
+```bash
+ssh ... 'cat "$MNGR_HOST_DIR/host_backup/service_events_dir"'
+ssh ... 'tail -n 5 <that-dir>/events.jsonl'
+```
+
+That pointer file exists only on a source running the `minds-v0.3.9` backup
+service or newer. Before that, the events sit under the *primary* agent's state
+dir (`<host_dir>/agents/<primary-agent-id>/events/backup/events.jsonl` -- Step
+5's `list-agents` names the primary), and `host-backup-now` over SSH fails
+*immediately* rather than hanging, because it derives the events dir from
+`MNGR_AGENT_STATE_DIR`, which an SSH session does not have. An immediate exit 2
+saying it cannot locate the events log means an old backup service, not a broken
+source.
+
+Both of these are quirks of the command's *waiter*, never of the backup: the
+service itself ticks, writes its events, and (given an `restic.env`) uploads
+normally. Never read a `host-backup-now` timeout as "the source's backups are
+broken" without checking the events log.
+
 ## Two gotchas specific to this crossing
 
 - **The AI-integration helper moved *and* changed shape.** `claude_p.py` now lives
