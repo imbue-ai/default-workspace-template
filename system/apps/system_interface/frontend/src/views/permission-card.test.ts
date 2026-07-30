@@ -30,18 +30,21 @@ function makeResult(output: string, isError = false): ToolResultEvent {
 // Mirror the `PermissionCard` component's pre-render work so each test exercises
 // the pure renderer exactly as the live card calls it: parse the request once,
 // assemble the raw-request text, and pass in an injected `scopeInfo` (instead of
-// driving the async gateway lookup).
+// driving the async gateway lookup) plus the raw-disclosure state the live
+// component owns.
 function renderCardFor(
   toolCall: ToolCall,
   toolResult: ToolResultEvent | null,
   resolution: PermissionResolution | null = null,
   scopeInfo: ScopeInfo | null = null,
+  rawOpen = false,
+  onToggleRaw: () => void = () => {},
 ): m.Vnode {
   const details = parsePermissionRequest(toolCall, toolResult);
   const rawInput = toolCall.input_preview || "";
   const rawOutput = toolResult?.output || "";
   const rawText = rawOutput ? `${rawInput}\n\n${rawOutput}` : rawInput;
-  return renderPermissionCard(details, scopeInfo, resolution, rawText, toolResult !== null);
+  return renderPermissionCard(details, scopeInfo, resolution, rawText, toolResult !== null, rawOpen, onToggleRaw);
 }
 
 // A realistic input_preview: the command is JSON-encoded and may be truncated
@@ -71,6 +74,9 @@ const FILE_SHARING_OUTPUT = `{"request_id":"fs-1","rationale":"write the report 
 // carries verb names and a target workspace, neither of which the card renders
 // as details for now -- only the heading and the button.
 const WORKSPACE_OUTPUT = `{"request_id":"ws-1","rationale":"export a backup of the old workspace","request_type":"workspace","payload":{"permissions":["minds-workspaces-backups-export"],"target_workspace_id":"agent-a3b7b469ee8341779c9ede1a798c447f"}}`;
+
+// An accounts request (listing the device's signed-in accounts).
+const ACCOUNTS_OUTPUT = `{"request_id":"acct-1","rationale":"check which account is signed in","request_type":"accounts","payload":{}}`;
 
 describe("parsePermissionRequest", () => {
   it("parses the rich details of a successful predefined creation POST", () => {
@@ -164,46 +170,52 @@ function textOf(node: unknown): string | null {
   return t ? (t.children as string) : null;
 }
 
+// The first vnode carrying `className` (exact word match within a possibly
+// multi-class attribute), or null.
+function findByClass(
+  node: unknown,
+  className: string,
+): { attrs?: Record<string, unknown>; children?: unknown } | null {
+  return findVnode(node, (v) => {
+    const cls = (v as { attrs?: { className?: unknown } }).attrs?.className;
+    return typeof cls === "string" && cls.split(" ").includes(className);
+  }) as { attrs?: Record<string, unknown>; children?: unknown } | null;
+}
+
+// The solid "Review & respond" button (distinct from the raw-disclosure toggle,
+// which is also a <button>).
+function findReviewButton(node: unknown): { attrs?: Record<string, unknown>; children?: unknown } | null {
+  return findByClass(node, "permission-request-button");
+}
+
 describe("renderPermissionCard", () => {
-  it("heads the card and shows the request and a button", () => {
+  it("shows the eyebrow, title, rationale, and review button on a pending card", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT));
 
-    const title = findVnode(
-      vnode,
-      (v) =>
-        v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-title",
-    );
-    // The predefined service name is conveyed by the scope on the "Requesting"
-    // line until the gateway catalog resolves a friendly name into the heading.
-    expect(textOf(title)).toBe("Permission request");
+    // The eyebrow reads "Permission request"; the title carries the specific
+    // subject (the raw scope until the gateway catalog resolves a name).
+    expect(textOf(findByClass(vnode, "permission-request-eyebrow"))).toBe("Permission request");
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("slack-api");
 
-    // The "Requesting" value is shown: the permission and scope as separate
-    // no-wrap tokens (so a long name can't break mid-name).
+    // The agent's reason renders directly beneath the title, with no label.
+    expect(textOf(findByClass(vnode, "permission-request-reason"))).toBe(
+      "I need to read #eng-releases to summarize the deploy thread.",
+    );
+
+    // The card no longer lists the specific permissions -- those live in the
+    // review modal and the raw disclosure.
     expect(
       findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-read-all"),
-    ).not.toBeNull();
-    expect(
-      findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-api"),
-    ).not.toBeNull();
+    ).toBeNull();
 
-    // The agent's reason for the request is surfaced on the card.
-    expect(
-      findVnode(
-        vnode,
-        (v) =>
-          v.tag === "#" &&
-          (v as { children?: unknown }).children === "I need to read #eng-releases to summarize the deploy thread.",
-      ),
-    ).not.toBeNull();
-
-    const button = findVnode(vnode, (v) => v.tag === "button");
+    const button = findReviewButton(vnode);
     expect(button).not.toBeNull();
     expect(textOf(button)).toBe("Review & respond");
   });
 
   it("wires the button to open the modal with the request id", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT));
-    const button = findVnode(vnode, (v) => v.tag === "button") as { attrs?: { onclick?: (e: Event) => void } } | null;
+    const button = findReviewButton(vnode) as { attrs?: { onclick?: (e: Event) => void } } | null;
 
     const postMessage = vi.fn();
     vi.stubGlobal("window", { parent: { postMessage } });
@@ -218,50 +230,39 @@ describe("renderPermissionCard", () => {
     );
   });
 
-  it("shows a pending state with no button before the result arrives", () => {
+  it("shows a pending state with no review button before the result arrives", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), null);
 
-    const title = findVnode(
-      vnode,
-      (v) =>
-        v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-title",
-    );
-    expect(textOf(title)).toBe("Permission request");
-    expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
-    const status = findVnode(
-      vnode,
-      (v) =>
-        v.tag === "div" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-status",
-    );
-    expect(textOf(status)).toBe("Waiting for the request to register\u2026");
+    expect(textOf(findByClass(vnode, "permission-request-eyebrow"))).toBe("Permission request");
+    expect(findReviewButton(vnode)).toBeNull();
+    expect(textOf(findByClass(vnode, "permission-request-status"))).toBe("Waiting for the request to register\u2026");
   });
 
   it("says the request couldn't be read (not 'waiting') when a result arrived but has no request id", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult('{"agent_id":"a"}'));
 
-    expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
-    const status = findVnode(
-      vnode,
-      (v) =>
-        v.tag === "div" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-status",
-    );
-    const text = textOf(status);
+    expect(findReviewButton(vnode)).toBeNull();
+    const text = textOf(findByClass(vnode, "permission-request-status"));
     expect(text).not.toBe("Waiting for the request to register\u2026");
     expect(text).toContain("Couldn't read this request");
   });
 
-  it("heads a workspace request as workspace management with a button and no detail lines", () => {
+  it("titles a file-sharing request 'Local files'", () => {
+    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(FILE_SHARING_OUTPUT));
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Local files");
+  });
+
+  it("titles an accounts request 'Device accounts'", () => {
+    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(ACCOUNTS_OUTPUT));
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Device accounts");
+  });
+
+  it("titles a workspace request 'Other machines' with a button and no permission specifics", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(WORKSPACE_OUTPUT));
 
-    const title = findVnode(
-      vnode,
-      (v) =>
-        v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-title",
-    );
-    expect(textOf(title)).toBe("Permission request: Workspace management");
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Other machines");
 
-    // No "Requesting" detail line for now: neither the verb names nor the
-    // target workspace id render on the card.
+    // Neither the verb names nor the target workspace id render on the card.
     expect(
       findVnode(
         vnode,
@@ -276,43 +277,40 @@ describe("renderPermissionCard", () => {
     ).toBeNull();
 
     // The rationale still shows, and the button opens the modal by request id.
-    expect(
-      findVnode(
-        vnode,
-        (v) => v.tag === "#" && (v as { children?: unknown }).children === "export a backup of the old workspace",
-      ),
-    ).not.toBeNull();
-    const button = findVnode(vnode, (v) => v.tag === "button");
+    expect(textOf(findByClass(vnode, "permission-request-reason"))).toBe("export a backup of the old workspace");
+    const button = findReviewButton(vnode);
     expect(button).not.toBeNull();
     expect(textOf(button)).toBe("Review & respond");
   });
 
-  it("shows a Granted verdict and no review button once granted", () => {
+  it("shows an Approved receipt and no review button once granted", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT), "granted");
     expect(
-      findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "Granted"),
+      findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "Approved"),
     ).not.toBeNull();
-    // The action button is replaced by the verdict.
-    expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
+    // The compact receipt still names what was requested.
+    expect(textOf(findByClass(vnode, "permission-request-receipt-title"))).toBe("slack-api");
+    // The action button is replaced by the verdict receipt.
+    expect(findReviewButton(vnode)).toBeNull();
   });
 
-  it("shows a Denied verdict once denied", () => {
+  it("shows a Denied receipt once denied", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT), "denied");
     expect(
       findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "Denied"),
     ).not.toBeNull();
-    expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
+    expect(findReviewButton(vnode)).toBeNull();
   });
 
-  it("shows a couldn't-complete verdict for an error outcome", () => {
+  it("shows a couldn't-complete receipt for an error outcome", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT), "error");
     expect(
       findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "Couldn't complete"),
     ).not.toBeNull();
-    expect(findVnode(vnode, (v) => v.tag === "button")).toBeNull();
+    expect(findReviewButton(vnode)).toBeNull();
   });
 
-  it("uses the gateway service name in the title and adds a permission tooltip", () => {
+  it("uses the gateway service name as the title once the catalog resolves", () => {
     const scopeInfo: ScopeInfo = {
       scope: "slack-api",
       display_name: "Slack",
@@ -320,45 +318,49 @@ describe("renderPermissionCard", () => {
       permissions: [{ name: "slack-read-all", description: "All read operations across the Slack API." }],
     };
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT), null, scopeInfo);
-
-    const title = findVnode(
-      vnode,
-      (v) =>
-        v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-title",
-    );
-    expect(textOf(title)).toBe("Permission request: Slack");
-
-    // The requested permission is a hoverable span carrying its description.
-    const perm = findVnode(
-      vnode,
-      (v) =>
-        v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-perm",
-    ) as { attrs?: Record<string, unknown> } | null;
-    expect(perm).not.toBeNull();
-    expect(perm?.attrs?.["data-tooltip"]).toBe("All read operations across the Slack API.");
-    expect(textOf(perm)).toBe("slack-read-all");
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Slack");
   });
 
-  it("falls back to the plain scope title and text before the catalog resolves", () => {
-    // No scopeInfo (e.g. the lookup hasn't landed): title stays generic and the
-    // permission shows as a plain no-wrap token with no hoverable tooltip span.
-    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT));
-    const title = findVnode(
-      vnode,
-      (v) =>
-        v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-title",
+  it("offers a closed raw disclosure whose toggle reports the click", () => {
+    const onToggleRaw = vi.fn();
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(PERMISSION_OUTPUT),
+      null,
+      null,
+      false,
+      onToggleRaw,
     );
-    expect(textOf(title)).toBe("Permission request");
-    expect(
-      findVnode(
-        vnode,
-        (v) =>
-          v.tag === "span" && (v as { attrs?: { className?: string } }).attrs?.className === "permission-request-perm",
-      ),
-    ).toBeNull();
-    expect(
-      findVnode(vnode, (v) => v.tag === "#" && (v as { children?: unknown }).children === "slack-read-all"),
-    ).not.toBeNull();
+
+    const toggle = findByClass(vnode, "permission-request-raw-toggle") as {
+      attrs?: { onclick?: (e: Event) => void };
+    } | null;
+    expect(toggle).not.toBeNull();
+    expect(textOf(toggle)).toBe("Show raw request");
+    // Closed: the raw pre isn't rendered.
+    expect(findVnode(vnode, (v) => v.tag === "pre")).toBeNull();
+
+    toggle?.attrs?.onclick?.({ preventDefault() {}, stopPropagation() {} } as unknown as Event);
+    expect(onToggleRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the raw request text and a 'Hide' toggle when the disclosure is open", () => {
+    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT), null, null, true);
+
+    expect(textOf(findByClass(vnode, "permission-request-raw-toggle"))).toBe("Hide raw request");
+    const raw = findByClass(vnode, "permission-request-raw");
+    expect(raw).not.toBeNull();
+    const rawTextNode = findVnode(
+      raw,
+      (v) => v.tag === "#" && typeof (v as { children?: unknown }).children === "string",
+    );
+    expect(rawTextNode?.children as string).toContain('"request_id": "885711ec07bf47239d71294e1534330b"');
+  });
+
+  it("keeps the raw disclosure available on a resolved card", () => {
+    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT), "granted", null, true);
+    expect(textOf(findByClass(vnode, "permission-request-raw-toggle"))).toBe("Hide raw request");
+    expect(findByClass(vnode, "permission-request-raw")).not.toBeNull();
   });
 });
 
