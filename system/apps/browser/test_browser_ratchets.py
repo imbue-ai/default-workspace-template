@@ -93,8 +93,8 @@ def test_prevent_asyncio_import() -> None:
     # single sync<->async quarantine loop -- the one place run.py's old asyncio usage
     # moved to), webrtc.py (aiortc is asyncio-native and its peers live on that same
     # loop, driven only through session.py), and the three test modules that drive
-    # session/webrtc code with asyncio.run. runner.py itself is synchronous Flask and
-    # does not import asyncio (it reaches the loop only through the bridge). Mirrors
+    # session/webrtc code with asyncio.run. runner.py itself is synchronous Flask with
+    # no asyncio dependency (it reaches the loop only through the bridge). Mirrors
     # the system_interface lib's async-WS ratchet.
     rc.check_asyncio_import(_DIR, snapshot(6))
 
