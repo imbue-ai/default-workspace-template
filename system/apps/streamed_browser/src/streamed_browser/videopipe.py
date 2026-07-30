@@ -69,10 +69,25 @@ WIRE_HEADER_LEN = 10
 _WIRE_MAGIC_H264 = 0x04
 FRAME_TYPE_IDR = 0x01
 
-# Per-row unacknowledged-stripe ceiling. Two keeps a stripe in flight while the
-# previous one's ack returns, so throughput is not halved by the round trip;
-# anything higher just rebuilds queueing in the tunnel.
+# Per-row unacknowledged-stripe window. The FLOOR (2) keeps a stripe in flight
+# while the previous one's ack returns; the live limit adapts upward with the
+# measured ack round trip (DCV ships frames-in-transit 2..8 for the same
+# reason): a high-RTT viewer needs more in flight to sustain frame rate, and
+# sizing by measured RTT adds only what the pipe itself occupies -- never a
+# standing queue.
 _CREDIT_LIMIT = 2
+_CREDIT_LIMIT_MAX = 8
+
+# Delay-gated quality servo (SQP-shaped): the smoothed ack RTT is compared to
+# the observed minimum; inflation beyond the budget means our own bytes are
+# queueing somewhere, so motion CRF steps softer (cheaper, smaller) until the
+# delay drains, then recovers. Paint-over crispness on settle is untouched.
+_RTT_EWMA_ALPHA = 0.2
+_QUALITY_DELAY_BUDGET_S = 0.10
+_QUALITY_RECOVER_DELAY_S = 0.04
+_CRF_SOFT_STEP = 4
+_CRF_RECOVER_STEP = 2
+_CRF_MAX = 38
 
 # Server-side floor between IDR requests (the request is global: every row's
 # encoder refreshes), so a struggling viewer cannot make the encoders spend
@@ -185,7 +200,7 @@ class CreditWindow:
     """
 
     def __init__(self, limit: int = _CREDIT_LIMIT) -> None:
-        self._limit = limit
+        self.limit = limit
         self._unacked: list[int] = []
         self._blocking_idr: int | None = None
         self.needs_keyframe = False
@@ -198,7 +213,7 @@ class CreditWindow:
         # stripe ships until the IDR lands.
         if self._blocking_idr is not None:
             return False
-        return len(self._unacked) < self._limit
+        return len(self._unacked) < self.limit
 
     def note_sent(self, frame_id: int) -> None:
         self._unacked.append(frame_id)
@@ -234,6 +249,7 @@ class _StripeRow:
         self.mailbox: bytes | None = None
         self.mailbox_is_idr = False
         self.window = CreditWindow()
+        self.sent_at: dict[int, float] = {}  # frame_id -> send time, for ack RTT
 
 
 class PixelfluxVideoPipe:
@@ -248,6 +264,7 @@ class PixelfluxVideoPipe:
         self.browser_id = browser_id
         self.display = display
         self._capture = None
+        self._settings = None
         self._condition = threading.Condition()
         self._rows: dict[int, _StripeRow] = {}
         self._cursor_message: str | None = None
@@ -257,6 +274,9 @@ class PixelfluxVideoPipe:
         self._last_retune = 0.0
         self._dropped_at_last_retune = 0
         self._acks_since_retune = 0
+        self._rtt_ewma: float | None = None
+        self._rtt_min: float | None = None
+        self._current_crf = _VIDEO_CRF
         self.frames_captured = 0
         self.frames_dropped = 0
 
@@ -286,6 +306,7 @@ class PixelfluxVideoPipe:
         settings.paint_over_trigger_frames = _PAINTOVER_TRIGGER_FRAMES
         capture = ScreenCapture()
         capture.start_capture(self._on_frame, settings)
+        self._settings = settings
         # Cursor shape changes arrive out-of-band (XFixes) so pointer motion
         # never dirties the framebuffer; registered after start so a current
         # cursor is replayed to a mid-run registration (pixelflux's REPLAY).
@@ -362,6 +383,9 @@ class PixelfluxVideoPipe:
                         packet = row.mailbox
                         row.mailbox = None
                         frame_id, _, _, is_idr = parse_wire_header(packet)
+                        row.sent_at[frame_id] = time.monotonic()
+                        if len(row.sent_at) > 32:
+                            row.sent_at.pop(next(iter(row.sent_at)))
                         if is_idr:
                             row.window.note_sent_keyframe(frame_id)
                         else:
@@ -396,6 +420,11 @@ class PixelfluxVideoPipe:
             row = self._rows.get(y_start)
             if row is None:
                 return
+            sent = row.sent_at.pop(frame_id, None)
+            if sent is not None:
+                rtt = time.monotonic() - sent
+                self._rtt_ewma = rtt if self._rtt_ewma is None else (1 - _RTT_EWMA_ALPHA) * self._rtt_ewma + _RTT_EWMA_ALPHA * rtt
+                self._rtt_min = rtt if self._rtt_min is None else min(self._rtt_min, rtt)
             row.window.ack(frame_id)
             if row.window.needs_keyframe:
                 self._request_idr_locked()
@@ -419,6 +448,36 @@ class PixelfluxVideoPipe:
             self._current_fps = wanted
             self._capture.update_framerate(wanted)
             logger.debug("video pipe {} capture rate retuned to {:.0f}fps ({} drops)", self.browser_id, wanted, dropped)
+        self._adapt_window_and_quality_locked()
+
+    def _adapt_window_and_quality_locked(self) -> None:
+        """RTT-driven adaptation, piggybacked on the once-a-second retune.
+
+        Window: enough stripes in flight to cover the measured ack RTT at the
+        current frame rate (the pipe's own occupancy), clamped 2..8 -- DCV's
+        frames-in-transit range. Quality: SQP-shaped delay gate -- smoothed RTT
+        inflated past the observed minimum plus budget means our bytes are the
+        queue, so motion CRF softens until delay drains, then recovers.
+        """
+        if self._rtt_ewma is None or self._rtt_min is None:
+            return
+        wanted_limit = max(_CREDIT_LIMIT, min(_CREDIT_LIMIT_MAX, int(self._current_fps * self._rtt_ewma) + 1))
+        for row in self._rows.values():
+            row.window.limit = wanted_limit
+        inflation = self._rtt_ewma - self._rtt_min
+        wanted_crf = self._current_crf
+        if inflation > _QUALITY_DELAY_BUDGET_S:
+            wanted_crf = min(_CRF_MAX, self._current_crf + _CRF_SOFT_STEP)
+        elif inflation < _QUALITY_RECOVER_DELAY_S and self._current_crf > _VIDEO_CRF:
+            wanted_crf = max(_VIDEO_CRF, self._current_crf - _CRF_RECOVER_STEP)
+        if wanted_crf != self._current_crf and self._capture is not None and self._settings is not None:
+            self._current_crf = wanted_crf
+            self._settings.video_crf = wanted_crf
+            self._capture.update_tunables(self._settings)
+            logger.debug(
+                "video pipe {} crf retuned to {} (rtt ewma {:.0f}ms, min {:.0f}ms, window {})",
+                self.browser_id, wanted_crf, self._rtt_ewma * 1000, self._rtt_min * 1000, wanted_limit,
+            )
 
     def _request_idr_locked(self) -> None:
         now = time.monotonic()
