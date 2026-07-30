@@ -19,11 +19,13 @@ workspace apps; there is no async world here at all.
 """
 
 import os
+import socket as socket_module
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, jsonify, request
 from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
@@ -38,10 +40,31 @@ _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
 _PORT = int(os.environ.get("STREAMED_BROWSER_PORT", "8091"))
 _SEND_POLL_SECONDS = 1.0
 _RECEIVE_POLL_SECONDS = 0.05
+# While a viewer is connected the server never goes silent longer than this:
+# the client's freeze attributor needs "socket silent" to unambiguously mean
+# transport (a starved server that encodes nothing would otherwise be
+# misfiled as a network stall).
+_HEARTBEAT_SECONDS = 0.25
 
 application = Flask(__name__, static_folder=None)
 application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
 sock = Sock(application)
+
+
+def _strip_websocket_compression() -> None:
+    """Drop the client's permessage-deflate offer before the handshake.
+
+    simple_websocket accepts the extension unconditionally and flask-sock
+    exposes no off switch, so without this every already-compressed H.264
+    stripe would be zlib-deflated here and inflated by the viewer -- pure
+    latency and CPU waste on incompressible data. flask_sock builds its
+    handshaking Server from ``request.environ`` inside the route, so a
+    before_request hook is early enough.
+    """
+    request.environ.pop("HTTP_SEC_WEBSOCKET_EXTENSIONS", None)
+
+
+application.before_request(_strip_websocket_compression)
 
 session = StreamedBrowserSession()
 
@@ -82,8 +105,17 @@ def _receive_pump(ws: Any, pipe: PixelfluxVideoPipe, router: InputRouter, stop_e
         stop_event.set()
 
 
+def _set_nodelay(ws: Any) -> None:
+    """Interactive stream: never let Nagle hold a stripe or input tail."""
+    try:
+        ws.sock.setsockopt(socket_module.IPPROTO_TCP, socket_module.TCP_NODELAY, 1)
+    except OSError as error:
+        logger.debug("could not set TCP_NODELAY on stream socket ({})", error)
+
+
 def stream_socket(ws: Any) -> None:
     """One viewer: bring the session up, then pump frames out and input in."""
+    _set_nodelay(ws)
     try:
         display = session.ensure_started()
     except SessionStartupError as error:
@@ -106,14 +138,20 @@ def stream_socket(ws: Any) -> None:
         daemon=True,
     )
     receiver.start()
+    last_send = time.monotonic()
     try:
         while not stop_event.is_set():
             cursor_message = pipe.take_cursor_message()
             if cursor_message is not None:
                 ws.send(cursor_message)
-            packet = pipe.next_packet(timeout=_SEND_POLL_SECONDS)
+                last_send = time.monotonic()
+            packet = pipe.next_packet(timeout=_HEARTBEAT_SECONDS)
             if packet is not None:
                 ws.send(packet)
+                last_send = time.monotonic()
+            elif time.monotonic() - last_send >= _HEARTBEAT_SECONDS:
+                ws.send("hb")
+                last_send = time.monotonic()
     except ConnectionClosed:
         pass
     finally:

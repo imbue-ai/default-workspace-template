@@ -89,9 +89,12 @@ _CAPTURE_FPS = float(os.environ.get("BROWSER_VIDEO_FPS", "60"))
 # sharp whenever the user could actually read it.
 _VIDEO_CRF = int(os.environ.get("BROWSER_VIDEO_CRF", "28"))
 _PAINTOVER_CRF = int(os.environ.get("BROWSER_VIDEO_PAINTOVER_CRF", "18"))
-# Default 15 damaged frames before paint-over -- seconds of soft text after
-# every scroll at damage-driven rates. 5 sharpens almost immediately.
-_PAINTOVER_TRIGGER_FRAMES = 5
+# Trigger counts DAMAGED FRAMES at the capture tick, not wall time: 5 frames
+# at a 60fps tick is 83ms -- a mid-scroll micro-pause -- and each firing costs
+# a ~200KB crisp-IDR burst that blocks live frames behind ~1s of wire
+# (measured; this was a dominant freeze mechanism). 30 frames ~= 0.5s of real
+# stillness at full tick.
+_PAINTOVER_TRIGGER_FRAMES = 30
 
 
 class VideoPipeError(RuntimeError):
@@ -102,20 +105,31 @@ class VideoPipeError(RuntimeError):
 # transport). The credit window caps DELIVERY at the path's real rate, but the
 # encoder ticks open-loop -- measured on a live workspace it encoded 60/s while
 # ~10/s were deliverable, burning a full core on stripes the mailbox then
-# discarded. The controller is AIMD on the WASTE signal: mailbox drops mean
-# the encoder outran delivery (multiplicative decrease), a drop-free interval
-# means it kept up (additive increase toward the ceiling). Keying on drops --
-# not on a measured delivery rate -- avoids the ratchet-down trap where bursty
-# damage under-fills a rate window and locks the tick at the floor.
-_RATE_MIN_FPS = 15.0
+# discarded. The controller keys on the WASTE signal: mailbox drops mean the
+# encoder outran delivery, so the rate steps down toward the interval's
+# MEASURED delivered rate (converging in one step); drop-free intervals climb
+# gently toward the ceiling. Gating the decrease on drops -- never on a low
+# delivery rate alone -- avoids the ratchet-down trap where bursty damage
+# under-fills a rate window and locks the tick at the floor.
+_RATE_MIN_FPS = 8.0
 _RATE_MAX_FPS = float(os.environ.get("BROWSER_VIDEO_FPS", "60"))
 _RATE_DECREASE_FACTOR = 0.6
-_RATE_INCREASE_FPS = 10.0
+_RATE_INCREASE_FPS = 3.0
 
 
-def target_capture_fps(current_fps: float, dropped_in_interval: int) -> float:
-    """Next capture rate from this interval's mailbox-drop count. Pure, for tests."""
+def target_capture_fps(current_fps: float, dropped_in_interval: int, delivered_fps: float) -> float:
+    """Next capture rate from this interval's drop count and delivered rate.
+
+    On drops, step toward what the path demonstrably delivered (plus slack)
+    rather than a blind multiplicative cut -- converges in one step instead of
+    sawtoothing; the multiplicative cut remains as the fallback when nothing
+    was delivered at all. Drop-free intervals climb gently (a +10 ramp against
+    a ~20-stripe/s ceiling guaranteed an overshoot drop-burst every ~2s,
+    log-verified). Pure, for tests.
+    """
     if dropped_in_interval > 0:
+        if delivered_fps > 0:
+            return max(_RATE_MIN_FPS, min(current_fps, delivered_fps * 1.2))
         return max(_RATE_MIN_FPS, current_fps * _RATE_DECREASE_FACTOR)
     return min(_RATE_MAX_FPS, current_fps + _RATE_INCREASE_FPS)
 
@@ -173,10 +187,17 @@ class CreditWindow:
     def __init__(self, limit: int = _CREDIT_LIMIT) -> None:
         self._limit = limit
         self._unacked: list[int] = []
+        self._blocking_idr: int | None = None
         self.needs_keyframe = False
 
     @property
     def has_credit(self) -> bool:
+        # An unacked IDR consumes the WHOLE window: stripes vary ~25x in size
+        # (4KB delta vs 110KB IDR), so counting them equally let ~220KB into
+        # flight at recovery time -- exactly when the path is weakest. No new
+        # stripe ships until the IDR lands.
+        if self._blocking_idr is not None:
+            return False
         return len(self._unacked) < self._limit
 
     def note_sent(self, frame_id: int) -> None:
@@ -187,6 +208,7 @@ class CreditWindow:
 
     def note_sent_keyframe(self, frame_id: int) -> None:
         self.needs_keyframe = False
+        self._blocking_idr = frame_id
         self._unacked.append(frame_id)
 
     def ack(self, frame_id: int) -> None:
@@ -194,7 +216,10 @@ class CreditWindow:
         lost ack message is harmless; ids wrap at u16, so membership decides)."""
         if frame_id in self._unacked:
             cutoff = self._unacked.index(frame_id)
+            acked = self._unacked[: cutoff + 1]
             del self._unacked[: cutoff + 1]
+            if self._blocking_idr in acked:
+                self._blocking_idr = None
 
     def admits(self, is_keyframe: bool) -> bool:
         if not self.has_credit:
@@ -231,6 +256,7 @@ class PixelfluxVideoPipe:
         self._current_fps = _RATE_MAX_FPS
         self._last_retune = 0.0
         self._dropped_at_last_retune = 0
+        self._acks_since_retune = 0
         self.frames_captured = 0
         self.frames_dropped = 0
 
@@ -281,6 +307,14 @@ class PixelfluxVideoPipe:
         with self._condition:
             self.frames_captured += 1
             row = self._rows.setdefault(y_start, _StripeRow())
+            if row.mailbox is not None and row.mailbox_is_idr and not is_idr:
+                # STICKY IDR: an unsent keyframe is the row's recovery -- letting
+                # a delta overwrite it re-broke the chain and forced another
+                # >=0.4s IDR request cycle, looping into multi-second freezes
+                # (probe-verified as the dominant stall mechanism). Drop the
+                # delta instead; the pending IDR supersedes it visually anyway.
+                self.frames_dropped += 1
+                return
             if row.mailbox is not None:
                 # Replacing this row's unsent stripe; if either side of the
                 # swap was a delta the row's chain is broken until a keyframe.
@@ -315,6 +349,11 @@ class PixelfluxVideoPipe:
         deadline = time.monotonic() + timeout
         with self._condition:
             while not self._closed:
+                if self._cursor_message is not None:
+                    # A pending cursor shape must not wait out the poll timeout
+                    # (up to 1s of hover-feedback lag on a static screen):
+                    # return so the sender's cursor check runs now.
+                    return None
                 for y_start in sorted(self._rows):
                     row = self._rows[y_start]
                     if row.mailbox is None:
@@ -365,13 +404,17 @@ class PixelfluxVideoPipe:
 
     def _retune_capture_rate_locked(self) -> None:
         """AIMD on the interval's mailbox drops, at most once a second."""
+        self._acks_since_retune += 1
         now = time.monotonic()
-        if now - self._last_retune < 1.0:
+        interval = now - self._last_retune
+        if interval < 1.0:
             return
         self._last_retune = now
         dropped = self.frames_dropped - self._dropped_at_last_retune
         self._dropped_at_last_retune = self.frames_dropped
-        wanted = target_capture_fps(self._current_fps, dropped)
+        delivered_fps = self._acks_since_retune / interval / max(1, len(self._rows))
+        self._acks_since_retune = 0
+        wanted = target_capture_fps(self._current_fps, dropped, delivered_fps)
         if wanted != self._current_fps and self._capture is not None:
             self._current_fps = wanted
             self._capture.update_framerate(wanted)

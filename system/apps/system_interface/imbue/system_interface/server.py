@@ -5,6 +5,7 @@ import socket
 import threading
 import traceback
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -1629,6 +1630,21 @@ def _layout_broadcast_endpoint() -> Response:
     return _json_response(response_body)
 
 
+def _strip_service_websocket_compression() -> None:
+    """Drop permessage-deflate offers on proxied service websockets.
+
+    Proxied services carry compressed binary streams (H.264 video, terminal
+    traffic) where deflate is pure re-compression waste, and simple_websocket
+    accepts the extension unconditionally with no off switch. Runs as a
+    before_request hook: flask_sock builds its handshaking Server from
+    ``request.environ`` inside the route, so mutating the environ here is
+    early enough. Scoped to /service/ paths so the interface's own JSON
+    websockets keep compression.
+    """
+    if request.path.startswith("/service/"):
+        request.environ.pop("HTTP_SEC_WEBSOCKET_EXTENSIONS", None)
+
+
 def _handle_unhandled_exception(exc: Exception) -> Response:
     # Let werkzeug's own HTTP errors (404 routing, 405, etc.) render normally;
     # only genuine unhandled exceptions become a 500 JSON body.
@@ -1666,6 +1682,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.register_error_handler(Exception, _handle_unhandled_exception)
 
     plugin_manager.hook.endpoint(app=application)
+
+    application.before_request(_strip_service_websocket_compression)
 
     sock = Sock(application)
 

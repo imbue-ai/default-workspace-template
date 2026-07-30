@@ -70,6 +70,9 @@ def test_pipe_streams_idr_first_and_respects_credit(xvfb_display) -> None:
         sent: list[bytes] = []
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
+            # Mimic the sender loop: cursor messages must be drained or the
+            # pipe (correctly) yields to them instead of delivering stripes.
+            pipe.take_cursor_message()
             packet = pipe.next_packet(timeout=1.5)
             if packet is None:
                 break
@@ -82,6 +85,7 @@ def test_pipe_streams_idr_first_and_respects_credit(xvfb_display) -> None:
         assert all(first_by_row.values()), f"a row opened without a keyframe: {first_by_row}"
         # Credit exhausted (no acks yet): further damage must not be delivered.
         _repaint(xvfb_display, "green")
+        pipe.take_cursor_message()
         assert pipe.next_packet(timeout=1.5) is None, "pipe sent a stripe with no credit"
 
         # Acks open every row's window; the stream must resume on its own
@@ -93,6 +97,7 @@ def test_pipe_streams_idr_first_and_respects_credit(xvfb_display) -> None:
         resumed = None
         deadline = time.monotonic() + 10
         while resumed is None and time.monotonic() < deadline:
+            pipe.take_cursor_message()
             resumed = pipe.next_packet(timeout=1.0)
         assert resumed is not None, "stream did not resume after acks"
         assert pipe.frames_captured >= len(first_by_row)
