@@ -18,6 +18,9 @@ export const IframePanel: m.Component<IframePanelAttrs> = {
       title,
       style: "width: 100%; height: 100%; border: none;",
       sandbox: "allow-scripts allow-same-origin allow-forms allow-popups",
+      // Let embedded services (e.g. the browser fleet viewer) reach the user's
+      // clipboard via navigator.clipboard for copy/paste into the remote browser.
+      allow: "clipboard-read; clipboard-write",
     };
     if (serviceName) {
       attrs[IFRAME_PANEL_SERVICE_NAME_ATTR] = serviceName;
