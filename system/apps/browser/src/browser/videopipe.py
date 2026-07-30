@@ -130,6 +130,17 @@ _PAINTOVER_TRIGGER_FRAMES = 30
 _INIT_CAPTURE_W = int(os.environ.get("STREAMED_BROWSER_WIDTH", "1280"))
 _INIT_CAPTURE_H = int(os.environ.get("STREAMED_BROWSER_HEIGHT", "800"))
 
+# pixelflux has no display field on CaptureSettings, so start_capture() binds to
+# whatever $DISPLAY names at that instant. In the fleet, several browsers each
+# run a pipe on their own Xvfb display in this one process, so two starts
+# racing on os.environ["DISPLAY"] could bind a capture to the wrong display.
+# Serialize the env-set + start_capture so each capture binds its own display;
+# the native capture holds its own X connection thereafter (verified on the box).
+# ponytail: process-global start lock -- start is rare (once per connect) so
+# serializing it costs nothing; per-display isolation would need a pixelflux API
+# that doesn't exist.
+_START_LOCK = threading.Lock()
+
 
 class VideoPipeError(RuntimeError):
     pass
@@ -149,6 +160,11 @@ _RATE_MIN_FPS = 8.0
 _RATE_MAX_FPS = float(os.environ.get("BROWSER_VIDEO_FPS", "60"))
 _RATE_DECREASE_FACTOR = 0.6
 _RATE_INCREASE_FPS = 3.0
+# Hidden-pane trickle: when the viewer's tab is not visible, capture at ~1-2 fps
+# instead of the full tick. Near-zero CPU (Chromium keeps running for the agent),
+# and a slow trickle keeps un-hide near-instant (a fresh frame is at most ~0.7s old,
+# and we force a keyframe on un-hide anyway).
+_HIDDEN_FPS = float(os.environ.get("BROWSER_HIDDEN_FPS", "1.5"))
 
 
 def target_capture_fps(current_fps: float, dropped_in_interval: int, delivered_fps: float) -> float:
@@ -305,6 +321,7 @@ class PixelfluxVideoPipe:
         self._current_crf = _VIDEO_CRF
         self.frames_captured = 0
         self.frames_dropped = 0
+        self._hidden = False
 
     def start(self) -> None:
         _attempt_pixelflux_import()
@@ -313,12 +330,8 @@ class PixelfluxVideoPipe:
                 f"pixelflux failed to import (missing system libraries? see setup_system.sh): {_pixelflux['error']}"
             )
         pixelflux_module: Any = _pixelflux["module"]
-        # pixelflux targets whatever $DISPLAY names -- CaptureSettings has no
-        # display field -- so point the process at this pipe's display. Safe
-        # process-globally: the service owns one session, and every pipe
-        # captures that session's display.
-        os.environ["DISPLAY"] = self.display
-        # The framebuffer size is the hard cap for any capture region.
+        # The framebuffer size is the hard cap for any capture region. xdpyinfo takes an
+        # explicit -display flag, so this is display-safe without the env.
         self._cap_w, self._cap_h = display_geometry(self.display)
         width = min(_INIT_CAPTURE_W, self._cap_w)
         height = min(_INIT_CAPTURE_H, self._cap_h)
@@ -337,7 +350,13 @@ class PixelfluxVideoPipe:
         settings.video_paintover_crf = _PAINTOVER_CRF
         settings.paint_over_trigger_frames = _PAINTOVER_TRIGGER_FRAMES
         capture = pixelflux_module.ScreenCapture()
-        capture.start_capture(self._on_frame, settings)
+        # pixelflux binds start_capture() to whatever $DISPLAY names (CaptureSettings has
+        # no display field). Several fleet pipes run in one process on different displays,
+        # so serialize the env-set + start so each capture binds its OWN display; the
+        # native capture holds its own X connection thereafter (verified on the box).
+        with _START_LOCK:
+            os.environ["DISPLAY"] = self.display
+            capture.start_capture(self._on_frame, settings)
         self._settings = settings
         # Cursor shape changes arrive out-of-band (XFixes) so pointer motion
         # never dirties the framebuffer; registered after start so a current
@@ -425,6 +444,23 @@ class PixelfluxVideoPipe:
             self._condition.notify()
         return width, height
 
+    def set_hidden(self, hidden: bool) -> None:
+        """Pane-visibility gate: when the viewer's tab is hidden, trickle capture at
+        ``_HIDDEN_FPS`` (near-zero CPU) instead of the full tick; when it returns,
+        restore the live rate and force a keyframe so the first visible frame is fresh.
+        The rate controller is told to stand down while hidden (see
+        _retune_capture_rate_locked and the idle snap-back) so it can't fight it back up."""
+        with self._condition:
+            if self._capture is None or hidden == self._hidden:
+                return
+            self._hidden = hidden
+            if hidden:
+                self._capture.update_framerate(_HIDDEN_FPS)
+            else:
+                self._capture.update_framerate(self._current_fps)
+                self._capture.request_idr_frame()
+            self._condition.notify()
+
     def next_packet(self, timeout: float, has_extra=None) -> bytes | None:  # noqa: ANN001
         """Block until some row's stripe is admitted by its window (or timeout).
 
@@ -475,6 +511,7 @@ class PixelfluxVideoPipe:
                 now = time.monotonic()
                 if (
                     self._current_fps < _RATE_MAX_FPS
+                    and not self._hidden
                     and now - self._last_retune > 2.0
                     and self._capture is not None
                 ):
@@ -503,6 +540,8 @@ class PixelfluxVideoPipe:
 
     def _retune_capture_rate_locked(self) -> None:
         """AIMD on the interval's mailbox drops, at most once a second."""
+        if self._hidden:
+            return  # trickling while the pane is hidden -- don't fight the rate back up
         self._acks_since_retune += 1
         now = time.monotonic()
         interval = now - self._last_retune

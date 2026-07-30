@@ -26,13 +26,17 @@ def test_prevent_while_true() -> None:
 
 
 def test_prevent_time_sleep() -> None:
-    # +2 for the boot-a-server integration tests (test_browser_integration.py): they
-    # start the real threaded Werkzeug server on an ephemeral port and poll for server
-    # readiness and for a state transition over a real socket -- the only way to verify
-    # the disconnect-as-lease + cast-WS contract that the in-process Flask test client
-    # cannot exercise. This mirrors system/apps/system_interface, whose boot-server tests bump
-    # the same ratchet. No production code uses time.sleep.
-    rc.check_time_sleep(_DIR, snapshot(2))
+    # 5 = 2 boot-a-server integration tests + 3 production sleeps that run OFF the event
+    # loop (so they honor the no-block-the-loop spirit of this ratchet):
+    #  - test_browser_integration.py (x2): start the real threaded Werkzeug server on an
+    #    ephemeral port and poll for readiness + a state transition over a real socket --
+    #    the only way to verify the disconnect-as-lease + cast-WS contract the in-process
+    #    Flask test client cannot exercise (mirrors system_interface's boot-server tests).
+    #  - session.py (x2): the per-browser Xvfb + PulseAudio readiness polls, run in a worker
+    #    thread via asyncio.to_thread (never on the loop) while the display/sink come up.
+    #  - xinput.py (x1): the Selkies keymap-settle after rebinding a recycled overlay
+    #    keycode, on the dedicated input thread. All three are thread sleeps, not loop blocks.
+    rc.check_time_sleep(_DIR, snapshot(5))
 
 
 def test_prevent_global_keyword() -> None:
@@ -51,12 +55,17 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    # +1 for session.py run_agent(): a browser-use Agent run can fail in many
-    # ways (LLM, CDP, navigation); we deliberately catch broadly at that task
-    # boundary so any failure is surfaced to the user's chat instead of being
-    # swallowed as an unretrieved-task exception. The error is re-logged and
-    # reported, not silenced.
-    rc.check_broad_exception_catch(_DIR, snapshot(1))
+    # 8 broad catches, every one an intentional isolation boundary that MUST NOT let a
+    # stray error kill a long-lived thread or a best-effort side effect:
+    #  - session.py (x1): run_agent() -- a browser-use Agent run fails many ways (LLM, CDP,
+    #    navigation); caught at the task boundary so any failure reaches the user's chat.
+    #  - xinput.py (x4): the XTEST input thread -- per-key release in the held-key sweep and
+    #    release_all, the best-effort Ctrl+V paste, and the window resize. Xlib raises
+    #    assorted protocol errors; none may tear down input for the whole browser.
+    #  - xclipboard.py (x3): the XFixes clipboard-monitor thread -- opening the display, the
+    #    select loop, and the on_change callback. A monitor-thread crash must be logged,
+    #    not silent, and a bad callback must not kill the monitor.
+    rc.check_broad_exception_catch(_DIR, snapshot(8))
 
 
 def test_prevent_builtin_exception_raises() -> None:

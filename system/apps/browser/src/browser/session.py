@@ -1,12 +1,12 @@
-"""Live browser fleet: headless Chromium + CDP screencast + a per-browser ownership state machine.
+"""Live browser fleet: headful Chromium + pixelflux pixel stream + a per-browser ownership state machine.
 
-Each :class:`LiveBrowser` owns one headless Chromium (launched and driven by
-``browser_use.BrowserSession``) plus a second, observer-only Playwright
-connection over the same CDP endpoint. The Playwright side does the things
-browser-use does not: stream the live view to the user (CDP
-``Page.startScreencast`` -> base64 JPEG frames over a WebSocket) and inject the
-user's mouse/keyboard (CDP ``Input.dispatch*Event``). The browser-use side does
-the AI driving (``Agent.run``). Both clients share the one Chromium, so the
+Each :class:`LiveBrowser` owns one headful Chromium (launched and driven by
+``browser_use.BrowserSession``) on its OWN private Xvfb display, plus a second,
+observer-only Playwright connection over the same CDP endpoint (used now only for
+tab/target tracking). The human view is a pixelflux striped-H.264 capture of that
+display, and the human's mouse/keyboard inject at the display level via XTEST --
+both handled per cast connection in runner.py, NOT here. The browser-use side does
+the AI driving (``Agent.run``) over CDP. Both clients share the one Chromium, so the
 human sees exactly what the agent does and vice versa.
 
 Ownership is a small per-browser state machine, and it is the heart of this
@@ -46,6 +46,8 @@ import json
 import os
 import queue
 import shutil
+import socket
+import subprocess
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
@@ -95,10 +97,9 @@ Lifecycle = Literal["init", "running", "crashed"]
 TaskEvent = dict[str, Any]
 EventSink = Callable[[TaskEvent], Awaitable[None]]
 
-# JPEG screencast tuned so a single base64 JSON frame stays comfortably under the
-# system_interface WebSocket proxy's 1 MiB per-message cap, even on busy pages.
-_SCREENCAST_FORMAT = "jpeg"
-_SCREENCAST_QUALITY = 55
+# Cold-start window/viewport size for a browser before the pane reports its real
+# size (the pane then grows the window + capture region). Kept the _SCREENCAST_*
+# name for continuity with the render clamp below; it is just the initial size now.
 _SCREENCAST_MAX_WIDTH = 1280
 _SCREENCAST_MAX_HEIGHT = 800
 # The live render size floats between the floor above (also a sane desktop baseline --
@@ -111,9 +112,6 @@ _RENDER_MAX_HEIGHT = 1080
 # tracks its size instead of pinning to a too-big minimum, but not degenerate.
 _RENDER_MIN_WIDTH = 640
 _RENDER_MIN_HEIGHT = 480
-# Every frame: the first frame after a tab switch arrives sooner, so clicking a
-# tab feels snappier. Slightly more bandwidth than skipping frames.
-_SCREENCAST_EVERY_NTH_FRAME = 1
 
 # Fortress's fixed install path (see the env.d unit
 # system/scripts/env.d/1000-playwright-fortress.sh). A stealth, C++-patched
@@ -157,6 +155,142 @@ _CAST_QUEUE_MAX_SIZE = 16
 # Each live session = a headless Chromium + a Playwright observer; cap the concurrent
 # count so a small compute (e.g. 4 GB) can't be OOM-ed. Override via BROWSER_MAX_SESSIONS.
 _MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "3"))
+
+
+# ---------------------------------------------------------------------------
+# Per-browser display + audio for the pixelflux pixel transport.
+#
+# Each browser renders headful into its OWN Xvfb display: pixelflux captures a
+# display region and XTEST injects into the X server, so browsers cannot share
+# one display the way the old CDP screencast could. Audio routes into a private
+# PulseAudio null sink named per browser; the audio pipe captures its monitor.
+# All best-effort -- audio is additive, so a browser still streams video if pulse
+# setup fails. Ported from the streamed_browser prototype (single-session there,
+# parameterized by browser here).
+# ---------------------------------------------------------------------------
+_DISPLAY_BASE = 50
+_DISPLAY_MAX = 79
+# Fixed framebuffer per display: Xvfb can't grow it at runtime, so size it to the
+# render cap (the largest pane we honor). Panes resize the window + capture region
+# within this. 1920x1080 = the H.264 level-4.0 ceiling the viewer decodes.
+_FB_W = _RENDER_MAX_WIDTH
+_FB_H = _RENDER_MAX_HEIGHT
+_XVFB_READY_TIMEOUT = 20.0
+_PULSE_SERVER = "unix:/var/run/pulse/native"
+# Chromium managed-policy dirs; CommandLineFlagSecurityWarningsEnabled=false hides
+# the yellow "unsupported flag: --no-sandbox" banner we would otherwise stream.
+_POLICY_DIRS = (
+    Path("/etc/chromium/policies/managed"),
+    Path("/etc/opt/chrome/policies/managed"),
+    Path("/etc/chromium-browser/policies/managed"),
+)
+_FLAG_WARNING_POLICY = '{"CommandLineFlagSecurityWarningsEnabled": false}\n'
+
+
+def _suppress_flag_warning_banner() -> None:
+    """Write the managed policy that hides the --no-sandbox banner (idempotent,
+    best-effort: the dirs are root-owned and a locked host may refuse)."""
+    for directory in _POLICY_DIRS:
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "minds-flag-warnings.json").write_text(_FLAG_WARNING_POLICY)
+        except OSError:
+            continue
+
+
+def _display_is_free(number: int) -> bool:
+    return not Path(f"/tmp/.X{number}-lock").exists() and not Path(f"/tmp/.X11-unix/X{number}").exists()
+
+
+def _x_socket_live(number: int) -> bool:
+    path = f"/tmp/.X11-unix/X{number}"
+    if not Path(path).exists():
+        return False
+    probe = socket.socket(socket.AF_UNIX)
+    probe.settimeout(1.0)
+    try:
+        probe.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+def _spawn_xvfb() -> "tuple[str, subprocess.Popen[bytes]]":
+    """Allocate a free display number and start an Xvfb on it. Blocking (call via a
+    thread); returns (display, process). Raises BrowserStartupError on failure."""
+    if shutil.which("Xvfb") is None:
+        raise BrowserStartupError("Xvfb is not installed in this workspace yet")
+    number = next((n for n in range(_DISPLAY_BASE, _DISPLAY_MAX + 1) if _display_is_free(n)), None)
+    if number is None:
+        raise BrowserStartupError("no free X display number for the browser")
+    display = f":{number}"
+    xvfb = subprocess.Popen(
+        ["Xvfb", display, "-screen", "0", f"{_FB_W}x{_FB_H}x24", "-nolisten", "tcp"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + _XVFB_READY_TIMEOUT
+    while not _x_socket_live(number):
+        if xvfb.poll() is not None or time.monotonic() > deadline:
+            if xvfb.poll() is None:
+                xvfb.terminate()
+            raise BrowserStartupError("Xvfb did not become ready")
+        time.sleep(0.1)
+    return display, xvfb
+
+
+def _ensure_pulse_sink(sink_name: str) -> bool:
+    """Start the system pulse daemon (idempotent) and load a null sink named
+    ``sink_name``. Returns whether the sink is present. Never raises. Blocking (call
+    via a thread). The daemon is shared across the fleet; each browser loads its own
+    null sink module so a silent tab produces silence the audio gate drops."""
+    env = {**os.environ, "PULSE_SERVER": _PULSE_SERVER}
+    try:
+        if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode != 0:
+            os.makedirs("/var/run/pulse", exist_ok=True)
+            # Anonymous-auth native socket at a fixed path: system-mode pulse as root
+            # otherwise leaves the socket group-gated and rejects our own clients.
+            subprocess.Popen(
+                ["pulseaudio", "--system", "--daemonize=no", "--disallow-exit",
+                 "--exit-idle-time=-1", "--log-target=stderr", "-n",
+                 "-L", "module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
+                    break
+                time.sleep(0.2)
+        subprocess.run(
+            ["pactl", "load-module", "module-null-sink", f"sink_name={sink_name}",
+             "rate=48000", "channels=2"],
+            env=env, capture_output=True, timeout=10,
+        )
+        check = subprocess.run(
+            ["pactl", "list", "short", "sinks"], env=env, capture_output=True, text=True, timeout=5
+        )
+        return sink_name in check.stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        logger.warning("pulse setup for sink {} failed ({}); browser streams video only", sink_name, error)
+        return False
+
+
+def _unload_pulse_sink(sink_name: str) -> None:
+    """Unload this browser's null-sink module on teardown (best-effort), so sinks
+    don't accumulate across browser create/close cycles."""
+    env = {**os.environ, "PULSE_SERVER": _PULSE_SERVER}
+    try:
+        listing = subprocess.run(
+            ["pactl", "list", "short", "modules"], env=env, capture_output=True, text=True, timeout=5
+        )
+        for line in listing.stdout.splitlines():
+            if f"sink_name={sink_name}" in line.split():
+                subprocess.run(
+                    ["pactl", "unload-module", line.split("\t", 1)[0]], env=env, capture_output=True, timeout=5
+                )
+    except (OSError, subprocess.SubprocessError) as error:
+        logger.debug("pulse sink unload for {} ignored ({})", sink_name, error)
 
 # Names whose background launch FAILED are remembered briefly so a late/retrying optimistic
 # viewer (still in 1013 reconnect-backoff when the launch failed, so it never registered a
@@ -455,8 +589,14 @@ class LiveBrowser(MutableModel):
     # bridge), so _broadcast can iterate it without a lock -- the single-loop
     # serialization is the guard. Mirrors system/apps/system_interface's WebSocketBroadcaster.
     _cast_queues: list["queue.Queue[str | None]"] = PrivateAttr(default_factory=list)
-    _latest_frame: str | None = PrivateAttr(default=None)
-    _send_in_flight: bool = PrivateAttr(default=False)
+    # Per-browser pixel transport: its private Xvfb display, the Chromium-audio null
+    # sink routed to it (and its monitor source), whether audio is available, and the
+    # Xvfb process (torn down in close()).
+    _display: str = PrivateAttr(default="")
+    _pulse_sink: str = PrivateAttr(default="")
+    _audio_source: str = PrivateAttr(default="")
+    _audio_available: bool = PrivateAttr(default=False)
+    _xvfb: "subprocess.Popen[bytes] | None" = PrivateAttr(default=None)
     _nav_tracked: set[Page] = PrivateAttr(default_factory=set)
     _active_target_id: str | None = PrivateAttr(default=None)
     _keepalive_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
@@ -477,9 +617,9 @@ class LiveBrowser(MutableModel):
     _selector_map: dict[int, Any] = PrivateAttr(default_factory=dict)
     _lease_touched_at: float = PrivateAttr(default=0.0)
     _screenshot_seq: int = PrivateAttr(default=0)
-    # Live render size (viewport / device-metrics / screencast), grown to the human's
-    # pane by _apply_resize between the floor (_SCREENCAST_MAX_*) and cap (_RENDER_MAX_*).
-    # Frozen while an agent drives so its `state` element indices don't shift mid-task.
+    # Current view size, reported to the agent (state 'resolution' + the resume note so
+    # it learns the page reflowed while the human held control). Updated via
+    # set_render_size from the cast resize path; starts at the cold-start window size.
     _render_w: int = PrivateAttr(default=_SCREENCAST_MAX_WIDTH)
     _render_h: int = PrivateAttr(default=_SCREENCAST_MAX_HEIGHT)
     # The render size the current agent started with -- compared on resume to tell it
@@ -533,9 +673,39 @@ class LiveBrowser(MutableModel):
 
     @property
     def _is_running(self) -> bool:
-        """Chromium is up and the screencast attached -- the only state in which the
+        """Chromium is up and the pixel pipe can capture -- the only state in which the
         browser can be driven and the viewer shows the live page."""
         return self._lifecycle == "running"
+
+    # --- pixel-transport accessors (read by the cast socket on the Flask thread) ---
+    @property
+    def display(self) -> str:
+        """This browser's private Xvfb display (e.g. ``:50``); the pipe/input target."""
+        return self._display
+
+    @property
+    def audio_source(self) -> str:
+        """PulseAudio monitor source to capture, or "" when audio is unavailable."""
+        return self._audio_source
+
+    @property
+    def audio_available(self) -> bool:
+        return self._audio_available
+
+    def human_controls(self) -> bool:
+        """Whether the human currently owns this browser. A single attribute read, so
+        it is safe to call from the Flask cast thread to gate XTEST input injection --
+        the loop writes ``controller`` atomically under ``_control_lock``, and a stale
+        read at the exact handoff instant is cosmetic (the viewer overlay also stops
+        sending input the moment an agent takes control)."""
+        return self.controller == "human"
+
+    def set_render_size(self, width: int, height: int) -> None:
+        """Record the realized view size after a human pane resize (the cast socket
+        calls this once the pipe re-targets the window), so the agent's state
+        'resolution' and the takeover resume-note reflect what the human is looking at.
+        A plain two-int write -- safe off the loop; a torn read is cosmetic."""
+        self._render_w, self._render_h = width, height
 
     def _build_bu_session(self, profile_dir: Path, chromium_path: str, *, chromium_sandbox: bool) -> BrowserSession:
         """Construct (don't start) the browser-use session for this browser's persistent
@@ -550,12 +720,33 @@ class LiveBrowser(MutableModel):
             # browser_use. We deliberately do NOT set storage_state (it would
             # overwrite the live profile).
             user_data_dir=str(profile_dir),
-            args=["--disable-dev-shm-usage"],
+            # Route this Chromium onto its OWN Xvfb display (pixelflux captures it) and
+            # its OWN pulse sink (the audio pipe captures the monitor). Merged over the
+            # process env so PATH/HOME survive -- we only override DISPLAY/PULSE_*.
+            env={
+                **os.environ,
+                "DISPLAY": self._display,
+                "PULSE_SERVER": _PULSE_SERVER,
+                "PULSE_SINK": self._pulse_sink,
+            },
+            # --window-position=0,0 pins the window at the origin so the capture region
+            # (0,0,w,h) maps window-pixel -> root-pixel 1:1 (input coords stay correct).
+            # The rest mirror the streamed_browser tuning: software compositing (no real
+            # GPU) roughly halves CPU while keeping WebGL for Fortress's fingerprint, and
+            # jump-scroll / no-animation cut damage the encoder would waste bytes on.
+            args=[
+                "--disable-dev-shm-usage",
+                "--window-position=0,0",
+                "--disable-gpu-compositing",
+                "--disable-smooth-scrolling",
+                "--force-prefers-reduced-motion",
+                "--wm-window-animations-disabled",
+            ],
             chromium_sandbox=chromium_sandbox,
             keep_alive=True,
             # Pin a fixed viewport + window so every site renders at the same
             # resolution -- a consistent "Chromium in a small window", not a size
-            # that shifts per page. Matches the screencast cap so frames never scale.
+            # that shifts per page. The pane grows the window + capture region later.
             viewport={"width": _SCREENCAST_MAX_WIDTH, "height": _SCREENCAST_MAX_HEIGHT},
             window_size={"width": _SCREENCAST_MAX_WIDTH, "height": _SCREENCAST_MAX_HEIGHT},
             device_scale_factor=1,
@@ -603,6 +794,18 @@ class LiveBrowser(MutableModel):
         profile_dir = _profile_dir(self.browser_id)
         profile_dir.mkdir(parents=True, exist_ok=True)
         _clear_stale_singleton(profile_dir)  # a prior hard kill may have orphaned a lock
+        # Bring up this browser's private Xvfb + audio sink BEFORE Chromium, so
+        # browser-use launches headful onto the right display with audio routed. Both
+        # block (Xvfb readiness, pactl), so run off the loop. Launches are serialized
+        # by the manager's startup lock, so the display allocation can't race.
+        _suppress_flag_warning_banner()
+        self._pulse_sink = f"browser-{self.browser_id}"
+        self._display, self._xvfb = await asyncio.to_thread(_spawn_xvfb)
+        self._audio_available = await asyncio.to_thread(_ensure_pulse_sink, self._pulse_sink)
+        self._audio_source = f"{self._pulse_sink}.monitor" if self._audio_available else ""
+        logger.info(
+            "LiveBrowser {} display {} up (audio={})", self.browser_id, self._display, self._audio_available
+        )
         self._bu_session = await self._start_bu_session(profile_dir, chromium_path)
         # The Chromium tree just spawned (and its processes self-write their
         # oom_score_adj moments later): have the OOM sweep re-band it.
@@ -703,21 +906,20 @@ class LiveBrowser(MutableModel):
     # --- screencast / active tab ---------------------------------------------
 
     async def _set_active_page(self, page: Page) -> None:
-        """Point the screencast at ``page`` and make it the input/agent target.
-
-        Serialized by ``_lock`` so overlapping calls (rapid navigations each firing
-        framenavigated) can't interleave at the stop/attach boundary and leak a CDP
-        session or start two screencasts on one target.
+        """Track ``page`` as the active tab (input/agent target) and refresh the tab
+        list. The human view is the pixelflux capture of the whole display, not a
+        per-target CDP screencast, so this no longer starts a screencast -- it just
+        attaches a CDP session to read the active target id and re-broadcasts tabs.
+        Serialized by ``_lock`` so rapid navigations can't leak a CDP session at the
+        detach/attach boundary.
         """
         async with self._lock:
             if self._context is None:
                 return  # torn down -- close() raced a queued nav re-attach
             if self._active_cdp is not None:
-                await self._stop_screencast()
+                await self._detach_active_cdp()
             # Re-check after the await above: close() doesn't take _lock, so it can
-            # null self._context while _stop_screencast() yields. Without this guard
-            # new_cdp_session(page) would dereference None and the orphaned task's
-            # AttributeError surfaces as "Task exception was never retrieved".
+            # null self._context while _detach_active_cdp() yields.
             if self._context is None:
                 return  # torn down mid-teardown -- nothing to (re)attach to
             self._active_page = page
@@ -729,51 +931,22 @@ class LiveBrowser(MutableModel):
                     self._active_target_id = info["targetInfo"]["targetId"]
                 except _BROWSER_ERRORS:
                     self._active_target_id = None
-                # Force the current render size on EVERY tab. browser-use pins the
-                # viewport on the first page, but tabs opened later (by the agent or
-                # by the site) can come up at a different size, so their frames would
-                # stream at a different resolution and the viewer would letterbox them
-                # inconsistently. Overriding the device metrics on each screencast
-                # target makes every tab stream at exactly _render_w x _render_h, and
-                # re-applies the human's latest resize (see _apply_resize).
-                try:
-                    await cdp.send(
-                        "Emulation.setDeviceMetricsOverride",
-                        {
-                            "width": self._render_w,
-                            "height": self._render_h,
-                            "deviceScaleFactor": 1,
-                            "mobile": False,
-                        },
-                    )
-                except _BROWSER_ERRORS as e:
-                    logger.debug("device-metrics override ignored ({})", e)
-                cdp.on("Page.screencastFrame", self._on_screencast_frame)
-                await cdp.send(
-                    "Page.startScreencast",
-                    {
-                        "format": _SCREENCAST_FORMAT,
-                        "quality": _SCREENCAST_QUALITY,
-                        "maxWidth": self._render_w,
-                        "maxHeight": self._render_h,
-                        "everyNthFrame": _SCREENCAST_EVERY_NTH_FRAME,
-                    },
-                )
             except _BROWSER_ERRORS as e:
-                logger.debug("screencast attach ignored ({})", e)
+                logger.debug("active-page cdp attach ignored ({})", e)
                 return
         await self._broadcast_tabs()
 
-    async def _stop_screencast(self) -> None:
+    async def _detach_active_cdp(self) -> None:
+        """Detach the active tab's CDP session (kept only for target tracking now that
+        the screencast is gone). Idempotent."""
         cdp = self._active_cdp
         self._active_cdp = None
         if cdp is None:
             return
         try:
-            await cdp.send("Page.stopScreencast")
             await cdp.detach()
         except _BROWSER_ERRORS as e:
-            logger.debug("screencast stop ignored ({})", e)
+            logger.debug("cdp detach ignored ({})", e)
 
     def _on_new_page(self, page: Page) -> None:
         """A new tab appeared (human or agent opened it): follow it."""
@@ -811,57 +984,6 @@ class LiveBrowser(MutableModel):
         if page is self._active_page and frame == page.main_frame:
             asyncio.create_task(self._set_active_page(page))
 
-    def _on_screencast_frame(self, params: dict[str, Any]) -> None:
-        """Playwright (sync) callback: stash the frame and schedule ack + send."""
-        self._latest_frame = params.get("data")
-        session_id = params.get("sessionId")
-        asyncio.create_task(self._ack_and_send(session_id))
-
-    async def _ack_and_send(self, screencast_session_id: Any) -> None:
-        cdp = self._active_cdp
-        if cdp is None:
-            return
-        try:
-            await cdp.send("Page.screencastFrameAck", {"sessionId": screencast_session_id})
-        except _BROWSER_ERRORS as e:
-            logger.debug("screencast ack ignored ({})", e)
-            return
-        if self._send_in_flight:
-            return
-        self._send_in_flight = True
-        try:
-            frame = self._latest_frame
-            if frame is not None:
-                self._broadcast({"type": "frame", "data": frame})
-        finally:
-            self._send_in_flight = False
-
-    async def _capture_one_frame(self) -> str | None:
-        """Grab a single screencast-shaped JPEG (base64) of the active tab on demand and
-        cache it as ``_latest_frame``.
-
-        The CDP screencast only emits a frame on a REPAINT, so a browser that flipped to
-        ``running`` and then sat on a static page has ``_latest_frame is None`` until it
-        next changes -- a fresh viewer connecting in that window would see a black canvas
-        (finding [6]). ``Page.captureScreenshot`` forces a one-off capture at the same
-        format/quality the screencast uses, so the replayed frame is indistinguishable
-        from a live one. Best-effort: returns None (and changes nothing) if there's no
-        active CDP session or the capture fails."""
-        cdp = self._active_cdp
-        if cdp is None:
-            return None
-        try:
-            shot = await cdp.send(
-                "Page.captureScreenshot",
-                {"format": _SCREENCAST_FORMAT, "quality": _SCREENCAST_QUALITY},
-            )
-        except _BROWSER_ERRORS as e:
-            logger.debug("one-off frame capture ignored ({})", e)
-            return None
-        data = shot.get("data")
-        if data:
-            self._latest_frame = data
-        return data
 
     async def _broadcast_tabs(self) -> None:
         # Stays async: it awaits _tab_list() (a CDP round-trip). The fan-out itself
@@ -992,67 +1114,11 @@ class LiveBrowser(MutableModel):
 
     # --- input ----------------------------------------------------------------
 
-    async def handle_cast_message(self, message: dict[str, Any]) -> None:
-        """Handle a message from a cast socket: human input or tab control.
-
-        Input/tab/nav are gated on ``_input_enabled`` (set only while the human has
-        control). The check and the CDP dispatch happen together under
-        ``_control_lock`` so an agent acquiring the browser mid-dispatch can't let a
-        stale human input land after the handoff (the input/control TOCTOU).
-        """
-        kind = message.get("type")
-        if kind == "resize":
-            # Same gate as input: _input_enabled is set iff the human (or an idle-free
-            # browser) owns it, so resizes are dropped while an agent drives -- that's
-            # the "aspect locked during agent control" freeze, for free.
-            async with self._control_lock:
-                if not self._input_enabled.is_set():
-                    logger.info("browser {} resize ignored: input not enabled (an agent controls it)", self.browser_id)
-                    return
-                await self._apply_resize(message)
-        elif kind in ("mouse", "key", "tab", "navigate", "back", "forward", "reload"):
-            async with self._control_lock:
-                if not self._input_enabled.is_set():
-                    return
-                await self._dispatch_input(message)
-
-    async def _dispatch_input(self, message: dict[str, Any]) -> None:
-        kind = message.get("type")
-        try:
-            cdp = self._active_cdp
-            if kind == "mouse" and cdp is not None:
-                await cdp.send("Input.dispatchMouseEvent", message["event"])
-            elif kind == "key" and cdp is not None:
-                await cdp.send("Input.dispatchKeyEvent", message["event"])
-            elif kind == "tab":
-                await self._handle_tab_control(message)
-            elif kind == "navigate" and self._active_page is not None:
-                await self._active_page.goto(message["url"])
-            elif kind == "back" and self._active_page is not None:
-                await self._active_page.go_back()
-            elif kind == "forward" and self._active_page is not None:
-                await self._active_page.go_forward()
-            elif kind == "reload" and self._active_page is not None:
-                await self._active_page.reload()
-        except _BROWSER_ERRORS as e:
-            logger.debug("cast input ignored ({})", e)
-
-    async def _apply_resize(self, message: dict[str, Any]) -> None:
-        """Human/idle resized their pane: re-render the browser to fill it, clamped to
-        [floor .. cap]. Reached only while input is enabled (human owns it), so an
-        agent's cached `state` indices never shift mid-task. Reuses _set_active_page,
-        which re-applies the new size to the device-metrics override + screencast."""
-        raw_w, raw_h = int(message.get("width", 0)), int(message.get("height", 0))
-        w = max(_RENDER_MIN_WIDTH, min(_RENDER_MAX_WIDTH, raw_w))
-        h = max(_RENDER_MIN_HEIGHT, min(_RENDER_MAX_HEIGHT, raw_h))
-        logger.info(
-            "browser {} resize request {}x{} -> clamped {}x{} (was {}x{}, headless={})",
-            self.browser_id, raw_w, raw_h, w, h, self._render_w, self._render_h, _HEADLESS,
-        )
-        if (w, h) == (self._render_w, self._render_h) or self._active_page is None:
-            return
-        self._render_w, self._render_h = w, h
-        await self._set_active_page(self._active_page)
+    # NOTE: human mouse/keyboard/scroll/resize no longer arrive as cast JSON. The
+    # human drives via XTEST + a real window resize on the cast WS (see runner.py:
+    # the Selkies `kd/ku/m` grammar and `r,W,H`, gated on human control); tab/nav
+    # come from the streamed Chromium chrome itself (pixels), not a rebuilt bar. The
+    # agent still drives via browser-use (run_agent/run_action) over its own CDP.
 
     async def _handle_tab_control(self, message: dict[str, Any]) -> None:
         if self._context is None:
@@ -1128,10 +1194,10 @@ class LiveBrowser(MutableModel):
         return {"ok": True, "mime": mime, "data": base64.b64encode(data).decode("ascii")}
 
     async def _xclip_write(self, data: bytes, mime: str) -> bool:
-        """Load ``data`` into the X11 CLIPBOARD selection. xclip forks a background owner
-        that serves the selection until another app claims it, so it persists for the
-        paste. DISPLAY is inherited from the browser service's env (:99)."""
-        args = ["xclip", "-selection", "clipboard"]
+        """Load ``data`` into this browser's X11 CLIPBOARD selection. xclip forks a
+        background owner that serves the selection until another app claims it, so it
+        persists for the paste. Targets this browser's private display via -display."""
+        args = ["xclip", "-display", self._display, "-selection", "clipboard"]
         if not mime.startswith("text/"):
             args += ["-t", mime]
         args += ["-i"]
@@ -1159,7 +1225,7 @@ class LiveBrowser(MutableModel):
     async def _xclip_out(self, target: str) -> bytes | None:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "xclip", "-selection", "clipboard", "-o", "-t", target,
+                "xclip", "-display", self._display, "-selection", "clipboard", "-o", "-t", target,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             )
             out, _ = await proc.communicate()
@@ -1940,41 +2006,24 @@ class LiveBrowser(MutableModel):
 
         Returns an outbound queue for the Flask cast handler to drain. The initial
         control + tabs (+ crash) sync is pushed BEFORE the queue is added to the
-        fan-out list, so the viewer's first messages are deterministic -- no live
-        frame can interleave ahead of the control/tabs the viewer needs first.
+        fan-out list, so the viewer's first messages are deterministic. Pixels come
+        from the per-connection pixelflux pipe (see runner.py), which forces a keyframe
+        on connect, so there is no frame to seed/replay here.
 
-        We also replay a screencast frame (``_latest_frame``) to a new client of a
-        RUNNING browser. The CDP screencast only emits a frame on a repaint, so a client
-        connecting to a browser sitting on a static/blank page would otherwise see a
-        black canvas (and the viewer's "Starting browser…" banner would never clear)
-        until the page next changed. If no frame has been cached yet (the common case for
-        a browser that just flipped ``init`` -> ``running`` and hasn't repainted --
-        finding [6]), we force a one-off capture so even the very first viewer sees the
-        live page at once. Skipped when crashed -- a dead browser shows the crash state,
-        not a stale frame.
-
-        The seed is at most four messages onto a fresh, empty queue whose maxsize
+        The seed is at most three messages onto a fresh, empty queue whose maxsize
         (``_CAST_QUEUE_MAX_SIZE`` = 16) is far larger, so the ``put_nowait``s here can
-        never raise ``queue.Full`` -- but the late-frame push goes through the same
-        Full-safe ``_broadcast``-style path for symmetry (finding [8]).
+        never raise ``queue.Full``.
 
         Runs on the loop (the runner calls it via ``bridge.run``), so the list
         mutation is single-threaded with respect to :meth:`_broadcast`.
         """
         client_queue: "queue.Queue[str | None]" = queue.Queue(maxsize=_CAST_QUEUE_MAX_SIZE)
         # The control message carries the lifecycle, so the viewer's FIRST message tells
-        # it whether to show the init overlay / live page / crashed overlay -- no guessing
-        # from frames. tabs follow (empty until running).
+        # it whether to show the init overlay / live page / crashed overlay. tabs follow.
         client_queue.put_nowait(json.dumps(self._control_message(), default=str))
         client_queue.put_nowait(json.dumps({"type": "tabs", "tabs": await self._tab_list()}, default=str))
         if self._crashed:  # a viewer opening a crashed browser sees the crash state at once
             client_queue.put_nowait(json.dumps({"type": "crashed", "browser_id": self.browser_id}, default=str))
-        elif self._is_running:
-            # Replay the live page so a new client isn't stuck on black. Capture one on
-            # demand if nothing has been cached yet (just flipped to running, no repaint).
-            frame = self._latest_frame if self._latest_frame is not None else await self._capture_one_frame()
-            if frame is not None:
-                client_queue.put_nowait(json.dumps({"type": "frame", "data": frame}, default=str))
         self._cast_queues.append(client_queue)
         return client_queue
 
@@ -2073,7 +2122,7 @@ class LiveBrowser(MutableModel):
         async with self._control_lock:
             await self._abandon_queues_locked("closed")
         await self._stop_active_agent()
-        await self._stop_screencast()
+        await self._detach_active_cdp()
         self._context = None  # bail out any nav re-attach queued during teardown
         if self._observer is not None:
             try:
@@ -2086,6 +2135,18 @@ class LiveBrowser(MutableModel):
                 await bu_session.kill()
             except _BROWSER_ERRORS as e:
                 logger.debug("browser kill ignored ({})", e)
+        # Tear down this browser's private display + audio sink (best-effort, off the
+        # loop since they block). Chromium is already dead, so nothing is capturing.
+        if self._pulse_sink:
+            await asyncio.to_thread(_unload_pulse_sink, self._pulse_sink)
+        xvfb = self._xvfb
+        self._xvfb = None
+        if xvfb is not None and xvfb.poll() is None:
+            xvfb.terminate()
+            try:
+                await asyncio.to_thread(xvfb.wait, 5)
+            except subprocess.TimeoutExpired:
+                xvfb.kill()
 
 
 async def _safe_title(page: Page) -> str:

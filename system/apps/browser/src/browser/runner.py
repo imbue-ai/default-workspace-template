@@ -39,7 +39,9 @@ import json
 import os
 import queue
 import signal
+import socket
 import threading
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import FrameType
@@ -50,6 +52,8 @@ from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
+from browser.audiopipe import AudioPipeError, AudioStreamer
+from browser.audiopipe import is_available as audio_is_available
 from browser.loop_bridge import AsyncLoopBridge, cancel_task
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
@@ -66,10 +70,16 @@ from browser.session import (
     anthropic_key_status,
     deferred_install_ready,
 )
+from browser.videopipe import PixelfluxVideoPipe, VideoPipeError
 from browser.wsgi import make_threaded_server
+from browser.xinput import InputRouter
 
 ROOT_PATH = os.environ.get("ROOT_PATH", "")
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
+_JSMPEG_JS = Path(__file__).parent / "assets" / "jsmpeg.min.js"
+# The cast socket never stays silent longer than this: it heartbeats ("hb") so the
+# viewer's freeze attributor can tell a transport stall from an idle (unchanging) page.
+_HEARTBEAT_SECONDS = 0.25
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 _STARTUP_ERRORS = (BrowserStartupError, PlaywrightError, RuntimeError, OSError, ConnectionError)
@@ -113,6 +123,26 @@ application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
 # clipboard rides HTTP, not the cast socket). Bound it so a giant paste can't OOM.
 application.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 sock = Sock(application)
+
+
+def _strip_websocket_compression() -> None:
+    """Drop the client's permessage-deflate offer before the WS handshake. flask-sock /
+    simple-websocket accept it unconditionally and would then zlib-deflate every
+    already-compressed H.264 stripe -- pure latency + CPU on incompressible data. The
+    handshake reads request.environ inside the route, so a before_request hook is early
+    enough."""
+    request.environ.pop("HTTP_SEC_WEBSOCKET_EXTENSIONS", None)
+
+
+application.before_request(_strip_websocket_compression)
+
+
+def _set_nodelay(ws: Any) -> None:
+    """Interactive stream: never let Nagle hold a stripe or an input tail."""
+    try:
+        ws.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except OSError as error:
+        logger.debug("could not set TCP_NODELAY on cast socket ({})", error)
 
 # Init gate: cleared at import, set when startup restore finishes (always, even on
 # failure -- see _startup). State-changing routes return 503 "initializing" until
@@ -759,40 +789,117 @@ def cmd_clipboard_paste(browser_id: str) -> Response:
     return jsonify(bridge.run(resolved.clipboard_paste(data, mime), timeout=_DIRECT_ACTION_TIMEOUT))
 
 
-# --- screencast WebSocket ----------------------------------------------------
+# --- cast WebSocket (control JSON + pixelflux video/input) + audio -------------
+
+
+def jsmpeg_js(browser_id: str) -> Response:
+    """Serve the vendored jsmpeg player. Same file for every browser; the per-id path
+    just lets the viewer build the URL relative to its own browser id."""
+    return Response(_JSMPEG_JS.read_text(), mimetype="application/javascript")
+
+
+def audio_socket(ws: Any, browser_id: str) -> None:
+    """Per-browser MPEG-TS audio for jsmpeg. An ffmpeg-gated streamer pumps MP2/MPEG-TS
+    bytes here only while this browser's sink is actually playing sound."""
+    session = _resolve_sync_for_ws(browser_id)
+    if session is None:
+        ws.close(1013)  # not up yet / gone -- the viewer retries
+        return
+    if not (audio_is_available() and session.audio_available and session.audio_source):
+        ws.close(1013)  # ffmpeg/pulse not ready, or this browser has no sink
+        return
+
+    def on_data(chunk: bytes) -> None:
+        try:
+            ws.send(chunk)
+        except ConnectionClosed:
+            pass
+
+    streamer = AudioStreamer(session.audio_source, on_data)
+    try:
+        streamer.start()
+    except AudioPipeError as error:
+        logger.warning("audio streamer for {} failed ({})", browser_id, error)
+        ws.close(1011)
+        return
+    closed = threading.Event()
+    try:
+        # jsmpeg never sends upstream; block on receive purely to detect disconnect.
+        while not closed.is_set():
+            ws.receive(timeout=30.0)
+    except ConnectionClosed:
+        closed.set()
+    finally:
+        streamer.stop()
+
+
+def _apply_cast_resize(
+    session: LiveBrowser, pipe: "PixelfluxVideoPipe | None", router: "InputRouter | None", data: str
+) -> None:
+    """Handle an ``r,W,H`` pane-size message: re-target the capture region + resize the
+    Chromium window to fill the pane, then record the size for the agent. Gated on human
+    control so an agent's page never reflows mid-task."""
+    if pipe is None or router is None or not session.human_controls():
+        return
+    try:
+        width_s, height_s = data[2:].split(",")
+        requested_w = max(320, int(width_s))
+        requested_h = max(240, int(height_s))
+    except ValueError:
+        logger.debug("dropped malformed cast resize {!r}", data[:32])
+        return
+    applied_w, applied_h = pipe.set_capture_region(requested_w, requested_h)
+    router.resize_window(applied_w, applied_h)
+    session.set_render_size(applied_w, applied_h)
 
 
 def _cast_inbound_pump(
-    ws: Any, session: LiveBrowser, stop_event: threading.Event
+    ws: Any,
+    session: LiveBrowser,
+    pipe: "PixelfluxVideoPipe | None",
+    router: "InputRouter | None",
+    stop_event: threading.Event,
 ) -> None:
     """Read inbound cast messages on a dedicated thread until the socket closes.
 
-    Inbound (client->loop) and outbound (loop->client) are handled by two threads
-    (this one reads; the handler's main thread drains the outbound queue and sends),
-    so a slow inbound poll never stalls the outbound screencast and vice versa --
-    the head-of-line blocking a single interleaved poll would cause. simple-websocket
-    supports send and receive from different threads. Each inbound JSON message is
-    dispatched to the loop via the bridge; commands are skipped while initializing
-    (a human can't grab a half-restored fleet).
+    Two kinds share the socket: JSON control (take_control / return_to_agents /
+    visibility), routed to the loop via the bridge; and raw Selkies text (``ack,`` /
+    ``r,`` / ``kd/ku/kr/kh/m``) handled locally on this thread -- input is gated on human
+    control and injected via XTEST, never round-tripped to the loop (per-move loop hops
+    would starve the stream). Everything is skipped while the fleet is still initializing.
     """
     try:
         while not stop_event.is_set():
             data = ws.receive(timeout=_CAST_INBOUND_POLL_SECONDS)
-            if data is None:
-                continue  # poll timeout; re-check the stop flag and keep reading
+            if data is None or isinstance(data, bytes):
+                continue  # poll timeout, or an unexpected binary frame
             if not _init_done.is_set():
                 continue  # the view streams read-only until the gate opens
-            try:
-                message = json.loads(data)
-            except (ValueError, TypeError):
+            if data[:1] == "{":  # JSON control
+                try:
+                    message = json.loads(data)
+                except (ValueError, TypeError):
+                    continue
+                kind = message.get("type")
+                if kind == "take_control":
+                    bridge.run(session.take_control(), timeout=_ROUTE_TIMEOUT)
+                elif kind == "return_to_agents":
+                    bridge.run(session.return_to_agents(), timeout=_ROUTE_TIMEOUT)
+                elif kind == "visibility" and pipe is not None:
+                    pipe.set_hidden(not message.get("visible", True))
                 continue
-            kind = message.get("type")
-            if kind == "take_control":
-                bridge.run(session.take_control(), timeout=_ROUTE_TIMEOUT)
-            elif kind == "return_to_agents":
-                bridge.run(session.return_to_agents(), timeout=_ROUTE_TIMEOUT)
-            else:
-                bridge.run(session.handle_cast_message(message), timeout=_ROUTE_TIMEOUT)
+            # Raw pixel-transport text: credit acks, resize, or Selkies input.
+            if pipe is not None and data.startswith("ack,"):
+                try:
+                    frame_id, y_start = data[4:].split(",")
+                    pipe.ack(int(frame_id), int(y_start))
+                except ValueError:
+                    logger.debug("dropped malformed ack {!r}", data[:32])
+            elif data.startswith("r,"):
+                _apply_cast_resize(session, pipe, router, data)
+            elif router is not None and session.human_controls():
+                # kd/ku/kr/kh/m -- inject only while the human owns the browser.
+                router.handle(data)
     except ConnectionClosed:
         pass
     finally:
@@ -800,71 +907,117 @@ def _cast_inbound_pump(
 
 
 def cast_socket(ws: Any, browser_id: str) -> None:
-    """Bridge one cast WebSocket: outbound screencast frames + inbound input/control.
+    """Bridge one cast WebSocket: outbound control JSON + pixelflux video, inbound
+    input/control.
 
-    Runs in its own Flask thread (thread-per-connection). The browser registers an
-    outbound ``queue.Queue`` on the loop; ``LiveBrowser._broadcast`` (on the loop)
-    pushes JSON frames onto it and this handler drains and sends them. A second
-    thread reads inbound messages so neither direction blocks the other.
+    Runs in its own Flask thread (thread-per-connection). ``LiveBrowser._broadcast`` (on
+    the loop) pushes control JSON onto this connection's queue; a per-connection
+    ``PixelfluxVideoPipe`` captures this browser's display and an ``InputRouter`` injects
+    the human's input. A second thread reads inbound so neither direction blocks the
+    other; the single sender thread here keeps control JSON ordered ahead of pixels.
     """
+    _set_nodelay(ws)
     resolved = _resolve_sync_for_ws(browser_id)
     if resolved is None:
-        # Three cases, distinguished by the close code so the viewer can react correctly:
-        # - The name's background launch FAILED (finding [7]). A late/retrying optimistic
-        #   viewer that was in 1013 backoff when it failed never registered a cast queue,
-        #   so it missed the launch_failed broadcast and would otherwise retry forever.
-        #   Close 1008 -- terminal, so the pane stops retrying and shows the failed state.
-        # - The name is syntactically valid but no browser is registered under it YET.
-        #   This is the OPTIMISTIC PANE opened on modal-accept BEFORE the serialized
-        #   launch finished registering the name -- a transient miss, not "gone". Close
-        #   1013 ("Try Again Later"); the viewer retries with backoff and connects once
-        #   the launch registers the name.
-        # - The name is invalid (could never exist). Close 1008 -- terminal, the viewer
-        #   shows "browser closed -- reopen" and stops reconnecting.
+        # Distinguish the close code so the viewer reacts correctly (as before): launch
+        # failed -> 1008 terminal; valid-but-not-registered-yet -> 1013 retryable (the
+        # optimistic pane); invalid name -> 1008 terminal.
         if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
-            ws.close(1008)  # launch failed -> terminal (stop retrying)
+            ws.close(1008)
         elif is_valid_browser_name(browser_id):
-            ws.close(1013)  # not yet created -> retryable
+            ws.close(1013)
         else:
-            ws.close(1008)  # gone / never valid -> terminal
+            ws.close(1008)
         return
     session = resolved
-    # Register + seed the initial control/tabs sync atomically on the loop, so no
-    # live frame can interleave ahead of the state the viewer needs first. The lifecycle
-    # is captured in the same on-loop step so the initializing banner below is consistent
-    # with the seed.
     client_queue, lifecycle = bridge.run(session.register_cast_queue_with_lifecycle(), timeout=_ROUTE_TIMEOUT)
     if not _init_done.is_set() and lifecycle != "running":
-        # The fleet is still restoring AND this browser isn't up yet: tell the viewer, so
-        # it shows a banner and clears it on the first live frame/control once this browser
-        # is up. A viewer joining an already-running browser is NOT told initializing
-        # (finding [3-runner]) -- its seed already carries lifecycle=running and the live
-        # page is streaming, so an initializing banner would be a false "still starting".
-        # put_nowait is safe: the queue is fresh with at most a few seed messages and its
-        # maxsize is far larger (finding [8]).
+        # Fleet still restoring AND this browser isn't up: tell the viewer to show the
+        # banner (cleared on the first control/frame once it's up). A viewer joining an
+        # already-running browser is not told this -- its seed carries lifecycle=running.
         client_queue.put_nowait(json.dumps({"type": "initializing"}))
+    # Per-connection pixel pipe + input router on this browser's private display. If the
+    # display isn't ready (or the pipe won't start), the socket still carries control JSON
+    # so ownership/crash/handoff work -- there just isn't a live picture on this connection.
+    pipe: "PixelfluxVideoPipe | None" = None
+    router: "InputRouter | None" = None
+    display = session.display
+    if display:
+        try:
+            pipe = PixelfluxVideoPipe(browser_id, display)
+            pipe.start()
+            router = InputRouter(display)
+        except (VideoPipeError, OSError, RuntimeError) as error:
+            logger.warning("cast pipe/router for {} failed to start ({})", browser_id, error)
+            if pipe is not None:
+                pipe.stop()
+            pipe = None
+            router = None
     stop_event = threading.Event()
     inbound = threading.Thread(
         target=_cast_inbound_pump,
-        kwargs={"ws": ws, "session": session, "stop_event": stop_event},
+        kwargs={"ws": ws, "session": session, "pipe": pipe, "router": router, "stop_event": stop_event},
         name=f"browser-cast-inbound-{browser_id}",
         daemon=True,
     )
     inbound.start()
+    last_send = time.monotonic()
+    shutdown = False
     try:
-        while not stop_event.is_set():
-            try:
-                message = client_queue.get(timeout=_CAST_OUTBOUND_POLL_SECONDS)
-            except queue.Empty:
+        while not stop_event.is_set() and not shutdown:
+            # 1. Control JSON first (ordered ahead of any new-size stripe), drained fully
+            #    (non-blocking; `shutdown` starts False here and ends the drain on the None
+            #    sentinel or an empty queue).
+            while not shutdown:
+                try:
+                    message = client_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if message is None:
+                    shutdown = True  # shutdown sentinel from _shutdown_cast_queues
+                    break
+                ws.send(message)
+                last_send = time.monotonic()
+            if shutdown:
+                break
+            if pipe is None:
+                # No pixels on this connection: just block on the control queue.
+                try:
+                    message = client_queue.get(timeout=_CAST_OUTBOUND_POLL_SECONDS)
+                except queue.Empty:
+                    continue
+                if message is None:
+                    break
+                ws.send(message)
+                last_send = time.monotonic()
                 continue
-            if message is None:
-                break  # shutdown sentinel
-            ws.send(message)
+            # 2. Pipe control (res,) then cursor, ahead of the stripe they describe.
+            control_message = pipe.take_control_message()
+            if control_message is not None:
+                ws.send(control_message)
+                last_send = time.monotonic()
+            cursor_message = pipe.take_cursor_message()
+            if cursor_message is not None:
+                ws.send(cursor_message)
+                last_send = time.monotonic()
+            # 3. One video stripe (blocks up to the heartbeat, but returns early if new
+            #    control JSON is waiting so it never sits ahead of a pixel frame).
+            packet = pipe.next_packet(timeout=_HEARTBEAT_SECONDS, has_extra=lambda: not client_queue.empty())
+            if packet is not None:
+                ws.send(packet)
+                last_send = time.monotonic()
+            elif time.monotonic() - last_send >= _HEARTBEAT_SECONDS:
+                ws.send("hb")
+                last_send = time.monotonic()
     except ConnectionClosed:
         pass
     finally:
         stop_event.set()
         inbound.join(timeout=5)
+        if pipe is not None:
+            pipe.stop()
+        if router is not None:
+            router.close()
         bridge.run(session.unregister_cast_queue(client_queue), timeout=_ROUTE_TIMEOUT)
 
 
@@ -903,7 +1056,9 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/tab", view_func=cmd_tab, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_copy, methods=["GET"], endpoint="clipboard_copy")
     application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_paste, methods=["POST"], endpoint="clipboard_paste")
+    application.add_url_rule("/browsers/<string:browser_id>/jsmpeg.min.js", view_func=jsmpeg_js, methods=["GET"])
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
+    sock.route("/browsers/<string:browser_id>/audio")(audio_socket)
 
 
 _register_routes()

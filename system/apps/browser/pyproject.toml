@@ -10,7 +10,13 @@ dependencies = [
     "oom-priority",
     "simple-websocket>=1.0",
     "werkzeug>=3.0",
+    "loguru>=0.7",
     "browser-use[core]==0.13.1",
+    # Pixel transport: pixelflux (Selkies' Rust capture/encode core; manylinux
+    # wheels, needs libva at import -- baked via setup_system.sh) streams the
+    # per-browser Xvfb display; python-xlib does XTEST input injection (xinput.py).
+    "pixelflux>=2.0.0",
+    "python-xlib>=0.33",
 ]
 
 # Entry point is "browser-service", not "browser": browser-use ships its own
