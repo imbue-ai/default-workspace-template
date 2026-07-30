@@ -31,6 +31,34 @@ _DISPLAY_BASE = 50
 _DISPLAY_MAX = 79
 _READY_TIMEOUT = 20.0
 _PROFILE_DIR = Path("data/.apps/streamed-browser/profile")
+# Chromium's managed-policy dirs (brand-independent set; verified on this
+# Fortress build by the prior browser-live-view-v2 work, which shipped the
+# same write). CommandLineFlagSecurityWarningsEnabled=false suppresses the
+# yellow "unsupported command-line flag: --no-sandbox" banner we would
+# otherwise stream -- it changes no browser behavior (unlike --test-type,
+# which we avoid for stealth). We must pass --no-sandbox because Chromium's
+# sandbox needs user namespaces we lack running as root in-container.
+_POLICY_DIRS = (
+    Path("/etc/chromium/policies/managed"),
+    Path("/etc/opt/chrome/policies/managed"),
+    Path("/etc/chromium-browser/policies/managed"),
+)
+_FLAG_WARNING_POLICY = '{"CommandLineFlagSecurityWarningsEnabled": false}\n'
+
+
+def _suppress_flag_warning_banner() -> None:
+    """Write the managed policy that hides the --no-sandbox banner.
+
+    Idempotent and cheap (three tiny writes); best-effort, since the dirs are
+    root-owned and a locked-down host may refuse -- the banner is cosmetic, so
+    a write failure must never block the session.
+    """
+    for directory in _POLICY_DIRS:
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "minds-flag-warnings.json").write_text(_FLAG_WARNING_POLICY)
+        except OSError:
+            continue
 _START_URL = os.environ.get("STREAMED_BROWSER_START_URL", "https://duckduckgo.com")
 
 
@@ -115,6 +143,7 @@ class StreamedBrowserSession:
                     raise SessionStartupError("Xvfb did not become ready")
                 threading.Event().wait(0.1)
             _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+            _suppress_flag_warning_banner()
             # --no-sandbox: the service runs as root in the workspace container
             # (same constraint as the browser app and the repo's Playwright
             # guidance for runtimes without unprivileged user namespaces).
