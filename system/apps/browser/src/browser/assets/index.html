@@ -10,31 +10,23 @@
   html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; background: #1e1e1e; color: #ddd; }
   #app { display: flex; flex-direction: column; height: 100vh; min-width: 0; }
 
-  #tabbar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: #252525; border-bottom: 1px solid #333; overflow-x: auto; }
-  .tab { padding: 4px 8px; background: #333; border-radius: 4px 4px 0 0; font-size: 12px; white-space: nowrap; cursor: pointer; max-width: 180px; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 6px; align-items: center; }
-  .tab.active { background: #0e639c; }
-  .tab .close { opacity: .6; }
-  .tab .close:hover { opacity: 1; }
-  #newtab { padding: 4px 9px; background: #333; border: none; color: #ddd; border-radius: 4px; cursor: pointer; }
-  #newtab:disabled { opacity: .5; cursor: not-allowed; }
-
-  #navbar { display: flex; gap: 6px; padding: 6px; background: #252525; border-bottom: 1px solid #333; align-items: center; }
-  .navbtn { padding: 4px 9px; background: #333; border: none; color: #ddd; border-radius: 4px; cursor: pointer; font-size: 15px; line-height: 1; }
-  .navbtn:hover:not(:disabled) { background: #3d3d3d; }
-  .navbtn:disabled { opacity: .4; cursor: not-allowed; }
-  #url { flex: 1; padding: 5px 8px; background: #1e1e1e; border: 1px solid #444; color: #ddd; border-radius: 4px; }
-  #url:disabled { opacity: .5; }
-
   /* A small persistent status bar shown whenever the human can drive the browser
      (resting/AI-untouched OR explicitly taken). Always-on "You have control"
      indicator; the hand-back button appears only when an agent is queued for it. */
   #returnbar { display: none; align-items: center; gap: 10px; padding: 6px 10px; background: #2a2a2a; border-bottom: 1px solid #333; font-size: 12px; color: #4ec9b0; }
   #returnbar.show { display: flex; }
   #returnbar.handoff { background: #5a3a1a; color: #ffcc66; }
+  #returnqueue { flex: 1; min-width: 0; }
   #returnbtn { padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+  #tipsbtn { padding: 5px 12px; background: #333; border: none; color: #ddd; border-radius: 4px; cursor: pointer; }
+  #tipsbtn:hover { background: #3d3d3d; }
 
+  /* The real Chromium chrome (tab strip + address bar) streams inside the pixels,
+     so there is no rebuilt tab/nav bar here -- the canvas IS the browser. It fills
+     the stage and letterboxes via object-fit:contain; the input layer maps pane
+     coordinates back through that letterbox. */
   #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-  #screen { max-width: 100%; max-height: 100%; cursor: default; }
+  #screen { width: 100%; height: 100%; object-fit: contain; cursor: default; }
   #screen:focus { outline: none; }
   #placeholder { position: absolute; color: #777; font-size: 13px; text-align: center; padding: 0 20px; }
 
@@ -60,37 +52,41 @@
 
   /* Full-stage cover shown while the browser is in the `init` lifecycle state:
      registered, but Chromium isn't up yet. It covers the WHOLE pane (above the
-     canvas) so the user never sees a half-built browser; the chrome (tab/nav bars)
-     is hidden too while it shows. Removed deterministically on the init->running
-     control message, not on "a frame arrived". A spinner gives a sense of progress. */
+     canvas) so the user never sees a half-built browser. Removed deterministically
+     on the init->running control message, not on "a frame arrived". A spinner gives
+     a sense of progress. */
   #initoverlay { display: none; position: absolute; inset: 0; z-index: 15; background: #1e1e1e; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 24px; }
   #initoverlay.show { display: flex; }
   #initoverlay .spinner { width: 28px; height: 28px; border: 3px solid #444; border-top-color: #0e639c; border-radius: 50%; animation: spin 0.8s linear infinite; }
   #initoverlay .msg { font-size: 15px; color: #ccc; font-weight: 600; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  /* While init/crashed cover the pane, hide the tab + nav chrome so a half-built
+  /* While init/crashed cover the pane, hide the control-status bar so a half-built
      browser never peeks through. Toggled by the `chrome-hidden` class on #app. */
-  #app.chrome-hidden #tabbar, #app.chrome-hidden #navbar, #app.chrome-hidden #returnbar { display: none; }
+  #app.chrome-hidden #returnbar { display: none; }
 
   /* Non-blocking top-center pill shown while a larger clipboard op is in flight
      (image paste/copy, long text). pointer-events:none so it never traps the user
      -- the paste is already server-owned, so they can navigate away freely. */
   #cliptoast { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 30; background: rgba(14, 99, 156, 0.92); color: #fff; padding: 6px 16px; border-radius: 999px; font-size: 13px; pointer-events: none; opacity: 0; transition: opacity .15s; }
   #cliptoast.show { opacity: 1; }
+
+  /* "View tips" modal: a dismissable card explaining how to drive the browser. */
+  #tipsmodal { display: none; position: absolute; inset: 0; z-index: 40; background: rgba(0, 0, 0, 0.6); align-items: center; justify-content: center; padding: 24px; }
+  #tipsmodal.show { display: flex; }
+  #tipscard { background: #252526; border: 1px solid #3a3a3a; border-radius: 8px; max-width: 560px; width: 100%; max-height: 90%; overflow-y: auto; padding: 20px 24px; font-size: 13px; line-height: 1.55; color: #ddd; }
+  #tipscard h2 { margin: 0 0 12px; font-size: 16px; color: #fff; }
+  #tipscard ul { margin: 0; padding-left: 18px; }
+  #tipscard li { margin: 8px 0; }
+  #tipscard .actions { margin-top: 16px; text-align: right; }
+  #tipsclose { padding: 6px 16px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="tabbar"><button id="newtab" title="New tab">+</button></div>
-  <div id="navbar">
-    <button id="back" class="navbtn" title="Back">&#8592;</button>
-    <button id="forward" class="navbtn" title="Forward">&#8594;</button>
-    <button id="reload" class="navbtn" title="Reload this page">&#8635;</button>
-    <input id="url" placeholder="Enter URL and press Enter" />
-  </div>
   <div id="returnbar">
     <span id="returnqueue">You have control.</span>
     <button id="returnbtn">Return control to agents</button>
+    <button id="tipsbtn">View tips</button>
   </div>
   <div id="stage">
     <canvas id="screen" tabindex="0"></canvas>
@@ -109,6 +105,20 @@
       <div class="spinner"></div>
       <div class="msg">Starting browser…</div>
     </div>
+    <div id="tipsmodal">
+      <div id="tipscard">
+        <h2>Using this browser</h2>
+        <ul>
+          <li><strong>Keyboard shortcuts.</strong> Mac: Cmd + C, V, A, E, F, etc. work; Cmd + T/W/N are unreliable — use Ctrl + T, W instead. Windows/Linux: Ctrl + C, V, A, E, F (and Shift variants) work; Ctrl + W/N unreliable.</li>
+          <li><strong>Scrolling.</strong> Click and drag to scroll works best; the trackpad and mouse wheel also work.</li>
+          <li><strong>Use it like a normal browser.</strong> Click, type, scroll, copy/paste text and images, manage tabs, watch videos with sound — it all works.</li>
+          <li><strong>You share each browser with agents, through a queue.</strong> Only one drives at a time; others wait in line. Click "Return control to agents" to hand it back when you're done.</li>
+          <li><strong>An agent may hand a browser to you</strong> for a captcha or login check. Control comes to you and this bar turns amber; finish the step, then return control.</li>
+          <li><strong>Logins are saved.</strong> Each browser keeps its own cookies and sign-ins across restarts.</li>
+        </ul>
+        <div class="actions"><button id="tipsclose">Got it</button></div>
+      </div>
+    </div>
   </div>
 </div>
 <script>
@@ -118,14 +128,8 @@
   const stage = document.getElementById("stage");
   const cliptoast = document.getElementById("cliptoast");
   const canvas = document.getElementById("screen");
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { desynchronized: true });
   const placeholder = document.getElementById("placeholder");
-  const tabbar = document.getElementById("tabbar");
-  const newtabBtn = document.getElementById("newtab");
-  const backBtn = document.getElementById("back");
-  const forwardBtn = document.getElementById("forward");
-  const reloadBtn = document.getElementById("reload");
-  const urlInput = document.getElementById("url");
   const overlay = document.getElementById("overlay");
   const crashOverlay = document.getElementById("crashoverlay");
   const initOverlay = document.getElementById("initoverlay");
@@ -135,13 +139,15 @@
   const returnBar = document.getElementById("returnbar");
   const returnBtn = document.getElementById("returnbtn");
   const returnQueue = document.getElementById("returnqueue");
+  const tipsBtn = document.getElementById("tipsbtn");
+  const tipsModal = document.getElementById("tipsmodal");
+  const tipsClose = document.getElementById("tipsclose");
 
   // Latest control state from the server's {type:"control"} broadcast. The
   // human can only drive the page while owner === "human".
   let controlOwner = "human";
   let castWs = null;
-  let hasFrame = false;
-  let lastMove = 0;
+  let hasFrame = false;       // true once the first stripe has painted (gates clipboard).
   let browserId = null;
   let reconnectTimer = null;
   let closedForGood = false;  // set on a 1008 close: the browser is gone, stop reconnecting.
@@ -163,6 +169,12 @@
     u.protocol = (u.protocol === "https:") ? "wss:" : "ws:";
     return u.toString();
   }
+
+  // Send a JSON control message (take_control / return_to_agents / visibility).
+  function sendCast(obj) { if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify(obj)); }
+  // Send a raw text control frame (Selkies input / ack / resize). Kept separate from
+  // sendCast so the pixel/input protocol never gets JSON-wrapped.
+  function sendInput(str) { if (castWs && castWs.readyState === 1) castWs.send(str); }
 
   // Idle-countdown + queue line under the "Agent has control" overlay. The server
   // pushes idle_seconds / idle_release_seconds (and the waiting queue) on each
@@ -187,21 +199,17 @@
   // Drive the overlay / return-bar / input lock from the latest control message.
   // owner == "agent":                      grey overlay + "Take control".
   // owner == "human" && human_pinned:      no overlay, persistent "Return to agents" bar.
-  // owner == "human" && !human_pinned:     resting state, fully interactive, no chrome.
+  // owner == "human" && !human_pinned:     resting state, fully interactive.
   function setControl(state) {
     lastControlState = state;
     controlOwner = state.owner;
     const agentDriving = state.owner === "agent";
     const humanPinned = state.owner === "human" && !!state.human_pinned;
-    if (agentDriving) { handoffReason = null; handoffAgent = null; }  // resumed -> clear the ask
-
-    tabbar.style.opacity = agentDriving ? "0.5" : "1";
-    tabbar.style.pointerEvents = agentDriving ? "none" : "auto";
-    urlInput.disabled = agentDriving;
-    newtabBtn.disabled = agentDriving;
-    backBtn.disabled = agentDriving;
-    forwardBtn.disabled = agentDriving;
-    reloadBtn.disabled = agentDriving;
+    if (agentDriving) {
+      handoffReason = null; handoffAgent = null;  // resumed -> clear the ask
+      // Release any locally-held pointer/keys so nothing sticks across the handoff.
+      buttonMask = 0; heldKeysyms.clear(); sendInput("kr");
+    }
 
     if (agentDriving) {
       const who = state.owner_name || state.owner_agent_id || "an agent";
@@ -253,13 +261,9 @@
   }
 
   // Render DETERMINISTICALLY from the explicit lifecycle on each control message.
-  // This is the single source of truth for the init/running overlays:
-  //   init    -> full "Starting browser…" overlay covering the pane; chrome hidden;
-  //              canvas/frames suppressed (don't show a half-built browser).
-  //   running -> overlays down, chrome shown; the live canvas + frames are visible.
+  //   init    -> full "Starting browser…" overlay covering the pane; chrome hidden.
+  //   running -> overlays down, chrome shown; the live canvas is visible.
   //   crashed -> handed off to showCrashed() (the terminal dead state).
-  // Driven off the lifecycle field, NOT off "did a frame arrive", so init->running is
-  // exact: the moment the daemon broadcasts running, the starting overlay comes down.
   function setLifecycle(next) {
     if (!next || next === lifecycle) return;
     lifecycle = next;
@@ -276,8 +280,8 @@
   }
 
   // The browser's Chromium died (OS/OOM kill, crash). Show a clear, terminal dead
-  // state -- distinct from the agent-control overlay and the "reconnecting" state --
-  // and lock the controls. This browser is gone; a new one opens as a separate tab.
+  // state -- distinct from the agent-control overlay and the "reconnecting" state.
+  // This browser is gone; a new one opens as a separate tab.
   function showCrashed() {
     crashed = true;
     lifecycle = "crashed";  // keep the explicit lifecycle consistent with the overlay
@@ -287,103 +291,77 @@
     returnBar.classList.remove("show");
     initOverlay.classList.remove("show");  // a crash from init replaces the starting overlay
     app.classList.remove("chrome-hidden");  // the crashed overlay covers the pane on its own
-    // Full near-opaque cover over the whole pane (see #crashoverlay) -- the dead
-    // state must read at a glance, not as faint text on the black canvas. Hide the
-    // small placeholder so the two don't both show.
     placeholder.style.display = "none";
     crashOverlay.classList.add("show");
-    tabbar.style.opacity = "0.5";
-    tabbar.style.pointerEvents = "none";
-    [urlInput, newtabBtn, backBtn, forwardBtn, reloadBtn].forEach((el) => (el.disabled = true));
   }
 
-  function renderTabs(tabs) {
-    [...tabbar.querySelectorAll(".tab")].forEach((t) => t.remove());
-    tabs.forEach((tab) => {
-      const el = document.createElement("div");
-      el.className = "tab" + (tab.active ? " active" : "");
-      el.title = tab.url;
-      const label = document.createElement("span");
-      label.textContent = tab.title || tab.url || "tab";
-      el.appendChild(label);
-      const close = document.createElement("span");
-      close.className = "close";
-      close.textContent = "x";
-      close.onclick = (e) => { e.stopPropagation(); sendCast({ type: "tab", action: "close", index: tab.index }); };
-      el.appendChild(close);
-      el.onclick = () => { showLoading(); sendCast({ type: "tab", action: "activate", index: tab.index }); };
-      tabbar.insertBefore(el, newtabBtn);
-      // Don't clobber the URL while the user is typing in it.
-      if (tab.active && document.activeElement !== urlInput) urlInput.value = tab.url || "";
+  // --- pixelflux striped H.264 rendering --------------------------------------
+  // Each horizontal stripe row is an independent H.264 stream with its own
+  // VideoDecoder, keyed by the wire header's y-start, composited onto one canvas
+  // at its y-offset (the Selkies vncStripeDecoders design). Binary messages are
+  // pixelflux packets (10-byte header + Annex B); "res," resets the geometry and
+  // "cursor," sets the CSS cursor. We ack each stripe AS IT EXITS ITS DECODER
+  // ("ack,frameId,yStart") -- the server holds at most two unacked stripes per row,
+  // which bounds delivery lag across the tunnel.
+  const HEADER_LEN = 10;
+  const FRAME_TYPE_IDR = 1;
+  const rows = {};            // per-stripe-row decode state, keyed by yStart.
+  let drawnAny = false;
+  // Freeze attributor (console-only diagnostics). The server heartbeats every 250ms:
+  // total socket silence >600ms is a TRANSPORT stall; video newer than the last paint
+  // with >500ms since that paint is a DECODE/SERVER stall. An idle screen is neither.
+  let lastPaint = 0, lastVideo = 0, lastAnything = 0, stallLoggedAt = 0;
+
+  function rowFor(yStart) {
+    let row = rows[yStart];
+    if (row === undefined) row = rows[yStart] = { decoder: null, needKey: true, seq: 0, pendingAcks: [] };
+    return row;
+  }
+  function resetRows() {
+    for (const y in rows) { try { rows[y].decoder && rows[y].decoder.close(); } catch (_) {} }
+    for (const y in rows) delete rows[y];
+  }
+  function makeDecoder(yStart) {
+    const row = rows[yStart];
+    const created = new VideoDecoder({
+      output: (frame) => {
+        // Grow the canvas to cover every row seen (stripe width = display width;
+        // total height = max yStart + stripe height).
+        const needW = frame.displayWidth, needH = yStart + frame.displayHeight;
+        if (canvas.width < needW || canvas.height < needH) {
+          canvas.width = Math.max(canvas.width, needW);
+          canvas.height = Math.max(canvas.height, needH);
+        }
+        ctx.drawImage(frame, 0, yStart);
+        frame.close();
+        lastPaint = performance.now();
+        if (!drawnAny) { drawnAny = true; hasFrame = true; placeholder.style.display = "none"; }
+        const frameId = row.pendingAcks.shift();  // no B-frames: decode order = submit order
+        if (frameId !== undefined) sendInput("ack," + frameId + "," + yStart);
+      },
+      error: (_err) => { row.needKey = true; row.pendingAcks.length = 0; row.decoder = null; },
     });
+    // prefer-software: at stripe resolution software decode is 1-3ms and strictly
+    // 1-in-1-out; hardware decoders may buffer after a keyframe, throttling the
+    // ack-on-output credit loop.
+    created.configure({ codec: "avc1.42C028", optimizeForLatency: true, hardwareAcceleration: "prefer-software" });
+    return created;
   }
 
-  function drawFrame(b64) {
-    const img = new Image();
-    img.onload = () => {
-      if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-      }
-      ctx.drawImage(img, 0, 0);
-      placeholder.style.display = "none";
-      hasFrame = true;
-    };
-    img.src = "data:image/jpeg;base64," + b64;
-  }
-
-  function sendCast(obj) { if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify(obj)); }
-
-  // Report our pane size so the server grows the browser to fill it (it clamps to
-  // [1280x800 .. 1920x1080] and ignores this while an agent drives). Debounced -- a
-  // drag fires a burst and each server resize re-attaches the screencast.
-  let resizeTimer = null;
-  function reportSize() {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      sendCast({ type: "resize", width: Math.round(stage.clientWidth), height: Math.round(stage.clientHeight) });
-    }, 150);
-  }
-  new ResizeObserver(reportSize).observe(stage);
-
-  // --- coordinate scaling: canvas CSS px -> frame device px ---
-  function scaled(e) {
-    const r = canvas.getBoundingClientRect();
-    const sx = canvas.width / r.width;
-    const sy = canvas.height / r.height;
-    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
-  }
-  function modifiers(e) {
-    return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
-  }
-  const BUTTONS = ["left", "middle", "right"];
-
-  function mouse(type, e) {
-    if (controlOwner === "agent" || !hasFrame) return;
-    if (type === "mouseMoved") {
-      const now = performance.now();
-      if (now - lastMove < 30) return;  // throttle moves so they don't starve the frame stream
-      lastMove = now;
+  setInterval(() => {
+    if (!drawnAny || document.hidden) return;
+    const now = performance.now();
+    let line = null;
+    if (now - lastAnything > 600) {
+      line = "transport stall " + ((now - lastAnything) / 1000).toFixed(1) + "s (socket silent)";
+    } else if (lastVideo > lastPaint && now - lastPaint > 500) {
+      line = "decode/server stall " + ((now - lastPaint) / 1000).toFixed(1) + "s (video arriving, not painting)";
     }
-    const p = scaled(e);
-    const button = BUTTONS[e.button] || "left";
-    sendCast({ type: "mouse", event: {
-      type: type, x: p.x, y: p.y,
-      button: (type === "mouseMoved") ? "none" : button,
-      buttons: e.buttons, clickCount: (type === "mousePressed" || type === "mouseReleased") ? 1 : 0,
-      modifiers: modifiers(e),
-    }});
-  }
-  canvas.addEventListener("mousedown", (e) => { canvas.focus(); mouse("mousePressed", e); });
-  canvas.addEventListener("mouseup", (e) => mouse("mouseReleased", e));
-  canvas.addEventListener("mousemove", (e) => mouse("mouseMoved", e));
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  canvas.addEventListener("wheel", (e) => {
-    if (controlOwner === "agent" || !hasFrame) return;
-    e.preventDefault();
-    const p = scaled(e);
-    sendCast({ type: "mouse", event: { type: "mouseWheel", x: p.x, y: p.y, button: "none", deltaX: e.deltaX, deltaY: e.deltaY, modifiers: modifiers(e) } });
-  }, { passive: false });
+    if (line !== null && now - stallLoggedAt > 1000) {
+      stallLoggedAt = now;
+      console.warn("[browser] " + line);
+    }
+  }, 250);
 
   // --- clipboard bridge -------------------------------------------------------
   // The remote browser runs headful with a real OS clipboard; these sync it with
@@ -394,9 +372,7 @@
   function clipUrl() { return new URL("browsers/" + browserId + "/clipboard", document.baseURI).toString(); }
 
   // Non-blocking progress pill for larger clipboard ops. Delayed so instant text
-  // ops don't flicker; returns a done() that clears it. pointer-events:none (CSS)
-  // means it never traps the user -- the paste is server-owned once uploaded, so
-  // they can navigate away and it still lands.
+  // ops don't flicker; returns a done() that clears it.
   function withClipToast(label) {
     const t = setTimeout(() => { cliptoast.textContent = label; cliptoast.classList.add("show"); }, 200);
     return () => { clearTimeout(t); cliptoast.classList.remove("show"); };
@@ -449,92 +425,276 @@
   document.addEventListener("copy", (e) => { if (clipActive()) { e.preventDefault(); copyFromRemote(false); } });
   document.addEventListener("cut", (e) => { if (clipActive()) { e.preventDefault(); copyFromRemote(true); } });
 
-  function key(type, e) {
-    if (controlOwner === "agent" || !hasFrame) return;
-    // Clipboard shortcuts are handled by the copy/paste/cut EVENT listeners above.
-    // Let the browser's DEFAULT fire those events -- so DON'T preventDefault and
-    // DON'T forward, or (a) the paste/copy event never fires and (b) the remote
-    // would paste/cut a second time. Covers Ctrl/Cmd+C/V/X plus the legacy
-    // Ctrl/Shift+Insert and Shift+Delete bindings; every other key passes through.
-    const kl = e.key.toLowerCase();
-    if (((e.ctrlKey || e.metaKey) && !e.altKey && ["c", "v", "x"].includes(kl))
-        || (e.key === "Insert" && (e.ctrlKey || e.shiftKey))
-        || (e.key === "Delete" && e.shiftKey)) {
-      return;
-    }
-    e.preventDefault();
-    const isChar = type === "keyDown" && e.key.length === 1;
-    sendCast({ type: "key", event: {
-      type: type, key: e.key, code: e.code,
-      windowsVirtualKeyCode: e.keyCode, text: isChar ? e.key : undefined,
-      autoRepeat: e.repeat, modifiers: modifiers(e),
-    }});
-  }
-  // Listen on the canvas (focused by a click), so host/browser shortcuts still
-  // work when the browser pane isn't focused, and typing in the URL input is
-  // unaffected.
-  canvas.addEventListener("keydown", (e) => key("keyDown", e));
-  canvas.addEventListener("keyup", (e) => key("keyUp", e));
+  // --- Selkies input capture --------------------------------------------------
+  // Gated on controlOwner !== "agent": while an agent drives we send no input (the
+  // grey overlay also blocks it locally, and the server drops it too). Clipboard
+  // combos (Cmd/Ctrl + C/V/X, Ctrl/Shift+Insert, Shift+Delete) are NOT forwarded --
+  // they fall through to the copy/paste/cut EVENT listeners above; every other key
+  // goes upstream as kd/ku.
+  const NAMED_KEYSYMS = {
+    Backspace: 0xff08, Tab: 0xff09, Enter: 0xff0d, Escape: 0xff1b, Delete: 0xffff,
+    Home: 0xff50, End: 0xff57, PageUp: 0xff55, PageDown: 0xff56,
+    ArrowLeft: 0xff51, ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54,
+    Insert: 0xff63, Menu: 0xff67, Pause: 0xff13, ScrollLock: 0xff14, PrintScreen: 0xff61,
+    CapsLock: 0xffe5, NumLock: 0xff7f,
+    Shift: 0xffe1, Control: 0xffe3, Alt: 0xffe9, AltGraph: 0xfe03, Meta: 0xffe7,
+    F1: 0xffbe, F2: 0xffbf, F3: 0xffc0, F4: 0xffc1, F5: 0xffc2, F6: 0xffc3,
+    F7: 0xffc4, F8: 0xffc5, F9: 0xffc6, F10: 0xffc7, F11: 0xffc8, F12: 0xffc9,
+  };
+  const RIGHT_SIDE_KEYSYMS = { Shift: 0xffe2, Control: 0xffe4, Alt: 0xffea, Meta: 0xffe8 };
 
-  // --- controls ---
-  newtabBtn.onclick = () => { showLoading(); sendCast({ type: "tab", action: "new" }); };  // server opens the home page
-  // Page navigation (only active while the human has control; the server also
-  // gates on that). These drive the live page's own history, not the pane.
-  backBtn.onclick = () => sendCast({ type: "back" });
-  forwardBtn.onclick = () => sendCast({ type: "forward" });
-  reloadBtn.onclick = () => sendCast({ type: "reload" });
-  urlInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      let u = urlInput.value.trim();
-      if (u && !/^https?:\/\//.test(u)) u = "https://" + u;
-      if (u) { showLoading(); sendCast({ type: "navigate", url: u }); }
+  function keysymFor(event) {
+    const key = event.key;
+    if (key.length === 1) {
+      const cp = key.codePointAt(0);
+      return cp <= 0xff ? cp : 0x01000000 | cp;
+    }
+    if (event.location === 2 && key in RIGHT_SIDE_KEYSYMS) return RIGHT_SIDE_KEYSYMS[key];
+    return NAMED_KEYSYMS[key] ?? null;
+  }
+
+  // Cmd/Ctrl+C/V/X (and the legacy Ctrl/Shift+Insert, Shift+Delete): handled by the
+  // clipboard event-bridge, so DON'T forward or preventDefault -- let the default
+  // fire the copy/paste/cut event, or the remote would clipboard a second time.
+  function isClipboardCombo(e) {
+    const kl = e.key.toLowerCase();
+    return ((e.ctrlKey || e.metaKey) && !e.altKey && ["c", "v", "x"].includes(kl))
+      || (e.key === "Insert" && (e.ctrlKey || e.shiftKey))
+      || (e.key === "Delete" && e.shiftKey);
+  }
+
+  function driving() { return controlOwner !== "agent"; }
+
+  let buttonMask = 0;
+  const heldKeysyms = new Set();
+
+  // Map a pane pointer event to remote device pixels, undoing object-fit:contain
+  // letterboxing. Null when the canvas has no size yet or the point is in the bars.
+  function captureCoords(event) {
+    if (!canvas.width || !canvas.height) return null;
+    const rect = canvas.getBoundingClientRect();
+    const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+    const drawnW = canvas.width * scale, drawnH = canvas.height * scale;
+    const offX = rect.left + (rect.width - drawnW) / 2;
+    const offY = rect.top + (rect.height - drawnH) / 2;
+    const x = Math.round((event.clientX - offX) / scale);
+    const y = Math.round((event.clientY - offY) / scale);
+    if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return null;
+    return { x, y };
+  }
+  function sendPointer(event, mask, scrollMagnitude) {
+    const pos = captureCoords(event);
+    if (pos === null) return;
+    sendInput("m," + pos.x + "," + pos.y + "," + mask + "," + (scrollMagnitude || 0));
+  }
+
+  // Coalesce pointer moves to one per animation frame: every raw move would
+  // otherwise cost an XTest inject + Chromium hit-test on the loaded server.
+  let pendingMove = null;
+  canvas.addEventListener("pointermove", (e) => {
+    if (!driving()) return;
+    if (pendingMove === null) {
+      requestAnimationFrame(() => {
+        if (pendingMove !== null && driving()) sendPointer(pendingMove, buttonMask, 0);
+        pendingMove = null;
+      });
+    }
+    pendingMove = e;
+  });
+  canvas.addEventListener("pointerdown", (e) => {
+    if (!driving()) return;
+    canvas.focus();
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    const bit = e.button === 1 ? 2 : e.button === 2 ? 4 : 1;  // left/middle/right -> mask bits 0/1/2
+    buttonMask |= bit;
+    sendPointer(e, buttonMask, 0);
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    if (!driving()) return;
+    const bit = e.button === 1 ? 2 : e.button === 2 ? 4 : 1;
+    buttonMask &= ~bit;
+    sendPointer(e, buttonMask, 0);
+  });
+  canvas.addEventListener("wheel", (e) => {
+    if (!driving()) return;
+    e.preventDefault();
+    const clicks = Math.max(1, Math.min(8, Math.round(Math.abs(e.deltaY) / 100)));
+    const bit = e.deltaY < 0 ? 8 : 16;  // mask bits 3 (up) / 4 (down), edge-triggered
+    sendPointer(e, buttonMask | bit, clicks);
+    sendPointer(e, buttonMask, 0);
+  }, { passive: false });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  canvas.addEventListener("keydown", (e) => {
+    if (!driving()) return;
+    if (isClipboardCombo(e)) return;  // let the copy/paste/cut event-bridge handle it
+    const keysym = keysymFor(e);
+    if (keysym === null) return;
+    e.preventDefault();
+    heldKeysyms.add(keysym);
+    sendInput("kd," + keysym);
+  });
+  canvas.addEventListener("keyup", (e) => {
+    if (!driving()) return;
+    if (isClipboardCombo(e)) return;
+    const keysym = keysymFor(e);
+    if (keysym === null) return;
+    e.preventDefault();
+    heldKeysyms.delete(keysym);
+    sendInput("ku," + keysym);
+  });
+  canvas.addEventListener("blur", () => { buttonMask = 0; heldKeysyms.clear(); sendInput("kr"); });
+  window.addEventListener("pagehide", () => sendInput("kr"));
+  // Held-key heartbeat (Selkies kh): report the full held set so the server can
+  // release anything whose keyup got lost in transit.
+  setInterval(() => sendInput("kh" + [...heldKeysyms].map((k) => "," + k).join("")), 2000);
+
+  // Hidden pane -> tell the server (it drops that pipe's capture rate + stops audio)
+  // and release all keys; visible -> tell it to raise the rate again.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      buttonMask = 0; heldKeysyms.clear(); sendInput("kr");
+      sendCast({ type: "visibility", visible: false });
+    } else {
+      sendCast({ type: "visibility", visible: true });
     }
   });
+
+  // --- audio (jsmpeg: MPEG-TS/MP2 over its own socket) ------------------------
+  // jsmpeg owns demux + decode + WebAudio scheduling + jitter buffer. The server
+  // only sends audio while sound plays, so the socket is simply quiet otherwise.
+  let jsmpegPlayer = null;
+  function connectAudio() {
+    if (jsmpegPlayer || !("JSMpeg" in window) || !browserId) return;
+    jsmpegPlayer = new JSMpeg.Player(wsUrl("browsers/" + browserId + "/audio"), { audio: true, video: false, autoplay: true });
+  }
+  // AudioContext starts suspended until a gesture; the pane is click-driven.
+  window.addEventListener("pointerdown", () => {
+    if (jsmpegPlayer && jsmpegPlayer.audioOut && jsmpegPlayer.audioOut.unlock) jsmpegPlayer.audioOut.unlock();
+  }, true);
+  // jsmpeg is served per-browser (browsers/<id>/jsmpeg.min.js), so it's loaded
+  // dynamically once we know the id -- then connectAudio() (idempotent, also called
+  // on the cast socket's open) can build the audio player.
+  function loadJsmpeg() {
+    if (document.getElementById("jsmpeg-lib") || !browserId) return;
+    const s = document.createElement("script");
+    s.id = "jsmpeg-lib";
+    s.src = new URL("browsers/" + browserId + "/jsmpeg.min.js", document.baseURI).toString();
+    s.onload = connectAudio;
+    document.head.appendChild(s);
+  }
+
+  // --- resize: make the remote browser fill the pane, on settle ---------------
+  // The pane IS the monitor: send its exact pixel size (even-aligned for H.264),
+  // debounced so one resize fires per gesture. The server resizes the window +
+  // capture region and echoes the realized size via "res,", which resets our canvas
+  // and decoders. During the drag, object-fit:contain scales the last frame.
+  let resizeTimer = null;
+  let lastSentSize = "";
+  function sendPaneSize() {
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.max(320, Math.round(rect.width) & ~1);
+    const h = Math.max(240, Math.round(rect.height) & ~1);
+    const key = w + "," + h;
+    if (key === lastSentSize) return;
+    lastSentSize = key;
+    sendInput("r," + key);
+  }
+  new ResizeObserver(() => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(sendPaneSize, 150);
+  }).observe(stage);
+
+  // --- controls ---
   // Take control: optimistically hide the overlay so a laggy round-trip can't
   // invite a double-click; the authoritative {type:"control"} broadcast reconciles.
   takeControlBtn.onclick = () => {
     takeControlBtn.disabled = true;
     overlay.classList.remove("show");
+    canvas.focus();
     sendCast({ type: "take_control" });
   };
   returnBtn.onclick = () => { returnBar.classList.remove("show"); sendCast({ type: "return_to_agents" }); };
+  tipsBtn.onclick = () => tipsModal.classList.add("show");
+  tipsClose.onclick = () => tipsModal.classList.remove("show");
+  tipsModal.addEventListener("click", (e) => { if (e.target === tipsModal) tipsModal.classList.remove("show"); });
 
   // --- connect ---
   function connect(id) {
     browserId = id;
+    loadJsmpeg();
+    resetRows();
+    drawnAny = false; hasFrame = false;
     castWs = new WebSocket(wsUrl("browsers/" + id + "/cast"));
-    castWs.onopen = () => reportSize();  // send our pane size once the socket is live
+    castWs.binaryType = "arraybuffer";
+    castWs.onopen = () => { lastSentSize = ""; sendPaneSize(); connectAudio(); };
     castWs.onmessage = (ev) => {
-      let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
-      if (m.type === "crashed") showCrashed();
-      else if (crashed) return;  // once crashed, ignore any late frames/control/tabs
-      else if (m.type === "launch_failed") {
-        // The serialized launch failed and the daemon removed the browser -- this name
-        // is gone for good. Treat it like the terminal 1008 "closed" state: stop
-        // retrying and tell the user to reopen.
-        closedForGood = true;
-        initOverlay.classList.remove("show");
-        showLoading("Browser failed to start — open a new one from the + menu.");
+      lastAnything = performance.now();
+      if (typeof ev.data === "string") {
+        const s = ev.data;
+        if (s.startsWith("res,")) {
+          // Realized capture size. Stripe y-offsets move when the height changes, so
+          // every per-row decoder is stale: close them all and hard-set the canvas to
+          // the new size (the forced keyframe repaints immediately).
+          const p = s.split(",");
+          resetRows();
+          canvas.width = parseInt(p[1], 10);
+          canvas.height = parseInt(p[2], 10);
+          return;
+        }
+        if (s.startsWith("cursor,")) {
+          const p = s.split(",");
+          canvas.style.cursor = "url(data:image/png;base64," + p[3] + ") " + p[1] + " " + p[2] + ", default";
+          return;
+        }
+        if (s === "hb") return;  // heartbeat -- keeps the stream alive; already counted above
+        // Otherwise it's a fleet JSON control message.
+        let m; try { m = JSON.parse(s); } catch (_) { return; }
+        if (m.type === "crashed") showCrashed();
+        else if (crashed) return;  // once crashed, ignore any late control messages
+        else if (m.type === "launch_failed") {
+          // The serialized launch failed and the daemon removed the browser -- this name
+          // is gone for good. Treat it like the terminal 1008 "closed" state.
+          closedForGood = true;
+          initOverlay.classList.remove("show");
+          showLoading("Browser failed to start — open a new one from the + menu.");
+        }
+        else if (m.type === "initializing") {
+          // GLOBAL "fleet still restoring" signal -- NOT this browser's own lifecycle.
+          // Only show the starting overlay when this browser hasn't reached running yet.
+          if (lifecycle !== "running") setLifecycle("init");
+        }
+        else if (m.type === "control") { setLifecycle(m.lifecycle); setControl(m); }  // explicit lifecycle drives the overlays
+        else if (m.type === "handoff_request") {
+          // An agent handed us the browser for a CAPTCHA/verification it can't do. Latch
+          // the ask and re-render the bar (the preceding control message left us pinned).
+          handoffReason = m.reason || "human verification needed";
+          handoffAgent = m.agent_name || "An agent";
+          setControl(lastControlState);
+        }
+        // m.type === "tabs" -> ignored (the real tab strip streams in the pixels).
+        // m.type === "ping" -> ignored; it only keeps the proxy stream alive.
+        return;
       }
-      else if (m.type === "initializing") {
-        // GLOBAL "fleet still restoring" signal -- NOT this browser's own lifecycle.
-        // The per-browser {type:"control"} lifecycle is authoritative: once THIS
-        // browser has reached running, never downgrade it back to init (that would
-        // re-show the full "Starting browser…" overlay over a live page until reload).
-        // Only show the starting overlay when this browser hasn't reached running yet.
-        if (lifecycle !== "running") setLifecycle("init");
-      }
-      else if (m.type === "control") { setLifecycle(m.lifecycle); setControl(m); }  // explicit lifecycle drives the overlays
-      else if (m.type === "frame") { if (lifecycle === "running") drawFrame(m.data); }  // only paint once running
-      else if (m.type === "handoff_request") {
-        // An agent handed us the browser for a CAPTCHA/verification it can't do. Latch
-        // the ask and re-render the bar (the preceding control message left us pinned).
-        handoffReason = m.reason || "human verification needed";
-        handoffAgent = m.agent_name || "An agent";
-        setControl(lastControlState);
-      }
-      else if (m.type === "tabs") { if (lifecycle === "running") renderTabs(m.tabs); }  // tabs only meaningful once running
-      // m.type === "ping" -> ignore; it only keeps the proxy stream alive.
+      // Binary => a pixelflux video stripe.
+      if (crashed) return;
+      const packet = new Uint8Array(ev.data);
+      if (packet.byteLength <= HEADER_LEN || packet[0] !== 0x04) return;
+      lastVideo = performance.now();
+      const view = new DataView(ev.data);
+      const isKey = view.getUint8(1) === FRAME_TYPE_IDR;
+      const frameId = view.getUint16(2);  // big-endian
+      const yStart = view.getUint16(4);
+      const row = rowFor(yStart);
+      if (row.needKey && !isKey) return;
+      row.needKey = false;
+      if (row.decoder === null) row.decoder = makeDecoder(yStart);
+      row.pendingAcks.push(frameId);
+      row.decoder.decode(new EncodedVideoChunk({
+        type: isKey ? "key" : "delta",
+        timestamp: row.seq++ * 16667,
+        data: packet.subarray(HEADER_LEN),
+      }));
     };
     castWs.onclose = (ev) => {
       hasFrame = false;
@@ -549,10 +709,7 @@
         return;
       }
       // 1013 ("Try Again Later"): the name is valid but the browser hasn't registered
-      // YET -- the narrow pre-registration window before create()'s loop insert is
-      // visible. With register-init-immediately this is now rare/brief. Keep the full
-      // "Starting browser…" overlay up and retry with backoff; we connect (and get the
-      // init/running lifecycle) once the name registers. NOT terminal.
+      // YET. Keep the full "Starting browser…" overlay up and retry with backoff.
       if (ev.code === 1013) {
         setLifecycle("init");
         initOverlay.classList.add("show");
@@ -560,9 +717,8 @@
         scheduleReconnect();
         return;
       }
-      // An unexpected drop (daemon bounce, network blip) while we WERE running: keep the
-      // page as-is under a "Reconnecting…" note and retry. During init, keep the
-      // starting overlay rather than flashing a reconnect banner.
+      // An unexpected drop while we WERE running: keep the page as-is under a
+      // "Reconnecting…" note and retry. During init, keep the starting overlay.
       if (lifecycle === "init") {
         initOverlay.classList.add("show");
         app.classList.add("chrome-hidden");
@@ -586,15 +742,15 @@
   function boot() {
     // Which browser to show comes from the URL (?session=<name>). Browsers are
     // addressed by NAME (e.g. "alex-smith"), not a number, and there is no default
-    // browser -- the pane is always opened for a specific name. Pass the raw name
-    // straight through to connect(); the server 404s an unknown name (the viewer then
-    // shows the closed / retrying banner).
+    // browser -- the pane is always opened for a specific name.
     const params = new URLSearchParams(location.search);
     const name = params.get("session");
     if (!name) { showLoading("Open a browser from the + menu."); return; }
-    // Show the full "Starting browser…" overlay up front (lifecycle starts "init"):
-    // the optimistic pane opens before the browser is registered/running, so the user
-    // sees the starting state until the first control message resolves the lifecycle.
+    if (!("VideoDecoder" in window)) {
+      showLoading("This browser can't play the video stream (WebCodecs is unavailable).");
+      return;
+    }
+    // Show the full "Starting browser…" overlay up front (lifecycle starts "init").
     initOverlay.classList.add("show");
     app.classList.add("chrome-hidden");
     connect(name);

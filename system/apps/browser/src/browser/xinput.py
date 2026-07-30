@@ -35,7 +35,6 @@ from loguru import logger
 from Xlib.display import Display
 from Xlib.ext import xtest
 
-
 _SCROLL_MAX_CLICKS = 64
 
 

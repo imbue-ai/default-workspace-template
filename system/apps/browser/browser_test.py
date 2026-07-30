@@ -94,15 +94,6 @@ def test_deferred_install_ready_gates_on_fortress_executable(
 # --- ownership state machine (no browser needed) -----------------------------
 
 
-class _FakeCDP:
-    def __init__(self) -> None:
-        self.sends: list[tuple[str, Any]] = []
-
-    async def send(self, method: str, params: Any = None) -> dict[str, Any]:
-        self.sends.append((method, params))
-        return {}
-
-
 def test_acquire_release_is_compare_and_set() -> None:
     browser = _running_browser(browser_id="b1")
 
@@ -123,26 +114,24 @@ def test_acquire_release_is_compare_and_set() -> None:
 
 
 def test_input_gating_follows_controller() -> None:
+    # Human input now injects via XTEST on the cast thread, gated on human_controls()
+    # (see runner.cast_socket / _cast_inbound_pump), which tracks the ownership state
+    # machine. This asserts that gate flips with the controller, alongside the
+    # _input_enabled event the loop-side paths (clipboard/resize) also check.
     browser = _running_browser(browser_id="b1")
-    cdp = _FakeCDP()
-    browser._active_cdp = cdp  # type: ignore[assignment]
 
     async def go() -> None:
-        # Human (resting): a mouse event is dispatched to the browser.
-        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved"}})
-        assert any(m == "Input.dispatchMouseEvent" for m, _ in cdp.sends)
-        cdp.sends.clear()
-        # Agent in control: human input is dropped (the input/control TOCTOU guard).
+        # Human (resting): the human owns it -> the cast socket injects input.
+        assert browser.human_controls() is True
+        assert browser._input_enabled.is_set()
+        # Agent in control: human_controls() flips false, so XTEST injection is gated off.
         await browser.acquire("A")
+        assert browser.human_controls() is False
         assert not browser._input_enabled.is_set()
-        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved"}})
-        await browser.handle_cast_message({"type": "tab", "action": "new"})
-        assert cdp.sends == []
         # Released back to the human: input flows again.
         await browser.release("A")
+        assert browser.human_controls() is True
         assert browser._input_enabled.is_set()
-        await browser.handle_cast_message({"type": "mouse", "event": {"type": "mouseMoved"}})
-        assert any(m == "Input.dispatchMouseEvent" for m, _ in cdp.sends)
 
     asyncio.run(go())
 
@@ -1292,32 +1281,12 @@ def test_register_cast_queue_seeds_initial_control_and_tabs() -> None:
     asyncio.run(go())
 
 
-def test_register_cast_queue_replays_last_frame_to_a_new_client() -> None:
-    # A client connecting mid-stream to a live browser sitting on a static page gets
-    # no fresh screencast frame (CDP only emits on a repaint), so register seeds the
-    # cached last frame after control + tabs -- otherwise the canvas stays black and
-    # the viewer's "Starting browser…" banner never clears.
-    browser = _running_browser(browser_id="b1")
-    browser._context = None
-    browser._latest_frame = "cached-jpeg-b64"
-
-    async def go() -> None:
-        q = await browser.register_cast_queue()
-        assert _pop_json(q)["type"] == "control"
-        assert _pop_json(q)["type"] == "tabs"
-        frame = _pop_json(q)
-        assert frame == {"type": "frame", "data": "cached-jpeg-b64"}
-        assert q.empty()
-
-    asyncio.run(go())
-
-
 def test_register_cast_queue_replays_no_frame_when_crashed() -> None:
-    # A crashed browser seeds the crash state, never a stale frame -- the dead browser
-    # must show as crashed, not as a frozen last frame.
+    # Pixels come from the per-connection pixelflux pipe (which forces a keyframe on
+    # connect), so register_cast_queue never seeds a frame. A crashed browser still seeds
+    # the crash state after control + tabs so the viewer shows the dead state.
     browser = bsession.LiveBrowser(browser_id="b1")
     browser._context = None
-    browser._latest_frame = "cached-jpeg-b64"
     browser._crashed = True
 
     async def go() -> None:
@@ -1325,47 +1294,7 @@ def test_register_cast_queue_replays_no_frame_when_crashed() -> None:
         assert _pop_json(q)["type"] == "control"
         assert _pop_json(q)["type"] == "tabs"
         assert _pop_json(q)["type"] == "crashed"
-        assert q.empty()  # crashed -> the cached frame is NOT replayed
-
-    asyncio.run(go())
-
-
-class _ScreenshotCDP:
-    """Fake CDP session whose ``Page.captureScreenshot`` returns a base64 frame, so the
-    on-demand one-off frame capture can be exercised without real Chromium."""
-
-    def __init__(self, data: str = "captured-jpeg-b64") -> None:
-        self.data = data
-        self.sends: list[str] = []
-
-    async def send(self, method: str, params: Any = None) -> dict[str, Any]:
-        self.sends.append(method)
-        if method == "Page.captureScreenshot":
-            return {"data": self.data}
-        return {}
-
-
-def test_register_cast_queue_captures_a_one_off_frame_when_running_without_a_cached_one() -> None:
-    # A browser that just flipped init -> running and hasn't repainted has _latest_frame
-    # is None, so there's no cached frame to replay -- a fresh viewer would sit black
-    # (finding [6]). register_cast_queue forces a one-off Page.captureScreenshot so even
-    # the very first viewer of a static page sees the live page, and caches it for the next.
-    browser = _running_browser(browser_id="b1")
-    browser._context = None
-    assert browser._latest_frame is None
-    cdp = _ScreenshotCDP()
-    browser._active_cdp = cdp  # type: ignore[assignment]
-
-    async def go() -> None:
-        q = await browser.register_cast_queue()
-        assert _pop_json(q)["type"] == "control"
-        assert _pop_json(q)["type"] == "tabs"
-        frame = _pop_json(q)
-        assert frame == {"type": "frame", "data": "captured-jpeg-b64"}  # the on-demand capture
-        assert q.empty()
-        assert "Page.captureScreenshot" in cdp.sends
-        # Cached for the next client (which then takes the cheap replay path, no capture).
-        assert browser._latest_frame == "captured-jpeg-b64"
+        assert q.empty()  # no frame is ever seeded; the pipe forces a keyframe on connect
 
     asyncio.run(go())
 

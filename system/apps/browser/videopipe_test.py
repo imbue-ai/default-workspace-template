@@ -2,7 +2,7 @@
 
 import pytest
 
-from streamed_browser.videopipe import (
+from browser.videopipe import (
     FRAME_TYPE_IDR,
     WIRE_HEADER_LEN,
     CreditWindow,

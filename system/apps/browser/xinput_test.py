@@ -1,6 +1,6 @@
 """Unit tests for the display-free parts of the input router."""
 
-from streamed_browser.xinput import diff_button_mask
+from browser.xinput import diff_button_mask
 
 
 def test_button_transitions_are_diffed() -> None:
