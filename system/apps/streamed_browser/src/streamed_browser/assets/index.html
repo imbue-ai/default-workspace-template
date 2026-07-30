@@ -241,13 +241,40 @@ function echoScroll(deltaPx) {
   else context.fillRect(0, 0, canvas.width, -deltaPx);
 }
 
+// Trackpads fire dozens of tiny pixel-delta wheel events per second (plus
+// momentum), where a mouse wheel fires a few ~100-delta notches. Emitting a
+// remote scroll per EVENT turned a trackpad flick into ~50 scroll commands
+// and as much echo. Accumulate deltas into a residual instead, flush at most
+// once per animation frame, and emit one remote click per ~100px accumulated
+// -- a mouse notch still maps to exactly one click, and momentum drains
+// smoothly. The residual is clamped so a big flick cannot bank a backlog
+// that keeps scrolling long after fingers lift.
+const WHEEL_PX_PER_CLICK = 100;
+let wheelResidual = 0;
+let wheelEvent = null;
+let wheelScheduled = false;
+
+function flushWheel() {
+  wheelScheduled = false;
+  const clicks = Math.min(8, Math.floor(Math.abs(wheelResidual) / WHEEL_PX_PER_CLICK));
+  if (clicks === 0 || wheelEvent === null) return;
+  const direction = Math.sign(wheelResidual);
+  wheelResidual -= direction * clicks * WHEEL_PX_PER_CLICK;
+  const bit = direction < 0 ? 8 : 16;  // mask bits 3 (up) / 4 (down), edge-triggered
+  echoScroll(direction * clicks * WHEEL_PX_PER_CLICK);
+  sendPointer(wheelEvent, buttonMask | bit, clicks);
+  sendPointer(wheelEvent, buttonMask, 0);
+}
+
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
-  const clicks = Math.max(1, Math.min(8, Math.round(Math.abs(e.deltaY) / 100)));
-  const bit = e.deltaY < 0 ? 8 : 16;  // mask bits 3 (up) / 4 (down), edge-triggered
-  echoScroll(Math.sign(e.deltaY) * clicks * 100);  // ~100px per wheel click in Chromium
-  sendPointer(e, buttonMask | bit, clicks);
-  sendPointer(e, buttonMask, 0);
+  const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.height : 1;
+  wheelResidual = Math.max(-800, Math.min(800, wheelResidual + e.deltaY * scale));
+  wheelEvent = e;
+  if (!wheelScheduled) {
+    wheelScheduled = true;
+    requestAnimationFrame(flushWheel);
+  }
 }, { passive: false });
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
