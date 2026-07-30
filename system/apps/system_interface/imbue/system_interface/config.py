@@ -32,8 +32,23 @@ class Config(BaseSettings):
     # FOLLOW so it reads the running observer's event stream instead of fighting
     # it for the lock (which would leave its agent view frozen from boot).
     system_interface_agent_events_mode: AgentEventsMode = AgentEventsMode.OBSERVE
+    # Service names that resolve back to *this* instance, so proxying them would
+    # nest this instance inside itself. The service dispatcher serves a short
+    # explanation for these instead of forwarding. The live-editing preview sets
+    # it to its own two service names: the user's seeded layout legitimately
+    # contains the preview tab (it stays open across the whole editing loop), and
+    # rendering that tab would proxy back to the wrapper framing it -- infinitely
+    # nested iframes, each loading a full system interface. Empty by default: the
+    # workspace's own system interface is not reachable as a `/service/` name at
+    # all, so it has nothing to exclude.
+    system_interface_self_referential_services: list[str] | None = None
 
-    @field_validator("system_interface_javascript_plugins", "system_interface_static_paths", mode="before")
+    @field_validator(
+        "system_interface_javascript_plugins",
+        "system_interface_static_paths",
+        "system_interface_self_referential_services",
+        mode="before",
+    )
     @classmethod
     def split_comma_separated(cls, value: object) -> list[str] | None:
         if isinstance(value, str):
@@ -41,6 +56,11 @@ class Config(BaseSettings):
         if isinstance(value, list):
             return [str(item) for item in value]
         return None
+
+    @cached_property
+    def self_referential_service_names(self) -> frozenset[str]:
+        """The self-referential service names, as a set for per-request lookup."""
+        return frozenset(self.system_interface_self_referential_services or ())
 
     @cached_property
     def javascript_plugin_basenames(self) -> list[str]:

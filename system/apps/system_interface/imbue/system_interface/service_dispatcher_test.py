@@ -308,6 +308,114 @@ def test_websocket_unknown_service_closes_with_4004(workspace_served: ServedApp)
         close_ws(ws)
 
 
+# --- self-referential services -----------------------------------------------
+#
+# A service that resolves back to the instance serving the request. Only the
+# live-editing preview configures any (its own two names): the layout it boots
+# from is a verbatim copy of the user's, which normally carries the preview tab,
+# and forwarding that tab would proxy back into the wrapper framing the preview --
+# an unbounded chain of iframes, each loading a whole system interface. The stub
+# stands in for that loop here: it is a *registered, reachable* service, so a test
+# that gets the explanation instead of the stub's body proves the refusal beat the
+# proxy rather than merely failing to resolve.
+
+
+@pytest.fixture
+def workspace_app_with_self_referential_web(stub_backend: ServedApp, monkeypatch: pytest.MonkeyPatch) -> Flask:
+    """A workspace app where the reachable 'web' service is marked self-referential."""
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-test")
+
+    broadcaster = WebSocketBroadcaster()
+    agent_manager = AgentManager.build(broadcaster)
+    agent_manager._apps = [AppEntry(name="web", url=stub_backend.http_url)]
+
+    return create_application(
+        build_test_state(
+            config=Config(system_interface_self_referential_services=["web"]),
+            agent_manager=agent_manager,
+        )
+    )
+
+
+def test_self_referential_service_explains_itself_instead_of_proxying(
+    workspace_app_with_self_referential_web: Flask,
+) -> None:
+    """The tab gets the explanation, not the backend it would otherwise nest."""
+    client = workspace_app_with_self_referential_web.test_client()
+    # Present the SW cookie so the bootstrap page cannot be what we observe: this
+    # request would otherwise be forwarded straight to the stub.
+    client.set_cookie("sw_installed_web", "1")
+
+    response = client.get("/service/web/", headers={"sec-fetch-mode": "navigate"})
+
+    assert response.status_code == 200
+    assert "nest the preview" in response.text
+    # The stub's own body never appears, so nothing was forwarded.
+    assert "<title>stub</title>" not in response.text
+
+
+def test_self_referential_service_short_circuits_the_service_worker_bootstrap(
+    workspace_app_with_self_referential_web: Flask,
+) -> None:
+    """No SW registration for a prefix that will only ever serve the explanation.
+
+    A first navigation (no cookie) normally gets the bootstrap page that registers
+    the scoped service worker. For a self-referential service that dance is pure
+    overhead, and a registered SW would outlive this instance in the browser.
+    """
+    client = workspace_app_with_self_referential_web.test_client()
+
+    response = client.get("/service/web/", headers={"sec-fetch-mode": "navigate"})
+
+    assert "serviceWorker.register" not in response.text
+    assert "nest the preview" in response.text
+
+
+def test_self_referential_service_refuses_a_subresource_request_too(
+    workspace_app_with_self_referential_web: Flask,
+) -> None:
+    """Not just navigations: every path under the prefix stops here."""
+    client = workspace_app_with_self_referential_web.test_client()
+    client.set_cookie("sw_installed_web", "1")
+
+    response = client.get("/service/web/json")
+
+    assert response.status_code == 200
+    assert '{"ok": true}' not in response.text
+
+
+def test_non_self_referential_service_still_proxies(workspace_client: FlaskClient) -> None:
+    """The refusal is scoped to the configured names; the default list is empty.
+
+    Guards the workspace's own system interface, which configures none: every
+    service must keep forwarding exactly as before.
+    """
+    workspace_client.set_cookie("sw_installed_web", "1")
+    response = workspace_client.get("/service/web/json")
+    assert response.status_code == 200
+    assert '{"ok": true}' in response.text
+
+
+@pytest.mark.timeout(15)
+def test_self_referential_service_websocket_is_refused(
+    workspace_app_with_self_referential_web: Flask,
+) -> None:
+    """A stale service worker or cached page must not reconnect the loop.
+
+    The HTTP refusal means nothing this instance serves opens such a socket, but a
+    client left over from a previous boot can still try, and bridging it would
+    re-establish exactly what the HTTP path refuses.
+    """
+    with serve_app(workspace_app_with_self_referential_web) as served:
+        ws = open_ws(served, "/service/web/ws-echo")
+        try:
+            with pytest.raises(simple_websocket.ConnectionClosed) as excinfo:
+                ws.receive(timeout=_WS_RECEIVE_TIMEOUT)
+            assert excinfo.value.reason == 4004
+        finally:
+            close_ws(ws)
+
+
 @pytest.mark.timeout(15)
 def test_connect_backend_websocket_falls_back_across_addresses(stub_backend: ServedApp) -> None:
     """The backend WS connect iterates resolved addresses instead of only trying the first.

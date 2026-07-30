@@ -14,6 +14,9 @@ Responsibilities:
 - WebSocket requests forward bidirectionally with subprotocol passthrough.
 - Requests for unknown or not-yet-registered services show the
   auto-retrying loading page (HTML accept) or return 502 (otherwise).
+- Requests for a *self-referential* service -- one that resolves back to this
+  same instance, so forwarding would nest it inside itself -- serve a short
+  explanation instead of proxying. Only the live-editing preview configures any.
 
 Everything here is synchronous: HTTP forwarding uses a sync ``httpx.Client``
 and the WebSocket bridge runs one thread per direction (each WS connection
@@ -41,6 +44,7 @@ from imbue.system_interface.app_context import get_state
 from imbue.system_interface.primitives import ServiceName
 from imbue.system_interface.proxy import generate_backend_loading_html
 from imbue.system_interface.proxy import generate_bootstrap_html
+from imbue.system_interface.proxy import generate_self_referential_service_html
 from imbue.system_interface.proxy import generate_service_worker_js
 from imbue.system_interface.proxy import rewrite_cookie_path
 from imbue.system_interface.proxy import rewrite_proxied_html
@@ -62,6 +66,17 @@ class BackendWebSocketUrlError(ValueError):
 
 def _sw_cookie_name(service_name: str) -> str:
     return f"sw_installed_{service_name}"
+
+
+def _is_self_referential(service_name: str) -> bool:
+    """Whether this service resolves back to the instance handling the request.
+
+    Configured via ``system_interface_self_referential_services``; empty for the
+    workspace's own system interface, which is not reachable as a ``/service/``
+    name. The live-editing preview names its own two services here so the preview
+    tab in the user's seeded layout cannot proxy back into the wrapper framing it.
+    """
+    return service_name in get_state().config.self_referential_service_names
 
 
 def _make_loading_html(current_service: ServiceName) -> str:
@@ -233,6 +248,15 @@ def _handle_service_http(service_name: str, path: str) -> Response:
     parsed_service = ServiceName(service_name)
     agent_manager = get_state().agent_manager
 
+    # Short-circuit before the service-worker/bootstrap dance: a self-referential
+    # service must never reach the proxy, and there is no point registering a SW
+    # for a prefix that will only ever serve this page.
+    if _is_self_referential(service_name):
+        return Response(
+            generate_self_referential_service_html(parsed_service),
+            mimetype="text/html",
+        )
+
     if path == "__sw.js":
         return _handle_service_sw_js(service_name)
 
@@ -368,6 +392,14 @@ def _handle_service_websocket(
 ) -> None:
     """Proxy a WebSocket connection under ``/service/<name>/<path>`` to the backend service."""
     agent_manager = get_state().agent_manager
+
+    # The HTTP path already refuses these, so nothing this instance serves opens
+    # such a socket -- but a stale service worker or a cached page from a previous
+    # boot can still try, and bridging it would reconnect the loop the HTTP
+    # refusal exists to break.
+    if _is_self_referential(service_name):
+        client_websocket.close(4004, f"Self-referential service: {service_name}")
+        return
 
     backend_url = agent_manager.get_service_url(service_name)
     if backend_url is None:

@@ -692,7 +692,7 @@ def test_preview_seeds_the_primary_agents_layout_not_the_callers(
     assert (seed_dir / "layouts" / "desktop.json").read_text() == '{"panels":["chat"]}'
 
 
-def _preview_panel_layout(service_name: str) -> str:
+def _service_panel_layout(service_name: str) -> str:
     """A persisted layout whose single panel is an iframe on ``service_name``."""
     return json.dumps(
         {
@@ -705,99 +705,53 @@ def _preview_panel_layout(service_name: str) -> str:
 
 @pytest.mark.parametrize(
     "service_name",
-    [reveal_mod.PREVIEW_SERVICE_NAME, reveal_mod.PREVIEW_INNER_SERVICE_NAME],
+    [reveal_mod.PREVIEW_SERVICE_NAME, reveal_mod.PREVIEW_INNER_SERVICE_NAME, "browser"],
 )
-def test_preview_does_not_seed_a_layout_that_opens_the_preview_itself(
+def test_preview_seeds_every_layout_verbatim_including_its_own_tab(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, service_name: str
 ) -> None:
-    # Seeding a layout that already has a preview panel would make the preview
-    # render itself: the inner app resolves that service against the same live
-    # registry, so the panel proxies back to the wrapper framing it. The layout's
-    # *content* must be dropped -- while the registry that names the slug is still
-    # copied, so the layout opens empty instead of vanishing from the picker.
+    # A layout that opens the preview tab is the normal case, not the exception:
+    # that tab stays open for the whole editing pass, so any re-``preview`` copies
+    # a layout containing it. Dropping such a layout took the user's real tabs with
+    # it -- the nesting is refused by the previewed instance instead (the
+    # self-referential-services env below), so the copy stays faithful.
     repo_root = tmp_path / "repo"
     work_dir = _make_work_dir(repo_root)
     layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host")
-    (layout_dir / "layouts" / "with-preview.json").write_text(
-        _preview_panel_layout(service_name)
-    )
+    content = _service_panel_layout(service_name)
+    (layout_dir / "layouts" / "with-service.json").write_text(content)
+    (layout_dir / "layout.json").write_text(content)
+    runner = _RecordingRunner()
 
-    code = reveal_mod.preview(
-        _SLUG, str(work_dir), repo_root, runner=_RecordingRunner()
-    )
+    code = reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=runner)
 
     assert code == 0
     seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
-    assert not (seed_dir / "layouts" / "with-preview.json").exists()
-    # The unrelated layout and the slug registry still come through.
+    assert (seed_dir / "layouts" / "with-service.json").read_text() == content
+    assert (seed_dir / "layout.json").read_text() == content
     assert (seed_dir / "layouts" / "desktop.json").exists()
     assert (seed_dir / "layouts_meta.json").exists()
 
 
-def test_preview_drops_a_legacy_layout_that_opens_the_preview_itself(
+def test_preview_declares_its_own_services_self_referential(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The same guard covers the legacy single-file layout, not just the per-slug
-    # directory -- a workspace that never migrated would otherwise nest itself.
+    # This is what stops the faithfully-copied preview tab from rendering the
+    # preview inside itself, so it must reach the booted instance -- naming BOTH
+    # the wrapper service and the inner app service.
     repo_root = tmp_path / "repo"
     work_dir = _make_work_dir(repo_root)
-    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host")
-    (layout_dir / "layout.json").write_text(
-        _preview_panel_layout(reveal_mod.PREVIEW_SERVICE_NAME)
+    _seed_live_layout(monkeypatch, tmp_path / "host")
+    runner = _RecordingRunner()
+
+    assert reveal_mod.preview(_SLUG, str(work_dir), repo_root, runner=runner) == 0
+
+    argv = runner.argvs_starting(*_SERVE_UP)[0]
+    expected = (
+        f"{reveal_mod.PREVIEW_SELF_REFERENTIAL_SERVICES_ENV}="
+        f"{reveal_mod.PREVIEW_SERVICE_NAME},{reveal_mod.PREVIEW_INNER_SERVICE_NAME}"
     )
-
-    code = reveal_mod.preview(
-        _SLUG, str(work_dir), repo_root, runner=_RecordingRunner()
-    )
-
-    assert code == 0
-    seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
-    assert not (seed_dir / "layout.json").exists()
-
-
-def test_preview_skips_a_corrupt_layout_and_says_why(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # A live layout file the server itself could not render is left out of the
-    # seed -- but the operator must be told *that*, not that the nesting guard
-    # fired, or they go looking for a preview panel that isn't there.
-    repo_root = tmp_path / "repo"
-    work_dir = _make_work_dir(repo_root)
-    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host")
-    (layout_dir / "layouts" / "truncated.json").write_text('{"panelParams":')
-
-    code = reveal_mod.preview(
-        _SLUG, str(work_dir), repo_root, runner=_RecordingRunner()
-    )
-
-    assert code == 0
-    seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
-    assert not (seed_dir / "layouts" / "truncated.json").exists()
-    message = capsys.readouterr().err
-    assert "truncated.json" in message
-    assert "not valid JSON" in message
-    assert "preview panel" not in message
-
-
-def test_preview_seeds_layouts_that_open_other_services(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The guard is scoped to the preview's own services: an ordinary service panel
-    # is exactly what the user wants to see reproduced in the preview.
-    repo_root = tmp_path / "repo"
-    work_dir = _make_work_dir(repo_root)
-    layout_dir = _seed_live_layout(monkeypatch, tmp_path / "host")
-    (layout_dir / "layouts" / "with-browser.json").write_text(
-        _preview_panel_layout("browser")
-    )
-
-    code = reveal_mod.preview(
-        _SLUG, str(work_dir), repo_root, runner=_RecordingRunner()
-    )
-
-    assert code == 0
-    seed_dir = reveal_mod._preview_layout_seed_dir(repo_root, _SLUG)
-    assert (seed_dir / "layouts" / "with-browser.json").exists()
+    assert expected in argv
 
 
 def test_preview_reseeds_from_scratch_on_rerun(
