@@ -6,8 +6,10 @@ from streamed_browser.videopipe import (
     FRAME_TYPE_IDR,
     WIRE_HEADER_LEN,
     CreditWindow,
+    PixelfluxVideoPipe,
     VideoPipeError,
     parse_wire_header,
+    target_capture_fps,
 )
 
 
@@ -79,8 +81,6 @@ def test_dropped_delta_requires_keyframe_to_resume() -> None:
 def test_sticky_idr_survives_later_deltas_in_the_mailbox() -> None:
     # A delta overwriting an unsent IDR re-broke the row's chain and looped
     # into >=0.4s recovery cycles (probe-verified dominant freeze mechanism).
-    from streamed_browser.videopipe import PixelfluxVideoPipe
-
     pipe = PixelfluxVideoPipe("test", ":0")
     idr = _packet(1, FRAME_TYPE_IDR)
     delta = _packet(2, 0x00)
@@ -101,8 +101,6 @@ def test_ack_of_unknown_frame_is_harmless() -> None:
 
 
 def test_capture_rate_steps_to_delivered_on_drops_and_climbs_gently() -> None:
-    from streamed_browser.videopipe import target_capture_fps
-
     # Drops with a measured delivered rate: converge to delivered * 1.2 in one step.
     assert target_capture_fps(60.0, dropped_in_interval=5, delivered_fps=10.0) == 12.0
     # Drops with nothing delivered: multiplicative fallback.

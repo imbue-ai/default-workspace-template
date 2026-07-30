@@ -1,0 +1,1 @@
+The service websocket proxy no longer negotiates permessage-deflate on /service/ paths (proxied services carry compressed binary streams -- video, terminal -- where deflate is pure re-compression waste) and sets TCP_NODELAY on both sides of every proxied websocket so interactive messages are never held back by Nagle's algorithm.

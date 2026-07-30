@@ -1,0 +1,1 @@
+The streamed-browser service runs as a supervised program at slightly elevated CPU priority so agent build/test bursts cannot starve the live pixel path, and the base image now bakes the small runtime libraries (libva, x11-utils) its encoder loads at import, so the service works from first boot.
