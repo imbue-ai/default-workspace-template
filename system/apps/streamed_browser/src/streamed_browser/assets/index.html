@@ -76,6 +76,29 @@ function connect() {
   const rows = {};
   let drawnAny = false;
 
+  // Freeze attributor: on any >500ms gap between painted frames while data
+  // was expected, classify the stall -- the socket went silent (a transport
+  // stall: TCP loss/RTO somewhere in the tunnel) vs. messages kept arriving
+  // but nothing painted (decode-chain recovery or a starved server). Shown
+  // briefly in the status pill and kept in the console for later reading.
+  let lastPaint = 0, lastMessage = 0;
+  setInterval(() => {
+    if (!drawnAny || document.hidden) return;
+    const now = performance.now();
+    const paintGap = now - lastPaint;
+    if (paintGap < 500) return;
+    // No inbound data at all means idle (no damage) -- only flag when
+    // messages flowed without paints, or flowed and then went silent mid-use.
+    const messageGap = now - lastMessage;
+    if (messageGap > paintGap) return;  // genuinely idle screen
+    const cause = messageGap > 400 ? "network stall" : "decode/server stall";
+    const line = `freeze ${(paintGap / 1000).toFixed(1)}s (${cause})`;
+    console.warn("[streamed-browser] " + line);
+    status.textContent = line;
+    status.classList.remove("hidden");
+    setTimeout(() => { if (status.textContent === line) status.classList.add("hidden"); }, 2000);
+  }, 250);
+
   function rowFor(yStart) {
     let row = rows[yStart];
     if (row === undefined) row = rows[yStart] = { decoder: null, needKey: true, seq: 0, pendingAcks: [] };
@@ -96,6 +119,7 @@ function connect() {
         }
         context.drawImage(frame, 0, yStart);
         frame.close();
+        lastPaint = performance.now();
         if (!drawnAny) { drawnAny = true; status.classList.add("hidden"); }
         const frameId = row.pendingAcks.shift();  // no B-frames: decode order = submit order
         if (frameId !== undefined && socket.readyState === WebSocket.OPEN) {
@@ -116,6 +140,7 @@ function connect() {
 
   socket.onopen = () => { retryDelay = 500; status.textContent = "starting browser…"; };
   socket.onmessage = (event) => {
+    lastMessage = performance.now();
     if (typeof event.data === "string") {
       if (event.data.startsWith("cursor,")) {
         const [, hotX, hotY, png] = event.data.split(",");
