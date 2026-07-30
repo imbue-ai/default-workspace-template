@@ -4,11 +4,12 @@ transcript at the end -- so a
 launched run completes on its own and everything is retrievable from R2 without the launching
 machine staying on.
 
-Eval mode is gated on system/scripts/test_case_metadata.json; absent -> immediate no-op (normal workspaces).
+Eval mode is gated on system/services/eval_worker/test_case_metadata.json; absent -> immediate
+no-op (normal workspaces).
 
 Each entry in config["prompts"] is one turn's user message. A literal string is sent verbatim; the
 sentinel DECIDE_FROM_PERSONA makes the worker role-play the client (transcript-so-far + persona ->
-Anthropic API, via eval_decider).
+Anthropic API, via the decider module).
 
 Turn logic (N = len(prompts)):
   turn 1        -> send prompts[0]  (always a literal -- the opening ask)
@@ -24,11 +25,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import eval_decider
-import eval_wait_watcher as watcher
+from eval_worker import decider
+from eval_worker import wait_watcher as watcher
 
-CONFIG_PATH = Path("system/scripts/test_case_metadata.json")
-DONE_MARKER = Path("runtime/eval_done")
+CONFIG_PATH = Path("system/services/eval_worker/test_case_metadata.json")
+DONE_MARKER = Path("data/.state/eval/done")
 DECIDE_SENTINEL = "DECIDE_FROM_PERSONA"
 
 
@@ -44,7 +45,7 @@ def _load_config() -> dict | None:
 def _resolve_message(prompt: str, agent_id: str, config: dict) -> str:
     """A literal prompt is sent as-is; DECIDE_FROM_PERSONA is role-played from the transcript so far."""
     if prompt == DECIDE_SENTINEL:
-        return eval_decider.decide_next_message(
+        return decider.decide_next_message(
             agent_id, config.get("persona", ""), config.get("anthropic_api_key", "")
         )
     return prompt
@@ -71,7 +72,7 @@ def main() -> None:
     config = _load_config()
     if config is None:
         print(
-            "[eval] no system/scripts/test_case_metadata.json -- not eval mode, exiting",
+            "[eval] no system/services/eval_worker/test_case_metadata.json -- not eval mode, exiting",
             flush=True,
         )
         return
@@ -79,9 +80,9 @@ def main() -> None:
         print("[eval] already finished (marker present) -- exiting", flush=True)
         return
 
-    from eval_sink import EvalSink
+    from eval_worker.sink import EvalSink
 
-    # Creds come from test_case_metadata.json (see eval_sink); we drive restic ourselves. backup_provider is
+    # Creds come from test_case_metadata.json (see the sink module); we drive restic ourselves. backup_provider is
     # configure_later, so host-backup is already idle -- nothing to stop.
     sink = EvalSink(config)
 

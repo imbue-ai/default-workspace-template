@@ -1,0 +1,1 @@
+Combined integration PR (carries mngr/break-apart-scripts): the five OOM entry points move out of `system/scripts/` into this package's `bin/`, and all wiring (supervisord, earlyoom hook, claude launch command, SessionStart hook) points at the new paths. See `mngr-break-apart-scripts.md` in this directory for details.

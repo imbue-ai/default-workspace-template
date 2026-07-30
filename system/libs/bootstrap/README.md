@@ -18,13 +18,10 @@ service.
    (`core.hooksPath` is deliberately NOT set here: the post-commit auto-push
    hook only becomes active when the opt-in github-sync skill wires it up --
    see `system/libs/github_sync/README.md`.)
-2. **CLAUDE_CONFIG_DIR host-env write** - records the services agent's per-agent
-   Claude config dir in `$MNGR_HOST_DIR/env` so every other agent on the host
-   inherits it.
-3. **Initial chat agent** - on first boot only (gated by
+2. **Initial chat agent** - on first boot only (gated by
    `data/.state/initial_chat_created`), commits the rsynced workspace onto a clean
    `main` branch and creates the welcome chat agent (`--message /welcome`).
-4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
+3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
 

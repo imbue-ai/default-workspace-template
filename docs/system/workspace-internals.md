@@ -22,15 +22,19 @@ Users make "creations". There are conventions for the common kinds:
 - a **skill**: teaches the mind how to do work the user cares about (including
   scripts and CLI tools, which ship inside the skill that knows how to use
   them). A skill that is automatically run on a schedule is called an
-  "automation". Lives under `.agents/skills/<name>/`.
+  "automation" -- the machinery that runs automations lives in
+  `system/libs/automations/`, and the weekly Caretaker
+  (`system/services/caretaker/`) is the built-in example. Lives under
+  `.agents/skills/<name>/`.
 - **data**: documents, images, notes, or data created by apps and skills.
   Lives under `data/`.
 - **customizations**: changes to any of the above -- everything in the
   workspace can be modified.
 
-A **service** is a background supervisord program with no tab. Standalone
-services live in `system/services/`; a service that exists solely to support
-one app lives in that app's folder and is named `<app>-<role>`.
+A **service** is a background program with no tab -- usually supervised by
+supervisord, sometimes cron-driven (the Caretaker). Standalone services live
+in `system/services/`; a service that exists solely to support one app lives
+in that app's folder and is named `<app>-<role>`.
 
 ## Structure
 
@@ -48,9 +52,11 @@ one app lives in that app's folder and is named `<app>-<role>`.
   `browser/`, and every user-built app; registered in the uv workspace via the
   `system/apps/*` member glob
 - `system/services/` - Standalone background services (`app_watcher/`,
-  `cloudflare_tunnel/`, `host_backup/`, `env_converge/`, `oom_priority/`)
+  `caretaker/`, `cloudflare_tunnel/`, `eval_worker/`, `host_backup/`,
+  `env_converge/`, `oom_priority/`)
 - `system/libs/` - Support libraries, including `bootstrap/` (first-boot
-  setup, then launches supervisord to supervise the apps and services)
+  setup, then launches supervisord to supervise the apps and services) and
+  `automations/` (the machinery that runs skills on a schedule)
 - `data/` - Gitignored workspace data: documents and project folders, uploads,
   memories, tickets, secrets, machine state, and per-app data (see
   `data/README.md`)

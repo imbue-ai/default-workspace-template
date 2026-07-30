@@ -11,7 +11,7 @@ has two failure modes that drive every choice below: **it only fires when the
 machine is up at that moment** (a job whose time passes while the container
 is off or asleep is skipped, never made up), and **it does not care whether
 the job finished** (a run that dies mid-flight is simply gone). When a job
-must not be missed, run it through `system/scripts/run_job.sh`: an every-minute cron
+must not be missed, run it through `system/libs/automations/run_job.sh`: an every-minute cron
 line ticks it, and it runs the job on its cadence when the machine is up --
 catching up the first minute the machine is back after downtime, and
 **retrying a run that failed or was killed before completing**. The built-in
@@ -72,7 +72,7 @@ from the env files mngr maintains on the host dir and runs the command from
 the repo root:
 
 ```
-/home/user/workspace/system/scripts/with_agent_env.sh <command...>
+/home/user/workspace/system/libs/automations/with_agent_env.sh <command...>
 ```
 
 Also redirect output to a log file (cron would otherwise try to mail it):
@@ -101,7 +101,7 @@ Write the entry (durable copy, then install live, per the section above) with
 a line that ticks every minute through the wrapper and the runner:
 
 ```
-* * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/scripts/run_job.sh <job-id> --every <N[mhd]> [--at <hour>] [--retry-after <N[mhd]>] <command...> >> /var/log/supervisor/<job>.log 2>&1
+* * * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh <job-id> --every <N[mhd]> [--at <hour>] [--retry-after <N[mhd]>] <command...> >> /var/log/supervisor/<job>.log 2>&1
 ```
 
 - `--every` -- the cadence: `15m`, `3h`, `1d`, `7d`, ...
@@ -138,7 +138,7 @@ Write the entry (same two-copy dance) with a standard 5-field schedule, then
 the **user** (always `root` here), then the command:
 
 ```
-30 9 * * 1   root   /home/user/workspace/system/scripts/with_agent_env.sh bash scripts/weekly_report.sh >> /var/log/supervisor/weekly-report.log 2>&1
+30 9 * * 1   root   /home/user/workspace/system/libs/automations/with_agent_env.sh bash scripts/weekly_report.sh >> /var/log/supervisor/weekly-report.log 2>&1
 ```
 
 The 5 schedule fields are minute (0-59), hour (0-23), day of month (1-31),
@@ -147,11 +147,12 @@ daily; `0 0 1 * *` = midnight on the 1st. One quirk: `%` is special in cron
 commands (means newline) -- escape it as `\%` (e.g. `date +\%F`). Cron
 rescans `/etc/cron.d/` within a minute; no reload.
 
-## Set up a schedule agent (run a skill on a schedule)
+## Set up an automation (run a skill on a schedule)
 
-A **schedule agent** is a scheduled job that, instead of running a plain
-script, wakes a dedicated agent to run one skill in its own chat tab. To add
-one -- say a news digest:
+An **automation** is a skill run automatically on a schedule (the workspace
+vocabulary term): a scheduled job that, instead of running a plain script,
+wakes a dedicated agent to run one skill in its own chat tab. The machinery
+lives in `system/libs/automations/`. To add one -- say a news digest:
 
 1. **Write the skill** at `.agents/skills/<name>/SKILL.md` -- the instructions
    the agent follows on each run (see the existing skills for the shape).
@@ -159,28 +160,28 @@ one -- say a news digest:
    at 9 AM, or every 15 minutes -- same pattern, different `--every`:
 
    ```
-   * * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/scripts/run_job.sh news --every 1d --at 9 bash /home/user/workspace/system/scripts/run_schedule_agent.sh news >> /var/log/supervisor/news-job.log 2>&1
-   * * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/scripts/run_job.sh news --every 15m bash /home/user/workspace/system/scripts/run_schedule_agent.sh news >> /var/log/supervisor/news-job.log 2>&1
+   * * * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh news --every 1d --at 9 bash /home/user/workspace/system/libs/automations/run_automation.sh news >> /var/log/supervisor/news-job.log 2>&1
+   * * * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh news --every 15m bash /home/user/workspace/system/libs/automations/run_automation.sh news >> /var/log/supervisor/news-job.log 2>&1
    ```
 
-That is all -- no new agent template is required. `system/scripts/run_schedule_agent.sh
-<skill>` creates a persistent singleton agent (labelled `schedule_agent=<skill>`),
+That is all -- no new agent template is required. `system/libs/automations/run_automation.sh
+<skill>` creates a persistent singleton agent (labelled `automation=<skill>`),
 keeps it alive across runs, and on each run clears its chat and re-sends
 `/<skill>`, so the skill runs fresh; the agent surfaces its own chat tab
 right after its first message via `system/scripts/layout.py open --layout <desktop|mobile>`
 (the same way web apps are surfaced). Pass `--template <t>` only when you want a custom agent
-template; otherwise the generic `schedule_agent` template is used.
+template; otherwise the generic `automation` template is used.
 
 ## How the Caretaker is wired (the built-in example)
 
-The Caretaker is the schedule-agent pattern above, **off by default**: no
+The Caretaker is the automation pattern above, **off by default**: no
 cron entry exists until the user enables it, and even when on, the agent only
 wakes when a deterministic check found something. Enabling (the
 enable-caretaker skill) writes the single line in
 `data/.state/cron.d/minds-caretaker` (installed live to `/etc/cron.d/`):
 
 ```
-* * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/scripts/run_job.sh caretaker --every 7d --at 3 bash /home/user/workspace/system/scripts/caretaker_check.sh >> /var/log/supervisor/caretaker-job.log 2>&1
+* * * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh caretaker --every 7d --at 3 bash /home/user/workspace/system/services/caretaker/caretaker_check.sh >> /var/log/supervisor/caretaker-job.log 2>&1
 ```
 
 - **Timing** is the standard runner: `--every 7d --at 3`, catch-up after
@@ -190,7 +191,7 @@ enable-caretaker skill) writes the single line in
   error output in `/var/log/supervisor/` since the last check, disk at or
   above 85 percent, and new OOM-guard shedding. Findings are written to
   `data/.state/caretaker/findings.md` and the Caretaker agent is woken via
-  `run_schedule_agent.sh caretaker --template caretaker`; with no findings,
+  `run_automation.sh caretaker --template caretaker`; with no findings,
   nothing runs until the next weekly check. The one exception: if the agent
   has never introduced itself (no `data/.state/caretaker/permissions.md`), it is
   woken once regardless of findings.
@@ -229,9 +230,9 @@ The complete map of the scheduling machinery, for edits and debugging:
   ordinary schedule lines (cron rescans the directory within a minute).
 - `/etc/cron.d/minds-caretaker` -- the Caretaker's drop-in (only exists
   while the Caretaker is enabled; see enable-caretaker/disable-caretaker).
-- `/home/user/workspace/system/scripts/run_job.sh` -- the runner (cadence, catch-up,
+- `/home/user/workspace/system/libs/automations/run_job.sh` -- the runner (cadence, catch-up,
   completion tracking, and retry -- with unit tests in
-  `system/scripts/run_job_test.py`).
+  `system/libs/automations/run_job_test.py`).
 - `/home/user/workspace/data/.state/jobs/<job-id>/` -- each runner job's state
   (`last_attempt`, `last_success`, `failures`, `lock`).
 - `supervisord.conf` -- `[program:cron]` is the cron daemon (check it with
@@ -239,7 +240,7 @@ The complete map of the scheduling machinery, for edits and debugging:
 - `/var/log/supervisor/<job>.log` -- each job's own output (per the redirect
   on its entry); `/var/log/supervisor/cron-*.log` -- the cron daemon's logs.
 - `/home/user/.mngr/env` and `/home/user/.mngr/agents/<id>/env` -- the host and per-agent env
-  files mngr maintains; `system/scripts/with_agent_env.sh` sources them (host first,
+  files mngr maintains; `system/libs/automations/with_agent_env.sh` sources them (host first,
   then the services agent's) to rebuild the job environment.
 - `/etc/localtime` + `/etc/timezone` -- the container clock, set from the
   user's timezone at each boot by the bootstrap (see the timezone section

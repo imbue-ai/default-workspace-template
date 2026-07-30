@@ -1,0 +1,1 @@
+Combined integration PR (carries mngr/break-apart-scripts): new package -- the eval worker moves out of `system/scripts/` into `system/services/eval_worker/` with an `eval-worker` console script; the harness-slotted config moves to `system/services/eval_worker/test_case_metadata.json`. See `mngr-break-apart-scripts.md` in this directory for details.
