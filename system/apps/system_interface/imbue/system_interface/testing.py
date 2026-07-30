@@ -14,7 +14,6 @@ without ever starting the agent manager.
 
 from __future__ import annotations
 
-import json
 import socket
 import threading
 import time
@@ -255,27 +254,6 @@ def serve_app(app: Flask) -> Iterator[ServedApp]:
 def open_ws(served: ServedApp, path: str, subprotocols: list[str] | None = None) -> simple_websocket.Client:
     """Open a WebSocket client against a ``ServedApp`` at ``path``."""
     return simple_websocket.Client(f"{served.ws_url}{path}", subprotocols=subprotocols)
-
-
-# Message types every connection is greeted with, before anything a test does.
-# Kept here rather than as a count at each call site: the burst has grown before
-# (``view_epoch``), and a test that drains a fixed number silently starts reading
-# a greeting where it meant to read the event it triggered.
-CONNECT_SNAPSHOT_MESSAGE_TYPES = frozenset({"agents_updated", "apps_updated", "view_epoch"})
-
-
-def drain_connect_snapshot(ws: simple_websocket.Client, timeout: float) -> None:
-    """Read the greeting every connection starts with, so the next receive is the test's.
-
-    Also the synchronization barrier these tests need: the greeting is only sent
-    once the connection has registered with the broadcaster, so a test that has
-    drained it can trigger a broadcast and know this socket is among its
-    recipients. Skipping it makes the broadcast race the registration.
-    """
-    remaining = set(CONNECT_SNAPSHOT_MESSAGE_TYPES)
-    while remaining:
-        message = json.loads(ws.receive(timeout=timeout))
-        remaining.discard(message.get("type"))
 
 
 def close_ws(ws: simple_websocket.Client) -> None:

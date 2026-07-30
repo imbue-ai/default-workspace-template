@@ -1,37 +1,14 @@
 /**
  * Reloading the whole system interface into the code currently on disk.
  *
- * Every reveal of a changed interface bumps an *epoch*
- * (`system/scripts/refresh_workspace_view.py` writes `data/.state/view_epoch`)
- * and then broadcasts a `reload_system_interface` layout op. Two ways in, for
- * one reason: the broadcast is a live fan-out with no replay, so it only
- * reaches browsers connected at that instant, and a services restart leaves
- * every browser on reconnect backoff for a while after the server is back.
- *
- * - Connected now: the dockview shell handles the op by calling
- *   `reloadInterface()`.
- * - Reconnecting later: the server sends its epoch on WebSocket connect, and a
- *   page whose loaded epoch is older reloads itself (see `shouldReloadForEpoch`).
- *
- * Either way the reload is of the top-level page, so the browser picks up the
- * new hashed assets (and any change to the shell chrome itself), transitively
- * reloading every child chat iframe.
+ * Every reveal of a changed interface ends by broadcasting a
+ * `reload_system_interface` layout op, through
+ * `system/scripts/refresh_workspace_view.py` -- for a backend-only change too,
+ * not just a rebuilt bundle. The dockview shell handles that op by calling
+ * `reloadInterface()`, which reloads the top-level page so the browser picks up
+ * the new hashed assets (and any change to the shell chrome itself),
+ * transitively reloading every child chat iframe.
  */
-
-/** Whether a page loaded at `loadedEpoch` should reload now that the server
- * reports `serverEpoch`.
- *
- * An empty `serverEpoch` means nothing has ever been revealed in this
- * workspace, which is not a reason to reload. An empty `loadedEpoch` means this
- * page predates the epoch being served at all -- reloading is precisely the fix,
- * and once reloaded the document carries the current epoch, so this cannot
- * loop. */
-export function shouldReloadForEpoch(serverEpoch: string, loadedEpoch: string): boolean {
-  if (serverEpoch === "") {
-    return false;
-  }
-  return serverEpoch !== loadedEpoch;
-}
 
 /** Reload the top-level page that hosts the system interface.
  *

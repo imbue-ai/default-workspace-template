@@ -45,17 +45,3 @@ export function getPrimaryAgentId(): string {
   cachedPrimaryAgentId = metaElement?.getAttribute("content") ?? "";
   return cachedPrimaryAgentId;
 }
-
-let cachedViewEpoch: string | null = null;
-
-/** The interface epoch this document was served with (see `reload.ts`). Cached
- * deliberately: it must keep reporting what *this* page loaded with, even after
- * the server has moved on. */
-export function getLoadedViewEpoch(): string {
-  if (cachedViewEpoch !== null) {
-    return cachedViewEpoch;
-  }
-  const metaElement = document.querySelector('meta[name="system-interface-view-epoch"]');
-  cachedViewEpoch = metaElement?.getAttribute("content") ?? "";
-  return cachedViewEpoch;
-}
