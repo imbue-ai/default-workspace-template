@@ -76,27 +76,27 @@ function connect() {
   const rows = {};
   let drawnAny = false;
 
-  // Freeze attributor: on any >500ms gap between painted frames while data
-  // was expected, classify the stall -- the socket went silent (a transport
-  // stall: TCP loss/RTO somewhere in the tunnel) vs. messages kept arriving
-  // but nothing painted (decode-chain recovery or a starved server). Shown
-  // briefly in the status pill and kept in the console for later reading.
-  let lastPaint = 0, lastMessage = 0;
+  // Freeze attributor (console-only diagnostics, no UI). The server sends a
+  // heartbeat every 250ms while connected, so: total socket silence >600ms is
+  // a TRANSPORT stall; video packets newer than the last paint with >500ms
+  // since that paint is a DECODE/SERVER stall. An idle screen (heartbeats
+  // flowing, no video because nothing changed) is neither and stays quiet --
+  // heartbeats must never count as "a paint is expected".
+  let lastPaint = 0, lastVideo = 0, lastAnything = 0;
+  let stallLoggedAt = 0;
   setInterval(() => {
     if (!drawnAny || document.hidden) return;
     const now = performance.now();
-    const paintGap = now - lastPaint;
-    if (paintGap < 500) return;
-    // No inbound data at all means idle (no damage) -- only flag when
-    // messages flowed without paints, or flowed and then went silent mid-use.
-    const messageGap = now - lastMessage;
-    if (messageGap > paintGap) return;  // genuinely idle screen
-    const cause = messageGap > 400 ? "network stall" : "decode/server stall";
-    const line = `freeze ${(paintGap / 1000).toFixed(1)}s (${cause})`;
-    console.warn("[streamed-browser] " + line);
-    status.textContent = line;
-    status.classList.remove("hidden");
-    setTimeout(() => { if (status.textContent === line) status.classList.add("hidden"); }, 2000);
+    let line = null;
+    if (now - lastAnything > 600) {
+      line = `transport stall ${((now - lastAnything) / 1000).toFixed(1)}s (socket silent)`;
+    } else if (lastVideo > lastPaint && now - lastPaint > 500) {
+      line = `decode/server stall ${((now - lastPaint) / 1000).toFixed(1)}s (video arriving, not painting)`;
+    }
+    if (line !== null && now - stallLoggedAt > 1000) {
+      stallLoggedAt = now;
+      console.warn("[streamed-browser] " + line);
+    }
   }, 250);
 
   function rowFor(yStart) {
@@ -144,7 +144,7 @@ function connect() {
 
   socket.onopen = () => { retryDelay = 500; status.textContent = "starting browser…"; };
   socket.onmessage = (event) => {
-    lastMessage = performance.now();
+    lastAnything = performance.now();
     if (typeof event.data === "string") {
       if (event.data.startsWith("cursor,")) {
         const [, hotX, hotY, png] = event.data.split(",");
@@ -154,6 +154,7 @@ function connect() {
     }
     const packet = new Uint8Array(event.data);
     if (packet.byteLength <= HEADER_LEN || packet[0] !== 0x04) return;
+    lastVideo = performance.now();
     const view = new DataView(event.data);
     const isKey = view.getUint8(1) === FRAME_TYPE_IDR;
     const frameId = view.getUint16(2);   // big-endian
