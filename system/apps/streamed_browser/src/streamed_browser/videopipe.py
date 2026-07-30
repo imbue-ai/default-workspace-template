@@ -101,28 +101,23 @@ class VideoPipeError(RuntimeError):
 # Closed-loop capture rate (the Salsify idea: the encoder should not outrun the
 # transport). The credit window caps DELIVERY at the path's real rate, but the
 # encoder ticks open-loop -- measured on a live workspace it encoded 60/s while
-# ~10/s were deliverable, burning a full core on frames the mailbox discarded.
-# The controller retunes pixelflux's live capture rate to track the measured
-# ack rate, with headroom so a recovering path can speed back up.
+# ~10/s were deliverable, burning a full core on stripes the mailbox then
+# discarded. The controller is AIMD on the WASTE signal: mailbox drops mean
+# the encoder outran delivery (multiplicative decrease), a drop-free interval
+# means it kept up (additive increase toward the ceiling). Keying on drops --
+# not on a measured delivery rate -- avoids the ratchet-down trap where bursty
+# damage under-fills a rate window and locks the tick at the floor.
 _RATE_MIN_FPS = 15.0
 _RATE_MAX_FPS = float(os.environ.get("BROWSER_VIDEO_FPS", "60"))
-_RATE_WINDOW_SECONDS = 2.0
-_RATE_HEADROOM = 1.5
-_RATE_RETUNE_THRESHOLD_FPS = 4.0
+_RATE_DECREASE_FACTOR = 0.6
+_RATE_INCREASE_FPS = 10.0
 
 
-def target_capture_fps(acked_stripes_in_window: int, row_count: int) -> float:
-    """The capture rate warranted by the last window's delivered stripes.
-
-    Zero deliveries means idle (damage-driven capture costs nothing while
-    static), so snap back to the ceiling and the next interaction gets the
-    low-latency tick. Otherwise: delivered full-frame rate, plus headroom to
-    probe upward, clamped. Pure, for tests.
-    """
-    if acked_stripes_in_window == 0:
-        return _RATE_MAX_FPS
-    frame_rate = acked_stripes_in_window / _RATE_WINDOW_SECONDS / max(1, row_count)
-    return max(_RATE_MIN_FPS, min(_RATE_MAX_FPS, frame_rate * _RATE_HEADROOM + 2.0))
+def target_capture_fps(current_fps: float, dropped_in_interval: int) -> float:
+    """Next capture rate from this interval's mailbox-drop count. Pure, for tests."""
+    if dropped_in_interval > 0:
+        return max(_RATE_MIN_FPS, current_fps * _RATE_DECREASE_FACTOR)
+    return min(_RATE_MAX_FPS, current_fps + _RATE_INCREASE_FPS)
 
 
 def is_available() -> bool:
@@ -233,9 +228,9 @@ class PixelfluxVideoPipe:
         self._cursor_message: str | None = None
         self._closed = False
         self._last_idr_request = 0.0
-        self._ack_times: list[float] = []
         self._current_fps = _RATE_MAX_FPS
         self._last_retune = 0.0
+        self._dropped_at_last_retune = 0
         self.frames_captured = 0
         self.frames_dropped = 0
 
@@ -347,10 +342,11 @@ class PixelfluxVideoPipe:
                 now = time.monotonic()
                 if (
                     self._current_fps < _RATE_MAX_FPS
-                    and (not self._ack_times or now - self._ack_times[-1] > _RATE_WINDOW_SECONDS)
+                    and now - self._last_retune > 2.0
                     and self._capture is not None
                 ):
                     self._current_fps = _RATE_MAX_FPS
+                    self._dropped_at_last_retune = self.frames_dropped
                     self._capture.update_framerate(_RATE_MAX_FPS)
                 self._condition.wait(timeout=remaining)
             return None
@@ -368,19 +364,18 @@ class PixelfluxVideoPipe:
             self._condition.notify()
 
     def _retune_capture_rate_locked(self) -> None:
-        """Track the delivered rate with the capture tick, at most once a second."""
+        """AIMD on the interval's mailbox drops, at most once a second."""
         now = time.monotonic()
-        self._ack_times.append(now)
         if now - self._last_retune < 1.0:
             return
         self._last_retune = now
-        cutoff = now - _RATE_WINDOW_SECONDS
-        self._ack_times = [t for t in self._ack_times if t >= cutoff]
-        wanted = target_capture_fps(len(self._ack_times), len(self._rows))
-        if abs(wanted - self._current_fps) >= _RATE_RETUNE_THRESHOLD_FPS and self._capture is not None:
+        dropped = self.frames_dropped - self._dropped_at_last_retune
+        self._dropped_at_last_retune = self.frames_dropped
+        wanted = target_capture_fps(self._current_fps, dropped)
+        if wanted != self._current_fps and self._capture is not None:
             self._current_fps = wanted
             self._capture.update_framerate(wanted)
-            logger.debug("video pipe {} capture rate retuned to {:.0f}fps", self.browser_id, wanted)
+            logger.debug("video pipe {} capture rate retuned to {:.0f}fps ({} drops)", self.browser_id, wanted, dropped)
 
     def _request_idr_locked(self) -> None:
         now = time.monotonic()
