@@ -220,10 +220,14 @@ def read_view_epoch() -> str:
 
     An unreadable or absent file is not an error: a workspace where nothing has
     ever been revealed has no epoch, and an empty one never triggers a reload.
+    Undecodable counts as unreadable for the same reason ``_inject_view_epoch_meta_tag``
+    escapes what it gets back -- the content is off disk, not from our writer --
+    and ``UnicodeDecodeError`` is a ``ValueError``, so ``OSError`` alone would let
+    it escape into the shell response and the WebSocket connect.
     """
     try:
         return VIEW_EPOCH_PATH.read_text().strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return ""
 
 

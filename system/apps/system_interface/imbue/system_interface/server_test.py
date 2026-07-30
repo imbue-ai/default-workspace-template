@@ -131,6 +131,21 @@ def test_view_epoch_is_empty_when_never_revealed(tmp_path: Path) -> None:
         assert read_view_epoch() == ""
 
 
+def test_an_undecodable_view_epoch_reads_as_unset(tmp_path: Path) -> None:
+    """Garbage in the file must degrade to "no epoch", not take the UI down.
+
+    ``read_text`` raises ``UnicodeDecodeError`` -- a ``ValueError`` -- on bytes it
+    cannot decode, and this runs both while assembling the app shell and on every
+    WebSocket connect, so an uncaught one would 500 the whole interface instead of
+    costing a reload nobody would have noticed.
+    """
+    epoch_path = tmp_path / "view_epoch"
+    epoch_path.write_bytes(b"\xff\xfe not utf-8")
+
+    with patch("imbue.system_interface.server.VIEW_EPOCH_PATH", epoch_path):
+        assert read_view_epoch() == ""
+
+
 def test_view_epoch_path_matches_the_writer() -> None:
     """The server must read the exact file the refresh helper writes.
 
