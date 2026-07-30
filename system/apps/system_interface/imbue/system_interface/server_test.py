@@ -36,6 +36,7 @@ from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import read_view_epoch
+from imbue.system_interface.testing import CONNECT_SNAPSHOT_MESSAGE_TYPES
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
@@ -1096,7 +1097,14 @@ def test_websocket_connect_reports_the_current_view_epoch(app: Flask, tmp_path: 
         with serve_app(app) as served:
             ws = open_ws(served, "/api/ws")
             try:
-                messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(3)]
+                # Counted off the shared greeting rather than written out, for the
+                # reason that constant exists: this is the test the burst last grew
+                # for, and a hard-coded number quietly reads the wrong window when
+                # it grows again.
+                messages = [
+                    json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+                    for _ in range(len(CONNECT_SNAPSHOT_MESSAGE_TYPES))
+                ]
             finally:
                 close_ws(ws)
 
