@@ -70,7 +70,8 @@ def _receive_pump(ws: Any, pipe: PixelfluxVideoPipe, router: InputRouter, stop_e
                 continue
             if data.startswith("ack,"):
                 try:
-                    pipe.ack(int(data[4:]))
+                    frame_id, y_start = data[4:].split(",")
+                    pipe.ack(int(frame_id), int(y_start))
                 except ValueError:
                     logger.warning("dropped malformed ack {!r}", data[:32])
             else:
@@ -107,6 +108,9 @@ def stream_socket(ws: Any) -> None:
     receiver.start()
     try:
         while not stop_event.is_set():
+            cursor_message = pipe.take_cursor_message()
+            if cursor_message is not None:
+                ws.send(cursor_message)
             packet = pipe.next_packet(timeout=_SEND_POLL_SECONDS)
             if packet is not None:
                 ws.send(packet)

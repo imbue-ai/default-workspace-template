@@ -22,25 +22,26 @@
 </div>
 <script>
 "use strict";
-// Viewer for the streamed-browser service. One WebSocket carries pixelflux
-// H.264 frames out (10-byte stripe header + Annex B; see videopipe.py) and
-// Selkies-grammar input + credit acks back in (kd/ku/kr/m/ack; see xinput.py).
-// Frames are acked WHEN THEIR PIXELS EXIT THE DECODER -- the server holds at
-// most two unacked frames in flight, which is what bounds delivery lag across
-// the tunnel no matter where congestion lives.
+// Viewer for the streamed-browser service, stripe mode (the Selkies client's
+// design): each horizontal stripe row is an independent H.264 stream with its
+// own VideoDecoder, keyed by the wire header's y-start, composited onto one
+// canvas at its y-offset. Binary messages are pixelflux packets (10-byte
+// header + Annex B); text messages carry cursor shapes
+// ("cursor,<hotX>,<hotY>,<png base64>" -- applied as the CSS cursor, so the
+// pointer is drawn locally and its motion costs the server nothing).
+// Upstream we send Selkies-grammar input (kd/ku/kr/kh/m) and per-stripe
+// credit acks ("ack,<frameId>,<yStart>") AS THE STRIPE EXITS ITS DECODER --
+// the server holds at most two unacked stripes per row, which is what bounds
+// delivery lag across the tunnel wherever congestion lives.
 const HEADER_LEN = 10;
 const FRAME_TYPE_IDR = 1;
 const status = document.getElementById("status");
 const canvas = document.getElementById("screen");
-const context = document.getElementById("screen").getContext("2d", { desynchronized: true });
+const context = canvas.getContext("2d", { desynchronized: true });
 let socket = null;
 let retryDelay = 500;
 
 // --- keysym mapping (client side of the Selkies kd/ku grammar) --------------
-// Printable characters map by the X11 rule: Latin-1 codepoints are their own
-// keysym; everything else is 0x01000000 | codepoint (the server's overlay
-// keycodes handle keysyms the layout lacks). Named keys use the standard X
-// keysyms below.
 const NAMED_KEYSYMS = {
   Backspace: 0xff08, Tab: 0xff09, Enter: 0xff0d, Escape: 0xff1b, Delete: 0xffff,
   Home: 0xff50, End: 0xff57, PageUp: 0xff55, PageDown: 0xff56,
@@ -70,34 +71,43 @@ function connect() {
   socket = new WebSocket(url);
   socket.binaryType = "arraybuffer";
 
-  let decoder = null;
-  let needKey = true;
-  let decodeSeq = 0;
-  const pendingAcks = [];
-  let drawn = 0, bytes = 0;
+  // Per-stripe-row decode state, keyed by y-start (the Selkies
+  // vncStripeDecoders shape): each row is its own H.264 chain.
+  const rows = {};
+  let drawnAny = false;
 
-  function makeDecoder() {
+  function rowFor(yStart) {
+    let row = rows[yStart];
+    if (row === undefined) row = rows[yStart] = { decoder: null, needKey: true, seq: 0, pendingAcks: [] };
+    return row;
+  }
+
+  function makeDecoder(yStart) {
+    const row = rows[yStart];
     const created = new VideoDecoder({
       output: (frame) => {
-        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
-          canvas.width = frame.displayWidth;
-          canvas.height = frame.displayHeight;
+        // Grow the canvas to cover every row seen (stripe width = display
+        // width; total height = max yStart + stripe height).
+        const needW = frame.displayWidth;
+        const needH = yStart + frame.displayHeight;
+        if (canvas.width < needW || canvas.height < needH) {
+          canvas.width = Math.max(canvas.width, needW);
+          canvas.height = Math.max(canvas.height, needH);
         }
-        context.drawImage(frame, 0, 0);
+        context.drawImage(frame, 0, yStart);
         frame.close();
-        drawn += 1;
-        if (drawn === 1) status.classList.add("hidden");
-        const frameId = pendingAcks.shift();   // no B-frames: decode order = submit order
+        if (!drawnAny) { drawnAny = true; status.classList.add("hidden"); }
+        const frameId = row.pendingAcks.shift();  // no B-frames: decode order = submit order
         if (frameId !== undefined && socket.readyState === WebSocket.OPEN) {
-          socket.send("ack," + frameId);
+          socket.send(`ack,${frameId},${yStart}`);
         }
       },
       error: (error) => {
         status.textContent = "resyncing: " + error.message;
         status.classList.remove("hidden");
-        needKey = true;
-        pendingAcks.length = 0;
-        decoder = null;
+        row.needKey = true;
+        row.pendingAcks.length = 0;
+        row.decoder = null;
       },
     });
     created.configure({ codec: "avc1.42C028", optimizeForLatency: true });
@@ -106,19 +116,27 @@ function connect() {
 
   socket.onopen = () => { retryDelay = 500; status.textContent = "starting browser…"; };
   socket.onmessage = (event) => {
+    if (typeof event.data === "string") {
+      if (event.data.startsWith("cursor,")) {
+        const [, hotX, hotY, png] = event.data.split(",");
+        canvas.style.cursor = `url(data:image/png;base64,${png}) ${hotX} ${hotY}, default`;
+      }
+      return;
+    }
     const packet = new Uint8Array(event.data);
-    bytes += packet.byteLength;
     if (packet.byteLength <= HEADER_LEN || packet[0] !== 0x04) return;
     const view = new DataView(event.data);
     const isKey = view.getUint8(1) === FRAME_TYPE_IDR;
-    const frameId = view.getUint16(2);  // big-endian
-    if (needKey && !isKey) return;
-    needKey = false;
-    if (decoder === null) decoder = makeDecoder();
-    pendingAcks.push(frameId);
-    decoder.decode(new EncodedVideoChunk({
+    const frameId = view.getUint16(2);   // big-endian
+    const yStart = view.getUint16(4);
+    const row = rowFor(yStart);
+    if (row.needKey && !isKey) return;
+    row.needKey = false;
+    if (row.decoder === null) row.decoder = makeDecoder(yStart);
+    row.pendingAcks.push(frameId);
+    row.decoder.decode(new EncodedVideoChunk({
       type: isKey ? "key" : "delta",
-      timestamp: decodeSeq++ * 33333,
+      timestamp: row.seq++ * 16667,
       data: packet.subarray(HEADER_LEN),
     }));
   };
@@ -131,9 +149,8 @@ function connect() {
 }
 
 // --- input capture -----------------------------------------------------------
-// Coordinates: the canvas letterboxes (object-fit: contain), so map client
-// coordinates through the drawn video rectangle to capture-space pixels.
 let buttonMask = 0;
+const heldKeysyms = new Set();
 
 function captureCoords(event) {
   if (!canvas.width || !canvas.height) return null;
@@ -184,16 +201,21 @@ canvas.addEventListener("keydown", (e) => {
   const keysym = keysymFor(e);
   if (keysym === null) return;
   e.preventDefault();
+  heldKeysyms.add(keysym);
   sendInput("kd," + keysym);
 });
 canvas.addEventListener("keyup", (e) => {
   const keysym = keysymFor(e);
   if (keysym === null) return;
   e.preventDefault();
+  heldKeysyms.delete(keysym);
   sendInput("ku," + keysym);
 });
-canvas.addEventListener("blur", () => { buttonMask = 0; sendInput("kr"); });
+canvas.addEventListener("blur", () => { buttonMask = 0; heldKeysyms.clear(); sendInput("kr"); });
 window.addEventListener("pagehide", () => sendInput("kr"));
+// Held-key heartbeat (Selkies kh): report the full held set so the server can
+// release anything whose keyup got lost in transit.
+setInterval(() => sendInput("kh" + [...heldKeysyms].map((k) => "," + k).join("")), 2000);
 
 if (!("VideoDecoder" in window)) {
   status.textContent = "WebCodecs is not available in this browser";
