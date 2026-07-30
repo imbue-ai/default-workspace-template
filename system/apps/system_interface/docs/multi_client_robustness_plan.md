@@ -11,6 +11,19 @@ Ordering rule: where two causes compound each other, the simpler fix (fewer
 design decisions) comes first. P0 items are mechanical and independently
 shippable; P1 items need small product choices; P2 items need real design.
 
+## Fast-track batch (one worker, land soon)
+
+The set to implement together for broad symptom relief without design work:
+P0.1, P0.2, P0.3, P0.4, P1.5, plus two slices of P1.7 — (a) skip a remote
+re-apply when the normalized layout content is semantically equal, and
+(b) when a re-apply does run, preserve the local active tab instead of
+adopting the saver's. P1.5 and the P1.7 slices must share one
+content-normalization function (it defines both the autosave guard and the
+skip-apply check). Deliberately excluded: full P1.6 (cleanup, not symptom
+relief once P1.5 lands), full incremental apply (P1.7), and broadcast
+versioning/acks (P2.9) — the one known symptom the batch does not cover is
+agent-driven broadcasts lost while a client's WS is reconnecting.
+
 ## Symptom -> cause map
 
 | Symptom | Cause(s) |
@@ -52,20 +65,23 @@ layouts resurrect it on every apply (the geebspace 404 storm began the second
 a client freshly mounted the saved layout containing the destroyed
 `migrate-workspace` tab).
 
-- On `agents_updated` and during `applyLayoutContent`, strip chat panels whose
-  agent id is absent from the known-agent list (mirror the existing
-  primary-agent strip), or replace them with an explicit "agent destroyed"
-  placeholder that has a close button. Either is acceptable; strip-plus-toast
-  is the smaller change.
+- Do NOT remove the tab. When an agent is absent from the known-agent list
+  (and confirmed gone, below), keep the panel but render an explicit
+  tombstone state — "This agent was destroyed." — with a close button,
+  instead of the current "No conversation data" + screen-capture polling.
+  The tab remaining visible is deliberate: the user keeps the context that
+  the agent existed and chooses when to dismiss it.
 - Care: `agents_updated` can transiently miss agents while the `mngr observe`
   pipeline restarts. Only prune when the agent is absent AND its `/events`
   fetch 404s (the server distinguishes a discovery gap from a genuinely
   unknown agent via `_find_agent`), or debounce pruning across a couple of
   snapshots.
 
-Acceptance: destroying an agent (from UI, CLI, or another client) removes or
-tombstones its tabs on every connected client and from the saved layout after
-the next autosave; dead tabs never survive a reload.
+Acceptance: destroying an agent (from UI, CLI, or another client) turns its
+tabs into the tombstone state on every connected client, with zero background
+requests; closing the tombstone removes it from the saved layout after the
+next autosave; a tombstoned tab restored from a saved layout renders as a
+tombstone again (never as the polling not-found state).
 
 ### P0.3 Fence transcript paging against resets and hangs
 
