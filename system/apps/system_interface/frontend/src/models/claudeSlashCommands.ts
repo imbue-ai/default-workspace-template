@@ -8,6 +8,13 @@
  *
  * Which commands behave this way is a fact about Claude Code, not about the chat, so it lives in
  * its own module rather than inline in the composer.
+ *
+ * The composer applies this unconditionally, with no check of which kind of agent is on the other
+ * end. That is safe only because this chat cannot show a non-Claude agent at all: every message it
+ * renders comes from parsing Claude Code's own session transcript, and sign-in is handled by
+ * Claude-specific auth code. If the chat ever gains a second agent type, this list stops being
+ * universally correct -- another agent's slash commands are its own -- and the guard has to become
+ * per-agent-type instead.
  */
 
 export const INPUT_BLOCKING_SLASH_COMMANDS: readonly string[] = ["/status"];

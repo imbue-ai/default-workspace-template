@@ -258,6 +258,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         messageText = localStorage.getItem(messageTextKey(agentId)) ?? "";
         isInterruptInFlight = false;
         isModelDropdownOpen = false;
+        // The notice names a command typed for the previous agent, so it must not follow the user
+        // to the next one.
+        blockedSlashCommand = null;
         // Load this agent's model + fast-mode selection for the picker (cached
         // per agent, so this is a no-op once loaded).
         fetchModelSettings(agentId);
