@@ -13,17 +13,13 @@ import time
 
 import pytest
 
-from streamed_browser.videopipe import PIXELFLUX_IMPORT_ERROR, PixelfluxVideoPipe, is_available, parse_wire_header
+from streamed_browser.videopipe import PixelfluxVideoPipe, is_available, parse_wire_header
 
 _DISPLAY = ":93"
 
 
 def _deps_present() -> bool:
-    return (
-        PIXELFLUX_IMPORT_ERROR is None
-        and shutil.which("Xvfb") is not None
-        and shutil.which("xsetroot") is not None
-    )
+    return is_available() and shutil.which("Xvfb") is not None and shutil.which("xsetroot") is not None
 
 
 @pytest.fixture()
