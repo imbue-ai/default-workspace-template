@@ -590,6 +590,9 @@ _SYNOPSIS_OPTOUT_FLAGS: dict[str, frozenset[str]] = {
             "--id",
             "--name-style",
             "--type",
+            # Set through create templates rather than typed by hand, same as --type.
+            "--output-style",
+            "--append-system-prompt",
             "--provider",
             "--host-name-style",
             "--update",

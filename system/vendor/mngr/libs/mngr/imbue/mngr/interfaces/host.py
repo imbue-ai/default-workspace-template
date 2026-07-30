@@ -39,8 +39,10 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import HostNameStyle
 from imbue.mngr.primitives import HostState
+from imbue.mngr.primitives import OutputStyleName
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import SnapshotName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import TmuxHeight
 from imbue.mngr.primitives import TmuxWidth
 from imbue.mngr.primitives import TmuxWindowSize
@@ -1030,6 +1032,22 @@ class CreateAgentOptions(FrozenModel):
     agent_args: tuple[str, ...] = Field(
         default=(),
         description="Additional arguments passed to the agent",
+    )
+    output_style: OutputStyleName | None = Field(
+        default=None,
+        description=(
+            "Name of an output style to launch the agent with, matched against the `name:` "
+            "frontmatter of a style file. Harness-neutral: each agent type applies it through "
+            "its own mechanism (claude sets `outputStyle` in its managed settings; codex has no "
+            "output-style concept and folds the style body into its developer instructions)."
+        ),
+    )
+    append_system_prompt: SystemPromptText | None = Field(
+        default=None,
+        description=(
+            "Text to append to the agent's system prompt. Harness-neutral: claude passes it as "
+            "`--append-system-prompt`, codex folds it into its developer instructions."
+        ),
     )
     user: str | None = Field(
         default=None,

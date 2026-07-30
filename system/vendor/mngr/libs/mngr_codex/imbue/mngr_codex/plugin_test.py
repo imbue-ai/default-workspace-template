@@ -101,12 +101,15 @@ def test_codex_agent_subclasses_interactive_tui_agent() -> None:
 
 
 def test_codex_agent_advertises_tui_ready_indicator() -> None:
-    """The ready indicator is a fixed header string that renders with the input composer.
+    """The ready indicator is the pinned composer prompt glyph, mirroring claude's ``❯``.
 
     codex has no pre-input readiness hook (SessionStart fires lazily on the first
-    prompt), so this banner poll is the readiness signal.
+    prompt), so readiness screen-scrapes. The prompt is scraped (not the ``/model to
+    change`` header) because the header scrolls out of the visible pane once a turn
+    renders enough output, intermittently hanging the next send; the prompt is pinned
+    at the bottom and never scrolls off.
     """
-    assert CodexAgent.TUI_READY_INDICATOR == "/model to change"
+    assert CodexAgent.TUI_READY_INDICATOR == "›"
 
 
 def test_codex_agent_implements_submission_evidence_probes() -> None:

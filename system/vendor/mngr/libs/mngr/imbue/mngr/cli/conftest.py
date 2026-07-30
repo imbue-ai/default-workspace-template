@@ -57,6 +57,8 @@ def default_create_cli_opts() -> CreateCliOptions:
         setting=(),
         positional_name=None,
         positional_agent_type=None,
+        output_style=None,
+        append_system_prompt=None,
         agent_args=(),
         template=(),
         type="claude",

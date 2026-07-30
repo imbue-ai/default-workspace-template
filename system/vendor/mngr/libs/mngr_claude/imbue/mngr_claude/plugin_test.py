@@ -312,6 +312,9 @@ _WORKTREE_OPTIONS = CreateAgentOptions(
     transfer_mode=TransferMode.GIT_WORKTREE,
 )
 
+# For hook tests, which assert on hooks and settings_overrides rather than output styles.
+_NO_OUTPUT_STYLE_OPTIONS = CreateAgentOptions(agent_type=AgentTypeName("claude"))
+
 
 def _setup_worktree_agent(
     local_provider: LocalProviderInstance,
@@ -2238,7 +2241,7 @@ def test_configure_agent_hooks_writes_managed_file_not_settings_local(
         host, temp_mngr_ctx, work_dir, ClaudeAgentConfig(check_installation=False, use_env_config_dir=True)
     )
 
-    agent._configure_agent_hooks(host, temp_mngr_ctx)
+    agent._configure_agent_hooks(host, temp_mngr_ctx, _NO_OUTPUT_STYLE_OPTIONS)
 
     # The managed settings file holds the hooks.
     managed_path = get_managed_settings_path(agent._get_agent_dir())
@@ -2262,7 +2265,7 @@ def test_configure_agent_hooks_works_without_a_git_repo(
         host, temp_mngr_ctx, work_dir, ClaudeAgentConfig(check_installation=False, use_env_config_dir=True)
     )
 
-    agent._configure_agent_hooks(host, temp_mngr_ctx)
+    agent._configure_agent_hooks(host, temp_mngr_ctx, _NO_OUTPUT_STYLE_OPTIONS)
 
     managed_path = get_managed_settings_path(agent._get_agent_dir())
     assert managed_path.exists()
@@ -2283,7 +2286,7 @@ def test_configure_agent_hooks_creates_managed_settings_file(
         host, temp_mngr_ctx, work_dir, ClaudeAgentConfig(check_installation=False, use_env_config_dir=True)
     )
 
-    agent._configure_agent_hooks(host, temp_mngr_ctx)
+    agent._configure_agent_hooks(host, temp_mngr_ctx, _NO_OUTPUT_STYLE_OPTIONS)
 
     managed_path = get_managed_settings_path(agent._get_agent_dir())
     assert managed_path.exists()
@@ -2314,7 +2317,7 @@ def test_configure_agent_hooks_applies_settings_overrides_in_managed_file(
         ),
     )
 
-    agent._configure_agent_hooks(host, temp_mngr_ctx)
+    agent._configure_agent_hooks(host, temp_mngr_ctx, _NO_OUTPUT_STYLE_OPTIONS)
 
     content = get_managed_settings_path(agent._get_agent_dir()).read_text()
     settings = json.loads(content)
@@ -2347,7 +2350,7 @@ def test_configure_agent_hooks_does_not_touch_existing_settings_local(
         host, temp_mngr_ctx, work_dir, ClaudeAgentConfig(check_installation=False, use_env_config_dir=True)
     )
 
-    agent._configure_agent_hooks(host, temp_mngr_ctx)
+    agent._configure_agent_hooks(host, temp_mngr_ctx, _NO_OUTPUT_STYLE_OPTIONS)
 
     # settings.local.json is byte-for-byte unchanged.
     assert settings_local.read_text() == original_text
@@ -2382,7 +2385,7 @@ def test_configure_agent_hooks_overwrites_managed_file_fresh(
     stale = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mkdir -p /events/stale"}]}]}}
     managed_path.write_text(json.dumps(stale))
 
-    agent._configure_agent_hooks(host, temp_mngr_ctx)
+    agent._configure_agent_hooks(host, temp_mngr_ctx, _NO_OUTPUT_STYLE_OPTIONS)
 
     settings = json.loads(managed_path.read_text())
     stop_hooks = settings["hooks"].get("Stop", [])
@@ -2406,7 +2409,7 @@ def test_configure_agent_hooks_adds_credential_sync_on_macos(
     )
 
     with patch(f"{_CLAUDE_AGENT_MODULE}.is_macos", return_value=True):
-        agent._configure_agent_hooks(host, temp_mngr_ctx)
+        agent._configure_agent_hooks(host, temp_mngr_ctx, _NO_OUTPUT_STYLE_OPTIONS)
 
     settings = json.loads(get_managed_settings_path(agent._get_agent_dir()).read_text())
 
@@ -2436,7 +2439,7 @@ def test_configure_agent_hooks_skips_credential_sync_when_disabled(
     )
 
     with patch(f"{_CLAUDE_AGENT_MODULE}.is_macos", return_value=True):
-        agent._configure_agent_hooks(host, temp_mngr_ctx)
+        agent._configure_agent_hooks(host, temp_mngr_ctx, _NO_OUTPUT_STYLE_OPTIONS)
 
     settings = json.loads(get_managed_settings_path(agent._get_agent_dir()).read_text())
 
@@ -2519,7 +2522,7 @@ def test_configure_agent_hooks_adds_permission_auto_allow_when_enabled(
         ClaudeAgentConfig(check_installation=False, auto_allow_permissions=True, use_env_config_dir=True),
     )
 
-    agent._configure_agent_hooks(host, temp_mngr_ctx)
+    agent._configure_agent_hooks(host, temp_mngr_ctx, _NO_OUTPUT_STYLE_OPTIONS)
 
     managed_path = get_managed_settings_path(agent._get_agent_dir())
     assert managed_path.exists()
@@ -2550,7 +2553,7 @@ def test_configure_agent_hooks_does_not_add_permission_auto_allow_by_default(
         host, temp_mngr_ctx, work_dir, ClaudeAgentConfig(check_installation=False, use_env_config_dir=True)
     )
 
-    agent._configure_agent_hooks(host, temp_mngr_ctx)
+    agent._configure_agent_hooks(host, temp_mngr_ctx, _NO_OUTPUT_STYLE_OPTIONS)
 
     settings = json.loads(get_managed_settings_path(agent._get_agent_dir()).read_text())
 

@@ -38,6 +38,8 @@ from imbue.mngr.agents.common_transcript import maybe_provision_common_transcrip
 from imbue.mngr.agents.common_transcript import provision_raw_transcript_scripts
 from imbue.mngr.agents.common_transcript import provision_scripts_to_commands_dir
 from imbue.mngr.agents.installation import ensure_cli_installed
+from imbue.mngr.agents.output_styles import read_output_style_files
+from imbue.mngr.agents.output_styles import resolve_output_style
 from imbue.mngr.agents.tui_agent import InteractiveTuiAgent
 from imbue.mngr.agents.tui_utils import POST_SUBMIT_DIALOG_OBSERVE_SECONDS
 from imbue.mngr.agents.tui_utils import SubmissionConfirmationPolicy
@@ -562,6 +564,14 @@ an mngr agent rather than in the user's persistent ~/.claude/ directory.
 _MANAGED_SETTINGS_SHELL_PATH: Final[str] = f"$MNGR_AGENT_STATE_DIR/{'/'.join(MANAGED_SETTINGS_RELATIVE_PATH)}"
 MANAGED_SETTINGS_LAUNCH_ARG: Final[str] = f'--settings "{_MANAGED_SETTINGS_SHELL_PATH}"'
 
+# Where claude itself looks for output styles, relative to the work_dir. mngr validates
+# --output-style against this exact path -- the one claude will read -- so a name that
+# resolves here is guaranteed to resolve for claude too.
+CLAUDE_OUTPUT_STYLES_DIR: Final[str] = ".claude/output-styles"
+
+# The settings.json key claude reads to select an output style by name.
+OUTPUT_STYLE_SETTING_KEY: Final[str] = "outputStyle"
+
 
 _PLUGINS_DIR_MARKER: Final[str] = "/plugins/"
 """Generic marker for extracting relative plugin paths.
@@ -663,6 +673,7 @@ def _build_settings_json(
     *,
     is_unattended: bool = False,
     allow_narrowing: bool = False,
+    extra_settings: dict[str, Any] | None = None,
 ) -> str:
     """Build settings.json content for per-agent config dirs.
 
@@ -696,6 +707,10 @@ def _build_settings_json(
     data = apply_settings_patch(
         data, config.settings_overrides, allow_narrowing=allow_narrowing, base_description=base_description
     )
+    # Applied last so a per-create option (currently only --output-style) wins over a
+    # settings_overrides value for the same key, matching CLI-beats-config elsewhere.
+    if extra_settings:
+        data.update(extra_settings)
     return json.dumps(data, indent=2) + "\n"
 
 
@@ -1856,7 +1871,26 @@ class ClaudeCoreAgent(
 
         return transfers
 
-    def _configure_agent_hooks(self, host: OnlineHostInterface, mngr_ctx: MngrContext) -> None:
+    def _build_output_style_settings(self, host: OnlineHostInterface, options: CreateAgentOptions) -> dict[str, Any]:
+        """Return the ``outputStyle`` settings patch for ``options``, or ``{}`` if unset.
+
+        Claude resolves the style file itself at launch, so mngr only needs to pass the
+        name -- but it validates first, against ``.claude/output-styles/`` in the work_dir:
+        the very directory claude will read. Validating claude's own path (rather than
+        wherever the styles are authored, which may be a symlink away) is what turns a
+        broken link or a misspelled name into a failed create instead of an agent that
+        launches silently unstyled.
+        """
+        if options.output_style is None:
+            return {}
+        styles_dir = Path(self.work_dir) / CLAUDE_OUTPUT_STYLES_DIR
+        # Raises UserInputError, listing what is available, when the name has no match.
+        resolve_output_style(options.output_style, read_output_style_files(host, styles_dir))
+        return {OUTPUT_STYLE_SETTING_KEY: str(options.output_style)}
+
+    def _configure_agent_hooks(
+        self, host: OnlineHostInterface, mngr_ctx: MngrContext, options: CreateAgentOptions
+    ) -> None:
         """Write mngr's hooks (and the user's settings_overrides) to the managed settings file.
 
         This is the ``use_env_config_dir``-mode channel only. In that mode there
@@ -1891,6 +1925,11 @@ class ClaudeCoreAgent(
             allow_narrowing=mngr_ctx.config.allow_settings_key_assignment_narrowing,
             base_description="mngr's managed Claude hooks",
         )
+        # Folded on last so a per-create --output-style wins over a settings_overrides
+        # outputStyle, matching how CLI beats config everywhere else. Merged into the
+        # resolved dict rather than layered as config, so it cannot disturb the model /
+        # fastMode / skipDangerousModePermissionPrompt keys already resolved above.
+        settings.update(self._build_output_style_settings(host, options))
 
         settings_path = get_managed_settings_path(self._get_agent_dir())
         # The plugin/claude/ parent may not exist yet (in use_env_config_dir
@@ -1995,6 +2034,8 @@ class ClaudeCoreAgent(
             sync_local=config.sync_home_settings,
             is_unattended=self.is_unattended_enabled(),
             allow_narrowing=mngr_ctx.config.allow_settings_key_assignment_narrowing,
+            # Same fold as the shared-mode path in _configure_agent_hooks.
+            extra_settings=self._build_output_style_settings(host, options),
         )
 
         generated_files: dict[Path, str] = {
@@ -2172,7 +2213,7 @@ class ClaudeCoreAgent(
             # resolved predicate (not the deprecated use_env_config_dir alias) so it
             # also fires when shared mode is set via isolate_local_config_dir=False.
             if not self._is_isolated_config_dir():
-                self._configure_agent_hooks(host, mngr_ctx)
+                self._configure_agent_hooks(host, mngr_ctx, options)
 
             # should be done by now, just wanted to do in parallel for latency reasons
             provision_backgroun_script_thread.join(60.0)
@@ -2773,6 +2814,17 @@ class ClaudeAgent(
         """
         script_path = "$MNGR_AGENT_STATE_DIR/commands/claude_background_tasks.sh"
         return f"( {script_path} {shlex.quote(session_name)} {shlex.quote(primary_window_name)} ) &"
+
+    def build_extra_agent_args(self, options: CreateAgentOptions) -> tuple[str, ...]:
+        """Turn the harness-neutral ``append_system_prompt`` into claude's own flag.
+
+        ``output_style`` is deliberately absent: claude takes it as the ``outputStyle``
+        setting written during provisioning (see ``_build_output_style_settings``), not
+        as a launch flag.
+        """
+        if options.append_system_prompt is None:
+            return ()
+        return ("--append-system-prompt", str(options.append_system_prompt))
 
     def assemble_command(
         self,
