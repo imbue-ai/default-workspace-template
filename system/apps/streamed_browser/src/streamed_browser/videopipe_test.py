@@ -112,3 +112,12 @@ def test_capture_rate_steps_to_delivered_on_drops_and_climbs_gently() -> None:
     # Drop-free: gentle additive climb, capped.
     assert target_capture_fps(36.0, dropped_in_interval=0, delivered_fps=20.0) == 39.0
     assert target_capture_fps(60.0, dropped_in_interval=0, delivered_fps=30.0) == 60.0
+
+
+def test_window_limit_expands_with_credit_headroom() -> None:
+    window = CreditWindow(limit=2)
+    window.note_sent(1)
+    window.note_sent(2)
+    assert not window.admits(is_keyframe=False)
+    window.limit = 4  # RTT adaptation raised the ceiling
+    assert window.admits(is_keyframe=False)
