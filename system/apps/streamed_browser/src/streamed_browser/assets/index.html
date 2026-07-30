@@ -164,6 +164,7 @@ function connect() {
       return;
     }
     const packet = new Uint8Array(event.data);
+    if (packet[0] === 0x01) { playAudio(packet.subarray(1)); return; }  // Opus chunk
     if (packet.byteLength <= HEADER_LEN || packet[0] !== 0x04) return;
     lastVideo = performance.now();
     const view = new DataView(event.data);
@@ -188,6 +189,55 @@ function connect() {
     retryDelay = Math.min(retryDelay * 2, 5000);
   };
 }
+
+// --- audio playback (Opus over WebCodecs -> AudioWorklet) --------------------
+// Server sends Opus chunks (magic byte 0x01) only while the tab actually makes
+// sound (pcmflux's sample-level silence gate), so this stays idle otherwise.
+// WebCodecs AudioDecoder outputs f32-planar; we interleave and hand it to a
+// tiny worklet with a bounded drop-oldest jitter buffer.
+let audioCtx = null, audioNode = null, audioDecoder = null, audioReady = false, audioTs = 0;
+const AUDIO_WORKLET = `
+class PB extends AudioWorkletProcessor {
+  constructor(){ super(); this.q=[]; this.port.onmessage = e => { this.q.push(e.data); while(this.q.length>8) this.q.shift(); }; }
+  process(_i, outputs){ const o=outputs[0]; const f=this.q.shift();
+    const n=o[0].length;
+    if(!f){ for(const c of o) c.fill(0); return true; }
+    for(let i=0;i<n;i++){ o[0][i]=f[2*i]||0; if(o[1]) o[1][i]=f[2*i+1]||0; }
+    return true; }
+}
+registerProcessor('pb', PB);`;
+async function ensureAudio() {
+  if (audioCtx) return;
+  audioCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
+  const url = URL.createObjectURL(new Blob([AUDIO_WORKLET], { type: "application/javascript" }));
+  await audioCtx.audioWorklet.addModule(url);
+  audioNode = new AudioWorkletNode(audioCtx, "pb", { outputChannelCount: [2] });
+  audioNode.connect(audioCtx.destination);
+  audioDecoder = new AudioDecoder({
+    output: (data) => {
+      const frames = data.numberOfFrames, out = new Float32Array(frames * 2), plane = new Float32Array(frames);
+      data.copyTo(plane, { planeIndex: 0, format: "f32-planar" });
+      for (let i = 0; i < frames; i++) out[2 * i] = plane[i];
+      if (data.numberOfChannels > 1) data.copyTo(plane, { planeIndex: 1, format: "f32-planar" });
+      for (let i = 0; i < frames; i++) out[2 * i + 1] = plane[i];
+      data.close();
+      audioNode.port.postMessage(out, [out.buffer]);
+    },
+    error: () => {},
+  });
+  audioDecoder.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 2 });
+  audioReady = true;
+}
+function playAudio(opus) {
+  if (!("AudioDecoder" in window)) return;
+  if (!audioReady) { ensureAudio(); return; }  // first chunk primes it; a few ms of audio dropped is fine
+  if (audioCtx.state === "suspended") return;   // waiting for the gesture unlock
+  if (audioDecoder.decodeQueueSize > 12) return;  // link stalled -> drop, don't queue latency
+  audioDecoder.decode(new EncodedAudioChunk({ type: "key", timestamp: audioTs, data: opus }));
+  audioTs += 20000;  // 20ms frames
+}
+// Browsers suspend AudioContext until a gesture; the pane is click-driven.
+window.addEventListener("pointerdown", () => { audioCtx?.resume?.(); }, true);
 
 // --- input capture -----------------------------------------------------------
 let buttonMask = 0;

@@ -31,7 +31,9 @@ from loguru import logger
 from simple_websocket import ConnectionClosed
 from werkzeug.serving import make_server
 
-from streamed_browser.session import SessionStartupError, StreamedBrowserSession, is_chromium_installed
+from streamed_browser.audiopipe import AudioPipe, AudioPipeError
+from streamed_browser.audiopipe import is_available as is_audio_available
+from streamed_browser.session import AUDIO_SOURCE_DEVICE, SessionStartupError, StreamedBrowserSession, is_chromium_installed
 from streamed_browser.videopipe import PixelfluxVideoPipe, VideoPipeError
 from streamed_browser.videopipe import is_available as is_pipe_available
 from streamed_browser.xinput import InputRouter
@@ -142,6 +144,16 @@ def stream_socket(ws: Any) -> None:
         ws.close(1011)
         return
     router = InputRouter(display)
+    # Audio is strictly additive: gate on pcmflux being importable AND the
+    # session's null sink existing. A start failure leaves video untouched.
+    audio_pipe: AudioPipe | None = None
+    if is_audio_available() and session.audio_available:
+        candidate = AudioPipe(AUDIO_SOURCE_DEVICE, pipe.condition)
+        try:
+            candidate.start()
+            audio_pipe = candidate
+        except AudioPipeError as error:
+            logger.warning("audio pipe unavailable ({}); streaming video only", error)
     stop_event = threading.Event()
     receiver = threading.Thread(
         target=_receive_pump,
@@ -151,6 +163,7 @@ def stream_socket(ws: Any) -> None:
     )
     receiver.start()
     last_send = time.monotonic()
+    audio_pending = audio_pipe.has_pending if audio_pipe is not None else None
     try:
         while not stop_event.is_set():
             control_message = pipe.take_control_message()
@@ -162,7 +175,11 @@ def stream_socket(ws: Any) -> None:
             if cursor_message is not None:
                 ws.send(cursor_message)
                 last_send = time.monotonic()
-            packet = pipe.next_packet(timeout=_HEARTBEAT_SECONDS)
+            if audio_pipe is not None:
+                for chunk in audio_pipe.drain():
+                    ws.send(chunk)
+                    last_send = time.monotonic()
+            packet = pipe.next_packet(timeout=_HEARTBEAT_SECONDS, has_extra=audio_pending)
             if packet is not None:
                 ws.send(packet)
                 last_send = time.monotonic()
@@ -173,6 +190,8 @@ def stream_socket(ws: Any) -> None:
         pass
     finally:
         stop_event.set()
+        if audio_pipe is not None:
+            audio_pipe.stop()
         pipe.stop()
         router.close()
         receiver.join(timeout=5)

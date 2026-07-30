@@ -15,6 +15,9 @@ dependencies = [
     "pixelflux>=2.0.0",
     # XTEST input injection (see xinput.py, ported from Selkies).
     "python-xlib>=0.33",
+    # On-demand Opus audio (see audiopipe.py). pcmflux is pixelflux's audio
+    # sibling from the same vendor; needs a PulseAudio daemon at runtime.
+    "pcmflux>=2.0.0",
 ]
 
 [project.scripts]

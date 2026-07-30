@@ -51,12 +51,14 @@ def test_prevent_bare_except() -> None:
 
 def test_prevent_broad_exception_catch() -> None:
     # +3, all deliberate boundary catches: two in xinput.py's release paths
-    # (a held-key sweep and release_all must visit EVERY key even if one
-    # release raises an arbitrary Xlib protocol error -- a skipped key stays
-    # stuck down for the user), and one in videopipe.py's stop_capture guard
-    # (pixelflux teardown joins native threads and has wedged in testing; the
-    # stop must never take the service down with it). Each logs; none silences.
-    rc.check_broad_exception_catch(_DIR, snapshot(3))
+    # all deliberate boundary catches: three in xinput.py (a held-key sweep,
+    # release_all, and the window-resize finder -- each must tolerate an
+    # arbitrary Xlib protocol error from a window/key changing under it, or the
+    # user is left with a stuck key or a dead input thread), one in
+    # videopipe.py's stop_capture guard, and one in audiopipe.py's stop_capture
+    # guard (both native-thread teardowns that have wedged in testing and must
+    # never take the service down). Each logs; none silences.
+    rc.check_broad_exception_catch(_DIR, snapshot(5))
 
 
 def test_prevent_builtin_exception_raises() -> None:
