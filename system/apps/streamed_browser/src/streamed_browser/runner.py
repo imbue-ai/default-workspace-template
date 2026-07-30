@@ -97,6 +97,18 @@ def _receive_pump(ws: Any, pipe: PixelfluxVideoPipe, router: InputRouter, stop_e
                     pipe.ack(int(frame_id), int(y_start))
                 except ValueError:
                     logger.warning("dropped malformed ack {!r}", data[:32])
+            elif data.startswith("r,"):
+                try:
+                    width_s, height_s = data[2:].split(",")
+                    # Floor to a sane minimum; the pipe clamps to the framebuffer
+                    # cap and to even dimensions and returns what it applied.
+                    requested_w = max(320, int(width_s))
+                    requested_h = max(240, int(height_s))
+                except ValueError:
+                    logger.warning("dropped malformed resize {!r}", data[:32])
+                else:
+                    applied_w, applied_h = pipe.set_capture_region(requested_w, requested_h)
+                    router.resize_window(applied_w, applied_h)
             else:
                 router.handle(data)
     except ConnectionClosed:
@@ -141,6 +153,11 @@ def stream_socket(ws: Any) -> None:
     last_send = time.monotonic()
     try:
         while not stop_event.is_set():
+            control_message = pipe.take_control_message()
+            if control_message is not None:
+                # Ahead of any new-size stripe (single sender thread => ordered).
+                ws.send(control_message)
+                last_send = time.monotonic()
             cursor_message = pipe.take_cursor_message()
             if cursor_message is not None:
                 ws.send(cursor_message)

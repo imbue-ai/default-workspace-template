@@ -271,6 +271,35 @@ class InputRouter:
                     self._mouse.button(x_button, False)
             self._button_mask = 0
 
+    def resize_window(self, width: int, height: int) -> None:
+        """Resize the browser's toplevel window to fill the pane (no WM here, so
+        we configure the window directly). Best-effort: the largest mapped,
+        viewable top-level child of the root is Chromium's window; anchor it at
+        the origin so capture-region coords map 1:1. X errors (a window that
+        vanished mid-call) are swallowed -- a failed resize is cosmetic."""
+        with self._lock:
+            # Broad on purpose: python-xlib raises assorted protocol errors
+            # (BadWindow/BadMatch) if the window changes under us; none should
+            # take the input thread down.
+            try:
+                root = self._display.screen().root
+                best = None
+                best_area = -1
+                for window in root.query_tree().children:
+                    attrs = window.get_attributes()
+                    if attrs.map_state != Xlib.X.IsViewable or attrs.override_redirect:
+                        continue
+                    geometry = window.get_geometry()
+                    area = geometry.width * geometry.height
+                    if area > best_area:
+                        best_area = area
+                        best = window
+                if best is not None:
+                    best.configure(x=0, y=0, width=width, height=height)
+                    self._display.sync()
+            except Exception:  # noqa: BLE001
+                logger.debug("resize_window({},{}) failed (window changed?)", width, height)
+
     def close(self) -> None:
         self.release_all()
         self._display.close()

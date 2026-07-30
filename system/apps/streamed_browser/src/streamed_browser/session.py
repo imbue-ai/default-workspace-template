@@ -23,10 +23,19 @@ from pathlib import Path
 from loguru import logger
 
 _FORTRESS_BINARY = "/opt/fortress/tilion-fortress/tilion"
-# Deliberately modest: fewer pixels is the cheapest encode win on a 2-vCPU
-# host, and the pane upscales. Bump via env when the host has cores to spare.
-_SCREEN_W = int(os.environ.get("STREAMED_BROWSER_WIDTH", "1024"))
-_SCREEN_H = int(os.environ.get("STREAMED_BROWSER_HEIGHT", "640"))
+# The framebuffer is fixed at a cap for the session's life -- Xvfb allocates it
+# once and cannot grow it at runtime (verified: RANDR maxes at the initial
+# size). Panes resize the WINDOW and the capture region WITHIN this framebuffer
+# (see videopipe.set_capture_region + xinput.resize_window), so it must be at
+# least as large as the biggest pane we'll honor. 1920x1080 = the H.264 level
+# 4.0 ceiling the client decodes; ~8MB of RAM, zero CPU (only the captured
+# sub-region is ever encoded).
+_FB_W = int(os.environ.get("STREAMED_BROWSER_FB_WIDTH", "1920"))
+_FB_H = int(os.environ.get("STREAMED_BROWSER_FB_HEIGHT", "1080"))
+# Initial window + capture size, before the viewer's first resize message lands
+# (the pane sends its real size on connect, so this is just the cold-start size).
+_INIT_W = int(os.environ.get("STREAMED_BROWSER_WIDTH", "1280"))
+_INIT_H = int(os.environ.get("STREAMED_BROWSER_HEIGHT", "800"))
 _DISPLAY_BASE = 50
 _DISPLAY_MAX = 79
 _READY_TIMEOUT = 20.0
@@ -132,7 +141,7 @@ class StreamedBrowserSession:
                 raise SessionStartupError("no free X display number for the streamed browser")
             display = f":{number}"
             self._xvfb = subprocess.Popen(
-                ["Xvfb", display, "-screen", "0", f"{_SCREEN_W}x{_SCREEN_H}x24"],
+                ["Xvfb", display, "-screen", "0", f"{_FB_W}x{_FB_H}x24"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -174,9 +183,10 @@ class StreamedBrowserSession:
                     "--hide-crash-restore-bubble",
                     "--disable-dev-shm-usage",
                     f"--user-data-dir={_PROFILE_DIR.resolve()}",
+                    # Pinned at the origin so capture-region (0,0,w,h) maps
+                    # window-pixel -> root-pixel 1:1 (input coords stay correct).
                     "--window-position=0,0",
-                    f"--window-size={_SCREEN_W},{_SCREEN_H}",
-                    "--start-maximized",
+                    f"--window-size={_INIT_W},{_INIT_H}",
                     _START_URL,
                 ],
                 env={**os.environ, "DISPLAY": display},
@@ -184,7 +194,7 @@ class StreamedBrowserSession:
                 stderr=subprocess.DEVNULL,
             )
             self.display = display
-            logger.info("streamed browser session up on {} ({}x{})", display, _SCREEN_W, _SCREEN_H)
+            logger.info("streamed browser session up on {} (framebuffer {}x{}, window {}x{})", display, _FB_W, _FB_H, _INIT_W, _INIT_H)
             return display
 
     def _stop_locked(self) -> None:
