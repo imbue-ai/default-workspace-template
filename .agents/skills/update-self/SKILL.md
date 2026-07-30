@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the latest stable release). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Minds app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 ---
 
 # Pulling updates from the upstream template, safely
@@ -22,8 +22,9 @@ each change by its class. The worker owns the merge, the conflict triage, and th
 validation; you own going live.
 
 The default target is the **latest stable `minds-v*` tag** (released,
-already-tested), not `origin/main`. The user may override to a specific tag or to
-`main`.
+already-tested), not `origin/main` -- and never newer than the Minds app driving
+this workspace, since the template ships the code that app talks to. The user may
+override to a specific tag or to `main`.
 
 Because the update flow itself evolves, once the target is resolved this pass
 **re-points itself at the target version's own copy of the update-self skill**
@@ -78,17 +79,62 @@ with open('system/config/parent.toml', 'rb') as f:
 ")"
 git fetch upstream --tags
 
-REF=$(python3 .agents/skills/update-self/scripts/update_self.py resolve-target --local-tags \
-    | python3 -c 'import sys, json; print(json.load(sys.stdin)["ref"])')
+python3 .agents/skills/update-self/scripts/update_self.py resolve-target --local-tags \
+    > /tmp/update-self-target.json || exit 1
 # `--local-tags` reads the tags the fetch above just landed (no second network
 # round-trip). Honoring a user override, append e.g. `--override main` or
-# `--override minds-v0.3.6` to the resolve-target call above.
-echo "$REF"
+# `--override minds-v0.3.6` to the resolve-target call above. The `|| exit 1`
+# leaves a refusal's `error:` line as the last thing printed -- without it the
+# read below fails on the empty file and buries that line under a traceback.
+cat /tmp/update-self-target.json
+REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.json"))["ref"])')
 ```
 
-`resolve-target` prints `{"ref": ..., "kind": "tag|branch|ref"}`; `main` resolves
-to `upstream/main` (not the stale local branch). Keep `$REF` in your shell for the
-dispatch below, and tell the user which version you're updating to.
+`resolve-target` prints `{"ref": ..., "kind": "tag|branch|ref", "ceiling": ...,
+"exceeds_ceiling": ..., "latest_available": ..., "held_back_by_ceiling": ...}`;
+`main` resolves to `upstream/main` (not the stale local branch). Keep `$REF` in
+your shell for the dispatch below, and tell the user which version you're
+updating to.
+
+**If the command exits non-zero, stop -- nothing is wrong with the workspace.**
+It prints a single plain-language `error:` line saying why no target could be
+chosen. Relay *that* line in plain terms per the §5a composition rules and offer
+the next step; the usual reasons each have a different answer for the user: the
+minds app could not be reached (it is closed, or the gateway is down -- retry once
+it is running); the app is too old to report its version (update the minds app
+itself first, then re-run); every release upstream is already newer than the app;
+or the workspace is already on the release it may take -- which is either "you are
+current" or "updating the app unlocks the newer one," and the `error:` line says
+which. Do **not** work around it by resolving a ref by hand.
+
+### The version ceiling
+
+The default target is capped at the version of the **minds app driving this
+workspace**, which `resolve-target` reads from the app itself (`ceiling` in the
+output). This matters because the template carries the code the app talks to --
+the system interface and the vendored `mngr` -- so a workspace running a template
+newer than its app would be speaking a protocol the app does not know. When the
+app reports a branch rather than a release tag (a dev build) there is nothing to
+compare against and `ceiling` does not cap anything.
+
+A workspace already sitting *at* the ceiling gets a refusal rather than a pass:
+the capped target is the release it was created from, so there is nothing to
+merge, and `resolve-target` says so instead of spending a backup, a worker and a
+validation run on a no-op -- naming the newer release the app is holding back
+when there is one. A workspace *behind* the ceiling still updates to it: being
+capped is not the same as having nothing to gain, which is why the two cases are
+distinguished by whether the resolved ref is already an ancestor of `HEAD` and
+not by the ceiling alone.
+
+**`"exceeds_ceiling": true` means the user's `--override` names a version this
+app cannot vouch for** -- newer than the app, or a branch/commit whose version
+can't be compared. Do not dispatch the worker on it silently. Tell the user
+plainly what they asked for and what it risks ("that version is newer than your
+Minds app, so parts of your workspace may stop working until you update the app
+itself"), and **get an explicit go-ahead before continuing**. This is a separate
+confirmation from the Step 5a approval gate, and it comes first: 5a asks whether
+to apply a verified update, this asks whether to attempt an unsupported one at
+all. An override at or below the ceiling needs no extra confirmation.
 
 To preview what the release actually changes, always diff from the **merge
 base**, never from `HEAD` -- a `git diff HEAD "$REF"` also shows every *local*
@@ -145,7 +191,13 @@ target. The target's flow is entered at **Step 3**. So an edit to this skill mus
 preserve that boundary: a future version's Steps 1-2 must stay "capture a backup,
 the single-flight/clean-tree checks, then resolve a ref into `$REF`", and its
 Step 3 must stay the worker dispatch -- otherwise an older initiator handing off
-into a newer copy (or vice versa) lands at the wrong step. Keep the staging path
+into a newer copy (or vice versa) lands at the wrong step. The version ceiling is
+part of resolving `$REF`, so Step 2 computes it from the *local* copy -- which on
+a workspace whose template predates the ceiling does not compute one at all.
+Step 3a therefore re-checks it from the staged target copy before the dispatch,
+so the cap holds on the very first update into it. Keep 3a in any future
+version: it, not Step 2, is what protects a workspace arriving from an older
+template. Keep the staging path
 (`data/.tasks/update-self/skill-at-target/.agents/skills/update-self`) stable for the
 same reason. Note also that this handoff runs the target ref's `update_self.py`
 and follows its prose *before* the Step 5a approval gate; for the default target
@@ -154,6 +206,49 @@ merge itself, but a `--override` to an untrusted ref means trusting that ref's
 flow code and instructions -- only override to a ref you trust.
 
 ## 3. Dispatch the worker
+
+### 3a. Re-check the ceiling from the staged copy (first, before anything else)
+
+Run the version ceiling once more, from the **staged target copy**:
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    resolve-target --local-tags --override "$REF" > /tmp/update-self-recheck.json || exit 1
+cat /tmp/update-self-recheck.json
+```
+
+**This is not redundant with Step 2 -- it is the only ceiling check that runs on
+a workspace updating *into* the ceiling for the first time.** Step 2 runs from
+this workspace's *local* skill copy, and any workspace whose template predates
+the ceiling has a local copy that does not check one: it happily resolves the
+newest tag upstream, which is exactly the too-new target the ceiling exists to
+refuse. The staged copy is by construction at least as new as `$REF`, so this
+check runs no matter how stale the initiator was. That is precisely what §2a's
+hand-off machinery is for -- "a fix that shipped in the release is applied on the
+way *in*" -- and the ceiling is such a fix.
+
+If `exceeds_ceiling` is `true` here and the user has **not** already confirmed an
+over-ceiling `--override` in Step 2, stop and take that confirmation now, with
+the same plain-language framing Step 2 describes. A default (no-override) resolve
+that trips this means the local copy chose a target its app cannot support:
+say so, and offer the ref this pass *would* cap to (re-run without `--override`
+to learn it). Do not dispatch the worker until it is resolved.
+
+**If the user takes the capped ref instead**, set `$REF` to it and then re-run
+§2a for the new `$REF` before dispatching. Do not just reassign the variable:
+§2a staged the skill at the *old* `$REF`, and the staged copy is what supplies
+the worker guide, the `update_self.py` both of you run, and the prose you are
+reading -- leaving it in place would run the too-new release's flow against a
+target that is not it. `bootstrap-skill` re-stages destructively, so re-running
+it is safe, and 2a's `differs` branch then decides which document you follow, as
+on the first pass. The capped ref is by construction at or below the ceiling, so
+the second time through 3a clears.
+
+The boundary in §2a still holds: Step 2 is what *resolves* a target and Step 3 is
+the worker dispatch. 3a resolves nothing -- it either clears the target Step 2
+chose or hands the pass back to 2a with the ceiling's answer.
+
+### 3b. Launch
 
 Open a tracking ticket, write the task file, launch via the `launch-task`
 machinery, and background-poll.
@@ -286,20 +381,30 @@ order:
 
 1. **Verdict headline** (one line, first thing they see): "ready to apply,"
    "ready to apply, with one caveat," or "needs your input on X."
-2. **What's new** -- always first after the headline. Keep this *detailed*: some
-   readers want the specifics, others happily skim it as "great, they're on it."
-   Do not thin it out -- carry the worker's digest, just in prose a lay reader
+2. **Held back by your app version** -- include this line if and only if
+   `held_back_by_ceiling` is `true` in the resolve-target output
+   (`/tmp/update-self-target.json`). Say it in one plain line -- "there's a newer
+   version available (`latest_available`), but it needs a newer Minds app than
+   you're running, so I stopped at X" -- so the user understands why they aren't
+   getting the newest thing and knows updating the app unlocks it. Do **not**
+   derive this yourself by comparing `ref` against `latest_available`: those two
+   also differ when the *user's own* `--override` picked an older tag, and saying
+   "your app held this back" there blames the app for the user's choice. The flag
+   already accounts for that.
+3. **What's new** -- always first after the ceiling note. Keep this *detailed*:
+   some readers want the specifics, others happily skim it as "great, they're on
+   it." Do not thin it out -- carry the worker's digest, just in prose a lay reader
    parses (describe what each change does, not the file names).
-3. **Conflicts** -- "none," or what needed reconciling.
-4. **Validation** -- did the suite pass; is any failure pre-existing/unrelated.
-5. **Caveats** -- only if any; what to expect after applying.
-6. **Pre-existing issues** -- only if any, and only after verifying attribution
+4. **Conflicts** -- "none," or what needed reconciling.
+5. **Validation** -- did the suite pass; is any failure pre-existing/unrelated.
+6. **Caveats** -- only if any; what to expect after applying.
+7. **Pre-existing issues** -- only if any, and only after verifying attribution
    (see the worker guidance's §4a): state plainly whether each lives in
    **built-in** code (present at the target ref -> report upstream) or the
    **user's own** code. Never call built-in code "workspace-added."
-7. **The ask** -- see the language rule below.
+8. **The ask** -- see the language rule below.
 
-**Detail in the informational sections (2-4); plain language at the decision
+**Detail in the informational sections (3-5); plain language at the decision
 points.** Spend deliberate plain-language care only where the message asks the
 user to **decide or act** -- the verdict headline, any caveat that needs their
 action, and the closing ask. Those carry no jargon: never "merge," "land," or
