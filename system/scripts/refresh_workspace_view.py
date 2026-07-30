@@ -82,8 +82,9 @@ RELOAD_OP = "reload_system_interface"
 # This therefore names the checkout *this copy of the script* lives in, which is
 # the served one for every caller that can reach here -- the reveal script and
 # the update flows all edit and restart the live service, which is only coherent
-# from the workspace's own checkout. Same handoff, and same assumption, as
-# ``forward_port.py`` writing ``data/.state/apps.toml`` for the server to read.
+# from the workspace's own checkout. Same shape of handoff as ``forward_port.py``
+# writing ``data/.state/apps.toml`` for the server to read, though that one
+# resolves its path from the cwd rather than from itself.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 VIEW_EPOCH_PATH = _REPO_ROOT / "data/.state/view_epoch"
 
