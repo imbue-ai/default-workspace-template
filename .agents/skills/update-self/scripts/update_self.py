@@ -527,17 +527,24 @@ def classify_path(path: str) -> PathClass:
       for a workspace rebuild, never revealed by a service restart.
     - ``dockerfile`` -- ``system/Dockerfile``; split by hunk into live-applicable
       vs rebuild-only by worker judgement.
-    - ``docs`` -- any ``README.md``, ``CLAUDE.md``, changelog entries, and
-      any other ``*.md`` (including everything under ``docs/``).
+    - ``docs`` -- a ``README.md`` or a ``changelog/*.md`` entry wherever it lives,
+      ``CLAUDE.md``, and any other ``*.md`` outside the prefixes above. A
+      ``SKILL.md`` under ``.agents/`` is *not* docs: a skill's prose is what an
+      agent runs, so it stays ``shared_runtime``.
     - ``other`` -- anything else.
     """
     is_manifest = Path(path).name in _MANIFEST_BASENAMES
     project = _project_for_path(path)
 
-    # A README is documentation wherever it lives -- without this, a README
-    # under a service prefix (e.g. ``system/libs/bootstrap/README.md``) would inherit
-    # that prefix's reveal class and trigger a pointless restart.
-    if Path(path).name == "README.md":
+    # A README or a per-PR changelog entry is documentation wherever it lives --
+    # without this, one under a service prefix (e.g. ``system/libs/bootstrap/``)
+    # would inherit that prefix's reveal class and trigger a pointless restart.
+    # Every release ships entries under ``.agents/changelog/``, so this is the
+    # common case rather than a corner. Matched one level deep and on ``.md``
+    # only (the bucket glob ``**/changelog/*``), so an *app* named ``changelog``
+    # keeps its own class.
+    is_changelog_entry = Path(path).parent.name == "changelog" and path.endswith(".md")
+    if Path(path).name == "README.md" or is_changelog_entry:
         return PathClass(CLASS_DOCS, project, is_manifest)
     # Provisioning files are matched before the generic ``system/scripts/`` and
     # catch-all rules below: a toolchain script lives under ``system/scripts/`` (would

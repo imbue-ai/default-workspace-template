@@ -535,6 +535,15 @@ def test_classify_path_reveal_classes() -> None:
         "system/libs/bootstrap/README.md": update_self.CLASS_DOCS,
         "system/apps/system_interface/README.md": update_self.CLASS_DOCS,
         "system/vendor/mngr/README.md": update_self.CLASS_DOCS,
+        # Changelog entries likewise, in every project's bucket -- a release
+        # ships them under runtime prefixes, so without this nearly every update
+        # would restart a service (or run an impact analysis) over markdown.
+        ".agents/changelog/some-entry.md": update_self.CLASS_DOCS,
+        "system/libs/bootstrap/changelog/some-entry.md": update_self.CLASS_DOCS,
+        "system/apps/system_interface/changelog/some-entry.md": update_self.CLASS_DOCS,
+        # But the match is one level deep and markdown-only, so an app that
+        # happens to be *named* changelog still reveals as code.
+        "system/apps/changelog/main.py": update_self.CLASS_SHARED_RUNTIME,
     }
     for path, expected in cases.items():
         assert update_self.classify_path(path).reveal_class == expected, path
