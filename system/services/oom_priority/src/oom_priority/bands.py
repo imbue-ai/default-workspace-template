@@ -123,6 +123,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "terminal": 10,
     "system_interface": 20,
     "cloudflared": 30,
+    # The sharing stack (gateway + caddy + frpc children inherit its band): a
+    # shed share tunnel drops live viewers, so it sits just above cloudflared.
+    "share-gateway": 35,
     # Opt-in runtime/ sync (added by the github-sync skill); inherits the band the
     # now-removed runtime-backup service used to hold.
     "github-sync": 40,

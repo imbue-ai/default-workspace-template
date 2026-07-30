@@ -10,6 +10,7 @@ dependencies = [
     "github-sync",
     "env-converge",
     "host-backup",
+    "share-gateway",
     "tk-command-parsing",
     "imbue-common",
     "tomlkit>=0.12",
@@ -72,6 +73,7 @@ app-watcher = { workspace = true }
 github-sync = { workspace = true }
 env-converge = { workspace = true }
 host-backup = { workspace = true }
+share-gateway = { workspace = true }
 mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }

@@ -1,0 +1,208 @@
+"""The gateway's HTTP surface: caddy's forward_auth backend + the login callback.
+
+Every request to a shared origin passes through ``/_auth/verify`` (session
+cookie verified, email re-checked against the grants file, Origin policy
+enforced, session cookie stripped from what the service sees). Visitors
+without a session are bounced to the accounts broker and land back on
+``/_auth/callback``, which verifies the broker's handoff token and sets the
+workspace session cookie.
+"""
+
+import secrets
+import threading
+import time
+from pathlib import Path
+from urllib.parse import urlencode
+
+from flask import Flask
+from flask import Response
+from flask import request
+
+from share_gateway.grants import GrantsError
+from share_gateway.grants import load_grants
+from share_gateway.handoff import HandoffVerificationError
+from share_gateway.handoff import JwksCache
+from share_gateway.handoff import SingleUseJtiRegistry
+from share_gateway.handoff import verify_handoff_token
+from share_gateway.hostnames import service_for_host
+from share_gateway.materials import ShareMaterials
+from share_gateway.origin_policy import is_request_origin_allowed
+from share_gateway.session_cookie import SESSION_COOKIE_NAME
+from share_gateway.session_cookie import SESSION_LIFETIME_SECONDS
+from share_gateway.session_cookie import mint_session_cookie_value
+from share_gateway.session_cookie import strip_session_cookie
+from share_gateway.session_cookie import verify_session_cookie_value
+
+_PENDING_LOGIN_TTL_SECONDS = 600.0
+
+_LOADING_PAGE = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3">
+<title>Loading...</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
+height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<body><div><h1>Starting up&hellip;</h1>
+<p>This service is not ready yet. The page retries automatically.</p></div></body></html>
+"""
+
+_FORBIDDEN_PAGE = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Not shared with you</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
+height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<body><div><h1>Not shared with you</h1>
+<p>This workspace exists, but your account has not been granted access to this page.</p></div></body></html>
+"""
+
+
+class PendingLoginRegistry:
+    """Nonces for in-flight broker logins: minted at redirect time, consumed once at the callback."""
+
+    def __init__(self) -> None:
+        self._created_at_by_nonce: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def mint(self) -> str:
+        nonce = secrets.token_urlsafe(24)
+        now = time.monotonic()
+        with self._lock:
+            self._created_at_by_nonce = {
+                pending_nonce: created_at
+                for pending_nonce, created_at in self._created_at_by_nonce.items()
+                if now - created_at < _PENDING_LOGIN_TTL_SECONDS
+            }
+            self._created_at_by_nonce[nonce] = now
+        return nonce
+
+    def consume(self, nonce: str) -> bool:
+        with self._lock:
+            created_at = self._created_at_by_nonce.pop(nonce, None)
+        return created_at is not None and time.monotonic() - created_at < _PENDING_LOGIN_TTL_SECONDS
+
+
+def _is_html_navigation(method: str, accept_header: str, is_websocket_upgrade: bool) -> bool:
+    return method.upper() == "GET" and not is_websocket_upgrade and "text/html" in accept_header.lower()
+
+
+def _requested_url(host: str, forwarded_uri: str) -> str:
+    uri = forwarded_uri if forwarded_uri.startswith("/") else "/"
+    return f"https://{host}{uri}"
+
+
+def build_gateway_app(
+    materials: ShareMaterials,
+    grants_path: Path,
+    signing_secret: str,
+    jwks_cache: JwksCache,
+    jti_registry: SingleUseJtiRegistry,
+    pending_logins: PendingLoginRegistry,
+) -> Flask:
+    app = Flask(__name__)
+    workspace_domain = materials.workspace_domain
+
+    def _forbidden() -> Response:
+        return Response(_FORBIDDEN_PAGE, status=403, mimetype="text/html")
+
+    @app.get("/_auth/healthz")
+    def healthz() -> Response:
+        return Response("ok", status=200, mimetype="text/plain")
+
+    @app.get("/_auth/loading")
+    def loading() -> Response:
+        return Response(_LOADING_PAGE, status=503, mimetype="text/html")
+
+    @app.get("/_auth/verify")
+    def verify() -> Response:
+        host = request.headers.get("X-Forwarded-Host", "")
+        method = request.headers.get("X-Forwarded-Method", "GET")
+        forwarded_uri = request.headers.get("X-Forwarded-Uri", "/")
+        is_ours, service_name = service_for_host(host, workspace_domain)
+        if not is_ours:
+            return _forbidden()
+
+        # Upgrade is hop-by-hop, so caddy passes it explicitly (see the
+        # forward_auth block in the rendered Caddyfile).
+        is_websocket_upgrade = request.headers.get("X-Forwarded-Upgrade", "").lower() == "websocket"
+
+        origin_header = request.headers.get("Origin")
+        if not is_request_origin_allowed(method, origin_header, is_websocket_upgrade, workspace_domain):
+            return _forbidden()
+
+        cookie_header = request.headers.get("Cookie", "")
+        session_value = request.cookies.get(SESSION_COOKIE_NAME, "")
+        email = verify_session_cookie_value(signing_secret, session_value, workspace_domain)
+        if email is None:
+            accept_header = request.headers.get("Accept", "")
+            if _is_html_navigation(method, accept_header, is_websocket_upgrade):
+                nonce = pending_logins.mint()
+                authorize_query = urlencode(
+                    {
+                        "machine_domain": workspace_domain,
+                        "next": _requested_url(host, forwarded_uri),
+                        "state": nonce,
+                    }
+                )
+                return Response(
+                    status=302,
+                    headers={"Location": f"{materials.broker_url}/share/authorize?{authorize_query}"},
+                )
+            return Response("authentication required", status=401, mimetype="text/plain")
+
+        # Re-check the grants file on every request so revocation is instant.
+        # A malformed or missing grants file fails closed.
+        try:
+            grants = load_grants(grants_path)
+        except GrantsError:
+            return _forbidden()
+        if not grants.allows(email, service_name):
+            return _forbidden()
+
+        return Response(
+            status=200,
+            headers={"X-Share-Filtered-Cookie": strip_session_cookie(cookie_header)},
+        )
+
+    @app.get("/_auth/callback")
+    def callback() -> Response:
+        token = request.args.get("token", "")
+        state = request.args.get("state", "")
+        next_url = request.args.get("next", "")
+        if not token or not state or not pending_logins.consume(state):
+            return _forbidden()
+        try:
+            email = verify_handoff_token(
+                token=token,
+                expected_nonce=state,
+                workspace_domain=workspace_domain,
+                jwks_cache=jwks_cache,
+                jti_registry=jti_registry,
+            )
+        except HandoffVerificationError:
+            return _forbidden()
+        try:
+            grants = load_grants(grants_path)
+        except GrantsError:
+            return _forbidden()
+        if not grants.allows_any(email):
+            return _forbidden()
+
+        # Only bounce back to one of this workspace's own origins.
+        redirect_target = f"https://{workspace_domain}/"
+        if next_url.startswith("https://"):
+            next_host = next_url.removeprefix("https://").split("/", 1)[0]
+            is_ours, _service = service_for_host(next_host, workspace_domain)
+            if is_ours:
+                redirect_target = next_url
+
+        response = Response(status=302, headers={"Location": redirect_target})
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            mint_session_cookie_value(signing_secret, email, workspace_domain),
+            max_age=SESSION_LIFETIME_SECONDS,
+            domain=workspace_domain,
+            path="/",
+            secure=True,
+            httponly=True,
+            samesite="Lax",
+        )
+        return response
+
+    return app
