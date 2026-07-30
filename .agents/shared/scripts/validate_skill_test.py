@@ -205,7 +205,7 @@ _BROKEN_RUN_PY = _PEP723_HEADER + "import this_module_definitely_does_not_exist_
 
 
 def _skill_with_run_py(base: Path, run_py_body: str) -> Path:
-    """A valid skill whose scripts/run.py has the given body."""
+    """A valid skill whose system/scripts/run.py has the given body."""
     skill = _write_skill(base, "s", metadata_crystallized=True)
     (skill / "scripts" / "run.py").write_text(run_py_body)
     return skill

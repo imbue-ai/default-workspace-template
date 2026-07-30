@@ -1,0 +1,3 @@
+Workspace apt sources now default to imbue's snapshot-pinned mirror at `https://apt.imbuepackages.com` (`system/scripts/write_apt_sources.sh`): image builds and runtime installs stop taking the throttled snapshot.debian.org path unless `APT_MIRROR_BASE_URL` is explicitly set empty (the mirror-outage fallback). Setting `APT_MIRROR_BASE_URL` to another base still overrides. The mirror itself is the standalone `apps/apt_mirror` project in the mngr monorepo (Cloudflare Worker + R2), no longer the remote service connector.
+
+Advance the pinned apt snapshot timestamp from 20260720T000000Z to 20260725T000000Z -- the first timestamp cut on the live mirror (per the release runbook, the mirror must serve a timestamp before it can be pinned here).

@@ -39,23 +39,23 @@ worker's worktree.
 > published tip, STOP -- do not fall back to a from-`BASE_REF` rebuild.
 
 > **CWD INVARIANT -- where each step runs.** The source mind's live checkout at
-> `/mngr/code` is touched in exactly two read-only ways and one write:
-> - §2 does a **read-only object fetch** of the published repo into `/mngr/code`'s
+> `/home/user/workspace` is touched in exactly two read-only ways and one write:
+> - §2 does a **read-only object fetch** of the published repo into `/home/user/workspace`'s
 >   object store and reads the delta with `git diff`/`git show`. A fetch adds
->   objects; it NEVER changes `/mngr/code`'s working tree or branch. This is safe, and
+>   objects; it NEVER changes `/home/user/workspace`'s working tree or branch. This is safe, and
 >   is the same read-only fetch `use-inspiration` §1 uses.
 > - Everything from §3's worker `done` through §7's push runs with **cwd = `$WT`**
->   (the worker's worktree), NEVER `/mngr/code`. There is no merge-back: `$WT`'s tree,
+>   (the worker's worktree), NEVER `/home/user/workspace`. There is no merge-back: `$WT`'s tree,
 >   built by the worker on top of the fetched published tip, IS what gets pushed,
 >   as-is, from `$WT`. IGNORE `lead-proxy.md`'s default `done -> merge the
 >   worker's branch` handling -- as in `publish-inspiration`, merging the assembly
->   branch into `/mngr/code` is forbidden (it once reset a live mind's tree to an old
->   base). Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/mngr/code`, or
->   any step that mutates `/mngr/code`'s tree after assembly.
-> - **The ONE sanctioned write to `/mngr/code`: §8, the version-history entry.** After
->   the push SUCCEEDS, `/mngr/code` gets exactly one write -- appending the v(n+1)
->   entry to `VERSION_HISTORY.md` and committing that single file on the branch
->   `/mngr/code` is already on (`git add VERSION_HISTORY.md` + `git commit`, NEVER a
+>   branch into `/home/user/workspace` is forbidden (it once reset a live mind's tree to an old
+>   base). Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/home/user/workspace`, or
+>   any step that mutates `/home/user/workspace`'s tree after assembly.
+> - **The ONE sanctioned write to `/home/user/workspace`: §8, the version-history entry.** After
+>   the push SUCCEEDS, `/home/user/workspace` gets exactly one write -- appending the v(n+1)
+>   entry to `docs/VERSION_HISTORY.md` and committing that single file on the branch
+>   `/home/user/workspace` is already on (`git add docs/VERSION_HISTORY.md` + `git commit`, NEVER a
 >   merge, checkout, reset, or `git add -A`). If the push did not happen, it does
 >   not run at all.
 
@@ -72,11 +72,11 @@ worker's worktree.
 
 ## Shared conventions
 
-- **The ledger** is `VERSION_HISTORY.md`. Its `## Inspirations` section is
+- **The ledger** is `docs/VERSION_HISTORY.md`. Its `## Inspirations` section is
   where a publish/revise is recorded (the same format `publish-inspiration` §8
   step 4 and `update-self` §5b write); §1 reads it and §8 appends to it.
 - **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees under
-  `/mngr/worktree/<name>-<uuid>/`; the path cannot be guessed -- resolve it from
+  `/home/user/worktrees/<name>-<uuid>/`; the path cannot be guessed -- resolve it from
   the worker's `done` report per §3. Everything after re-assembly runs with cwd =
   `$WT`.
 - **The published tip.** The current `main` of the published repo -- the tree the
@@ -99,7 +99,7 @@ SLUG="<slug>"
 SLUG="$SLUG" awk '
     $0 ~ "^### " ENVIRON["SLUG"] "  --  " { print; inside = 1; next }
     /^(## |### )/ { inside = 0 }
-    inside' VERSION_HISTORY.md
+    inside' docs/VERSION_HISTORY.md
 ```
 
 From that block extract:
@@ -120,8 +120,8 @@ delta, only the full current state of the recipe's paths.
 
 ## 2. Fetch the published tip, verify it, compute the delta, and run the scope gate
 
-**cwd = `/mngr/code` for this section** (read-only fetch + `git diff`; nothing in
-`/mngr/code`'s working tree changes).
+**cwd = `/home/user/workspace` for this section** (read-only fetch + `git diff`; nothing in
+`/home/user/workspace`'s working tree changes).
 
 **2a. Get read access and fetch the published tip.** Route git through the
 latchkey gateway exactly as `use-inspiration` §1 does for a private fetch (the
@@ -222,12 +222,12 @@ steps (mirroring `build_inspiration.sh`'s mechanics -- stage-before-reset,
 must assemble from the published tip's tree, but -- like `build_inspiration.sh` --
 it does no network fetch itself. Bundle the tip you already fetched in §2 and
 stage it into the worker via `launch-task`'s `source_artifacts_dir` mechanism (a
-gitignored artifact pushed into the worker's worktree):
+gitignored file pushed into the worker's worktree):
 
 ```bash
-mkdir -p runtime/launch-task/<slug>
+mkdir -p data/.tasks/launch-task/<slug>
 git tag -f "_pub-tip-<slug>" "$PUBLISHED_TIP"
-git bundle create runtime/launch-task/<slug>/published-tip.bundle "_pub-tip-<slug>"
+git bundle create data/.tasks/launch-task/<slug>/published-tip.bundle "_pub-tip-<slug>"
 git tag -d "_pub-tip-<slug>"
 ```
 
@@ -237,7 +237,7 @@ over as a frozen bundle is deliberate: it keeps the worker offline (matching
 in the lead (matching `publish-inspiration`), and lets divergence (§2b) be
 surfaced in chat rather than discovered deep inside the worker.
 
-**3b. Commit pending `/mngr/code` work, then write the task file and launch.** (`mngr
+**3b. Commit pending `/home/user/workspace` work, then write the task file and launch.** (`mngr
 create` refuses a dirty tree; commit -- never stash.) Substitute the real values:
 the slug, repo URL, `PUBLISHED_TIP` sha, the user-confirmed changed paths as a
 `--name-status` delta (added / modified / deleted, scoped to what the user
@@ -245,7 +245,7 @@ approved in §2e, plus any newly-added path), the `exclude` list and
 `modification_rules` from §2c, the new version `v(n+1)`, and a one-line
 description of what changed for the changelog entry.
 
-Set `source_artifacts_dir: runtime/launch-task/<slug>` in the task frontmatter so
+Set `source_artifacts_dir: data/.tasks/launch-task/<slug>` in the task frontmatter so
 the bundle is pushed to the worker. The task body directs the worker to:
 
 1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `FINISH_REPORT_PATH`) per
@@ -254,7 +254,7 @@ the bundle is pushed to the worker. The task body directs the worker to:
 2. **Load the published tip from the bundle** and confirm it matches the expected
    sha (objects only; no network):
    ```bash
-   git fetch runtime/launch-task/<slug>/published-tip.bundle "refs/tags/_pub-tip-<slug>:refs/tags/_pub-tip-<slug>"
+   git fetch data/.tasks/launch-task/<slug>/published-tip.bundle "refs/tags/_pub-tip-<slug>:refs/tags/_pub-tip-<slug>"
    test "$(git rev-parse refs/tags/_pub-tip-<slug>)" = "<PUBLISHED_TIP>"   # abort if not
    ```
 3. **Snapshot the secret-scan tools and stage the approved changed paths BEFORE
@@ -299,7 +299,7 @@ the bundle is pushed to the worker. The task body directs the worker to:
    date). Newest last; NEVER rewrite an earlier Publication-history entry, and
    NEVER write into "Adaptation history" (that is the adopters' log). Leave the
    thumbnail as published unless the lead's task says the user wants it changed.
-8. **Boot smoke-check** the result -- validate `supervisord.conf` via the
+8. **Boot smoke-check** the result -- validate `system/supervisord.conf` via the
    supervisor lib (`ServerOptions().realize()` / `process_config()`), NEVER
    `supervisord -t` (which launches the daemon), the same method
    `build_inspiration.sh` step 9 uses. If it fails, report `stuck`.
@@ -420,22 +420,22 @@ create one or change its settings. Never fall back to a token-in-URL push.
 
 ## 8. Record the v(n+1) entry in the ledger (ONLY after the push succeeded)
 
-The single sanctioned write back to `/mngr/code` -- read the CWD-INVARIANT callout at
+The single sanctioned write back to `/home/user/workspace` -- read the CWD-INVARIANT callout at
 the top before running it. If the push failed or the user aborted, SKIP this
 entirely: an update that did not publish is never recorded.
 
-Write the entry directly into `VERSION_HISTORY.md` (cwd `/mngr/code`) -- the same
+Write the entry directly into `docs/VERSION_HISTORY.md` (cwd `/home/user/workspace`) -- the same
 `## Inspirations` recording contract `publish-inspiration` §8 step 4 owns, just
 computing the NEXT version instead of v1. Append-only; every `## Inspirations`
 line ends in a commit; a retried step is a no-op, never a duplicate. Inputs:
 `SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo>"`, `NOTE="<one line: what
-changed>"`, and `SOURCE_SHA` = the current `/mngr/code` HEAD the update was cut from
+changed>"`, and `SOURCE_SHA` = the current `/home/user/workspace` HEAD the update was cut from
 (the source anchor for v(n+1) -- NOT `BASE_REF`, NOT `PUBLISHED_TIP`, NOT anything
 from `$WT`).
 
 - The slug's `### <slug>  --  <repo-url>` heading already exists (this mind
   published v1 through `publish-inspiration`). In the unlikely event
-  `VERSION_HISTORY.md` is missing, recreate the shipped three-section
+  `docs/VERSION_HISTORY.md` is missing, recreate the shipped three-section
   starter (`## Workspace`, `## Inspirations`, `## Adopted inspirations`; the exact
   heredoc lives in `update-self` §5b) and re-add the heading before appending.
 - Append one line under that heading:
@@ -454,12 +454,12 @@ from `$WT`).
 Then commit that one file:
 
 ```bash
-( cd /mngr/code \
-    && git add VERSION_HISTORY.md \
+( cd /home/user/workspace \
+    && git add docs/VERSION_HISTORY.md \
     && git commit -m "version history: updated inspiration <slug> to v(n+1)" )
 ```
 
-Exactly one file staged by name, one commit, on whatever branch `/mngr/code` is on.
+Exactly one file staged by name, one commit, on whatever branch `/home/user/workspace` is on.
 NEVER `git add -A`, never a merge/checkout/reset. If the idempotence check found
 the entry already recorded, nothing is staged and you skip the commit. If the
 commit fails (a hook rejects it), the update still succeeded -- say so and fix the
@@ -470,8 +470,8 @@ entry rather than re-pushing anything.
 On a successful push, clean up per `launch-task`: the worker can be destroyed now
 (`create_worker.py destroy --name <slug>`), and the local `mngr/<slug>` branch can
 go (the snapshot commit lives on the remote; the branch's intermediate commits
-were never pushed). Remove the bundle artifact
-(`runtime/launch-task/<slug>/published-tip.bundle`). No git remote cleanup is
+were never pushed). Remove the bundle file
+(`data/.tasks/launch-task/<slug>/published-tip.bundle`). No git remote cleanup is
 needed -- §2a/§7 fetch and push explicit URLs and add no named remote.
 
 If the push failed and you are stopping, leave the worker, `$WT`, and the branch

@@ -1,16 +1,16 @@
-# Contention between passes over the same artifact
+# Contention between passes over the same creation
 
-Multiple chats can each change the same artifact and each dispatch a harden
-pass (`update-artifact` / `heal-artifact`). Left uncoordinated this produces
+Multiple chats can each change the same creation and each dispatch a harden
+pass (`update-creation` / `heal-creation`). Left uncoordinated this produces
 two failure shapes: two agents' harden workers colliding (the worker name,
-branch, and runtime dir are all derived from the artifact name), and a
+branch, and runtime dir are all derived from the creation name), and a
 hardened branch getting merged after the base it was verified against has
 moved.
 
 Two principles drive every rule below:
 
 - **A hardened branch is only trustworthy against the exact base it was
-  verified on.** Merging it after the artifact changed underneath -- or
+  verified on.** Merging it after the creation changed underneath -- or
   hand-resolving a conflicted merge -- ships a combination nobody tested,
   which defeats the point of the pass.
 - **The foreground always wins.** A user waiting in chat outranks a
@@ -19,10 +19,10 @@ Two principles drive every rule below:
   an in-flight pass; it just makes that pass stale, and staleness is handled
   here.
 
-## Before dispatch: one pass per artifact (single-flight)
+## Before dispatch: one pass per creation (single-flight)
 
-At most one harden pass per artifact may be in flight, in either flow -- an
-`update` and a `heal` pass on the same artifact collide just as hard as two
+At most one harden pass per creation may be in flight, in either flow -- an
+`update` and a `heal` pass on the same creation collide just as hard as two
 updates. Before opening the tracking ticket, look for a live pass:
 
 ```bash
@@ -57,26 +57,27 @@ states; the newest pass always covers the union instead.
 
 Run these in order before `git merge`:
 
-1. **Wait out the foreground lease (services only).** If the artifact is a
-   service and another agent holds its editing lease (an open/in-progress
-   `editing service <name>` ticket in `tk ready` -- see `update-service`'s
+1. **Wait out the foreground lease (apps and services only).** If the creation is
+   an app or service and another agent holds its editing lease (an open/in-progress
+   `editing service <name>` ticket in `tk ready` -- see `update-app`'s
    "One editor at a time"), do not merge or refresh mid-edit. Re-check about
    once a minute until the lease is released, then continue -- their edit
    will usually make your pass stale anyway, which the next check catches.
 
-2. **Freshness check.** The pass is mergeable only if the artifact has not
+2. **Freshness check.** The pass is mergeable only if the creation has not
    changed since the worker branched:
 
    ```bash
    BASE=$(git merge-base HEAD "$WORKER_BRANCH")
-   git diff --name-only "$BASE" HEAD -- <ARTIFACT_PATHS>
+   git diff --name-only "$BASE" HEAD -- <CREATION_PATHS>
    ```
 
-   `<ARTIFACT_PATHS>` is the artifact's whole footprint, not just the files
-   the worker touched: for a service, `libs/<package>/ supervisord.conf`;
+   `<CREATION_PATHS>` is the creation's whole footprint, not just the files
+   the worker touched: for an app, `system/apps/<package>/ system/supervisord.conf`
+   (a standalone service likewise, under `system/services/<package>/`);
    for a skill, `.agents/skills/<name>/`; for a shared script or reference,
-   its path; for the system interface, `apps/system_interface/` (that
-   artifact's merge lives in `update-system-interface` Step 4, which applies
+   its path; for the system interface, `system/apps/system_interface/` (that
+   creation's merge lives in `update-system-interface` Step 4, which applies
    this same check). Empty output means fresh: merge normally. Any output
    means the base moved under the worker: the pass is stale -- do not merge;
    supersede it (below).
@@ -101,6 +102,6 @@ Deleting the branch is deliberate: its verification ran against a base that
 no longer exists, so nothing on it is trustworthy to keep. Then dispatch a
 fresh pass through the normal flow (Steps 1-3 of the calling skill) whose
 scope covers **everything since the last hardened merge**: at minimum the
-`$BASE..HEAD` commits touching the artifact, plus whatever any notes on the
+`$BASE..HEAD` commits touching the creation, plus whatever any notes on the
 old ticket describe. One superseding pass validates the union of all pending
 changes together -- which is the only combination that will actually run.

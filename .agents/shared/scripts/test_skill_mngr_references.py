@@ -1,7 +1,7 @@
 """Guard: ``mngr <subcommand>`` references in skill markdown name real commands.
 
 Skills carry ``mngr ...`` command examples in their prose that agents copy and
-run verbatim. When vendor/mngr renames or removes a subcommand, those examples
+run verbatim. When system/vendor/mngr renames or removes a subcommand, those examples
 go stale silently. This test scans skill markdown for code-formatted
 ``mngr <subcommand>`` tokens and asserts each subcommand exists in the live mngr
 CLI, so that drift fails at merge.

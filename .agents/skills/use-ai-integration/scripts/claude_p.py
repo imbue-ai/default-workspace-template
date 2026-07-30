@@ -12,11 +12,13 @@ instead (cheaper for non-agentic work; see the use-ai-integration skill). With n
 key, ``claude -p`` runs on the local Claude subscription's programmatic pool.
 
 Workspace credentials live in the ``env`` block of the shared
-``$CLAUDE_CONFIG_DIR/settings.json`` (written by the in-UI Claude sign-in
+``~/.claude/settings.json`` (claude's default config dir -- resolved via
+``$CLAUDE_CONFIG_DIR`` only when that var is explicitly set, which a minds
+workspace never does; written by the in-UI Claude sign-in
 modal), NOT in the process environment -- long-lived services inherit a
 frozen env from supervisord, so an env-var check would go stale the moment
 the user changes auth. Keyed (API key) integrations additionally snapshot
-the key + base URL into ``runtime/secrets/anthropic.env`` at setup time
+the key + base URL into ``data/.secrets/anthropic.env`` at setup time
 (``write_anthropic_env_snapshot``): the workspace's sign-in can change
 after a service is built, and a keyed service keeps billing against the
 key it was set up with rather than silently switching. The user removes or
@@ -94,10 +96,10 @@ class WorkspaceAICredentials:
 # Where a keyed integration's snapshot of the workspace API key lives, written
 # at integration-setup time by ``write_anthropic_env_snapshot``. Relative to
 # the repo root, which is every service's working directory (supervisord runs
-# them from /code). Holds ONLY ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL): the
+# them from /home/user/workspace). Holds ONLY ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL): the
 # subscription oauth token cannot authenticate direct API calls, so it is
 # never written here.
-ANTHROPIC_ENV_SNAPSHOT_PATH = "runtime/secrets/anthropic.env"
+ANTHROPIC_ENV_SNAPSHOT_PATH = "data/.secrets/anthropic.env"
 
 
 def _read_env_file(path: str) -> dict[str, str]:
@@ -120,7 +122,7 @@ def _read_env_file(path: str) -> dict[str, str]:
 def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     """Resolve current credentials: the snapshot file, then shared settings, then env.
 
-    ``runtime/secrets/anthropic.env`` -- the key snapshot a keyed integration
+    ``data/.secrets/anthropic.env`` -- the key snapshot a keyed integration
     writes at setup (``write_anthropic_env_snapshot``) -- wins for the API key
     and base URL: a built service stays pinned to the key it was set up with
     even after the user switches the workspace's sign-in in the modal. The
@@ -131,16 +133,19 @@ def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     """
     snapshot_env = _read_env_file(ANTHROPIC_ENV_SNAPSHOT_PATH)
     settings_env: dict[str, object] = {}
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
-    if config_dir:
-        settings_path = os.path.join(config_dir, "settings.json")
-        try:
-            with open(settings_path, encoding="utf-8") as f:
-                settings = json.load(f)
-            if isinstance(settings, dict) and isinstance(settings.get("env"), dict):
-                settings_env = settings["env"]
-        except (OSError, ValueError):
-            settings_env = {}
+    # Resolve the config dir the way claude itself does: $CLAUDE_CONFIG_DIR
+    # when explicitly set, else ~/.claude (the workspace never sets the var).
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "") or os.path.expanduser(
+        "~/.claude"
+    )
+    settings_path = os.path.join(config_dir, "settings.json")
+    try:
+        with open(settings_path, encoding="utf-8") as f:
+            settings = json.load(f)
+        if isinstance(settings, dict) and isinstance(settings.get("env"), dict):
+            settings_env = settings["env"]
+    except (OSError, ValueError):
+        settings_env = {}
 
     def resolve(key: str, use_snapshot: bool = True) -> str | None:
         if use_snapshot:
@@ -167,8 +172,8 @@ def write_anthropic_env_snapshot() -> str:
 
     Run once at integration-setup time (and again only to deliberately
     re-key). Writes ``ANTHROPIC_API_KEY`` and, when present,
-    ``ANTHROPIC_BASE_URL`` to ``runtime/secrets/anthropic.env`` with owner-only
-    permissions, creating ``runtime/secrets/`` if needed. Deliberately never
+    ``ANTHROPIC_BASE_URL`` to ``data/.secrets/anthropic.env`` with owner-only
+    permissions, creating ``data/.secrets/`` if needed. Deliberately never
     writes ``CLAUDE_CODE_OAUTH_TOKEN`` -- a subscription token cannot
     authenticate direct API calls. Raises when the workspace has no API key
     configured (the integration should use the keyless ``claude -p`` path
@@ -185,7 +190,9 @@ def write_anthropic_env_snapshot() -> str:
         lines.append(f"ANTHROPIC_BASE_URL={creds.base_url}")
     directory = os.path.dirname(ANTHROPIC_ENV_SNAPSHOT_PATH)
     os.makedirs(directory, exist_ok=True)
-    fd = os.open(ANTHROPIC_ENV_SNAPSHOT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(
+        ANTHROPIC_ENV_SNAPSHOT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+    )
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return ANTHROPIC_ENV_SNAPSHOT_PATH

@@ -12,7 +12,7 @@ scripts, references, or assets. The SKILL.md reads like a recipe: "do X,
 then Y, then Z." Each step of that process is one of three kinds:
 
 - **`[script]`** -- deterministic. Runs the same code every time, only the
-  data varies. Lives in `scripts/`.
+  data varies. Lives in `system/scripts/`.
 - **`[ai-script]`** -- needs a model's judgement, but is a *fixed part of
   the flow* (the same prompt/criteria every run, only the data varies).
   Script it as an AI call following the `use-ai-integration` skill (see
@@ -72,7 +72,7 @@ A mixed flow of all three kinds is the norm for useful skills.
 ```
 .agents/skills/<name>/
   SKILL.md                  # required; body <= 500 lines (progressive disclosure)
-  scripts/
+  system/scripts/
     run.py                  # optional; include when there are deterministic steps
     *.py                    # optional helpers
   references/*.md           # optional long-form docs; load on demand
@@ -99,7 +99,7 @@ metadata:
 Omit `allowed-tools`, `license`, and `compatibility` unless you have a
 specific reason to constrain or declare them -- the defaults are fine.
 
-## scripts/run.py (optional)
+## system/scripts/run.py (optional)
 
 Include `run.py` when the skill has `[script]` or `[ai-script]` steps that
 benefit from automation. A skill can be pure SKILL.md prose with no scripts
@@ -116,7 +116,7 @@ functions (one per step) and expose them two ways:
   splitting it is not reasonable.) Once the steps are already helper functions
   the split is cheap, and it pays off twice: an agent running the skill in a
   chat turn can drive the steps one at a time for a rich per-step progress
-  view, and each boundary leaves an inspectable intermediate artifact.
+  view, and each boundary leaves an inspectable intermediate output.
 - **A `run all` subcommand** that chains the steps in-process -- just function
   calls, no serialization cost -- for headless and scheduled runs.
 
@@ -156,7 +156,7 @@ add appropriate dependencies to your PEP 723 header.
 frontmatter, the kebab-case name rules, directory-name match, description
 length, 500-line body limit, and that any `run.py` begins with a PEP 723
 header. When those static checks pass and a `run.py` exists, it also runs
-`uv run scripts/run.py --help`, which forces `uv` to resolve the script's PEP
+`uv run system/scripts/run.py --help`, which forces `uv` to resolve the script's PEP
 723 dependencies and import the module -- so a broken import or unresolvable
 dependency fails validation here rather than only at scenario time. (This is a
 shallow import check: `--help` exercises top-level imports and the argparse

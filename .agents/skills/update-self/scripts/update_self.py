@@ -63,7 +63,7 @@ from pathlib import Path
 from typing import NamedTuple, Sequence
 
 # The repo-relative directory holding the update-self skill (SKILL.md,
-# references/, scripts/). Used by ``bootstrap-skill`` to extract the target
+# references/, system/scripts/). Used by ``bootstrap-skill`` to extract the target
 # ref's own copy of the flow.
 SKILL_DIR_REL = ".agents/skills/update-self"
 
@@ -165,9 +165,9 @@ CLASS_OTHER = "other"
 # ``provisioner`` reveal class.
 _PROVISIONER_SCRIPTS = frozenset(
     {
-        "scripts/setup_system.sh",  # pinned global toolchain (latchkey, uv, claude, ...)
-        "scripts/install_secret_scanners.sh",  # pinned global scanner binaries
-        "scripts/_provision_guard.sh",  # the guard that gates the above
+        "system/scripts/setup_system.sh",  # pinned global toolchain (latchkey, uv, claude, ...)
+        "system/scripts/install_secret_scanners.sh",  # pinned global scanner binaries
+        "system/scripts/_provision_guard.sh",  # the guard that gates the above
     }
 )
 
@@ -194,7 +194,7 @@ class PathClass(NamedTuple):
 
     ``reveal_class`` selects the go-live action; ``project`` is the pytest
     project whose suite covers the path (``.`` = the root workspace,
-    ``apps/system_interface`` and ``vendor/mngr`` run their own suites);
+    ``system/apps/system_interface`` and ``system/vendor/mngr`` run their own suites);
     ``is_manifest`` flags a dependency-manifest change that needs an env refresh.
     """
 
@@ -206,14 +206,14 @@ class PathClass(NamedTuple):
 def _project_for_path(path: str) -> str:
     """Return the pytest project root that owns ``path``.
 
-    Only ``apps/system_interface`` and ``vendor/mngr`` carry their own pytest
+    Only ``system/apps/system_interface`` and ``system/vendor/mngr`` carry their own pytest
     config (the root config ignores them); everything else -- libs, scripts,
     ``.agents`` -- is covered by the root suite, reported as ``.``.
     """
-    if path.startswith("apps/system_interface/"):
-        return "apps/system_interface"
-    if path.startswith("vendor/mngr/"):
-        return "vendor/mngr"
+    if path.startswith("system/apps/system_interface/"):
+        return "system/apps/system_interface"
+    if path.startswith("system/vendor/mngr/"):
+        return "system/vendor/mngr"
     return "."
 
 
@@ -222,56 +222,58 @@ def classify_path(path: str) -> PathClass:
 
     The classes drive reveal-by-class in the skill:
 
-    - ``system_interface`` -- ``apps/system_interface/**``; revealed via
+    - ``system_interface`` -- ``system/apps/system_interface/**``; revealed via
       ``reveal_system_interface.py`` (which owns its own manifest refresh).
-    - ``service`` -- ``supervisord.conf`` and ``libs/bootstrap/**``; applied by
+    - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``; applied by
       restarting the services agent (``mngr start --restart system-services``).
-    - ``editable_tool`` -- ``vendor/mngr/**``; ``.py`` picked up live, a manifest
+    - ``editable_tool`` -- ``system/vendor/mngr/**``; ``.py`` picked up live, a manifest
       change needs ``uv sync --all-packages`` / an editable reinstall.
-    - ``shared_runtime`` -- ``scripts/**``, other ``libs/**``, and ``.agents/**``:
-      may be a live runtime dependency of a service or a workspace-added skill,
-      so it needs the worker's impact analysis before it can be called a silent
-      merge.
+    - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,
+      ``system/services/**``, ``system/apps/**``, and ``.agents/**``: may be a live runtime dependency of
+      a service or a workspace-added skill or app, so it needs the worker's
+      impact analysis before it can be called a silent merge.
     - ``provisioner`` -- the pinned-toolchain scripts and the ``.mngr/`` create
       config (see :func:`_is_provisioner`); shapes image-build / create-time
       provisioning, so a change is re-run live (idempotent scripts) or flagged
       for a workspace rebuild, never revealed by a service restart.
-    - ``dockerfile`` -- ``Dockerfile``; split by hunk into live-applicable vs
-      rebuild-only by worker judgement.
-    - ``docs`` -- any ``README.md``, ``CLAUDE.md``, ``changelog/**``, and
-      top-level ``*.md``.
+    - ``dockerfile`` -- ``system/Dockerfile``; split by hunk into live-applicable
+      vs rebuild-only by worker judgement.
+    - ``docs`` -- any ``README.md``, ``CLAUDE.md``, changelog entries, and
+      any other ``*.md`` (including everything under ``docs/``).
     - ``other`` -- anything else.
     """
     is_manifest = Path(path).name in _MANIFEST_BASENAMES
     project = _project_for_path(path)
 
     # A README is documentation wherever it lives -- without this, a README
-    # under a service prefix (e.g. ``libs/bootstrap/README.md``) would inherit
+    # under a service prefix (e.g. ``system/libs/bootstrap/README.md``) would inherit
     # that prefix's reveal class and trigger a pointless restart.
     if Path(path).name == "README.md":
         return PathClass(CLASS_DOCS, project, is_manifest)
-    # Provisioning files are matched before the generic ``scripts/`` and
-    # catch-all rules below: a toolchain script lives under ``scripts/`` (would
+    # Provisioning files are matched before the generic ``system/scripts/`` and
+    # catch-all rules below: a toolchain script lives under ``system/scripts/`` (would
     # otherwise read as ``shared_runtime``) and ``.mngr/settings.toml`` would
     # otherwise fall through to ``other`` -- either way the reveal would miss its
     # build/create-time impact.
     if _is_provisioner(path):
         return PathClass(CLASS_PROVISIONER, project, is_manifest)
-    if path.startswith("apps/system_interface/"):
+    if path.startswith("system/apps/system_interface/"):
         return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest)
-    if path == "supervisord.conf" or path.startswith("libs/bootstrap/"):
+    if path == "system/supervisord.conf" or path.startswith("system/libs/bootstrap/"):
         return PathClass(CLASS_SERVICE, project, is_manifest)
-    if path.startswith("vendor/mngr/"):
+    if path.startswith("system/vendor/mngr/"):
         return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest)
-    if path == "Dockerfile":
+    if path == "system/Dockerfile":
         return PathClass(CLASS_DOCKERFILE, project, is_manifest)
     if (
-        path.startswith("scripts/")
+        path.startswith("system/scripts/")
         or path.startswith(".agents/")
-        or path.startswith("libs/")
+        or path.startswith("system/libs/")
+        or path.startswith("system/services/")
+        or path.startswith("system/apps/")
     ):
         return PathClass(CLASS_SHARED_RUNTIME, project, is_manifest)
-    if path == "CLAUDE.md" or path.startswith("changelog/") or path.endswith(".md"):
+    if path == "CLAUDE.md" or "/changelog/" in path or path.endswith(".md"):
         return PathClass(CLASS_DOCS, project, is_manifest)
     return PathClass(CLASS_OTHER, project, is_manifest)
 
@@ -409,13 +411,13 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
     # Per-PR changelog entries live in a ``changelog/`` dir under each project
-    # bucket -- ``dev/changelog/``, ``.agents/changelog/``, ``libs/<name>/
-    # changelog/``, ``apps/<name>/changelog/`` -- plus the legacy top-level
-    # ``changelog/`` (see scripts/check_changelog_entries.py for the bucket
-    # definition). Match every one of them at any depth with a single glob rather
-    # than the top-level dir alone, or the "what's new" digest silently drops
-    # everything landed under the bucketed layout. Exclude the vendored subtree,
-    # which carries its own separate changelog system.
+    # bucket -- ``system/changelog/``, ``.agents/changelog/``, and
+    # ``system/{libs,services,apps}/<name>/changelog/`` (see
+    # system/scripts/check_changelog_entries.py for the bucket definition).
+    # Match every one of them at any depth with a single glob rather than one
+    # dir alone, or the "what's new" digest silently drops everything landed
+    # under the bucketed layout. Exclude the vendored subtree, which carries
+    # its own separate changelog system.
     added = _list_names(
         _git(
             [
@@ -426,7 +428,7 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
                 args.target,
                 "--",
                 ":(glob)**/changelog/*",
-                ":(exclude)vendor",
+                ":(exclude)system/vendor",
             ],
             repo_root,
         )
@@ -459,8 +461,8 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
         # The target ref predates the skill, so there is no target copy to hand
         # off to: stage the *local* copy at the fixed path (so the worker still
         # finds the flow there) and report ``differs=False`` -- the caller stays
-        # on the local flow. Skip ``__pycache__`` so an imported-script artifact
-        # never rides along.
+        # on the local flow. Skip ``__pycache__`` so stale bytecode caches
+        # never ride along.
         shutil.copytree(
             repo_root / SKILL_DIR_REL,
             staged_skill,
@@ -487,7 +489,7 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
 
     # Whether the ref's skill differs from the local working-tree copy. Let git
     # do the compare: ``git diff`` ignores untracked files, so the ``__pycache__/
-    # *.pyc`` that importing the script drops into ``scripts/`` never registers as
+    # *.pyc`` that importing the script drops into ``system/scripts/`` never registers as
     # a spurious difference. ``--quiet`` exits 0 if identical, 1 on any
     # difference; ``check_returncode`` surfaces any other code as a real git error.
     diff = subprocess.run(
@@ -586,9 +588,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     bootstrap_parser.add_argument(
         "--dest",
-        default="runtime/update-self/skill-at-target",
+        default="data/.tasks/update-self/skill-at-target",
         help="Staging dir the skill is extracted into (default: "
-        "runtime/update-self/skill-at-target).",
+        "data/.tasks/update-self/skill-at-target).",
     )
     bootstrap_parser.set_defaults(func=_cmd_bootstrap_skill)
 

@@ -51,13 +51,13 @@ def test_build_argv_task_keeps_tools_and_sets_permission_mode() -> None:
         "do work",
         model="claude-haiku-4-5",
         system=None,
-        append_system="Only touch runtime/.",
+        append_system="Only touch data/.",
         tools=None,
         permission_mode="bypassPermissions",
     )
     # tools=None leaves the flag off entirely, inheriting the default tool set.
     assert "--tools" not in argv
-    assert argv[argv.index("--append-system-prompt") + 1] == "Only touch runtime/."
+    assert argv[argv.index("--append-system-prompt") + 1] == "Only touch data/."
     assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
     assert "--system-prompt" not in argv
 
@@ -195,7 +195,7 @@ def test_child_env_strips_mngr_vars_when_requested(
 def _isolate_credential_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point every credential source at an empty tmp dir; return a settings path.
 
-    chdir isolates the runtime/secrets/anthropic.env snapshot (a repo-root
+    chdir isolates the data/.secrets/anthropic.env snapshot (a repo-root
     relative path); CLAUDE_CONFIG_DIR points at the tmp dir for settings; the
     process-env credential vars are cleared.
     """
@@ -210,7 +210,7 @@ def test_credentials_prefer_snapshot_over_settings(tmp_path: Path, monkeypatch: 
     """The setup-time snapshot pins a keyed integration across later auth changes."""
     settings = _isolate_credential_sources(tmp_path, monkeypatch)
     settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-new-key", "ANTHROPIC_BASE_URL": "https://new/"}}')
-    snapshot = tmp_path / "runtime" / "secrets" / "anthropic.env"
+    snapshot = tmp_path / "data" / ".secrets" / "anthropic.env"
     snapshot.parent.mkdir(parents=True)
     snapshot.write_text("ANTHROPIC_API_KEY=sk-pinned-key\nANTHROPIC_BASE_URL=https://pinned/\n")
 
@@ -232,12 +232,34 @@ def test_credentials_fall_back_to_settings_without_snapshot(
     assert creds.base_url is None
 
 
+def test_credentials_read_default_claude_dir_when_config_dir_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With CLAUDE_CONFIG_DIR unset -- the workspace-wide default since the
+    ~/.claude cutover -- the resolver reads the shared ~/.claude/settings.json
+    instead of skipping settings entirely."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    default_dir = tmp_path / ".claude"
+    default_dir.mkdir()
+    (default_dir / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-default-dir-key"}}'
+    )
+
+    creds = claude_p.read_workspace_ai_credentials()
+
+    assert creds.api_key == "sk-default-dir-key"
+
+
 def test_credentials_never_take_oauth_token_from_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A hand-edited token line in the snapshot is ignored: tokens cannot auth API calls."""
     _isolate_credential_sources(tmp_path, monkeypatch)
-    snapshot = tmp_path / "runtime" / "secrets" / "anthropic.env"
+    snapshot = tmp_path / "data" / ".secrets" / "anthropic.env"
     snapshot.parent.mkdir(parents=True)
     snapshot.write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-handwritten\n")
 
@@ -267,4 +289,4 @@ def test_write_snapshot_raises_without_a_key(tmp_path: Path, monkeypatch: pytest
 
     with pytest.raises(claude_p.ClaudeCLIError, match="nothing to snapshot"):
         claude_p.write_anthropic_env_snapshot()
-    assert not (tmp_path / "runtime" / "secrets" / "anthropic.env").exists()
+    assert not (tmp_path / "data" / ".secrets" / "anthropic.env").exists()
