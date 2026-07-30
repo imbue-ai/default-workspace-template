@@ -1,23 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { findDeclinedSlashCommand, listDeclinedSlashCommands } from "./claudeSlashCommands";
+import { DECLINED_SLASH_COMMANDS, findDeclinedSlashCommand } from "./claudeSlashCommands";
 
 describe("findDeclinedSlashCommand", () => {
   it("declines a command that takes over the input box", () => {
-    expect(findDeclinedSlashCommand("/status")).toEqual({ command: "/status", reason: "takes-over-input" });
+    expect(findDeclinedSlashCommand("/status")).toBe("/status");
   });
 
-  it("declines a command that ends the session, with its own reason", () => {
-    expect(findDeclinedSlashCommand("/exit")).toEqual({ command: "/exit", reason: "ends-session" });
-    expect(findDeclinedSlashCommand("/quit")).toEqual({ command: "/quit", reason: "ends-session" });
+  it("declines the session-ending commands too", () => {
+    expect(findDeclinedSlashCommand("/exit")).toBe("/exit");
+    expect(findDeclinedSlashCommand("/quit")).toBe("/quit");
   });
 
   it("ignores surrounding whitespace and case", () => {
-    expect(findDeclinedSlashCommand("  /STATUS  ")?.command).toBe("/status");
-    expect(findDeclinedSlashCommand("/Exit")?.command).toBe("/exit");
+    expect(findDeclinedSlashCommand("  /STATUS  ")).toBe("/status");
+    expect(findDeclinedSlashCommand("/Exit")).toBe("/exit");
   });
 
   it("declines even with trailing arguments, which Claude ignores for these commands", () => {
-    expect(findDeclinedSlashCommand("/status extra words")?.command).toBe("/status");
+    expect(findDeclinedSlashCommand("/status extra words")).toBe("/status");
   });
 
   it("does not match a command mentioned inside a sentence", () => {
@@ -38,8 +38,8 @@ describe("findDeclinedSlashCommand", () => {
   });
 
   it("declines /theme, whose argument form takes over even though the bare form does not", () => {
-    expect(findDeclinedSlashCommand("/theme")?.command).toBe("/theme");
-    expect(findDeclinedSlashCommand("/theme dark")?.command).toBe("/theme");
+    expect(findDeclinedSlashCommand("/theme")).toBe("/theme");
+    expect(findDeclinedSlashCommand("/theme dark")).toBe("/theme");
   });
 
   it("leaves commands that were measured to send fine", () => {
@@ -51,7 +51,7 @@ describe("findDeclinedSlashCommand", () => {
   });
 
   it("lists every command with a leading slash and no whitespace", () => {
-    for (const command of listDeclinedSlashCommands()) {
+    for (const command of DECLINED_SLASH_COMMANDS) {
       expect(command).toMatch(/^\/[a-z0-9-]+$/);
     }
   });

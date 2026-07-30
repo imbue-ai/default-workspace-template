@@ -28,7 +28,6 @@ import {
 } from "../models/ModelSettings";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
-import type { DeclinedSlashCommand } from "../models/claudeSlashCommands";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { icon, stopIcon } from "./icons";
 
@@ -76,9 +75,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   // agent's terminal -- both bypassing the managed agent-auth screen (auth
   // lives in settings.json / claude's credential store, managed there).
   let interceptedAuthCommand: "/login" | "/logout" | null = null;
-  // A slash command the chat declines to deliver: it would either occupy the agent's input box or
-  // end its session, and in both cases only someone at the agent's terminal could put it right.
-  let declinedSlashCommand: DeclinedSlashCommand | null = null;
+  // A slash command the chat declines to deliver, because it would change the agent's terminal
+  // rather than start a turn. It still works from that terminal, which the notice says.
+  let declinedSlashCommand: string | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
   let isModelDropdownOpen = false;
@@ -412,14 +411,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         m.redraw();
       }
 
-      function renderDeclinedCommandNotice(declined: DeclinedSlashCommand): m.Vnode {
-        const { command, reason } = declined;
-        // The title already names the command and says it wasn't sent, so the body only carries the
-        // consequence and the way to do it anyway.
-        const explanation =
-          reason === "ends-session"
-            ? "It would shut the agent down."
-            : "It would take over the agent's terminal and stop it answering here — run it there instead.";
+      function renderDeclinedCommandNotice(command: string): m.Vnode {
         return m(
           "div.custom-url-dialog-overlay",
           {
@@ -438,7 +430,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             },
             [
               m("h3.custom-url-dialog-title", `${command} can't be sent from chat`),
-              m("p.logout-notice-body", explanation),
+              m("p.logout-notice-body", "You can still send it from the agent's terminal."),
               m("div.custom-url-dialog-actions", [
                 m("button.custom-url-dialog-cancel", { onclick: () => dismissDeclinedCommandNotice() }, "OK"),
               ]),

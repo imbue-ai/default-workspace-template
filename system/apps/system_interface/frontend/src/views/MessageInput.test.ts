@@ -116,7 +116,9 @@ describe("MessageInput send guard", () => {
   it("does not send /status, and explains why", async () => {
     const after = await typeAndSend(MessageInput(), "agent-1", "/status");
     expect(mocks.sendMessage).not.toHaveBeenCalled();
-    expect(renderedText(after)).toContain("/status can't be sent from chat");
+    const text = renderedText(after);
+    expect(text).toContain("/status can't be sent from chat");
+    expect(text).toContain("You can still send it from the agent's terminal.");
   });
 
   it("keeps the typed message so it is not lost", async () => {
@@ -136,13 +138,12 @@ describe("MessageInput send guard", () => {
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/clear");
   });
 
-  it("does not send /exit, and gives the session-ending reason rather than the view one", async () => {
+  it("does not send /exit either, with the same notice", async () => {
     const after = await typeAndSend(MessageInput(), "agent-1", "/exit");
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     const text = renderedText(after);
     expect(text).toContain("/exit can't be sent from chat");
-    expect(text).toContain("shut the agent down");
-    expect(text).not.toContain("take over the agent's terminal");
+    expect(text).toContain("You can still send it from the agent's terminal.");
   });
 
   it("does not carry the notice over to another agent", async () => {
