@@ -53,8 +53,7 @@ export const DECLINED_SLASH_COMMANDS: readonly string[] = [
   "/stats",
   "/status",
   "/tasks",
-  // Declined on the strength of its argument form: bare `/theme` sends fine, but `/theme dark`
-  // takes over the input box. Matching by name covers both.
+  // Here for its argument form only: bare `/theme` sends fine, `/theme dark` takes over.
   "/theme",
   "/usage",
   "/usage-credits",
@@ -64,9 +63,17 @@ export const DECLINED_SLASH_COMMANDS: readonly string[] = [
 /**
  * The declined command this message would run, or null if it would not run one.
  *
- * Matched on the command name only, so an argument does not slip the command through. This is
- * deliberately more conservative than the exact-match interception used for `/login` and `/logout`,
- * where an argument genuinely changes what the command does.
+ * Matched on the command name, so every argument form is declined with it. Some arguments do make a
+ * command harmless -- `/mcp enable all` answers inline where bare `/mcp` takes over the input box --
+ * but which ones is not knowable from here. `/theme` runs the other way (bare is harmless,
+ * `/theme dark` takes over), so the direction is not even consistent, and behaviour can turn on the
+ * argument's *value*, which cannot be enumerated: a valid one may open a view where a nonsense one
+ * only prints an error.
+ *
+ * So this deliberately over-declines. The two mistakes are not symmetric: declining a form that
+ * would have worked costs one trip to the terminal, which the notice names, while allowing one that
+ * takes over leaves the agent unable to answer in chat until someone clears it there -- the bug this
+ * guard exists to prevent.
  */
 export function findDeclinedSlashCommand(text: string): string | null {
   const firstToken = text.trim().toLowerCase().split(/\s+/, 1)[0] ?? "";
