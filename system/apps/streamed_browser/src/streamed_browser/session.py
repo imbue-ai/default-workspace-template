@@ -133,6 +133,13 @@ class StreamedBrowserSession:
                     # content. Jump scrolling lands in 1-2 damage frames.
                     "--disable-smooth-scrolling",
                     "--wm-window-animations-disabled",
+                    # Sites honoring prefers-reduced-motion drop their own
+                    # animations -- less damage to encode for content the
+                    # delivered frame rate could not show smoothly anyway.
+                    "--force-prefers-reduced-motion",
+                    # Bound renderer sprawl on a 2-vCPU host: tab-heavy
+                    # browsing otherwise spawns a process per site.
+                    "--renderer-process-limit=4",
                     "--no-first-run",
                     "--disable-session-crashed-bubble",
                     "--hide-crash-restore-bubble",
