@@ -74,11 +74,10 @@ def test_ack_of_unknown_frame_is_harmless() -> None:
     assert window.admits(is_keyframe=False)
 
 
-def test_capture_rate_tracks_delivery_and_snaps_to_max_when_idle() -> None:
+def test_capture_rate_aimd_backs_off_on_drops_and_recovers_without() -> None:
     from streamed_browser.videopipe import target_capture_fps
 
-    assert target_capture_fps(0, 2) == 60.0  # idle -> ceiling
-    # 40 stripes over the 2s window on 2 rows = 10 fps delivered -> 1.5x + 2.
-    assert target_capture_fps(40, 2) == 17.0
-    assert target_capture_fps(4, 2) == 15.0  # floor
-    assert target_capture_fps(400, 2) == 60.0  # cap
+    assert target_capture_fps(60.0, dropped_in_interval=5) == 36.0  # multiplicative decrease
+    assert target_capture_fps(20.0, dropped_in_interval=1) == 15.0  # floored
+    assert target_capture_fps(36.0, dropped_in_interval=0) == 46.0  # additive increase
+    assert target_capture_fps(60.0, dropped_in_interval=0) == 60.0  # capped
