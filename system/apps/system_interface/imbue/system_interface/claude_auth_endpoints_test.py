@@ -41,7 +41,7 @@ _LIST_PAYLOAD = json.dumps(
         "agents": [
             {"name": "ababa", "type": "claude", "state": "RUNNING"},
             {"name": "system-services", "type": "main", "state": "RUNNING"},
-            {"name": "worker-1", "type": "worker", "state": "WAITING"},
+            {"name": "worker-1", "type": "claude", "state": "WAITING"},
         ]
     }
 )

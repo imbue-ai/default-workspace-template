@@ -46,7 +46,7 @@ export interface TerminalSessionInfo {
 export interface ProtoAgent {
   agent_id: string;
   name: string;
-  creation_type: "worktree" | "chat";
+  creation_type: "chat" | "codex";
   parent_agent_id: string | null;
 }
 
@@ -263,7 +263,7 @@ function handleEvent(event: WsEvent): void {
       protoAgents.push({
         agent_id: event.agent_id,
         name: event.name,
-        creation_type: event.creation_type as "worktree" | "chat",
+        creation_type: event.creation_type as "chat" | "codex",
         parent_agent_id: event.parent_agent_id,
       });
       break;

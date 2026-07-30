@@ -171,7 +171,6 @@ interface PanelParams {
 // Modal state
 let showNewChatModal = false;
 let showNewCodexModal = false;
-let showNewAgentModal = false;
 let showNewBrowserModal = false;
 // When a background create POST fails, the New-browser modal is re-opened
 // pre-filled with the name the user typed and the daemon's reason, so the user
@@ -808,16 +807,6 @@ function buildDropdownItems(
       showNewBrowserModal = true;
       m.redraw();
     },
-  });
-
-  items.push({
-    label: "New agent",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewAgentModal = true;
-      m.redraw();
-    },
-    dividerAfter: true,
   });
 
   // --- Named-layout section ---
@@ -2876,22 +2865,6 @@ export const DockviewWorkspace: m.Component = {
               },
               onCancel() {
                 showNewCodexModal = false;
-                newTabTargetGroup = null;
-              },
-            })
-          : null,
-
-        showNewAgentModal
-          ? m(CreateAgentModal, {
-              mode: "worktree",
-              onCreated(newAgentId: string, newAgentName: string) {
-                showNewAgentModal = false;
-                const targetGroup = newTabTargetGroup;
-                newTabTargetGroup = null;
-                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
-              },
-              onCancel() {
-                showNewAgentModal = false;
                 newTabTargetGroup = null;
               },
             })

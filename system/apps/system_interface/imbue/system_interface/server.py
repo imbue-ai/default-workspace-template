@@ -35,6 +35,7 @@ from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.agent_manager import CODEX_HARNESS_TEMPLATE
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
@@ -78,7 +79,6 @@ from imbue.system_interface.models import AttachmentUploadResponse
 from imbue.system_interface.models import CreateAgentResponse
 from imbue.system_interface.models import CreateChatRequest
 from imbue.system_interface.models import CreateCodexRequest
-from imbue.system_interface.models import CreateWorktreeRequest
 from imbue.system_interface.models import DestroyAgentResponse
 from imbue.system_interface.models import ErrorResponse
 from imbue.system_interface.models import InterruptAgentResponse
@@ -1191,22 +1191,6 @@ def _random_name_endpoint() -> Response:
     return _json_response(RandomNameResponse(name=name).model_dump())
 
 
-def _create_worktree_agent() -> Response:
-    """Create a new worktree agent."""
-    agent_manager: AgentManager = get_state().agent_manager
-    body = request.get_json()
-
-    try:
-        create_request = CreateWorktreeRequest(**body)
-        agent_name = create_request.name
-        selected_agent_id = create_request.selected_agent_id or agent_manager.get_own_agent_id()
-        agent_id = agent_manager.create_worktree_agent(agent_name, selected_agent_id)
-        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
-    except (AgentCreationError, OSError, ValueError) as e:
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=400)
-
-
 def _create_chat_agent() -> Response:
     """Create a new chat agent in the primary agent's work directory."""
     agent_manager: AgentManager = get_state().agent_manager
@@ -1222,13 +1206,16 @@ def _create_chat_agent() -> Response:
 
 
 def _create_codex_agent() -> Response:
-    """Create a new codex chat agent in the primary agent's work directory."""
+    """Create a new codex chat agent in the primary agent's work directory.
+
+    Same `chat` role as _create_chat_agent, on the codex harness instead of claude.
+    """
     agent_manager: AgentManager = get_state().agent_manager
     body = request.get_json()
 
     try:
         create_request = CreateCodexRequest(**body)
-        agent_id = agent_manager.create_codex_agent(create_request.name)
+        agent_id = agent_manager.create_chat_agent(create_request.name, CODEX_HARNESS_TEMPLATE)
         return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))
@@ -1779,7 +1766,6 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
-    application.add_url_rule("/api/agents/create-worktree", view_func=_create_worktree_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-codex", view_func=_create_codex_agent, methods=["POST"])
     application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])

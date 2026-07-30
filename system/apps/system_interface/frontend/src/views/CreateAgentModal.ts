@@ -1,13 +1,13 @@
 /**
- * Modal dialog for creating a new agent (worktree, chat, or codex).
+ * Modal dialog for creating a new agent (chat, on either harness).
  * Shows a single "Name" input field pre-filled with a random name.
  */
 
 import m from "mithril";
-import { apiUrl, getPrimaryAgentId } from "../base-path";
+import { apiUrl } from "../base-path";
 
 interface CreateAgentModalAttrs {
-  mode: "worktree" | "chat" | "codex";
+  mode: "chat" | "codex";
   onCreated: (agentId: string, agentName: string) => void;
   onCancel: () => void;
 }
@@ -39,19 +39,12 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
     m.redraw();
 
     try {
-      // codex runs in the primary's work dir like a chat, just a different harness
-      // template server-side; worktree is the only mode with a distinct body.
+      // Both modes create the same `chat` role in the primary's work dir; they
+      // differ only in which harness template the server stacks under it.
       const url =
-        attrs.mode === "worktree"
-          ? apiUrl("/api/agents/create-worktree")
-          : attrs.mode === "codex"
-            ? apiUrl("/api/agents/create-codex")
-            : apiUrl("/api/agents/create-chat");
+        attrs.mode === "codex" ? apiUrl("/api/agents/create-codex") : apiUrl("/api/agents/create-chat");
 
-      const body: Record<string, string> =
-        attrs.mode === "worktree"
-          ? { name: name.trim(), selected_agent_id: getPrimaryAgentId() }
-          : { name: name.trim() };
+      const body: Record<string, string> = { name: name.trim() };
 
       const response = await m.request<{ agent_id: string }>({
         method: "POST",
@@ -74,12 +67,7 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
 
     view(vnode) {
       const attrs = vnode.attrs;
-      const title =
-        attrs.mode === "worktree"
-          ? "Create Worktree Agent"
-          : attrs.mode === "codex"
-            ? "Create Codex Agent"
-            : "Create Chat Agent";
+      const title = attrs.mode === "codex" ? "Create Codex Agent" : "Create Chat Agent";
 
       return m(
         "div.custom-url-dialog-overlay",

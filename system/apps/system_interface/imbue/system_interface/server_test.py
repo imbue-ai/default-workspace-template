@@ -1076,16 +1076,6 @@ def test_create_chat_agent_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> 
     assert response.status_code == 400
 
 
-def test_create_worktree_agent_missing_agent(client: FlaskClient) -> None:
-    """Creating a worktree agent with an unknown selected agent returns 400."""
-    response = client.post(
-        "/api/agents/create-worktree",
-        json={"name": "test-worktree", "selected_agent_id": "nonexistent"},
-    )
-    assert response.status_code == 400
-
-
-@pytest.mark.timeout(15)
 def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     """The WebSocket endpoint sends agents_updated and apps_updated on connect."""
     with serve_app(app) as served:
