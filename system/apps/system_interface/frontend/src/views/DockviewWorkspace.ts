@@ -765,8 +765,8 @@ function buildDropdownItems(
     },
   });
 
-  // New codex agent -- a chat agent running the codex harness (mngr template
-  // chat_codex) in the primary's work_dir, alongside the claude chat above.
+  // New codex agent -- the same `chat` role as the entry above, stacked on the
+  // `codex` harness template instead of `claude`, in the primary's work_dir.
   // Gated behind FEATURE_FLAG_ENABLE_CODEX (delivered via meta tag) so codex can
   // be dark-launched; hidden unless the host explicitly enables it.
   if (isCodexEnabled()) {
