@@ -19,7 +19,7 @@ To enable, write the Caretaker's schedule entry (durably, then live) and
 clear any stale job state:
 
     mkdir -p /home/user/workspace/data/.state/cron.d
-    printf '%s\n' '* * * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh /home/user/workspace/system/scripts/run_job.sh caretaker --every 7d --at 3 bash /home/user/workspace/system/scripts/caretaker_check.sh >> /var/log/supervisor/caretaker-job.log 2>&1' > /home/user/workspace/data/.state/cron.d/minds-caretaker
+    printf '%s\n' '* * * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh /home/user/workspace/system/libs/automations/run_job.sh caretaker --every 7d --at 3 bash /home/user/workspace/system/services/caretaker/caretaker_check.sh >> /var/log/supervisor/caretaker-job.log 2>&1' > /home/user/workspace/data/.state/cron.d/minds-caretaker
     install -m 0644 /home/user/workspace/data/.state/cron.d/minds-caretaker /etc/cron.d/minds-caretaker
     rm -rf /home/user/workspace/data/.state/jobs/caretaker
 

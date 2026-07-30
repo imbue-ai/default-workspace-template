@@ -342,6 +342,154 @@ jobs:
         run: uv run python scripts/cleanup_modal_snapshot_images.py sweep --max-age-hours 1.0
 
 
+  # Clean up old Vultr test VPS instances left behind by the mngr_vultr release
+  # tests. The Vault credential fetch fails the job if the entry is absent.
+  cleanup-vultr-instances:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets the use-vault-secrets step below mint a GitHub OIDC token for Vault.
+      id-token: write
+
+    steps:
+      - name: Fetch Vultr credentials from Vault
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/VULTR_API_KEY
+
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Install Python dependencies
+        run: uv sync --all-packages
+
+      - name: Clean up old Vultr test instances
+        run: uv run python scripts/cleanup_old_vultr_test_instances.py --max-age-hours 1.0
+
+
+  # Clean up old AWS test EC2 instances left behind by the mngr_aws release
+  # tests. The Vault credential fetch fails the job if the entries are absent.
+  cleanup-aws-instances:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets the use-vault-secrets step below mint a GitHub OIDC token for Vault.
+      id-token: write
+
+    steps:
+      - name: Fetch AWS credentials from Vault
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/AWS_ACCESS_KEY_ID
+            mngr/ci/AWS_SECRET_ACCESS_KEY
+
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Install Python dependencies
+        run: uv sync --all-packages
+
+      - name: Clean up old AWS test instances
+        run: uv run python scripts/cleanup_old_aws_test_instances.py --max-age-hours 1.0
+
+
+  # Clean up old GCP test GCE instances left behind by the mngr_gcp release
+  # tests. The Vault credential fetch fails the job if the entry is absent.
+  cleanup-gcp-instances:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets the use-vault-secrets step below mint a GitHub OIDC token for Vault.
+      id-token: write
+
+    steps:
+      - name: Fetch GCP credentials from Vault
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/GCP_SERVICE_ACCOUNT_KEY
+
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Install Python dependencies
+        run: uv sync --all-packages
+
+      # The Vault value is base64-encoded: GitHub's log masking is line-based and
+      # exact-match, so a raw multi-line JSON secret would leak into the logs.
+      - name: Write GCP credentials
+        run: |
+          echo "$GCP_SERVICE_ACCOUNT_KEY" | base64 -d > "$RUNNER_TEMP/gcp-key.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
+
+      - name: Clean up old GCP test instances
+        run: uv run python scripts/cleanup_old_gcp_test_instances.py --max-age-hours 1.0
+
+
+  # Clean up old Azure test VMs left behind by the mngr_azure release tests.
+  # The script no-ops if Azure credentials or a subscription cannot be resolved,
+  # so this job is safe before the secrets are configured. Migrate to Vault
+  # (mngr/ci/AZURE_*) once the Azure test subscription is provisioned.
+  cleanup-azure-instances:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Install Python dependencies
+        run: uv sync --all-packages
+
+      - name: Clean up old Azure test instances
+        run: uv run python scripts/cleanup_old_azure_test_instances.py --max-age-hours 1.0
+
+
   # Acceptance tests via offload on Modal
   test-offload-acceptance:
     runs-on: ubuntu-latest

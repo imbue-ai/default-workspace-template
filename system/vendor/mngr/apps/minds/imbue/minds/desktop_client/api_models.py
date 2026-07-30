@@ -210,6 +210,17 @@ class EmptyResponse(FrozenModel):
     """An empty ``{}`` success body (e.g. an idempotent dismissal)."""
 
 
+class TimezoneResponse(FrozenModel):
+    """The host machine's timezone, for callers that need the user's local time."""
+
+    timezone: str = Field(
+        description=(
+            "IANA timezone of the machine the desktop client runs on (e.g. America/Los_Angeles); "
+            "empty string when it cannot be determined"
+        )
+    )
+
+
 class AgentNotificationRequest(ApiRequestModel):
     """Body for sending a desktop notification on behalf of an agent."""
 
@@ -441,6 +452,19 @@ class AccountsResponse(FrozenModel):
     """The accounts signed in on this device (for associating a workspace with one)."""
 
     accounts: tuple[AccountSummary, ...] = Field(description="All signed-in accounts")
+
+
+class AppVersionResponse(FrozenModel):
+    """The version identity of the minds desktop app a workspace is attached to."""
+
+    workspace_template_ref: str = Field(
+        description=(
+            "The newest workspace-template ref this app supports, and the app's own release "
+            "identity: a released binary ships the ``minds-v*`` tag it was verified against. "
+            "A workspace must not update itself past this. A dev build reports a branch instead, "
+            "which imposes no ceiling."
+        )
+    )
 
 
 class OkResponse(FrozenModel):

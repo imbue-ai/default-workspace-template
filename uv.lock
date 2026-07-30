@@ -25,11 +25,14 @@ resolution-markers = [
 [manifest]
 members = [
     "app-watcher",
+    "automations",
     "bootstrap",
     "browser",
+    "caretaker",
     "cloudflare-tunnel",
     "default-workspace-template",
     "env-converge",
+    "eval-worker",
     "github-sync",
     "host-backup",
     "mngr-cli-contract",
@@ -282,6 +285,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/9a/8e/82a0fe20a541c0314
 wheels = [
     { url = "https://files.pythonhosted.org/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl", hash = "sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309", size = 67548, upload-time = "2026-03-19T14:22:23.645Z" },
 ]
+
+[[package]]
+name = "automations"
+version = "0.1.0"
+source = { virtual = "system/libs/automations" }
 
 [[package]]
 name = "backoff"
@@ -552,6 +560,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/2d/85/aa72d1ffced7402fe
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f5/54/23aae0681500a459fc4498b60754cb8ead8df964d8166e5915edb7e8136c/bubus-1.5.6-py3-none-any.whl", hash = "sha256:254ae37cd9299941f5e9d6afb11f8e3ce069f83e5b9476f88c6b2e32912f237d", size = 52121, upload-time = "2025-08-30T18:20:42.091Z" },
 ]
+
+[[package]]
+name = "caretaker"
+version = "0.1.0"
+source = { virtual = "system/services/caretaker" }
 
 [[package]]
 name = "cdp-use"
@@ -986,10 +999,10 @@ source = { virtual = "." }
 dependencies = [
     { name = "app-watcher" },
     { name = "bootstrap" },
-    { name = "boto3" },
     { name = "browser" },
     { name = "cloudflare-tunnel" },
     { name = "env-converge" },
+    { name = "eval-worker" },
     { name = "github-sync" },
     { name = "host-backup" },
     { name = "imbue-common" },
@@ -1018,10 +1031,10 @@ dev = [
 requires-dist = [
     { name = "app-watcher", editable = "system/services/app_watcher" },
     { name = "bootstrap", editable = "system/libs/bootstrap" },
-    { name = "boto3", specifier = ">=1.34" },
     { name = "browser", editable = "system/apps/browser" },
     { name = "cloudflare-tunnel", editable = "system/services/cloudflare_tunnel" },
     { name = "env-converge", editable = "system/services/env_converge" },
+    { name = "eval-worker", editable = "system/services/eval_worker" },
     { name = "github-sync", editable = "system/libs/github_sync" },
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
@@ -1094,6 +1107,17 @@ requires-dist = [
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
+
+[[package]]
+name = "eval-worker"
+version = "0.1.0"
+source = { editable = "system/services/eval_worker" }
+dependencies = [
+    { name = "boto3" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "boto3", specifier = ">=1.34" }]
 
 [[package]]
 name = "executing"

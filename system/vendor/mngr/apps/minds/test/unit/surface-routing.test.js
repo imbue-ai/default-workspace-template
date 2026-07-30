@@ -44,6 +44,9 @@ test('parseAccentSourceAgentId is wider: it tints for workspace-scoped local scr
   assert.equal(parseAccentSourceAgentId(`http://${AGENT}.localhost:8080/x`), AGENT);
   assert.equal(parseAccentSourceAgentId(`${BASE}/goto/${AGENT}/`), AGENT);
   assert.equal(parseAccentSourceAgentId(`${BASE}/workspace/${AGENT}/settings`), AGENT);
+  // The options panel's full-page twin is workspace-scoped like the rest of
+  // /workspace/<id>/..., so it tints without needing its own rule.
+  assert.equal(parseAccentSourceAgentId(`${BASE}/workspace/${AGENT}/options`), AGENT);
   assert.equal(parseAccentSourceAgentId(`${BASE}/sharing/${AGENT}/code`), AGENT);
   assert.equal(parseAccentSourceAgentId(`${BASE}/destroying/${AGENT}`), AGENT);
   assert.equal(parseAccentSourceAgentId(`${BASE}/agents/${AGENT}/recovery`), AGENT);
@@ -62,11 +65,13 @@ test('selectSurfaceForUrl: agent content -> content view; every trusted local pa
   for (const path of [
     '/',
     '/create',
+    '/create/inspiration',
     '/settings',
     '/accounts',
     '/welcome',
     `/creating/${AGENT}`,
     `/workspace/${AGENT}/settings`,
+    `/workspace/${AGENT}/options`,
     `/sharing/${AGENT}/code`,
     `/destroying/${AGENT}`,
     `/agents/${AGENT}/recovery`,
@@ -80,10 +85,14 @@ test('isSwappableLocalPath: hub pages (including recovery) swap in place; lifecy
   for (const path of [
     '/',
     '/create',
+    '/create/inspiration',
     '/settings',
     '/accounts',
     '/_chrome',
     `/workspace/${AGENT}/settings`,
+    // The options panel's browser-mode full-page twin (the desktop client shows
+    // the same content as an overlay modal at .../options/modal).
+    `/workspace/${AGENT}/options`,
     // Recovery is swappable: its poll loops are minds:page-teardown-guarded, so
     // the constant hub <-> recovery hops of a flapping workspace keep the
     // titlebar intact instead of blinking on every full load.
@@ -98,6 +107,9 @@ test('isSwappableLocalPath: hub pages (including recovery) swap in place; lifecy
     '/auth/login',
     '/help',
     `/sharing/${AGENT}/code`,
+    // The overlay-hosted variant of the options panel is never a hub page: it
+    // is loaded into the overlay surface's iframe, not swapped into the shell.
+    `/workspace/${AGENT}/options/modal`,
   ]) {
     assert.equal(isSwappableLocalPath(path), false, `${path} should require a full navigation`);
   }

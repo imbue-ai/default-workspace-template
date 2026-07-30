@@ -27,6 +27,7 @@ import {
   setModel,
 } from "../models/ModelSettings";
 import { openLoginModal } from "../models/ClaudeAuth";
+import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { icon, stopIcon } from "./icons";
 
@@ -74,6 +75,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   // agent's terminal -- both bypassing the managed agent-auth screen (auth
   // lives in settings.json / claude's credential store, managed there).
   let interceptedAuthCommand: "/login" | "/logout" | null = null;
+  // A slash command the chat declines to deliver, because it would change the agent's terminal
+  // rather than start a turn. It still works from that terminal, which the notice says.
+  let declinedSlashCommand: string | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
   let isModelDropdownOpen = false;
@@ -81,6 +85,16 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
   function focusMessageTextarea(): void {
     messageTextareaElement?.focus();
+  }
+
+  // The declined-command notice has nothing focusable to hang an onkeydown off, so Escape comes
+  // from a document listener while it is open (as the image lightbox does). Stable reference, for
+  // the same reason as the dropdown handler below.
+  function handleDeclinedNoticeKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      declinedSlashCommand = null;
+      m.redraw();
+    }
   }
 
   // Stable reference (defined once for the component's life) so the dropdown's
@@ -253,6 +267,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         messageText = localStorage.getItem(messageTextKey(agentId)) ?? "";
         isInterruptInFlight = false;
         isModelDropdownOpen = false;
+        // The notice names a command typed for the previous agent, so it must not follow the user
+        // to the next one.
+        declinedSlashCommand = null;
         // Load this agent's model + fast-mode selection for the picker (cached
         // per agent, so this is a no-op once loaded).
         fetchModelSettings(agentId);
@@ -265,6 +282,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         const trimmedCommand = messageText.trim().toLowerCase();
         if (trimmedCommand === "/login" || trimmedCommand === "/logout") {
           interceptedAuthCommand = trimmedCommand;
+          m.redraw();
+          return;
+        }
+        const declined = findDeclinedSlashCommand(messageText);
+        if (declined !== null) {
+          declinedSlashCommand = declined;
           m.redraw();
           return;
         }
@@ -393,6 +416,54 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         m.redraw();
       }
 
+      function dismissDeclinedCommandNotice(): void {
+        declinedSlashCommand = null;
+        m.redraw();
+      }
+
+      function renderDeclinedCommandNotice(command: string): m.Vnode {
+        return m(
+          "div.custom-url-dialog-overlay",
+          {
+            oncreate() {
+              document.addEventListener("keydown", handleDeclinedNoticeKeydown);
+            },
+            onremove() {
+              document.removeEventListener("keydown", handleDeclinedNoticeKeydown);
+            },
+            onclick(e: MouseEvent) {
+              if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
+                dismissDeclinedCommandNotice();
+              }
+            },
+          },
+          m(
+            "div.custom-url-dialog",
+            {
+              onclick(e: MouseEvent) {
+                e.stopPropagation();
+              },
+            },
+            [
+              m("h3.custom-url-dialog-title", `${command} can't be sent from chat`),
+              m("p.logout-notice-body", "You can still send it from the agent's terminal."),
+              m("div.custom-url-dialog-actions", [
+                m(
+                  "button.custom-url-dialog-cancel",
+                  {
+                    // Focus it so Enter and Space dismiss too, and so the notice is reachable
+                    // without a mouse.
+                    oncreate: (buttonVnode: m.VnodeDOM) => (buttonVnode.dom as HTMLButtonElement).focus(),
+                    onclick: () => dismissDeclinedCommandNotice(),
+                  },
+                  "OK",
+                ),
+              ]),
+            ],
+          ),
+        );
+      }
+
       function renderAuthCommandNotice(command: "/login" | "/logout"): m.Vnode {
         const title = command === "/login" ? "Sign-in is managed here" : "Sign-out is managed here";
         const explanation =
@@ -455,6 +526,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       return m("div", { class: "message-input mx-auto w-full" }, [
         interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
+        declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
         m("input", {
           type: "file",
           multiple: true,

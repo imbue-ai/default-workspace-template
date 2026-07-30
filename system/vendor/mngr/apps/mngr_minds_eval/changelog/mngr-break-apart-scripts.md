@@ -1,0 +1,3 @@
+Adapted to the default-workspace-template's system/scripts breakup: the harness now slots the case config at `system/services/eval_worker/test_case_metadata.json` (the eval worker's new package home) and the pre-restructure layout fallbacks are removed.
+
+The retired "FCT" (forever-claude-template) terminology is fully renamed to default-workspace-template/dwt: the `fct_repo`/`fct_branch` eval-config keys become `dwt_repo`/`dwt_branch`, `box --dwt-link` becomes `--dwt-repo`, and the default template branch switches from `minds-eval-autosend` to `main` (which now carries the eval worker). The checked-in `eval-config*.json` examples drop their pinned branch keys. Old key/flag spellings stop working.

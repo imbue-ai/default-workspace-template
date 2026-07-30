@@ -1,0 +1,1 @@
+Combined integration PR (carries mngr/break-apart-scripts): new package -- the recurring-job machinery moves from `system/scripts/` to `system/libs/automations/`, with `run_schedule_agent.sh` renamed `run_automation.sh` and the `schedule_agent` label/template renamed `automation`. See `mngr-break-apart-scripts.md` in this directory for details.

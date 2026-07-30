@@ -1024,6 +1024,15 @@ def _build_mngr_create_command(
             # inherits the same gateway URL / password / JWT.
             latchkey_host_env_args.extend(["--host-env", f"{key}={value}"])
 
+    # Extra env vars this creating host wants forwarded onto every created workspace host, named (not
+    # valued) in ``MINDS_EXTRA_PASS_HOST_ENV`` (space-separated). ``--pass-host-env`` reads each from
+    # THIS process's env, so the values ride the creating process rather than the command line. The
+    # eval harness sets this on its box to push feature flags into eval workspaces; a normal create
+    # leaves it unset.
+    extra_pass_host_env_args: list[str] = []
+    for name in os.environ.get("MINDS_EXTRA_PASS_HOST_ENV", "").split():
+        extra_pass_host_env_args.extend(["--pass-host-env", name])
+
     color_label_args: list[str] = []
     if color is not None:
         # Pre-normalized by the caller (or the form POST handler) to
@@ -1074,6 +1083,7 @@ def _build_mngr_create_command(
         "--label",
         "user_created=true",
         *latchkey_host_env_args,
+        *extra_pass_host_env_args,
         "--label",
         "is_primary=true",
         *color_label_args,
@@ -1190,6 +1200,13 @@ def _build_mngr_create_command(
             # Same remote shape as vultr/aws: the ``main`` + ``modal`` templates
             # run the provisioning chain over SSH on the freshly-created sandbox.
             mngr_command.extend(["--new-host", "--template", "main", "--template", "modal"])
+            # Optional overlay template stacked on ``modal`` (like ``docker_runsc`` on
+            # ``docker``): any create host may name one via ``MINDS_MODAL_EXTRA_TEMPLATE``.
+            # The eval harness sets it to ``modal_eval`` (shorter sandbox timeout); a
+            # normal create leaves it unset and gets plain ``modal``.
+            extra_modal_template = os.environ.get("MINDS_MODAL_EXTRA_TEMPLATE")
+            if extra_modal_template:
+                mngr_command.extend(["--template", extra_modal_template])
             mngr_command.extend(_remote_host_env_flags())
         case LaunchMode.GCP:
             # Same shape as aws; the address already selects the ``byok-gcp-<slug>``
@@ -1396,7 +1413,7 @@ def run_mngr_create(
     irrelevant.
 
     No Anthropic credentials are involved at create time: workspace Claude
-    auth lives in the env block of the shared CLAUDE_CONFIG_DIR settings.json,
+    auth lives in the env block of the workspace's shared ~/.claude/settings.json,
     written by the in-workspace sign-in modal after the workspace boots.
 
     Returns ``(canonical_agent_id, canonical_host_id)``. Both canonical
@@ -2168,8 +2185,9 @@ class AgentCreator(MutableModel):
     ) -> None:
         """Flip the pending record to FAILED, downgrading store errors to warnings.
 
-        The in-memory FAILED status is already set by the caller; losing the
-        durable failure snapshot only costs the failed row across restarts.
+        The caller sets the in-memory FAILED status right after this returns;
+        losing the durable failure snapshot only costs the failed row across
+        restarts.
         """
         if self.pending_create_attempt_store is None:
             return
@@ -2453,7 +2471,7 @@ class AgentCreator(MutableModel):
                 # no pre-created scaffolding at all.
 
                 parsed_host = HostName(host_name)
-                log_sink.put("[minds] Creating workspace '{}' (mode: {})...".format(host_name, launch_mode.value))
+                log_sink.put("[minds] Creating machine '{}' (mode: {})...".format(host_name, launch_mode.value))
 
                 # A dead (interrupted / failed) earlier create attempt holding this
                 # same name on this provider is implicitly discarded before the
@@ -2662,19 +2680,21 @@ class AgentCreator(MutableModel):
             logger.opt(exception=e).error("Failed to create agent for create attempt {}", create_attempt_id)
             log_sink.put("[minds] ERROR: {}".format(e))
             error_kind = classify_create_attempt_error(repo_source, e)
-            with self._lock:
-                self._statuses[cid_str] = AgentCreateAttemptStatus.FAILED
-                self._errors[cid_str] = str(e)
-                if error_kind is not None:
-                    self._error_kinds[cid_str] = error_kind
             # Snapshot the failure (and the create attempt log's tail) into the
-            # pending-create-attempt record so the failed row survives restarts.
+            # pending-create-attempt record BEFORE publishing the in-memory
+            # FAILED status (mirroring the DONE path): anyone who observes
+            # FAILED can rely on the durable record already being terminal.
             self._mark_pending_create_attempt_failed(
                 cid_str,
                 error=str(e),
                 error_kind=error_kind.value if error_kind is not None else None,
                 log_tail=log_sink.tail_lines(FAILED_CREATE_ATTEMPT_LOG_TAIL_MAX_LINES),
             )
+            with self._lock:
+                self._statuses[cid_str] = AgentCreateAttemptStatus.FAILED
+                self._errors[cid_str] = str(e)
+                if error_kind is not None:
+                    self._error_kinds[cid_str] = error_kind
             self._notify_create_attempts_changed()
         finally:
             log_sink.put(LOG_SENTINEL)
@@ -2917,7 +2937,7 @@ class AgentCreator(MutableModel):
         retry page, which is better than spinning forever in the create attempt UI.
         """
         if self.mngr_forward_port == 0 or not self.mngr_forward_preauth_cookie:
-            logger.debug("Workspace readiness probe disabled (port=0 or empty preauth); skipping")
+            logger.debug("Machine readiness probe disabled (port=0 or empty preauth); skipping")
             return
 
         deadline = time.monotonic() + timeout_seconds
@@ -2940,7 +2960,7 @@ class AgentCreator(MutableModel):
                 if status is not None:
                     last_status = status
                     if status == 200:
-                        logger.debug("Workspace ready for {} after {} probe(s)", agent_id, attempt)
+                        logger.debug("Machine ready for {} after {} probe(s)", agent_id, attempt)
                         log_sink.put("[minds] System interface is ready.")
                         # Propagate the success into the shared health tracker,
                         # clearing the suspect flag and probe-failure run that
@@ -2953,12 +2973,12 @@ class AgentCreator(MutableModel):
                         return
                 threading.Event().wait(timeout=self.workspace_ready_poll_interval_seconds)
         logger.warning(
-            "Workspace readiness probe for {} timed out after {:.0f}s (last status={}); publishing redirect anyway",
+            "Machine readiness probe for {} timed out after {:.0f}s (last status={}); publishing redirect anyway",
             agent_id,
             timeout_seconds,
             last_status,
         )
         log_sink.put(
-            "[minds] Warning: workspace did not become ready within "
+            "[minds] Warning: machine did not become ready within "
             f"{timeout_seconds:.0f}s; you may see a retry page on first load."
         )

@@ -1,14 +1,20 @@
 # system/services/
 
-Background services: supervised programs with no tab of their own. They keep
-the workspace running -- backing it up, keeping tunnels alive, watching state
--- without the user ever needing to open them.
+Background services with no tab of their own -- most supervised by
+supervisord, some driven by cron instead. They keep the workspace running --
+backing it up, keeping tunnels alive, watching state -- without the user ever
+needing to open them.
 
 - `app_watcher/` - Watches the app registry (`data/.state/apps.toml`), writes
   server events for discovery, and reconciles with the Cloudflare forwarding
   API.
+- `caretaker/` - The weekly Caretaker's deterministic check (cron-driven via
+  `system/libs/automations/`, off by default; see the enable-caretaker
+  skill).
 - `cloudflare_tunnel/` - Runs the Cloudflare tunnel for global access when a
   tunnel token is present.
+- `eval_worker/` - One-shot worker for the minds-evals harness; a no-op
+  unless the harness slotted its config into the workspace.
 - `host_backup/` - Continuous restic backup of the whole host directory to a
   remote repository.
 - `env_converge/` - One-shot environment convergence on boot (deferred
