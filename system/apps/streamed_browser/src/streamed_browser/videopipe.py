@@ -42,28 +42,41 @@ token.
 
 import base64
 import contextlib
+import importlib
 import os
 import shutil
 import subprocess
 import threading
 import time
+from typing import Any
 
 from loguru import logger
 
 # pixelflux is a hard dependency of this package, but its native module dlopens
-# system libraries (libva and friends) at import. On a host missing them the
-# import raises, and an unguarded module-level import would take down the whole
-# service (crash-looping every route, not just this pipe) -- which is exactly
-# what happened on the first workspace deploy. Guarded so the service always
-# boots; start() reports the real reason the pipe is unavailable.
-try:
-    from pixelflux import CaptureSettings, ScreenCapture
-except ImportError as _pixelflux_import_error:
-    CaptureSettings = None
-    ScreenCapture = None
-    PIXELFLUX_IMPORT_ERROR: str | None = str(_pixelflux_import_error)
-else:
-    PIXELFLUX_IMPORT_ERROR = None
+# system libraries (libva, pixman) that env-converge may still be installing
+# when the service first boots. An unguarded module-level import would take
+# down the whole service (crash-looping every route) on a host where they are
+# missing -- which is exactly what happened on the first workspace deploy --
+# and caching that failure forever stranded a fresh workspace's pane until a
+# manual restart. So the import lives in a retryable holder: attempted at
+# module load, re-attempted on every pipe start while it remains broken.
+_pixelflux: dict[str, object] = {"module": None, "error": "not yet imported"}
+
+
+def _attempt_pixelflux_import() -> None:
+    if _pixelflux["module"] is not None:
+        return
+    try:
+        _pixelflux["module"] = importlib.import_module("pixelflux")
+    except ImportError as error:
+        _pixelflux["error"] = str(error)
+        return
+    if _pixelflux["error"] != "not yet imported":
+        logger.info("pixelflux import succeeded on retry (deferred native libraries arrived)")
+    _pixelflux["error"] = None
+
+
+_attempt_pixelflux_import()
 
 WIRE_HEADER_LEN = 10
 _WIRE_MAGIC_H264 = 0x04
@@ -151,7 +164,7 @@ def target_capture_fps(current_fps: float, dropped_in_interval: int, delivered_f
 
 def is_available() -> bool:
     """Pixelflux's native module loaded (the capture display arrives per-pipe)."""
-    return PIXELFLUX_IMPORT_ERROR is None
+    return _pixelflux["module"] is not None
 
 
 def display_geometry(display: str) -> tuple[int, int]:
@@ -281,17 +294,19 @@ class PixelfluxVideoPipe:
         self.frames_dropped = 0
 
     def start(self) -> None:
-        if PIXELFLUX_IMPORT_ERROR is not None:
+        _attempt_pixelflux_import()
+        if _pixelflux["module"] is None:
             raise VideoPipeError(
-                f"pixelflux failed to import (missing system libraries? see setup_system.sh): {PIXELFLUX_IMPORT_ERROR}"
+                f"pixelflux failed to import (missing system libraries? see setup_system.sh): {_pixelflux['error']}"
             )
+        pixelflux_module: Any = _pixelflux["module"]
         # pixelflux targets whatever $DISPLAY names -- CaptureSettings has no
         # display field -- so point the process at this pipe's display. Safe
         # process-globally: the service owns one session, and every pipe
         # captures that session's display.
         os.environ["DISPLAY"] = self.display
         width, height = display_geometry(self.display)
-        settings = CaptureSettings()
+        settings = pixelflux_module.CaptureSettings()
         settings.capture_width = width
         settings.capture_height = height
         settings.target_fps = _CAPTURE_FPS
@@ -304,7 +319,7 @@ class PixelfluxVideoPipe:
         settings.use_paint_over_quality = True
         settings.video_paintover_crf = _PAINTOVER_CRF
         settings.paint_over_trigger_frames = _PAINTOVER_TRIGGER_FRAMES
-        capture = ScreenCapture()
+        capture = pixelflux_module.ScreenCapture()
         capture.start_capture(self._on_frame, settings)
         self._settings = settings
         # Cursor shape changes arrive out-of-band (XFixes) so pointer motion

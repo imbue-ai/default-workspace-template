@@ -67,13 +67,7 @@ def test_prevent_builtin_exception_raises() -> None:
 
 
 def test_prevent_inline_imports() -> None:
-    # +1 (MISFIRE, same shape as the browser app's names.py bump): videopipe.py
-    # guards its pixelflux import in a module-level try/except ImportError --
-    # the native module dlopens system libraries (libva) at import, and an
-    # unguarded import crash-loops the whole service on hosts missing them.
-    # The import is at MODULE level; the regex matches it only because a `try`
-    # body is indented.
-    rc.check_inline_imports(_DIR, snapshot(1))
+    rc.check_inline_imports(_DIR, snapshot(0))
 
 
 def test_prevent_relative_imports() -> None:
