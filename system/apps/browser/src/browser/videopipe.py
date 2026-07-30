@@ -43,7 +43,21 @@ import threading
 import time
 
 from loguru import logger
-from pixelflux import CaptureSettings, ScreenCapture
+
+# pixelflux is a hard dependency of this package, but its native module dlopens
+# system libraries (libva and friends) at import. On a host missing them the
+# import raises, and an unguarded module-level import would take down the whole
+# browser-service (crash-looping every route, not just this pipe) -- which is
+# exactly what happened on the first workspace deploy. Guarded so the service
+# always boots; start() reports the real reason the pipe is unavailable.
+try:
+    from pixelflux import CaptureSettings, ScreenCapture
+except ImportError as _pixelflux_import_error:
+    CaptureSettings = None
+    ScreenCapture = None
+    PIXELFLUX_IMPORT_ERROR: str | None = str(_pixelflux_import_error)
+else:
+    PIXELFLUX_IMPORT_ERROR = None
 
 WIRE_HEADER_LEN = 10
 _WIRE_MAGIC_H264 = 0x04
@@ -74,8 +88,8 @@ class VideoPipeError(RuntimeError):
 
 
 def is_available() -> bool:
-    """An X display to capture from (pixelflux itself is a hard dependency)."""
-    return bool(os.environ.get("DISPLAY"))
+    """Pixelflux's native module loaded and there is an X display to capture."""
+    return PIXELFLUX_IMPORT_ERROR is None and bool(os.environ.get("DISPLAY"))
 
 
 def display_geometry(display: str) -> tuple[int, int]:
@@ -183,7 +197,11 @@ class PixelfluxVideoPipe:
         self.frames_dropped = 0
 
     def start(self) -> None:
-        if not is_available():
+        if PIXELFLUX_IMPORT_ERROR is not None:
+            raise VideoPipeError(
+                f"pixelflux failed to import (missing system libraries? see setup_system.sh): {PIXELFLUX_IMPORT_ERROR}"
+            )
+        if not os.environ.get("DISPLAY"):
             raise VideoPipeError("no DISPLAY to capture in this workspace")
         width, height = display_geometry(self.display)
         settings = CaptureSettings()
