@@ -38,22 +38,39 @@ class ClipboardError(RuntimeError):
     pass
 
 
-def _xclip(args: list[str], display: str, data: bytes | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["xclip", "-selection", "clipboard", *args],
-        env={**os.environ, "DISPLAY": display},
-        input=data,
-        capture_output=True,
-        timeout=10,
-    )
+def _xclip_base(display: str) -> list[str]:
+    # -display as a flag (not the DISPLAY env): matches the proven browser-app
+    # invocation and is robust regardless of the service's own environment.
+    return ["xclip", "-display", display, "-selection", "clipboard"]
 
 
 def set_clipboard(display: str, data: bytes, mime: str) -> None:
-    """Own the remote CLIPBOARD with ``data`` of ``mime`` (text or image)."""
-    args = ["-i"] if mime.startswith("text/") else ["-t", mime, "-i"]
-    result = _xclip(args, display, data)
+    """Own the remote CLIPBOARD with ``data`` of ``mime`` (text or image).
+
+    ``xclip -i`` forks a BACKGROUND process that keeps serving the selection
+    until another app claims it -- so stdout/stderr MUST be DEVNULL, never
+    pipes: a captured pipe is inherited by that persistent child and keeps the
+    parent's communicate() blocked forever (the bug this replaced).
+    """
+    args = _xclip_base(display)
+    if not mime.startswith("text/"):
+        args += ["-t", mime]
+    args += ["-i"]
+    result = subprocess.run(
+        args, input=data, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5
+    )
     if result.returncode != 0:
-        raise ClipboardError(f"xclip set failed: {result.stderr.decode(errors='replace')[:200]}")
+        raise ClipboardError(f"xclip set exited {result.returncode}")
+
+
+def _xclip_out(display: str, target: str) -> bytes | None:
+    """One ``xclip -o -t <target>`` read; None on failure (xclip -o exits, so
+    capturing its stdout is safe -- unlike the -i write above)."""
+    result = subprocess.run(
+        [*_xclip_base(display), "-o", "-t", target],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5,
+    )
+    return result.stdout if result.returncode == 0 else None
 
 
 def read_clipboard(display: str) -> tuple[bytes, str] | None:
@@ -62,16 +79,16 @@ def read_clipboard(display: str) -> tuple[bytes, str] | None:
     Returns (bytes, mime) or None when the clipboard is empty/unreadable or
     over the size cap.
     """
-    targets = _xclip(["-o", "-t", "TARGETS"], display)
-    available = set(targets.stdout.decode(errors="replace").split()) if targets.returncode == 0 else set()
+    targets = _xclip_out(display, "TARGETS")
+    available = set(targets.decode(errors="replace").split()) if targets else set()
     for mime in _IMAGE_TARGETS:
         if mime in available:
-            out = _xclip(["-o", "-t", mime], display)
-            if out.returncode == 0 and 0 < len(out.stdout) <= _READ_MAX_BYTES:
-                return out.stdout, mime
-    out = _xclip(["-o"], display)
-    if out.returncode == 0 and 0 < len(out.stdout) <= _READ_MAX_BYTES:
-        return out.stdout, "text/plain"
+            data = _xclip_out(display, mime)
+            if data and 0 < len(data) <= _READ_MAX_BYTES:
+                return data, mime
+    data = _xclip_out(display, "UTF8_STRING")
+    if data and 0 < len(data) <= _READ_MAX_BYTES:
+        return data, "text/plain"
     return None
 
 
