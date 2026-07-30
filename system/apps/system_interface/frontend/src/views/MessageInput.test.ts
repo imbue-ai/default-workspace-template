@@ -136,6 +136,15 @@ describe("MessageInput send guard", () => {
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/clear");
   });
 
+  it("does not send /exit, and gives the session-ending reason rather than the view one", async () => {
+    const after = await typeAndSend(MessageInput(), "agent-1", "/exit");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    const text = renderedText(after);
+    expect(text).toContain("/exit can't be sent from chat");
+    expect(text).toContain("shuts the agent's session down");
+    expect(text).not.toContain("full-screen view");
+  });
+
   it("does not carry the notice over to another agent", async () => {
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "/status");

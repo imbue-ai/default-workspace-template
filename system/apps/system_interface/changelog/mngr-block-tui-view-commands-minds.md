@@ -1,17 +1,22 @@
-Chat now declines the slash commands that leave an agent unable to receive messages, instead of
-sending them.
+Chat now declines the slash commands that would leave an agent unable to receive messages, instead
+of sending them.
 
-A chat message reaches an agent by being typed into its terminal, and some Claude Code commands
-replace the input box with a full-screen view. Sending one left the agent unable to accept any
-further message until someone closed that view from the terminal -- which a chat user cannot do.
-The composer now shows a short notice explaining why, and keeps the typed message so nothing is
-lost.
+A chat message reaches an agent by being typed into its terminal, so a command that changes the
+terminal rather than starting a turn does something chat cannot undo. Two kinds are declined, each
+with its own explanation:
 
-Declined: `/add-dir`, `/config` (`/settings`), `/diff`, `/extra-usage`, `/goal`, `/help`, `/hooks`,
-`/ide`, `/mcp`, `/permissions` (`/allowed-tools`), `/powerup`, `/privacy-settings`,
-`/release-notes`, `/skills`, `/status`, `/tasks` (`/bashes`), `/usage` (`/cost`, `/stats`),
-`/usage-credits`, `/workflows`.
+- Commands that replace the input box with a full-screen view, leaving the agent unable to accept
+  any further message until someone closes that view from its terminal: `/add-dir`, `/config`
+  (`/settings`), `/diff`, `/extra-usage`, `/goal`, `/help`, `/hooks`, `/ide`, `/mcp`, `/permissions`
+  (`/allowed-tools`), `/powerup`, `/privacy-settings`, `/release-notes`, `/skills`, `/status`,
+  `/tasks` (`/bashes`), `/theme`, `/usage` (`/cost`, `/stats`), `/usage-credits`, `/workflows`.
 
-Each one was measured against a live agent, and commands that turned out to send fine are
-deliberately not declined -- including `/model`, `/plugin`, `/theme`, `/rewind`, `/export`,
-`/version`, `/clear` and `/compact`.
+- Commands that end the agent's session outright, after which it stops responding to anything:
+  `/exit` (`/quit`).
+
+The composer shows a short notice explaining which of the two applies, and keeps the typed message
+so nothing is lost.
+
+Each entry was measured against a live agent rather than inferred, and commands that turned out to
+send fine are deliberately still allowed -- including `/model`, `/plugin`, `/rewind`, `/export`,
+`/version`, `/effort`, `/tui`, `/clear` and `/compact`.

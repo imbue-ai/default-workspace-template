@@ -27,7 +27,8 @@ import {
   setModel,
 } from "../models/ModelSettings";
 import { openLoginModal } from "../models/ClaudeAuth";
-import { findInputBlockingSlashCommand } from "../models/claudeSlashCommands";
+import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
+import type { DeclinedSlashCommand } from "../models/claudeSlashCommands";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { icon, stopIcon } from "./icons";
 
@@ -75,10 +76,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   // agent's terminal -- both bypassing the managed agent-auth screen (auth
   // lives in settings.json / claude's credential store, managed there).
   let interceptedAuthCommand: "/login" | "/logout" | null = null;
-  // A slash command that would replace the agent's input box with a full-pane view. Delivering it
-  // would leave the agent unable to accept any further message, and only someone at the agent's
-  // terminal could dismiss the view, so the composer declines it instead.
-  let blockedSlashCommand: string | null = null;
+  // A slash command the chat declines to deliver: it would either occupy the agent's input box or
+  // end its session, and in both cases only someone at the agent's terminal could put it right.
+  let declinedSlashCommand: DeclinedSlashCommand | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
   let isModelDropdownOpen = false;
@@ -260,7 +260,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         isModelDropdownOpen = false;
         // The notice names a command typed for the previous agent, so it must not follow the user
         // to the next one.
-        blockedSlashCommand = null;
+        declinedSlashCommand = null;
         // Load this agent's model + fast-mode selection for the picker (cached
         // per agent, so this is a no-op once loaded).
         fetchModelSettings(agentId);
@@ -276,9 +276,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           m.redraw();
           return;
         }
-        const inputBlockingCommand = findInputBlockingSlashCommand(messageText);
-        if (inputBlockingCommand !== null) {
-          blockedSlashCommand = inputBlockingCommand;
+        const declined = findDeclinedSlashCommand(messageText);
+        if (declined !== null) {
+          declinedSlashCommand = declined;
           m.redraw();
           return;
         }
@@ -407,18 +407,25 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         m.redraw();
       }
 
-      function dismissBlockedCommandNotice(): void {
-        blockedSlashCommand = null;
+      function dismissDeclinedCommandNotice(): void {
+        declinedSlashCommand = null;
         m.redraw();
       }
 
-      function renderBlockedCommandNotice(command: string): m.Vnode {
+      function renderDeclinedCommandNotice(declined: DeclinedSlashCommand): m.Vnode {
+        const { command, reason } = declined;
+        const explanation =
+          reason === "ends-session"
+            ? `${command} shuts the agent's session down. It would stop responding to anything, and ` +
+              "only someone at its terminal could start it again, so it was not sent."
+            : `${command} replaces the agent's input box with a full-screen view. The agent would ` +
+              "stop accepting messages until that view was closed from its terminal, so it was not sent.";
         return m(
           "div.custom-url-dialog-overlay",
           {
             onclick(e: MouseEvent) {
               if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
-                dismissBlockedCommandNotice();
+                dismissDeclinedCommandNotice();
               }
             },
           },
@@ -431,14 +438,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             },
             [
               m("h3.custom-url-dialog-title", `${command} can't be sent from chat`),
-              m(
-                "p.logout-notice-body",
-                `${command} replaces the agent's input box with a full-screen view. The agent would ` +
-                  "stop accepting messages until that view was closed from its terminal, so it was " +
-                  "not sent. Your message is still in the composer.",
-              ),
+              m("p.logout-notice-body", `${explanation} Your message is still in the composer.`),
               m("div.custom-url-dialog-actions", [
-                m("button.custom-url-dialog-cancel", { onclick: () => dismissBlockedCommandNotice() }, "OK"),
+                m("button.custom-url-dialog-cancel", { onclick: () => dismissDeclinedCommandNotice() }, "OK"),
               ]),
             ],
           ),
@@ -507,7 +509,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       return m("div", { class: "message-input mx-auto w-full" }, [
         interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
-        blockedSlashCommand !== null ? renderBlockedCommandNotice(blockedSlashCommand) : null,
+        declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
         m("input", {
           type: "file",
           multiple: true,
