@@ -76,7 +76,10 @@ def test_prevent_inline_imports() -> None:
     # at import time (a `_generate` callable is bound), so the importability check costs
     # nothing per call. Making the regex distinguish module-level try/except ImportError
     # from function-inline imports risks missing real violations, so this is bumped.
-    rc.check_inline_imports(_DIR, snapshot(2))
+    # +1 (MISFIRE, same shape) for videopipe.py's module-level `try: from pixelflux
+    # import ...` guard: pixelflux dlopens system libraries (libva) at import, and an
+    # unguarded import crash-loops the whole browser-service on hosts missing them.
+    rc.check_inline_imports(_DIR, snapshot(3))
 
 
 def test_prevent_relative_imports() -> None:
