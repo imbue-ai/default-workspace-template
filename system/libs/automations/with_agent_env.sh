@@ -22,7 +22,7 @@
 # Every cron job -- the built-in Caretaker entry and any user-added job alike
 # -- should be prefixed with it:
 #
-#   17 3 * * *   root   /home/user/workspace/system/scripts/with_agent_env.sh bash system/scripts/my_job.sh >> /var/log/supervisor/my-job.log 2>&1
+#   17 3 * * *   root   /home/user/workspace/system/libs/automations/with_agent_env.sh bash my_job.sh >> /var/log/supervisor/my-job.log 2>&1
 set -euo pipefail
 
 if [ ! -f /home/user/.mngr/env ]; then

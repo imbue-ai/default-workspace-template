@@ -1,0 +1,11 @@
+[project]
+name = "caretaker"
+version = "0.1.0"
+description = "The weekly Caretaker's deterministic check: wakes the Caretaker automation agent only when it finds something worth telling the user about"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+# No build-system: this is a bash-script package (a virtual uv workspace
+# member). caretaker_check.sh is run by cron through the automations lib's
+# run_job.sh once the enable-caretaker skill has written the cron entry.

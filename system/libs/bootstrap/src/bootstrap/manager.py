@@ -1,14 +1,17 @@
 """Bootstrap: first-boot setup, then launch supervisord.
 
 `uv run bootstrap` runs once per container boot (from the `bootstrap`
-extra_window). It performs first-boot setup -- global git config, writing
-CLAUDE_CONFIG_DIR into the host env, and creating the initial chat agent --
-and then `exec`s the system supervisord in the foreground. supervisord
-(configured by system/supervisord.conf) owns every background service from then on.
+extra_window). It performs first-boot setup -- global git config and creating
+the initial chat agent -- and then `exec`s the system supervisord in the
+foreground. supervisord (configured by system/supervisord.conf) owns every
+background service from then on.
 
 Running supervisord via exec keeps the bootstrap tmux window alive as
 supervisord and lets the supervised services inherit this shell's already-
-sourced agent environment (MNGR_AGENT_STATE_DIR, CLAUDE_CONFIG_DIR, etc.).
+sourced agent environment (MNGR_AGENT_STATE_DIR, MNGR_HOST_DIR, etc.).
+CLAUDE_CONFIG_DIR is deliberately absent from that environment: every claude
+in the workspace uses claude's own default ~/.claude, so there is nothing to
+resolve or export.
 """
 
 import json
@@ -52,11 +55,9 @@ FAST_MODE_DECISION_FILE = STATE_DIR / "fast_mode_decision.json"
 # read by system_interface's welcome_resend to address the resend by id.
 INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
 
-# Env var names used by the bootstrap's new responsibilities.
+# Env var names used by the bootstrap's responsibilities.
 _AGENT_ID_ENV_VAR = "MNGR_AGENT_ID"
-_AGENT_STATE_DIR_ENV_VAR = "MNGR_AGENT_STATE_DIR"
 _HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
-_CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
 # Global git config applied on every boot: rewrite git@ / ssh:// GitHub
 # remotes to https (there are no SSH credentials in the container). Note that
@@ -82,98 +83,6 @@ _GIT_GLOBAL_CONFIG_ARGVS = (
         "ssh://git@github.com/",
     ),
 )
-
-
-def _parse_env_file(content: str) -> dict[str, str]:
-    """Parse a host env file (as produced by mngr's _format_env_file).
-
-    Format spec mirrored from libs/mngr/.../hosts/host.py:_format_env_file:
-    one `KEY=value` per line; values containing space, quote, or newline are
-    double-quoted with `\\"` escaping. We accept blank lines and ignore them.
-
-    Kept minimal (no shell-style expansion) so bootstrap doesn't need a
-    python-dotenv dependency.
-    """
-    result: dict[str, str] = {}
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        if not key:
-            continue
-        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
-            value = value[1:-1].replace('\\"', '"')
-        result[key] = value
-    return result
-
-
-def _format_env_value(value: str) -> str:
-    """Quote a value the same way mngr's _format_env_file does."""
-    if any(c in value for c in (" ", '"', "'", "\n")):
-        return '"' + value.replace('"', '\\"') + '"'
-    return value
-
-
-def _format_env_file(env: dict[str, str]) -> str:
-    """Render an env dict back into the host env file format."""
-    return "\n".join(f"{k}={_format_env_value(v)}" for k, v in env.items()) + "\n"
-
-
-def _resolve_services_claude_config_dir() -> Path | None:
-    """Return the services agent's per-agent Claude config dir.
-
-    Mirrors mngr_claude's per-agent layout: $MNGR_AGENT_STATE_DIR/plugin/
-    claude/anthropic. Returns None if the state-dir env var is not set,
-    which only happens in tests or a broken container.
-    """
-    state_dir = os.environ.get(_AGENT_STATE_DIR_ENV_VAR, "")
-    if not state_dir:
-        logger.warning(
-            "{} is unset; cannot resolve services agent Claude config dir",
-            _AGENT_STATE_DIR_ENV_VAR,
-        )
-        return None
-    return Path(state_dir) / "plugin" / "claude" / "anthropic"
-
-
-def _ensure_host_claude_config_dir(target: Path) -> None:
-    """Make sure $MNGR_HOST_DIR/env exports CLAUDE_CONFIG_DIR=<target>.
-
-    Idempotent: only rewrites the env file when the key is missing or its
-    current value differs from `target`. Future agents created on this host
-    source this file at start-up (see build_source_env_shell_commands in
-    mngr/.../hosts/host.py) and therefore inherit the right config dir
-    without any per-agent intervention.
-    """
-    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
-    if not host_dir:
-        logger.warning(
-            "{} is unset; skipping CLAUDE_CONFIG_DIR write to host env",
-            _HOST_DIR_ENV_VAR,
-        )
-        return
-    env_path = Path(host_dir) / "env"
-    target_str = str(target)
-    existing: dict[str, str] = {}
-    if env_path.exists():
-        try:
-            existing = _parse_env_file(env_path.read_text())
-        except OSError as e:
-            logger.warning("Failed to read host env file at {}: {}", env_path, e)
-            return
-    if existing.get(_CLAUDE_CONFIG_DIR_ENV_VAR) == target_str:
-        logger.debug(
-            "Host env already has {}={}", _CLAUDE_CONFIG_DIR_ENV_VAR, target_str
-        )
-        return
-    existing[_CLAUDE_CONFIG_DIR_ENV_VAR] = target_str
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text(_format_env_file(existing))
-    logger.info("Wrote {}={} to {}", _CLAUDE_CONFIG_DIR_ENV_VAR, target_str, env_path)
 
 
 def _read_host_name() -> str | None:
@@ -504,20 +413,6 @@ def _maybe_create_initial_chat() -> None:
     logger.info("Wrote signal file {}", INITIAL_CHAT_SIGNAL)
 
 
-def _bootstrap_init_chat_dir() -> None:
-    """Write CLAUDE_CONFIG_DIR to host env, then create initial chat if needed.
-
-    Ordering matters: the env write must precede the chat-agent create so
-    the new agent's claude binary sees CLAUDE_CONFIG_DIR via the host env
-    file mngr sources at agent startup. Failures in either step are
-    non-fatal so services still come up and the user has a working UI.
-    """
-    config_dir = _resolve_services_claude_config_dir()
-    if config_dir is not None:
-        _ensure_host_claude_config_dir(config_dir)
-    _maybe_create_initial_chat()
-
-
 def _configure_git_global() -> None:
     """Apply the boot-time global git config.
 
@@ -613,7 +508,9 @@ def _fetch_user_timezone() -> str:
         )
         return ""
     if not timezone_name:
-        logger.debug("Desktop client does not know the user timezone; container stays on UTC")
+        logger.debug(
+            "Desktop client does not know the user timezone; container stays on UTC"
+        )
     return timezone_name
 
 
@@ -672,7 +569,9 @@ def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> Non
         if not entry.is_file():
             continue
         if not _CRON_NAME_PATTERN.fullmatch(entry.name):
-            logger.warning("Skipping cron entry with a name cron would ignore: {}", entry.name)
+            logger.warning(
+                "Skipping cron entry with a name cron would ignore: {}", entry.name
+            )
             continue
         try:
             target = target_dir / entry.name
@@ -747,7 +646,7 @@ def main() -> None:
     if tz_name:
         _apply_container_timezone(tz_name)
 
-    _bootstrap_init_chat_dir()
+    _maybe_create_initial_chat()
 
     # Overlay symlinks must exist before services start writing.
     _run_env_converge_fast_phase()
