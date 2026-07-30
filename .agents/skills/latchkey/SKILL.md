@@ -147,16 +147,13 @@ When the existing credentials are expired or invalid, there are currently two wa
 - By disconnecting and reconnecting the account on the "Connectors" settings page (tell the user to do that if there are more than one account configured for the given service).
 
 
-## Secondary gateway
+## When the gateway is unreachable
 
-By default, most of the commands above are actually routed through a gateway that runs on the user's computer.
-For `latchkey curl` calls specifically, when the user's computer is offline, you would typically get "Exit code 7".
-Sometimes, there's a secondary Latchkey gateway available running in the cloud that you can use instead.
-To do that, repeat your call with the following env var overrides:
-    - `LATCHKEY_GATEWAY=$LATCHKEY_GATEWAY_SECONDARY`
-    - `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE=""`
-If you're still not able to connect, it means the secondary gateway hasn't actually been configured.
-Permission management, or any other commands other than `latchkey curl`, are not supported by the secondary gateway.
+Every command above is routed through the single Latchkey gateway at
+`$LATCHKEY_GATEWAY`. There is no fallback gateway: if that one cannot be
+reached, `latchkey curl` fails with "Exit code 7" and there is nothing to
+retry against. Treat it as a transient outage -- wait and retry later, and
+tell the user the service is temporarily unreachable if it persists.
 
 
 ## Notes
