@@ -526,7 +526,9 @@ The report says which classes merged. Apply each; a clean pull-in is still
   a sustained stretch, which a quick restart never does. Without this the user
   keeps reading the page the *previous* build rendered. The helper is
   fire-and-forget and always exits 0 -- it reports each channel on stderr and is
-  never a reason to stop.
+  never a reason to stop. Run it straight after the restart; it does not need
+  the interface to be back up, because it records the change on disk and a
+  browser reloads itself when it reconnects.
 
 - **`editable_tool` (`system/vendor/mngr/**`)** -- `.py` is picked up live; a manifest
   change needs an env refresh (`uv sync --all-packages`, or `uv tool install -e

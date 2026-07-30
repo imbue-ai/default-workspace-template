@@ -190,6 +190,10 @@ back quickly never crosses that bar, so the user is left reading the page the
 previous build rendered. The helper is fire-and-forget and always exits 0; it
 reports each channel on stderr and is never a reason to stop.
 
+Run it straight after the restart -- you do not need to wait for the interface
+to come back first. It records the change on disk, so a browser still on
+reconnect backoff reloads itself when it returns.
+
 ### 4. Verify
 
 Confirm the change actually does the right thing, exercised as the user
