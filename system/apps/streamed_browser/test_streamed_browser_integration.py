@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from browser.videopipe import PIXELFLUX_IMPORT_ERROR, PixelfluxVideoPipe, is_available, parse_wire_header
+from streamed_browser.videopipe import PIXELFLUX_IMPORT_ERROR, PixelfluxVideoPipe, is_available, parse_wire_header
 
 _DISPLAY = ":93"
 

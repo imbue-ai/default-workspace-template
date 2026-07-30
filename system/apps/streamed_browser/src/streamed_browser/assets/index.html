@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Streamed Browser</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  #screen { flex: 1; min-height: 0; width: 100%; object-fit: contain; outline: none; cursor: default; }
+  #status {
+    position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+    background: rgba(20,20,20,.85); color: #ccc; font: 12px system-ui, sans-serif;
+    padding: 4px 10px; border-radius: 6px; pointer-events: none; transition: opacity .3s;
+  }
+  #status.hidden { opacity: 0; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="status">connecting…</div>
+  <canvas id="screen" tabindex="0"></canvas>
+</div>
+<script>
+"use strict";
+// Viewer for the streamed-browser service. One WebSocket carries pixelflux
+// H.264 frames out (10-byte stripe header + Annex B; see videopipe.py) and
+// Selkies-grammar input + credit acks back in (kd/ku/kr/m/ack; see xinput.py).
+// Frames are acked WHEN THEIR PIXELS EXIT THE DECODER -- the server holds at
+// most two unacked frames in flight, which is what bounds delivery lag across
+// the tunnel no matter where congestion lives.
+const HEADER_LEN = 10;
+const FRAME_TYPE_IDR = 1;
+const status = document.getElementById("status");
+const canvas = document.getElementById("screen");
+const context = document.getElementById("screen").getContext("2d", { desynchronized: true });
+let socket = null;
+let retryDelay = 500;
+
+// --- keysym mapping (client side of the Selkies kd/ku grammar) --------------
+// Printable characters map by the X11 rule: Latin-1 codepoints are their own
+// keysym; everything else is 0x01000000 | codepoint (the server's overlay
+// keycodes handle keysyms the layout lacks). Named keys use the standard X
+// keysyms below.
+const NAMED_KEYSYMS = {
+  Backspace: 0xff08, Tab: 0xff09, Enter: 0xff0d, Escape: 0xff1b, Delete: 0xffff,
+  Home: 0xff50, End: 0xff57, PageUp: 0xff55, PageDown: 0xff56,
+  ArrowLeft: 0xff51, ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54,
+  Insert: 0xff63, Menu: 0xff67, Pause: 0xff13, ScrollLock: 0xff14, PrintScreen: 0xff61,
+  CapsLock: 0xffe5, NumLock: 0xff7f,
+  Shift: 0xffe1, Control: 0xffe3, Alt: 0xffe9, AltGraph: 0xfe03, Meta: 0xffe7,
+  F1: 0xffbe, F2: 0xffbf, F3: 0xffc0, F4: 0xffc1, F5: 0xffc2, F6: 0xffc3,
+  F7: 0xffc4, F8: 0xffc5, F9: 0xffc6, F10: 0xffc7, F11: 0xffc8, F12: 0xffc9,
+};
+const RIGHT_SIDE_KEYSYMS = { Shift: 0xffe2, Control: 0xffe4, Alt: 0xffea, Meta: 0xffe8 };
+
+function keysymFor(event) {
+  const key = event.key;
+  if (key.length === 1) {
+    const cp = key.codePointAt(0);
+    return cp <= 0xff ? cp : 0x01000000 | cp;
+  }
+  if (event.location === 2 && key in RIGHT_SIDE_KEYSYMS) return RIGHT_SIDE_KEYSYMS[key];
+  return NAMED_KEYSYMS[key] ?? null;
+}
+
+// --- connection --------------------------------------------------------------
+function connect() {
+  const url = new URL("stream", document.baseURI);
+  url.protocol = (url.protocol === "https:") ? "wss:" : "ws:";
+  socket = new WebSocket(url);
+  socket.binaryType = "arraybuffer";
+
+  let decoder = null;
+  let needKey = true;
+  let decodeSeq = 0;
+  const pendingAcks = [];
+  let drawn = 0, bytes = 0;
+
+  function makeDecoder() {
+    const created = new VideoDecoder({
+      output: (frame) => {
+        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+          canvas.width = frame.displayWidth;
+          canvas.height = frame.displayHeight;
+        }
+        context.drawImage(frame, 0, 0);
+        frame.close();
+        drawn += 1;
+        if (drawn === 1) status.classList.add("hidden");
+        const frameId = pendingAcks.shift();   // no B-frames: decode order = submit order
+        if (frameId !== undefined && socket.readyState === WebSocket.OPEN) {
+          socket.send("ack," + frameId);
+        }
+      },
+      error: (error) => {
+        status.textContent = "resyncing: " + error.message;
+        status.classList.remove("hidden");
+        needKey = true;
+        pendingAcks.length = 0;
+        decoder = null;
+      },
+    });
+    created.configure({ codec: "avc1.42C028", optimizeForLatency: true });
+    return created;
+  }
+
+  socket.onopen = () => { retryDelay = 500; status.textContent = "starting browser…"; };
+  socket.onmessage = (event) => {
+    const packet = new Uint8Array(event.data);
+    bytes += packet.byteLength;
+    if (packet.byteLength <= HEADER_LEN || packet[0] !== 0x04) return;
+    const view = new DataView(event.data);
+    const isKey = view.getUint8(1) === FRAME_TYPE_IDR;
+    const frameId = view.getUint16(2);  // big-endian
+    if (needKey && !isKey) return;
+    needKey = false;
+    if (decoder === null) decoder = makeDecoder();
+    pendingAcks.push(frameId);
+    decoder.decode(new EncodedVideoChunk({
+      type: isKey ? "key" : "delta",
+      timestamp: decodeSeq++ * 33333,
+      data: packet.subarray(HEADER_LEN),
+    }));
+  };
+  socket.onclose = () => {
+    status.textContent = "reconnecting…";
+    status.classList.remove("hidden");
+    setTimeout(connect, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 5000);
+  };
+}
+
+// --- input capture -----------------------------------------------------------
+// Coordinates: the canvas letterboxes (object-fit: contain), so map client
+// coordinates through the drawn video rectangle to capture-space pixels.
+let buttonMask = 0;
+
+function captureCoords(event) {
+  if (!canvas.width || !canvas.height) return null;
+  const rect = canvas.getBoundingClientRect();
+  const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+  const drawnW = canvas.width * scale, drawnH = canvas.height * scale;
+  const offX = rect.left + (rect.width - drawnW) / 2;
+  const offY = rect.top + (rect.height - drawnH) / 2;
+  const x = Math.round((event.clientX - offX) / scale);
+  const y = Math.round((event.clientY - offY) / scale);
+  if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return null;
+  return { x, y };
+}
+
+function sendInput(message) {
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(message);
+}
+
+function sendPointer(event, mask, scrollMagnitude) {
+  const pos = captureCoords(event);
+  if (pos === null) return;
+  sendInput(`m,${pos.x},${pos.y},${mask},${scrollMagnitude || 0}`);
+}
+
+canvas.addEventListener("pointermove", (e) => sendPointer(e, buttonMask, 0));
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.focus();
+  canvas.setPointerCapture(e.pointerId);
+  const bit = e.button === 1 ? 2 : e.button === 2 ? 4 : 1;  // left/middle/right -> mask bits 0/1/2
+  buttonMask |= bit;
+  sendPointer(e, buttonMask, 0);
+});
+canvas.addEventListener("pointerup", (e) => {
+  const bit = e.button === 1 ? 2 : e.button === 2 ? 4 : 1;
+  buttonMask &= ~bit;
+  sendPointer(e, buttonMask, 0);
+});
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const clicks = Math.max(1, Math.min(8, Math.round(Math.abs(e.deltaY) / 100)));
+  const bit = e.deltaY < 0 ? 8 : 16;  // mask bits 3 (up) / 4 (down), edge-triggered
+  sendPointer(e, buttonMask | bit, clicks);
+  sendPointer(e, buttonMask, 0);
+}, { passive: false });
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+canvas.addEventListener("keydown", (e) => {
+  const keysym = keysymFor(e);
+  if (keysym === null) return;
+  e.preventDefault();
+  sendInput("kd," + keysym);
+});
+canvas.addEventListener("keyup", (e) => {
+  const keysym = keysymFor(e);
+  if (keysym === null) return;
+  e.preventDefault();
+  sendInput("ku," + keysym);
+});
+canvas.addEventListener("blur", () => { buttonMask = 0; sendInput("kr"); });
+window.addEventListener("pagehide", () => sendInput("kr"));
+
+if (!("VideoDecoder" in window)) {
+  status.textContent = "WebCodecs is not available in this browser";
+} else {
+  connect();
+}
+</script>
+</body>
+</html>
