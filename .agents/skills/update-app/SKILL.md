@@ -1,6 +1,6 @@
 ---
 name: update-app
-description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, cloudflared, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
+description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
 ---
 
 # Changing an existing app or service
@@ -13,7 +13,7 @@ there's a tab to refresh:
   origin, `http://<name>.<workspace-host>/` (scaffolded via
   `build-app`). Lives under `system/apps/<package>/`.
 - **Background service** -- a supervisord program with no tab (`host-backup`,
-  `cloudflared`, forwarders), standalone under `system/services/` or co-owned
+  `share-gateway`, forwarders), standalone under `system/services/` or co-owned
   by an app (named `<app>-<role>`, code in the app's folder).
 
 Two things are easy to forget when editing either, and both leave the user

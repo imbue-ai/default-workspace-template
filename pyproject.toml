@@ -5,7 +5,6 @@ description = "Template repo for a persistent Claude agent"
 requires-python = ">=3.11"
 dependencies = [
     "bootstrap",
-    "cloudflare-tunnel",
     "app-watcher",
     "github-sync",
     "env-converge",
@@ -68,7 +67,6 @@ exclude = ["system/apps/terminal"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }
-cloudflare-tunnel = { workspace = true }
 app-watcher = { workspace = true }
 github-sync = { workspace = true }
 env-converge = { workspace = true }

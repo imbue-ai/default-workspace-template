@@ -38,8 +38,8 @@ RESERVED_NAMES = frozenset(
     {
         "system-interface",
         "system_interface",
-        "cloudflared",
-        "cloudflare-tunnel",
+        "share-gateway",
+        "share_gateway",
         "app-watcher",
         "bootstrap",
         "github-sync",
@@ -121,7 +121,9 @@ def _pick_port(repo_root: Path, requested: int | None) -> int:
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
     if requested is not None:
         if requested in in_use:
-            sys.exit(f"error: --port {requested} is already in use by another app or service")
+            sys.exit(
+                f"error: --port {requested} is already in use by another app or service"
+            )
         return requested
     port = LOWEST_AUTO_PORT
     while port in in_use:
@@ -423,7 +425,9 @@ def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
         sys.exit(f"error: {path} not found (cannot register the new app)")
     existing = path.read_text()
     if f"[program:{name}]" in existing:
-        sys.exit(f"error: system/supervisord.conf already has a [program:{name}] section")
+        sys.exit(
+            f"error: system/supervisord.conf already has a [program:{name}] section"
+        )
     block = _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port)
     path.write_text(existing.rstrip("\n") + "\n\n" + block)
 
@@ -448,7 +452,9 @@ def _find_repo_root(start: Path) -> Path:
             parent / "system/supervisord.conf"
         ).exists():
             return parent
-    sys.exit("error: could not locate repo root (pyproject.toml + system/supervisord.conf)")
+    sys.exit(
+        "error: could not locate repo root (pyproject.toml + system/supervisord.conf)"
+    )
 
 
 def main() -> None:

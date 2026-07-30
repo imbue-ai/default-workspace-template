@@ -54,12 +54,12 @@ def test_unknown_program_and_its_children_are_raised_to_the_user_service_band() 
 def test_builtin_program_missing_its_prefix_is_raised_to_its_own_band() -> None:
     proc = _FakeProc({200: 0})
     oom_tag_backstop.handle_running_event(
-        _running_payload("cloudflared", 200),
+        _running_payload("share-gateway", 200),
         read_adj=proc.read,
         write_adj=proc.write,
         list_descendants=lambda pid: [],
     )
-    assert proc.writes == [(200, bands.SERVICE_BANDS["cloudflared"])]
+    assert proc.writes == [(200, bands.SERVICE_BANDS["share-gateway"])]
 
 
 def test_never_lowers_a_self_tagged_process() -> None:
