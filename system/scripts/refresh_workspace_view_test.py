@@ -2,16 +2,16 @@
 
 These tests exercise the contract the update flows depend on:
 
-- The interface is waited for before either channel fires, because callers run
-  this while the services agent is still restarting and the broadcast has no
-  replay.
-- Both channels fire on every run, independently -- the WebSocket broadcast
-  reaches shared tunnel viewers the Minds app cannot, and the app call drops a
-  cache and survives a dead WebSocket the broadcast needs.
-- One channel failing never suppresses the other, and no failure is fatal:
-  a stale tab must not fail a reveal whose change already landed on disk.
-- The app call addresses the workspace's PRIMARY agent, not the caller, so a
-  sub-agent refreshes the right window.
+- The view epoch is bumped on disk on every run, before anything is asked of
+  the network. It is the only channel that survives the interface being down,
+  and the only one that reaches a viewer who is not looking right now.
+- The two live channels fire independently -- the WebSocket broadcast reaches
+  shared tunnel viewers the Minds app cannot, and the app call drops a cache the
+  broadcast cannot touch.
+- One channel failing never suppresses another, and no failure is fatal: a stale
+  tab must not fail a reveal whose change already landed on disk.
+- The app call addresses the workspace's PRIMARY agent, and is skipped outright
+  rather than aimed at the caller when that cannot be resolved.
 """
 
 from __future__ import annotations
@@ -35,28 +35,11 @@ _BASE_URL = "http://127.0.0.1:8000"
 
 
 class _RecordingHttp(refresh_workspace_view.HttpClient):
-    """Records every POST and answers each URL from a caller-supplied status map.
+    """Records every POST and answers each URL from a caller-supplied status map."""
 
-    ``health_statuses`` is consumed one entry per health probe (the last repeats),
-    so a test can model a server that is down for N probes and then comes back.
-    It defaults to an immediately-healthy server, which is the common case.
-    """
-
-    def __init__(
-        self,
-        status_by_url_fragment: dict[str, int | None],
-        health_statuses: list[int | None] | None = None,
-    ) -> None:
+    def __init__(self, status_by_url_fragment: dict[str, int | None]) -> None:
         self._status_by_url_fragment = status_by_url_fragment
-        self._health_statuses = list(health_statuses or [200])
         self.posts: list[tuple[str, dict, dict]] = []
-        self.health_probes: list[str] = []
-
-    def get_status(self, url: str, timeout: float) -> int | None:
-        self.health_probes.append(url)
-        if len(self._health_statuses) > 1:
-            return self._health_statuses.pop(0)
-        return self._health_statuses[0]
 
     def post_json(
         self, url: str, payload: dict, headers: dict, timeout: float
@@ -106,196 +89,217 @@ def _agent_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "jwt")
 
 
-def test_refresh_fires_both_channels() -> None:
-    """Neither channel alone reaches every viewer, so a run must fire both."""
+@pytest.fixture
+def epoch_path(tmp_path: Path) -> Path:
+    """Where a run under test records the new interface epoch."""
+    return tmp_path / "state" / "view_epoch"
+
+
+def test_refresh_fires_every_channel(epoch_path: Path) -> None:
+    """No channel alone reaches every viewer, so a run must fire all of them."""
     http = _RecordingHttp({})
 
     exit_code = refresh_workspace_view.refresh(
-        runner=_StubRunner(), http=http, base_url=_BASE_URL
+        runner=_StubRunner(), http=http, base_url=_BASE_URL, epoch_path=epoch_path
     )
 
     assert exit_code == 0
-    broadcast_url = http.url_containing("/api/layout/broadcast")
-    app_url = http.url_containing("/minds-api-proxy/")
-    assert broadcast_url == f"{_BASE_URL}/api/layout/broadcast"
-    assert (
-        app_url
-        == f"http://gateway.invalid/minds-api-proxy/api/v1/agents/{_PRIMARY_ID}/refresh"
-    )
-
-
-def test_waits_for_the_interface_before_broadcasting() -> None:
-    """The broadcast must not be fired at a server that is still restarting.
-
-    Callers run this straight after `mngr start --restart system-services`. The
-    broadcast is a live fan-out with no replay, so one sent at a dead port is not
-    retried -- it is lost, and with it the only channel that reaches a shared
-    tunnel viewer. So the wait has to happen before the POST, not alongside it.
-    """
-    http = _RecordingHttp({}, health_statuses=[None, None, 200])
-    slept: list[float] = []
-
-    exit_code = refresh_workspace_view.refresh(
-        runner=_StubRunner(), http=http, base_url=_BASE_URL, sleeper=slept.append
-    )
-
-    assert exit_code == 0
-    assert http.health_probes == [f"{_BASE_URL}/api/agents"] * 3
-    assert len(slept) == 2  # one between each pair of probes, none after the last
+    assert epoch_path.read_text().strip() != ""
     assert http.url_containing("/api/layout/broadcast") is not None
+    assert http.url_containing(f"/agents/{_PRIMARY_ID}/refresh") is not None
 
 
-def test_a_healthy_interface_is_not_waited_on() -> None:
-    """The common case (a frontend-only reveal, no restart) must not pay a delay."""
-    http = _RecordingHttp({})
-    slept: list[float] = []
+def test_each_run_records_a_distinct_epoch(epoch_path: Path) -> None:
+    """A second reveal must be distinguishable from the first.
+
+    A page that reloaded for reveal N holds N; if reveal N+1 wrote the same
+    value, that page would have no way to know it is stale again.
+    """
+    refresh_workspace_view.refresh(
+        runner=_StubRunner(),
+        http=_RecordingHttp({}),
+        base_url=_BASE_URL,
+        epoch_path=epoch_path,
+    )
+    first = epoch_path.read_text()
 
     refresh_workspace_view.refresh(
-        runner=_StubRunner(), http=http, base_url=_BASE_URL, sleeper=slept.append
+        runner=_StubRunner(),
+        http=_RecordingHttp({}),
+        base_url=_BASE_URL,
+        epoch_path=epoch_path,
     )
 
-    assert len(http.health_probes) == 1
-    assert slept == []
+    assert epoch_path.read_text() != first
 
 
-def test_an_interface_that_never_returns_still_fires_both_channels() -> None:
-    """Giving up on the probe must not also give up on refreshing.
+def test_epoch_is_recorded_even_when_nothing_is_reachable(epoch_path: Path) -> None:
+    """The durable channel must not depend on anything being up.
 
-    The probe only tells us about *this* server: the Minds app channel does not
-    go through it at all, and a browser may reach it by a route we cannot (a
-    stale MINDS_WORKSPACE_SERVER_URL). Trying and failing costs nothing.
+    This is the case the helper exists for: callers run it straight after a
+    services restart, so the server may still be down and the app unreachable.
+    The epoch is what makes the reload happen anyway, when the browser
+    reconnects.
     """
-    http = _RecordingHttp({}, health_statuses=[None])
+    http = _RecordingHttp({"broadcast": None, "refresh": None})
 
     exit_code = refresh_workspace_view.refresh(
-        runner=_StubRunner(), http=http, base_url=_BASE_URL, sleeper=lambda _s: None
+        runner=_StubRunner(), http=http, base_url=_BASE_URL, epoch_path=epoch_path
     )
 
     assert exit_code == 0
-    assert http.url_containing("/api/layout/broadcast") is not None
-    assert http.url_containing("/minds-api-proxy/") is not None
+    assert epoch_path.read_text().strip() != ""
 
 
-def test_broadcast_asks_for_a_whole_interface_reload() -> None:
+def test_epoch_is_recorded_before_the_live_channels(epoch_path: Path) -> None:
+    """Ordering matters: a POST can block for its full timeout.
+
+    If the epoch were written after, a browser reconnecting during that window
+    would read the old value and stay on the previous build.
+    """
+    written_when_posting: list[bool] = []
+
+    class _ObservingHttp(_RecordingHttp):
+        def post_json(
+            self, url: str, payload: dict, headers: dict, timeout: float
+        ) -> int | None:
+            written_when_posting.append(epoch_path.exists())
+            return super().post_json(url, payload, headers, timeout)
+
+    refresh_workspace_view.refresh(
+        runner=_StubRunner(),
+        http=_ObservingHttp({}),
+        base_url=_BASE_URL,
+        epoch_path=epoch_path,
+    )
+
+    assert written_when_posting == [True, True]
+
+
+def test_broadcast_asks_for_a_whole_interface_reload(epoch_path: Path) -> None:
     """The op must be the full-UI reload, not the per-iframe ``refresh``.
 
-    ``refresh`` only reloads inner panels; a backend restart invalidates the
-    shell itself, so anything short of the full reload leaves stale code running.
+    Only the top-level reload picks up new hashed assets and shell chrome.
     """
     http = _RecordingHttp({})
 
-    refresh_workspace_view.refresh(runner=_StubRunner(), http=http, base_url=_BASE_URL)
-
-    broadcast_payload = next(
-        p for url, p, _h in http.posts if "/api/layout/broadcast" in url
+    refresh_workspace_view.refresh(
+        runner=_StubRunner(), http=http, base_url=_BASE_URL, epoch_path=epoch_path
     )
-    assert broadcast_payload["op"] == "reload_system_interface"
+
+    broadcasts = [p for p in http.posts if "/api/layout/broadcast" in p[0]]
+    assert [payload["op"] for _url, payload, _headers in broadcasts] == [
+        "reload_system_interface"
+    ]
 
 
-def test_app_refresh_targets_the_primary_agent_not_the_caller() -> None:
+def test_app_refresh_targets_the_primary_agent_not_the_caller(epoch_path: Path) -> None:
     """A sub-agent must refresh its workspace's window, not its own agent id.
 
-    The Minds app keys windows by primary agent id, so addressing our own id
-    would refresh some other window or none at all.
+    The Minds app identifies a workspace window by the primary agent's id, so a
+    refresh addressed to a sub-agent names no window at all.
     """
     http = _RecordingHttp({})
 
-    refresh_workspace_view.refresh(runner=_StubRunner(), http=http, base_url=_BASE_URL)
+    refresh_workspace_view.refresh(
+        runner=_StubRunner(), http=http, base_url=_BASE_URL, epoch_path=epoch_path
+    )
 
-    app_url = http.url_containing("/minds-api-proxy/")
-    assert app_url is not None
-    assert _PRIMARY_ID in app_url
-    assert _OWN_ID not in app_url
+    assert http.url_containing(f"/agents/{_PRIMARY_ID}/refresh") is not None
+    assert http.url_containing(f"/agents/{_OWN_ID}/refresh") is None
 
 
-def test_a_failed_broadcast_still_refreshes_the_app() -> None:
+def test_unresolvable_primary_skips_the_app_call_rather_than_guessing(
+    epoch_path: Path,
+) -> None:
+    """A lookup that fails must not fall back to the caller's own id.
+
+    Addressing our own id would be accepted by the gateway and broadcast by the
+    app, then match no window -- a silent no-op that reads as success. Skipping
+    is the same outcome, reported honestly.
+    """
+    http = _RecordingHttp({})
+
+    refresh_workspace_view.refresh(
+        runner=_StubRunner(error=OSError("mngr not found")),
+        http=http,
+        base_url=_BASE_URL,
+        epoch_path=epoch_path,
+    )
+
+    assert http.url_containing("/refresh") is None
+    assert http.url_containing("/api/layout/broadcast") is not None
+
+
+def test_primary_lookup_ignores_a_nonzero_exit(epoch_path: Path) -> None:
+    """A discovery error prints to stdout too; only a clean exit is trusted."""
+    http = _RecordingHttp({})
+
+    refresh_workspace_view.refresh(
+        runner=_StubRunner(stdout="Error: could not reach provider\n", returncode=1),
+        http=http,
+        base_url=_BASE_URL,
+        epoch_path=epoch_path,
+    )
+
+    assert http.url_containing("/refresh") is None
+
+
+def test_a_failed_broadcast_still_refreshes_the_app(epoch_path: Path) -> None:
     """The channels are independent: a dead frontend WebSocket is exactly the
     case the app call exists to cover, so it must still run."""
     http = _RecordingHttp({"/api/layout/broadcast": None})
 
     exit_code = refresh_workspace_view.refresh(
-        runner=_StubRunner(), http=http, base_url=_BASE_URL
+        runner=_StubRunner(), http=http, base_url=_BASE_URL, epoch_path=epoch_path
     )
 
     assert exit_code == 0
-    assert http.url_containing("/minds-api-proxy/") is not None
+    assert http.url_containing(f"/agents/{_PRIMARY_ID}/refresh") is not None
 
 
-def test_a_failed_app_refresh_still_broadcasts() -> None:
+def test_a_failed_app_refresh_still_broadcasts(epoch_path: Path) -> None:
     """A workspace with no desktop app attached still has tunnel viewers to reload."""
-    http = _RecordingHttp({"/minds-api-proxy/": 502})
+    http = _RecordingHttp({"/refresh": 502})
 
     exit_code = refresh_workspace_view.refresh(
-        runner=_StubRunner(), http=http, base_url=_BASE_URL
+        runner=_StubRunner(), http=http, base_url=_BASE_URL, epoch_path=epoch_path
     )
 
     assert exit_code == 0
     assert http.url_containing("/api/layout/broadcast") is not None
 
 
-def test_refresh_is_never_fatal_when_both_channels_fail() -> None:
+def test_refresh_is_never_fatal_when_every_channel_fails(tmp_path: Path) -> None:
     """The change already landed on disk; a stale tab must not fail the reveal."""
-    http = _RecordingHttp({"/api/layout/broadcast": None, "/minds-api-proxy/": None})
+    unwritable_epoch = tmp_path / "not-a-directory" / "view_epoch"
+    unwritable_epoch.parent.write_text("this is a file, not a directory")
+    http = _RecordingHttp({"broadcast": None, "refresh": None})
 
     exit_code = refresh_workspace_view.refresh(
-        runner=_StubRunner(), http=http, base_url=_BASE_URL
+        runner=_StubRunner(), http=http, base_url=_BASE_URL, epoch_path=unwritable_epoch
     )
 
     assert exit_code == 0
 
 
 def test_missing_gateway_env_skips_the_app_call_but_still_broadcasts(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, epoch_path: Path
 ) -> None:
     """A bare mngr workspace (no desktop app) still reloads its browser viewers.
 
-    It must also not pay for the primary-agent lookup: that is a ``mngr ls``
-    subprocess with a 30s budget, and with no app attached there is nothing for
-    the id it resolves to address.
+    The lookup must not even run there: it is a 30s-budget subprocess with
+    nothing to address.
     """
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
     http = _RecordingHttp({})
     runner = _StubRunner()
 
     exit_code = refresh_workspace_view.refresh(
-        runner=runner, http=http, base_url=_BASE_URL
+        runner=runner, http=http, base_url=_BASE_URL, epoch_path=epoch_path
     )
 
     assert exit_code == 0
-    assert http.url_containing("/api/layout/broadcast") is not None
-    assert http.url_containing("/minds-api-proxy/") is None
     assert runner.commands == []
-
-
-def test_primary_lookup_failure_falls_back_to_our_own_agent_id(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """When ``mngr ls`` cannot run, the caller is usually the primary itself.
-
-    The fallback must also say so: the POST succeeds either way, so without a
-    note a sub-agent that just refreshed some other window sees only the
-    "requested a reload" line and has no way to tell.
-    """
-    runner = _StubRunner(error=OSError("mngr not found"))
-    http = _RecordingHttp({})
-
-    refresh_workspace_view.refresh(runner=runner, http=http, base_url=_BASE_URL)
-
-    app_url = http.url_containing("/minds-api-proxy/")
-    assert app_url is not None
-    assert _OWN_ID in app_url
-    assert (
-        "could not resolve this workspace's primary agent id" in capsys.readouterr().err
-    )
-
-
-def test_primary_lookup_ignores_a_nonzero_exit() -> None:
-    """A discovery error prints to stdout too; only a clean exit is trusted."""
-    runner = _StubRunner(stdout="Error: discovery failed\n", returncode=1)
-    http = _RecordingHttp({})
-
-    refresh_workspace_view.refresh(runner=runner, http=http, base_url=_BASE_URL)
-
-    app_url = http.url_containing("/minds-api-proxy/")
-    assert app_url is not None
-    assert _OWN_ID in app_url
+    assert http.url_containing("/api/layout/broadcast") is not None
+    assert http.url_containing("/refresh") is None
