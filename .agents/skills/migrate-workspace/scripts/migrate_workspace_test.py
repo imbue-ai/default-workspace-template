@@ -602,6 +602,58 @@ def test_split_file_stream_splits_batched_reads_and_omits_missing_files() -> Non
     assert migrate_workspace._split_file_stream("") == {}
 
 
+def _simulate_shell_read(files: dict[str, str | None]) -> str:
+    """Reproduce the stdout the batched read script produces on a real shell.
+
+    ``files`` maps a path to its on-disk content, or ``None`` for a file that
+    does not exist (the ``[ -f ]`` guard emits nothing). Content is written
+    verbatim -- crucially including files with no trailing newline -- followed by
+    the trailing ``echo`` the command appends.
+    """
+    sentinel = migrate_workspace._FILE_SENTINEL
+    out: list[str] = []
+    for path, content in files.items():
+        if content is None:
+            continue
+        out.append(f"{sentinel} {path}\n")
+        out.append(content)
+        out.append("\n")  # the command's trailing `echo`
+    return "".join(out)
+
+
+def test_read_command_recovers_files_without_trailing_newline() -> None:
+    # data.json-style content with no final newline must not swallow the next
+    # file's sentinel line.
+    files = {
+        "/a/data.json": '{"id": "a"}',  # no trailing newline
+        "/a/missing": None,
+        "/b/data.json": '{"id": "b"}\n',  # trailing newline
+        "/c/data.json": "line1\nline2",  # multi-line, no trailing newline
+    }
+    stream = _simulate_shell_read(files)
+    recovered = migrate_workspace._split_file_stream(stream)
+    # The point: a newline-less file no longer swallows the next file's sentinel,
+    # so every present file is recovered and json-parses. The trailing `echo` may
+    # leave at most one trailing newline, which is immaterial to json/grep callers.
+    assert "/a/missing" not in recovered
+    assert set(recovered) == {"/a/data.json", "/b/data.json", "/c/data.json"}
+    assert recovered["/a/data.json"] == '{"id": "a"}'
+    assert recovered["/c/data.json"] == "line1\nline2"
+    assert recovered["/b/data.json"].rstrip("\n") == '{"id": "b"}'
+    import json as _json
+
+    assert {_json.loads(recovered[p])["id"] for p in ("/a/data.json", "/b/data.json")} == {
+        "a",
+        "b",
+    }
+
+
+def test_read_file_command_terminates_content_with_newline() -> None:
+    command = migrate_workspace._read_file_command("/a/data.json")
+    assert command.endswith("; echo; fi")
+    assert "[ -f '/a/data.json' ]" in command
+
+
 # --- CLI wiring ------------------------------------------------------------
 
 

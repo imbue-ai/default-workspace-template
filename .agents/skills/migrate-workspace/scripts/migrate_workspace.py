@@ -956,22 +956,29 @@ def run_remote(target: SshTarget, remote_command: str) -> str:
     from the *remote command* is not an error here: several probes (a missing
     file, an empty glob) legitimately exit non-zero, and the callers below read
     the stdout they got.
+
+    stdout is decoded with ``errors="replace"`` rather than ``text=True``: some
+    commands ``cat`` files the caller named without knowing their type (the audit
+    scan walks the whole baseline set, which includes committed PNGs), and a
+    strict utf-8 decode would abort the entire pass on the first binary byte.
+    Callers grep or json-parse the result, so a replacement char in a binary blob
+    is harmless; a crash is not.
     """
     result = subprocess.run(
         build_ssh_argv(
             target.host, target.user, target.port, target.key_path, remote_command
         ),
         capture_output=True,
-        text=True,
         check=False,
     )
     # OpenSSH reserves 255 for its own failures (connect refused, auth denied,
     # host unreachable); anything else is the remote command's own exit code.
     if result.returncode == 255:
         raise SshError(
-            result.stderr.strip() or "ssh failed to connect to the source workspace"
+            result.stderr.decode("utf-8", "replace").strip()
+            or "ssh failed to connect to the source workspace"
         )
-    return result.stdout
+    return result.stdout.decode("utf-8", "replace")
 
 
 _FILE_SENTINEL = "===MIGRATE-WORKSPACE-FILE==="
@@ -980,6 +987,25 @@ _FILE_SENTINEL = "===MIGRATE-WORKSPACE-FILE==="
 # large audit set from costing one ssh handshake per file; the cap keeps the
 # generated shell command well inside the remote shell's argument limit.
 _READ_BATCH_SIZE = 60
+
+
+def _read_file_command(path: str) -> str:
+    """Shell snippet that emits one sentinel-delimited section for ``path``.
+
+    The trailing ``echo`` after ``cat`` is load-bearing: many of the files read
+    this way (``data.json`` in particular) have no final newline, so without it
+    the next file's ``echo <sentinel>`` would print onto the same line as this
+    file's last byte -- the sentinel would no longer start its line, and
+    :func:`_split_file_stream` would fold the following file into this one. The
+    extra newline it introduces is immaterial to callers, which json-parse or
+    grep the result, and :func:`_split_file_stream` normalises trailing newlines
+    away in any case.
+    """
+    quoted = _shell_quote(path)
+    return (
+        f"if [ -f {quoted} ]; then "
+        f"echo {_shell_quote(_FILE_SENTINEL + ' ' + path)}; cat {quoted}; echo; fi"
+    )
 
 
 def _read_remote_files(target: SshTarget, paths: Sequence[str]) -> dict[str, str]:
@@ -995,11 +1021,7 @@ def _read_remote_files(target: SshTarget, paths: Sequence[str]) -> dict[str, str
     unique = list(dict.fromkeys(paths))
     for start in range(0, len(unique), _READ_BATCH_SIZE):
         batch = unique[start : start + _READ_BATCH_SIZE]
-        script = "; ".join(
-            f"if [ -f {_shell_quote(path)} ]; then "
-            f"echo {_shell_quote(_FILE_SENTINEL + ' ' + path)}; cat {_shell_quote(path)}; fi"
-            for path in batch
-        )
+        script = "; ".join(_read_file_command(path) for path in batch)
         contents.update(_split_file_stream(run_remote(target, script)))
     return contents
 
