@@ -659,15 +659,6 @@ class AgentManager:
             return self._own_work_dir
         return None
 
-    def _get_current_branch(self, work_dir: Path) -> str:
-        """Get the current git branch for a work directory."""
-        result = run_local_command_modern_version(
-            command=["git", "-C", str(work_dir), "branch", "--show-current"],
-            cwd=None,
-            is_checked=True,
-        )
-        return result.stdout.strip()
-
     def _run_creation(
         self,
         agent_id: str,
