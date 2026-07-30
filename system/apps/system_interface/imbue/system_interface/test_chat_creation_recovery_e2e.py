@@ -53,9 +53,28 @@ def _playwright_browsers_installed() -> bool:
     return cache_dir.exists() and any(cache_dir.iterdir())
 
 
+def _frontend_built() -> bool:
+    """Check whether the frontend has been built (``static/index.html`` exists).
+
+    Without a build the Flask server serves a "Frontend not built" placeholder, so
+    every e2e test would ``page.goto()`` and then burn its per-test timeout waiting
+    for selectors that can never appear. The path is resolved relative to this test
+    module (``imbue/system_interface/`` holds both this file and the build output)
+    so it holds regardless of the cwd.
+    """
+    return (Path(__file__).parent / "static" / "index.html").is_file()
+
+
 pytestmark = [
     pytest.mark.release,
     pytest.mark.skipif(not _playwright_browsers_installed(), reason="Playwright browsers not installed"),
+    pytest.mark.skipif(
+        not _frontend_built(),
+        reason=(
+            "System interface frontend not built "
+            "(run `cd system/apps/system_interface/frontend && npm run build`); skipping e2e."
+        ),
+    ),
 ]
 
 _PRIMARY_AGENT_ID = "agent-primary-0001"
@@ -203,7 +222,7 @@ def _create_chat_through_ui(page: Page, base_url: str) -> None:
 
 
 @pytest.mark.tmux
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=False)
 def test_not_found_panel_recovers_when_the_agent_resolves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: Page
 ) -> None:
@@ -228,7 +247,7 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
 
 
 @pytest.mark.tmux
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=False)
 def test_not_found_panel_recovers_when_both_proto_events_arrive_together(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: Page
 ) -> None:
@@ -250,7 +269,7 @@ def test_not_found_panel_recovers_when_both_proto_events_arrive_together(
 
 
 @pytest.mark.tmux
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(120, func_only=False)
 def test_not_found_panel_does_not_poll_the_screen_capture_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: Page
 ) -> None:
