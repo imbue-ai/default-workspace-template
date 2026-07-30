@@ -27,6 +27,7 @@ import {
   setModel,
 } from "../models/ModelSettings";
 import { openLoginModal } from "../models/ClaudeAuth";
+import { findInputBlockingSlashCommand } from "../models/claudeSlashCommands";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { icon, stopIcon } from "./icons";
 
@@ -74,6 +75,10 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   // agent's terminal -- both bypassing the managed agent-auth screen (auth
   // lives in settings.json / claude's credential store, managed there).
   let interceptedAuthCommand: "/login" | "/logout" | null = null;
+  // A slash command that would replace the agent's input box with a full-pane view. Delivering it
+  // would leave the agent unable to accept any further message, and only someone at the agent's
+  // terminal could dismiss the view, so the composer declines it instead.
+  let blockedSlashCommand: string | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
   let isModelDropdownOpen = false;
@@ -268,6 +273,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           m.redraw();
           return;
         }
+        const inputBlockingCommand = findInputBlockingSlashCommand(messageText);
+        if (inputBlockingCommand !== null) {
+          blockedSlashCommand = inputBlockingCommand;
+          m.redraw();
+          return;
+        }
         // Wait for in-flight uploads so a just-dropped file is included rather
         // than dropped from the message.
         await waitForComposerUploads(agentId);
@@ -393,6 +404,44 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         m.redraw();
       }
 
+      function dismissBlockedCommandNotice(): void {
+        blockedSlashCommand = null;
+        m.redraw();
+      }
+
+      function renderBlockedCommandNotice(command: string): m.Vnode {
+        return m(
+          "div.custom-url-dialog-overlay",
+          {
+            onclick(e: MouseEvent) {
+              if ((e.target as HTMLElement).classList.contains("custom-url-dialog-overlay")) {
+                dismissBlockedCommandNotice();
+              }
+            },
+          },
+          m(
+            "div.custom-url-dialog",
+            {
+              onclick(e: MouseEvent) {
+                e.stopPropagation();
+              },
+            },
+            [
+              m("h3.custom-url-dialog-title", `${command} can't be sent from chat`),
+              m(
+                "p.logout-notice-body",
+                `${command} replaces the agent's input box with a full-screen view. The agent would ` +
+                  "stop accepting messages until that view was closed from its terminal, so it was " +
+                  "not sent. Your message is still in the composer.",
+              ),
+              m("div.custom-url-dialog-actions", [
+                m("button.custom-url-dialog-cancel", { onclick: () => dismissBlockedCommandNotice() }, "OK"),
+              ]),
+            ],
+          ),
+        );
+      }
+
       function renderAuthCommandNotice(command: "/login" | "/logout"): m.Vnode {
         const title = command === "/login" ? "Sign-in is managed here" : "Sign-out is managed here";
         const explanation =
@@ -455,6 +504,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       return m("div", { class: "message-input mx-auto w-full" }, [
         interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
+        blockedSlashCommand !== null ? renderBlockedCommandNotice(blockedSlashCommand) : null,
         m("input", {
           type: "file",
           multiple: true,
