@@ -50,6 +50,13 @@ def _write_tick(events_dir: Path, *types: BackupEventType, tick_id: str) -> None
         pytest.param(
             (), BackupEventType.TICK_ERROR, EXIT_BACKUP_FAILED, id="tick-error"
         ),
+        # restic ran and failed -- the ending exit code 1 has always stood for.
+        pytest.param(
+            (BackupEventType.SNAPSHOT_CREATED,),
+            BackupEventType.RESTIC_BACKUP_FAILED,
+            EXIT_BACKUP_FAILED,
+            id="restic-failed",
+        ),
         # The happy path, which must resolve on the restic outcome rather than on
         # the mid-tick event preceding it.
         pytest.param(
