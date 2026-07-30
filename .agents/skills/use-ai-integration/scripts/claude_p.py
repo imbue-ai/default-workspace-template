@@ -12,7 +12,9 @@ instead (cheaper for non-agentic work; see the use-ai-integration skill). With n
 key, ``claude -p`` runs on the local Claude subscription's programmatic pool.
 
 Workspace credentials live in the ``env`` block of the shared
-``$CLAUDE_CONFIG_DIR/settings.json`` (written by the in-UI Claude sign-in
+``~/.claude/settings.json`` (claude's default config dir -- resolved via
+``$CLAUDE_CONFIG_DIR`` only when that var is explicitly set, which a minds
+workspace never does; written by the in-UI Claude sign-in
 modal), NOT in the process environment -- long-lived services inherit a
 frozen env from supervisord, so an env-var check would go stale the moment
 the user changes auth. Keyed (API key) integrations additionally snapshot
@@ -131,16 +133,19 @@ def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     """
     snapshot_env = _read_env_file(ANTHROPIC_ENV_SNAPSHOT_PATH)
     settings_env: dict[str, object] = {}
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
-    if config_dir:
-        settings_path = os.path.join(config_dir, "settings.json")
-        try:
-            with open(settings_path, encoding="utf-8") as f:
-                settings = json.load(f)
-            if isinstance(settings, dict) and isinstance(settings.get("env"), dict):
-                settings_env = settings["env"]
-        except (OSError, ValueError):
-            settings_env = {}
+    # Resolve the config dir the way claude itself does: $CLAUDE_CONFIG_DIR
+    # when explicitly set, else ~/.claude (the workspace never sets the var).
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "") or os.path.expanduser(
+        "~/.claude"
+    )
+    settings_path = os.path.join(config_dir, "settings.json")
+    try:
+        with open(settings_path, encoding="utf-8") as f:
+            settings = json.load(f)
+        if isinstance(settings, dict) and isinstance(settings.get("env"), dict):
+            settings_env = settings["env"]
+    except (OSError, ValueError):
+        settings_env = {}
 
     def resolve(key: str, use_snapshot: bool = True) -> str | None:
         if use_snapshot:
@@ -185,7 +190,9 @@ def write_anthropic_env_snapshot() -> str:
         lines.append(f"ANTHROPIC_BASE_URL={creds.base_url}")
     directory = os.path.dirname(ANTHROPIC_ENV_SNAPSHOT_PATH)
     os.makedirs(directory, exist_ok=True)
-    fd = os.open(ANTHROPIC_ENV_SNAPSHOT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(
+        ANTHROPIC_ENV_SNAPSHOT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+    )
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return ANTHROPIC_ENV_SNAPSHOT_PATH

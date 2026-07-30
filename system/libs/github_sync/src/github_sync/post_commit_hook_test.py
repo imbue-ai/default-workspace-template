@@ -1,4 +1,4 @@
-"""Tests for the system/scripts/git_hooks/post-commit auto-push hook.
+"""Tests for the system/libs/github_sync/git_hooks/post-commit auto-push hook.
 
 The hook is the third piece of the opt-in GitHub sync (see the README): it
 auto-pushes the committed branch of any checkout, but only when sync is
@@ -22,7 +22,7 @@ import pytest
 
 from github_sync.testing import init_repo_with_origin
 
-_HOOK_DIR = Path(__file__).parents[4] / "scripts" / "git_hooks"
+_HOOK_DIR = Path(__file__).parents[2] / "git_hooks"
 
 _PUSH_WAIT_SECONDS = 20.0
 

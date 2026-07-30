@@ -96,6 +96,10 @@ Targets `open` accepts:
   than creating a duplicate. This is the same terminal the chat
   panel's "Open agent terminal" button mounts.
 
+Not `browser`. The agentic-browser-fleet surfaces its own panes; a bare
+`open browser` binds to no browser and is rejected. Only open one when a
+user explicitly asks, and always name it: `open service:browser?session=<name>`.
+
 ## Refs: how every panel is addressed
 
 Every panel has a stable, type-prefixed ref returned by `inspect`:
