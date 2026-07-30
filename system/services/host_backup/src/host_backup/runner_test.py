@@ -200,9 +200,9 @@ def test_every_way_a_tick_ends_emits_a_terminal_event(
 
     `host-backup-now` waits for a member of TICK_TERMINAL_EVENT_TYPES, so a tick
     ending that emits something outside that set strands the caller until its
-    timeout. Asserting set equality (not membership) catches drift in both
-    directions: a new tick ending whose event was never added to the set, and a
-    type in the set that no tick actually emits.
+    timeout. Asserting set equality (not membership) pins the set to the endings
+    enumerated below, so a type nothing emits cannot linger in it; a *new* way
+    for a tick to end is only covered once it is driven here too.
     """
     # `_check_secrets_present` reads the relative data/.secrets/restic.env, so an
     # empty cwd is what makes "backups are not configured" the outcome.
