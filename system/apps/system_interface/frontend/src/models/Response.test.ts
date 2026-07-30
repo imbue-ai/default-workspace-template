@@ -12,6 +12,8 @@ vi.mock("mithril", () => ({
 
 import {
   appendEvents,
+  clearConversationNotFound,
+  isConversationNotFound,
   prependEvents,
   evictOldEvents,
   fetchEvents,
@@ -248,6 +250,35 @@ describe("window position (offset / total)", () => {
     expect(getFirstOffset(agent)).toBe(40);
     expect(hasMoreBefore(agent)).toBe(true);
     expect(hasMoreAfter(agent)).toBe(true);
+  });
+});
+
+// A 404 from /events is ambiguous: the agent may be genuinely destroyed, or the
+// `mngr observe` pipeline may just be restarting. The store therefore records the
+// marker but never makes it permanent -- the chat panel clears it when the agent
+// reappears in an agents_updated snapshot, and the refetch has to behave like a
+// first load.
+describe("conversation not-found marker", () => {
+  it("is set by a 404 and cleared for a retry that then loads normally", async () => {
+    const agent = freshAgent();
+    mockRequest.mockRejectedValueOnce({ code: 404, message: "Agent not found" });
+    await expect(fetchEvents(agent)).rejects.toBeTruthy();
+    expect(isConversationNotFound(agent)).toBe(true);
+
+    clearConversationNotFound(agent);
+    expect(isConversationNotFound(agent)).toBe(false);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("a")], offset: 0, total: 1 });
+    await fetchEvents(agent);
+    expect(ids(agent)).toEqual(["a"]);
+    expect(isConversationNotFound(agent)).toBe(false);
+  });
+
+  it("is not set by a non-404 failure", async () => {
+    const agent = freshAgent();
+    mockRequest.mockRejectedValueOnce({ code: 500, message: "boom" });
+    await expect(fetchEvents(agent)).rejects.toBeTruthy();
+    expect(isConversationNotFound(agent)).toBe(false);
   });
 });
 
