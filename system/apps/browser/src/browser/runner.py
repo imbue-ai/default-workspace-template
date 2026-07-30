@@ -69,11 +69,13 @@ from browser.session import (
     anthropic_key_status,
     deferred_install_ready,
 )
+from browser.videopipe import VideoPipeError, stream_video
 from browser.vnc import reap_orphan_displays
 from browser.wsgi import make_threaded_server
 
 ROOT_PATH = os.environ.get("ROOT_PATH", "")
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
+_VIDEO_HTML = Path(__file__).parent / "assets" / "video.html"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 _STARTUP_ERRORS = (BrowserStartupError, PlaywrightError, RuntimeError, OSError, ConnectionError)
@@ -935,6 +937,32 @@ def cast_socket(ws: Any, browser_id: str) -> None:
         bridge.run(session.unregister_cast_queue(client_queue), timeout=_ROUTE_TIMEOUT)
 
 
+def video_page() -> Response:
+    return Response(_VIDEO_HTML.read_text(), mimetype="text/html")
+
+
+def video_socket(ws: Any, browser_id: str) -> None:
+    """One H.264 video pipe viewer (see browser.videopipe): capture the browser's
+    display and stream Annex B access units until the client disconnects. Close
+    codes mirror the cast socket: 1013 retryable (not up yet), 1008 terminal."""
+    session = _resolve_sync_for_ws(browser_id)
+    if session is None:
+        ws.close(1008 if not is_valid_browser_name(browser_id) else 1013)
+        return
+    display = session.video_capture_display()
+    if display is None:
+        ws.close(1013)
+        return
+    try:
+        stream_video(ws, display, browser_id)
+    except ConnectionClosed:
+        pass
+    except VideoPipeError as error:
+        logger.warning("video pipe failed for browser {} ({})", browser_id, error)
+        with contextlib.suppress(ConnectionClosed):
+            ws.close(1011)
+
+
 def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
     """Resolve a browser for the cast socket; None on any KeyError/startup error."""
     try:
@@ -973,7 +1001,9 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/resize", view_func=resize_browser, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/audio/connect", view_func=audio_connect, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/audio/disconnect", view_func=audio_disconnect, methods=["POST"])
+    application.add_url_rule("/video", view_func=video_page, methods=["GET"])
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
+    sock.route("/browsers/<string:browser_id>/video")(video_socket)
 
 
 _register_routes()

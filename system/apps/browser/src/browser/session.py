@@ -592,6 +592,10 @@ class LiveBrowser(MutableModel):
             raise
         self._vnc = display
 
+    def video_capture_display(self) -> str | None:
+        """The X display name for capture-based viewers (videopipe), None before start."""
+        return self._vnc.display if self._vnc is not None else None
+
     def _stop_vnc(self) -> None:
         """Tear the display down. Idempotent; safe on a browser that never started one."""
         keeper = self._focus

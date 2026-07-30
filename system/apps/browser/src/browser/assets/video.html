@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Live video (WebCodecs prototype)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ccc; font: 13px system-ui, sans-serif; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  #stats { padding: 4px 8px; background: #1c1c1c; white-space: pre; }
+  #screen { flex: 1; min-height: 0; width: 100%; object-fit: contain; background: #000; }
+  #hint { padding: 16px; }
+  a { color: #8ab4f8; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stats">connecting...</div>
+  <canvas id="screen"></canvas>
+  <div id="hint" hidden></div>
+</div>
+<script>
+"use strict";
+// H.264-over-WebSocket viewer for the videopipe prototype. Each binary message
+// is one Annex B access unit prefixed with a 1-byte key(1)/delta(0) flag; the
+// stream always opens with SPS/PPS + IDR (the server spawns ffmpeg per
+// connection), so a description-less (Annex B) VideoDecoder config suffices.
+// Compare side by side with the KasmVNC pane; the ?browser= name is the same
+// fleet browser name the normal viewer uses.
+const FRAME_MICROS = 1e6 / 24;
+const params = new URLSearchParams(location.search);
+const browserId = params.get("browser");
+const stats = document.getElementById("stats");
+const canvas = document.getElementById("screen");
+const context = canvas.getContext("2d");
+
+async function showHint() {
+  const hint = document.getElementById("hint");
+  hint.hidden = false;
+  canvas.hidden = true;
+  let names = [];
+  try {
+    const response = await fetch("browsers");
+    names = (await response.json()).browsers?.map((b) => b.id ?? b.name) ?? [];
+  } catch (_) { /* service not reachable; the bare hint still helps */ }
+  hint.innerHTML = "Pass ?browser=&lt;name&gt;. Running browsers: " +
+    (names.length ? names.map((n) => `<a href="video?browser=${encodeURIComponent(n)}">${n}</a>`).join(", ") : "(none found)");
+  stats.textContent = "no browser selected";
+}
+
+function start() {
+  let frames = 0, bytes = 0, drawn = 0, needKey = false;
+  let decoder = null;
+  const socketUrl = new URL("browsers/" + encodeURIComponent(browserId) + "/video", document.baseURI);
+  socketUrl.protocol = (socketUrl.protocol === "https:") ? "wss:" : "ws:";
+  const socket = new WebSocket(socketUrl);
+  socket.binaryType = "arraybuffer";
+
+  function makeDecoder() {
+    const created = new VideoDecoder({
+      output: (frame) => {
+        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+          canvas.width = frame.displayWidth;
+          canvas.height = frame.displayHeight;
+        }
+        context.drawImage(frame, 0, 0);
+        frame.close();
+        drawn += 1;
+      },
+      error: (error) => {
+        // Recover at the next keyframe with a fresh decoder; a lost reference
+        // frame otherwise corrupts every following delta.
+        stats.textContent = "decoder error, resyncing: " + error.message;
+        needKey = true;
+        decoder = null;
+      },
+    });
+    created.configure({ codec: "avc1.42C028", optimizeForLatency: true });
+    return created;
+  }
+
+  socket.onmessage = (event) => {
+    const payload = new Uint8Array(event.data);
+    const isKey = payload[0] === 1;
+    bytes += payload.byteLength;
+    if (needKey && !isKey) return;
+    needKey = false;
+    if (decoder === null) decoder = makeDecoder();
+    decoder.decode(new EncodedVideoChunk({
+      type: isKey ? "key" : "delta",
+      timestamp: frames * FRAME_MICROS,
+      data: payload.subarray(1),
+    }));
+    frames += 1;
+  };
+  socket.onclose = (event) => { stats.textContent = "disconnected (" + event.code + "); reload to retry"; };
+  socket.onerror = () => { stats.textContent = "socket error; reload to retry"; };
+
+  setInterval(() => {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    stats.textContent =
+      `browser=${browserId}  drawn=${drawn}/24fps  ${(bytes * 8 / 1e6).toFixed(2)} Mbit in last 1s` +
+      `  decode queue=${decoder ? decoder.decodeQueueSize : "-"}`;
+    bytes = 0;
+  }, 1000);
+}
+
+if (!("VideoDecoder" in window)) {
+  stats.textContent = "WebCodecs is not available in this browser";
+} else if (!browserId) {
+  showHint();
+} else {
+  start();
+}
+</script>
+</body>
+</html>
