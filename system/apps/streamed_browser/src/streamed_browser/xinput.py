@@ -271,6 +271,18 @@ class InputRouter:
                     self._mouse.button(x_button, False)
             self._button_mask = 0
 
+    def paste(self) -> None:
+        """Inject Ctrl+V so the focused page pastes the current X selection.
+        Used by the paste-in HTTP path after the selection is set."""
+        with self._lock:
+            try:
+                self._keyboard.press(0xFFE3)   # Control_L
+                self._keyboard.press(0x0076)   # v
+                self._keyboard.release(0x0076)
+                self._keyboard.release(0xFFE3)
+            except Exception:  # noqa: BLE001  (injection best-effort; never raise to the route)
+                logger.debug("paste injection failed")
+
     def resize_window(self, width: int, height: int) -> None:
         """Resize the browser's toplevel window to fill the pane (no WM here, so
         we configure the window directly). Best-effort: the largest mapped,
