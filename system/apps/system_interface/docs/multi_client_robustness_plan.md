@@ -173,13 +173,14 @@ Proposal (mostly deletion):
   a static title. If rename-following matters, offer an explicit rename
   action in the tab context menu that renames the tmux session and retitles
   the tab in one deliberate step.
-- Decide on `window-size latest` (set in `terminal_tmux.conf`): with two
-  clients regularly viewing the same session, `latest` makes each client's
-  keystroke resize the other's view. `smallest` (tmux default behavior via
-  `window-size smallest`) is more predictable for shared viewing; `latest`
-  is better for the single-viewer case. Pick one and document it — but note
-  the churn users currently see is mostly the reconnect storms (P1.5/P1.7),
-  not this setting, so this is a judgment call rather than a bug fix.
+- Leave `window-size latest` (set in `terminal_tmux.conf`) alone. It was
+  added deliberately to fix agent terminals being resized to absurdly small
+  sizes (a stale or default-80x24 client shrinking the session for
+  everyone, which is what smallest-style sizing does). With two live
+  clients it does mean the most-recently-active client dictates the size of
+  a shared session, but that is inherent to sharing one tmux session, and
+  the churn users actually see comes from the reconnect storms
+  (P1.5/P1.7), not this setting. Do not revert it as part of this work.
 
 Acceptance: with two clients viewing the same terminal, no
 `terminal_session` traffic exists, no layout saves are triggered by terminal
