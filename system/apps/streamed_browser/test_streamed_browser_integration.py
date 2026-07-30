@@ -62,37 +62,39 @@ def test_pipe_streams_idr_first_and_respects_credit(xvfb_display) -> None:
     pipe = PixelfluxVideoPipe("itest", xvfb_display)
     pipe.start()
     try:
-        # Provoke frames and pull the first packet: it must be a keyframe (a
-        # fresh encoder opens with SPS/PPS + IDR), and it must parse.
+        # Provoke frames and drain the initial burst: every row opens with a
+        # keyframe (a fresh encoder emits SPS/PPS + IDR per stripe), each row
+        # can send up to the credit limit, then the pipe must go quiet.
         _repaint(xvfb_display, "red")
-        first = None
-        deadline = time.monotonic() + 10
-        while first is None and time.monotonic() < deadline:
-            first = pipe.next_packet(timeout=1.0)
-        assert first is not None, "no frame arrived from pixelflux within 10s"
-        first_id, _, first_is_idr = parse_wire_header(first)
-        assert first_is_idr
-
-        # Second frame sends on remaining credit; then the window is exhausted
-        # (limit 2, no acks yet) and the pipe must withhold delivery.
         _repaint(xvfb_display, "blue")
-        second = pipe.next_packet(timeout=5.0)
-        assert second is not None
-        second_id, _, _ = parse_wire_header(second)
+        sent: list[bytes] = []
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            packet = pipe.next_packet(timeout=1.5)
+            if packet is None:
+                break
+            sent.append(packet)
+        assert sent, "no stripes arrived from pixelflux within 15s"
+        first_by_row: dict[int, bool] = {}
+        for packet in sent:
+            _, y_start, _, is_idr = parse_wire_header(packet)
+            first_by_row.setdefault(y_start, is_idr)
+        assert all(first_by_row.values()), f"a row opened without a keyframe: {first_by_row}"
+        # Credit exhausted (no acks yet): further damage must not be delivered.
         _repaint(xvfb_display, "green")
-        assert pipe.next_packet(timeout=1.5) is None, "pipe sent a frame with no credit"
+        assert pipe.next_packet(timeout=1.5) is None, "pipe sent a stripe with no credit"
 
-        # Acks open the window; the withheld (or a fresher) frame flows, and
-        # because deltas may have been dropped meanwhile the pipe must recover
-        # on its own via the IDR request path -- eventually delivering a frame.
-        pipe.ack(first_id)
-        pipe.ack(second_id)
+        # Acks open every row's window; the stream must resume on its own
+        # (recovering via the IDR request path where deltas were dropped).
+        for packet in sent:
+            frame_id, y_start, _, _ = parse_wire_header(packet)
+            pipe.ack(frame_id, y_start)
         _repaint(xvfb_display, "orange")
         resumed = None
         deadline = time.monotonic() + 10
         while resumed is None and time.monotonic() < deadline:
             resumed = pipe.next_packet(timeout=1.0)
         assert resumed is not None, "stream did not resume after acks"
-        assert pipe.frames_captured >= 3
+        assert pipe.frames_captured >= len(first_by_row)
     finally:
         pipe.stop()

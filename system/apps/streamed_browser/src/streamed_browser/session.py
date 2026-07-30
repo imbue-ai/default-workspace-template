@@ -23,8 +23,10 @@ from pathlib import Path
 from loguru import logger
 
 _FORTRESS_BINARY = "/opt/fortress/tilion-fortress/tilion"
-_SCREEN_W = int(os.environ.get("STREAMED_BROWSER_WIDTH", "1280"))
-_SCREEN_H = int(os.environ.get("STREAMED_BROWSER_HEIGHT", "800"))
+# Deliberately modest: fewer pixels is the cheapest encode win on a 2-vCPU
+# host, and the pane upscales. Bump via env when the host has cores to spare.
+_SCREEN_W = int(os.environ.get("STREAMED_BROWSER_WIDTH", "1024"))
+_SCREEN_H = int(os.environ.get("STREAMED_BROWSER_HEIGHT", "640"))
 _DISPLAY_BASE = 50
 _DISPLAY_MAX = 79
 _READY_TIMEOUT = 20.0

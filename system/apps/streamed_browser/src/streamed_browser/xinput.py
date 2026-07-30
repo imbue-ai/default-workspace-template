@@ -228,6 +228,20 @@ class InputRouter:
                 self._keyboard.release(keysym)
         elif kind == "kr":
             self.release_all()
+        elif kind == "kh":
+            # Held-key heartbeat (Selkies): the client periodically reports the
+            # full set it believes is held. Anything we track that the client
+            # no longer holds lost its keyup in transit -- release it, so a
+            # dropped message can never leave a key stuck down.
+            reported = {int(token) for token in tokens[1:] if token}
+            with self._lock:
+                for keysym in list(self._pressed_keysyms - reported):
+                    self._pressed_keysyms.discard(keysym)
+                    # Broad on purpose: the sweep must visit every stale key.
+                    try:
+                        self._keyboard.release(keysym)
+                    except Exception:  # noqa: BLE001
+                        logger.debug("failed releasing stale keysym {}", keysym)
         elif kind == "m":
             x, y, mask, magnitude = (int(t) for t in tokens[1:5])
             with self._lock:

@@ -11,16 +11,18 @@ from streamed_browser.videopipe import (
 )
 
 
-def _packet(frame_id: int, frame_type: int, payload: bytes = b"\x00" * 4) -> bytes:
-    header = bytes([0x04, frame_type, frame_id >> 8, frame_id & 0xFF, 0, 0, 5, 0, 3, 32])
+def _packet(frame_id: int, frame_type: int, y_start: int = 0, payload: bytes = b"\x00" * 4) -> bytes:
+    header = bytes(
+        [0x04, frame_type, frame_id >> 8, frame_id & 0xFF, y_start >> 8, y_start & 0xFF, 5, 0, 3, 32]
+    )
     return header + payload
 
 
-def test_parse_wire_header_reads_id_type_and_idr_flag() -> None:
-    frame_id, frame_type, is_idr = parse_wire_header(_packet(517, FRAME_TYPE_IDR))
-    assert (frame_id, frame_type, is_idr) == (517, FRAME_TYPE_IDR, True)
-    frame_id, frame_type, is_idr = parse_wire_header(_packet(0, 0x00))
-    assert (frame_id, frame_type, is_idr) == (0, 0x00, False)
+def test_parse_wire_header_reads_id_row_type_and_idr_flag() -> None:
+    frame_id, y_start, frame_type, is_idr = parse_wire_header(_packet(517, FRAME_TYPE_IDR, y_start=400))
+    assert (frame_id, y_start, frame_type, is_idr) == (517, 400, FRAME_TYPE_IDR, True)
+    frame_id, y_start, frame_type, is_idr = parse_wire_header(_packet(0, 0x00))
+    assert (frame_id, y_start, frame_type, is_idr) == (0, 0, 0x00, False)
 
 
 def test_parse_wire_header_rejects_short_and_foreign_packets() -> None:
