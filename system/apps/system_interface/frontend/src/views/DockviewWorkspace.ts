@@ -712,14 +712,12 @@ function buildDropdownItems(
 
   // Apps that do not have open tabs. Exclude "system_interface"
   // (that's the surrounding chrome UI, not a tab-able app), "terminal"
-  // (reachable via the "New terminal" menu item further down), "browser"
+  // (reachable via the "New terminal" menu item further down), and "browser"
   // (the fleet has its own per-session items + "New browser" below; the bare
   // browser app entry would open a session-less viewer that doesn't dedup
-  // against the fleet panes), and "web" (the placeholder example server --
-  // the browser fleet is the real web surface, so it's just noise).
+  // against the fleet panes).
   const apps = getApps().filter(
-    (app) =>
-      app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser" && app.name !== "web",
+    (app) => app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser",
   );
   for (const app of apps) {
     if (!openAppNames.has(app.name)) {

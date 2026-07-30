@@ -167,6 +167,33 @@ The desktop client matches the same value on the inbound side. The
 key rotates per minds startup; nothing else in the monorepo reads it
 from disk, so there is no on-disk copy to keep in sync.
 
+Three routes are *not* agent-scoped and are granted to every agent by the
+baseline, because they are identical for all callers and carry no
+per-workspace data: `GET /minds-api-proxy/api/schema` (the OpenAPI
+description of the reachable surface), `GET
+/minds-api-proxy/api/v1/timezone` (the IANA timezone of the machine the
+desktop client runs on), and `GET /minds-api-proxy/api/v1/app/version`
+(the newest workspace-template ref the app supports, which for a released
+binary is also its own release tag). That last one is what a workspace's
+`update-self` caps itself against, so it does not pull a template newer
+than the app driving it. Note that this is self-imposed by the workspace,
+not enforced here: nothing stops an agent that skips `resolve-target`, or
+a user running `git merge` by hand. The threat model is a workspace
+breaking itself by accident, not a hostile one. It is baseline-granted
+rather than must-ask because update-self resolves its target from a
+background worker, where a permission dialog has nobody to answer it.
+Each of the three is pinned by `const` to its exact method and path, so
+none of them widens to the rest of `/api/v1` -- note in particular that
+the app grant pins `/app/version` and not `/app`, so it cannot widen to
+whatever app state a later route hangs off that prefix.
+Existing hosts pick a newly-added baseline grant up through
+`reconcile_baseline_permissions`, which `register_agent_for_host` applies
+whenever it registers a discovered agent -- a baseline addition alone
+would otherwise only reach newly-created workspaces. Auto-registration
+de-dupes per `(host, agent)` pair for the life of the process, so a
+baseline addition lands on the first discovery after the app restarts,
+not mid-run.
+
 Per-agent isolation comes from the latchkey gateway's permissions
 file. The agent baseline grants every agent one shared call --
 `POST /minds-api-proxy/api/v1/agents/<...>/notifications` -- so any
@@ -269,10 +296,48 @@ Each entry has the shape:
   dialog never pre-checks it, but the user can opt into it explicitly.
 
 The minds desktop client caches the response in-process on first access
-so each request renders without re-fetching. To add a new service,
-edit `services.json` in the gateway extension package (see its README).
-Schemas must already exist in detent; minds does not register custom
-schemas.
+so each request renders without re-fetching. To add a new builtin
+service, edit `services.json` in the gateway extension package (see its
+README); those schemas must already exist in detent.
+
+## Additional (custom) services
+
+Beyond detent's builtin catalog, minds ships a small hardcoded list of
+*additional* services in
+[`libs/mngr_latchkey/imbue/mngr_latchkey/additional_services.json`](../../../libs/mngr_latchkey/imbue/mngr_latchkey/additional_services.json).
+Their catalog entries are folded into `services.json` by that package's
+generator, so the dialog and the gateway extensions treat them exactly like a
+builtin service. These are third-party services minds supports itself, using
+two latchkey features:
+
+* **Registration.** At gateway bring-up, `Latchkey.initialize()` runs
+  `latchkey services register <name> --base-api-url <url>` for each
+  additional service (skipping any already registered, since that command
+  is not idempotent), so latchkey can inject the user's stored credentials
+  for the service's domain.
+* **Self-shipped detent schemas, referenced via `include`.** A custom scope
+  is not one of detent's builtin schemas, so each additional service ships
+  its own scope schema (matching the service domain) plus a permission
+  schema. Rather than inlining those schemas into every host's
+  `latchkey_permissions.json`, minds materializes them **once** into a
+  shared `minds_shared_schemas.json` file and has every per-host file
+  reference it through detent's [`include`](https://github.com/imbue-ai/detent)
+  directive. Granting an additional-service scope is then a plain rule
+  write (no schema injection); detent resolves the scope's schema from the
+  shared include. The include is a bare relative name, which detent resolves
+  relative to the referencing file's directory -- so the same host file
+  works both on the desktop (where the shared file lives in the gateway's
+  opaque-handle directory) and on a VPS (where it is shipped next to the
+  host's `~/.latchkey/permissions.json`).
+
+Additional services are merged into the same catalog the dialog reads, so
+they appear and are granted exactly like builtin ones. The seed entry is
+`claude.ai`, which exposes a single `everything` permission (full access
+to the `claude.ai` domain). Because registered services support only
+static-argument credentials, authenticating one is a manual
+`latchkey auth set <name> -H "..."` (the browser sign-in flow does not
+apply); granting the permission and supplying credentials are independent
+steps.
 
 ## Connectors and accounts (Settings page)
 

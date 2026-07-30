@@ -176,32 +176,87 @@ def _layout(*args: str, quiet: bool = False) -> bool:
     return result.returncode == 0
 
 
-def _pull_in_pane(browser_name: str) -> None:
-    """Surface browser ``browser_name`` as its OWN pane to the right of the requesting
-    agent's chat (each browser in a separate pane).
+def _resolve_active_layout() -> tuple[bool, str | None]:
+    """Resolve the layout to surface a browser pane into, via ``layout.py context``.
 
-    ``--new-group`` forces a fresh pane rather than tabbing the browser into an
-    existing pane group, so opening a second browser lands beside the first, not as a
-    tab inside it. Splitting an already-open browser is a no-op that just focuses it,
-    so this is safe to call repeatedly.
+    ``split`` requires a ``--layout`` (mutating ops only apply on clients that have that
+    named layout active), so the pane-pull must name the layout the human is actually
+    viewing. ``context`` is a read-only query over the client-activity log.
 
-    Any agent the user started -- the primary, or one opened via "+ New agent" --
-    surfaces the pane next to its OWN chat (``--relative-to self``). A launch-task /
-    background agent has no chat in this workspace's UI (and may be a separate
-    container), so the split can't land; we then say so in one clear line rather than
-    leaking layout.py's raw 5s "service not registered" error. Either way the browser
-    is running and reachable -- the pane is just a viewing convenience.
+    Returns ``(reachable, layout)``:
+    * ``reachable`` is False when the layout server can't be reached at all -- an isolated
+      ``launch-task`` sub-agent in its own container, or no daemon. The caller skips
+      silently: there is no screen of ours to surface into.
+    * When reachable, ``layout`` is the active layout to target -- the current layout of
+      the connected client that most recently messaged THIS agent (matched by name, since
+      the context summary carries ``agent_name`` not id), else the most-recently-active
+      connected client's layout, else None (reachable but nothing to place it on).
     """
+    root = _repo_root()
+    script = root / "system" / "scripts" / "layout.py"
+    if not script.exists():
+        return (False, None)
+    result = subprocess.run(
+        [sys.executable, str(script), "context", "--json"], cwd=str(root), capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return (False, None)  # unreachable (isolated sub-agent / no daemon)
+    try:
+        clients = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return (True, None)
+    # ``context`` lists clients most-recently-active first; keep connected ones reporting a layout.
+    connected = [
+        client
+        for client in clients
+        if isinstance(client, dict) and client.get("is_connected") and client.get("current_layout")
+    ]
+    my_name = os.environ.get("MNGR_AGENT_NAME")
+    if my_name:
+        for client in connected:
+            if any(msg.get("agent_name") == my_name for msg in client.get("recent_messages", [])):
+                return (True, str(client["current_layout"]))
+    if connected:
+        return (True, str(connected[0]["current_layout"]))
+    return (True, None)
+
+
+def _pull_in_pane(browser_name: str) -> None:
+    """Surface browser ``browser_name`` as its OWN pane beside the requesting agent's chat,
+    optimistically.
+
+    Resolves the layout the requester's client is viewing via ``layout.py context`` (see
+    ``_resolve_active_layout``). If the layout server is unreachable -- an isolated
+    ``launch-task`` sub-agent in its own container -- we **skip silently**: there is no
+    screen of ours to surface into. Otherwise we split the browser into that layout next
+    to the agent's own chat (``--relative-to self``), or the parent's chat when a parent
+    handed a sub-agent its ref via ``$BROWSER_FLEET_ANCHOR``. ``--new-group`` makes each
+    browser its own pane; splitting an already-open one just focuses it, so this is safe
+    to call repeatedly.
+
+    If the split can't land (no target layout, or the human isn't currently viewing it),
+    we fall back to one neutral line offering the manual "+"-menu route -- the browser is
+    up and fully drivable from the CLI either way; the pane is only a live-view convenience.
+    """
+    reachable, layout = _resolve_active_layout()
+    if not reachable:
+        return  # isolated sub-agent / no layout server -- nothing of ours to surface into
     ref = f"service:browser?session={browser_name}"
-    # A parent may hand a sub-agent its chat as an anchor; otherwise anchor on our own.
-    anchor = os.environ.get(_ENV_ANCHOR)
-    if anchor and _layout("split", ref, "--relative-to", anchor, "--direction", "right", "--new-group", quiet=True):
-        return
-    if _layout("split", ref, "--relative-to", "self", "--direction", "right", "--new-group", quiet=True):
-        return
-    _err(f"browser {browser_name} is running, but I couldn't open its live pane here. "
-         'If you are the workspace\'s main agent, open it from the "+" menu; a background '
-         "or sub-agent can't show panes (have the main agent drive the browser).")
+    if layout is not None:
+        # A parent may hand a sub-agent its chat as an anchor; otherwise anchor on our own.
+        anchor = os.environ.get(_ENV_ANCHOR)
+        if anchor and _layout(
+            "split", ref, "--relative-to", anchor, "--direction", "right", "--new-group", "--layout", layout, quiet=True
+        ):
+            return
+        if _layout(
+            "split", ref, "--relative-to", "self", "--direction", "right", "--new-group", "--layout", layout, quiet=True
+        ):
+            return
+    # Reachable but couldn't place the pane. Not an error -- offer the manual route
+    # without implying anything broke.
+    _out(f"browser {browser_name} is ready. To watch it live, open it from the "
+         '"+" menu (New browser -> ' + f"{browser_name}) in the side panel.")
 
 
 # --- commands -----------------------------------------------------------------

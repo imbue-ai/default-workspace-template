@@ -175,8 +175,8 @@ Inputs: `SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo>"`, and the target
 version `<n>` you pulled in §1.
 
 - **If `docs/VERSION_HISTORY.md` is missing** (deleted since creation), recreate
-  the shipped three-section starter first -- the `# Version history` heading, its
-  explanatory paragraph, and the sections `## Workspace`, `## Inspirations`,
+  the shipped starter first -- the `# Version history` heading, its explanatory
+  paragraph, and the sections `## Workspace`, `## Migrations`, `## Inspirations`,
   `## Adopted inspirations` in that order (byte-identical to the shipped root
   file; `update-self` §5b carries the exact heredoc) -- then append.
 - **Create the heading** `### <slug>  --  <repo-url>` under `## Adopted

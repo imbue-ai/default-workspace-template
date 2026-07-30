@@ -1,0 +1,1 @@
+Removed the automated "Vet" review check from CI: the `Vet` GitHub Actions workflow (`.github/workflows/vet.yml`) no longer runs on pull requests, since its cost/benefit ratio was not favorable. The `address-pr-comments` skill no longer references Vet; it still handles feedback from Copilot and other bot reviewers.

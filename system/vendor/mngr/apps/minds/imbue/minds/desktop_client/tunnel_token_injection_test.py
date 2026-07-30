@@ -1,7 +1,7 @@
 """Unit tests for the Cloudflare tunnel token file path.
 
 The path here must match the file the DEFAULT_WORKSPACE_TEMPLATE cloudflare-tunnel runner watches
-(``system/libs/cloudflare_tunnel/.../runner.py``: ``data/.secrets/cloudflare_tunnel.env``).
+(``system/services/cloudflare_tunnel/.../runner.py``: ``data/.secrets/cloudflare_tunnel.env``).
 Pinning it on both sides catches an accidental divergence of the contract.
 """
 
@@ -16,7 +16,7 @@ def test_tunnel_token_file_is_per_secret_env_in_data_secrets() -> None:
 
 
 def test_clear_tunnel_token_never_starts_a_stopped_host() -> None:
-    """Clearing the token file must not boot a stopped workspace.
+    """Clearing the token file must not boot a stopped machine.
 
     ``mngr exec`` auto-starts the host by default; deleting a token file from a
     stopped container is pointless (the stale file is explicitly harmless while

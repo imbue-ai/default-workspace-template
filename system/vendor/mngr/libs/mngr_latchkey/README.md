@@ -103,6 +103,18 @@ CLI flag > env var > settings.toml > built-in default.
   or a pre-logging traceback) that never reaches the structured log -- so
   it is the place to look if the supervisor dies before it starts logging.
 
+  Each spawn appends a `<timestamp> === spawning ... ===` marker before
+  handing the descriptor over. The child's own lines cannot be stamped
+  from the parent (it writes to the descriptor directly), so the marker is
+  what dates whatever follows it, letting a traceback here be lined up
+  against the timestamped logs uploaded alongside it. Spawn time is also
+  the only moment the file can safely be rotated -- no child holds the
+  descriptor yet -- so an oversized capture (one left by an older build,
+  or by a child crash-looping before its logging is configured) is rotated
+  there, once it passes 10MB, to `latchkey_forward.log.<timestamp>`, keeping
+  only the newest rotation. Without that the file is append-only for the life
+  of the install, and is gzipped and re-uploaded with every bug report.
+
 ## Error reporting (Sentry)
 
 `mngr latchkey forward` can report errors to Sentry. It is **off by default** and
@@ -153,6 +165,69 @@ bundled `permissions` extension (see [Gateway HTTP extensions](#gateway-http-ext
 only the deny-all default, the admin file, and the per-agent opaque
 baseline are written directly via `imbue.mngr_latchkey.store.save_permissions`.
 
+### Per-account grants
+
+Third-party service access is granted **per latchkey account**, not per
+service. Latchkey (>= 3.2.0) tells detent which account's credentials it
+injected into a request (as `customMetadata.account`; the unnamed default
+account is the empty string), and detent (>= 1.11.0) can compose schemas, so
+each grant is a rule keyed `<scope>:<account>` backed by a generated schema
+that intersects the built-in scope with that account:
+
+```json
+{
+  "rules": [{ "slack-api:hynek@imbue-ai": ["slack-read-all"] }],
+  "schemas": {
+    "slack-api:hynek@imbue-ai": {
+      "allOf": [
+        { "$ref": "#/$defs/slack-api" },
+        {
+          "properties": {
+            "customMetadata": {
+              "type": "object",
+              "properties": { "account": { "const": "hynek@imbue-ai" } },
+              "required": ["account"]
+            }
+          },
+          "required": ["customMetadata"]
+        }
+      ]
+    }
+  }
+}
+```
+
+Detent stops at the first rule whose *scope* matches, and a request made with
+another account does not match this one, so per-account rules simply stack.
+
+The `<scope>:<account>` **name is only a naming convention** -- a stable,
+human-readable identifier -- and is never parsed: both a detent scope name and
+an account may legitimately contain a colon. Everything that needs to know what
+a rule grants inspects the *schema structure* instead (the `$ref` to the base
+scope next to the `customMetadata.account` gate).
+
+The name is still required to be *unique* per (scope, account) pair, since the
+gateway merges rules by key, so the scope half is percent-escaped (`%` -> `%25`,
+then `:` -> `%3A`) before the two are joined. That makes the mapping injective
+whatever either half contains -- and it is the identity for every scope name the
+catalog ships, so keys read exactly as above. The account is the last field and
+is never escaped.
+`imbue.mngr_latchkey.account_scopes` is the single owner of both sides of that
+structure: `build_account_grant` composes a grant (key + permissions + backing
+schema) and `list_account_grants` / `resolve_account_scope` /
+`resolved_schema_names` read grants back.
+`ServicesCatalog.list_service_account_grants` layers the catalog on top, which
+is what every consumer (the minds connectors page, the permission dialog's
+pre-check, the revoke paths, and VPS credential sync) actually calls. The
+gateway's `permission_requests` extension carries a JavaScript copy of the two
+*generating* helpers (it computes a pending request's effect in-process), guarded
+against drift by `account_scopes_test.py`; nothing on the JavaScript side reads
+grants back.
+
+Minds' own gateway-self scopes (`latchkey-self`, `minds-api-proxy-*`) stay
+account-agnostic: latchkey attaches no account metadata to requests an
+extension serves, so an account-gated schema would never match them.
+
 ## Data-format migrations
 
 The plugin records the version of its on-disk data format in a
@@ -165,6 +240,18 @@ installed code targets, applying the intervening migrations in the appropriate
 direction (`up` after an upgrade, `down` after a downgrade) and re-stamping the
 file. This is cheap in the steady state (one small file read when already
 current), and a fresh install is simply stamped straight to the current version.
+
+Besides the plugin's own data directory, every migration step is handed the
+latchkey directory and binary, because rewriting the plugin's state sometimes
+requires looking at the *upstream* latchkey state next to it -- the per-account
+permissions migration, for instance, shells out to `latchkey auth list
+--offline` to learn which accounts have stored credentials. It does so only once
+it has found a host file to rewrite, so a startup with nothing to migrate never
+pays for it, and a failed listing aborts the migration rather than being read as
+"no accounts anywhere". A per-host permissions file that cannot be read, parsed,
+or rewritten is replaced with the file a freshly-created host would get (the
+agent baseline) rather than failing the whole run: the host keeps working from a
+clean slate and its agents can re-request what they need.
 
 ---
 
@@ -204,11 +291,18 @@ consume the stream and approve/delete on resolution.
 * `POST /permission-requests` with body
   `{"agent_id": "...", "rationale": "...", "type": "...", "payload": {...}}`.
   Two `type` values are accepted:
-  * `"predefined"` -- detent scope/permission grant, with payload
-    `{"scope": "...", "permissions": ["...", ...]}`. The scope must be
-    one named in the bundled `services.json` catalog, and each
-    permission must be either one the catalog lists for that scope or
-    the catch-all `any`.
+  * `"predefined"` -- detent scope/permission grant for one signed-in
+    account of the service, with payload
+    `{"scope": "...", "permissions": ["...", ...], "account": "..."}`.
+    The scope must be one named in the bundled `services.json` catalog,
+    and each permission must be either one the catalog lists for that
+    scope or the catch-all `any`. `account` is the latchkey account the
+    grant applies to (the unnamed default account is the empty string);
+    it is optional, and an agent that does not know which account to use
+    omits it. A request with no account has an **empty** `effect` -- it
+    can only be resolved by a client that names the chosen account in the
+    approve override body (see below), which is what the minds dialog
+    does after the user picks or signs one in.
   * `"file-sharing"` -- single-file access through the `minds-api-proxy`
     extension, with payload `{"path": "<absolute-path>"}`. The path
     must be absolute and free of `..` segments.
@@ -230,15 +324,22 @@ consume the stream and approve/delete on resolution.
   pending request file. Returns `200` with `{request_id, target,
   applied}` where `applied` is the freshly-rewritten permissions
   file. Available to the admin.
+
+  An optional JSON body overrides what the approval grants, recomputing
+  the effect from the user's choices: `{"account": "...",
+  "permissions": [...]}` for a `predefined` request (the permission list
+  is optional), `{"path": "..."}` for `file-sharing`, and
+  `{"permissions": [...], "target_workspace_id": ...}` for `workspace`.
 * `DELETE /permission-requests/<request_id>` removes a single pending
   request without applying its effect. UIs call this on deny so a
   fresh `?follow=true` consumer never sees the resolved request
   again. Available to the admin.
 
 Pending requests are stored as one JSON file per request under
-`<latchkey-directory>/permission_requests/v2/`. The `v2` segment is
+`<latchkey-directory>/permission_requests/v3/`. The `v3` segment is
 the on-disk schema version; future shape changes get a new directory
-rather than trying to migrate files in place.
+rather than trying to migrate files in place (`v3` introduced the
+per-account `predefined` payload).
 
 ### `minds-api-proxy` extension
 
@@ -304,13 +405,21 @@ root is rejected with HTTP 403.
   is not consulted.
 * `GET /permissions/rules?path=<file>&rule_key=<scope>` returns the
   rule for `<scope>`, or 404 if absent.
-* `POST /permissions/rules?path=<file>&rule_key=<scope>` with a JSON
-  body of permission-schema names (`["any"]`,
-  `["slack-read-all", ...]`, ...) adds or replaces the rule for
-  `<scope>`. Everything in the file other than the matching rule is
-  preserved verbatim. The target file (and any missing parent
-  directories, e.g. `hosts/<host_id>/`) is created if it does not yet
-  exist.
+* `POST /permissions/rules?path=<file>&rule_key=<key>` with the body
+  `{"permissions": ["slack-read-all", ...], "schemas": {"<name>": {...}}}`
+  adds or replaces the rule for `<key>`. `schemas` is optional and is
+  merged by name into the file's `schemas` object; everything else in
+  the file is preserved verbatim. The target file (and any missing
+  parent directories, e.g. `hosts/<host_id>/`) is created if it does
+  not yet exist.
+
+  The extension never synthesizes schemas and never interprets
+  `<key>`, so a caller whose key is not a name detent already knows (a
+  built-in schema, or one already defined in the file) **must** define
+  it here. That is how per-account grants are written: their key names a
+  generated schema composed by
+  `imbue.mngr_latchkey.account_scopes.build_account_grant`, which owns
+  that shape (see [Per-account grants](#per-account-grants)).
 * `DELETE /permissions/rules?path=<file>&rule_key=<scope>` removes
   the named rule.
 
@@ -326,17 +435,56 @@ uv run python libs/mngr_latchkey/scripts/generate_services_json.py \
 Display names and the service ordering are editorial metadata detent does
 not carry; they live as curated constants in that script.
 
+`services.json` also carries minds' own *additional* (custom) services --
+ones detent has no schemas for, currently `claude.ai`. Their definitions are
+hand-maintained in `imbue/mngr_latchkey/additional_services.json` (a
+`display_name`, a `base_api_url`, the single Detent `scope` it exposes with
+an inline scope `schema`, and its grantable `permissions`, each with an
+inline `schema`), and the generator *folds their catalog entries into*
+`services.json`. That way every reader of the catalog -- `ServicesCatalog`
+and both gateway extensions -- works from one file in one shape and never
+has to know which of the two sources a service came from.
+
+Because a custom scope is not a detent builtin, its schemas have to reach the
+gateway's permission check. Rather than inlining them into every host file,
+`core.Latchkey.initialize()` materializes them **once** into a shared
+`minds_shared_schemas.json` (a schemas-only detent config, see
+`SHARED_SCHEMAS_FILENAME`), and every per-host permissions file references it
+via detent's `include` directive (added by the agent baseline and, for
+pre-existing files, a data-format migration). The include is a *bare relative*
+name so it resolves next to the referencing file on both the desktop (the
+opaque-handle directory) and a VPS (`~/.latchkey`, where `remote_gateway`
+ships the shared file alongside the permissions file). Granting a custom scope
+is then a plain rule write -- no per-host schema inlining.
+
+`imbue.mngr_latchkey.additional_services` is the single Python chokepoint for
+the file. It exposes the registration list (each service is registered with the
+`latchkey` CLI at gateway bring-up), the merged schemas used to materialize the
+shared file, and the catalog projection the generator folds into
+`services.json`. No gateway extension reads it -- they only read
+`services.json`.
+
 A typical end-to-end shell flow:
 
 ```sh
 # Stream pending requests as they come in.
 curl -N "${auth[@]}" "$GATEWAY_URL/permission-requests?follow=true"
 
-# Grant the agent slack-read-all on its host's permissions file.
+# Grant the agent slack-read-all for one Slack account on its host's
+# permissions file. Grants are per account, so the rule names a generated
+# schema that gates the built-in slack-api scope on that account -- and the
+# caller, not the gateway, defines it.
 HOST_PERMS=$MNGR_LATCHKEY_DIRECTORY/mngr_latchkey/hosts/$HOST_ID/latchkey_permissions.json
-curl -X POST "${auth[@]}" \
-  -H "Content-Type: application/json" -d '["slack-read-all"]' \
-  "$GATEWAY_URL/permissions/rules?path=$HOST_PERMS&rule_key=slack-api"
+RULE_KEY='slack-api:hynek@imbue-ai'
+curl -X POST "${auth[@]}" -H "Content-Type: application/json" \
+  -d '{"permissions": ["slack-read-all"],
+       "schemas": {"slack-api:hynek@imbue-ai": {"allOf": [
+         {"$ref": "#/$defs/slack-api"},
+         {"properties": {"customMetadata": {"type": "object",
+            "properties": {"account": {"const": "hynek@imbue-ai"}},
+            "required": ["account"]}},
+          "required": ["customMetadata"]}]}}}' \
+  "$GATEWAY_URL/permissions/rules?path=$HOST_PERMS&rule_key=$RULE_KEY"
 
 # Clear the pending request now that it has been resolved.
 curl -X DELETE "${auth[@]}" "$GATEWAY_URL/permission-requests/$REQUEST_ID"
