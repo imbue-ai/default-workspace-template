@@ -9,8 +9,10 @@ pass_env__extend = ["REMOTE_SERVICE_CONNECTOR_URL", "LATCHKEY_GATEWAY"]
 host_env__extend = [
     "IS_SANDBOX=1",
     "IS_AUTONOMOUS=1",
-    # Fast mode is enabled for all agents (settings_overrides fastMode=true on
-    # agent_types.claude below); this gates the Opus fast-mode capability on.
+    # Vestigial: fast mode for Opus 4.7 was deprecated 2026-06-25 and removed
+    # 2026-07-24, and this workspace runs Opus 4.8 (agent_types.claude model
+    # below), so this gates nothing. Kept only so a pinned Claude Code older
+    # than the removal keeps behaving as before; drop it on the next version bump.
     "CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE=1",
     # Skip Claude Code's org-level fast-mode eligibility check. Agents sign in
     # with a Claude Max subscription that supports fast mode, but the session
@@ -85,12 +87,31 @@ auto_dismiss_dialogs = true
 auto_allow_permissions = true
 auto_disable_questions = true
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
+# fastMode defaults OFF here so every NON-interactive agent runs at standard
+# speed -- this type itself (which the `worktree`, `caretaker`, and `automation`
+# create templates below select directly), the `worker` and `main` types that
+# inherit it, and the `subskill-worker` template that resolves to `worker`. Fast
+# mode buys latency at a higher per-token price, which is worth it only when a
+# human is waiting on the reply. User-facing chat agents override it per create:
+# the system interface and the bootstrap both pass
+# `-S agent_types.claude.settings_overrides.fastMode=<bool>`, resolved from the
+# workspace's fast-mode decision (see system_interface's fast_mode_policy.py).
+#
+# That override targets `claude` rather than `chat` because a `-S` is parsed as
+# its own config layer, without the `parent_type = "claude"` this file gives
+# `chat` -- so `chat` resolves against the base agent config, which has no
+# `settings_overrides` field, and the create is rejected. `claude` is registered
+# by the claude plugin, whose config class declares it. A chat create resolves
+# its own config, so overriding the base there never reaches a worker create.
+# This is the canonical explanation; the two create paths and the CLI-contract
+# test point here rather than repeating it.
+#
 # skipDangerousModePermissionPrompt suppresses Claude Code's bypass-permissions
 # warning dialog (every agent here launches with --dangerously-skip-permissions).
 # It must ride the mngr-managed --settings overlay because nothing provisions the
 # shared ~/.claude/settings.json: in shared config-dir mode mngr writes nothing
 # into the shared dir, and claude itself only creates it lazily.
-settings_overrides__extend = {model = "opus[1m]", fastMode = true, skipDangerousModePermissionPrompt = true}
+settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/services/oom_priority/bin/claude_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
@@ -119,9 +140,12 @@ isolate_local_config_dir = false
 
 # User-facing chat agents run this type -- the initial /welcome agent and every
 # "New Agent" chat both launch with `--template chat` (system/libs/bootstrap's
-# manager.py and system/libs/system_interface/.../agent_manager.py). parent_type = "claude" inherits
-# all launch config (the oom wrapper command, cli_args, pinned version,
-# model/fastMode); we only add the Engineering Subordinate output style on top.
+# manager.py and system/apps/system_interface/.../agent_manager.py). parent_type = "claude" inherits
+# all launch config (the oom wrapper command, cli_args, pinned version, model);
+# we only add the Engineering Subordinate output style on top. fastMode is
+# deliberately NOT set here -- both chat-create paths pass it per create (see the
+# note on agent_types.claude.settings_overrides), and a value set here would
+# outrank that override.
 # Scoping it here rather than on `claude` keeps worktree/worker/main agents
 # unstyled -- only user-facing chat should talk like a subordinate. The style
 # file lives at .claude/output-styles/engineering-subordinate.md; its `name:`
