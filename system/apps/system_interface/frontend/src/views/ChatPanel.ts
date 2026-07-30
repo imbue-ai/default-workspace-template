@@ -44,7 +44,13 @@ import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
-import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
+import { AgentPresenceTracker } from "../models/agentPresence";
+import {
+  buildAgentTerminalUrl,
+  closeChatPanelForAgent,
+  getTerminalUrl,
+  openIframeTabForAgent,
+} from "./DockviewWorkspace";
 import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { renderPendingMessages } from "./PendingMessageView";
@@ -417,6 +423,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // the agent is listed but its transcript keeps 404ing: one reload per stretch of
   // presence, re-armed the next time the agent goes missing.
   let recoveryAttemptedWhilePresent = false;
+  // Decides when this panel's agent may be declared destroyed (see agentPresence).
+  const presence = new AgentPresenceTracker();
 
   function ensureAgentLoaded(agentId: string): void {
     if (agentId === currentAgentId) {
@@ -427,6 +435,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     scroll.reset();
     backfillInFlight = false;
     recoveryAttemptedWhilePresent = false;
+    presence.reset();
     loadAgent(agentId);
   }
 
@@ -444,8 +453,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (agentId === null) {
       return;
     }
-    if (getAgentById(agentId) === undefined) {
+    const isPresent = getAgentById(agentId) !== undefined;
+    presence.noteSnapshot(isPresent);
+    if (!isPresent) {
       recoveryAttemptedWhilePresent = false;
+      // The snapshot may have just tipped the panel into the tombstone state.
+      m.redraw();
       return;
     }
     if (!isConversationNotFound(agentId) || recoveryAttemptedWhilePresent) {
@@ -562,6 +575,35 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   /**
+   * The agent behind this tab is gone for good.
+   *
+   * The tab deliberately stays: the user keeps the context that the agent
+   * existed and decides when to drop it. Nothing here fetches -- no transcript,
+   * no stream, no screen capture -- so a destroyed agent's tab costs nothing
+   * however long it is left open, and closing it takes the panel out of the next
+   * layout autosave so it does not come back on the next restore.
+   */
+  function renderDestroyedAgent(agentId: string): m.Vnode {
+    return m("div", { class: "message-list-tombstone flex flex-col items-center justify-center h-full gap-4 p-8" }, [
+      m("p", { class: "text-lg font-semibold text-text-primary" }, "This agent was destroyed."),
+      m(
+        "p",
+        { class: "text-text-secondary" },
+        "Its conversation is no longer available. Close this tab when you no longer need it.",
+      ),
+      m(
+        "button",
+        {
+          type: "button",
+          class: "chat-placeholder-btn",
+          onclick: () => closeChatPanelForAgent(agentId),
+        },
+        "Close tab",
+      ),
+    ]);
+  }
+
+  /**
    * The agent exists but has no transcript -- typically a Claude session that
    * crashed on startup, where the raw terminal output is the only diagnostic.
    *
@@ -640,6 +682,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     ensureAgentLoaded(agentId);
     manageStreamConnection(agentId);
+
+    if (presence.isConfirmedGone) {
+      return renderDestroyedAgent(agentId);
+    }
 
     if (isConversationNotFound(agentId)) {
       return renderNoConversation(agentId);
@@ -802,6 +848,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // mount without a panel api -- treat that as visible.
       panelVisible = vnode.attrs.isVisible ?? true;
 
+      // Feed the presence tracker the transcript half of the tombstone gate before
+      // anything below reads its verdict.
+      presence.noteTranscriptMissing(isConversationNotFound(agentId));
+      const isTombstoned = presence.isConfirmedGone;
+
       // renderMessages sets the reserved heights, so build the content first, then
       // decide whether the viewport currently sits over a reserved region (above
       // all loaded rows, or below them) and so should show a loading overlay
@@ -816,7 +867,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         (phantomTopHeight > 0 && currentScrollTop < loadedTop) ||
         (phantomBottomHeight > 0 && currentScrollTop + viewportPx > loadedBottom);
 
-      const acceptsFileDrops = !isProtoAgent(agentId) && !isConversationNotFound(agentId);
+      const acceptsFileDrops = !isProtoAgent(agentId) && !isConversationNotFound(agentId) && !isTombstoned;
 
       return m(
         "div",
@@ -884,8 +935,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 m("p", { class: "text-text-secondary" }, "Loading messages..."),
               )
             : null,
-          // Only show message input when not in proto-agent mode
-          isProtoAgent(agentId)
+          // No composer for a proto-agent (still being created) or for a
+          // destroyed one: the tombstone's only affordance is closing the tab.
+          isProtoAgent(agentId) || isTombstoned
             ? null
             : m("footer", { class: "app-footer" }, [
                 m(EmptySlot, { name: "conversation-before-input" }),

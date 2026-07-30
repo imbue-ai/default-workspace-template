@@ -12,3 +12,12 @@ automatic retry happens at most every 30 seconds, and there is an explicit Retry
 button. A chat that 404s because the agent list was momentarily empty now
 recovers on its own as soon as the agent reappears, instead of staying wedged
 until the page is reloaded.
+
+A chat tab whose agent has actually been destroyed -- from this client, another
+client, or the CLI -- now says so. The tab is kept rather than silently removed,
+so you keep the context that the agent existed, and it renders "This agent was
+destroyed." with a Close button and makes no further requests of any kind.
+Closing it takes the tab out of the saved layout, so it stops reappearing on
+every restore. The tab is only declared dead when the agent is missing from
+consecutive agent-list updates *and* its transcript comes back not-found, so a
+momentary hiccup in agent discovery cannot tombstone a live chat.
