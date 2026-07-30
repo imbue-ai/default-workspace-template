@@ -414,12 +414,12 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
 
       function renderDeclinedCommandNotice(declined: DeclinedSlashCommand): m.Vnode {
         const { command, reason } = declined;
+        // The title already names the command and says it wasn't sent, so the body only carries the
+        // consequence and the way to do it anyway.
         const explanation =
           reason === "ends-session"
-            ? `${command} shuts the agent's session down. It would stop responding to anything, and ` +
-              "only someone at its terminal could start it again, so it was not sent."
-            : `${command} replaces the agent's input box with a full-screen view. The agent would ` +
-              "stop accepting messages until that view was closed from its terminal, so it was not sent.";
+            ? "It would shut the agent down."
+            : "It would take over the agent's terminal and stop it answering here — run it there instead.";
         return m(
           "div.custom-url-dialog-overlay",
           {
@@ -438,7 +438,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             },
             [
               m("h3.custom-url-dialog-title", `${command} can't be sent from chat`),
-              m("p.logout-notice-body", `${explanation} Your message is still in the composer.`),
+              m("p.logout-notice-body", explanation),
               m("div.custom-url-dialog-actions", [
                 m("button.custom-url-dialog-cancel", { onclick: () => dismissDeclinedCommandNotice() }, "OK"),
               ]),

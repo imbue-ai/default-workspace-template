@@ -141,8 +141,8 @@ describe("MessageInput send guard", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     const text = renderedText(after);
     expect(text).toContain("/exit can't be sent from chat");
-    expect(text).toContain("shuts the agent's session down");
-    expect(text).not.toContain("full-screen view");
+    expect(text).toContain("shut the agent down");
+    expect(text).not.toContain("take over the agent's terminal");
   });
 
   it("does not carry the notice over to another agent", async () => {
