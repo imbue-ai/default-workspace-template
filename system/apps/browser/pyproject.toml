@@ -11,6 +11,9 @@ dependencies = [
     "simple-websocket>=1.0",
     "werkzeug>=3.0",
     "browser-use[core]==0.13.1",
+    # Live-view H.264 pipe (videopipe.py): CPU capture+encode of the shared X
+    # display. Ships manylinux wheels; capture needs a DISPLAY at runtime.
+    "pixelflux>=2.0.0",
 ]
 
 # Entry point is "browser-service", not "browser": browser-use ships its own

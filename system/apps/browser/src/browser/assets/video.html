@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Live video (pixelflux/WebCodecs)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ccc; font: 13px system-ui, sans-serif; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  #stats { padding: 4px 8px; background: #1c1c1c; white-space: pre; }
+  #screen { flex: 1; min-height: 0; width: 100%; object-fit: contain; background: #000; }
+  #hint { padding: 16px; }
+  a { color: #8ab4f8; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stats">connecting...</div>
+  <canvas id="screen"></canvas>
+  <div id="hint" hidden></div>
+</div>
+<script>
+"use strict";
+// Viewer for the pixelflux H.264 pipe (see browser/videopipe.py). Each binary
+// message is one full frame: a 10-byte pixelflux stripe header (magic 0x04,
+// frame type, u16 frame id, stripe geometry) followed by Annex B H.264. The
+// stream self-starts with SPS/PPS+IDR, so a description-less VideoDecoder
+// config (Annex B mode per the WebCodecs AVC registration) decodes it as-is.
+//
+// Flow control: we acknowledge every frame WHEN ITS PIXELS COME OUT OF THE
+// DECODER, not on receipt -- the ack is the server's only evidence the whole
+// path (network, tunnel, decode) has actually digested the frame, and it never
+// allows more than a couple unacked, so congestion anywhere shows up as fewer
+// frames, never as a growing backlog of stale ones.
+const HEADER_LEN = 10;
+const FRAME_TYPE_IDR = 1;
+const params = new URLSearchParams(location.search);
+const browserId = params.get("browser");
+const stats = document.getElementById("stats");
+const canvas = document.getElementById("screen");
+const context = canvas.getContext("2d");
+
+async function showHint() {
+  const hint = document.getElementById("hint");
+  hint.hidden = false;
+  canvas.hidden = true;
+  let names = [];
+  try {
+    const response = await fetch("browsers");
+    names = (await response.json()).browsers?.map((b) => b.id ?? b.name) ?? [];
+  } catch (_) { /* service unreachable; the bare hint still helps */ }
+  hint.innerHTML = "Pass ?browser=&lt;name&gt;. Running browsers: " +
+    (names.length ? names.map((n) => `<a href="video?browser=${encodeURIComponent(n)}">${n}</a>`).join(", ") : "(none found)");
+  stats.textContent = "no browser selected";
+}
+
+let retryDelay = 500;
+
+function connect() {
+  let decoder = null;
+  let needKey = true;          // never feed deltas before the first keyframe
+  let decodeSeq = 0;           // monotonic decoder timestamp (frame ids wrap at u16)
+  const pendingAcks = [];      // frame ids in decode order; shifted per output
+  let drawn = 0, received = 0, bytes = 0;
+
+  const socketUrl = new URL("browsers/" + encodeURIComponent(browserId) + "/video", document.baseURI);
+  socketUrl.protocol = (socketUrl.protocol === "https:") ? "wss:" : "ws:";
+  const socket = new WebSocket(socketUrl);
+  socket.binaryType = "arraybuffer";
+
+  function makeDecoder() {
+    const created = new VideoDecoder({
+      output: (frame) => {
+        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+          canvas.width = frame.displayWidth;
+          canvas.height = frame.displayHeight;
+        }
+        context.drawImage(frame, 0, 0);
+        frame.close();
+        drawn += 1;
+        // H.264 without B-frames decodes in submission order, so the oldest
+        // pending id is this frame's id.
+        const frameId = pendingAcks.shift();
+        if (frameId !== undefined && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ ack: frameId }));
+        }
+      },
+      error: (error) => {
+        // Lost reference chain (e.g. a dropped packet); resync at the next IDR.
+        stats.textContent = "decoder error, resyncing: " + error.message;
+        needKey = true;
+        pendingAcks.length = 0;
+        decoder = null;
+      },
+    });
+    created.configure({ codec: "avc1.42C028", optimizeForLatency: true });
+    return created;
+  }
+
+  socket.onopen = () => { retryDelay = 500; };
+  socket.onmessage = (event) => {
+    const packet = new Uint8Array(event.data);
+    received += 1;
+    bytes += packet.byteLength;
+    if (packet.byteLength <= HEADER_LEN || packet[0] !== 0x04) return;
+    const view = new DataView(event.data);
+    const frameType = view.getUint8(1);
+    const frameId = view.getUint16(2);   // big-endian
+    const isKey = frameType === FRAME_TYPE_IDR;
+    if (needKey && !isKey) return;
+    needKey = false;
+    if (decoder === null) decoder = makeDecoder();
+    pendingAcks.push(frameId);
+    decoder.decode(new EncodedVideoChunk({
+      type: isKey ? "key" : "delta",
+      timestamp: decodeSeq++ * 33333,
+      data: packet.subarray(HEADER_LEN),
+    }));
+  };
+  socket.onclose = (event) => {
+    if (event.code === 1008) { stats.textContent = "browser gone (" + event.code + ")"; return; }
+    stats.textContent = "disconnected; retrying...";
+    setTimeout(connect, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 5000);
+  };
+
+  setInterval(() => {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    stats.textContent =
+      `browser=${browserId}  drawn=${drawn} recv=${received}` +
+      `  ${(bytes * 8 / 1e6).toFixed(2)} Mbit last 1s` +
+      `  unacked=${pendingAcks.length}  decode queue=${decoder ? decoder.decodeQueueSize : "-"}`;
+    bytes = 0;
+  }, 1000);
+}
+
+if (!("VideoDecoder" in window)) {
+  stats.textContent = "WebCodecs is not available in this browser";
+} else if (!browserId) {
+  showHint();
+} else {
+  connect();
+}
+</script>
+</body>
+</html>
