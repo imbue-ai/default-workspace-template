@@ -1273,37 +1273,35 @@ def test_idle_lease_sweep_releases_only_a_quiet_lease() -> None:
 # --- cast fan-out: outbound queue per socket (the Flask<->loop WS inversion) ---
 
 
-def test_register_cast_queue_seeds_initial_control_and_tabs() -> None:
-    # A freshly-registered cast queue is seeded with the current control + tabs sync
-    # BEFORE any live frame, so the viewer's first messages are deterministic. The
-    # control seed carries the lifecycle (here `init` -- the browser hasn't launched),
-    # so the viewer shows the starting overlay until it sees `running`.
+def test_register_cast_queue_seeds_initial_control() -> None:
+    # A freshly-registered cast queue is seeded with the current control state as its
+    # FIRST message, so the viewer's first message is deterministic. The control seed
+    # carries the lifecycle (here `init` -- the browser hasn't launched), so the viewer
+    # shows the starting overlay until it sees `running`. /cast carries only control now
+    # (no pixels, no tab list), so nothing else is seeded on a non-crashed browser.
     browser = bsession.LiveBrowser(browser_id="b1")  # init by default
 
     async def go() -> None:
         q = await browser.register_cast_queue()
         first = _pop_json(q)
-        second = _pop_json(q)
         assert first["type"] == "control" and first["owner"] == "human"
         assert first["lifecycle"] == "init"  # the viewer renders the starting overlay off this
-        assert second["type"] == "tabs" and second["tabs"] == []
-        assert q.empty()  # not running -> no replayed frame; not crashed -> no crash message
+        assert q.empty()  # not crashed -> only the control seed
         assert q in browser._cast_queues
 
     asyncio.run(go())
 
 
-def test_register_cast_queue_replays_no_frame_when_crashed() -> None:
+def test_register_cast_queue_seeds_crash_state_when_crashed() -> None:
     # Pixels ride the pixelflux /stream socket now (seeded there with a fresh IDR on
-    # connect), not the cast queue -- so register_cast_queue seeds only control + tabs
-    # (+ crashed). A crashed browser seeds the crash state and no frame.
+    # connect), not the cast queue -- so register_cast_queue seeds only control (+ crashed
+    # when the browser is dead). A crashed browser seeds the crash state and no frame.
     browser = bsession.LiveBrowser(browser_id="b1")
     browser._crashed = True
 
     async def go() -> None:
         q = await browser.register_cast_queue()
         assert _pop_json(q)["type"] == "control"
-        assert _pop_json(q)["type"] == "tabs"
         assert _pop_json(q)["type"] == "crashed"
         assert q.empty()  # crashed -> crash state, never a frame
 

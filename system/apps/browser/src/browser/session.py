@@ -81,7 +81,7 @@ ControlOwner = Literal["human", "agent"]
 # Explicit per-browser lifecycle. A browser is REGISTERED in the fleet the instant
 # create() is called (so the viewer/CLI can address it at once), but its Chromium is
 # launched asynchronously and serialized, so it starts in ``init`` and flips to
-# ``running`` only once Chromium is up and the screencast is attached. ``crashed`` is
+# ``running`` only once Chromium is up and the active tab is foregrounded. ``crashed`` is
 # terminal (Chromium died -- OOM/segfault). Driving/ownership only applies once
 # ``running``; the viewer renders deterministically off this field.
 Lifecycle = Literal["init", "running", "crashed"]
@@ -267,14 +267,15 @@ def _unload_pulse_sink(sink_name: str) -> None:
 # Page the browser opens on, and the default for "New tab".
 _HOME_URL = os.environ.get("BROWSER_HOME_URL", "https://www.google.com")
 
-# Server-side cast keepalive: a static page emits no screencast frames, so without
-# traffic the system_interface WS proxy closes the idle stream (~30s). A periodic
-# ping keeps the backend->client direction alive between real frames.
+# Server-side cast keepalive: the /cast control socket can sit silent for long
+# stretches, so without traffic the system_interface WS proxy closes the idle stream
+# (~30s). A periodic ping keeps the backend->client direction alive between control
+# messages. (Pixels/audio on /stream have their own heartbeat.)
 _KEEPALIVE_SECONDS = 10
 
-# Outbound buffer depth per cast WebSocket. Screencast frames are produced on the
+# Outbound buffer depth per cast WebSocket. Control messages are produced on the
 # loop and drained by a Flask thread; if a client falls behind we drop the OLDEST
-# frame (a stale frame is worthless -- only the latest matters) rather than block
+# message (only the latest control state matters) rather than block
 # the loop. A handful of frames is plenty of slack for a momentarily-slow client.
 _CAST_QUEUE_MAX_SIZE = 16
 
@@ -599,7 +600,7 @@ class LiveBrowser(MutableModel):
     # finishes/aborts first and observes _closed. None once create's launch isn't pending.
     _launch_task: "asyncio.Task[None] | None" = PrivateAttr(default=None)
     _closed: bool = PrivateAttr(default=False)
-    # Serializes screencast/active-tab changes (slow CDP work).
+    # Serializes direct browser actions + active-tab foregrounding (slow CDP work).
     _lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
     # Serializes ALL ownership changes -- the single mutual-exclusion primitive.
     _control_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
@@ -937,8 +938,8 @@ class LiveBrowser(MutableModel):
         return urls, active
 
     async def _keepalive_loop(self) -> None:
-        """Ping cast sockets periodically so a static page (no screencast frames)
-        doesn't let the WS proxy time out the idle stream; also sweep idle leases and
+        """Ping cast (control) sockets periodically so a quiet browser doesn't let the
+        WS proxy time out the idle stream; also poll for a crash, sweep idle leases, and
         refresh the viewer's idle-countdown / queue display while an agent holds."""
         dead_polls = 0
         while not self._closed:
@@ -1624,7 +1625,7 @@ class LiveBrowser(MutableModel):
         the browser action we re-check ``(agent, me, unpinned)`` under ``_control_lock``,
         so a human take-control between two commands makes the next one a clean no-op
         (``lost_control``) instead of touching the human's browser. The action itself
-        runs under ``_lock`` (serialized with screencast tab-switches), NOT under
+        runs under ``_lock`` (serialized with tab-switch foregrounding), NOT under
         ``_control_lock`` -- so a human take-control stays instant (at worst one
         in-flight action lands before the next command sees it).
         """
@@ -1825,25 +1826,21 @@ class LiveBrowser(MutableModel):
     async def register_cast_queue(self) -> "queue.Queue[str | None]":
         """Register a new cast WebSocket and SEED its initial sync, atomically on the loop.
 
-        Returns an outbound queue for the Flask cast handler to drain. The initial
-        control + tabs (+ crash) sync is pushed BEFORE the queue is added to the
-        fan-out list, so the viewer's first messages are deterministic -- no live
-        frame can interleave ahead of the control/tabs the viewer needs first.
+        Returns an outbound queue for the Flask cast handler to drain. The control (+ crash)
+        sync is pushed BEFORE the queue is added to the fan-out list, so the viewer's first
+        message is deterministic. The /cast socket carries ONLY control/ownership now -- no
+        pixels (they ride /stream) and no tab list (the viewer shows Chromium's own tab strip
+        in the streamed pixels), so nothing tab- or frame-shaped is seeded here.
 
-        The seed is at most four messages onto a fresh, empty queue whose maxsize
-        (``_CAST_QUEUE_MAX_SIZE`` = 16) is far larger, so the ``put_nowait``s here can
-        never raise ``queue.Full`` -- but the late-frame push goes through the same
-        Full-safe ``_broadcast``-style path for symmetry (finding [8]).
-
-        Runs on the loop (the runner calls it via ``bridge.run``), so the list
-        mutation is single-threaded with respect to :meth:`_broadcast`.
+        The seed is at most two messages onto a fresh, empty queue whose maxsize
+        (``_CAST_QUEUE_MAX_SIZE`` = 16) is far larger, so the ``put_nowait``s here can never
+        raise ``queue.Full``. Runs on the loop (the runner calls it via ``bridge.run``), so
+        the list mutation is single-threaded with respect to :meth:`_broadcast`.
         """
         client_queue: "queue.Queue[str | None]" = queue.Queue(maxsize=_CAST_QUEUE_MAX_SIZE)
         # The control message carries the lifecycle, so the viewer's FIRST message tells
-        # it whether to show the init overlay / live page / crashed overlay -- no guessing
-        # from frames. tabs follow (empty until running).
+        # it whether to show the init overlay / live page / crashed overlay.
         client_queue.put_nowait(json.dumps(self._control_message(), default=str))
-        client_queue.put_nowait(json.dumps({"type": "tabs", "tabs": await self._tab_list()}, default=str))
         if self._crashed:  # a viewer opening a crashed browser sees the crash state at once
             client_queue.put_nowait(json.dumps({"type": "crashed", "browser_id": self.browser_id}, default=str))
         # Pixels are seeded on the /stream socket (a fresh SPS/PPS+IDR on connect), not here.
