@@ -1200,6 +1200,10 @@ def _handle_client_state_message(
             active_layout,
             id(client_queue),
         )
+    else:
+        # A re-report on an already-registered connection with an unchanged
+        # layout; not worth a log line.
+        pass
     if layout_dir is not None:
         workspace_layouts.set_last_active_slug(layout_dir, active_layout)
         events_path = client_activity.get_events_path(layout_dir)
