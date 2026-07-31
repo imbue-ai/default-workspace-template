@@ -15,7 +15,7 @@ Code reaches Claude in one of two ways, depending on whether an
 `ANTHROPIC_API_KEY` is configured for the workspace: with a key, call `litellm`
 directly; without one, use the `claude -p` helper in `system/scripts/claude_p.py`.
 
-Credentials live in the `env` block of the shared `$CLAUDE_CONFIG_DIR/settings.json`
+Credentials live in the `env` block of the shared `~/.claude/settings.json`
 (written by the in-UI Claude sign-in modal), NOT in the process environment --
 services inherit a frozen env from supervisord, so an env-var check goes stale
 when the user changes auth. Check which path applies with the resolver in

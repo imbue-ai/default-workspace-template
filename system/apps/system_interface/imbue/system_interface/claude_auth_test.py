@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import threading
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -272,6 +273,29 @@ def test_read_managed_auth_env_tolerates_missing_and_corrupt_files(isolated_clau
     assert claude_auth.read_managed_auth_env() == {}
 
 
+# ----- config dir / .claude.json resolution -----
+
+
+def test_resolution_defaults_to_home_claude_when_config_dir_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With CLAUDE_CONFIG_DIR unset (the workspace-wide default since the
+    ~/.claude cutover) the config dir is ~/.claude and the global config is
+    ~/.claude.json -- BESIDE the dir, not inside it, matching where claude
+    itself reads the API-key approval from."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert claude_auth._resolve_claude_config_dir() == tmp_path / ".claude"
+    assert claude_auth._resolve_claude_json_path() == tmp_path / ".claude.json"
+
+
+def test_resolution_honors_explicit_config_dir_env(isolated_claude_config: Path) -> None:
+    """An explicitly exported CLAUDE_CONFIG_DIR pins both the config dir and
+    the .claude.json inside it (claude's set-var layout)."""
+    assert claude_auth._resolve_claude_config_dir() == isolated_claude_config
+    assert claude_auth._resolve_claude_json_path() == isolated_claude_config / ".claude.json"
+
+
 # ----- workspace host id -----
 
 
@@ -295,17 +319,21 @@ def test_read_workspace_host_id_tolerates_missing_env_and_file(
 _LIST_PAYLOAD = json.dumps(
     {
         "agents": [
-            {"name": "chat-1", "type": "claude", "state": "RUNNING"},
+            {"name": "chat-1", "type": "chat", "state": "RUNNING"},
             {"name": "system-services", "type": "main", "state": "RUNNING"},
             {"name": "worker-1", "type": "worker", "state": "RUNNING"},
-            {"name": "chat-2", "type": "claude", "state": "WAITING"},
-            {"name": "old-chat", "type": "claude", "state": "STOPPED"},
+            {"name": "extra-chat", "type": "claude", "state": "WAITING"},
+            {"name": "old-chat", "type": "chat", "state": "STOPPED"},
         ]
     }
 )
 
 
-def test_snapshot_includes_claude_and_worker_types_excludes_main(isolated_claude_config: Path) -> None:
+def test_snapshot_includes_claude_chat_and_worker_types_excludes_main(isolated_claude_config: Path) -> None:
+    """`chat`-typed agents (the initial welcome chat and every "New Agent" chat)
+    run a real claude and MUST be restarted on credential changes -- they were
+    silently skipped when the `chat` type split off from `claude`."""
+
     def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
         return FakeFinishedProcess(stdout=_LIST_PAYLOAD)
 
@@ -314,9 +342,39 @@ def test_snapshot_includes_claude_and_worker_types_excludes_main(isolated_claude
     assert [(s.name, s.state) for s in snapshots] == [
         ("chat-1", "RUNNING"),
         ("worker-1", "RUNNING"),
-        ("chat-2", "WAITING"),
+        ("extra-chat", "WAITING"),
         ("old-chat", "STOPPED"),
     ]
+
+
+def test_claude_binary_agent_types_cover_every_claude_parented_settings_type() -> None:
+    """CLAUDE_BINARY_AGENT_TYPES must equal the claude-rooted types in .mngr/settings.toml.
+
+    The restart filter matches literal type names from `mngr list`, so a new
+    agent type whose parent chain reaches `claude` would silently dodge
+    auth-change restarts unless it is added to the set (how the `chat` type
+    briefly slipped through). Derives the expected set from the settings file
+    so the two cannot drift.
+    """
+    settings_path = Path(__file__).parents[5] / ".mngr" / "settings.toml"
+    with settings_path.open("rb") as settings_file:
+        agent_types = tomllib.load(settings_file).get("agent_types", {})
+
+    def _is_claude_rooted(type_name: str) -> bool:
+        seen: set[str] = set()
+        current = type_name
+        while current not in seen:
+            seen.add(current)
+            if current == "claude":
+                return True
+            parent = agent_types.get(current, {}).get("parent_type")
+            if not isinstance(parent, str):
+                return False
+            current = parent
+        return False
+
+    claude_rooted = {name for name in agent_types if _is_claude_rooted(name)} | {"claude"}
+    assert claude_auth.CLAUDE_BINARY_AGENT_TYPES == frozenset(claude_rooted)
 
 
 def test_snapshot_raises_on_mngr_failure(isolated_claude_config: Path) -> None:
@@ -362,7 +420,7 @@ def test_restart_issues_one_fused_batched_call_per_behavior_group(
     command_log: list[tuple[str, ...]] = []
     service = _build_restart_recording_service(command_log)
     restarted = service.restart_all_claude_agents()
-    assert restarted == ["chat-1", "worker-1", "chat-2"]
+    assert restarted == ["chat-1", "worker-1", "extra-chat"]
     mngr_calls = [cmd for cmd in command_log if cmd[0] == "mngr" and cmd[1] != "list"]
     assert mngr_calls == [
         (
@@ -374,7 +432,7 @@ def test_restart_issues_one_fused_batched_call_per_behavior_group(
             "chat-1",
             "worker-1",
         ),
-        ("mngr", "start", "--restart", "--no-resume", "chat-2"),
+        ("mngr", "start", "--restart", "--no-resume", "extra-chat"),
     ]
     assert not (isolated_claude_config / ".claude.json").exists()
 
@@ -393,7 +451,7 @@ def test_restart_demotes_never_welcomed_agent_to_no_resume(isolated_claude_confi
 
     restarted = service.restart_all_claude_agents(never_welcomed_agent_name="chat-1")
 
-    assert set(restarted) == {"chat-1", "worker-1", "chat-2"}
+    assert set(restarted) == {"chat-1", "worker-1", "extra-chat"}
     mngr_calls = [cmd for cmd in command_log if cmd[0] == "mngr" and cmd[1] != "list"]
     assert mngr_calls == [
         (
@@ -404,7 +462,7 @@ def test_restart_demotes_never_welcomed_agent_to_no_resume(isolated_claude_confi
             claude_auth.RESTART_CONTINUE_MESSAGE,
             "worker-1",
         ),
-        ("mngr", "start", "--restart", "--no-resume", "chat-2", "chat-1"),
+        ("mngr", "start", "--restart", "--no-resume", "extra-chat", "chat-1"),
     ]
 
 
@@ -919,9 +977,7 @@ def test_status_managed_env_outranks_credentials_fold(isolated_claude_config: Pa
     (isolated_claude_config / "settings.json").write_text(json.dumps({"env": {"ANTHROPIC_API_KEY": "sk-ant-key"}}))
 
     def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
-        return FakeFinishedProcess(
-            stdout='{"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "Max"}'
-        )
+        return FakeFinishedProcess(stdout='{"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "Max"}')
 
     service = claude_auth.ClaudeAuthService(command_runner=_runner)
     assert service.get_auth_status().auth_mode is claude_auth.AuthMode.API_KEY
@@ -948,8 +1004,15 @@ def test_extract_setup_token_ignores_stale_frame_under_first_row() -> None:
     extractor stored an 80-column stump here)."""
     frame_end = "\x1b[?2026l"
     raw = (
-        "\x1b[2J\x1b[1;1H" + _FAKE_TOKEN[:80] + "\x1b[2;1H" + "esponse_type=code&redirect_uri=stale" + frame_end
-        + "\x1b[2;1H\x1b[K" + _FAKE_TOKEN[80:] + "\x1b[3;1H\x1b[KStore this token securely." + frame_end
+        "\x1b[2J\x1b[1;1H"
+        + _FAKE_TOKEN[:80]
+        + "\x1b[2;1H"
+        + "esponse_type=code&redirect_uri=stale"
+        + frame_end
+        + "\x1b[2;1H\x1b[K"
+        + _FAKE_TOKEN[80:]
+        + "\x1b[3;1H\x1b[KStore this token securely."
+        + frame_end
     )
     assert claude_auth._extract_setup_token(raw) == _FAKE_TOKEN
 
@@ -990,9 +1053,7 @@ def test_list_argv_accepted_by_live_cli() -> None:
 
 
 def test_restart_with_message_argv_accepted_by_live_cli() -> None:
-    assert_mngr_argv_valid(
-        claude_auth._build_restart_with_message_command(["agent-a", "agent-b"], "please continue")
-    )
+    assert_mngr_argv_valid(claude_auth._build_restart_with_message_command(["agent-a", "agent-b"], "please continue"))
 
 
 def test_restart_no_resume_argv_accepted_by_live_cli() -> None:

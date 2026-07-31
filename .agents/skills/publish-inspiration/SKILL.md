@@ -949,9 +949,10 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 
 - **If `docs/VERSION_HISTORY.md` is missing** (deleted since creation), recreate
   the shipped starter first -- the `# Version history` heading, its explanatory
-  paragraph, and the three empty sections `## Workspace`, `## Inspirations`,
-  `## Adopted inspirations` in that order (byte-identical to the shipped root
-  file; `update-self` §5b carries the exact heredoc) -- then append.
+  paragraph, and the empty sections `## Workspace`, `## Migrations`,
+  `## Inspirations`, `## Adopted inspirations` in that order (byte-identical to
+  the shipped root file; `update-self` §5b carries the exact heredoc) -- then
+  append.
 
 - **Seed the `## Workspace` origin line if it is absent** -- exactly once per
   workspace, as the FIRST line under `## Workspace`. Resolve the template base

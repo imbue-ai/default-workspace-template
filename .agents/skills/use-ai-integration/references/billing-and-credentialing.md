@@ -43,7 +43,7 @@ nearly all of it (measured on this repo, Haiku, a one-line prompt):
 ## Credential resolution
 
 Workspace credentials live in the `env` block of the shared
-`$CLAUDE_CONFIG_DIR/settings.json`, written only by the in-UI Claude sign-in
+`~/.claude/settings.json`, written only by the in-UI Claude sign-in
 modal. They are deliberately NOT in the process environment: supervisord
 freezes its env at boot, so an env-var credential would go stale the moment
 the user changes auth in the modal.
@@ -67,8 +67,9 @@ the user changes auth in the modal.
   attempted (litellm's auth error, or a non-zero `claude -p` exit surfaced as
   `ClaudeCLIError`) rather than hanging.
 
-A service run by supervisord still inherits `CLAUDE_CONFIG_DIR` from the
-bootstrap shell, which is what makes the settings file findable.
+`CLAUDE_CONFIG_DIR` is unset workspace-wide, so every claude (and the
+resolver in `claude_p.py`) lands on claude's own default `~/.claude` --
+which is what makes the settings file findable from any process.
 
 ## The mngr `claude -p` session-hook bug
 

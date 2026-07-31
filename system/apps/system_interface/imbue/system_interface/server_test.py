@@ -18,6 +18,7 @@ from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.errors import AgentStartError
+from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -467,16 +468,10 @@ def test_set_model_unknown_agent_returns_404(client: FlaskClient) -> None:
     assert response.status_code == 404
 
 
-def test_set_fast_mode_sends_on_and_off() -> None:
+def test_set_fast_mode_sends_on_and_off(tmp_path: Path) -> None:
     """POSTing fast mode sends the running agent a `/fast on` or `/fast off` command."""
     agent_id = "agent-00000000000000000000000000000006"
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
-        claude_config_dir=Path("/tmp/.claude"),
-    )
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
@@ -493,6 +488,94 @@ def test_set_fast_mode_unknown_agent_returns_404(client: FlaskClient) -> None:
     with patch("imbue.system_interface.server._find_agent", return_value=None):
         response = client.post("/api/agents/nonexistent/fast", json={"enabled": True})
     assert response.status_code == 404
+
+
+def test_model_settings_prefers_managed_settings_over_user_settings(client: FlaskClient, tmp_path: Path) -> None:
+    """mngr passes the managed file via --settings, which Claude layers above the
+    shared user settings -- so a freshly launched agent reports the provisioned
+    value, not the stale one the shared config happens to carry."""
+    agent_id = "agent-00000000000000000000000000000020"
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
+    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
+    managed_path.parent.mkdir(parents=True, exist_ok=True)
+    managed_path.write_text(json.dumps({"fastMode": True}))
+
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.get(f"/api/agents/{agent_id}/model-settings")
+
+    # The user settings file has no fastMode key at all, which on its own reads as
+    # off; the managed overlay is what makes this agent fast.
+    assert response.get_json()["fast_mode"] is True
+
+
+def test_setting_fast_mode_records_it_where_the_next_launch_reads_it(tmp_path: Path) -> None:
+    """`/fast off` deletes the key instead of writing false, so the toggle is written
+    into the agent's own launch settings -- which is both what the picker reads back
+    and what the agent comes back with if it restarts."""
+    agent_id = "agent-00000000000000000000000000000021"
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
+    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
+    managed_path.parent.mkdir(parents=True, exist_ok=True)
+    # The agent was provisioned fast, and mngr's hooks share the file.
+    managed_path.write_text(json.dumps({"hooks": {"SessionStart": ["mark-active"]}, "fastMode": True}))
+
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is True
+        assert client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False}).status_code == 200
+        assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is False
+
+    # On disk, so a restart of this service or of the agent reports the same thing --
+    # and mngr's hooks are still there.
+    assert json.loads(managed_path.read_text()) == {
+        "hooks": {"SessionStart": ["mark-active"]},
+        "fastMode": False,
+    }
+
+
+def test_setting_fast_mode_reports_settings_it_cannot_record(tmp_path: Path) -> None:
+    """The running session took the command but the change will not outlive it, so
+    the caller is told rather than shown a success it cannot rely on."""
+    agent_id = "agent-00000000000000000000000000000022"
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
+    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
+    managed_path.parent.mkdir(parents=True, exist_ok=True)
+    managed_path.write_text("{not valid json")
+
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False})
+
+    assert response.status_code == 500
+    # Whatever mngr had in there is untouched rather than replaced.
+    assert managed_path.read_text() == "{not valid json"
+
+
+def test_workspace_fast_mode_starts_undecided_and_records_an_answer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The prompt is owed until answered, and the answer survives for later chats."""
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    client = create_application(build_test_state()).test_client()
+
+    assert client.get("/api/workspace/fast-mode").get_json()["fast_mode"] is None
+
+    recorded = client.post("/api/workspace/fast-mode", json={"enabled": False}).get_json()
+    assert recorded["fast_mode"] is False
+
+    # A later reader (a new chat create, another browser) sees the same answer.
+    assert client.get("/api/workspace/fast-mode").get_json()["fast_mode"] is False
+
+
+def test_workspace_fast_mode_can_keep_fast_mode_on(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Answering "keep it" must also stick, or the prompt would reappear forever."""
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    client = create_application(build_test_state()).test_client()
+
+    client.post("/api/workspace/fast-mode", json={"enabled": True})
+    assert client.get("/api/workspace/fast-mode").get_json()["fast_mode"] is True
 
 
 def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dict[str, int]) -> AgentManager:

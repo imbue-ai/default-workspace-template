@@ -1,0 +1,1 @@
+Combined integration PR (carries mngr/claude-config-dir): claude auth and session discovery resolve the config dir like claude itself (`$CLAUDE_CONFIG_DIR` if set, else `~/.claude`), key approval writes to `~/.claude.json`, and `chat`-typed agents are restarted on credential changes. See `mngr-claude-config-dir.md` in this directory for details.

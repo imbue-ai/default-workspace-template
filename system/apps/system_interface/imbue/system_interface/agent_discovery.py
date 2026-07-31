@@ -81,45 +81,37 @@ def _read_claude_config_dir_from_env(env_file: Path) -> Path | None:
 
 
 def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
-    """Resolve a Claude agent's CLAUDE_CONFIG_DIR.
+    """Resolve a Claude agent's effective Claude config dir.
 
-    The lookup mirrors the env-resolution chain that the agent's own tmux
-    session uses at startup (mngr sources the host env first, then the
-    agent env), so we end up with the same answer the running agent sees:
+    In the current layout no agent or host env file sets CLAUDE_CONFIG_DIR
+    at all -- every claude in the workspace resolves claude's own default,
+    the shared `~/.claude` -- so the normal outcome is step 4. Steps 1-3
+    mirror the env-resolution chain the agent's own tmux session uses at
+    startup (mngr sources the host env, then the agent env), so an agent
+    that somehow carries an explicit pin (e.g. one created from a shell
+    with the var exported) is still watched at the dir it actually uses:
 
-    1. Agent's per-agent env file (`<agent_state_dir>/env`). mngr_claude
-       writes `CLAUDE_CONFIG_DIR` here when `use_env_config_dir=False`,
-       pinning the agent at its own per-agent config dir.
-    2. Host env file (`$MNGR_HOST_DIR/env`). The bootstrap writes
-       `CLAUDE_CONFIG_DIR` here when `use_env_config_dir=True` is in
-       effect for the agent type, so every chat/worker/worktree agent in
-       the workspace inherits the services agent's config dir.
+    1. Agent's per-agent env file (`<agent_state_dir>/env`).
+    2. Host env file (`$MNGR_HOST_DIR/env`).
     3. Conventional per-agent path (`<agent_state_dir>/plugin/claude/
-       anthropic`) if it exists on disk. Covers legacy agents that
-       predate use_env_config_dir.
-    4. The user's `~/.claude` as a last-resort fallback.
-
-    Without step 2 the session_watcher pointed at `~/.claude` for every
-    use_env_config_dir=True agent, found no `projects/` subdir, and
-    returned empty events to the UI -- the visible symptom was "messages
-    don't show up in the chat panel" for any agent created via the
-    "New Chat" button.
+       anthropic`) if it exists on disk (an isolated mngr_claude agent).
+    4. The shared `~/.claude` (claude's default when the var is unset).
     """
-    # 1. Per-agent env (use_env_config_dir=False)
+    # 1. Per-agent env (an explicitly pinned agent)
     per_agent = _read_claude_config_dir_from_env(agent_state_dir / "env")
     if per_agent is not None:
         return per_agent
-    # 2. Host env (use_env_config_dir=True; the bootstrap wrote it there)
+    # 2. Host env (nothing writes this anymore; kept as an env-chain mirror)
     host_dir = os.environ.get("MNGR_HOST_DIR", "")
     if host_dir:
         host_level = _read_claude_config_dir_from_env(Path(host_dir) / "env")
         if host_level is not None:
             return host_level
-    # 3. Conventional per-agent path (legacy)
+    # 3. Conventional per-agent path (an isolated mngr_claude agent)
     conventional = agent_state_dir / "plugin" / "claude" / "anthropic"
     if conventional.exists():
         return conventional
-    # 4. User-level fallback
+    # 4. Claude's own default: the shared ~/.claude
     return Path.home() / ".claude"
 
 

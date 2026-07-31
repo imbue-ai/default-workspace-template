@@ -1,0 +1,1 @@
+New package: the Caretaker's deterministic weekly check (`caretaker_check.sh`) moves out of `system/scripts/` into `system/services/caretaker/`, which now owns the Caretaker's docs. The check finds the automations machinery (`run_automation.sh`) via repo-root derivation instead of a same-directory sibling path.
