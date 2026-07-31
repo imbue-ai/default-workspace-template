@@ -3583,6 +3583,7 @@ dependencies = [
     { name = "modal" },
     { name = "prisma" },
     { name = "pyyaml" },
+    { name = "tenacity" },
 ]
 
 [package.metadata]
@@ -3591,6 +3592,7 @@ requires-dist = [
     { name = "modal", specifier = ">=1.4.3" },
     { name = "prisma", specifier = ">=0.15" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "tenacity", specifier = ">=8.0" },
 ]
 
 [[package]]

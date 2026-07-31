@@ -39,7 +39,7 @@ fi
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
-: "${LATCHKEY_VERSION:=3.1.0}"
+: "${LATCHKEY_VERSION:=3.3.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
 # Install a downloaded binary atomically: fetch to a temp file beside the target,
