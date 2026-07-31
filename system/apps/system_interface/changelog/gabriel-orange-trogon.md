@@ -30,3 +30,10 @@ the live end of the conversation is snapped back onto it. Every paging request i
 now timeboxed, so a hung one can no longer freeze a chat under a permanent
 "Loading messages..." overlay, and a run of pages that achieve nothing backs off
 instead of retrying on every frame.
+
+A chat whose live connection dies without saying so -- a dropped tunnel, or the
+machine sleeping and waking -- now recovers by itself within about 35 seconds
+instead of sitting frozen while the agent's terminal keeps moving. The server's
+idle keepalive is now something the browser can actually observe, and the client
+treats a stream that has said nothing at all for 30 seconds as dead and rebuilds
+it.

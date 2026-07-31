@@ -33,6 +33,67 @@ function getBackoff(agentId: string): ReconnectBackoff {
 // eventsByAgent[agentId] does not drop them.
 const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
 
+// The server's idle keepalive, delivered as a named SSE event precisely so the
+// watchdog below can see it (a `:` comment line keeps the socket warm but the
+// EventSource API never surfaces one). It carries no payload.
+const SSE_PING_EVENT = "ping";
+/**
+ * How long a stream may be completely silent -- no transcript event, no ping --
+ * before it is presumed dead and rebuilt.
+ *
+ * A half-dead connection (tunnel drop, sleep/wake) produces no `error` and no
+ * `close`: the transcript just stops while the terminal's WebSocket, which has
+ * its own keepalive, keeps looking healthy. That is the "chat out of sync with
+ * the TUI" report. The server pings roughly every 8s, so this leaves ample room
+ * for a couple of missed pings before acting.
+ */
+export const SSE_SILENCE_TIMEOUT_MS = 30_000;
+// Watchdog tick. Short relative to the timeout, so recovery lands within about
+// SSE_SILENCE_TIMEOUT_MS plus one tick.
+const SSE_WATCHDOG_INTERVAL_MS = 5_000;
+
+const lastStreamActivityMsByAgent = new Map<string, number>();
+// One timer for all streams; started with the first connection and stopped once
+// the last one goes away, so an idle app holds no interval.
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+function noteStreamActivity(agentId: string): void {
+  lastStreamActivityMsByAgent.set(agentId, Date.now());
+}
+
+function startWatchdog(): void {
+  if (watchdogTimer !== null) {
+    return;
+  }
+  watchdogTimer = setInterval(checkStreamLiveness, SSE_WATCHDOG_INTERVAL_MS);
+}
+
+function stopWatchdogIfNoStreams(): void {
+  if (watchdogTimer !== null && activeStreams.size === 0) {
+    clearInterval(watchdogTimer);
+    watchdogTimer = null;
+  }
+}
+
+/** Tear down and rebuild any stream that has gone silent past the timeout.
+ *  Recovery goes through the snapshot path so the transcript is re-read whole,
+ *  covering whatever was missed while the connection was quietly dead. */
+function checkStreamLiveness(): void {
+  const now = Date.now();
+  for (const [agentId, eventSource] of [...activeStreams]) {
+    const silentForMs = now - (lastStreamActivityMsByAgent.get(agentId) ?? now);
+    if (silentForMs < SSE_SILENCE_TIMEOUT_MS) {
+      continue;
+    }
+    console.warn(`SSE stream for agent ${agentId} silent for ${Math.round(silentForMs / 1000)}s; reconnecting`);
+    eventSource.close();
+    activeStreams.delete(agentId);
+    lastStreamActivityMsByAgent.delete(agentId);
+    void reconnectWithSnapshot(agentId);
+  }
+  stopWatchdogIfNoStreams();
+}
+
 // Claude auth is mind-global, so an auth-error on any agent's stream
 // opens the single shared login modal (see models/ClaudeAuth.ts) -- no
 // per-agent routing needed.
@@ -61,13 +122,23 @@ export function connectToStream(agentId: string): void {
 
   const eventSource = new EventSource(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/stream`));
   activeStreams.set(agentId, eventSource);
+  noteStreamActivity(agentId);
+  startWatchdog();
 
   eventSource.onopen = () => {
     // A successful (re)connection resets this agent's backoff.
     getBackoff(agentId).reset();
+    noteStreamActivity(agentId);
   };
 
+  // Server keepalive: proves the connection is alive on a stream with nothing
+  // to say. Deliberately does nothing else -- it is not a transcript event.
+  eventSource.addEventListener(SSE_PING_EVENT, () => {
+    noteStreamActivity(agentId);
+  });
+
   eventSource.onmessage = (messageEvent: MessageEvent) => {
+    noteStreamActivity(agentId);
     const raw = parseJsonMessage<{ type?: string }>(messageEvent.data);
     if (raw === null) {
       return;
@@ -86,6 +157,8 @@ export function connectToStream(agentId: string): void {
     if (activeStreams.get(agentId) === eventSource) {
       eventSource.close();
       activeStreams.delete(agentId);
+      lastStreamActivityMsByAgent.delete(agentId);
+      stopWatchdogIfNoStreams();
       setTimeout(() => {
         const wasExplicitlyDisconnected = explicitlyDisconnectedAgents.delete(agentId);
         if (!wasExplicitlyDisconnected && !activeStreams.has(agentId)) {
@@ -143,11 +216,13 @@ export function disconnectFromStream(agentId: string): void {
   // Drop the backoff so a later fresh connectToStream starts from the base
   // delay rather than inheriting a stale grown delay.
   backoffByAgent.delete(agentId);
+  lastStreamActivityMsByAgent.delete(agentId);
   const eventSource = activeStreams.get(agentId);
   if (eventSource !== undefined) {
     eventSource.close();
     activeStreams.delete(agentId);
   }
+  stopWatchdogIfNoStreams();
 }
 
 // Compatibility shims
