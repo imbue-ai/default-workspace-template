@@ -924,7 +924,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         (phantomTopHeight > 0 && currentScrollTop < loadedTop) ||
         (phantomBottomHeight > 0 && currentScrollTop + viewportPx > loadedBottom);
 
-      const acceptsFileDrops = !isProtoAgent(agentId) && !isConversationNotFound(agentId) && !isTombstoned;
+      // A tombstoned chat is a subset of not-found, so this covers it too.
+      const acceptsFileDrops = !isProtoAgent(agentId) && !isConversationNotFound(agentId);
 
       return m(
         "div",
