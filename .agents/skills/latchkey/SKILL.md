@@ -149,11 +149,11 @@ When the existing credentials are expired or invalid, there are currently two wa
 
 ## When the gateway is unreachable
 
-Every command above is routed through the single Latchkey gateway at
-`$LATCHKEY_GATEWAY`. There is no fallback gateway: if that one cannot be
-reached, `latchkey curl` fails with "Exit code 7" and there is nothing to
-retry against. Treat it as a transient outage -- wait and retry later, and
-tell the user the service is temporarily unreachable if it persists.
+Every command above is routed through the Latchkey gateway at
+`$LATCHKEY_GATEWAY`. If it cannot be reached, treat it as
+a transient outage. It usually helps if the user restarts the
+Minds app. Requests to /permissions and /permission-requests are
+routed to the user's computer so they will fail if it's offline.
 
 
 ## Notes
