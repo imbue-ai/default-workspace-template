@@ -51,6 +51,10 @@ name = "connector-auth"
 addr = "{plugin_addr}"
 path = "{plugin_path}"
 ops = [{ops}]
+# Verify the connector's certificate: frp defaults to InsecureSkipVerify for
+# https plugin addrs, and this channel carries the shared auth secret and the
+# Login/NewProxy authorization decisions.
+tlsVerify = true
 """
 
 
@@ -120,3 +124,18 @@ def render_port_80_redirect_caddyfile(config: RelayConfiguration) -> str:
     redir https://{{host}}{{uri}} permanent
 }}
 """
+
+
+@pure
+def render_all_artifacts(config: RelayConfiguration) -> dict[str, str]:
+    """All rendered relay config artifacts, keyed by their on-disk basename.
+
+    The single source of truth for which config files a relay carries: the
+    render CLI writes exactly these, and the SSH deploy stages them (the
+    basenames must appear in ``remote_install.REMOTE_ARTIFACT_PATHS``).
+    """
+    return {
+        "frps.toml": render_frps_toml(config),
+        "nftables.conf": render_nftables_conf(config),
+        "port80.Caddyfile": render_port_80_redirect_caddyfile(config),
+    }

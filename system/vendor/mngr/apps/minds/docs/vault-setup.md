@@ -52,6 +52,7 @@ secrets/minds/<tier>/litellm
 secrets/minds/<tier>/litellm-connector
 secrets/minds/<tier>/neon
 secrets/minds/<tier>/pool-ssh
+secrets/minds/<tier>/sharing
 secrets/minds/<tier>/supertokens
 ```
 

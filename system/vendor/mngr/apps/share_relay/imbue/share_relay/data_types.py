@@ -1,7 +1,10 @@
 from pydantic import AnyHttpUrl
 from pydantic import Field
+from pydantic import field_validator
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.share_relay.errors import InvalidRelayConfigurationError
+from imbue.share_relay.primitives import ContentDomain
 from imbue.share_relay.primitives import DEFAULT_HEALTHCHECK_PORT
 from imbue.share_relay.primitives import DEFAULT_TUNNEL_CONTROL_PORT
 from imbue.share_relay.primitives import DEFAULT_VHOST_HTTPS_PORT
@@ -22,7 +25,7 @@ class RelayConfiguration(FrozenModel):
     region: RegionCode = Field(
         description="Region code -- the label under the content domain apex this relay serves (e.g. 'us1')"
     )
-    content_domain: str = Field(
+    content_domain: ContentDomain = Field(
         description="The content domain apex workspace hostnames live under (e.g. 'imbueminds.com')"
     )
     plugin_auth_url: AnyHttpUrl = Field(
@@ -52,6 +55,21 @@ class RelayConfiguration(FrozenModel):
         default=100,
         description="nftables concurrent-connection cap per source IP on the vhost port",
     )
+
+    @field_validator("plugin_auth_url")
+    @classmethod
+    def _plugin_auth_url_has_no_query_or_fragment(cls, value: AnyHttpUrl) -> AnyHttpUrl:
+        # The frps config renderer keeps only the URL's origin and path (frps
+        # concatenates addr + path itself), so a query/fragment would be
+        # silently dropped -- e.g. a secret passed as ?secret=... would render
+        # a relay whose auth callbacks all fail. Reject loudly instead; the
+        # secret belongs in a path segment (https://<connector>/frps/auth/<secret>).
+        if value.query or value.fragment:
+            raise InvalidRelayConfigurationError(
+                "plugin_auth_url must not carry a query string or fragment; "
+                "put the shared secret in a path segment (https://<connector>/frps/auth/<secret>)"
+            )
+        return value
 
     @property
     def region_domain(self) -> str:

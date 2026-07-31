@@ -138,12 +138,19 @@ def clear_share_materials_from_agent(agent_id: AgentId, mngr_caller: MngrCaller)
 
 
 def read_share_grants_from_agent(agent_id: AgentId, mngr_caller: MngrCaller) -> str | None:
-    """Read the grants document back from the agent; None when absent or unreadable."""
+    """Read the grants document back from the agent; None when absent.
+
+    A failed exec raises :class:`ShareInjectionError` rather than returning
+    None: "no document exists" and "the read never landed" must stay
+    distinguishable, or a caller could mistake an unreadable policy for an
+    empty one (the ``|| true`` folds the absent-file case into rc 0).
+    """
     result = mngr_caller.call(
         ["exec", str(agent_id), f"cat {_SHARE_GRANTS_FILE} 2>/dev/null || true", "--no-start"],
         timeout=_SHARE_EXEC_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
-        logger.debug("Could not read share grants from agent {}: {}", agent_id, result.stderr.strip())
-        return None
+        raise ShareInjectionError(
+            f"Could not read share grants from agent {agent_id}: {result.stderr.strip() or 'exec failed'}"
+        )
     return result.stdout if result.stdout.strip() else None

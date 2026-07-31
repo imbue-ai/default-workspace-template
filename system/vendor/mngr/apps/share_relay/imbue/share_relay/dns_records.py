@@ -32,7 +32,12 @@ def relay_dns_record_names(config: RelayConfiguration) -> list[str]:
 
 
 def _check_cf(response: httpx.Response) -> dict[str, Any]:
-    body = response.json()
+    try:
+        body = response.json()
+    except ValueError as exc:
+        # Edge proxies can answer with HTML (502/504) or an empty body; surface
+        # the status rather than an opaque JSON decode error.
+        raise RelayDnsError(f"Cloudflare DNS API returned non-JSON response (status {response.status_code})") from exc
     if response.status_code >= 400 or not body.get("success", False):
         raise RelayDnsError(f"Cloudflare DNS API error {response.status_code}: {body.get('errors')}")
     return body
@@ -48,6 +53,11 @@ def upsert_a_record(client: httpx.Client, zone_id: str, record_name: str, ip_add
     if existing:
         record_id = str(existing[0]["id"])
         _check_cf(client.put(f"{_CF_BASE_URL}/zones/{zone_id}/dns_records/{record_id}", json=record_body))
+        # Stale duplicates (e.g. leftover round-robin entries) would keep
+        # answering with the old IP; delete them so the upsert converges on
+        # exactly one A record.
+        for stale_record in existing[1:]:
+            _check_cf(client.delete(f"{_CF_BASE_URL}/zones/{zone_id}/dns_records/{stale_record['id']}"))
         return record_id
     created = _check_cf(client.post(f"{_CF_BASE_URL}/zones/{zone_id}/dns_records", json=record_body))
     return str(created["result"]["id"])

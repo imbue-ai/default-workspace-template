@@ -1,29 +1,30 @@
 """Operator CLI for the self-hosted sharing relays.
 
-Renders a region's on-disk relay config (frps, nftables, the :80 redirector)
-and runs the liveness endpoint. Provisioning the VPS itself and copying these
-files onto it is driven by the justfile recipes (OVH Public Cloud API); this
-CLI is the source of truth for what those files contain, so it stays testable
-and the deploy step is a dumb copy.
+Renders a region's on-disk relay config (frps, nftables, the :80 redirector),
+runs the liveness endpoint, and drives the relay's whole operational lifecycle:
+``provision`` creates the VPS on OVH Public Cloud, ``deploy`` installs the
+pinned frps + rendered config over SSH and (re)starts the services, ``dns``
+points the region's records at the instance, and ``list`` / ``destroy`` manage
+existing instances. The justfile recipes are thin wrappers over these commands;
+the pure render step stays separate so the config is unit-testable.
 """
 
 import json
 import os
 import sys
 from pathlib import Path
-from typing import Final
 
 import click
 from loguru import logger
+from pydantic import AnyHttpUrl
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.logging import setup_logging
-from imbue.share_relay.config_render import render_frps_toml
-from imbue.share_relay.config_render import render_nftables_conf
-from imbue.share_relay.config_render import render_port_80_redirect_caddyfile
+from imbue.share_relay.config_render import render_all_artifacts
 from imbue.share_relay.data_types import RelayConfiguration
 from imbue.share_relay.dns_records import upsert_relay_dns_records
 from imbue.share_relay.healthcheck import serve_healthcheck
+from imbue.share_relay.primitives import ContentDomain
 from imbue.share_relay.primitives import DEFAULT_HEALTHCHECK_PORT
 from imbue.share_relay.primitives import DEFAULT_TUNNEL_CONTROL_PORT
 from imbue.share_relay.primitives import DEFAULT_VHOST_HTTPS_PORT
@@ -38,17 +39,22 @@ from imbue.share_relay.provisioning import make_ovh_client_from_env
 from imbue.share_relay.provisioning import pick_public_ipv4
 from imbue.share_relay.remote_install import deploy_relay
 
-# Basenames the rendered artifacts are written under (consumed by the deploy
-# recipes, which drop them into their well-known host locations).
-_FRPS_TOML_NAME: Final[str] = "frps.toml"
-_NFTABLES_CONF_NAME: Final[str] = "nftables.conf"
-_PORT_80_CADDYFILE_NAME: Final[str] = "port80.Caddyfile"
-
 
 @click.group()
 def main() -> None:
     """Render and serve config for the self-hosted sharing relays."""
     setup_logging(level="INFO")
+
+
+def _relay_configuration(region: str, content_domain: str, plugin_auth_url: str) -> RelayConfiguration:
+    return RelayConfiguration(
+        region=RegionCode(region),
+        content_domain=ContentDomain(content_domain),
+        plugin_auth_url=AnyHttpUrl(plugin_auth_url),
+        vhost_https_port=DEFAULT_VHOST_HTTPS_PORT,
+        tunnel_control_port=DEFAULT_TUNNEL_CONTROL_PORT,
+        healthcheck_port=DEFAULT_HEALTHCHECK_PORT,
+    )
 
 
 @main.command()
@@ -63,23 +69,15 @@ def main() -> None:
 )
 def render(region: str, content_domain: str, plugin_auth_url: str, out_dir: Path) -> None:
     """Render a region's frps / nftables / :80-redirect config into OUT_DIR."""
-    config = RelayConfiguration(
-        region=RegionCode(region),
-        content_domain=content_domain,
-        plugin_auth_url=plugin_auth_url,  # ty: ignore[invalid-argument-type]
-        vhost_https_port=DEFAULT_VHOST_HTTPS_PORT,
-        tunnel_control_port=DEFAULT_TUNNEL_CONTROL_PORT,
-        healthcheck_port=DEFAULT_HEALTHCHECK_PORT,
-    )
+    config = _relay_configuration(region, content_domain, plugin_auth_url)
     out_dir.mkdir(parents=True, exist_ok=True)
-    artifacts = {
-        _FRPS_TOML_NAME: render_frps_toml(config),
-        _NFTABLES_CONF_NAME: render_nftables_conf(config),
-        _PORT_80_CADDYFILE_NAME: render_port_80_redirect_caddyfile(config),
-    }
-    for name, content in artifacts.items():
-        (out_dir / name).write_text(content)
-        logger.info("Wrote {}", out_dir / name)
+    for name, content in render_all_artifacts(config).items():
+        artifact_path = out_dir / name
+        artifact_path.write_text(content)
+        # frps.toml embeds the connector auth secret in the plugin URL path;
+        # keep every rendered artifact owner-only (same hardening as deploy).
+        artifact_path.chmod(0o600)
+        logger.info("Wrote {}", artifact_path)
 
 
 @main.command()
@@ -93,17 +91,6 @@ def render(region: str, content_domain: str, plugin_auth_url: str, out_dir: Path
 def healthcheck(healthcheck_port: int, tunnel_control_port: int) -> None:
     """Serve the relay liveness endpoint (GET /healthz)."""
     serve_healthcheck(RelayPort(healthcheck_port), RelayPort(tunnel_control_port))
-
-
-def _relay_configuration(region: str, content_domain: str, plugin_auth_url: str) -> RelayConfiguration:
-    return RelayConfiguration(
-        region=RegionCode(region),
-        content_domain=content_domain,
-        plugin_auth_url=plugin_auth_url,  # ty: ignore[invalid-argument-type]
-        vhost_https_port=DEFAULT_VHOST_HTTPS_PORT,
-        tunnel_control_port=DEFAULT_TUNNEL_CONTROL_PORT,
-        healthcheck_port=DEFAULT_HEALTHCHECK_PORT,
-    )
 
 
 @main.command()
@@ -131,7 +118,7 @@ def provision(env_name: str, region: str, ovh_region: str, flavor: str, image: s
         project_id=cloud_project_id_from_env(),
     )
     instance_name = build_relay_instance_name(env_name, RegionCode(region))
-    cloud_init_user_data = (Path(__file__).parent.parent.parent / "deploy" / "cloud-init.yaml").read_text()
+    cloud_init_user_data = (Path(__file__).parent / "deploy_assets" / "cloud-init.yaml").read_text()
     ssh_key_id = provisioner.ensure_ssh_key(
         key_name=instance_name,
         public_key=ssh_public_key_file.read_text().strip(),

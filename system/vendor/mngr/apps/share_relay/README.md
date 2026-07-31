@@ -6,7 +6,9 @@ A relay is a small OVH Public Cloud instance running [frp](https://github.com/fa
 `frps` in **SNI-passthrough** mode. It reads the ClientHello SNI of each inbound
 TLS connection on port 443 and splices the raw byte stream into the matching
 workspace tunnel. It never terminates TLS, so it sees only ciphertext and holds
-no certificates or credentials: TLS terminates *inside* the workspace container.
+no TLS certificates and no per-share credentials: TLS terminates *inside* the
+workspace container. Its only secret is the connector plugin-auth URL embedded
+in `frps.toml` (installed root-only), which authorizes tunnel operations.
 It also holds no per-share state -- every tunnel `Login` / `NewProxy` operation
 is authorized by an HTTP callback to the connector, so a workspace's `frpc` can
 only claim the hostnames its relay token is allowed to.
@@ -44,6 +46,12 @@ share-relay render --region us1 --content-domain imbueminds.com \
 share-relay healthcheck
 ```
 
+The same CLI drives the relay's operational lifecycle (the justfile recipes are
+thin wrappers over these): `provision` creates the instance on OVH Public
+Cloud, `deploy` renders the config and installs it -- plus the pinned frps and
+the healthcheck script -- over SSH, restarting the services, `dns` upserts the
+region's records, and `list` / `destroy` manage existing instances.
+
 - `frps.toml` -- SNI-passthrough vhost + the connector-auth server plugin
   (`Login` / `NewProxy` only; visitor connections never call the connector).
 - `nftables.conf` -- tier-2 abuse guard: per-source-IP new-connection rate and
@@ -52,9 +60,9 @@ share-relay healthcheck
 - `port80.Caddyfile` -- a dumb `:80 -> https` redirector so bare `http://` links
   don't hang (SNI passthrough is 443-only).
 
-`deploy/cloud-init.yaml` provisions a fresh instance (nftables, caddy, the frps
-+ healthcheck systemd units); the justfile recipes render the config, copy it,
-and (re)start the units via the OVH Public Cloud API.
+`imbue/share_relay/deploy_assets/cloud-init.yaml` provisions a fresh instance (nftables, caddy, the frps
++ healthcheck systemd units); everything version- or config-shaped is applied
+afterwards by `share-relay deploy` over SSH, so changes never need a reimage.
 
 ## Status
 

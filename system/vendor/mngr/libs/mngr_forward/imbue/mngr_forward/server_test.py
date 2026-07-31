@@ -293,6 +293,35 @@ def test_goto_authenticated_redirects_to_subdomain_with_token(
     assert "next=%2F" in location
 
 
+def test_goto_rejects_malformed_host_ids(
+    app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
+) -> None:
+    """Ids outside the strict host-<32hex> shape 404 instead of reaching the Location header.
+
+    ``HostId`` alone accepts newline-suffixed / underscore / 0x-prefixed hex
+    (``int(hex, 16)`` semantics), which would inject the raw bytes into the
+    redirect hostname.
+    """
+    client, store, _resolver = app_setup
+    cookie = create_session_cookie(store.get_signing_key())
+    for bad_id in ("host-" + "a" * 31 + "%0A", "host-" + "a" * 30 + "_b", "host-0x" + "a" * 30, "host-deadbeef"):
+        response = client.get(f"/goto/{bad_id}/", cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie})
+        assert response.status_code == 404, bad_id
+
+
+def test_goto_lowercases_uppercase_host_ids(
+    app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
+) -> None:
+    """An uppercase id redirects to the lowercased origin so the minted token verifies there."""
+    client, store, _resolver = app_setup
+    cookie = create_session_cookie(store.get_signing_key())
+    upper_host_id = "host-" + "0" * 31 + "A"
+    response = client.get(f"/goto/{upper_host_id}/", cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie})
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith(f"http://{upper_host_id.lower()}.localhost:18421/_subdomain_auth?token=")
+
+
 def test_goto_rejects_protocol_relative_next(
     app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
 ) -> None:
@@ -1386,6 +1415,43 @@ def test_goto_with_service_param_redirects_to_service_origin(
     location = response.headers["location"]
     assert location.startswith(f"http://deep.svc.{valid_host_id}.localhost:18421/_subdomain_auth?token=")
     assert "next=%2Fpanel" in location
+
+
+def test_goto_accepts_looser_sub_origin_labels_before_the_service(
+    app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
+) -> None:
+    """Deeper labels are the service's own sub-origin space, routed with the hostname-label charset.
+
+    Only the last label is a service name; a sub-origin like ``a--b`` (valid
+    per FORWARD_SUBDOMAIN_PATTERN, invalid as a ServiceLabel) must bounce back
+    to its own origin instead of 404ing mid-login.
+    """
+    client, store, _resolver = app_setup
+    cookie = create_session_cookie(store.get_signing_key())
+    valid_host_id = "host-" + "0" * 31 + "a"
+    response = client.get(
+        f"/goto/{valid_host_id}/?service=a--b.svc",
+        cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie},
+    )
+    assert response.status_code == 302
+    assert response.headers["location"].startswith(
+        f"http://a--b.svc.{valid_host_id}.localhost:18421/_subdomain_auth?token="
+    )
+
+
+def test_goto_still_rejects_a_malformed_service_name_even_with_valid_sub_origins(
+    app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
+) -> None:
+    # The LAST label is the service name and keeps the strict ServiceLabel rule.
+    client, store, _resolver = app_setup
+    cookie = create_session_cookie(store.get_signing_key())
+    valid_host_id = "host-" + "0" * 31 + "a"
+    for bad_chain in ("sub.a--b", "sub..svc", "UP.svc"):
+        response = client.get(
+            f"/goto/{valid_host_id}/?service={bad_chain}",
+            cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie},
+        )
+        assert response.status_code == 404, bad_chain
 
 
 def test_goto_rejects_invalid_service_labels(

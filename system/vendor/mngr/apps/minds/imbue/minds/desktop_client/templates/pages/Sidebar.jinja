@@ -31,7 +31,7 @@
   for the titlebar's first button without any caller customization.
 
   mngr_forward_origin is exposed via data-mngr-forward-origin so sidebar.js
-  can build the cross-origin /goto/<agent>/ URL the plugin serves.
+  can build the cross-origin /goto/<host-id>/ URL the plugin serves.
 #}
 {% set _body_attrs %}data-mngr-forward-origin="{{ mngr_forward_origin }}"{% endset %}
 {% set _scripts %}

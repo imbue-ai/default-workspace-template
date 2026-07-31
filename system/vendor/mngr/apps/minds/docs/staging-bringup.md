@@ -95,10 +95,11 @@ become Vault entries in step 4.
   - Account ID
   - Zone ID
   - Base domain (e.g. `staging.minds.example.com`)
-  - API token with **Tunnel Write** and **DNS Write** scoped to the
-    zone (`https://dash.cloudflare.com/profile/api-tokens`).
-  - Optional: comma-separated list of identity-provider UUIDs to
-    allowlist on Cloudflare Access apps (`CLOUDFLARE_ALLOWED_IDPS`).
+  - Account-owned API token (`cfat_`, not `cfut_`) with **DNS: Edit**
+    (ACME DNS-01 challenge TXT records), **Workers R2 Storage: Edit**,
+    **Account API Tokens: Edit**, and **Account Analytics: Read**
+    (`https://dash.cloudflare.com/profile/api-tokens`); see
+    `.minds/template/cloudflare.sh` for the canonical scope list.
 
 - [ ] **Google OAuth client** for staging. Create a new client at
   <https://console.cloud.google.com/apis/credentials>. Redirect URI:
@@ -147,8 +148,9 @@ become Vault entries in step 4.
 one known placeholder -- update it in this branch and commit:
 
 - [ ] `cloudflare_domain = "CHANGE_ME.example.com"` -> the real staging
-  zone (e.g. `"staging.minds.example.com"`). Read by the connector at
-  runtime and used by tunnel creation.
+  zone (e.g. `"staging.minds.example.com"`). Read by the tier setup
+  scripts; the connector's ACME DNS-01 challenge records go into the
+  zone identified by `CLOUDFLARE_ZONE_ID`.
 
 The other fields (`modal_workspace`, `vault_path_prefix`, the
 `[secrets]` services list, `[lifecycle]`, `[min_containers]`) are
@@ -201,8 +203,14 @@ Modal-pushed entries (consumed by the deployed apps at runtime):
 
 - [ ] **`secrets/minds/staging/cloudflare`** -- `CLOUDFLARE_API_TOKEN`,
   `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`,
-  `CLOUDFLARE_DOMAIN` (same as `deploy.toml`'s `cloudflare_domain`),
-  optionally `CLOUDFLARE_ALLOWED_IDPS`.
+  `CLOUDFLARE_DOMAIN` (same as `deploy.toml`'s `cloudflare_domain`).
+
+- [ ] **`secrets/minds/staging/sharing`** -- the self-hosted sharing
+  config (see `.minds/template/sharing.sh` for the canonical key list
+  and per-key docs): `SHARE_CONTENT_DOMAIN`, `SHARE_DEFAULT_REGION`,
+  `SHARE_RELAY_ENDPOINTS`, `FRPS_AUTH_SECRET`, `ACME_CA_LIST`,
+  `ACME_EAB_KID_ZEROSSL` / `ACME_EAB_HMAC_ZEROSSL`,
+  `BROKER_JWT_SIGNING_KEY_PEM`, `ACCOUNTS_BASE_URL`.
 
 - [ ] **`secrets/minds/staging/litellm`** -- `ANTHROPIC_API_KEY`,
   `DATABASE_URL` (pooled DSN for the `litellm_cost` DB),
@@ -377,10 +385,11 @@ The terminal should print a `login_url`. Open it in a browser.
   `/creating/<agent-id>` page; expect it to flip to `DONE` and
   redirect to the agent.
 - [ ] The agent's dockview UI loads and the `web` service is
-  reachable through `<agent-id>.localhost:<port>/service/web/`.
-- [ ] Open the Share modal on a service and verify the global
-  Cloudflare URL is generated and reachable (gated on the email you
-  signed in with).
+  reachable through its own origin, `web.host-<hex>.localhost:<port>/`.
+- [ ] Open the workspace options panel's Share tab, enable sharing for
+  the email you signed in with, and verify the share URL (on the
+  self-hosted relay under `SHARE_CONTENT_DOMAIN`) is generated and
+  reachable.
 
 Tear-down (only if you want to start over -- staging destroy wipes
 the SuperTokens users + the Neon DB schema, NOT the underlying

@@ -142,9 +142,11 @@ from imbue.minds.desktop_client.responses import make_file_response
 from imbue.minds.desktop_client.responses import make_response
 from imbue.minds.desktop_client.responses import make_streaming_response
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
+from imbue.minds.desktop_client.sharing_handler import EmptyGrantsError
 from imbue.minds.desktop_client.sharing_handler import SharingError
 from imbue.minds.desktop_client.sharing_handler import disable_sharing
 from imbue.minds.desktop_client.sharing_handler import enable_sharing
+from imbue.minds.desktop_client.sharing_handler import get_active_share
 from imbue.minds.desktop_client.sharing_handler import get_sharing
 from imbue.minds.desktop_client.sharing_handler import probe_share_readiness
 from imbue.minds.desktop_client.state import get_state
@@ -2644,19 +2646,32 @@ def _grants_to_plain(
     return workspace, services
 
 
+def _optional_str(document: dict[str, object], key: str) -> str | None:
+    value = document.get(key)
+    return value if isinstance(value, str) else None
+
+
 def _sharing_document_to_response(document: dict[str, object]) -> MachineSharingResponse:
     raw_grants = document.get("grants")
-    grants = (
-        SharingGrantsDocument.model_validate(raw_grants) if isinstance(raw_grants, dict) else SharingGrantsDocument()
-    )
+    # None means the grants read did not land (unknown, NOT empty) -- pass it
+    # through so the client can refuse to edit an unseen policy.
+    grants: SharingGrantsDocument | None
+    if raw_grants is None:
+        grants = None
+    else:
+        grants = (
+            SharingGrantsDocument.model_validate(raw_grants)
+            if isinstance(raw_grants, dict)
+            else SharingGrantsDocument()
+        )
     return MachineSharingResponse(
         host_id=str(document.get("host_id", "")),
         enabled=bool(document.get("enabled", False)),
-        workspace_domain=document.get("workspace_domain"),
-        url=document.get("url"),
-        region=document.get("region"),
-        last_tunnel_login_at=document.get("last_tunnel_login_at"),
-        cert_not_after=document.get("cert_not_after"),
+        workspace_domain=_optional_str(document, "workspace_domain"),
+        url=_optional_str(document, "url"),
+        region=_optional_str(document, "region"),
+        last_tunnel_login_at=_optional_str(document, "last_tunnel_login_at"),
+        cert_not_after=_optional_str(document, "cert_not_after"),
         grants=grants,
     )
 
@@ -2683,6 +2698,11 @@ def _handle_machine_sharing_put(host_id: str) -> MachineSharingResponse | Respon
             service_grants=service_grants,
             backend_resolver=get_state().backend_resolver,
         )
+    except EmptyGrantsError as exc:
+        # A grants document naming nobody is a request-validation failure,
+        # not an upstream fault. 400 rather than 422: spectree reserves 422
+        # for its own request-schema validation errors.
+        return _json_error(str(exc), 400)
     except SharingError as exc:
         return _json_error(str(exc), 502)
     return _sharing_document_to_response(document)
@@ -2712,11 +2732,12 @@ def _handle_machine_sharing_readiness(host_id: str) -> SharingReadinessResponse:
     http_client = state.http_client
     if http_client is None:
         return SharingReadinessResponse(ready=False)
-    document = get_sharing(host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store)
-    workspace_domain = document.get("workspace_domain")
-    if not document.get("enabled") or not isinstance(workspace_domain, str) or not workspace_domain:
+    # Only the connector-side share status is needed here; the full sharing
+    # document would also exec into the workspace for grants each poll.
+    share = get_active_share(host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store)
+    if share is None or not share.workspace_domain:
         return SharingReadinessResponse(ready=False)
-    return SharingReadinessResponse(ready=probe_share_readiness(http_client, workspace_domain))
+    return SharingReadinessResponse(ready=probe_share_readiness(http_client, share.workspace_domain))
 
 
 # -- Desktop namespace routes (cookie-or-bearer; no agent verb) --

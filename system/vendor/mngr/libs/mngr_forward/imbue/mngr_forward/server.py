@@ -20,6 +20,7 @@ One domain-scoped session cookie covers the whole family.
 
 import asyncio
 import ipaddress
+import re
 import socket as socket_module
 import threading
 from collections.abc import AsyncGenerator
@@ -74,6 +75,15 @@ from imbue.mngr_forward.ssh_tunnel import parse_url_host_port
 _PROXY_TIMEOUT_SECONDS: Final[float] = 30.0
 
 _SUBDOMAIN_AUTH_PATH: Final[str] = "/_subdomain_auth"
+
+# Strict shape for the /goto/{host_id} path segment: the exact (lowercased)
+# ``host-<32hex>`` coordinate FORWARD_SUBDOMAIN_PATTERN routes.
+_GOTO_HOST_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"host-[a-f0-9]{32}")
+
+# One sub-origin label of a service's deeper origin space: the per-label
+# charset FORWARD_SUBDOMAIN_PATTERN routes (looser than ServiceLabel, which
+# applies only to the service name itself).
+_SUB_ORIGIN_LABEL_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z0-9_-]+")
 
 _EXCLUDED_RESPONSE_HEADERS: Final[frozenset[str]] = frozenset(
     {"transfer-encoding", "content-encoding", "content-length"}
@@ -875,22 +885,32 @@ def _handle_goto_workspace(
         preauth_cookie_value=preauth_cookie_value,
     ):
         return Response(status_code=302, headers={"Location": "/"})
-    try:
-        parsed_id = HostId(host_id)
-    except ValueError:
+    # ``HostId`` alone is too lax for a value interpolated into the redirect
+    # hostname (``int(hex, 16)`` accepts newlines / underscores / ``0x`` and
+    # preserves case, which the lowercased subdomain parse then never matches),
+    # so require the exact ``host-<32hex>`` shape the subdomain pattern routes.
+    normalized_host_id = host_id.lower()
+    if _GOTO_HOST_ID_PATTERN.fullmatch(normalized_host_id) is None:
         return Response(status_code=404)
+    parsed_id = HostId(normalized_host_id)
     # An optional ``service`` carries the dotted label chain of the origin
     # that bounced here (e.g. ``svc`` or ``sub.svc``) so the bridge -- and
-    # its final redirect -- run on that exact origin. Each label must be a
-    # valid service label; anything else is a crafted URL.
+    # its final redirect -- run on that exact origin. Only the LAST label is a
+    # service name; deeper labels are that service's own sub-origin space,
+    # which FORWARD_SUBDOMAIN_PATTERN routes with the looser hostname-label
+    # charset (a sub-origin like ``a--b`` must bounce back to its own origin,
+    # not 404 mid-login). Anything outside either rule is a crafted URL.
     service_param = request.query_params.get("service", "")
     service_host_prefix = ""
     if service_param:
+        *sub_origin_labels, service_label = service_param.split(".")
+        if any(_SUB_ORIGIN_LABEL_PATTERN.fullmatch(label) is None for label in sub_origin_labels):
+            return Response(status_code=404)
         try:
-            validated_labels = [ServiceLabel(label) for label in service_param.split(".")]
+            validated_service = ServiceLabel(service_label)
         except ValueError:
             return Response(status_code=404)
-        service_host_prefix = ".".join(str(label) for label in validated_labels) + "."
+        service_host_prefix = ".".join([*sub_origin_labels, str(validated_service)]) + "."
     signing_key = auth_store.get_signing_key()
     token = create_subdomain_auth_token(signing_key=signing_key, workspace_host_id=str(parsed_id))
     next_url = _sanitize_next_url(request.query_params.get("next", "/"))

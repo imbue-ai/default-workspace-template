@@ -44,7 +44,7 @@ from supertokens_python.types import User
 from supertokens_python.types.base import AccountInfoInput
 
 from imbue.remote_service_connector.app import CloudflareApiError
-from imbue.remote_service_connector.app import ForwardingCtx
+from imbue.remote_service_connector.app import CloudflareCtx
 from imbue.remote_service_connector.app import PoolHostCleanupError
 from imbue.remote_service_connector.app import R2BucketNotEmptyError
 from imbue.remote_service_connector.app import R2BucketNotFoundError
@@ -215,16 +215,16 @@ def make_fake_key_store() -> InMemoryKeyStore:
     return InMemoryKeyStore()
 
 
-class FakeForwardingCtx(ForwardingCtx):
-    """ForwardingCtx backed by FakeCloudflareOps for testing."""
+class FakeCloudflareCtx(CloudflareCtx):
+    """CloudflareCtx backed by FakeCloudflareOps for testing."""
 
     fake: FakeCloudflareOps
 
 
-def make_fake_forwarding_ctx() -> FakeForwardingCtx:
-    """Create a FakeForwardingCtx for testing."""
+def make_fake_cloudflare_ctx() -> FakeCloudflareCtx:
+    """Create a FakeCloudflareCtx for testing."""
     fake = FakeCloudflareOps()
-    ctx = FakeForwardingCtx(ops=fake)
+    ctx = FakeCloudflareCtx(ops=fake)
     ctx.fake = fake
     return ctx
 
@@ -464,6 +464,32 @@ class FakeSuperTokensBackend:
         provider.is_verified = is_verified
         self.registered_providers[provider_id] = provider
 
+    def add_third_party_account(
+        self,
+        *,
+        provider_id: str,
+        email: str,
+        third_party_user_id: str,
+        is_verified: bool = True,
+    ) -> str:
+        """Seed a third-party account directly, bypassing the auth routes.
+
+        Lets tests set up pre-existing cross-method duplicates (two accounts
+        sharing one email) that the one-account-per-email signup guard refuses
+        to create through the routes. Returns the new account's user id.
+        """
+        account = _make_account(
+            email=email,
+            password=None,
+            provider_id=provider_id,
+            third_party_user_id=third_party_user_id,
+            display_name=None,
+            is_verified=is_verified,
+        )
+        self.accounts_by_id[account.user_id] = account
+        self.accounts_by_email.setdefault(email, account)
+        return account.user_id
+
     def mark_email_verified(self, user_id: str) -> None:
         """Force-flip an account to verified (bypassing the token flow)."""
         account = self.accounts_by_id.get(user_id)
@@ -500,7 +526,18 @@ class FakeSuperTokensBackend:
     ) -> EPSignUpOkResult | EmailAlreadyExistsError:
         del tenant_id, user_context
         self._raise_if_configured("sign_up")
-        if email in self.accounts_by_email:
+        # Scope the duplicate check to emailpassword accounts, matching the real
+        # recipe: a same-email third-party account does NOT block a password
+        # signup (that per-recipe scoping is what makes cross-method duplicates
+        # possible, so the fake must permit them for the route-level guard to be
+        # the thing under test). Match emails case-insensitively, like the real
+        # core (which normalizes emails to lowercase) and like the fake's own
+        # ``list_users_by_account_info``.
+        has_email_password_account = any(
+            existing.provider_id == "emailpassword" and existing.email.lower() == email.lower()
+            for existing in self.accounts_by_id.values()
+        )
+        if has_email_password_account:
             return EmailAlreadyExistsError()
         account = _make_account(
             email=email,
@@ -510,6 +547,9 @@ class FakeSuperTokensBackend:
             display_name=None,
             is_verified=False,
         )
+        # Plain assignment (not setdefault): ``sign_in`` resolves passwords
+        # through this dict, so the password account must own the email slot
+        # even when a same-email third-party account claimed it first.
         self.accounts_by_email[email] = account
         self.accounts_by_id[account.user_id] = account
         user = _build_st_user(account)
@@ -636,10 +676,19 @@ class FakeSuperTokensBackend:
         user_context: dict[str, Any] | None = None,
     ) -> list[User]:
         del tenant_id, do_union_of_account_info, user_context
-        account = self.accounts_by_email.get(account_info.email) if account_info.email else None
-        if account is None:
+        self._raise_if_configured("list_users_by_account_info")
+        if account_info.email is None:
             return []
-        return [_build_st_user(account)]
+        # Scan accounts_by_id rather than the one-value-per-email accounts_by_email
+        # dict so cross-method duplicates (same email, different login methods) are
+        # all reported, the way the real SDK reports them. Match emails
+        # case-insensitively, also like the real core (which normalizes emails to
+        # lowercase): callers such as the one-account-per-email guard lowercase the
+        # email before looking it up.
+        email_lower = account_info.email.lower()
+        return [
+            _build_st_user(account) for account in self.accounts_by_id.values() if account.email.lower() == email_lower
+        ]
 
     def send_reset_password_email(
         self,
@@ -756,7 +805,17 @@ class FakeSuperTokensBackend:
         user_context: dict[str, Any] | None = None,
     ) -> ManuallyCreateOrUpdateUserOkResult:
         del tenant_id, user_context
-        existing = self.accounts_by_email.get(email)
+        # The real SDK call is keyed by third-party identity, not email: match on
+        # (third_party_id, third_party_user_id) so a returning OAuth sign-in resolves
+        # to the OAuth account even when a same-email password account also exists.
+        existing = next(
+            (
+                candidate
+                for candidate in self.accounts_by_id.values()
+                if candidate.provider_id == third_party_id and candidate.third_party_user_id == third_party_user_id
+            ),
+            None,
+        )
         created_new = existing is None
         if existing is None:
             account = _make_account(
@@ -767,7 +826,9 @@ class FakeSuperTokensBackend:
                 display_name=None,
                 is_verified=is_verified,
             )
-            self.accounts_by_email[email] = account
+            # setdefault: never clobber a same-email password account, which
+            # ``sign_in`` looks up through this dict.
+            self.accounts_by_email.setdefault(email, account)
             self.accounts_by_id[account.user_id] = account
         else:
             account = existing
@@ -1333,6 +1394,17 @@ class FakeCursor:
                     "eab_kid": eab_kid,
                 }
             )
+
+        elif query_lower.startswith("select count(*) from issued_certs"):
+            # The fake rows carry no created_at; every recorded issuance counts
+            # as recent, which is what the rate-limit tests need.
+            host_id, user_label = params
+            count = sum(
+                1
+                for cert_row in self._backend.issued_cert_rows
+                if cert_row["host_id"] == host_id and cert_row["user_id"] == user_label
+            )
+            self._results = [(count,)]
 
         elif query_lower.startswith("select not_after from issued_certs"):
             matching_not_afters = sorted(

@@ -8,6 +8,7 @@ from imbue.minds.desktop_client.share_materials_injection import build_share_env
 from imbue.minds.desktop_client.share_materials_injection import clear_share_materials_from_agent
 from imbue.minds.desktop_client.share_materials_injection import inject_share_grants_into_agent
 from imbue.minds.desktop_client.share_materials_injection import inject_share_materials_into_agent
+from imbue.minds.desktop_client.share_materials_injection import read_share_grants_from_agent
 from imbue.minds.desktop_client.share_materials_injection import render_grants_toml
 from imbue.minds.utils.mngr_caller import MngrCallResult
 from imbue.minds.utils.testing import RecordingMngrCaller
@@ -63,6 +64,22 @@ def test_inject_raises_on_exec_failure() -> None:
 
     with pytest.raises(ShareInjectionError):
         inject_share_grants_into_agent(AgentId(), "[workspace]\n", caller)
+
+
+def test_read_share_grants_returns_none_when_absent() -> None:
+    # `|| true` folds the absent-file case into rc 0 with empty stdout.
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=""))
+
+    assert read_share_grants_from_agent(AgentId(), caller) is None
+
+
+def test_read_share_grants_raises_on_exec_failure() -> None:
+    # A failed exec must stay distinguishable from an absent document, or a
+    # caller could mistake an unreadable policy for an empty one.
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=1, stderr="offline"))
+
+    with pytest.raises(ShareInjectionError):
+        read_share_grants_from_agent(AgentId(), caller)
 
 
 def test_clear_share_materials_is_best_effort_and_no_start() -> None:

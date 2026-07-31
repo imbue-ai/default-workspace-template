@@ -26,7 +26,7 @@ from imbue.share_relay.primitives import RegionCode
 # Default instance shape for a relay: the smallest general-purpose discovery
 # flavor with unmetered bandwidth. Overridable per provision call.
 DEFAULT_RELAY_FLAVOR_NAME: Final[str] = "d2-4"
-DEFAULT_RELAY_IMAGE_NAME: Final[str] = "Debian 12"
+DEFAULT_RELAY_IMAGE_NAME: Final[str] = "Debian 13"
 
 _INSTANCE_ACTIVE_TIMEOUT_SECONDS: Final[float] = 600.0
 _INSTANCE_POLL_INTERVAL_SECONDS: Final[float] = 10.0
@@ -104,11 +104,22 @@ class OvhPublicCloudRelayProvisioner(MutableModel):
         return f"/cloud/project/{self.project_id}{suffix}"
 
     def ensure_ssh_key(self, key_name: str, public_key: str, ovh_region: str) -> str:
-        """Register (or reuse) an SSH key in the project; returns its id."""
+        """Register (or reuse) an SSH key in the project; returns its id.
+
+        Reuse requires the stored key material to match: after a local key
+        rotation, silently reusing the stale project key by name would produce
+        an instance the operator cannot SSH into.
+        """
         existing_keys = self.client.get(self._project_url("/sshkey"))
         for key in existing_keys:
-            if key.get("name") == key_name:
-                return str(key["id"])
+            if key.get("name") != key_name:
+                continue
+            if str(key.get("publicKey", "")).strip() != public_key.strip():
+                raise RelayProvisioningError(
+                    f"SSH key {key_name!r} already exists in the project with different key material; "
+                    "delete it from the project (or provision with a different key name) and retry."
+                )
+            return str(key["id"])
         created = self.client.post(
             self._project_url("/sshkey"),
             name=key_name,

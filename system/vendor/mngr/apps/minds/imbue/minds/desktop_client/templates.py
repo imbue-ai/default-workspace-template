@@ -331,6 +331,7 @@ def render_landing_page(
     shutdown_capable_agent_ids: Sequence[AgentId] | None = None,
     mind_liveness_by_agent_id: dict[str, str] | None = None,
     agent_providers: dict[str, str] | None = None,
+    agent_host_ids: dict[str, str] | None = None,
     account_email: str = "",
     extra_account_count: int = 0,
     remote_workspaces: Sequence[RemoteWorkspaceTile] | None = None,
@@ -347,10 +348,15 @@ def render_landing_page(
 
     ``mngr_forward_origin`` is the bare origin of the ``mngr forward`` plugin
     (e.g. ``"http://localhost:8421"``). Workspace links target
-    ``{mngr_forward_origin}/goto/<agent>/`` because Phase 2 deletes minds'
+    ``{mngr_forward_origin}/goto/<host>/`` because Phase 2 deletes minds'
     in-process subdomain forwarder; the plugin owns ``/goto/`` now.
 
     agent_names maps agent ID strings to human-readable workspace names.
+
+    agent_host_ids maps agent ID strings to the workspace's ``host-<hex>``
+    coordinate. The plugin's ``/goto/`` route is host-keyed, so rows with an
+    entry link via it; rows without one fall back to the agent id (nothing
+    better is known -- same degrade as the inspiration page's rows).
 
     agent_accents maps agent ID strings to ``#rrggbb`` workspace accent
     hexes (the stored color label, resolved by the caller). Agents without
@@ -395,6 +401,7 @@ def render_landing_page(
         shutdown_capable_agent_ids=shutdown_capable_agent_id_strings,
         mind_liveness_by_agent_id=mind_liveness_by_agent_id or {},
         agent_providers=agent_providers or {},
+        agent_host_ids=agent_host_ids or {},
         account_email=account_email,
         extra_account_count=extra_account_count,
         create_attempt_rows=list(create_attempt_rows or []),

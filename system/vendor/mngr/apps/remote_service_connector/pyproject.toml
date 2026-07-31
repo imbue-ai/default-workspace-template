@@ -1,7 +1,7 @@
 [project]
 name = "remote-service-connector"
 version = "0.1.0"
-description = "Modal-deployed connector for managing remote services (Cloudflare tunnels, SuperTokens auth) via authenticated HTTP endpoints"
+description = "Modal-deployed connector for managing remote services (SuperTokens auth, pool-host leasing, R2 buckets, self-hosted workspace sharing) via authenticated HTTP endpoints"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

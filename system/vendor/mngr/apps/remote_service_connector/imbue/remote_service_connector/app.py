@@ -39,6 +39,7 @@ from typing import Protocol
 from urllib.parse import quote
 from urllib.parse import unquote
 from urllib.parse import urlencode
+from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
@@ -55,7 +56,6 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import ExtensionOID
 from fastapi import FastAPI
 from fastapi import Form
 from fastapi import HTTPException
@@ -65,6 +65,7 @@ from fastapi.responses import JSONResponse
 from fastapi.responses import RedirectResponse
 from paramiko.hostkeys import HostKeyEntry
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 from supertokens_python import InputAppInfo
@@ -108,6 +109,7 @@ from supertokens_python.recipe.thirdparty.syncio import get_provider
 from supertokens_python.recipe.thirdparty.syncio import manually_create_or_update_user
 from supertokens_python.syncio import get_user
 from supertokens_python.syncio import list_users_by_account_info
+from supertokens_python.types import LoginMethod
 from supertokens_python.types import RecipeUserId
 from supertokens_python.types.base import AccountInfoInput
 from tenacity import retry
@@ -1057,7 +1059,7 @@ class HttpCloudflareOps:
 # ---------------------------------------------------------------------------
 
 
-class ForwardingCtx:
+class CloudflareCtx:
     """Thin holder of the Cloudflare ops abstraction. Created once per container."""
 
     def __init__(self, ops: CloudflareOps) -> None:
@@ -1085,7 +1087,7 @@ _USER_ID_PREFIX_LENGTH = 16
 
 
 def derive_user_id_prefix(user_id: str) -> str:
-    """The 16-hex prefix of a SuperTokens user id, used to namespace tunnels/leases/buckets.
+    """The 16-hex prefix of a SuperTokens user id, used to namespace leases/buckets.
 
     Also the ``account_entitlements.user_id_prefix`` lookup key, so every
     caller must derive it identically -- always go through this helper.
@@ -1438,7 +1440,7 @@ class AccountEntitlements(PlanEntitlements):
     """One account's entitlement row: identity fields plus the quota values."""
 
     user_id: str = Field(description="Full SuperTokens user id (row key)")
-    user_id_prefix: str = Field(description="16-hex user-id prefix used to namespace tunnels/leases/buckets")
+    user_id_prefix: str = Field(description="16-hex user-id prefix used to namespace leases/buckets")
     plan_name: str = Field(description="The plan this row was last assigned from")
 
     def quota_values(self) -> PlanEntitlements:
@@ -1952,15 +1954,21 @@ def _frps_reject(reason: str) -> FrpsAuthDecision:
     return FrpsAuthDecision(reject=True, reject_reason=reason, unchange=True)
 
 
-def decide_frps_new_proxy(workspace_domain: str, claimed_custom_domains: list[str]) -> FrpsAuthDecision:
+def decide_frps_new_proxy(
+    workspace_domain: str, claimed_custom_domains: list[str], claimed_subdomain: str = ""
+) -> FrpsAuthDecision:
     """Authorize an frps ``NewProxy``: the claimed customDomains must be exactly
     this workspace's own bare domain and/or its wildcard, nothing else.
 
     This is what stops workspace X's frpc from registering workspace Y's
     hostname on the shared relay: the token resolves to X's domain, and any
     claim outside X's own ``{workspace_domain, *.workspace_domain}`` is
-    rejected.
+    rejected. A ``subdomain`` claim is rejected outright: the relay's frps
+    never enables subdomain routing (no ``subDomainHost``), and rejecting it
+    here keeps that guarantee independent of the relay's rendered config.
     """
+    if claimed_subdomain:
+        return _frps_reject(f"subdomain claims are not supported (got {claimed_subdomain!r})")
     allowed = {workspace_domain.lower(), f"*.{workspace_domain.lower()}"}
     if not claimed_custom_domains:
         return _frps_reject("NewProxy claimed no custom domains")
@@ -1999,6 +2007,11 @@ def _extract_frps_custom_domains(content: dict[str, Any]) -> list[str]:
     return [domain for domain in domains if isinstance(domain, str)]
 
 
+def _extract_frps_subdomain(content: dict[str, Any]) -> str:
+    subdomain = content.get("subdomain")
+    return subdomain if isinstance(subdomain, str) else ""
+
+
 # Columns every share SELECT returns, so row-to-dict projection stays in one place.
 _SHARE_COLUMNS = "host_id, user_id, region, workspace_domain, state, created_at, updated_at, last_tunnel_login_at"
 _SHARE_COLUMN_NAMES = tuple(name.strip() for name in _SHARE_COLUMNS.split(","))
@@ -2006,7 +2019,7 @@ _SHARE_COLUMN_NAMES = tuple(name.strip() for name in _SHARE_COLUMNS.split(","))
 
 def _share_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
     """Project a ``_SHARE_COLUMNS`` row into a dict, stringifying timestamps."""
-    share = dict(zip(_SHARE_COLUMN_NAMES, row, strict=False))
+    share: dict[str, Any] = dict(zip(_SHARE_COLUMN_NAMES, row, strict=True))
     for timestamp_column in ("created_at", "updated_at", "last_tunnel_login_at"):
         value = share.get(timestamp_column)
         share[timestamp_column] = str(value) if value is not None else None
@@ -2016,18 +2029,19 @@ def _share_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
 class ShareStore(Protocol):
     """Abstraction over the shares / relay_tokens / issued_certs tables so endpoints are unit-testable."""
 
-    def count_active_shares(self, user_label: str, exclude_host_id: str) -> int: ...
     def get_share(self, host_id: str, user_label: str) -> dict[str, Any] | None: ...
     def list_shares(self, user_label: str) -> list[dict[str, Any]]: ...
-    def activate_share(self, coordinate: ShareCoordinate) -> None: ...
+    def activate_share_and_rotate_token(
+        self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str
+    ) -> None: ...
     def deactivate_share(self, host_id: str, user_label: str) -> None: ...
-    def replace_relay_token(self, host_id: str, user_label: str, token_hash: str) -> None: ...
     def delete_relay_tokens(self, host_id: str, user_label: str) -> None: ...
     def find_share_by_token_hash(self, token_hash: str) -> dict[str, Any] | None: ...
     def find_active_share_by_workspace_domain(self, workspace_domain: str) -> dict[str, Any] | None: ...
     def record_tunnel_login(self, host_id: str, user_label: str) -> None: ...
     def get_pool_host_datacenter(self, host_id: str) -> str | None: ...
     def get_latest_cert_not_after(self, workspace_domain: str) -> str | None: ...
+    def count_certs_issued_in_last_day(self, host_id: str, user_label: str) -> int: ...
     def record_issued_cert(
         self,
         workspace_domain: str,
@@ -2042,19 +2056,6 @@ class ShareStore(Protocol):
 
 class PostgresShareStore:
     """ShareStore backed by the connector's existing Neon DB."""
-
-    def count_active_shares(self, user_label: str, exclude_host_id: str) -> int:
-        conn = _get_pool_db_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) FROM shares WHERE user_id = %s AND state = 'active' AND host_id <> %s",
-                    (user_label, exclude_host_id),
-                )
-                row = cur.fetchone()
-        finally:
-            conn.close()
-        return int(row[0]) if row is not None else 0
 
     def get_share(self, host_id: str, user_label: str) -> dict[str, Any] | None:
         conn = _get_pool_db_connection()
@@ -2082,11 +2083,25 @@ class PostgresShareStore:
             conn.close()
         return [_share_row_to_dict(row) for row in rows]
 
-    def activate_share(self, coordinate: ShareCoordinate) -> None:
+    def activate_share_and_rotate_token(
+        self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str
+    ) -> None:
         conn = _get_pool_db_connection()
         try:
             with conn:
                 with conn.cursor() as cur:
+                    # Serialize per-user activation so concurrent creates cannot
+                    # all pass the quota count (same pattern as lease_host).
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                        (f"share-quota:{coordinate.user_label}",),
+                    )
+                    cur.execute(
+                        "SELECT COUNT(*) FROM shares WHERE user_id = %s AND state = 'active' AND host_id <> %s",
+                        (coordinate.user_label, coordinate.host_id),
+                    )
+                    row = cur.fetchone()
+                    check_share_quota(int(row[0]) if row is not None else 0, max_active_shares)
                     cur.execute(
                         "INSERT INTO shares (host_id, user_id, region, workspace_domain, state) "
                         "VALUES (%s, %s, %s, %s, 'active') "
@@ -2094,6 +2109,20 @@ class PostgresShareStore:
                         "region = EXCLUDED.region, workspace_domain = EXCLUDED.workspace_domain, "
                         "state = 'active', updated_at = NOW()",
                         (coordinate.host_id, coordinate.user_label, coordinate.region, coordinate.workspace_domain),
+                    )
+                    # The token swap rides the SAME transaction (and the same
+                    # advisory lock): a separate transaction would let two
+                    # concurrent creates interleave their DELETE+INSERT pairs
+                    # (leaving two valid tokens for one share) and a crash
+                    # between the two would leave an active share whose relay
+                    # token was never written.
+                    cur.execute(
+                        "DELETE FROM relay_tokens WHERE host_id = %s AND user_id = %s",
+                        (coordinate.host_id, coordinate.user_label),
+                    )
+                    cur.execute(
+                        "INSERT INTO relay_tokens (token_hash, host_id, user_id) VALUES (%s, %s, %s)",
+                        (token_hash, coordinate.host_id, coordinate.user_label),
                     )
         finally:
             conn.close()
@@ -2106,22 +2135,6 @@ class PostgresShareStore:
                     cur.execute(
                         "UPDATE shares SET state = 'inactive', updated_at = NOW() WHERE host_id = %s AND user_id = %s",
                         (host_id, user_label),
-                    )
-        finally:
-            conn.close()
-
-    def replace_relay_token(self, host_id: str, user_label: str, token_hash: str) -> None:
-        conn = _get_pool_db_connection()
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "DELETE FROM relay_tokens WHERE host_id = %s AND user_id = %s",
-                        (host_id, user_label),
-                    )
-                    cur.execute(
-                        "INSERT INTO relay_tokens (token_hash, host_id, user_id) VALUES (%s, %s, %s)",
-                        (token_hash, host_id, user_label),
                     )
         finally:
             conn.close()
@@ -2214,6 +2227,20 @@ class PostgresShareStore:
         finally:
             conn.close()
         return str(row[0]) if row is not None else None
+
+    def count_certs_issued_in_last_day(self, host_id: str, user_label: str) -> int:
+        conn = _get_pool_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM issued_certs "
+                    "WHERE host_id = %s AND user_id = %s AND created_at > NOW() - INTERVAL '24 hours'",
+                    (host_id, user_label),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        return int(row[0]) if row is not None else 0
 
     def record_issued_cert(
         self,
@@ -2382,7 +2409,7 @@ def validate_share_csr(csr_pem: str, workspace_domain: str) -> None:
     else:
         raise InvalidCsrError("CSR public key must be RSA or ECDSA")
     try:
-        san_extension = csr.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+        san_extension = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName)
     except x509.ExtensionNotFound as exc:
         raise InvalidCsrError("CSR has no subjectAltName extension") from exc
     claimed_names = set(san_extension.value.get_values_for_type(x509.DNSName))
@@ -2397,7 +2424,7 @@ def extract_cert_chain_metadata(cert_chain_pem: str) -> tuple[str, list[str]]:
         leaf = x509.load_pem_x509_certificate(cert_chain_pem.encode("utf-8"))
     except ValueError as exc:
         raise AcmeIssuanceError(f"CA returned an unparseable certificate chain: {exc}") from exc
-    san_extension = leaf.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+    san_extension = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName)
     sans = list(san_extension.value.get_values_for_type(x509.DNSName))
     return leaf.not_valid_after_utc.isoformat(), sans
 
@@ -2409,40 +2436,37 @@ class Dns01Ops(Protocol):
     def delete_txt_record(self, record_id: str) -> None: ...
 
 
-class CloudflareDns01Ops:
-    """Dns01Ops against the content domain's Cloudflare zone (same token/zone as the rest of the connector).
+class CloudflareDns01Ops(BaseModel):
+    """Dns01Ops against the content domain's Cloudflare zone (same token/zone as the rest of the connector)."""
 
-    Plain-class ``__init__`` holding an ``httpx.Client``, matching this
-    self-contained file's other ops implementations (``HttpCloudflareOps``);
-    the connector deliberately avoids the monorepo's pydantic base classes.
-    """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def __init__(self, api_token: str, zone_id: str) -> None:
-        self._zone_id = zone_id
-        self._client = httpx.Client(
-            base_url=_CF_BASE_URL,
-            headers={"Authorization": f"Bearer {api_token}"},
-            timeout=30.0,
-        )
+    zone_id: str
+    client: httpx.Client
 
     def create_txt_record(self, record_name: str, content: str) -> str:
-        response = self._client.post(
-            f"/zones/{self._zone_id}/dns_records",
+        response = self.client.post(
+            f"/zones/{self.zone_id}/dns_records",
             json={"type": "TXT", "name": record_name, "content": content, "ttl": _ACME_TXT_RECORD_TTL_SECONDS},
         )
         return str(cf_check(response)["result"]["id"])
 
     def delete_txt_record(self, record_id: str) -> None:
-        response = self._client.delete(f"/zones/{self._zone_id}/dns_records/{record_id}")
+        response = self.client.delete(f"/zones/{self.zone_id}/dns_records/{record_id}")
         cf_check(response)
 
 
 @functools.cache
 def get_dns01_ops() -> Dns01Ops:
-    return CloudflareDns01Ops(
-        api_token=os.environ["CLOUDFLARE_API_TOKEN"],
-        zone_id=os.environ["CLOUDFLARE_ZONE_ID"],
+    # _require_share_env (rather than bare indexing) so a tier missing the
+    # cloudflare secret surfaces as the 503 sharing-not-configured diagnostic
+    # like every other sharing config value, not an opaque KeyError 500.
+    client = httpx.Client(
+        base_url=_CF_BASE_URL,
+        headers={"Authorization": f"Bearer {_require_share_env('CLOUDFLARE_API_TOKEN')}"},
+        timeout=30.0,
     )
+    return CloudflareDns01Ops(zone_id=_require_share_env("CLOUDFLARE_ZONE_ID"), client=client)
 
 
 class AcmeAccountStore(Protocol):
@@ -2669,12 +2693,12 @@ class IssueShareCertRequest(BaseModel):
 
 
 @functools.cache
-def get_ctx() -> ForwardingCtx:
+def get_cloudflare_ctx() -> CloudflareCtx:
     ops = HttpCloudflareOps(
         api_token=os.environ["CLOUDFLARE_API_TOKEN"],
         account_id=os.environ["CLOUDFLARE_ACCOUNT_ID"],
     )
-    return ForwardingCtx(ops=ops)
+    return CloudflareCtx(ops=ops)
 
 
 def raise_as_http(exc: Exception) -> NoReturn:
@@ -3206,11 +3230,10 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
             region=region,
             content_domain=share_content_domain(),
         )
-        active_share_count = store.count_active_shares(user_label, exclude_host_id=body.host_id)
-        check_share_quota(active_share_count, DEFAULT_MAX_SHARED_WORKSPACES_PER_USER)
-        store.activate_share(coordinate)
         relay_token = generate_relay_token()
-        store.replace_relay_token(body.host_id, user_label, hash_relay_token(relay_token))
+        store.activate_share_and_rotate_token(
+            coordinate, DEFAULT_MAX_SHARED_WORKSPACES_PER_USER, hash_relay_token(relay_token)
+        )
         return {
             "host_id": coordinate.host_id,
             "workspace_domain": coordinate.workspace_domain,
@@ -3280,8 +3303,10 @@ def frps_auth(plugin_secret: str, body: FrpsAuthRequest) -> dict[str, object]:
     claim, authenticated by the shared secret embedded in its rendered plugin
     URL path. The presented relay token must resolve to an active share, and a
     ``NewProxy`` may only claim that share's own bare domain and wildcard.
-    Operations other than the two we subscribe to are allowed unchanged --
-    frps should not be configured to send them, and rejecting an unexpected op
+    Every operation must present a relay token resolving to an active share
+    (token-less bodies are rejected whatever the op); beyond that, operations
+    other than the two we subscribe to are allowed unchanged -- frps should
+    not be configured to send them, and constraining an unexpected op further
     would break the tunnel for no security gain.
     """
     with handle_endpoint_errors():
@@ -3298,8 +3323,19 @@ def frps_auth(plugin_secret: str, body: FrpsAuthRequest) -> dict[str, object]:
             return _frps_allow().model_dump()
         if body.op == _FRPS_NEW_PROXY_OP:
             claimed_domains = _extract_frps_custom_domains(body.content)
-            return decide_frps_new_proxy(str(share["workspace_domain"]), claimed_domains).model_dump()
+            claimed_subdomain = _extract_frps_subdomain(body.content)
+            return decide_frps_new_proxy(
+                str(share["workspace_domain"]), claimed_domains, claimed_subdomain
+            ).model_dump()
         return _frps_allow().model_dump()
+
+
+# ACME issuance ceiling per share per rolling day. A relay-token holder could
+# otherwise loop issuance, churning real DNS TXT records and burning CA order
+# quota (Let's Encrypt's duplicate-certificate limit is 5/week). Legitimate
+# traffic is one first issuance plus a daily renewal check that only reissues
+# under 30 days to expiry, so five a day is generous.
+_MAX_CERT_ISSUANCES_PER_DAY: Final[int] = 5
 
 
 @web_app.post("/shares/cert")
@@ -3321,6 +3357,15 @@ def issue_share_cert(request: Request, body: IssueShareCertRequest) -> dict[str,
         if share is None or share["state"] != "active":
             raise HTTPException(status_code=401, detail="Unknown or inactive relay token")
         workspace_domain = str(share["workspace_domain"])
+        issued_today = store.count_certs_issued_in_last_day(str(share["host_id"]), str(share["user_id"]))
+        if issued_today >= _MAX_CERT_ISSUANCES_PER_DAY:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"This share has been issued {issued_today} certificates in the last 24 hours "
+                    f"(limit {_MAX_CERT_ISSUANCES_PER_DAY}); wait before requesting another."
+                ),
+            )
         validate_share_csr(body.csr_pem, workspace_domain)
         cert_chain_pem, ca_name = issue_share_certificate(
             csr_pem=body.csr_pem,
@@ -3511,8 +3556,24 @@ def broker_login_page(request: Request) -> HTMLResponse:
     return _render_broker_login_page(next_path, "")
 
 
+def _is_cross_site_form_post(request: Request) -> bool:
+    """True when a form POST's Origin header names a different site than the request's own host.
+
+    Login CSRF needs no existing cookie (the attack SETS the victim's session
+    to the attacker's account), so SameSite offers no protection here. Every
+    current browser sends Origin on form POSTs; a present-but-foreign (or
+    ``null``) Origin is a cross-site submission. An absent header (non-browser
+    clients, tests) is allowed -- they are not CSRF victims.
+    """
+    origin = request.headers.get("origin", "")
+    if not origin:
+        return False
+    return urlparse(origin).netloc.lower() != request.headers.get("host", "").lower()
+
+
 @web_app.post("/share/session", response_model=None)
 def broker_create_session(
+    request: Request,
     email: str = Form(...),
     password: str = Form(...),
     mode: str = Form(...),
@@ -3521,6 +3582,8 @@ def broker_create_session(
     """Sign in (or up) via the browser form, set the SSO cookie, and continue to the authorize URL."""
     with handle_endpoint_errors():
         _require_supertokens_configured()
+        if _is_cross_site_form_post(request):
+            raise HTTPException(status_code=403, detail="Cross-site login submissions are not accepted")
         next_path = _sanitize_broker_path(unquote(next_target))
         stripped_email = email.strip()
         if not stripped_email or not password:
@@ -4868,7 +4931,7 @@ def create_bucket_endpoint(request: Request, body: CreateBucketRequest) -> dict[
         user = authenticate_request(request)
         entitlements = resolve_entitlements_for_user(request, user)
         owner_user_id = _get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
-        ops = get_ctx().ops
+        ops = get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, body.name)
         # The `host-` short-name shape is reserved for workspace-backup buckets:
         # allowed only when the caller has a workspace record (any state) with
@@ -4911,7 +4974,7 @@ def list_buckets_endpoint(request: Request) -> list[dict[str, object]]:
     """List all R2 buckets owned by the caller."""
     with handle_endpoint_errors():
         user = authenticate_request(request)
-        ops = get_ctx().ops
+        ops = get_cloudflare_ctx().ops
         endpoint = r2_s3_endpoint(ops.account_id)
         return [
             BucketInfo(bucket_name=str(b["name"]), s3_endpoint=endpoint).model_dump()
@@ -4924,7 +4987,7 @@ def get_bucket_endpoint(request: Request, name: str) -> dict[str, object]:
     """Return metadata for one of the caller's buckets (keys come from the keys endpoints)."""
     with handle_endpoint_errors():
         user = authenticate_request(request)
-        ops = get_ctx().ops
+        ops = get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, name)
         if not _owned_bucket_exists(ops, user.user_id_prefix, full_name):
             raise R2BucketNotFoundError(full_name)
@@ -4942,7 +5005,7 @@ def delete_bucket_endpoint(request: Request, name: str) -> dict[str, str]:
     with handle_endpoint_errors():
         user = authenticate_request(request)
         owner_user_id = _get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
-        ops = get_ctx().ops
+        ops = get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, name)
         verify_bucket_ownership(full_name, user.user_id_prefix)
         # The interlock runs on the slugified short name -- the name the
@@ -4973,7 +5036,7 @@ def roll_bucket_key_endpoint(request: Request, name: str) -> dict[str, object]:
     with handle_endpoint_errors():
         user = authenticate_request(request)
         owner_user_id = _get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
-        ops = get_ctx().ops
+        ops = get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, name)
         if not _owned_bucket_exists(ops, user.user_id_prefix, full_name):
             raise R2BucketNotFoundError(full_name)
@@ -5037,7 +5100,7 @@ def delete_bucket_key_endpoint(request: Request, access_key_id: str) -> dict[str
         row = store.get_key(access_key_id)
         if row is None or row["owner_user_id"] != owner_user_id:
             raise HTTPException(status_code=404, detail="Key not found")
-        get_ctx().ops.delete_bucket_token(access_key_id)
+        get_cloudflare_ctx().ops.delete_bucket_token(access_key_id)
         store.delete_key(access_key_id)
         return {"status": "deleted"}
 
@@ -5061,7 +5124,7 @@ def create_storage_cleanup_grant(request: Request) -> dict[str, object]:
     'not_needed' no-op.
     """
     with handle_endpoint_errors():
-        ops = get_ctx().ops
+        ops = get_cloudflare_ctx().ops
         user = authenticate_request(request)
         entitlements = resolve_entitlements_for_user(request, user)
         key_store = get_key_store()
@@ -5113,7 +5176,7 @@ def recheck_storage_enforcement(request: Request) -> dict[str, object]:
     measurement.
     """
     with handle_endpoint_errors():
-        ops = get_ctx().ops
+        ops = get_cloudflare_ctx().ops
         user = authenticate_request(request)
         entitlements = resolve_entitlements_for_user(request, user)
         key_store = get_key_store()
@@ -6055,7 +6118,7 @@ def get_account(request: Request) -> dict[str, object]:
     to materialize an account's plan.
     """
     with handle_endpoint_errors():
-        ops = get_ctx().ops
+        ops = get_cloudflare_ctx().ops
         user = authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = _get_user_id_from_access_token(token)
@@ -6144,7 +6207,7 @@ def admin_get_account(request: Request, email: str) -> dict[str, object]:
     with handle_endpoint_errors():
         require_admin_key(request)
         entitlements = _admin_ensure_entitlements(email)
-        usage = compute_account_usage(get_ctx().ops, entitlements.user_id_prefix, entitlements.user_id)
+        usage = compute_account_usage(get_cloudflare_ctx().ops, entitlements.user_id_prefix, entitlements.user_id)
         return AccountInfoResponse(
             user_id=entitlements.user_id,
             email=email.strip().lower(),
@@ -6387,7 +6450,7 @@ def admin_run_backup_retention_reap(
     with handle_endpoint_errors():
         require_admin_key(request)
         result = run_backup_retention_reap(
-            get_ctx().ops,
+            get_cloudflare_ctx().ops,
             get_sync_store(),
             get_key_store(),
             get_orphan_bucket_store(),
@@ -6412,7 +6475,7 @@ def admin_run_r2_sweep(request: Request, email: str | None = None) -> dict[str, 
         require_admin_key(request)
         only_user_id = _resolve_user_id_by_email(email) if email else None
         counters = run_r2_quota_sweep(
-            get_ctx().ops,
+            get_cloudflare_ctx().ops,
             get_key_store(),
             get_entitlements_store(),
             get_grant_store(),
@@ -6457,7 +6520,11 @@ class SignInRequest(BaseModel):
 
 
 class AuthResponse(BaseModel):
-    status: str = Field(description="OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, FIELD_ERROR, or ERROR")
+    status: str = Field(
+        description=(
+            "OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, ACCOUNT_EXISTS_WITH_OTHER_METHOD, FIELD_ERROR, or ERROR"
+        )
+    )
     message: str | None = Field(default=None, description="Human-readable message for non-OK statuses")
     user: AuthUser | None = Field(default=None, description="User info when status is OK")
     tokens: SessionTokens | None = Field(default=None, description="Session tokens when status is OK")
@@ -6578,6 +6645,82 @@ def _require_supertokens_configured() -> None:
         raise HTTPException(status_code=503, detail="SuperTokens not configured on the server")
 
 
+# Status returned when a signup is refused because the email already has an
+# account under a different login method (e.g. a Google account exists and the
+# caller tries a password signup, or vice versa). Without this guard each
+# method would happily create its own SuperTokens user for the same email --
+# duplicate accounts with disjoint workspaces, keys, and entitlements.
+_ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS: Final[str] = "ACCOUNT_EXISTS_WITH_OTHER_METHOD"
+
+_EMAIL_PASSWORD_LOGIN_METHOD_ID: Final[str] = "emailpassword"
+
+_DISPLAY_NAME_BY_LOGIN_METHOD_ID: Final[dict[str, str]] = {
+    _EMAIL_PASSWORD_LOGIN_METHOD_ID: "email and password",
+    "google": "Google sign-in",
+    "github": "GitHub sign-in",
+}
+
+
+def _login_method_id(login_method: LoginMethod) -> str:
+    """The stable identifier of a login method: the third-party provider id, or the recipe id.
+
+    Only the 'emailpassword' and 'thirdparty' recipes are enabled on this app, but the SDK
+    type also allows 'passwordless'/'webauthn' methods; falling back to ``recipe_id`` keeps
+    the guard accurate (rather than misreporting such a method as email-and-password) if
+    another recipe is ever enabled.
+    """
+    if login_method.third_party is not None:
+        return login_method.third_party.id
+    return login_method.recipe_id
+
+
+def _existing_login_method_ids_for_email(email: str) -> set[str]:
+    """The login-method ids ('emailpassword' / third-party provider ids) already registered for ``email``."""
+    email_lower = email.strip().lower()
+    users = list_users_by_account_info(
+        tenant_id=_AUTH_TENANT_ID,
+        account_info=AccountInfoInput(email=email_lower),
+    )
+    method_ids: set[str] = set()
+    for user in users:
+        for login_method in user.login_methods:
+            if login_method.has_same_email_as(email_lower):
+                method_ids.add(_login_method_id(login_method))
+    return method_ids
+
+
+def _cross_method_signup_rejection(email: str, attempted_method_id: str) -> AuthResponse | None:
+    """The one-account-per-email guard shared by password signup and the OAuth callback.
+
+    Returns the rejection response when ``email`` is already registered under a
+    *different* login method than ``attempted_method_id``, and None when the
+    signup/sign-in may proceed. An email whose ``attempted_method_id`` account
+    already exists is deliberately allowed through: for OAuth that is a normal
+    returning sign-in, and for password signup the recipe's own
+    EMAIL_ALREADY_EXISTS answer is the accurate one. Pre-existing cross-method
+    duplicates therefore also keep both of their sign-ins working.
+    """
+    existing_method_ids = _existing_login_method_ids_for_email(email)
+    if not existing_method_ids or attempted_method_id in existing_method_ids:
+        return None
+    existing_method_names = " or ".join(
+        sorted(_DISPLAY_NAME_BY_LOGIN_METHOD_ID.get(method_id, method_id) for method_id in existing_method_ids)
+    )
+    logger.info(
+        "Refused %s signup for %s: the email is already registered via %s",
+        attempted_method_id,
+        email,
+        existing_method_names,
+    )
+    return AuthResponse(
+        status=_ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS,
+        message=(
+            f"An account for this email already exists using {existing_method_names}. "
+            "Sign in with that method instead."
+        ),
+    )
+
+
 @web_app.post("/auth/signup", response_model=AuthResponse)
 def auth_signup(body: SignUpRequest) -> AuthResponse:
     """Create a new email/password account and return a session + user info.
@@ -6594,6 +6737,12 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
             return AuthResponse(status="FIELD_ERROR", message="Email and password are required")
 
         try:
+            # One-account-per-email: refuse a password signup when the email
+            # already has an account under another login method (e.g. Google).
+            rejection = _cross_method_signup_rejection(email, _EMAIL_PASSWORD_LOGIN_METHOD_ID)
+            if rejection is not None:
+                return rejection
+
             result = ep_sign_up(tenant_id=_AUTH_TENANT_ID, email=email, password=body.password)
 
             if isinstance(result, EmailAlreadyExistsError):
@@ -6906,6 +7055,23 @@ def auth_oauth_callback(body: OAuthCallbackRequest) -> AuthResponse:
             return AuthResponse(status="ERROR", message="No email provided by the OAuth provider")
 
         email = oauth_user.email.id
+
+        # One-account-per-email: refuse the OAuth callback when the email
+        # already has an account under another login method (e.g. a password
+        # account). The provider dialog has already run by this point, but
+        # nothing has been written to SuperTokens yet -- returning here leaves
+        # no user, no session, and no partial state. A core outage during the
+        # lookup is surfaced as the same structured ERROR the other /auth/*
+        # endpoints return, so the typed desktop client gets a stable JSON
+        # shape rather than a FastAPI 500 body.
+        try:
+            rejection = _cross_method_signup_rejection(email, body.provider_id)
+        except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+            logger.error("SuperTokens SDK error during OAuth callback", exc_info=exc)
+            return AuthResponse(status="ERROR", message="Auth backend unavailable")
+        if rejection is not None:
+            return rejection
+
         result = manually_create_or_update_user(
             tenant_id=_AUTH_TENANT_ID,
             third_party_id=body.provider_id,
@@ -7003,6 +7169,7 @@ image = modal.Image.debian_slim().pip_install(
     "acme",
     "josepy",
     "pyjwt",
+    "cryptography",
 )
 app = modal.App(name=f"rsc-{_DEPLOY_ENV}", image=image)
 
@@ -7133,7 +7300,7 @@ def _connector_secrets() -> list[modal.Secret]:
     secrets=_connector_secrets(),
     # Warm-pool size driven by ``_MIN_CONTAINERS`` at the top of this
     # module: defaults to 1 for production / staging (avoid cold-boot
-    # penalty on auth / lease / tunnel hits from the desktop client) and
+    # penalty on auth / lease / share hits from the desktop client) and
     # 0 for dev (per-developer envs sit idle most of the time). Override
     # at deploy time with ``MINDS_MIN_CONTAINERS=<n>``. Mirrors the
     # equivalent block in apps/modal_litellm/app.py.
@@ -7203,7 +7370,9 @@ def _init_supertokens_once() -> None:
 )
 def r2_quota_sweep() -> dict[str, int]:
     _init_supertokens_once()
-    counters = run_r2_quota_sweep(get_ctx().ops, get_key_store(), get_entitlements_store(), get_grant_store())
+    counters = run_r2_quota_sweep(
+        get_cloudflare_ctx().ops, get_key_store(), get_entitlements_store(), get_grant_store()
+    )
     logger.info("R2 quota sweep done: %s", counters)
     return counters
 
@@ -7219,7 +7388,7 @@ def r2_quota_sweep() -> dict[str, int]:
 )
 def backup_retention_reap() -> dict[str, int]:
     counters = run_backup_retention_reap(
-        get_ctx().ops,
+        get_cloudflare_ctx().ops,
         get_sync_store(),
         get_key_store(),
         get_orphan_bucket_store(),

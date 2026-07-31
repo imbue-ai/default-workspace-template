@@ -19,6 +19,7 @@ from cryptography.x509.oid import NameOID
 from fastapi import HTTPException
 from jwt import algorithms as jwt_algorithms_rsa
 from starlette.testclient import TestClient
+from supertokens_python.recipe.emailpassword.interfaces import SignUpOkResult as EPSignUpOkResult
 
 import imbue.remote_service_connector.app as app_mod
 from imbue.remote_service_connector.app import DEFAULT_MAX_SHARED_WORKSPACES_PER_USER
@@ -166,6 +167,13 @@ def test_decide_frps_new_proxy_rejects_foreign_domains_and_empty_claims() -> Non
     assert decide_frps_new_proxy(domain, [foreign]).reject is True
     assert decide_frps_new_proxy(domain, [domain, foreign]).reject is True
     assert decide_frps_new_proxy(domain, []).reject is True
+
+
+def test_decide_frps_new_proxy_rejects_subdomain_claims() -> None:
+    # The relay never enables subdomain routing; rejecting the claim here keeps
+    # that guarantee independent of the relay's rendered frps config.
+    domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.imbueminds.com"
+    assert decide_frps_new_proxy(domain, [domain], claimed_subdomain="evil").reject is True
 
 
 def test_parse_relay_endpoint_map_parses_multiple_regions() -> None:
@@ -598,6 +606,33 @@ def test_issue_share_cert_rejects_token_of_inactive_share(monkeypatch: pytest.Mo
     assert resp.status_code == 401
 
 
+def test_issue_share_cert_rate_limits_per_share_per_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sixth issuance inside a day 429s before any ACME or DNS work happens."""
+    client, backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _STUB_HOST_ID}, headers=_share_headers()).json()
+    for _ in range(5):
+        backend.issued_cert_rows.append(
+            {
+                "workspace_domain": created["workspace_domain"],
+                "host_id": _STUB_HOST_ID,
+                "user_id": _STUB_USER_LABEL,
+                "ca_name": "test-ca",
+                "cert_chain_pem": "pem",
+                "sans": "[]",
+                "not_after": "2027-01-01T00:00:00+00:00",
+            }
+        )
+
+    resp = client.post(
+        "/shares/cert",
+        json={"csr_pem": _make_share_csr(created["workspace_domain"])},
+        headers={"Authorization": f"Bearer {created['relay_token']}"},
+    )
+
+    assert resp.status_code == 429
+    assert "last 24 hours" in resp.json()["detail"]
+
+
 def test_issue_share_cert_rejects_csr_with_wrong_names(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
     created = client.post("/shares", json={"host_id": _STUB_HOST_ID}, headers=_share_headers()).json()
@@ -621,7 +656,9 @@ def test_issue_share_cert_returns_chain_and_records_it(monkeypatch: pytest.Monke
     domain = created["workspace_domain"]
     chain = _make_self_signed_chain([domain, f"*.{domain}"])
 
-    def _stub_issue(csr_pem: str, dns_ops: object, account_store: object, ca_configs: list[object]) -> tuple[str, str]:
+    def _stub_issue(
+        csr_pem: str, dns_ops: object, account_store: object, ca_configs: list[app_mod.AcmeCaConfig]
+    ) -> tuple[str, str]:
         assert ca_configs and ca_configs[0].name == "letsencrypt"
         return chain, "letsencrypt"
 
@@ -685,6 +722,7 @@ def test_build_broker_jwks_matches_signing_key() -> None:
     assert key_entry["kid"]
     assert "=" not in key_entry["n"]
     reconstructed = jwt_algorithms_rsa.RSAAlgorithm.from_jwk(json.dumps(key_entry))
+    assert isinstance(reconstructed, rsa.RSAPublicKey)
     assert reconstructed.public_numbers() == _TEST_BROKER_KEY.public_key().public_numbers()
 
 
@@ -789,9 +827,40 @@ def test_broker_login_page_renders_form(monkeypatch: pytest.MonkeyPatch) -> None
     assert "<form method='post' action='/share/session'>" in resp.text
 
 
+def test_broker_session_rejects_cross_site_form_posts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A login POST whose Origin names another site is refused (login CSRF needs no cookie)."""
+    client, _backend, _st_backend = _make_broker_test_client(monkeypatch)
+
+    resp = client.post(
+        "/share/session",
+        data={"email": "alice@example.com", "password": "pw-123456", "mode": "signin"},
+        headers={"Origin": "https://evil.example"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 403
+
+
+def test_broker_session_accepts_a_same_origin_form_post(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend, st_backend = _make_broker_test_client(monkeypatch)
+    signup = st_backend.sign_up(tenant_id="public", email="carol@example.com", password="pw-123456")
+    assert isinstance(signup, EPSignUpOkResult)
+    st_backend.mark_email_verified(signup.user.id)
+
+    resp = client.post(
+        "/share/session",
+        data={"email": "carol@example.com", "password": "pw-123456", "mode": "signin", "next": "/"},
+        headers={"Origin": "http://testserver"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 303
+
+
 def test_broker_session_sets_cookie_and_redirects_for_verified_user(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend, st_backend = _make_broker_test_client(monkeypatch)
     signup = st_backend.sign_up(tenant_id="public", email="alice@example.com", password="pw-123456")
+    assert isinstance(signup, EPSignUpOkResult)
     st_backend.mark_email_verified(signup.user.id)
 
     resp = client.post(

@@ -68,9 +68,13 @@ _AGENT_B: AgentId = AgentId("agent-00000000000000000000000000000002")
 
 
 def test_render_landing_page_with_agents_lists_them_as_links() -> None:
+    # The plugin's /goto/ route is host-keyed: rows with a known host
+    # coordinate link via it, rows without one fall back to the agent id.
     ids = (_AGENT_A, _AGENT_B)
-    html = render_landing_page(accessible_agent_ids=ids)
-    assert f"/goto/{_AGENT_A}/" in html
+    host_a = "host-000000000000000000000000000000aa"
+    html = render_landing_page(accessible_agent_ids=ids, agent_host_ids={str(_AGENT_A): host_a})
+    assert f"/goto/{host_a}/" in html
+    assert f"/goto/{_AGENT_A}/" not in html
     assert f"/goto/{_AGENT_B}/" in html
     assert str(_AGENT_A) in html
     assert str(_AGENT_B) in html

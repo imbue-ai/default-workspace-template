@@ -382,6 +382,12 @@ class ForwardStreamManager(MutableModel):
             # Hostnames name hosts, so the resolver needs the host coordinate
             # to route ``host-<hex>.localhost`` requests back to this agent.
             self.resolver.set_agent_host(agent_id, str(agent.host_id))
+        else:
+            # The agent id came from delta.added_agent_ids, so a miss violates
+            # an aggregator invariant; without the host mapping this agent's
+            # host origin serves the loading page forever, so leave a
+            # breadcrumb rather than failing silently.
+            logger.warning("Added agent {} missing from the aggregator; host mapping not registered", agent_id)
         ssh_info = self._ssh_for_agent(agent_id)
         if ssh_info is not None:
             self.resolver.update_ssh_info(agent_id, ssh_info)

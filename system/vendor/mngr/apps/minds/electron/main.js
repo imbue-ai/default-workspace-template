@@ -213,7 +213,7 @@ function isCrashPageUrl(url) {
 // Classify a URL as "external" -- i.e. something that should open in the
 // user's default browser rather than inside the app. All in-app navigation
 // (the minds backend, the mngr_forward plugin, and every
-// `agent-<id>.localhost` workspace subdomain) lives on localhost, so anything
+// `host-<id>.localhost` workspace subdomain) lives on localhost, so anything
 // off-localhost over http(s), plus mail/tel links, is treated as external.
 // Non-web schemes (file:, about:, blob:, data:, devtools:, etc.) are internal
 // app machinery and must never be handed to shell.openExternal.
@@ -276,6 +276,14 @@ function sameWorkspaceId(a, b) {
 function toHostScopedWorkspaceId(workspaceId) {
   if (!workspaceId) return workspaceId;
   return workspaceHostIdByAgentId.get(workspaceId) || workspaceId;
+}
+
+// Backend surfaces that validate agent-<hex> ids (e.g. the /_chrome crumb
+// seed) need the AGENT coordinate; translate a host-keyed id when the alias
+// is known, else pass the id through.
+function toAgentScopedWorkspaceId(workspaceId) {
+  if (!workspaceId) return workspaceId;
+  return workspaceAgentIdByHostId.get(workspaceId) || workspaceId;
 }
 
 // Refresh the agent<->host alias maps from a workspaces payload row set
@@ -407,7 +415,9 @@ function focusBundle(bundle) {
 function computeTitleFor(bundle) {
   const agentId = bundle.currentWorkspaceId;
   if (agentId) {
-    const ws = workspaceList.find((w) => w.id === agentId);
+    // currentWorkspaceId is host-keyed (derived from content URLs) while the
+    // workspaceList rows are agent-keyed, so compare through the alias maps.
+    const ws = workspaceList.find((w) => sameWorkspaceId(w.id, agentId));
     const name = ws ? (ws.name || ws.id) : null;
     return name ? `${name} \u2014 Minds` : 'Minds';
   }
@@ -911,7 +921,7 @@ function createBundle() {
 
   // Defense in depth: the chrome view hosts ONLY trusted local pages served from
   // the backend origin. It must never navigate to untrusted agent content -- an
-  // ``agent-<id>.localhost`` subdomain or the ``/goto/<id>/`` auth bridge -- which
+  // ``host-<id>.localhost`` subdomain or the ``/goto/<id>/`` auth bridge -- which
   // belongs on the content view (caged relay preload, workspace-content session).
   // The trusted flow always hands agent URLs to navigateBundle via the
   // navigate-content bridge (sidebar rows, Landing rows, the create-complete
@@ -1276,7 +1286,7 @@ function wireContentViewEvents(bundle, contentView) {
       return;
     }
     // Non-agent URL. Defense in depth: the content view hosts ONLY foreign agent
-    // content (the ``agent-<id>.localhost`` subdomain / the ``/goto/`` auth
+    // content (the ``host-<id>.localhost`` subdomain / the ``/goto/`` auth
     // bridge). It must never navigate to a trusted minds page served from the
     // bare backend origin -- those render on the chrome surface with the full
     // preload bridge. Block any in-page attempt to load one here (e.g. a
@@ -1294,7 +1304,7 @@ function wireContentViewEvents(bundle, contentView) {
   // navigations, so a server redirect could still land a trusted backend-origin
   // page on the untrusted content surface. Route it to the chrome surface
   // instead. (The /goto auth bridge's own redirect targets the
-  // agent-<id>.localhost subdomain, not the backend origin, so it passes
+  // host-<id>.localhost subdomain, not the backend origin, so it passes
   // through untouched.)
   contentView.webContents.on('will-redirect', (event, url) => {
     if (isBackendOriginUrl(url)) {
@@ -1475,7 +1485,7 @@ function notifyOpenFailed(url) {
 
 // Whether a URL is served from the trusted minds backend's bare origin
 // (``http://localhost:<backendPort>``) -- i.e. a trusted local/native page, as
-// opposed to an agent subdomain (``agent-<id>.localhost``), the ``/goto`` plugin
+// opposed to an agent subdomain (``host-<id>.localhost``), the ``/goto`` plugin
 // origin (a different port), or an external site. Used by the content view's
 // navigation guard to keep trusted pages off the untrusted content surface.
 function isBackendOriginUrl(url) {
@@ -1599,7 +1609,9 @@ function loadLocalIntoChrome(bundle, absolute) {
 function accentColorForAgent(agentId) {
   if (!agentId || !latestChromeState.workspaces) return null;
   for (const w of latestChromeState.workspaces) {
-    if (w && w.id === agentId && typeof w.accent === 'string' && /^#[0-9a-f]{6}$/i.test(w.accent)) {
+    // The list rows are agent-keyed while the accent source can be host-keyed
+    // (workspace content); compare in either coordinate.
+    if (w && sameWorkspaceId(w.id, agentId) && typeof w.accent === 'string' && /^#[0-9a-f]{6}$/i.test(w.accent)) {
       return w.accent;
     }
   }
@@ -1638,7 +1650,9 @@ function ensureBundleChromeWrapper(bundle) {
     // until the content commits. chrome.js owns every later update.
     const params = new URLSearchParams();
     if (accent) params.set('accent', accent);
-    if (bundle.currentWorkspaceId) params.set('agent', bundle.currentWorkspaceId);
+    // The server-side crumb seed strictly validates agent-<hex>, while
+    // currentWorkspaceId is host-keyed for workspace content -- translate.
+    if (bundle.currentWorkspaceId) params.set('agent', toAgentScopedWorkspaceId(bundle.currentWorkspaceId));
     const query = params.toString();
     const url = backendBaseUrl + '/_chrome' + (query ? '?' + query : '');
     // Swapped in place when the persistent shell is live (instant, titlebar
@@ -1648,7 +1662,7 @@ function ensureBundleChromeWrapper(bundle) {
 }
 
 // Single choke point for driving what a window displays. Untrusted agent content
-// (agent-<id>.localhost / /goto/<id>/) goes to the content view (shown, floating
+// (host-<id>.localhost / /goto/<id>/) goes to the content view (shown, floating
 // over the /_chrome wrapper); every trusted local page goes to the chrome view,
 // which renders the titlebar + the page body itself (content view hidden). The
 // caller passes an absolute url or a backend-relative path. Enforces
@@ -2739,10 +2753,10 @@ function readLastLogLines(lineCount) {
 // restored window re-derives it from its own saved ``url`` (the content URL
 // it reopens to), so there is nothing per-window to remember.
 //
-// A workspace window's live content URL is on the agent subdomain
-// (``agent-<id>.localhost:<mngr_forward_port>/...``), whose host AND port both
-// change between runs, so it can't be replayed verbatim. ``toPersistedContentUrl``
-// canonicalises such windows to the port-independent ``/goto/<agent>/``
+// A workspace window's live content URL is on the workspace subdomain
+// (``host-<id>.localhost:<mngr_forward_port>/...``), whose port changes
+// between runs, so it can't be replayed verbatim. ``toPersistedContentUrl``
+// canonicalises such windows to the port-independent ``/goto/<host-id>/``
 // auth-bridge path; ``toRestoredContentUrl`` rebuilds the live workspace URL
 // from it on launch. The mind itself persists its panel layout server-side and
 // restores it on a fresh load of its root, so reopening the root is enough to
@@ -2802,20 +2816,21 @@ function parseRecoveryPageAgentId(url) {
 }
 
 // Canonicalise a window's live content URL into the form persisted in
-// ``window-state.json``. A workspace window's URL is on the agent subdomain
-// (``agent-<id>.localhost:<mngr_forward_port>/...``); stripping that to a bare
-// relative path loses the agent identity (the subdomain host) and would
-// reopen against the minds backend (the landing page) on restore. Persist the
-// port-independent ``/goto/<agent>/`` auth-bridge path instead -- it carries
-// the agent id, is recognised by ``parseWorkspaceId`` (so dead-workspace
-// filtering works), and ``toRestoredContentUrl`` rebuilds the live origin from
-// it. A window sitting on a workspace's RECOVERY page also persists as the
-// workspace itself: the recovery URL's ``return_to`` query embeds an absolute
-// URL on this session's forward origin, so persisting it verbatim would send
-// next session's restored window to a dead port (the restored recovery page
-// goes healthy and 302s to the stale return_to). Restoring into the workspace
-// re-enters recovery through the normal unhealthy-redirect with fresh
-// parameters if it is still down. Everything else persists as home ("/").
+// ``window-state.json``. A workspace window's URL is on the workspace
+// subdomain (``host-<id>.localhost:<mngr_forward_port>/...``); stripping that
+// to a bare relative path loses the workspace identity (the subdomain host)
+// and would reopen against the minds backend (the landing page) on restore.
+// Persist the port-independent ``/goto/<host-id>/`` auth-bridge path instead
+// -- it carries the host id, is recognised by ``parseWorkspaceId`` (so
+// dead-workspace filtering works), and ``toRestoredContentUrl`` rebuilds the
+// live origin from it. A window sitting on a workspace's RECOVERY page also
+// persists as the workspace itself: the recovery URL's ``return_to`` query
+// embeds an absolute URL on this session's forward origin, so persisting it
+// verbatim would send next session's restored window to a dead port (the
+// restored recovery page goes healthy and 302s to the stale return_to).
+// Restoring into the workspace re-enters recovery through the normal
+// unhealthy-redirect with fresh parameters if it is still down. Everything
+// else persists as home ("/").
 function toPersistedContentUrl(url) {
   const workspaceId = parseWorkspaceId(url) || parseRecoveryPageAgentId(url);
   // Persist host-keyed: content URLs already are, but a recovery URL reached
@@ -4488,7 +4503,7 @@ function handleNotification(event) {
 // Mirrors the cookie into the workspace content partition so any
 // chrome/iframe / WebContentsView using that partition is authenticated too.
 // Loopback hosts the `mngr forward` proxy serves under its self-signed cert:
-// the bare `localhost` origin, the `agent-<id>.localhost` workspace subdomains
+// the bare `localhost` origin, the `host-<id>.localhost` workspace subdomains
 // (`*.localhost`), and the `127.0.0.1` IP host. Every other host must fall
 // through to Chromium's normal verification.
 function isLoopbackHostname(hostname) {
@@ -4684,7 +4699,10 @@ ipcMain.on('open-request-modal', (event, requestId) => {
 // allowlisted `minds:open-help` postMessage. The agent id is re-validated here
 // (never trust the renderer) before being packed into the help URL.
 ipcMain.on('open-help', (event, agentId) => {
-  const scopedAgentId = typeof agentId === 'string' && /^agent-[a-f0-9]{1,64}$/i.test(agentId) ? agentId : '';
+  // Accept both workspace coordinates: the recovery page runs on host-keyed
+  // URLs (/agents/host-<hex>/recovery) and sends the host id, which the
+  // backend /help route resolves to the agent id itself.
+  const scopedAgentId = typeof agentId === 'string' && /^(?:agent|host)-[a-f0-9]{1,64}$/i.test(agentId) ? agentId : '';
   openHelp(getBundleFromEvent(event), scopedAgentId);
 });
 

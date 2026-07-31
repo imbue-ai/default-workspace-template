@@ -12,9 +12,9 @@
   the overlay would strand the app in the modal. Anything that must leave goes
   through window.minds.navigateContent (see workspace_settings_page.js).
 
-  data-mngr-forward-origin carries the plugin origin that serves /goto/<agent>/
-  (minds' own origin does not), so workspace_options.js can build the workspace
-  URL it falls back to when this page is loaded without the shell bridge.
+  data-mngr-forward-origin carries the plugin origin that serves the /goto/
+  bridge (minds' own origin does not), so workspace_options.js can build the
+  workspace URL it falls back to when loaded without the shell bridge.
   OverlaySurface wraps Base, which -- unlike ChromeShell -- adds no body
   attributes of its own, so it is set here.
 #}
@@ -35,7 +35,7 @@
                 body_style="-webkit-app-region: no-drag;"
                 body_attrs={{ _body_attrs }}
                 scripts={{ _scripts }}>
-  <WorkspaceOptionsShell :agent_id="agent_id" :tab="tab"
+  <WorkspaceOptionsShell :agent_id="agent_id" :host_id="host_id" :tab="tab"
                          :anchor_x="anchor_x" :anchor_y="anchor_y" :anchor_height="anchor_height"
                          :accent="current_color">
     <div data-wsopt-panel="share" class="flex-1 min-h-0 flex-col {{ 'flex' if tab == 'share' else 'hidden' }}">

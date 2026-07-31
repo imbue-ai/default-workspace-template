@@ -31,7 +31,7 @@
     requestAnimationFrame(tickProgress);
   }
 
-  // Enter the just-created workspace. redirectUrl is the /goto/<agent>/ URL.
+  // Enter the just-created workspace. redirectUrl is the /goto/<host-id>/ URL.
   // On the trusted chrome surface, hand it to the shell bridge so the
   // workspace opens in the caged content view instead of navigating this
   // (chrome) frame into untrusted agent content; a plain browser (no shell)
@@ -145,7 +145,8 @@
   // already be drained), so we poll the operation status. SSE is used only for
   // the live log stream. The create operation reports
   // {status, is_done, redirect_url, error, error_kind}; redirect_url is the
-  // absolute /goto/<agent>/ URL the server builds once the workspace is ready.
+  // absolute /goto/<host-id>/ URL the server builds once the workspace is
+  // ready.
   var statusPoll = null;
   function applyStatus(data) {
     if (!data) return;

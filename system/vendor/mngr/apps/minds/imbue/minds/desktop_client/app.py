@@ -111,7 +111,6 @@ from imbue.minds.desktop_client.responses import make_redirect_response
 from imbue.minds.desktop_client.responses import make_response
 from imbue.minds.desktop_client.responses import make_streaming_response
 from imbue.minds.desktop_client.responses import safe_local_redirect_path
-from imbue.minds.desktop_client.session_store import AccountSession
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.sharing_handler import delete_share_for_host
 from imbue.minds.desktop_client.state import DesktopClientState
@@ -1098,6 +1097,7 @@ def _handle_landing_page() -> Response:
         agent_names: dict[str, str] = {}
         agent_accents: dict[str, str] = {}
         agent_providers: dict[str, str] = {}
+        agent_host_ids: dict[str, str] = {}
         for aid in all_agent_ids:
             info = backend_resolver.get_agent_display_info(aid)
             ws_name = backend_resolver.get_workspace_name(aid)
@@ -1109,6 +1109,11 @@ def _handle_landing_page() -> Response:
             # Collapse the per-region / per-account provider instance name to a
             # single friendly compute-provider label (e.g. aws-us-west-2 -> AWS).
             agent_providers[str(aid)] = friendly_provider_label(info.provider_name if info else None)
+            # The plugin's /goto/ route is host-keyed; rows without a known
+            # host coordinate are omitted and fall back to the agent id.
+            host_coordinate = _workspace_host_coordinate(info, landing_session_store, str(aid))
+            if host_coordinate:
+                agent_host_ids[str(aid)] = host_coordinate
         shutdown_capable_agent_ids = get_shutdown_capable_workspace_agent_ids(backend_resolver)
         mind_liveness_by_agent_id = {
             aid: state.value for aid, state in compute_mind_liveness_by_agent_id(backend_resolver).items()
@@ -1122,6 +1127,7 @@ def _handle_landing_page() -> Response:
             shutdown_capable_agent_ids=shutdown_capable_agent_ids,
             mind_liveness_by_agent_id=mind_liveness_by_agent_id,
             agent_providers=agent_providers,
+            agent_host_ids=agent_host_ids,
             account_email=launcher_email,
             extra_account_count=launcher_extra_count,
             remote_workspaces=remote_workspaces,
@@ -3347,9 +3353,7 @@ class _WorkspaceContext(FrozenModel):
     current_account: object | None = Field(description="The account this workspace is associated with, if any.")
     accounts: tuple[object, ...] = Field(description="Every signed-in account, offered by the Associate prompt.")
     servers: tuple[str, ...] = Field(description="The service names this workspace has registered.")
-    host_id: str = Field(
-        description="The machine's host-<hex> coordinate (keys the sharing API); empty when unknown."
-    )
+    host_id: str = Field(description="The machine's host-<hex> coordinate (keys the sharing API); empty when unknown.")
     account_email: str = Field(description="The associated account's email, empty when unassociated.")
     has_account: bool = Field(description="Whether the workspace is associated with an account at all.")
     is_leased_imbue_cloud: bool = Field(
@@ -4150,6 +4154,11 @@ def create_desktop_client(
         view_func=_handle_sharing_redirect,
         endpoint="sharing_redirect_service",
     )
+    app.add_url_rule(
+        "/sharing/<agent_id>/<service_name>/modal",
+        view_func=_handle_sharing_redirect,
+        endpoint="sharing_redirect_modal",
+    )
 
     # Agent create-attempt routes. The create form now submits to POST
     # /api/v1/workspaces and /creating/<id> polls the v1 operations resource, so
@@ -4259,8 +4268,11 @@ def _run_system_interface_health_probe_loop(
                 # Workspace origins are keyed by host id; an agent whose host
                 # coordinate discovery hasn't supplied yet cannot be probed and
                 # counts as failing (matching what the plugin would answer).
+                # Require the real host-<hex> shape: the resolver interface's
+                # placeholder ("localhost") would probe the unroutable vhost
+                # localhost.localhost.
                 display_info = backend_resolver.get_agent_display_info(aid)
-                if display_info is None or not display_info.host_id:
+                if display_info is None or not str(display_info.host_id).startswith("host-"):
                     tracker.record_probe_failure(aid)
                     continue
                 probe_status = probe_workspace_through_plugin(

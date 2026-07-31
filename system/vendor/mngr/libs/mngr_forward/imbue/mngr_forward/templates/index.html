@@ -25,7 +25,12 @@
     <ul>
       {% for entry in agents %}
         <li class="{% if entry.is_unresolved %}unresolved{% endif %}">
-          <a href="/goto/{{ entry.host_id }}/">{{ entry.agent_id }}</a>
+          {% if entry.host_id %}
+            <a href="/goto/{{ entry.host_id }}/">{{ entry.agent_id }}</a>
+          {% else %}
+            {# No host known yet: an anchor would point at the broken /goto// #}
+            <span>{{ entry.agent_id }}</span>
+          {% endif %}
           {% if entry.is_unresolved %}<span class="reason">{{ entry.reason }}</span>{% endif %}
         </li>
       {% endfor %}

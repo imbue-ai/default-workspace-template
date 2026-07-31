@@ -9,14 +9,12 @@
 // #ws-share-config. Everything is guarded on its own elements, which is what
 // lets a surface omit a pane.
 //
-// Sharing is per (workspace, service). "Whole machine" is not a special case:
-// it is the workspace's own web UI service (system_interface), shared through
-// the same tunnel + Cloudflare Access policy as any app. Each target therefore
-// keeps its own independent state, cached here per target so switching back
-// and forth does not re-shell-out to the imbue_cloud connector.
+// Sharing is machine-level: one share per machine with a single grants
+// document, onto which the pane maps its per-target view ("Whole machine" or
+// one app). See the Share machine pane section below for the full model.
 //
 // The ACL is rebuilt with DOM methods (never innerHTML) so a crafted email
-// cannot inject script, matching sharing.js.
+// cannot inject script.
 
 (function () {
   'use strict';
@@ -31,20 +29,22 @@
 
   // Dismissal: in Electron the panel is an overlay iframe, so it must ask the
   // shell to tear the overlay down; as a plain page there is nothing to close,
-  // so fall back to the workspace. ``/goto/<agent>/`` is served by the mngr
+  // so fall back to the workspace. The ``/goto/`` bridge is served by the mngr
   // forward plugin, NOT by minds' own origin, so it needs the plugin origin the
-  // page carries on its body (same read as sharing.js / sidebar.js); without
-  // one there is no workspace URL to build, so land on the workspace list.
+  // page carries on its body (same read as sidebar.js); without one there is
+  // no workspace URL to build, so land on the workspace list.
   window.dismissWorkspaceOptions = function () {
     var backdrop = document.getElementById('ws-options-backdrop');
-    var agentId = backdrop ? backdrop.dataset.agentId : '';
+    // The /goto/ route is host-keyed; the agent id is only the last resort
+    // when no host coordinate is known (same degrade as the landing rows).
+    var workspaceId = backdrop ? (backdrop.dataset.hostId || backdrop.dataset.agentId) : '';
     if (window.minds && window.minds.closeModal) {
       window.minds.closeModal();
       return;
     }
     var mngrForwardOrigin = (document.body && document.body.dataset.mngrForwardOrigin) || '';
-    window.location.href = agentId && mngrForwardOrigin
-      ? mngrForwardOrigin + '/goto/' + encodeURIComponent(agentId) + '/'
+    window.location.href = workspaceId && mngrForwardOrigin
+      ? mngrForwardOrigin + '/goto/' + encodeURIComponent(workspaceId) + '/'
       : '/';
   };
 
@@ -58,9 +58,9 @@
     // overlay guard only blocks FOREIGN origins, so a same-origin href (the
     // backups page's "View all backups", the Associate prompt's sign-in link)
     // would load a full page into the modal view and strand the app there.
-    // Hand those to the shell instead and dismiss, the way SharingModal does
-    // for its own sign-in link. Only present on the overlay surface -- the
-    // browser-mode page and the standalone settings page navigate normally.
+    // Hand those to the shell instead and dismiss. Only present on the
+    // overlay surface -- the browser-mode page and the standalone settings
+    // page navigate normally.
     document.addEventListener('click', function (event) {
       if (!window.minds || !window.minds.navigateContent) return;
       // Let the browser handle new-tab / new-window intents unchanged.
@@ -288,6 +288,12 @@
     if (knownTargets.indexOf(button.dataset.shareTarget) < 0) knownTargets.push(button.dataset.shareTarget);
   });
   if (knownTargets.indexOf(wholeService) < 0) knownTargets.push(wholeService);
+
+  // A ?target= naming something that is not rendered (e.g. a legacy link to a
+  // service the DNS-safe filter now excludes) must not become the selection:
+  // document builds iterate only knownTargets, so edits staged on a phantom
+  // target would be silently dropped from every write.
+  if (knownTargets.indexOf(currentTarget) < 0) currentTarget = wholeService;
 
   function el(id) { return document.getElementById(id); }
 
@@ -676,6 +682,16 @@
     requestWithErrorCheck(shareApiBase, { method: 'GET' })
       .then(function (response) { return response.json(); })
       .then(function (data) {
+        // grants: null means the machine is shared but the grants read never
+        // landed. That is a failed read, not an empty policy -- adopting it
+        // would render every grantee as revoked and let an edit replace a
+        // policy nobody ever saw.
+        if (data && data.enabled && !data.grants) {
+          machine.failed = true;
+          renderTarget();
+          showError('Could not load sharing status -- select a target again to retry.');
+          return;
+        }
         syncFromDocument(data);
         // An already-published link is assumed live: the provisioning wait
         // only applies to a share this session just created.

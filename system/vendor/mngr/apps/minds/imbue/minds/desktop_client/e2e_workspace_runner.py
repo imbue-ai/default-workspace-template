@@ -57,7 +57,7 @@ _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[5]
 
 # The contentView page URL contains ``/_chrome`` only for the chrome
 # (sidebar/title-bar) view; the main content view never does. We match the
-# pure-localhost backend pages, not the ``agent-<id>.localhost`` proxy.
+# pure-localhost backend pages, not the ``host-<id>.localhost`` proxy.
 # The capturing group exposes the bare origin (``http://localhost:<port>``)
 # so :func:`_backend_origin_from_page` can reuse the same pattern instead of
 # re-encoding the localhost-origin contract a second time.
@@ -631,7 +631,7 @@ def _wait_for_workspace_ready_or_failure(browser: Browser, creating_page: Page, 
     DIFFERENT WebContentsViews (separate CDP pages):
 
     - **success**: the ready workspace opens on the CONTENT view -- its own page
-      on the ``agent-<id>.localhost`` origin. ``creating.js`` hands the ready
+      on the ``host-<id>.localhost`` origin. ``creating.js`` hands the ready
       workspace's ``/goto`` URL to the ``window.minds`` bridge, which shows it on
       the content surface while the chrome view that drove the form
       (``creating_page``) returns to the ``/_chrome`` wrapper. (Before the split

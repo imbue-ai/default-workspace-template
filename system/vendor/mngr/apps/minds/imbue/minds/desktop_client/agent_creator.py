@@ -2659,7 +2659,7 @@ class AgentCreator(MutableModel):
                     on_created(canonical_id, canonical_host_id)
 
                 # Configure restic backups asynchronously on a detached
-                # thread (mirrors the Cloudflare tunnel-token path): bucket
+                # thread: bucket
                 # create attempt + injection is a multi-second round-trip we don't
                 # want to block the redirect on, and a failure here is
                 # non-fatal to the already-created workspace. Skipped (no

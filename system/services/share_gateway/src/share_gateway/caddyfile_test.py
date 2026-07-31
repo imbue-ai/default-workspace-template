@@ -68,6 +68,11 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
 
     assert "forward_auth 127.0.0.1:8791" in rendered
     assert "uri /_auth/verify" in rendered
+    assert "header_up X-Forwarded-Upgrade {header.Upgrade}" in rendered
+    # The auth subrequest must not itself look like a WebSocket upgrade: the
+    # gateway's WSGI server 400s WS handshakes, which would deny every WS
+    # connection at the auth step.
+    assert "header_up -Upgrade" in rendered
     assert "copy_headers X-Share-Filtered-Cookie>Cookie" in rendered
     assert "handle /_auth/*" in rendered
     assert "rewrite * /_auth/loading" in rendered

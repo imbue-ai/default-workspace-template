@@ -13,6 +13,11 @@
 # restarts the units. Re-render + redeploy to change anything -- never
 # hand-edit on the host.
 
+# Refresh the apt cache first: base images commonly ship with a stale/empty
+# cache, and a failed package install would only surface later when `deploy`
+# tries to restart the missing services.
+package_update: true
+
 packages:
   - nftables
   - caddy
