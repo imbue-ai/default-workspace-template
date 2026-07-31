@@ -252,7 +252,7 @@ Email-addressed operator management of per-account entitlements, authenticated b
 
 These endpoints front the SuperTokens core so that clients (e.g. the `minds` desktop client) never need the SuperTokens API key. They require `SUPERTOKENS_CONNECTION_URI` (and usually `SUPERTOKENS_API_KEY`) to be configured on the server; otherwise they return 503. All of them are unauthenticated *except* `/auth/session/revoke`, which must be called with the caller's own access token (see below).
 
-- `POST /auth/signup` -- Body: `{email, password}`. Returns status, user info, session tokens, and whether email verification is pending.
+- `POST /auth/signup` -- Body: `{email, password}`. Returns status, user info, session tokens, and whether email verification is pending. Refused with status `ACCOUNT_EXISTS_WITH_OTHER_METHOD` when the email is already registered under a different login method (e.g. Google).
 - `POST /auth/signin` -- Body: `{email, password}`. Returns status, user info, session tokens, and whether email verification is pending.
 - `POST /auth/session/refresh` -- Body: `{refresh_token}`. Returns a new access/refresh token pair.
 - `POST /auth/session/revoke` -- Header: `Authorization: Bearer <access_token>`. Revokes every SuperTokens session for the caller's user. The user_id is derived from the access token, so an anonymous caller cannot revoke another user's sessions. Called on sign-out so that access/refresh tokens stored on the client's machine become useless even if copied off-box.
@@ -263,5 +263,5 @@ These endpoints front the SuperTokens core so that clients (e.g. the `minds` des
 - `POST /auth/password/reset` -- Body: `{token, new_password}`. Consumes a reset token and sets a new password.
 - `GET /auth/reset-password?token=...` -- Renders an HTML form. Used by the link inside password-reset emails.
 - `POST /auth/oauth/authorize` -- Body: `{provider_id, callback_url}`. Returns the URL to redirect the user to.
-- `POST /auth/oauth/callback` -- Body: `{provider_id, callback_url, query_params}`. Exchanges OAuth params for a session.
+- `POST /auth/oauth/callback` -- Body: `{provider_id, callback_url, query_params}`. Exchanges OAuth params for a session. Refused with status `ACCOUNT_EXISTS_WITH_OTHER_METHOD` (before any user is created) when the email already has a password or other-provider account.
 - `GET /auth/users/{user_id}` -- Returns basic info about a user (email, login provider).

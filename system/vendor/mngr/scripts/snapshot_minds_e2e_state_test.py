@@ -14,6 +14,10 @@ python manifests tree must cover every uv workspace member's pyproject.toml
 (a missing member manifest breaks the manifests-only
 ``uv sync --no-install-workspace`` layer), and the pnpm tree must contain
 exactly what ``pnpm install --frozen-lockfile`` reads.
+
+Finally, the in-sandbox runner program (a Python program held in a string and
+executed via ``python -c`` inside the sandbox) is compile-checked, so a syntax
+error in it fails here instead of after the multi-minute image build in CI.
 """
 
 import re
@@ -23,6 +27,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from scripts.snapshot_minds_e2e_state import _IN_SANDBOX_RUNNER_PROGRAM
 from scripts.snapshot_minds_e2e_state import _PNPM_MANIFEST_RELATIVE_PATHS
 from scripts.snapshot_minds_e2e_state import _python_manifest_relative_paths
 from scripts.snapshot_minds_e2e_state import _stage_dep_manifest_trees
@@ -172,3 +177,15 @@ def test_stage_dep_manifest_trees_copy_only_manifest_files(tmp_path: Path) -> No
     assert all(Path(path).name in ("pyproject.toml", "uv.lock") for path in python_files)
     pnpm_files = {path.relative_to(pnpm_tree).as_posix() for path in pnpm_tree.rglob("*") if path.is_file()}
     assert pnpm_files == set(_PNPM_MANIFEST_RELATIVE_PATHS)
+
+
+def test_in_sandbox_runner_program_is_valid_python() -> None:
+    """The ``python -c`` runner program string must at least be syntactically valid.
+
+    The program only ever executes inside the Modal sandbox, after the
+    multi-minute image build and dockerd bring-up -- a syntax error there is
+    the most expensive possible way to discover a typo in the string. This
+    guard cannot vouch for imports or runtime behavior (those need the real
+    sandbox), but it catches the cheap-to-catch failure mode at unit-test time.
+    """
+    compile(_IN_SANDBOX_RUNNER_PROGRAM, "<in-sandbox-runner-program>", "exec")
