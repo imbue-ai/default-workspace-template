@@ -42,6 +42,9 @@ from typing import Callable
 from loguru import logger as _loguru_logger
 from watchdog.observers import Observer
 
+from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
+from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.codex_session_parser import parse_codex_rollout_line
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.system_interface.watcher_common import WakeOnChangeHandler
@@ -65,7 +68,7 @@ _MARKER_RELATIVE = Path("codex_transcript_path")
 _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
 
 
-class CodexSessionWatcher:
+class CodexSessionWatcher(AgentSessionWatcher):
     """Watches a codex agent's raw rollout file and emits parsed UI events."""
 
     # Instance attributes declared at class level so a `build()` classmethod (no
@@ -88,14 +91,12 @@ class CodexSessionWatcher:
     _observer: Any
 
     @classmethod
-    def build(
-        cls,
-        agent_id: str,
-        agent_state_dir: Path,
-        on_events: Callable[[str, list[dict[str, Any]]], None],
-    ) -> "CodexSessionWatcher":
+    def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "CodexSessionWatcher":
+        """Build from the agent record. Codex needs only the state dir: its rollout lives
+        under the per-agent CODEX_HOME there, so ``claude_config_dir`` is never read."""
+        agent_state_dir = agent_info.agent_state_dir
         self = cls.__new__(cls)
-        self._agent_id = agent_id
+        self._agent_id = agent_info.id
         # Marker file holding the active rollout's absolute path (rewritten each turn,
         # so it follows rotation), and the sessions dir we watchdog.
         self._marker_path = agent_state_dir / _MARKER_RELATIVE
