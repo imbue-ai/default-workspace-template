@@ -102,6 +102,12 @@ def render_caddyfile(
     admin localhost:2019
     auto_https off
     https_port {https_port}
+    servers {{
+        # h1/h2 only: h3 is UDP, which the SNI-passthrough relay can never
+        # carry, so advertising it (Alt-Svc) just makes browsers probe a
+        # dead path before falling back.
+        protocols h1 h2
+    }}
 }}
 
 https://{workspace_domain}:{https_port}, https://*.{workspace_domain}:{https_port} {{

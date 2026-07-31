@@ -77,6 +77,9 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     assert "handle /_auth/*" in rendered
     assert "rewrite * /_auth/loading" in rendered
     assert "auto_https off" in rendered
+    # h1/h2 only: h3 is UDP and cannot traverse the SNI-passthrough relay, so
+    # it must not be advertised via Alt-Svc.
+    assert "protocols h1 h2" in rendered
 
 
 def test_caddyfile_without_shell_still_renders() -> None:
