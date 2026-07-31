@@ -512,17 +512,17 @@ name = "browser-use-core"
 version = "0.13.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "beautifulsoup4" },
-    { name = "cdp-use" },
-    { name = "curl-cffi" },
-    { name = "fetch-use" },
-    { name = "lxml" },
-    { name = "pandas" },
-    { name = "pillow" },
-    { name = "pypdf" },
-    { name = "requests" },
-    { name = "tabulate" },
-    { name = "websocket-client" },
+    { name = "beautifulsoup4", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "cdp-use", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "curl-cffi", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "fetch-use", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "lxml", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "pandas", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "pillow", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "pypdf", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "requests", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "tabulate", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "websocket-client", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e3/ec/ab55e6127ed9dcafef3a5c030c992f0dc9ed2751f8505e2b849ffdc1f7e3/browser_use_core-0.13.1-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:5963365bef99d621a2ee678ade53458f032a17290d0b5810ceec6fd46f6d03ee", size = 25267945, upload-time = "2026-06-10T00:48:53.763Z" },
@@ -958,9 +958,9 @@ name = "curl-cffi"
 version = "0.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "certifi" },
-    { name = "cffi" },
-    { name = "rich" },
+    { name = "certifi", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "cffi", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "rich", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/48/5b/89fcfebd3e5e85134147ac99e9f2b2271165fd4d71984fc65da5f17819b7/curl_cffi-0.15.0.tar.gz", hash = "sha256:ea0c67652bf6893d34ee0f82c944f37e488f6147e9421bef1771cc6545b02ded", size = 196437, upload-time = "2026-04-03T11:12:31.525Z" }
 wheels = [
@@ -2619,9 +2619,9 @@ name = "pandas"
 version = "3.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy" },
-    { name = "python-dateutil" },
-    { name = "tzdata", marker = "sys_platform == 'win32'" },
+    { name = "numpy", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "python-dateutil", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "tzdata", marker = "(platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/4f/5f3422a2afec5ffc46308b79e53291365a93748b498ac2e58bead0197916/pandas-3.0.5.tar.gz", hash = "sha256:dca3734d6ab7c906e6730f0788b0a1dbb9f2467731f9711f77995c8e9d62d712", size = 4658219, upload-time = "2026-07-22T22:19:28.819Z" }
 wheels = [
@@ -2669,6 +2669,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1f/e7/81fdcbc7f190cdb058cffc9431587eb289833bdd633e2002455ca9bb13d4/paramiko-4.0.0.tar.gz", hash = "sha256:6a25f07b380cc9c9a88d2b920ad37167ac4667f8d9886ccebd8f90f654b5d69f", size = 1630743, upload-time = "2025-08-04T01:02:03.711Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/90/a744336f5af32c433bd09af7854599682a383b37cfd78f7de263de6ad6cb/paramiko-4.0.0-py3-none-any.whl", hash = "sha256:0e20e00ac666503bf0b4eda3b6d833465a2b7aff2e2b3d79a8bba5ef144ee3b9", size = 223932, upload-time = "2025-08-04T01:02:02.029Z" },
+]
+
+[[package]]
+name = "pcmflux"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/ac/86cc0ec075eaae8eec057d1ad391c53bd3c600fd069cc9f0f5b08b868865/pcmflux-2.0.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:4f8d6a245d51c9523a4420ccdc3549f2b77b8ec88e6ca16d058a1c01c5d4f77f", size = 3497503, upload-time = "2026-07-17T17:34:34.696Z" },
+    { url = "https://files.pythonhosted.org/packages/61/ca/4b00cfa09f9c50adbc67882485fcea05cf3faf3d7ae2db37480d45d1af82/pcmflux-2.0.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:97fa0a0a8bd21defb747cf6dfb1d0b68c5e1900347b23273456f121a2c184c65", size = 3720959, upload-time = "2026-07-17T17:34:35.931Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/26/164efd38f0f1280c06ed5523422735510ae0bc44559c6a3dde49381d2726/pcmflux-2.0.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:c49abe0f3ee9387dc40ca52ad96bcee7e24b7b47d978f8afb98dc9193e180252", size = 1912538, upload-time = "2026-07-17T17:34:37.453Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/e2/6af30d83dd1d8532f547d60e8339f45770dd648892dd9d49a09dc87f8269/pcmflux-2.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3b73e9bce2236a86bdf1135f3b1fbc23642e04094b87b51ffaf3de4de0460dba", size = 2033427, upload-time = "2026-07-17T17:34:39.324Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/9b/e4bf1d7da63951e3ca5c9dc57a6e0e41e0275b4451d55d7bb63bfe78b39b/pcmflux-2.0.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:c092419a228ba92058b2b1982ca6190006ea8fe207463dcdfcf6a5632c57bd4d", size = 3496998, upload-time = "2026-07-17T17:34:40.662Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/e5/ab80cd4d0b111bcda3cfe211a2f84b961dabaea8e1c9fb8e9118ca533e89/pcmflux-2.0.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:28ec2b33327085b00d9c5773e8093b85256837bca03257b167869c9ab4584ab1", size = 3720206, upload-time = "2026-07-17T17:34:42.13Z" },
+    { url = "https://files.pythonhosted.org/packages/13/8f/cfc355979d3b573050f31fb3f24409964df7c7450c4718dfe681bb9a1131/pcmflux-2.0.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:8195667a366f5a76ec6cfcc096e564ae3ce77bee17c20f89f858a42c8f9673ac", size = 1911988, upload-time = "2026-07-17T17:34:43.454Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/25/653ca49b0eefde185a417e80f333a61d319cc338e425bf93327c02f89b48/pcmflux-2.0.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:dc37be36026f578d7068b2ea68d39a1484051619966c608c6db29b7edc512a1a", size = 2032633, upload-time = "2026-07-17T17:34:44.963Z" },
+    { url = "https://files.pythonhosted.org/packages/78/28/a4209023b9d3420814e3d79dc179ef11eddf89b15bc1a1b15eaeb473967f/pcmflux-2.0.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:d19c1f2c9773eb3e185f92e34ff331cfb5d2546d07494332f32e8aaa8f41f647", size = 3497279, upload-time = "2026-07-17T17:34:46.265Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/69/99bb9d02fe925a0f38d9359e0761a9d38d831c293eba71654f3d29f13acf/pcmflux-2.0.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:050a8c7d7c099ee363279f085cab65e5f9891dc6ab9481a3edf64a901d276352", size = 3720558, upload-time = "2026-07-17T17:34:47.593Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/95/724be40b85fe8ee64381211cbf64c09dd7668e1a81747eda383c17f3f54c/pcmflux-2.0.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:09ff0496f5e1f46b7f092cf07b3ccf7be27ef4c1d910ec29e6420f7094576e91", size = 1912333, upload-time = "2026-07-17T17:34:48.879Z" },
+    { url = "https://files.pythonhosted.org/packages/12/b0/58a9201f2110400ce6a3ed5974484acad536632e61870d387de518616bad/pcmflux-2.0.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:64fa58c7004c9719b87342fab273b50a618cf39d8021455d3df0f124d2e61d0f", size = 2033011, upload-time = "2026-07-17T17:34:50.126Z" },
 ]
 
 [[package]]
@@ -6711,6 +6730,7 @@ dependencies = [
     { name = "flask" },
     { name = "flask-sock" },
     { name = "loguru" },
+    { name = "pcmflux" },
     { name = "pixelflux" },
     { name = "python-xlib" },
     { name = "simple-websocket" },
@@ -6722,6 +6742,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "loguru", specifier = ">=0.7" },
+    { name = "pcmflux", specifier = ">=2.0.0" },
     { name = "pixelflux", specifier = ">=2.0.0" },
     { name = "python-xlib", specifier = ">=0.33" },
     { name = "simple-websocket", specifier = ">=1.0" },

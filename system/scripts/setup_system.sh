@@ -75,7 +75,7 @@ apt-get install -y --no-install-recommends \
 # at import -- without libva its import raises (guarded in videopipe.py) --
 # plus xdpyinfo, which videopipe uses to size the capture. Small enough to bake.
 apt-get install -y --no-install-recommends \
-    libva2 libva-drm2 libva-x11-2 libpixman-1-0 x11-utils pulseaudio pulseaudio-utils ffmpeg
+    libva2 libva-drm2 libva-x11-2 libpixman-1-0 x11-utils pulseaudio pulseaudio-utils
 rm -rf /var/lib/apt/lists/*
 
 # The Debian `supervisor` package enables a systemd unit that immediately starts

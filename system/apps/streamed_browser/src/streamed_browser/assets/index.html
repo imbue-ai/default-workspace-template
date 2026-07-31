@@ -30,7 +30,6 @@
   <canvas id="screen" tabindex="0"></canvas>
   <div id="clipchip"></div>
 </div>
-<script src="jsmpeg.min.js"></script>
 <script>
 "use strict";
 // Viewer for the streamed-browser service, stripe mode (the Selkies client's
@@ -164,7 +163,7 @@ function connect() {
     return created;
   }
 
-  socket.onopen = () => { retryDelay = 500; status.textContent = "starting browser…"; connectAudio(); };
+  socket.onopen = () => { retryDelay = 500; status.textContent = "starting browser…"; };
   socket.onmessage = (event) => {
     lastAnything = performance.now();
     if (typeof event.data === "string") {
@@ -194,6 +193,7 @@ function connect() {
       return;
     }
     const packet = new Uint8Array(event.data);
+    if (packet[0] === 0x01) { playAudio(packet.subarray(1)); return; }  // Opus chunk
     if (packet.byteLength <= HEADER_LEN || packet[0] !== 0x04) return;
     lastVideo = performance.now();
     const view = new DataView(event.data);
@@ -219,19 +219,84 @@ function connect() {
   };
 }
 
-// --- audio (jsmpeg: MPEG-TS/MP2 over its own socket) -------------------------
-// jsmpeg owns demux + decode + WebAudio scheduling + jitter buffer, so there is
-// no hand-written playback here. The server only sends audio while sound plays
-// (ffmpeg is gated on the sink state), so the socket is simply quiet otherwise.
-let jsmpegPlayer = null;
-function connectAudio() {
-  if (jsmpegPlayer || !("JSMpeg" in window)) return;
-  const url = new URL("audio", document.baseURI);
-  url.protocol = (url.protocol === "https:") ? "wss:" : "ws:";
-  jsmpegPlayer = new JSMpeg.Player(url.href, { audio: true, video: false, autoplay: true });
+// --- audio playback (Opus over WebCodecs -> AudioWorklet) --------------------
+// Server sends mono Opus chunks (magic byte 0x01) interleaved on the SAME
+// socket, only while the tab actually makes sound (pcmflux's sample-level
+// silence gate), so this stays idle otherwise. WebCodecs AudioDecoder outputs
+// f32-planar; we duplicate mono to L/R and hand it to a tiny worklet with a
+// bounded drop-oldest jitter buffer that absorbs decode/network jitter.
+let audioCtx = null, audioNode = null, audioDecoder = null, audioReady = false, audioTs = 0;
+// Interleaved-stereo sample ring buffer. Incoming Opus frames are 960 samples
+// (20ms) but process() runs on 128-sample quanta, so we MUST buffer samples and
+// drain exactly what each quantum needs -- shifting a whole frame per quantum
+// (the previous bug) discarded ~7/8 of every frame and cackled. Pre-buffer a
+// little before draining so decode/network jitter doesn't underrun; on overflow
+// drop oldest (bounded latency), on underrun output silence.
+const AUDIO_WORKLET = `
+class PB extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.cap = 48000 * 2 * 2;          // ~2s stereo
+    this.ring = new Float32Array(this.cap);
+    this.read = 0; this.write = 0; this.size = 0;
+    this.priming = true;
+    this.PRIME = 48000 * 2 * 0.06;      // ~60ms before playback starts
+    this.port.onmessage = (e) => {
+      const f = e.data;
+      for (let i = 0; i < f.length; i++) { this.ring[this.write] = f[i]; this.write = (this.write + 1) % this.cap; }
+      this.size += f.length;
+      if (this.size > this.cap) { const drop = this.size - this.cap; this.read = (this.read + drop) % this.cap; this.size = this.cap; }
+      if (this.priming && this.size >= this.PRIME) this.priming = false;
+    };
+  }
+  process(_inputs, outputs) {
+    const o = outputs[0], n = o[0].length;
+    for (let i = 0; i < n; i++) {
+      if (!this.priming && this.size >= 2) {
+        o[0][i] = this.ring[this.read]; this.read = (this.read + 1) % this.cap;
+        o[1][i] = this.ring[this.read]; this.read = (this.read + 1) % this.cap;
+        this.size -= 2;
+      } else {
+        o[0][i] = 0; o[1][i] = 0;
+        if (this.size < 2) this.priming = true;  // ran dry -> re-prime before resuming
+      }
+    }
+    return true;
+  }
 }
-// AudioContext starts suspended until a gesture; the pane is click-driven.
-window.addEventListener("pointerdown", () => jsmpegPlayer && jsmpegPlayer.audioOut && jsmpegPlayer.audioOut.unlock && jsmpegPlayer.audioOut.unlock(), true);
+registerProcessor('pb', PB);`;
+async function ensureAudio() {
+  if (audioCtx) return;
+  audioCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
+  const url = URL.createObjectURL(new Blob([AUDIO_WORKLET], { type: "application/javascript" }));
+  await audioCtx.audioWorklet.addModule(url);
+  audioNode = new AudioWorkletNode(audioCtx, "pb", { outputChannelCount: [2] });
+  audioNode.connect(audioCtx.destination);
+  audioDecoder = new AudioDecoder({
+    output: (data) => {
+      const frames = data.numberOfFrames, out = new Float32Array(frames * 2), plane = new Float32Array(frames);
+      data.copyTo(plane, { planeIndex: 0, format: "f32-planar" });
+      for (let i = 0; i < frames; i++) out[2 * i] = plane[i];
+      if (data.numberOfChannels > 1) data.copyTo(plane, { planeIndex: 1, format: "f32-planar" });
+      for (let i = 0; i < frames; i++) out[2 * i + 1] = plane[i];  // mono -> duplicate to both channels
+      data.close();
+      audioNode.port.postMessage(out, [out.buffer]);
+    },
+    error: () => {},
+  });
+  audioDecoder.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 1 });
+  audioReady = true;
+}
+function playAudio(opus) {
+  if (!("AudioDecoder" in window)) return;
+  if (!audioReady) { ensureAudio(); return; }  // first chunk primes it; a few ms of audio dropped is fine
+  if (audioCtx.state === "suspended") return;   // waiting for the gesture unlock
+  if (audioDecoder.decodeQueueSize > 12) return;  // link stalled -> drop, don't queue latency
+  audioDecoder.decode(new EncodedAudioChunk({ type: "key", timestamp: audioTs, data: opus }));
+  audioTs += 20000;  // 20ms frames
+}
+// Browsers suspend AudioContext until a gesture; the pane is click-driven.
+window.addEventListener("pointerdown", () => { audioCtx?.resume?.(); }, true);
 
 // --- input capture -----------------------------------------------------------
 let buttonMask = 0;
