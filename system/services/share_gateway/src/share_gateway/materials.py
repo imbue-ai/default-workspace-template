@@ -16,9 +16,15 @@ SECRETS_DIR = Path("data/.secrets")
 MATERIALS_FILE = SECRETS_DIR / "share.env"
 GRANTS_FILE = SECRETS_DIR / "share_grants.toml"
 SIGNING_SECRET_FILE = SECRETS_DIR / "share_gateway_signing_key"
+AUTH_LABEL_FILE = SECRETS_DIR / "share_auth_label"
 TLS_DIR = SECRETS_DIR / "share_tls"
 TLS_KEY_FILE = TLS_DIR / "key.pem"
 TLS_CERT_FILE = TLS_DIR / "cert.pem"
+
+# The dedicated auth-origin label is ``auth-<rand>``; the same 8-char
+# lowercase base36 suffix scheme service labels use (see forward_port.py).
+_AUTH_LABEL_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
+_AUTH_LABEL_RANDOM_LENGTH = 8
 
 STATE_DIR = Path("data/.state/share_gateway")
 CADDYFILE_PATH = STATE_DIR / "Caddyfile"
@@ -26,9 +32,11 @@ FRPC_CONFIG_PATH = STATE_DIR / "frpc.toml"
 
 # Local port layout: caddy terminates the share's TLS on HTTPS_PORT (frpc
 # splices relay bytes into it); the gateway's Flask app (forward_auth backend
-# + /_auth/* endpoints) listens on GATEWAY_PORT.
+# + /_auth/* endpoints) listens on GATEWAY_PORT; frpc's loopback admin server
+# (for `frpc reload`) listens on FRPC_ADMIN_PORT.
 GATEWAY_PORT = 8791
 CADDY_HTTPS_PORT = 8443
+FRPC_ADMIN_PORT = 7401
 
 _EXPORT_LINE_PATTERN = re.compile(r"""^export\s+([A-Z0-9_]+)=["']?([^"'\n]*)["']?\s*$""", re.MULTILINE)
 
@@ -107,3 +115,24 @@ def load_or_create_signing_secret(path: Path) -> str:
     path.write_text(secret)
     path.chmod(0o600)
     return secret
+
+
+_VALID_AUTH_LABEL = re.compile(r"^auth-[a-z0-9]{" + str(_AUTH_LABEL_RANDOM_LENGTH) + r"}$")
+
+
+def load_or_create_auth_label(path: Path) -> str:
+    """The workspace's dedicated ``auth-<rand>`` origin label, generated once and persisted.
+
+    Stable across unshare/re-share (like the cert) so the auth origin does not
+    move. A stored value that does not match the expected shape is replaced.
+    """
+    if path.exists():
+        existing = path.read_text().strip()
+        if _VALID_AUTH_LABEL.match(existing):
+            return existing
+    suffix = "".join(secrets.choice(_AUTH_LABEL_ALPHABET) for _ in range(_AUTH_LABEL_RANDOM_LENGTH))
+    label = f"auth-{suffix}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(label)
+    path.chmod(0o600)
+    return label
