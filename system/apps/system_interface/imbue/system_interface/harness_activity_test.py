@@ -31,7 +31,7 @@ def test_each_tracker_is_independent() -> None:
     """Trackers are per-agent, so one agent's signals never leak into another's."""
     first = build_tracker_for_harness("codex")
     second = build_tracker_for_harness("codex")
-    assert first.observe([{"type": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}]) is True
+    assert first.observe([{"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}]) is True
     assert first.derive(is_agent_running=True, process_started_at=None) == ActivityState.THINKING
     assert second.derive(is_agent_running=True, process_started_at=None) == ActivityState.IDLE
 
@@ -44,7 +44,7 @@ def test_fresh_tracker_is_idle() -> None:
 
 def test_observe_reports_no_change_on_repeat() -> None:
     """A repeated event list must short-circuit, so streamed lines stay cheap."""
-    events: list[dict[str, Any]] = [{"type": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}]
+    events: list[dict[str, Any]] = [{"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}]
     for harness in ("claude", "codex"):
         tracker = build_tracker_for_harness(harness)
         # Both harnesses cache the tail event type, so the first observe moves a
@@ -55,13 +55,13 @@ def test_observe_reports_no_change_on_repeat() -> None:
 
 def test_codex_turn_latch_drives_state() -> None:
     tracker = build_tracker_for_harness("codex")
-    tracker.observe([{"type": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}])
+    tracker.observe([{"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}])
     assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.THINKING
 
     tracker.observe(
         [
-            {"type": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},
-            {"type": "turn_completed", "timestamp": "2026-07-28T00:00:01Z"},
+            {"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},
+            {"type": "special", "kind": "turn_completed", "timestamp": "2026-07-28T00:00:01Z"},
         ]
     )
     assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.IDLE
@@ -70,7 +70,7 @@ def test_codex_turn_latch_drives_state() -> None:
 def test_codex_ignores_the_mngr_lifecycle() -> None:
     """The turn latch is authoritative for codex; mngr's RUNNING flag is not."""
     tracker = build_tracker_for_harness("codex")
-    tracker.observe([{"type": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}])
+    tracker.observe([{"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}])
     assert tracker.derive(is_agent_running=False, process_started_at=None) == ActivityState.THINKING
 
 
@@ -94,7 +94,7 @@ def test_stale_transcript_tail_reads_idle(harness: str) -> None:
     tracker = build_tracker_for_harness(harness)
     tracker.observe(
         [
-            {"type": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},
+            {"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},
             {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"},
         ]
     )
@@ -112,7 +112,7 @@ def test_reset_settles_on_idle(harness: str) -> None:
     tracker = build_tracker_for_harness(harness)
     tracker.observe(
         [
-            {"type": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},
+            {"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},
             {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"},
         ]
     )
@@ -126,7 +126,7 @@ def test_pending_tool_use_reads_tool_running(harness: str) -> None:
     tracker = build_tracker_for_harness(harness)
     tracker.observe(
         [
-            {"type": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},
+            {"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},
             {
                 "type": "assistant_message",
                 "timestamp": "2026-07-28T00:00:01Z",

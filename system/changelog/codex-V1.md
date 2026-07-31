@@ -62,3 +62,10 @@ Added OpenAI Codex CLI support to the workspace image.
 - Labels added for `image_gen__imagegen`, `list_mcp_resources`,
   `list_mcp_resource_templates`, and `read_mcp_resource`; the hosted `web_search` path was
   removed, since it cannot occur under `code_mode_host`.
+
+- Codex's turn-boundary markers now cross the wire as a declared `special` event type
+  carrying a `kind`, instead of three bare top-level types the frontend had never been
+  told about and silently dropped. `SpecialEventKind` (backend) and its TypeScript mirror
+  are the one list of legal kinds, so an undeclared marker is a type error rather than an
+  event that vanishes. Nothing renders them; they exist so `/events` reflects the true
+  transcript and the activity latch has an authoritative signal.

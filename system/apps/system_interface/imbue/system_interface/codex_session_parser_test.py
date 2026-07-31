@@ -51,7 +51,8 @@ def test_turn_aborted_emits_marker() -> None:
     line = {"timestamp": "2026-07-19T10:00:01Z", "type": "event_msg", "payload": {"type": "turn_aborted"}}
     events = parse_codex_rollout_line(line, 7, {})
     assert len(events) == 1
-    assert events[0]["type"] == "turn_aborted"
+    assert events[0]["type"] == "special"
+    assert events[0]["kind"] == "turn_aborted"
 
 
 def test_task_markers_become_turn_lifecycle_events() -> None:
@@ -61,12 +62,14 @@ def test_task_markers_become_turn_lifecycle_events() -> None:
         {"timestamp": "2026-07-19T10:00:00Z", "type": "event_msg", "payload": {"type": "task_started"}}, 1, {}
     )
     assert len(started) == 1
-    assert started[0]["type"] == "turn_started"
+    assert started[0]["type"] == "special"
+    assert started[0]["kind"] == "turn_started"
     completed = parse_codex_rollout_line(
         {"timestamp": "2026-07-19T10:00:02Z", "type": "event_msg", "payload": {"type": "task_complete"}}, 2, {}
     )
     assert len(completed) == 1
-    assert completed[0]["type"] == "turn_completed"
+    assert completed[0]["type"] == "special"
+    assert completed[0]["kind"] == "turn_completed"
 
 
 def test_assistant_message_id_dedups_reserialised_copies() -> None:

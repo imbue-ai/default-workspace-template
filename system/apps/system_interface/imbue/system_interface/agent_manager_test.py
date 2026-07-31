@@ -1425,7 +1425,7 @@ def test_codex_stale_transcript_tail_uses_the_codex_marker(agent_manager: AgentM
     # codex before it could write task_complete.
     agent_manager.update_session_events(
         "agent-1",
-        [{"type": "turn_started", "timestamp": "2020-01-01T00:00:00.000Z"}],
+        [{"type": "special", "kind": "turn_started", "timestamp": "2020-01-01T00:00:00.000Z"}],
     )
     with agent_manager._lock:
         assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING

@@ -107,10 +107,39 @@ export interface ToolResultEvent extends BaseTranscriptEvent {
 }
 
 /**
+ * Every non-message marker a harness may emit. Mirrors the backend's
+ * `SpecialEventKind` (harnesses/events.py); the two must be kept in step, which is what
+ * turns an undeclared kind into a type error here rather than an event silently dropped.
+ *
+ * Turn boundaries come from codex, which records them in its rollout in real time.
+ * Claude's transcript has no equivalent and emits none.
+ */
+export type SpecialEventKind = "turn_started" | "turn_completed" | "turn_aborted";
+
+/**
+ * A harness marker that is not a message. Nothing renders these -- they exist so the
+ * event stream reflects the true transcript, and so the backend's activity derivation
+ * has an authoritative signal. Declared here so the union stays exhaustive.
+ */
+export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
+  type: "special";
+  kind: SpecialEventKind;
+}
+
+/**
  * A single entry in the transcript event stream, discriminated by `type`.
  * Narrow on `event.type` before touching variant-specific fields.
+ *
+ * The first three types are the core contract: every harness emits them with the same
+ * fields, which is why no view needs to know which harness produced an event. `special`
+ * is the declared extension point -- a harness may emit the kinds it registers, and
+ * renderers ignore them.
  */
-export type TranscriptEvent = UserMessageEvent | AssistantMessageEvent | ToolResultEvent;
+export type TranscriptEvent =
+  | UserMessageEvent
+  | AssistantMessageEvent
+  | ToolResultEvent
+  | SpecialTranscriptEvent;
 
 // For hook compatibility
 export interface ResponseItem {

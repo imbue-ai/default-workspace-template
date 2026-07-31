@@ -45,6 +45,8 @@ import hashlib
 from typing import Any
 
 from imbue.system_interface.codex_tool_labels import codex_tool_labels
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
+from imbue.system_interface.harnesses.events import SpecialEventKind
 
 # Kept as ``codex/common_transcript`` to match the ``<harness>/common_transcript``
 # label ``claude_session_parser`` stamps -- "common" here means the normalized/common
@@ -207,7 +209,8 @@ def parse_codex_rollout_line(
             return [
                 {
                     "timestamp": timestamp,
-                    "type": "turn_aborted",
+                    "type": SPECIAL_EVENT_TYPE,
+                    "kind": SpecialEventKind.TURN_ABORTED.value,
                     "event_id": event_id,
                     "source": _SOURCE,
                     "message_uuid": event_id,
@@ -220,12 +223,17 @@ def parse_codex_rollout_line(
         # rollouts: ``task_complete`` lands just after the final assistant message, so
         # the dot clears only once the text is already on screen.
         if payload_type in ("task_started", "task_complete"):
-            marker = "turn_started" if payload_type == "task_started" else "turn_completed"
+            kind = (
+                SpecialEventKind.TURN_STARTED
+                if payload_type == "task_started"
+                else SpecialEventKind.TURN_COMPLETED
+            )
             event_id = f"codex-{line_index}-{payload_type}"
             return [
                 {
                     "timestamp": timestamp,
-                    "type": marker,
+                    "type": SPECIAL_EVENT_TYPE,
+                    "kind": kind.value,
                     "event_id": event_id,
                     "source": _SOURCE,
                     "message_uuid": event_id,
