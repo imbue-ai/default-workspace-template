@@ -72,7 +72,13 @@ import {
   saveLayoutAs,
   type LayoutInfo,
 } from "../models/WorkspaceLayouts";
-import { layoutContentKey, type PanelParams, type PanelType, type SavedLayout } from "../models/layoutContent";
+import {
+  layoutContentKey,
+  layoutContentsAreEquivalent,
+  type PanelParams,
+  type PanelType,
+  type SavedLayout,
+} from "../models/layoutContent";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
 
@@ -1684,6 +1690,46 @@ function displayNameForSlug(slug: string): string {
   return availableLayouts.find((layout) => layout.slug === slug)?.display_name ?? slug;
 }
 
+/** Which tabs this client has selected, so a re-apply can put them back. */
+interface LocalActiveTabs {
+  /** The active tab of every open group. */
+  perGroup: string[];
+  /** The one panel that holds focus, restored last so it wins. */
+  focused: string | null;
+}
+
+function captureLocalActiveTabs(dv: DockviewComponent): LocalActiveTabs {
+  const perGroup: string[] = [];
+  for (const group of dv.groups) {
+    const activeId = group.activePanel?.id;
+    if (activeId !== undefined) perGroup.push(activeId);
+  }
+  return { perGroup, focused: dv.activePanel?.id ?? null };
+}
+
+/** Reselect the tabs this client had, ignoring any that the incoming layout
+ *  no longer contains. */
+function restoreLocalActiveTabs(dv: DockviewComponent, active: LocalActiveTabs): void {
+  for (const panelId of active.perGroup) {
+    dv.panels.find((p) => p.id === panelId)?.api.setActive();
+  }
+  if (active.focused !== null) {
+    dv.panels.find((p) => p.id === active.focused)?.api.setActive();
+  }
+}
+
+interface ApplyLayoutOptions {
+  /**
+   * Keep the tabs this client has selected rather than adopting the ones the
+   * saving client had. Set for a re-apply driven by another client's save:
+   * which tab someone is reading is personal, and having it yanked to whatever
+   * the other person was looking at is the most jarring part of the live sync.
+   * Left off for a user-driven load, where adopting the saved layout wholesale
+   * -- active tab included -- is the point.
+   */
+  preserveActiveTabs: boolean;
+}
+
 /**
  * Mount ``saved`` into the dockview, replacing whatever is currently shown.
  * ``null`` (a layout with no saved content, or none could be fetched)
@@ -1691,10 +1737,14 @@ function displayNameForSlug(slug: string): string {
  * (or the empty-state overlay waits for it). Mirrors the restore semantics
  * that previously lived inline in ``initializeDockview``.
  */
-function applyLayoutContent(saved: SavedLayout | null): void {
+function applyLayoutContent(
+  saved: SavedLayout | null,
+  options: ApplyLayoutOptions = { preserveActiveTabs: false },
+): void {
   if (!dockview) return;
   const dv = dockview;
   awaitingInitialChat = false;
+  const localActiveTabs = options.preserveActiveTabs ? captureLocalActiveTabs(dv) : null;
 
   // Tear the outgoing layout down BEFORE seeding the incoming params.
   // ``fromJSON`` disposes the current panels before creating the new ones, and
@@ -1772,6 +1822,9 @@ function applyLayoutContent(saved: SavedLayout | null): void {
     if (!openInitialChatTab()) {
       awaitingInitialChat = true;
     }
+  }
+  if (localActiveTabs !== null) {
+    restoreLocalActiveTabs(dv, localActiveTabs);
   }
   updateEmptyState();
 }
@@ -1864,8 +1917,16 @@ function handleLayoutSyncEvent(event: LayoutSyncEvent): void {
       void (async () => {
         const saved = (await fetchLayoutContent(event.layoutSlug)) as SavedLayout | null;
         markServerContent(saved);
+        // Applying tears down and rebuilds every panel: chats remount and
+        // refetch, iframes and terminals reload, scroll positions reset. Do none
+        // of that when the incoming layout means what is already on screen --
+        // which is the common case, since the other client's save may have been
+        // provoked by something purely local to it.
+        if (layoutContentsAreEquivalent(saved, buildLayoutPayload())) {
+          return;
+        }
         beginRemoteApplySuppression();
-        applyLayoutContent(saved);
+        applyLayoutContent(saved, { preserveActiveTabs: true });
         m.redraw();
       })();
     }

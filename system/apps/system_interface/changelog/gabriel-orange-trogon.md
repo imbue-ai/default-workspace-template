@@ -54,3 +54,8 @@ pane divider, or switching tabs -- no longer triggers an automatic save on its
 own, since that is exactly the kind of change two windows cannot agree on. Such
 changes are still persisted alongside the next real edit (opening, closing or
 moving a tab), and "Save layout..." always saves everything as it looks.
+
+On top of that, a window now ignores an incoming layout change entirely when it
+means what is already on screen, so nothing remounts for nothing. When a real
+change does come through, the window keeps the tab *you* were reading instead of
+jumping to whatever the other window had selected.
