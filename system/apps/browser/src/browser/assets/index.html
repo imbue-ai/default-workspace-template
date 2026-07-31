@@ -59,9 +59,15 @@
      may not be flowing yet, so revealing on running would show a blank canvas. */
   #initoverlay { display: none; position: absolute; inset: 0; z-index: 15; background: #1e1e1e; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 24px; }
   #initoverlay.show { display: flex; }
-  #initoverlay .spinner { width: 28px; height: 28px; border: 3px solid #444; border-top-color: #0e639c; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  /* Loading progress bar: the fill width tracks the real stage (Chromium coming up ->
+     view loading -> painted), with a moving shimmer so the wait reads as alive. Hidden
+     on terminal states (failed/closed) via the `.static` class -- there's no progress then. */
+  #initoverlay .bar { width: 220px; max-width: 60%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; }
+  #initoverlay.static .bar { display: none; }
+  #initoverlay .bar .fill { height: 100%; width: 0; border-radius: 3px; background: linear-gradient(90deg, #0e639c, #4ec9b0); transition: width 0.4s ease; position: relative; }
+  #initoverlay .bar .fill::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent); animation: shimmer 1.2s linear infinite; }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
   #initoverlay .msg { font-size: 15px; color: #ccc; font-weight: 600; }
-  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* Transient clipboard status chip ("Pasting…", "Copied from remote", errors). Bottom
      of the pane, fades in on activity and out after a moment (verbatim from the streamed-browser prototype). */
@@ -92,7 +98,7 @@
       <div class="sub">Open a new browser from the + menu.</div>
     </div>
     <div id="initoverlay">
-      <div class="spinner"></div>
+      <div class="bar"><div class="fill" id="initfill"></div></div>
       <div class="msg">Starting browser…</div>
     </div>
     <div id="clipchip"></div>
@@ -223,20 +229,36 @@
   // Lifecycle drives the crash overlay + the init overlay's PRESENCE, but NOT its
   // removal on running: the init cover comes down only when the first streamed frame
   // paints (see revealOnFirstFrame), so the pane never reveals a blank canvas.
+  // Drive the init overlay's progress bar + label through the real load stages. Clearing
+  // `static` re-shows the bar (a terminal message may have hidden it).
+  function setInitStage(pct, label) {
+    initOverlay.classList.remove("static");
+    const fill = document.getElementById("initfill");
+    if (fill) fill.style.width = pct + "%";
+    initOverlay.querySelector(".msg").textContent = label;
+  }
+
   function setLifecycle(next) {
     if (!next || next === lifecycle) return;
     lifecycle = next;
     if (next === "crashed") { showCrashed(); return; }
     if (next === "init") {
+      // Chromium is still coming up; the agent can't drive it yet.
       firstFramePainted = false;
       initOverlay.classList.add("show");
+      setInitStage(35, "Starting browser…");
+    } else if (next === "running") {
+      // The browser is up and drivable now -- only the pixel view is still loading, so the
+      // cover stays up (revealed on the first painted frame) but the label reflects reality.
+      setInitStage(75, "Loading browser view…");
     }
-    // next === "running": leave the init overlay up until the first frame paints.
   }
 
   function revealOnFirstFrame() {
     if (firstFramePainted) return;
     firstFramePainted = true;
+    const fill = document.getElementById("initfill");
+    if (fill) fill.style.width = "100%";
     initOverlay.classList.remove("show");
   }
 
@@ -701,6 +723,7 @@ registerProcessor('pb', PB);`;
       else if (crashed) return;
       else if (m.type === "launch_failed") {
         closedForGood = true;
+        initOverlay.classList.add("static");
         initOverlay.querySelector(".msg").textContent = "Browser failed to start — open a new one from the + menu.";
       }
       else if (m.type === "initializing") { if (lifecycle !== "running") setLifecycle("init"); }
@@ -718,6 +741,7 @@ registerProcessor('pb', PB);`;
         overlay.classList.remove("show");
         returnBar.classList.remove("show");
         initOverlay.classList.add("show");
+        initOverlay.classList.add("static");
         initOverlay.querySelector(".msg").textContent = "Browser closed — reopen it from the + menu.";
         return;
       }
@@ -735,9 +759,10 @@ registerProcessor('pb', PB);`;
   function boot() {
     const params = new URLSearchParams(location.search);
     const name = params.get("session");
-    if (!name) { initOverlay.querySelector(".msg").textContent = "Open a browser from the + menu."; initOverlay.classList.add("show"); return; }
+    if (!name) { initOverlay.classList.add("static", "show"); initOverlay.querySelector(".msg").textContent = "Open a browser from the + menu."; return; }
     initOverlay.classList.add("show");
-    if (!("VideoDecoder" in window)) { initOverlay.querySelector(".msg").textContent = "This browser can't play the stream (WebCodecs missing)."; return; }
+    if (!("VideoDecoder" in window)) { initOverlay.classList.add("static"); initOverlay.querySelector(".msg").textContent = "This browser can't play the stream (WebCodecs missing)."; return; }
+    setInitStage(15, "Starting browser…");  // seed the bar until the first control message lands
     connect(name);        // control/ownership
     connectStream();      // pixels
   }
