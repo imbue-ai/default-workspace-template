@@ -306,10 +306,13 @@ class PixelfluxVideoPipe:
         self._expected_w = _INIT_CAPTURE_W
         self._closed = False
         self._last_idr_request = 0.0
-        self._current_fps = _RATE_MAX_FPS
+        self._current_fps = _RATE_MAX_FPS       # the AIMD's target capture rate
+        self._fps_ceiling = _CAPTURE_FPS         # the viewer-visibility throttle ceiling
+        self._applied_fps = _RATE_MAX_FPS        # last value handed to update_framerate
         self._last_retune = 0.0
         self._dropped_at_last_retune = 0
         self._acks_since_retune = 0
+        self._active_rows_since_retune: set[int] = set()  # rows that acked this interval
         self._rtt_ewma: float | None = None
         self._rtt_min: float | None = None
         self._current_crf = _VIDEO_CRF
@@ -435,20 +438,34 @@ class PixelfluxVideoPipe:
             self._condition.notify()
         return width, height
 
+    def _apply_framerate_locked(self) -> None:
+        """Push the SINGLE effective capture rate = min(visibility throttle ceiling, AIMD
+        rate) to pixelflux, but only when it actually changed. This is the one place that
+        calls ``update_framerate`` -- the throttle (``set_target_fps``) and the AIMD
+        (``_retune_capture_rate_locked`` / idle snap-back) both just update their own
+        variable and call here, so they can never fight over the encoder rate. Caller holds
+        ``self._condition``."""
+        if self._capture is None:
+            return
+        effective = int(max(1.0, min(self._fps_ceiling, self._current_fps)))
+        if effective == self._applied_fps:
+            return
+        self._applied_fps = effective
+        self._capture.update_framerate(effective)
+
     def set_target_fps(self, fps: float) -> None:
-        """Cap the encoder's frame rate at ``fps`` LIVE via pixelflux's ``update_framerate``
-        (no capture restart; ``update_tunables`` does NOT honor target_fps -- measured).
-        Used to throttle a browser whose viewer is hidden down to ~1fps so it stops burning
-        encode CPU while nobody watches, and back to the full rate when it's shown again.
-        Damage-driven capture means the ACTUAL rate is already <= this cap; this lowers the
-        ceiling. Idempotent (skips a no-op); best-effort (a dead capture is a no-op)."""
+        """Set the viewer-visibility throttle CEILING on the capture rate (a hidden pane asks
+        for ~1fps so it stops burning encode CPU; a shown pane asks for full). LIVE via
+        pixelflux's ``update_framerate`` (no restart; ``update_tunables`` does NOT honor
+        target_fps -- measured). The effective rate is min(this ceiling, the AIMD rate), so
+        the throttle can't be undone by the next AIMD retune (the bug this replaced)."""
         fps = max(1.0, min(_CAPTURE_FPS, fps))
         with self._condition:
-            if self._capture is None or self._settings is None or self._settings.target_fps == fps:
+            if self._fps_ceiling == fps:
                 return
-            self._settings.target_fps = fps
-            self._capture.update_framerate(int(fps))
-        logger.debug("video pipe {} target_fps -> {}", self.browser_id, fps)
+            self._fps_ceiling = fps
+            self._apply_framerate_locked()
+        logger.debug("video pipe {} fps ceiling -> {}", self.browser_id, fps)
 
     def next_packet(self, timeout: float, has_extra=None) -> bytes | None:  # noqa: ANN001
         """Block until some row's stripe is admitted by its window (or timeout).
@@ -505,7 +522,7 @@ class PixelfluxVideoPipe:
                 ):
                     self._current_fps = _RATE_MAX_FPS
                     self._dropped_at_last_retune = self.frames_dropped
-                    self._capture.update_framerate(_RATE_MAX_FPS)
+                    self._apply_framerate_locked()  # clamped by the visibility throttle ceiling
                 self._condition.wait(timeout=remaining)
             return None
 
@@ -521,6 +538,7 @@ class PixelfluxVideoPipe:
                 self._rtt_ewma = rtt if self._rtt_ewma is None else (1 - _RTT_EWMA_ALPHA) * self._rtt_ewma + _RTT_EWMA_ALPHA * rtt
                 self._rtt_min = rtt if self._rtt_min is None else min(self._rtt_min, rtt)
             row.window.ack(frame_id)
+            self._active_rows_since_retune.add(y_start)  # this row delivered this interval
             if row.window.needs_keyframe:
                 self._request_idr_locked()
             self._retune_capture_rate_locked()
@@ -536,12 +554,19 @@ class PixelfluxVideoPipe:
         self._last_retune = now
         dropped = self.frames_dropped - self._dropped_at_last_retune
         self._dropped_at_last_retune = self.frames_dropped
-        delivered_fps = self._acks_since_retune / interval / max(1, len(self._rows))
+        # Per-row delivered rate must divide by the rows that ACTUALLY delivered this
+        # interval, not every row that exists. Settled interaction damages ~1 of N stripes;
+        # dividing the total acks by len(self._rows) (all N) craters the estimate and the
+        # AIMD then clamps the capture tick to its floor -- the "fast for 30s then slow"
+        # bug. Dividing by active rows keeps the rate near what the busy row can carry.
+        active_rows = max(1, len(self._active_rows_since_retune))
+        delivered_fps = self._acks_since_retune / interval / active_rows
         self._acks_since_retune = 0
+        self._active_rows_since_retune.clear()
         wanted = target_capture_fps(self._current_fps, dropped, delivered_fps)
         if wanted != self._current_fps and self._capture is not None:
             self._current_fps = wanted
-            self._capture.update_framerate(wanted)
+            self._apply_framerate_locked()  # clamped by the visibility throttle ceiling
             logger.debug("video pipe {} capture rate retuned to {:.0f}fps ({} drops)", self.browser_id, wanted, dropped)
         self._adapt_window_and_quality_locked()
 
