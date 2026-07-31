@@ -30,6 +30,7 @@ import {
   hasMoreAfter,
   MAX_HELD_EVENTS,
   EVICT_TARGET_EVENTS,
+  PAGING_REQUEST_TIMEOUT_MS,
   type AssistantMessageEvent,
   type ToolCall,
   type TranscriptEvent,
@@ -250,6 +251,170 @@ describe("window position (offset / total)", () => {
     expect(getFirstOffset(agent)).toBe(40);
     expect(hasMoreBefore(agent)).toBe(true);
     expect(hasMoreAfter(agent)).toBe(true);
+  });
+});
+
+interface PendingRequest {
+  promise: Promise<unknown>;
+  resolve: (value: unknown) => void;
+}
+
+/** A request the test resolves by hand, so another fetch can be interleaved
+ *  while it is in flight. */
+function pendingRequest(): PendingRequest {
+  let resolve!: (value: unknown) => void;
+  const promise = new Promise<unknown>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+// The paging fences. Each of these guards one step of the reproduced wedge: a
+// backfill in flight across an SSE-reconnect snapshot reset landed a
+// non-contiguous older page carrying its old-epoch offset, which left
+// `firstOffset + held < total` while the window's last event WAS the tail, so
+// the panel re-issued `after=<tail>` forever, and a later hung request pinned
+// the in-flight guard and froze the panel entirely.
+describe("paging fences", () => {
+  it("discards an older page whose window was replaced while it was in flight", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e10")], offset: 10, total: 20 });
+    await fetchEvents(agent);
+
+    // Backfill goes out asking for the events before e10.
+    const backfill = pendingRequest();
+    mockRequest.mockReturnValueOnce(backfill.promise);
+    const backfillDone = fetchBackfillEvents(agent);
+
+    // An SSE reconnect refetches the snapshot mid-flight, resetting the window
+    // one event earlier.
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e9")], offset: 9, total: 20 });
+    await fetchEvents(agent);
+
+    // The in-flight page lands. Its coordinates happen to abut the NEW window, so
+    // the contiguity guard alone would wave it through -- but it answers a
+    // question about the window that no longer exists, and splicing it in would
+    // put the event before e10 directly before e9.
+    backfill.resolve({ events: [makeEvent("e8")], offset: 8, total: 20 });
+    await backfillDone;
+
+    expect(ids(agent)).toEqual(["e9"]);
+    expect(getFirstOffset(agent)).toBe(9);
+  });
+
+  it("drops an older page that does not abut the window start", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e10")], offset: 10, total: 20 });
+    await fetchEvents(agent);
+
+    // Claims to start at 3 and holds one event, so it ends at 4 -- nowhere near
+    // the window start at 10. Gluing it on would make the window claim events 5-9
+    // that it does not hold.
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e3")], offset: 3, total: 20 });
+    await fetchBackfillEvents(agent);
+
+    expect(ids(agent)).toEqual(["e10"]);
+    expect(getFirstOffset(agent)).toBe(10);
+    // The window start is untouched, so the next scroll retries from current
+    // coordinates rather than being stuck behind a corrupted window.
+    expect(hasMoreBefore(agent)).toBe(true);
+  });
+
+  it("accepts an older page that abuts the window start", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e10")], offset: 10, total: 20 });
+    await fetchEvents(agent);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e8"), makeEvent("e9")], offset: 8, total: 20 });
+    await fetchBackfillEvents(agent);
+
+    expect(ids(agent)).toEqual(["e8", "e9", "e10"]);
+    expect(getFirstOffset(agent)).toBe(8);
+  });
+
+  it("drops a newer page that does not abut the window end", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e2"), makeEvent("e3")], offset: 2, total: 20 });
+    await fetchEvents(agent);
+
+    // The window ends at 4; a page starting at 9 leaves a hole.
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e9")], offset: 9, total: 20 });
+    await fetchForwardEvents(agent);
+
+    expect(ids(agent)).toEqual(["e2", "e3"]);
+    expect(hasMoreAfter(agent)).toBe(true);
+  });
+
+  it("snaps the window onto the tail when the server reports nothing after our last event", async () => {
+    const agent = freshAgent();
+    // A window whose start is stale: it holds the last two events of the
+    // transcript but thinks it starts at 100, so `firstOffset + held < total`.
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e589"), makeEvent("e590")], offset: 100, total: 591 });
+    await fetchEvents(agent);
+    expect(hasMoreAfter(agent)).toBe(true);
+
+    // The exact answer the live server gave the wedged client.
+    mockRequest.mockResolvedValueOnce({ events: [], offset: 591, total: 591 });
+    await fetchForwardEvents(agent);
+
+    expect(getFirstOffset(agent)).toBe(589);
+    expect(getTotalEventCount(agent)).toBe(591);
+    expect(hasMoreAfter(agent)).toBe(false);
+
+    // ...and therefore the same cursor is never queried again.
+    mockRequest.mockClear();
+    await fetchForwardEvents(agent);
+    expect(mockRequest).not.toHaveBeenCalled();
+  });
+
+  it("reloads the snapshot when the held window cannot be squared with the reported tail", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({
+      events: [makeEvent("a"), makeEvent("b"), makeEvent("c")],
+      offset: 0,
+      total: 10,
+    });
+    await fetchEvents(agent);
+
+    // Holding three events but the whole transcript is now two: unreconcilable.
+    mockRequest.mockResolvedValueOnce({ events: [], offset: 2, total: 2 });
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("x"), makeEvent("y")], offset: 0, total: 2 });
+    await fetchForwardEvents(agent);
+
+    expect(ids(agent)).toEqual(["x", "y"]);
+    expect(getFirstOffset(agent)).toBe(0);
+    expect(getTotalEventCount(agent)).toBe(2);
+  });
+
+  it("timeboxes every paging request and survives one timing out", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e5")], offset: 5, total: 10 });
+    await fetchEvents(agent);
+
+    mockRequest.mockRejectedValueOnce(new Error("Request timed out"));
+    // Must settle rather than hang: the caller releases its in-flight guard in a
+    // `finally`, so a request that never settles freezes the panel.
+    await fetchBackfillEvents(agent);
+
+    for (const [options] of mockRequest.mock.calls) {
+      expect(options.timeout).toBe(PAGING_REQUEST_TIMEOUT_MS);
+    }
+    // A failed page leaves the window exactly where it was.
+    expect(ids(agent)).toEqual(["e5"]);
+    expect(getFirstOffset(agent)).toBe(5);
+  });
+
+  it("reports a failed offset jump so the caller does not pin to a window that never landed", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("tail")], offset: 99, total: 100 });
+    await fetchEvents(agent);
+
+    mockRequest.mockRejectedValueOnce(new Error("Request timed out"));
+    expect(await fetchWindowAtOffset(agent, 40)).toBe(false);
+    expect(ids(agent)).toEqual(["tail"]);
+
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("mid")], offset: 40, total: 100 });
+    expect(await fetchWindowAtOffset(agent, 40)).toBe(true);
   });
 });
 

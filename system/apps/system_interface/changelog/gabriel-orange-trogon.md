@@ -21,3 +21,12 @@ Closing it takes the tab out of the saved layout, so it stops reappearing on
 every restore. The tab is only declared dead when the agent is missing from
 consecutive agent-list updates *and* its transcript comes back not-found, so a
 momentary hiccup in agent discovery cannot tombstone a live chat.
+
+Scrolling a long transcript no longer corrupts its own loaded window. Pages that
+arrive after the view has been reset (an SSE reconnect, or a jump to a far scroll
+position) are discarded instead of being spliced in, pages that don't join up
+with what's loaded are rejected, and a window that has drifted out of step with
+the live end of the conversation is snapped back onto it. Every paging request is
+now timeboxed, so a hung one can no longer freeze a chat under a permanent
+"Loading messages..." overlay, and a run of pages that achieve nothing backs off
+instead of retrying on every frame.

@@ -45,6 +45,7 @@ import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
 import { AgentPresenceTracker } from "../models/agentPresence";
+import { ReconnectBackoff } from "../models/backoff";
 import {
   buildAgentTerminalUrl,
   closeChatPanelForAgent,
@@ -108,6 +109,10 @@ const ESTIMATED_EVENT_HEIGHT_PX = 160;
 // was hidden). Caching the outcome plus this floor bounds it to one request per
 // half-minute; the explicit Retry button covers the "I fixed it, look again" case.
 const SCREEN_RECAPTURE_INTERVAL_MS = 30_000;
+// How many consecutive no-progress pages to tolerate before saying so on the
+// console. The backoff below handles the load; this is the diagnostic that names
+// a wedged window while it is still happening.
+const NO_PROGRESS_WARN_AFTER_PAGES = 3;
 
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
@@ -160,6 +165,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // Paging (scroll-driven fetch) in-flight guard. Covers older/newer pages and
   // offset jumps -- only one is outstanding at a time.
   let backfillInFlight = false;
+  // Hold-off for paging that is achieving nothing. Reuses the shared exponential
+  // backoff (base 1s, capped at 30s, jittered) so a wedged window degrades to the
+  // occasional probe instead of a request per frame.
+  const pagingBackoff = new ReconnectBackoff();
+  let noProgressPages = 0;
+  let pagingBlockedUntilMs = 0;
   // After an offset jump replaces the window, pin the viewport once to the top of
   // the freshly loaded rows (just below the top reserved spacer) so the user lands
   // on the jumped-to content rather than in the reserved region above it. With the
@@ -470,6 +481,33 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   };
 
   /**
+   * Record whether a completed paging fetch actually moved the window, keyed on
+   * the store's render version (which bumps on any mutation that renders and on
+   * nothing else).
+   *
+   * Paging is driven from the render loop as well as from scroll events, so a
+   * page that changes nothing would be re-issued on the very next redraw --
+   * that is what turned one corrupted window into the observed unbounded
+   * `after=<tail>` request loop. Consecutive no-progress pages instead earn a
+   * growing hold-off; the first page that lands clears it.
+   */
+  function notePagingOutcome(agentId: string, renderVersionBefore: number): void {
+    if (getRenderVersion(agentId) !== renderVersionBefore) {
+      noProgressPages = 0;
+      pagingBackoff.reset();
+      pagingBlockedUntilMs = 0;
+      return;
+    }
+    noProgressPages += 1;
+    pagingBlockedUntilMs = Date.now() + pagingBackoff.nextDelay();
+    if (noProgressPages === NO_PROGRESS_WARN_AFTER_PAGES) {
+      console.warn(
+        `Transcript paging for agent ${agentId} made no progress ${noProgressPages} times in a row; backing off`,
+      );
+    }
+  }
+
+  /**
    * Keep the loaded window in step with the scroll position. Three cases, all
    * bounded to a single fetch:
    *   - viewport far from the loaded window (e.g. a scrollbar drag deep into
@@ -492,6 +530,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // still needs its one-shot pin applied -- in both cases the window is about to
     // change, so don't act on the current (transient) scroll position.
     if (backfillInFlight || pendingPinToWindowTop) {
+      return;
+    }
+    // Recent pages achieved nothing; wait out the backoff rather than re-asking
+    // the same question on every frame.
+    if (Date.now() < pagingBlockedUntilMs) {
       return;
     }
     const held = getEventCount(agentId);
@@ -521,14 +564,24 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       (targetIndex < firstOffset - JUMP_GAP_EVENTS || targetIndex > windowEnd + JUMP_GAP_EVENTS)
     ) {
       backfillInFlight = true;
-      fetchWindowAtOffset(agentId, targetIndex - Math.floor(JUMP_GAP_EVENTS / 2)).finally(() => {
-        backfillInFlight = false;
-        // The window now sits off the live tail, so stop following it, and pin the
-        // viewport once to the new window's top on the next redraw (applyScrollPosition).
-        scroll.userScrolledUp = true;
-        pendingPinToWindowTop = true;
-        m.redraw();
-      });
+      const versionBeforeJump = getRenderVersion(agentId);
+      void fetchWindowAtOffset(agentId, targetIndex - Math.floor(JUMP_GAP_EVENTS / 2))
+        .then((didPlaceWindow) => {
+          // Only when a window actually landed: the pin is one-shot and blocks
+          // further paging until it is applied, so arming it after a failed jump
+          // would strand the panel on the loading overlay.
+          if (didPlaceWindow) {
+            // The window now sits off the live tail, so stop following it, and pin the
+            // viewport once to the new window's top on the next redraw (applyScrollPosition).
+            scroll.userScrolledUp = true;
+            pendingPinToWindowTop = true;
+          }
+        })
+        .finally(() => {
+          backfillInFlight = false;
+          notePagingOutcome(agentId, versionBeforeJump);
+          m.redraw();
+        });
       return;
     }
 
@@ -536,8 +589,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // the viewport fixed on the content being read when the older page lands above.
     if (hasMoreBefore(agentId) && element.scrollTop - phantomTopHeight < BACKFILL_TRIGGER_PX) {
       backfillInFlight = true;
-      fetchBackfillEvents(agentId).finally(() => {
+      const versionBeforeBackfill = getRenderVersion(agentId);
+      void fetchBackfillEvents(agentId).finally(() => {
         backfillInFlight = false;
+        notePagingOutcome(agentId, versionBeforeBackfill);
         m.redraw();
       });
       return;
@@ -548,8 +603,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
     if (hasMoreAfter(agentId) && distanceFromBottom - phantomBottomHeight < BACKFILL_TRIGGER_PX) {
       backfillInFlight = true;
-      fetchForwardEvents(agentId).finally(() => {
+      const versionBeforeForward = getRenderVersion(agentId);
+      void fetchForwardEvents(agentId).finally(() => {
         backfillInFlight = false;
+        notePagingOutcome(agentId, versionBeforeForward);
         m.redraw();
       });
     }
