@@ -435,6 +435,21 @@ class PixelfluxVideoPipe:
             self._condition.notify()
         return width, height
 
+    def set_target_fps(self, fps: float) -> None:
+        """Cap the encoder's frame rate at ``fps`` LIVE via pixelflux's ``update_framerate``
+        (no capture restart; ``update_tunables`` does NOT honor target_fps -- measured).
+        Used to throttle a browser whose viewer is hidden down to ~1fps so it stops burning
+        encode CPU while nobody watches, and back to the full rate when it's shown again.
+        Damage-driven capture means the ACTUAL rate is already <= this cap; this lowers the
+        ceiling. Idempotent (skips a no-op); best-effort (a dead capture is a no-op)."""
+        fps = max(1.0, min(_CAPTURE_FPS, fps))
+        with self._condition:
+            if self._capture is None or self._settings is None or self._settings.target_fps == fps:
+                return
+            self._settings.target_fps = fps
+            self._capture.update_framerate(int(fps))
+        logger.debug("video pipe {} target_fps -> {}", self.browser_id, fps)
+
     def next_packet(self, timeout: float, has_extra=None) -> bytes | None:  # noqa: ANN001
         """Block until some row's stripe is admitted by its window (or timeout).
 

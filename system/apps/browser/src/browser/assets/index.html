@@ -304,7 +304,12 @@
       return created;
     }
 
-    streamWs.onopen = () => { streamRetry = 500; };
+    streamWs.onopen = () => {
+      streamRetry = 500;
+      // A fresh server pipe starts at full rate; if this pane is currently hidden,
+      // re-assert the throttle so a reconnect while hidden doesn't run at 60fps.
+      if (wantFps !== FULL_FPS) streamWs.send("f," + wantFps);
+    };
     streamWs.onmessage = (event) => {
       if (typeof event.data === "string") {
         if (event.data.startsWith("res,")) {
@@ -373,6 +378,26 @@
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(sendPaneSize, 150);
   }).observe(stage);
+
+  // Throttle the remote encoder when this pane isn't visible: a hidden pane asks the
+  // server for ~1fps so it stops burning encode CPU while nobody watches; a shown pane
+  // asks for the full rate. "Hidden" = the whole workspace tab is backgrounded (Page
+  // Visibility API) OR this browser isn't the active dockview tab (its panel is hidden,
+  // which the IntersectionObserver reports as not-intersecting). The server defaults a
+  // fresh stream to full rate, so we re-assert the wanted rate on every (re)connect.
+  const FULL_FPS = 60, HIDDEN_FPS = 1;
+  let paneOnScreen = true, wantFps = FULL_FPS;
+  function applyFps() {
+    const fps = (!document.hidden && paneOnScreen) ? FULL_FPS : HIDDEN_FPS;
+    if (fps === wantFps) return;
+    wantFps = fps;
+    if (streamWs && streamWs.readyState === WebSocket.OPEN) streamWs.send("f," + fps);
+  }
+  document.addEventListener("visibilitychange", applyFps);
+  new IntersectionObserver((entries) => {
+    paneOnScreen = entries.some((e) => e.isIntersecting && e.intersectionRatio > 0);
+    applyFps();
+  }, { threshold: [0, 0.01] }).observe(stage);
 
   // ---- audio playback (Opus over WebCodecs -> AudioWorklet) ----
   // Verbatim from streamed_browser. The server sends mono Opus chunks (magic byte 0x01)
