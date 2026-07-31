@@ -53,6 +53,7 @@ from simple_websocket import ConnectionClosed
 from browser.loop_bridge import AsyncLoopBridge, cancel_task
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
+from browser import mediastream
 from browser.session import (
     BrowserSessionManager,
     BrowserStartupError,
@@ -60,9 +61,6 @@ from browser.session import (
     FleetFullError,
     InvalidBrowserNameError,
     LiveBrowser,
-    # PlaywrightError comes from the engine module (session.py owns all Playwright/
-    # browser_use interaction); the sync web layer never imports playwright itself.
-    PlaywrightError,
     anthropic_key_status,
     deferred_install_ready,
 )
@@ -72,7 +70,8 @@ ROOT_PATH = os.environ.get("ROOT_PATH", "")
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
-_STARTUP_ERRORS = (BrowserStartupError, PlaywrightError, RuntimeError, OSError, ConnectionError)
+# browser-use drives Chromium over cdp-use, whose failures surface as these built-ins.
+_STARTUP_ERRORS = (BrowserStartupError, RuntimeError, OSError, ConnectionError)
 
 # How long a state-changing route's bridge.run waits before giving up and (via the
 # bridge) cancelling the orphaned coroutine. The acquire/hold/task streaming paths
@@ -109,8 +108,9 @@ manager = BrowserSessionManager()
 
 application = Flask(__name__, static_folder=None)
 application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
-# Clipboard paste bodies carry raw image bytes (the WS proxy's ~1 MiB cap is why
-# clipboard rides HTTP, not the cast socket). Bound it so a giant paste can't OOM.
+# Clipboard paste-in bodies carry raw image bytes over HTTP (the WS proxy's ~1 MiB cap
+# is why clipboard rides HTTP, not the stream socket). Bound it so a giant paste is
+# rejected before it's read into memory rather than wedging Chromium.
 application.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 sock = Sock(application)
 
@@ -737,26 +737,27 @@ def cmd_tab(browser_id: str) -> Response:
     )
 
 
-def cmd_clipboard_copy(browser_id: str) -> Response:
-    """Human viewer copies (or cuts, ``?cut=1``) the browser's current selection to
-    their local clipboard. Not agent-gated -- the session gates on human control.
-    Returns ``{ok, mime, text|data}``; ``mime`` is null when nothing is selected."""
-    resolved = _resolve_sync(browser_id)
-    if isinstance(resolved, Response):
-        return resolved
-    cut = request.args.get("cut") == "1"
-    return jsonify(bridge.run(resolved.clipboard_copy(cut=cut), timeout=_DIRECT_ACTION_TIMEOUT))
-
-
 def cmd_clipboard_paste(browser_id: str) -> Response:
     """Human viewer pastes their local clipboard into the browser. Body is the raw
-    clipboard bytes; Content-Type is the mime (text/plain or image/*)."""
+    clipboard bytes; Content-Type is the mime (text/plain or image/*). The paste is
+    gated on human control inside the media layer (an agent mid-task can't have a stray
+    paste land). Mirrors streamed_browser's POST /clipboard/paste, keyed per browser."""
     resolved = _resolve_sync(browser_id)
     if isinstance(resolved, Response):
         return resolved
     data = request.get_data()
     mime = (request.content_type or "text/plain").split(";")[0].strip() or "text/plain"
-    return jsonify(bridge.run(resolved.clipboard_paste(data, mime), timeout=_DIRECT_ACTION_TIMEOUT))
+    return mediastream.clipboard_paste(browser_id, resolved, data, mime)
+
+
+def cmd_clipboard_out(browser_id: str) -> Response:
+    """Copy-out: the bytes of the last remote copy on this browser, native mime. Ungated
+    -- it's what's already on the screen the human is watching. Mirrors streamed_browser's
+    GET /clipboard/out, keyed per browser."""
+    resolved = _resolve_sync(browser_id)
+    if isinstance(resolved, Response):
+        return resolved
+    return mediastream.clipboard_out(browser_id)
 
 
 # --- screencast WebSocket ----------------------------------------------------
@@ -786,13 +787,12 @@ def _cast_inbound_pump(
                 message = json.loads(data)
             except (ValueError, TypeError):
                 continue
+            # /cast carries ONLY ownership control now (pixels + input ride /stream).
             kind = message.get("type")
             if kind == "take_control":
                 bridge.run(session.take_control(), timeout=_ROUTE_TIMEOUT)
             elif kind == "return_to_agents":
                 bridge.run(session.return_to_agents(), timeout=_ROUTE_TIMEOUT)
-            else:
-                bridge.run(session.handle_cast_message(message), timeout=_ROUTE_TIMEOUT)
     except ConnectionClosed:
         pass
     finally:
@@ -876,6 +876,31 @@ def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
         return None
 
 
+def stream_socket(ws: Any, browser_id: str) -> None:
+    """Pixelflux media socket (BROWSER_MEDIA=pixelflux): one viewer of one browser.
+
+    Control/ownership stays on ``/cast`` (unchanged); this carries only pixels.
+    Resolves and gates exactly like ``cast_socket`` (same close-code contract), then
+    hands the RUNNING browser's private display to the verbatim streamer in
+    ``mediastream.py``.
+    """
+    resolved = _resolve_sync_for_ws(browser_id)
+    if resolved is None:
+        if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
+            ws.close(1008)  # launch failed -> terminal
+        elif is_valid_browser_name(browser_id):
+            ws.close(1013)  # not created yet -> retryable
+        else:
+            ws.close(1008)  # gone / never valid -> terminal
+        return
+    session = resolved
+    display = getattr(session, "_display", "")
+    if not session._is_running or not display:  # _is_running is a property
+        ws.close(1013)  # up but not streamable yet -> retryable backoff
+        return
+    mediastream.serve_stream(ws, browser_id, display, session)
+
+
 # --- app construction + lifecycle --------------------------------------------
 
 
@@ -901,9 +926,17 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/keys", view_func=cmd_keys, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/screenshot", view_func=cmd_screenshot, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/tab", view_func=cmd_tab, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_copy, methods=["GET"], endpoint="clipboard_copy")
-    application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_paste, methods=["POST"], endpoint="clipboard_paste")
+    application.add_url_rule(
+        "/browsers/<string:browser_id>/clipboard/paste", view_func=cmd_clipboard_paste, methods=["POST"]
+    )
+    application.add_url_rule(
+        "/browsers/<string:browser_id>/clipboard/out", view_func=cmd_clipboard_out, methods=["GET"]
+    )
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
+    # Pixelflux media socket: H.264 stripes out + credit acks/resize in (the pixel plane).
+    sock.route("/browsers/<string:browser_id>/stream")(stream_socket)
+    # Strip permessage-deflate so already-compressed H.264 stripes aren't re-deflated (#22).
+    application.before_request(mediastream.strip_websocket_compression)
 
 
 _register_routes()
