@@ -743,7 +743,7 @@ def cmd_clipboard_paste(browser_id: str) -> Response:
     """Human viewer pastes their local clipboard into the browser. Body is the raw
     clipboard bytes; Content-Type is the mime (text/plain or image/*). The paste is
     gated on human control inside the media layer (an agent mid-task can't have a stray
-    paste land). Mirrors streamed_browser's POST /clipboard/paste, keyed per browser."""
+    paste land). Mirrors the streamed-browser prototype's POST /clipboard/paste, keyed per browser."""
     resolved = _resolve_sync(browser_id)
     if isinstance(resolved, Response):
         return resolved
@@ -754,7 +754,7 @@ def cmd_clipboard_paste(browser_id: str) -> Response:
 
 def cmd_clipboard_out(browser_id: str) -> Response:
     """Copy-out: the bytes of the last remote copy on this browser, native mime. Ungated
-    -- it's what's already on the screen the human is watching. Mirrors streamed_browser's
+    -- it's what's already on the screen the human is watching. Mirrors the streamed-browser prototype's
     GET /clipboard/out, keyed per browser."""
     resolved = _resolve_sync(browser_id)
     if isinstance(resolved, Response):

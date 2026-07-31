@@ -178,7 +178,7 @@ def _stop_xvfb(xvfb: "subprocess.Popen[bytes]") -> None:
 # browser's Chromium is routed into ITS own sink via PULSE_SINK, so browsers never mix
 # audio and a silent tab yields silence the pcmflux sample-gate drops. All best-effort:
 # audio is strictly additive -- if pulse setup fails the browser still streams video.
-# Mirrors streamed_browser's setup (system mode + anonymous-auth native socket at a
+# Mirrors the streamed-browser prototype's setup (system mode + anonymous-auth native socket at a
 # fixed path: root otherwise leaves the socket group-gated and our clients get
 # "Access denied"); the only fleet change is one sink per browser instead of one global.
 _PULSE_SERVER = "unix:/var/run/pulse/native"
@@ -689,7 +689,7 @@ class LiveBrowser(MutableModel):
         # fixed size regardless, letterboxing the capture). --window-position=0,0 maps
         # the (0,0,w,h) capture region 1:1 to window pixels so input coords stay
         # correct. Always headful (it needs a real display to capture). The flags are
-        # streamed_browser's exact cheap-CPU set, minus the three browser-use supplies
+        # the streamed-browser prototype's exact cheap-CPU set, minus the three browser-use supplies
         # itself: --no-sandbox (chromium_sandbox), --user-data-dir, --window-size.
         return BrowserSession(
             headless=False,

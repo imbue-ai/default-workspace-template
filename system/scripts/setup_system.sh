@@ -71,9 +71,9 @@ apt-get install -y --no-install-recommends \
     bash build-essential ca-certificates cron curl earlyoom fd-find git git-lfs jq less nano \
     openssh-server procps restic ripgrep rsync sqlite3 supervisor tini tmux unison util-linux wget \
     xxd xmlstarlet
-# Runtime libraries the pixelflux wheel (streamed-browser H.264 pipe) dlopens
-# at import -- without libva its import raises (guarded in videopipe.py) --
-# plus xdpyinfo, which videopipe uses to size the capture. Small enough to bake.
+# Runtime libraries the pixelflux/pcmflux wheels (the browser fleet's H.264 + Opus
+# media pipes) dlopen at import -- without libva pixelflux's import raises (guarded in
+# videopipe.py) -- plus xdpyinfo, which videopipe uses to size the capture. Baked small.
 apt-get install -y --no-install-recommends \
     libva2 libva-drm2 libva-x11-2 libpixman-1-0 x11-utils pulseaudio pulseaudio-utils
 rm -rf /var/lib/apt/lists/*

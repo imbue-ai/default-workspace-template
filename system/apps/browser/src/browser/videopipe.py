@@ -137,8 +137,8 @@ _PAINTOVER_TRIGGER_FRAMES = 30
 # Initial capture size (matches the session's cold-start window). The viewer
 # sends its real pane size on connect, so the capture re-targets within ~150ms;
 # this only avoids a wrong-size first frame.
-_INIT_CAPTURE_W = int(os.environ.get("STREAMED_BROWSER_WIDTH", "1280"))
-_INIT_CAPTURE_H = int(os.environ.get("STREAMED_BROWSER_HEIGHT", "800"))
+_INIT_CAPTURE_W = int(os.environ.get("BROWSER_INIT_CAPTURE_W", "1280"))
+_INIT_CAPTURE_H = int(os.environ.get("BROWSER_INIT_CAPTURE_H", "800"))
 
 
 class VideoPipeError(RuntimeError):
