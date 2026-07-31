@@ -10,6 +10,7 @@ a sandboxed registry.
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -19,6 +20,9 @@ from types import ModuleType
 import pytest
 
 _SCRIPT = Path(__file__).parent / "forward_port.py"
+
+# ``<name>-<8 lowercase base36 chars>``.
+_LABEL_RE = re.compile(r"^[a-z0-9_-]+-[a-z0-9]{8}$")
 
 
 def _run(script_args: list[str], apps_file: Path) -> subprocess.CompletedProcess[str]:
@@ -43,7 +47,13 @@ def test_valid_names_register_and_are_persisted(tmp_path: Path, name: str) -> No
     apps_file = tmp_path / "apps.toml"
     result = _run(["--name", name, "--url", "http://localhost:7681"], apps_file)
     assert result.returncode == 0, result.stderr
-    assert _read_apps(apps_file) == [{"name": name, "url": "http://localhost:7681"}]
+    rows = _read_apps(apps_file)
+    assert len(rows) == 1
+    assert rows[0]["name"] == name
+    assert rows[0]["url"] == "http://localhost:7681"
+    # A registered service gets an unguessable ``<name>-<rand>`` origin label.
+    assert rows[0]["label"].startswith(f"{name}-")
+    assert _LABEL_RE.match(rows[0]["label"])
 
 
 @pytest.mark.parametrize(
@@ -85,14 +95,38 @@ def test_upsert_then_remove_round_trips(tmp_path: Path) -> None:
     result = _run(["--name", "web", "--url", "http://localhost:5000"], apps_file)
     assert result.returncode == 0, result.stderr
 
-    # Upsert of the same name updates the URL in place instead of appending.
+    label_after_create = _read_apps(apps_file)[0]["label"]
+
+    # Upsert of the same name updates the URL in place instead of appending,
+    # and keeps the original label (a service's origin must be stable).
     result = _run(["--name", "web", "--url", "http://localhost:5001"], apps_file)
     assert result.returncode == 0, result.stderr
-    assert _read_apps(apps_file) == [{"name": "web", "url": "http://localhost:5001"}]
+    rows = _read_apps(apps_file)
+    assert len(rows) == 1
+    assert rows[0]["name"] == "web"
+    assert rows[0]["url"] == "http://localhost:5001"
+    assert rows[0]["label"] == label_after_create
 
     result = _run(["--remove", "--name", "web"], apps_file)
     assert result.returncode == 0, result.stderr
     assert _read_apps(apps_file) == []
+
+
+def test_name_over_the_length_cap_is_rejected(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    too_long = "a" * 33
+    result = _run(["--name", too_long, "--url", "http://localhost:7681"], apps_file)
+    assert result.returncode != 0
+    assert "invalid app name" in result.stderr
+    assert not apps_file.exists()
+
+
+def test_auth_name_is_reserved(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(["--name", "auth", "--url", "http://localhost:7681"], apps_file)
+    assert result.returncode != 0
+    assert "invalid app name" in result.stderr
+    assert not apps_file.exists()
 
 
 def _load_module(module_name: str, path: Path) -> ModuleType:

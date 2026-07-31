@@ -13,6 +13,7 @@ import argparse
 import fcntl
 import os
 import re
+import secrets
 import tempfile
 from pathlib import Path
 
@@ -20,6 +21,22 @@ import tomlkit
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
+
+# Each service's public origin uses an UNGUESSABLE hostname label,
+# ``<name>-<rand>`` (e.g. ``terminal-x7k9q2w1``), both locally
+# (``<label>.host-<hex>.localhost``) and on a share
+# (``<label>.<ws-domain>``). On a share the workspace's frpc claims these
+# explicit labels instead of the wildcard, so the relay drops any SNI it was
+# not told about -- CT only ever exposes the bare ``*.<ws-domain>`` cert name,
+# which no longer routes. The random suffix is the one hostname component CT
+# never sees. Minted once per service and persisted (stable across re-share so
+# bookmarks/layouts keep working); see blueprint/random-service-labels/.
+_LABEL_RANDOM_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
+_LABEL_RANDOM_LENGTH = 8
+
+# Cap the service name so ``<name>-<rand>`` always fits a 63-char DNS label
+# (name + 1 hyphen + 8 random chars), with generous headroom.
+MAX_SERVICE_NAME_LENGTH = 32
 
 # Service-name rule: lowercase alphanumeric/underscore runs separated by
 # single hyphens (no uppercase, no leading/trailing/consecutive hyphens).
@@ -41,7 +58,15 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 
 # ``localhost`` is the local origin's root domain; a service by that name
 # would produce the nonsense hostname ``localhost.host-<hex>.localhost``.
-RESERVED_NAMES = frozenset({"localhost"})
+# ``auth`` is reserved for the share stack's dedicated ``auth-<rand>`` label
+# (the sole public ``/_auth/*`` origin), so no app may claim it.
+RESERVED_NAMES = frozenset({"localhost", "auth"})
+
+
+def mint_service_label(name: str) -> str:
+    """Mint an unguessable ``<name>-<rand>`` origin label for a freshly-registered service."""
+    suffix = "".join(secrets.choice(_LABEL_RANDOM_ALPHABET) for _ in range(_LABEL_RANDOM_LENGTH))
+    return f"{name}-{suffix}"
 
 
 def validate_service_name(name: str) -> str | None:
@@ -57,6 +82,12 @@ def validate_service_name(name: str) -> str | None:
             "alphanumeric/underscore runs separated by single hyphens (no "
             "leading, trailing, or consecutive hyphens) because the name "
             "becomes the leading label of the service's origin hostname"
+        )
+    if len(name) > MAX_SERVICE_NAME_LENGTH:
+        return (
+            f"invalid app name {name!r}: names must be at most "
+            f"{MAX_SERVICE_NAME_LENGTH} characters so the '<name>-<random>' "
+            "origin label fits a 63-character DNS label"
         )
     for prefix in RESERVED_NAME_PREFIXES:
         if name.startswith(prefix):
@@ -112,17 +143,22 @@ def _upsert(path: Path, name: str, url: str) -> None:
     doc = _load_apps(path)
     apps = doc.get("apps", [])
 
-    # Find existing entry by name
+    # Update an existing entry's URL in place, minting a label only if one was
+    # never assigned (a legacy row, or a row written before labels existed).
+    # The label is stable: re-registration must not change a service's origin.
     for app in apps:
         if app.get("name") == name:
             app["url"] = url
+            if not app.get("label"):
+                app["label"] = mint_service_label(name)
             _save_apps(path, doc)
             return
 
-    # No existing entry -- append
+    # No existing entry -- append with a freshly-minted label.
     entry = tomlkit.table()
     entry.add("name", name)
     entry.add("url", url)
+    entry.add("label", mint_service_label(name))
     apps.append(entry)
     _save_apps(path, doc)
 

@@ -51,6 +51,10 @@ RESERVED_NAMES = frozenset(
         # the local origin's root domain); reserve it here too so the scaffold
         # never mints an app that cannot register.
         "localhost",
+        # ``auth`` is reserved for the share stack's dedicated ``auth-<rand>``
+        # origin label (the sole public ``/_auth/*`` origin); forward_port.py
+        # rejects it, so the scaffold must too.
+        "auth",
     }
 )
 # Workspace hostnames carry their coordinate as a ``host-<hex>`` label
