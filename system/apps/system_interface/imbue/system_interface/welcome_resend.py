@@ -42,7 +42,7 @@ from loguru import logger as _loguru_logger
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.primitives import AgentId
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.session_watcher import ClaudeSessionWatcher
+from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
 
 logger = _loguru_logger
 

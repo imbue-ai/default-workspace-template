@@ -45,7 +45,7 @@ from watchdog.observers import Observer
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
-from imbue.system_interface.codex_session_parser import parse_codex_rollout_line
+from imbue.system_interface.harnesses.codex.session_parser import parse_codex_rollout_line
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.system_interface.watcher_common import WakeOnChangeHandler
 

@@ -2,7 +2,7 @@ import pytest
 
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
-from imbue.system_interface.claude_activity_state import derive_claude
+from imbue.system_interface.harnesses.claude.activity_state import derive_claude
 
 
 @pytest.mark.parametrize(

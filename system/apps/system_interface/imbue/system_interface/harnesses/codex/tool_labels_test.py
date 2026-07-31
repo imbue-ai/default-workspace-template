@@ -1,6 +1,6 @@
 import pytest
 
-from imbue.system_interface.codex_tool_labels import codex_tool_labels
+from imbue.system_interface.harnesses.codex.tool_labels import codex_tool_labels
 
 
 @pytest.mark.parametrize(

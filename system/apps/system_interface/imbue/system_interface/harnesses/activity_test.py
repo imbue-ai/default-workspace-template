@@ -3,9 +3,9 @@ from typing import Any
 import pytest
 
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.harness_activity import ClaudeActivityTracker
-from imbue.system_interface.harness_activity import CodexActivityTracker
-from imbue.system_interface.harness_activity import build_tracker_for_harness
+from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
+from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
+from imbue.system_interface.harnesses.registry import build_tracker
 
 
 @pytest.mark.parametrize(
@@ -19,8 +19,8 @@ from imbue.system_interface.harness_activity import build_tracker_for_harness
         pytest.param("", ClaudeActivityTracker, "claude_process_started", id="empty_falls_back_to_claude"),
     ],
 )
-def test_build_tracker_for_harness(harness: str, expected_type: type, expected_marker: str) -> None:
-    tracker = build_tracker_for_harness(harness)
+def test_build_tracker(harness: str, expected_type: type, expected_marker: str) -> None:
+    tracker = build_tracker(harness)
     assert isinstance(tracker, expected_type)
     # Each harness reads the marker its own mngr plugin writes -- the pairing
     # that used to be a hardcoded claude filename in AgentManager.
@@ -29,8 +29,8 @@ def test_build_tracker_for_harness(harness: str, expected_type: type, expected_m
 
 def test_each_tracker_is_independent() -> None:
     """Trackers are per-agent, so one agent's signals never leak into another's."""
-    first = build_tracker_for_harness("codex")
-    second = build_tracker_for_harness("codex")
+    first = build_tracker("codex")
+    second = build_tracker("codex")
     assert first.observe([{"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}]) is True
     assert first.derive(is_agent_running=True, process_started_at=None) == ActivityState.THINKING
     assert second.derive(is_agent_running=True, process_started_at=None) == ActivityState.IDLE
@@ -38,7 +38,7 @@ def test_each_tracker_is_independent() -> None:
 
 def test_fresh_tracker_is_idle() -> None:
     for harness in ("claude", "codex"):
-        tracker = build_tracker_for_harness(harness)
+        tracker = build_tracker(harness)
         assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.IDLE
 
 
@@ -46,7 +46,7 @@ def test_observe_reports_no_change_on_repeat() -> None:
     """A repeated event list must short-circuit, so streamed lines stay cheap."""
     events: list[dict[str, Any]] = [{"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}]
     for harness in ("claude", "codex"):
-        tracker = build_tracker_for_harness(harness)
+        tracker = build_tracker(harness)
         # Both harnesses cache the tail event type, so the first observe moves a
         # signal even though only codex reads the turn marker as a latch.
         assert tracker.observe(events) is True, f"{harness} should register the first event"
@@ -54,7 +54,7 @@ def test_observe_reports_no_change_on_repeat() -> None:
 
 
 def test_codex_turn_latch_drives_state() -> None:
-    tracker = build_tracker_for_harness("codex")
+    tracker = build_tracker("codex")
     tracker.observe([{"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}])
     assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.THINKING
 
@@ -69,14 +69,14 @@ def test_codex_turn_latch_drives_state() -> None:
 
 def test_codex_ignores_the_mngr_lifecycle() -> None:
     """The turn latch is authoritative for codex; mngr's RUNNING flag is not."""
-    tracker = build_tracker_for_harness("codex")
+    tracker = build_tracker("codex")
     tracker.observe([{"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"}])
     assert tracker.derive(is_agent_running=False, process_started_at=None) == ActivityState.THINKING
 
 
 def test_claude_honors_the_mngr_lifecycle() -> None:
     """A stopped claude agent is IDLE regardless of a mid-turn transcript tail."""
-    tracker = build_tracker_for_harness("claude")
+    tracker = build_tracker("claude")
     tracker.observe([{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"}])
     assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.THINKING
     assert tracker.derive(is_agent_running=False, process_started_at=None) == ActivityState.IDLE
@@ -91,7 +91,7 @@ def test_stale_transcript_tail_reads_idle(harness: str) -> None:
     stat'd the claude marker for every harness: an absent marker yields
     process_started_at=None, which disables the override entirely.
     """
-    tracker = build_tracker_for_harness(harness)
+    tracker = build_tracker(harness)
     tracker.observe(
         [
             {"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},
@@ -109,7 +109,7 @@ def test_stale_transcript_tail_reads_idle(harness: str) -> None:
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
 def test_reset_settles_on_idle(harness: str) -> None:
-    tracker = build_tracker_for_harness(harness)
+    tracker = build_tracker(harness)
     tracker.observe(
         [
             {"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},
@@ -123,7 +123,7 @@ def test_reset_settles_on_idle(harness: str) -> None:
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
 def test_pending_tool_use_reads_tool_running(harness: str) -> None:
-    tracker = build_tracker_for_harness(harness)
+    tracker = build_tracker(harness)
     tracker.observe(
         [
             {"type": "special", "kind": "turn_started", "timestamp": "2026-07-28T00:00:00Z"},

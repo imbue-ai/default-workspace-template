@@ -10,7 +10,7 @@ from pydantic import PrivateAttr
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
-from imbue.system_interface.claude_auth import ClaudeAuthService
+from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.harnesses.registry import build_watcher

@@ -75,7 +75,7 @@ from typing import Callable
 from loguru import logger as _loguru_logger
 from watchdog.observers import Observer
 
-from imbue.system_interface.session_parser import parse_session_lines
+from imbue.system_interface.harnesses.claude.session_parser import parse_session_lines
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher

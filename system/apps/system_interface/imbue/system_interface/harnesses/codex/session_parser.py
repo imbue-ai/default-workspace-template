@@ -44,7 +44,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from imbue.system_interface.codex_tool_labels import codex_tool_labels
+from imbue.system_interface.harnesses.codex.tool_labels import codex_tool_labels
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 

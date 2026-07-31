@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from imbue.system_interface.codex_session_parser import parse_codex_rollout_line
+from imbue.system_interface.harnesses.codex.session_parser import parse_codex_rollout_line
 
 
 def _user_line(text: str, timestamp: str = "2026-07-19T10:00:00.123Z") -> dict:
