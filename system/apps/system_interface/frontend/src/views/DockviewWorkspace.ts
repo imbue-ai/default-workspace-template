@@ -10,7 +10,6 @@ import {
   type DockviewGroupPanel,
   type IContentRenderer,
   type IHeaderActionsRenderer,
-  type SerializedDockview,
 } from "dockview-core";
 import { ChatPanel } from "./ChatPanel";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
@@ -73,6 +72,7 @@ import {
   saveLayoutAs,
   type LayoutInfo,
 } from "../models/WorkspaceLayouts";
+import { layoutContentKey, type PanelParams, type PanelType, type SavedLayout } from "../models/layoutContent";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
 
@@ -141,33 +141,6 @@ export function buildAgentTerminalUrl(agentName: string): string {
   return `${baseUrl}${separator}arg=_&arg=agent&arg=${encodeURIComponent(agentName)}`;
 }
 
-type PanelType = "chat" | "iframe" | "subagent";
-
-interface PanelParams {
-  panelType: PanelType;
-  agentId: string;
-  chatAgentId?: string;
-  url?: string;
-  title?: string;
-  subagentSessionId?: string;
-  // Workspace service name this iframe is tied to (e.g. "web", "api").
-  // Set only for iframe tabs that proxy an actual workspace service; left
-  // undefined for ad-hoc URL tabs, terminals, and agent-owned iframes.
-  // Drives both the WS-driven `layout_op` (op="refresh") service-wide
-  // reload match and the presence of the per-tab Refresh button.
-  serviceName?: string;
-  // Set only on persistent-terminal iframe tabs. ``terminalSessionName`` is
-  // the named tmux session the tab attaches to (attach-or-create); its
-  // presence is what marks a panel as a terminal (drives the banner, the
-  // Destroy button, and layout-restore reattach). ``terminalId`` is a
-  // per-tab id passed into the ttyd URL so the backend can map this tab's
-  // tmux client back to us for live title tracking. ``terminalSessionId`` is
-  // the immutable ``#{session_id}`` used to reflect a rename onto the tab.
-  terminalSessionName?: string;
-  terminalId?: string;
-  terminalSessionId?: string;
-}
-
 // Modal state
 let showNewChatModal = false;
 let showNewAgentModal = false;
@@ -204,11 +177,6 @@ let terminalDestroyPanelId: string | null = null;
 let showShareModal = false;
 let shareServiceName: string | null = null;
 
-interface SavedLayout {
-  dockview: SerializedDockview;
-  panelParams: Record<string, PanelParams>;
-}
-
 // Single shared dockview state
 let dockview: DockviewComponent | null = null;
 let dockviewContainer: HTMLElement | null = null;
@@ -226,11 +194,13 @@ let layoutDialogMode: LayoutDialogMode | null = null;
 // Cached layout registry backing the dialogs; refreshed on dialog open and
 // on every layout_saved / layout_deleted broadcast.
 let availableLayouts: LayoutInfo[] = [];
-// Serialized form of the layout content last persisted to (or received
-// from) the server for the active layout. Autosave skips the POST when the
-// current serialization matches -- the content guard half of the live-sync
-// echo suppression.
-let lastPersistedLayoutJson: string | null = null;
+// Semantic key (see layoutContent) of the layout content last persisted to, or
+// received from, the server for the active layout. Autosave skips the POST when
+// the current content means the same thing -- the content guard half of the
+// live-sync echo suppression. It is deliberately the *normalized* key and not
+// the raw serialization: two clients never produce byte-identical JSON for the
+// same layout, so a raw comparison can never reach quiescence.
+let lastPersistedLayoutKey: string | null = null;
 // Autosaves are suppressed until this timestamp while a remotely-received
 // layout is being applied: applying content fires onDidLayoutChange (and
 // post-apply resize events), and persisting/broadcasting those re-applies
@@ -1648,14 +1618,19 @@ async function saveLayout(): Promise<void> {
   if (Date.now() < suppressAutosaveUntilMs) return;
   const payload = buildLayoutPayload();
   if (payload === null) return;
-  const serialized = JSON.stringify(payload);
-  // Content guard: an unchanged layout is neither re-persisted nor
-  // re-broadcast, so remote re-applies cannot echo back and forth.
-  if (serialized === lastPersistedLayoutJson) return;
+  const contentKey = layoutContentKey(payload);
+  // Content guard: a layout that still means what the server holds is neither
+  // re-persisted nor re-broadcast, so remote re-applies cannot echo back and
+  // forth. The trade this makes is deliberate -- a change that is *only*
+  // client-specific geometry (a pane resize, a tab switch) no longer triggers an
+  // autosave of its own, because that is exactly the change two clients cannot
+  // agree on. Such changes still ride along with the next real edit, and an
+  // explicit "Save layout..." always persists.
+  if (contentKey === lastPersistedLayoutKey) return;
 
   try {
     await autosaveLayout(activeSlug, payload, getClientId());
-    lastPersistedLayoutJson = serialized;
+    lastPersistedLayoutKey = contentKey;
   } catch {
     // Layout save is best-effort (e.g. the layout was deleted mid-flight;
     // the deletion broadcast switches us to the fallback).
@@ -1686,7 +1661,7 @@ async function flushPendingSave(): Promise<void> {
 /** Mark ``content`` as what the server currently holds for the active
  *  layout, so the content guard in saveLayout can skip no-op persists. */
 function markServerContent(content: SavedLayout | null): void {
-  lastPersistedLayoutJson = content === null ? null : JSON.stringify(content);
+  lastPersistedLayoutKey = content === null ? null : layoutContentKey(content);
 }
 
 /** Open the autosave-suppression window used when applying content that
@@ -1737,15 +1712,20 @@ function applyLayoutContent(saved: SavedLayout | null): void {
     for (const [id, params] of Object.entries(saved.panelParams)) {
       panelParams.set(id, params);
     }
-    // Rebuild each restored terminal's ttyd url with a fresh per-tab id, so
-    // the ttyd ``session`` dispatch reattaches to the live tmux session -- or
-    // recreates it as a fresh shell if the tmux server was torn down since the
-    // layout was saved (e.g. a container restart). The fresh id keeps the
-    // pty->tab mapping (for live title tracking) accurate for this connection.
-    // Done before ``fromJSON`` so the terminal renderer mounts on the new url.
+    // Rebuild each restored terminal's ttyd url so the ``session`` dispatch
+    // reattaches to the live tmux session -- or recreates it as a fresh shell if
+    // the tmux server was torn down since the layout was saved (e.g. a container
+    // restart). Done before ``fromJSON`` so the terminal renderer mounts on it.
+    //
+    // The per-tab id is minted only when the tab has none. Re-minting it on
+    // every apply was a guaranteed source of divergence: it changed the layout
+    // content by construction, so a remote apply always produced a layout
+    // differing from the one just received, which armed another save, which
+    // provoked another apply. The id identifies the tab, and a re-applied tab is
+    // the same tab.
     for (const [, params] of panelParams) {
       if (params.terminalSessionName) {
-        params.terminalId = mintTerminalId();
+        params.terminalId = params.terminalId ?? mintTerminalId();
         params.url = buildSessionTerminalUrl(params.terminalSessionName, params.terminalId, primaryWorkDir());
       }
     }
@@ -1849,7 +1829,7 @@ async function saveLayoutUnderName(displayName: string): Promise<void> {
   if (payload === null) return;
   try {
     const result = await saveLayoutAs(displayName, payload, getClientId());
-    lastPersistedLayoutJson = JSON.stringify(payload);
+    lastPersistedLayoutKey = layoutContentKey(payload);
     const previousSlug = getActiveLayoutSlug();
     if (result.slug !== previousSlug) {
       setActiveLayoutSlug(result.slug);
@@ -2766,7 +2746,13 @@ async function executeDestroy(agentId: string, panelId: string): Promise<void> {
 /** Reflect a live tmux session change onto the owning terminal tab. Matches by
  *  ``terminalId`` when a client switched sessions, or by the immutable
  *  ``session_id`` when a session was renamed (``terminalId`` null). Records the
- *  ``session_id`` on first sight so later rename events can find the tab. */
+ *  ``session_id`` on first sight so later rename events can find the tab.
+ *
+ *  Deliberately does NOT schedule a layout save. The broadcast goes to every
+ *  connected client, so each of them persisted a layout because one tmux title
+ *  changed -- a steady source of saves nobody asked for. Titles are re-derivable
+ *  from the tmux session, so nothing is lost by not persisting them here; the
+ *  next real layout edit carries the current title along anyway. */
 function handleTerminalSessionUpdate(terminalId: string | null, sessionId: string, sessionName: string): void {
   if (!dockview) return;
   let targetPanelId: string | null = null;
@@ -2789,7 +2775,6 @@ function handleTerminalSessionUpdate(terminalId: string | null, sessionId: strin
   params.title = sessionName;
   dockview.panels.find((p) => p.id === targetPanelId)?.api.setTitle(sessionName);
   m.redraw();
-  scheduleSave();
 }
 
 async function executeTerminalDestroy(sessionName: string, panelId: string): Promise<void> {
