@@ -110,6 +110,15 @@ _DEFAULT_TAIL_COUNT = 50
 # each connection owns its own thread, so a wedged send only stalls that thread.
 _WS_PING_INTERVAL_SECONDS = 25
 
+# The SSE keepalive an idle transcript stream emits, and how many idle seconds
+# pass between two of them. Named ``ping`` rather than a ``:`` comment so the
+# browser's EventSource actually delivers it: the client's liveness watchdog
+# watches for these, and comments are invisible to it. Empty ``data`` so the
+# frame is well-formed without being mistaken for a transcript event.
+SSE_KEEPALIVE_EVENT = "ping"
+SSE_KEEPALIVE_FRAME = f"event: {SSE_KEEPALIVE_EVENT}\ndata: \n\n"
+_KEEPALIVE_IDLE_SECONDS = 8
+
 
 class _ReflectClientSubprotocols:
     """A WebSocket subprotocols allow-list that accepts whatever the client offers.
@@ -320,6 +329,14 @@ def _stream_filtered_events(
     while the subagent stream keeps only its own session. Filtered-out events
     do not reset the keepalive counter. A ``None`` from the queue (shutdown
     sentinel) ends the stream.
+
+    The keepalive is a *named* SSE event rather than a ``:`` comment line.
+    Comments keep the connection warm but the browser ``EventSource`` API never
+    surfaces them, so a client cannot tell a quiet stream from a half-dead one
+    (a dropped tunnel or a sleep/wake leaves the socket open and silent, and the
+    transcript freezes with no error). A named event is delivered to a listener,
+    which is what lets the client run a liveness watchdog. It carries no data
+    and is not a transcript event, so ``onmessage`` consumers never see it.
     """
     keepalive_counter = 0
     try:
@@ -334,9 +351,9 @@ def _stream_filtered_events(
                 yield f"data: {json.dumps(event)}\n\n"
             except queue.Empty:
                 keepalive_counter += 1
-                if keepalive_counter >= 8:
+                if keepalive_counter >= _KEEPALIVE_IDLE_SECONDS:
                     keepalive_counter = 0
-                    yield ": keepalive\n\n"
+                    yield SSE_KEEPALIVE_FRAME
     except GeneratorExit:
         pass
     finally:

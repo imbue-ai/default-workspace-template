@@ -32,6 +32,7 @@ from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
+from imbue.system_interface.server import SSE_KEEPALIVE_EVENT
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
@@ -1750,6 +1751,49 @@ def test_stream_filtered_events_forwards_only_matching_events() -> None:
 
     assert forwarded_ids == ["main-evt", "no-session"]
     assert "sub-evt" not in forwarded_ids
+
+
+class _AlwaysEmptyQueue(queue.Queue[dict[str, Any] | None]):
+    """A queue that reports empty without waiting, then ends the stream.
+
+    ``_stream_filtered_events`` polls with a one-second timeout, so reaching the
+    keepalive branch through a real queue would cost as many seconds as the
+    keepalive interval. This serves ``empty_polls`` immediate ``Empty``s and then
+    the shutdown sentinel, exercising the same branch deterministically.
+    """
+
+    def __init__(self, empty_polls: int) -> None:
+        super().__init__()
+        self._empty_polls = empty_polls
+
+    def get(self, block: bool = True, timeout: float | None = None) -> dict[str, Any] | None:
+        if self._empty_polls > 0:
+            self._empty_polls -= 1
+            raise queue.Empty
+        return None
+
+
+def test_stream_keepalive_is_a_named_event_not_a_comment() -> None:
+    """An idle stream's keepalive must be visible to the browser's EventSource.
+
+    SSE comment lines (``: keepalive``) keep the connection warm but the
+    EventSource API never surfaces them, so a client cannot distinguish a quiet
+    stream from a half-dead one -- which is how a dropped tunnel froze a
+    transcript silently while the terminal stayed alive. A named event is
+    delivered to a listener, which is what the client's liveness watchdog needs.
+    """
+    event_queues = AgentEventQueues()
+    # Comfortably more polls than the keepalive interval, so several are emitted.
+    event_queue = _AlwaysEmptyQueue(empty_polls=20)
+
+    frames = list(_stream_filtered_events("agent-1", event_queues, event_queue, lambda _event: True))
+
+    assert frames, "an idle stream must still emit keepalives"
+    for frame in frames:
+        assert frame.startswith(f"event: {SSE_KEEPALIVE_EVENT}\n"), frame
+        # It must not carry a transcript payload either, or onmessage consumers
+        # would try to parse the keepalive as an event.
+        assert not frame.startswith("data: "), frame
 
 
 def test_destroy_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
