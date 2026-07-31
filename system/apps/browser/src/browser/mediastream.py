@@ -1,7 +1,7 @@
 """Fleet media socket: pixelflux H.264 video to one viewer of one browser.
 
-The pixel path here is copied from ``streamed_browser/runner.py``'s ``/stream``
-handler VERBATIM -- the newest-wins credit-ack pipe, the outbound send loop
+The pixel path here is copied VERBATIM from the streamed-browser prototype's ``/stream``
+handler -- the newest-wins credit-ack pipe, the outbound send loop
 (control message, out-of-band cursor, stripe packets), TCP_NODELAY (#21), the
 permessage-deflate strip (#22), and the 250ms heartbeat the client's freeze
 attributor keys on (#25). The ONLY adaptation is the fleet's multi-browser
@@ -9,7 +9,7 @@ reality: the caller resolves the browser by NAME and hands us its private displa
 (:N), so we open a capture pipe on THAT display instead of a single global
 session.
 
-The clipboard bridge is likewise ported verbatim from streamed_browser (XFixes
+The clipboard bridge is likewise ported verbatim from the streamed-browser prototype (XFixes
 copy-out monitor + xclip paste-in via :mod:`browser.xclipboard`), adapted two
 ways for the fleet: the state is keyed per browser (each has its own display and
 possibly several viewers), and paste-IN is GATED on ``session.input_allowed`` so
@@ -49,11 +49,11 @@ _HEARTBEAT_SECONDS = 0.25
 
 # Paste-in bodies (images) can be large; the runner caps the request body so a giant
 # paste is rejected before it's read. 10 MiB matches xclipboard's read cap and the
-# client-side pre-check (verbatim from streamed_browser).
+# client-side pre-check (verbatim from the streamed-browser prototype).
 _CLIPBOARD_MAX_BYTES = 10 * 1024 * 1024
 # Text small enough to inline over the stream control channel; larger text and all
 # images route through GET /clipboard/out so no >1 MiB WS frame tears down the video
-# socket (verbatim threshold from streamed_browser).
+# socket (verbatim threshold from the streamed-browser prototype).
 _CLIP_INLINE_TEXT_MAX = 200 * 1024
 
 
@@ -81,7 +81,7 @@ def _on_remote_clipboard(browser_id: str, data: bytes, mime: str) -> None:
     """A copy happened in the remote browser (XFixes fired): stash it for the GET and
     signal every connected viewer of this browser. Small text inlines over the control
     channel; images and large text ride the GET so no >1 MiB WS frame can tear down the
-    video socket (verbatim policy from streamed_browser)."""
+    video socket (verbatim policy from the streamed-browser prototype)."""
     with _clip_lock:
         clip = _clips.get(browser_id)
         if clip is None:
@@ -143,7 +143,7 @@ def clipboard_paste(browser_id: str, session: Any, data: bytes, mime: str) -> Re
     GATED on ``session.input_allowed`` -- only the controlling human may write into the
     browser (an agent mid-task must not have a stray paste land). The selection is set
     BEFORE the paste keystroke, and the write is recorded so the copy-out monitor doesn't
-    echo it back (verbatim from streamed_browser, plus the fleet's control gate)."""
+    echo it back (verbatim from the streamed-browser prototype, plus the fleet's control gate)."""
     if not session.input_allowed:
         return jsonify({"error": "not controlling"}), 409
     with _clip_lock:
@@ -203,7 +203,7 @@ def _receive_pump(
     """Read credit acks, resize, and Selkies input on a dedicated thread until the
     socket closes.
 
-    Ack (flow control) and resize handling are verbatim from streamed_browser. Live
+    Ack (flow control) and resize handling are verbatim from the streamed-browser prototype. Live
     input (``router.handle`` -- Selkies kd/ku/kr/kh/m -> XTEST) is GATED on the browser's
     ``input_allowed`` (the thread-safe mirror of who holds control): a human's mouse/key
     is injected only while the human owns the browser, so a stale event can't land after
@@ -255,7 +255,7 @@ def _receive_pump(
 def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
     """Serve one viewer of one already-running browser on its private ``display``.
 
-    The outbound send loop is verbatim from streamed_browser's ``stream_socket``. ``session``
+    The outbound send loop is verbatim from the streamed-browser prototype's stream handler. ``session``
     is the LiveBrowser, read for ``input_allowed`` (the control gate for injected input) and
     ``audio_capture_device`` (this browser's PulseAudio monitor, or None if no audio).
     """
@@ -270,7 +270,7 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
     router = InputRouter(display)
     # Cold-start size: the viewer passes its real pane size as ?w=&h= on the connect
     # URL, so the first emitted frame is already pane-sized -- no 1280x800 frame is
-    # ever shown and no resize round-trip is needed (verbatim from streamed_browser).
+    # ever shown and no resize round-trip is needed (verbatim from the streamed-browser prototype).
     initial_w = request.args.get("w", type=int)
     initial_h = request.args.get("h", type=int)
     if initial_w is not None and initial_h is not None:
@@ -279,14 +279,14 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
     # Clipboard copy-out signals for THIS viewer: the XFixes monitor thread appends
     # small control strings here and the send loop below drains them (deque append /
     # popleft are each thread-safe; a single sender keeps WS sends serialized). Register
-    # the queue as a sink so a remote copy reaches this viewer (verbatim from streamed_browser).
+    # the queue as a sink so a remote copy reaches this viewer (verbatim from the streamed-browser prototype).
     clip_queue: "deque[str]" = deque(maxlen=32)
     clip_sink = clip_queue.append  # one identity for register/unregister set membership
     _register_clip_sink(browser_id, display, clip_sink)
     # Audio is strictly additive: gate on pcmflux being importable AND this browser having
     # its own sink. It shares the video pipe's Condition so a fresh Opus chunk wakes the
     # same single sender thread (simple_websocket sends are not cross-thread safe). A start
-    # failure leaves video untouched. Verbatim from streamed_browser, keyed to this browser.
+    # failure leaves video untouched. Verbatim from the streamed-browser prototype, keyed to this browser.
     audio_pipe: "AudioPipe | None" = None
     audio_device = session.audio_capture_device
     if is_audio_available() and audio_device:
