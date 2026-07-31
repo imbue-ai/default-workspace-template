@@ -26,6 +26,11 @@ export interface AgentState {
 export interface AppEntry {
   name: string;
   url: string;
+  // The unguessable ``<name>-<rand>`` hostname label this service's public
+  // origin uses (see ``system/scripts/forward_port.py``). Empty for legacy
+  // rows written before labels existed; ``labelForService`` falls back to the
+  // name in that case.
+  label: string;
 }
 
 // A live tmux terminal session (any tmux session whose name does NOT start
@@ -382,6 +387,18 @@ export function getApps(): AppEntry[] {
   return apps;
 }
 
+/** Resolve a service NAME to the unguessable hostname LABEL its public origin
+ *  uses. Services register a ``<name>-<rand>`` label (see
+ *  ``system/scripts/forward_port.py``); every panel origin is built from that
+ *  label, not the bare name. Falls back to the name itself when the service
+ *  has no known label -- an unregistered service, the ``system_interface``
+ *  shell, or before the app list has loaded -- so origin derivation still
+ *  works. */
+export function labelForService(name: string): string {
+  const app = apps.find((a) => a.name === name);
+  return app?.label || name;
+}
+
 export function getProtoAgents(): ProtoAgent[] {
   return protoAgents;
 }
@@ -459,7 +476,7 @@ export function buildSessionTerminalUrl(sessionName: string, terminalId: string,
   params.append("arg", sessionName);
   params.append("arg", terminalId);
   params.append("arg", workdir);
-  return `${deriveServiceOrigin("terminal")}?${params.toString()}`;
+  return `${deriveServiceOrigin(labelForService("terminal"))}?${params.toString()}`;
 }
 
 /** Ask the backend to allocate the next free ``terminal-N`` session name. The

@@ -19,9 +19,11 @@ active-panel state.
 
 import hashlib
 import json
+import os
 import re
 import threading
 import time
+import tomllib
 import urllib.parse
 import uuid
 from collections.abc import Sequence
@@ -46,6 +48,18 @@ _TERMINAL_SERVICE_NAME = "terminal"
 # prefixes its name as one more label, so a URL is a service URL exactly when
 # a ``host-<32hex>`` label appears somewhere PAST the first label.
 _WORKSPACE_HOST_LABEL_PATTERN = re.compile(r"^host-[0-9a-f]{32}$")
+
+# The app registry the frontend/forwarder key off. Defaults to
+# ``data/.state/apps.toml`` relative to cwd; overridable via ``MINDS_APPS_FILE``
+# (tests point it at a sandboxed fixture). Mirrors ``forward_port.py`` /
+# ``system/scripts/layout.py``.
+_DEFAULT_APPS_FILE = "data/.state/apps.toml"
+_ENV_APPS_FILE = "MINDS_APPS_FILE"
+
+
+def _apps_file() -> Path:
+    """Path to the app registry (``data/.state/apps.toml`` by default)."""
+    return Path(os.environ.get(_ENV_APPS_FILE, _DEFAULT_APPS_FILE))
 
 # Query parameter that distinguishes individual browsers in the per-workspace
 # browser fleet. The viewer is served at the browser service's origin with a
@@ -289,19 +303,47 @@ def is_destroyable_terminal_session(session_name: str, prefix: str) -> bool:
     return bool(session_name) and not _is_agent_session(session_name, prefix)
 
 
+def _read_label_to_service_name(path: Path) -> dict[str, str]:
+    """Map each service's origin ``label`` back to its registered ``name``.
+
+    Panel origins are built from a service's unguessable ``<name>-<rand>``
+    origin label (see ``system/scripts/forward_port.py``), so the first
+    hostname label of a stored service URL is the LABEL, not the name. This
+    reads ``data/.state/apps.toml`` and inverts each row's ``label -> name`` so
+    the parse below can recover the service name. Missing/unreadable registry
+    yields an empty map (callers fall back to the label as-is).
+    """
+    if not path.exists():
+        return {}
+    try:
+        data = tomllib.loads(path.read_text())
+    except (OSError, tomllib.TOMLDecodeError, ValueError):
+        return {}
+    mapping: dict[str, str] = {}
+    for entry in data.get("apps", []):
+        name = entry.get("name")
+        label = entry.get("label")
+        if isinstance(name, str) and name and isinstance(label, str) and label:
+            mapping[label] = name
+    return mapping
+
+
 def _service_name_from_url(url: Any) -> str | None:
     """Service name of an absolute service-origin URL, or None.
 
     The frontend persists panel URLs as absolute service origins whose host
-    prefixes the service name as the first label of the workspace hostname:
-    locally ``http://<name>.host-<hex>.localhost:8421/...`` and on shares
-    ``https://<name>.host-<hex>.<user>.<region>.<domain>/...`` -- the same
+    prefixes the service's unguessable ``<name>-<rand>`` origin label as the
+    first label of the workspace hostname: locally
+    ``http://<label>.host-<hex>.localhost:8421/...`` and on shares
+    ``https://<label>.host-<hex>.<user>.<region>.<domain>/...`` -- the same
     nesting rule, only the base differs. So a URL names a service exactly
-    when its host carries a ``host-<32hex>`` label past the first label, and
-    the service is the first label. Anything else -- an external ``https://``
-    panel, the bare workspace origin (whose FIRST label is the ``host-<hex>``
-    coordinate itself), a non-string value -- yields None so it never
-    masquerades as a service.
+    when its host carries a ``host-<32hex>`` label past the first label; the
+    first label is the origin LABEL, which the registry maps back to the
+    service name (falling back to the label as-is when it has no registry
+    match -- e.g. ``system_interface`` or a pre-label URL). Anything else --
+    an external ``https://`` panel, the bare workspace origin (whose FIRST
+    label is the ``host-<hex>`` coordinate itself), a non-string value --
+    yields None so it never masquerades as a service.
 
     ``system/scripts/layout.py`` (stdlib-only, cannot import this package)
     mirrors this parse in ``_service_coordinates_from_url``; a drift test in
@@ -313,7 +355,10 @@ def _service_name_from_url(url: Any) -> str | None:
     host = urllib.parse.urlsplit(url).hostname or ""
     labels = host.split(".")
     if any(_WORKSPACE_HOST_LABEL_PATTERN.match(label) for label in labels[1:]):
-        return labels[0] or None
+        label = labels[0]
+        if not label:
+            return None
+        return _read_label_to_service_name(_apps_file()).get(label, label)
     return None
 
 

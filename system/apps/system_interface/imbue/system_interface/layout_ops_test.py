@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import _service_name_from_url
@@ -649,3 +651,39 @@ def test_service_name_from_url_agrees_with_layout_script_parser() -> None:
     for url in urls:
         coordinates = layout_script._service_coordinates_from_url(url)
         assert _service_name_from_url(url) == (coordinates[0] if coordinates else None), url
+
+
+def test_labeled_service_origin_round_trips_to_service_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``<name>-<rand>`` origin label maps back to its registered service name.
+
+    Panel origins are built from the unguessable ``<name>-<rand>`` label, so the
+    stored URL's first hostname label is that label; the registry inverts it to
+    the service name. An unregistered label falls back to itself (best effort),
+    and the ``layout.py`` mirror agrees on both.
+    """
+    apps_file = tmp_path / "apps.toml"
+    apps_file.write_text(
+        '[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\n'
+        'label = "terminal-x7k9q2w1"\n'
+    )
+    monkeypatch.setenv("MINDS_APPS_FILE", str(apps_file))
+
+    labeled_url = f"http://terminal-x7k9q2w1.{_LOCAL_WORKSPACE_HOST}/?arg=_&arg=agent&arg=main"
+    assert _service_name_from_url(labeled_url) == "terminal"
+
+    # An unknown label (no registry row) falls back to itself.
+    unknown_url = f"http://ghost-00000000.{_LOCAL_WORKSPACE_HOST}/"
+    assert _service_name_from_url(unknown_url) == "ghost-00000000"
+
+    # The stdlib ``layout.py`` mirror must agree on the same registry.
+    script_path = Path(__file__).parents[4] / "scripts" / "layout.py"
+    spec = importlib.util.spec_from_file_location("_layout_script_label_check", script_path)
+    assert spec is not None and spec.loader is not None
+    layout_script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(layout_script)
+    for url in (labeled_url, unknown_url):
+        coordinates = layout_script._service_coordinates_from_url(url)
+        assert coordinates is not None
+        assert coordinates[0] == _service_name_from_url(url), url
