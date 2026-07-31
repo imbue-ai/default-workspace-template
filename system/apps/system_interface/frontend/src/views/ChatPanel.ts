@@ -32,10 +32,13 @@ import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selecti
 import { createTranscriptScroll } from "./transcript-scroll";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import {
+  addAgentRemovedListener,
   addAgentsUpdatedListener,
   getAgentById,
   getProtoAgents,
+  removeAgentRemovedListener,
   removeAgentsUpdatedListener,
+  type AgentRemovedListener,
   type AgentsUpdatedListener,
 } from "../models/AgentManager";
 import { openLoginModal } from "../models/ClaudeAuth";
@@ -44,13 +47,14 @@ import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
-import { AgentPresenceTracker } from "../models/agentPresence";
 import { ReconnectBackoff } from "../models/backoff";
 import {
   buildAgentTerminalUrl,
   closeChatPanelForAgent,
   getTerminalUrl,
+  isChatTombstoned,
   openIframeTabForAgent,
+  setChatTombstoned,
 } from "./DockviewWorkspace";
 import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
@@ -429,10 +433,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   function manageStreamConnection(agentId: string): void {
-    if (!isConversationNotFound(agentId)) {
-      connectToStream(agentId);
-    } else {
+    // A destroyed agent has nothing left to stream, and a not-found transcript
+    // means the server cannot resolve the agent at all.
+    if (isConversationNotFound(agentId) || isChatTombstoned(agentId)) {
       disconnectFromStream(agentId);
+    } else {
+      connectToStream(agentId);
     }
   }
 
@@ -440,8 +446,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // the agent is listed but its transcript keeps 404ing: one reload per stretch of
   // presence, re-armed the next time the agent goes missing.
   let recoveryAttemptedWhilePresent = false;
-  // Decides when this panel's agent may be declared destroyed (see agentPresence).
-  const presence = new AgentPresenceTracker();
 
   function ensureAgentLoaded(agentId: string): void {
     if (agentId === currentAgentId) {
@@ -452,9 +456,25 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     scroll.reset();
     backfillInFlight = false;
     recoveryAttemptedWhilePresent = false;
-    presence.reset();
     loadAgent(agentId);
   }
+
+  /**
+   * The agent behind this tab was destroyed.
+   *
+   * Acted on unconditionally: this is the backend relaying ``mngr observe``'s
+   * explicit removal, so unlike an agent going missing from a snapshot there is
+   * nothing to corroborate and nothing to debounce. Recording it on the panel
+   * params is what lets the tab still read as a tombstone after a reload.
+   */
+  const agentRemovedListener: AgentRemovedListener = (removedAgentId) => {
+    if (removedAgentId !== currentAgentId) {
+      return;
+    }
+    setChatTombstoned(removedAgentId, true);
+    disconnectFromStream(removedAgentId);
+    m.redraw();
+  };
 
   // A reload of the snapshot that 404'd is outstanding; only one at a time.
   let notFoundRetryInFlight = false;
@@ -489,13 +509,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
     // Read the agent store rather than the broadcast payload, which is filtered
     // to the user-facing agents.
-    const isPresent = getAgentById(agentId) !== undefined;
-    presence.noteSnapshot(isPresent);
-    if (!isPresent) {
+    if (getAgentById(agentId) === undefined) {
       recoveryAttemptedWhilePresent = false;
-      // The snapshot may have just tipped the panel into the tombstone state.
-      m.redraw();
       return;
+    }
+    // The agent is back. Whatever we were told before, it exists now, so drop a
+    // stale destroyed marker (an id that was destroyed and recreated) rather
+    // than leaving the tab insisting otherwise.
+    if (isChatTombstoned(agentId)) {
+      setChatTombstoned(agentId, false);
+      m.redraw();
     }
     if (!isConversationNotFound(agentId) || recoveryAttemptedWhilePresent || notFoundRetryInFlight) {
       return;
@@ -778,7 +801,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     ensureAgentLoaded(agentId);
     manageStreamConnection(agentId);
 
-    if (presence.isConfirmedGone) {
+    if (isChatTombstoned(agentId)) {
       return renderDestroyedAgent(agentId);
     }
 
@@ -924,10 +947,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   return {
     oninit() {
       addAgentsUpdatedListener(agentsUpdatedListener);
+      addAgentRemovedListener(agentRemovedListener);
     },
 
     onremove() {
       removeAgentsUpdatedListener(agentsUpdatedListener);
+      removeAgentRemovedListener(agentRemovedListener);
       disconnectLogWs();
       scroll.detach();
       if (currentAgentId !== null) {
@@ -943,10 +968,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // mount without a panel api -- treat that as visible.
       panelVisible = vnode.attrs.isVisible ?? true;
 
-      // Feed the presence tracker the transcript half of the tombstone gate before
-      // anything below reads its verdict.
-      presence.noteTranscriptMissing(isConversationNotFound(agentId));
-      const isTombstoned = presence.isConfirmedGone;
+      const isTombstoned = isChatTombstoned(agentId);
 
       // renderMessages sets the reserved heights, so build the content first, then
       // decide whether the viewport currently sits over a reserved region (above

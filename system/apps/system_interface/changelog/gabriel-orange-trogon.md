@@ -18,9 +18,13 @@ client, or the CLI -- now says so. The tab is kept rather than silently removed,
 so you keep the context that the agent existed, and it renders "This agent was
 destroyed." with a Close button and makes no further requests of any kind.
 Closing it takes the tab out of the saved layout, so it stops reappearing on
-every restore. The tab is only declared dead when the agent is missing from
-consecutive agent-list updates *and* its transcript comes back not-found, so a
-momentary hiccup in agent discovery cannot tombstone a live chat.
+every restore, and the tab still reads as a tombstone after a reload.
+
+This is driven by the workspace telling the interface that a specific agent was
+destroyed, rather than the interface guessing from an agent going missing. That
+distinction matters: an agent is equally missing from the list while it is still
+being created and while agent discovery is momentarily restarting, so a guess
+would eventually put "This agent was destroyed." on a perfectly healthy chat.
 
 Scrolling a long transcript no longer corrupts its own loaded window. Pages that
 arrive after the view has been reset (an SSE reconnect, or a jump to a far scroll

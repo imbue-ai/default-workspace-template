@@ -138,6 +138,15 @@ describe("layout content equivalence", () => {
     expect(layoutContentsAreEquivalent(withUndefined, without)).toBe(true);
   });
 
+  // The destroyed marker is real shared state, not a per-client view detail: it
+  // records that the backend reported the agent gone, so it must survive a save
+  // and reach the other client rather than being projected away.
+  it("still sees a chat tab being marked destroyed", () => {
+    const before = makeLayout({ "chat-a": chatPanel("a") });
+    const after = makeLayout({ "chat-a": { ...chatPanel("a"), chatTombstoned: true } });
+    expect(layoutContentsAreEquivalent(before, after)).toBe(false);
+  });
+
   it("distinguishes a layout with no content from an empty one", () => {
     expect(layoutContentsAreEquivalent(null, makeLayout({}))).toBe(false);
     expect(layoutContentsAreEquivalent(null, null)).toBe(true);

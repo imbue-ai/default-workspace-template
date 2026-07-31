@@ -45,6 +45,12 @@ export interface PanelParams {
   terminalSessionName?: string;
   terminalId?: string;
   terminalSessionId?: string;
+  // Set on a chat tab once the backend has said its agent was destroyed. This
+  // is a record of an authoritative event, not a guess from the agent list,
+  // which is what makes it safe to persist: a restored tab can render the
+  // tombstone straight away instead of re-deriving it. Cleared if the agent
+  // ever turns up in a later snapshot.
+  chatTombstoned?: boolean;
 }
 
 export interface SavedLayout {
