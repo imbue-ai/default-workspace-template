@@ -226,6 +226,15 @@ def _receive_pump(
                 else:
                     applied_w, applied_h = pipe.set_capture_region(requested_w, requested_h)
                     router.resize_window(applied_w, applied_h)
+            elif data.startswith("f,"):
+                # Viewer visibility throttle: a hidden pane asks for ~1fps so the
+                # encoder stops burning CPU while nobody watches; a shown pane asks for
+                # the full rate. Ungated (it's the viewer's own render concern, not an
+                # input action). The pipe clamps to [1, _CAPTURE_FPS].
+                try:
+                    pipe.set_target_fps(float(data[2:]))
+                except ValueError:
+                    logger.warning("dropped malformed fps {!r}", data[:32])
             elif data.startswith("kr") or data.startswith("kh"):
                 router.handle(data)  # release-all / held-key heartbeat: always allowed
             elif session.input_allowed:
