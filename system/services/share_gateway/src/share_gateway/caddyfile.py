@@ -116,10 +116,16 @@ https://{workspace_domain}:{https_port}, https://*.{workspace_domain}:{https_por
     handle {{
         forward_auth {gateway_backend} {{
             uri /_auth/verify
-            # Upgrade is hop-by-hop and would not survive the auth subrequest;
-            # pass it explicitly so the gateway can apply the WebSocket Origin
-            # rule. Origin and Cookie are end-to-end and forward on their own.
+            # forward_auth copies the original request's headers into the auth
+            # subrequest, Connection/Upgrade included, which makes caddy treat
+            # the subrequest itself as a WebSocket upgrade -- and the gateway's
+            # WSGI server rejects WebSocket handshakes with a 400, killing
+            # every WS connection at the auth step. Capture the upgrade marker
+            # for the gateway's Origin rule first, then strip Upgrade so the
+            # subrequest stays a plain GET. Origin and Cookie are end-to-end
+            # and forward on their own.
             header_up X-Forwarded-Upgrade {{header.Upgrade}}
+            header_up -Upgrade
             copy_headers X-Share-Filtered-Cookie>Cookie
         }}
 
