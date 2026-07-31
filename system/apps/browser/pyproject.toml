@@ -11,6 +11,18 @@ dependencies = [
     "simple-websocket>=1.0",
     "werkzeug>=3.0",
     "browser-use[core]==0.13.1",
+    # Pixel transport for the pixelflux media path (BROWSER_MEDIA=pixelflux, see
+    # videopipe.py). Selkies' Rust capture/encode engine; its native module dlopens
+    # libva/pixman (baked via setup_system.sh).
+    "pixelflux>=2.0.0",
+    # On-demand Opus audio for the pixelflux path (see audiopipe.py). pcmflux is
+    # pixelflux's audio sibling from the same vendor/wheel family; its native module
+    # captures a PulseAudio sink monitor and Opus-encodes, silence-gated.
+    "pcmflux>=2.0.0",
+    # XTEST input injection + window resize for the pixelflux path (see xinput.py,
+    # ported verbatim from Selkies). Also a transitive browser-use dep; pinned here
+    # because we import it directly.
+    "python-xlib>=0.33",
 ]
 
 # Entry point is "browser-service", not "browser": browser-use ships its own

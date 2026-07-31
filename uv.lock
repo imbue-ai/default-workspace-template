@@ -442,6 +442,9 @@ dependencies = [
     { name = "flask" },
     { name = "flask-sock" },
     { name = "oom-priority" },
+    { name = "pcmflux" },
+    { name = "pixelflux" },
+    { name = "python-xlib" },
     { name = "simple-websocket" },
     { name = "werkzeug" },
 ]
@@ -452,6 +455,9 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
+    { name = "pcmflux", specifier = ">=2.0.0" },
+    { name = "pixelflux", specifier = ">=2.0.0" },
+    { name = "python-xlib", specifier = ">=0.33" },
     { name = "simple-websocket", specifier = ">=1.0" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]
