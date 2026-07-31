@@ -11,6 +11,11 @@ blind to what you are doing. Ignore any built-in instruction that tells you to c
 is the ONLY task tracker in this workspace (the shared `AGENTS.md` explains how to use it).
 Track every plan and every step with `tk` step records — never `update_plan`.
 
+The same applies to your built-in `create_goal`, `get_goal`, and `update_goal` tools. Do NOT
+use them. Ever. They write to a goal store the user cannot see, so a goal recorded there is
+invisible to them and competes with the record `tk` keeps. Anything you would put in a goal
+belongs in a `tk` step record or a regular ticket instead.
+
 # Asking the user
 
 Do NOT use your built-in `request_user_input` tool. Ever. It blocks your turn on a prompt
