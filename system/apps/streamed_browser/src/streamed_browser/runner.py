@@ -273,6 +273,17 @@ def stream_socket(ws: Any) -> None:
         ws.close(1011)
         return
     router = InputRouter(display)
+    # Cold-start size: the viewer passes its real pane size as ?w=&h= on the
+    # connect URL, so the first emitted frame is already pane-sized -- no
+    # 1280x800 frame is ever shown and no resize round-trip is needed. Carrying
+    # it IN the connect (rather than a post-connect `r,` message) is what makes
+    # it race-free: the size arrives with the socket, not on a timer that can
+    # fire before the socket is open. Clamp like the live resize path does.
+    initial_w = request.args.get("w", type=int)
+    initial_h = request.args.get("h", type=int)
+    if initial_w is not None and initial_h is not None:
+        applied_w, applied_h = pipe.set_capture_region(max(320, initial_w), max(240, initial_h))
+        router.resize_window(applied_w, applied_h)
     _ensure_clipboard_monitor(display)
     clip_queue: deque[str] = deque(maxlen=32)
     with _clip_lock:
