@@ -130,6 +130,12 @@ interface EventsResponse {
 
 const BACKFILL_PAGE_SIZE = 50;
 
+// Every paging request is timeboxed. A hung fetch (a half-dead tunnel, a stalled
+// proxy) otherwise never settles, so the caller's in-flight guard is never
+// released and the panel freezes under the "Loading messages..." overlay with
+// scrolling inert -- the exact single-client wedge this fence exists for.
+export const PAGING_REQUEST_TIMEOUT_MS = 15_000;
+
 // Upper bound on events held client-side per agent. Far above any viewport
 // window; bounds JS memory for an arbitrarily long conversation while leaving
 // generous scrollback resident. Eviction (see evictOldEvents) only trims the
@@ -166,9 +172,25 @@ class TranscriptStore {
   // Total events in the full server-side transcript (see EventsResponse.total).
   #total = 0;
   #renderVersion = 0;
+  #generation = 0;
 
   get events(): TranscriptEvent[] {
     return this.#events;
+  }
+
+  /**
+   * Bumped by every wholesale window replacement (see reset). Paging requests
+   * capture it before they go out and drop their response if it moved: a page
+   * fetched against the old window's coordinates says nothing about the new one.
+   *
+   * This is the fence for the observed wedge: a scroll-up backfill was in flight
+   * when an SSE-reconnect snapshot reset the window to the live tail, and the
+   * stale prepend then glued an older page above the tail carrying its
+   * old-epoch offset. That left `firstOffset + held < total` while the window's
+   * last event WAS the tail, so the panel re-issued `after=<tail>` forever.
+   */
+  get generation(): number {
+    return this.#generation;
   }
 
   get eventCount(): number {
@@ -257,13 +279,33 @@ class TranscriptStore {
   }
 
   /**
+   * A server-placed page (one carrying its global `offset`) may only be spliced
+   * onto the window when it abuts it exactly -- `[offset, offset + length)` has
+   * to touch the window's `expectedEdge` and share no events with it. The held
+   * events are a single contiguous run by construction, so a page that claims a
+   * range the window does not adjoin cannot be joined to it without the result
+   * claiming to hold events it does not; the caller drops it and refetches from
+   * the current coordinates instead.
+   */
+  #pageAbuts(page: TranscriptEvent[], offset: number, expectedEdge: number): boolean {
+    if (page.length === 0 || offset !== expectedEdge) {
+      return false;
+    }
+    return page.every((event) => !this.#byId.has(event.event_id));
+  }
+
+  /**
    * Prepend an older page. When `offset` is given (the global index of the page's
-   * first event, from the server) it becomes the window's new start; otherwise the
-   * start shifts back by the number of events added (used by tests that prepend
-   * without a server round-trip).
+   * first event, from the server) the page must end exactly where the window
+   * starts, and `offset` becomes the window's new start; otherwise the start
+   * shifts back by the number of events added (used by tests that prepend
+   * without a server round-trip). Returns whether anything was stored.
    */
   prepend(olderEvents: TranscriptEvent[], offset?: number, total?: number): boolean {
     return this.#commit(() => {
+      if (offset !== undefined && !this.#pageAbuts(olderEvents, offset, this.#firstOffset - olderEvents.length)) {
+        return false;
+      }
       const deduped = olderEvents.filter((e) => !this.#byId.has(e.event_id));
       if (deduped.length === 0) {
         return false;
@@ -281,9 +323,13 @@ class TranscriptStore {
   }
 
   /** Append a newer page (paging toward the tail from a window moved off the end
-   *  by a jump). The window start is unchanged. */
-  appendForward(newerEvents: TranscriptEvent[], total?: number): boolean {
+   *  by a jump). The window start is unchanged. Mirror of `prepend`: a
+   *  server-placed page must start exactly where the window ends. */
+  appendForward(newerEvents: TranscriptEvent[], offset?: number, total?: number): boolean {
     return this.#commit(() => {
+      if (offset !== undefined && !this.#pageAbuts(newerEvents, offset, this.#firstOffset + this.#events.length)) {
+        return false;
+      }
       const deduped = newerEvents.filter((e) => !this.#byId.has(e.event_id));
       if (deduped.length === 0) {
         return false;
@@ -324,9 +370,11 @@ class TranscriptStore {
     return removeCount;
   }
 
-  /** Replace the held window wholesale (initial load, or a jump to an offset). */
+  /** Replace the held window wholesale (initial load, or a jump to an offset).
+   *  Invalidates every in-flight page (see `generation`). */
   reset(events: TranscriptEvent[], offset: number, total: number): void {
     this.#commit(() => {
+      this.#generation += 1;
       this.#events = events;
       this.#byId = new Map(events.map((e) => [e.event_id, e]));
       this.#firstOffset = offset;
@@ -346,13 +394,32 @@ class TranscriptStore {
     });
   }
 
-  /** A newer page came back empty: the window reaches the live tail; reconcile the
-   *  total the server now reports. */
-  reconcileTotalAtTail(total: number): void {
+  /**
+   * A newer page came back empty for a cursor that is our own last held event:
+   * the server is stating that the window already reaches the live tail. Treat
+   * that as authoritative and reconcile the window's position to it, so the held
+   * events end exactly at `total`.
+   *
+   * Setting only `total` is not enough. If `firstOffset` came from an older
+   * epoch, `firstOffset + held < total` survives the reconciliation and
+   * `hasMoreAfter` stays true against a window whose last event IS the tail --
+   * which is what turned into an unbounded `after=<tail>` retry loop.
+   *
+   * Returns false when the held window is longer than the whole transcript: the
+   * two claims cannot be reconciled, so the caller has to refetch the snapshot.
+   */
+  snapToTail(total: number): boolean {
+    const reconciledFirstOffset = total - this.#events.length;
+    if (reconciledFirstOffset < 0) {
+      return false;
+    }
     this.#commit(() => {
+      const changed = this.#total !== total || this.#firstOffset !== reconciledFirstOffset;
       this.#total = total;
-      return true;
+      this.#firstOffset = reconciledFirstOffset;
+      return changed;
     });
+    return true;
   }
 }
 
@@ -472,8 +539,13 @@ export function prependEvents(agentId: string, olderEvents: TranscriptEvent[], o
   }
 }
 
-export function appendForwardEvents(agentId: string, newerEvents: TranscriptEvent[], total?: number): void {
-  if (storeFor(agentId).appendForward(newerEvents, total)) {
+export function appendForwardEvents(
+  agentId: string,
+  newerEvents: TranscriptEvent[],
+  offset?: number,
+  total?: number,
+): void {
+  if (storeFor(agentId).appendForward(newerEvents, offset, total)) {
     m.redraw();
   }
 }
@@ -493,11 +565,7 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
   notFoundAgentIds.delete(agentId);
 
   try {
-    const result = await m.request<EventsResponse>({
-      method: "GET",
-      url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId },
-    });
+    const result = await requestEventsPage(agentId, {});
     placeWindow(agentId, result);
     // A snapshot reload (initial load or reconnect) may already contain the
     // real counterpart of an optimistic message; reconcile against it too.
@@ -512,18 +580,32 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
   }
 }
 
+/** Request one page of `/events`, timeboxed so a hung fetch cannot pin the
+ *  caller's in-flight guard forever. */
+function requestEventsPage(agentId: string, params: Record<string, string>): Promise<EventsResponse> {
+  return m.request<EventsResponse>({
+    method: "GET",
+    url: apiUrl("/api/agents/:agentId/events"),
+    params: { agentId, ...params },
+    timeout: PAGING_REQUEST_TIMEOUT_MS,
+  });
+}
+
 /** Jump the window to an arbitrary global offset in one request (e.g. a scrollbar
- *  drag far from the loaded window), replacing the held events. */
-export async function fetchWindowAtOffset(agentId: string, offset: number): Promise<void> {
+ *  drag far from the loaded window), replacing the held events. Returns whether
+ *  the window was actually replaced, so the caller only pins the viewport to the
+ *  new window when there is one. */
+export async function fetchWindowAtOffset(agentId: string, offset: number): Promise<boolean> {
   try {
-    const result = await m.request<EventsResponse>({
-      method: "GET",
-      url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId, offset: String(Math.max(0, offset)), limit: String(BACKFILL_PAGE_SIZE) },
+    const result = await requestEventsPage(agentId, {
+      offset: String(Math.max(0, offset)),
+      limit: String(BACKFILL_PAGE_SIZE),
     });
     placeWindow(agentId, result);
+    return true;
   } catch (error) {
     console.warn(`Failed to load events at offset ${offset} for agent ${agentId}`, error);
+    return false;
   }
 }
 
@@ -535,18 +617,23 @@ export async function fetchBackfillEvents(agentId: string): Promise<void> {
   if (!firstEventId) {
     return;
   }
+  const store = storeFor(agentId);
+  const generation = store.generation;
 
   try {
-    const result = await m.request<EventsResponse>({
-      method: "GET",
-      url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId, before: firstEventId, limit: String(BACKFILL_PAGE_SIZE) },
-    });
+    const result = await requestEventsPage(agentId, { before: firstEventId, limit: String(BACKFILL_PAGE_SIZE) });
+    if (store.generation !== generation) {
+      // The window was replaced while this page was in flight (a snapshot reset
+      // from an SSE reconnect, or an offset jump). The page describes
+      // coordinates that no longer exist; splicing it in is what corrupts the
+      // window. Drop it -- the next scroll refetches from where we now are.
+      return;
+    }
     if (result.events.length > 0) {
       prependEvents(agentId, result.events, result.offset, result.total);
     } else {
       // Nothing before the cursor: the window already starts at the beginning.
-      storeFor(agentId).markReachedStart(result.total);
+      store.markReachedStart(result.total);
     }
   } catch (error) {
     // Backfill failure is non-fatal: the older history just isn't loaded, and
@@ -564,18 +651,28 @@ export async function fetchForwardEvents(agentId: string): Promise<void> {
   if (!lastEventId) {
     return;
   }
+  const store = storeFor(agentId);
+  const generation = store.generation;
 
   try {
-    const result = await m.request<EventsResponse>({
-      method: "GET",
-      url: apiUrl("/api/agents/:agentId/events"),
-      params: { agentId, after: lastEventId, limit: String(BACKFILL_PAGE_SIZE) },
-    });
+    const result = await requestEventsPage(agentId, { after: lastEventId, limit: String(BACKFILL_PAGE_SIZE) });
+    if (store.generation !== generation) {
+      return;
+    }
     if (result.events.length > 0) {
-      appendForwardEvents(agentId, result.events, result.total);
+      appendForwardEvents(agentId, result.events, result.offset, result.total);
     } else if (result.total !== undefined) {
-      // Nothing after the cursor: the window reaches the live tail.
-      storeFor(agentId).reconcileTotalAtTail(result.total);
+      // Nothing after our own last event: the window reaches the live tail.
+      // Reconcile the window's position to that, and if it cannot be squared
+      // with the held events, throw the window away and reload the snapshot.
+      if (store.snapToTail(result.total)) {
+        m.redraw();
+      } else {
+        console.warn(`Transcript window for agent ${agentId} cannot reach the tail; reloading the snapshot`);
+        await fetchEvents(agentId).catch((error: unknown) => {
+          console.warn(`Snapshot reload for agent ${agentId} failed`, error);
+        });
+      }
     }
   } catch (error) {
     console.warn(`Failed to load newer events for agent ${agentId}`, error);
