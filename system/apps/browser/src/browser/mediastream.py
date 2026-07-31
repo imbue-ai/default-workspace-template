@@ -38,7 +38,7 @@ from simple_websocket import ConnectionClosed
 from browser.audiopipe import AudioPipe, AudioPipeError
 from browser.audiopipe import is_available as is_audio_available
 from browser.videopipe import PixelfluxVideoPipe, VideoPipeError
-from browser.xclipboard import ClipboardError, ClipboardMonitor, set_clipboard
+from browser.xclipboard import ClipboardError, ClipboardMonitor, read_clipboard, set_clipboard
 from browser.xinput import InputRouter
 
 _RECEIVE_POLL_SECONDS = 0.05
@@ -137,6 +137,18 @@ def _unregister_clip_sink(browser_id: str, send: Callable[[str], None]) -> None:
         monitor_to_close.close()  # off the lock: close() joins the monitor thread
 
 
+def _await_clipboard_owned(display: str, attempts: int = 20, interval: float = 0.05) -> bool:
+    """Poll the X CLIPBOARD until xclip's forked owner is serving it (up to ~1s).
+
+    Runs off the event loop (Flask request thread), same category of display settle as the
+    Xvfb/PulseAudio/XTEST waits elsewhere -- a real ownership handoff, not an event-loop sleep."""
+    for _ in range(attempts):
+        if read_clipboard(display) is not None:
+            return True
+        time.sleep(interval)
+    return False
+
+
 def clipboard_paste(browser_id: str, session: Any, data: bytes, mime: str) -> Response:
     """Paste-in: set the browser's X CLIPBOARD from the POST body, then inject Ctrl+V.
 
@@ -159,6 +171,15 @@ def clipboard_paste(browser_id: str, session: Any, data: bytes, mime: str) -> Re
         set_clipboard(display, data, mime)
         if monitor is not None:
             monitor.note_written(data)
+        # xclip -i forks a BACKGROUND selection owner; injecting Ctrl+V before it has
+        # actually claimed the X CLIPBOARD makes the paste read a stale/empty selection --
+        # the intermittent "nothing pasted" while the client still reported success. Confirm
+        # the selection is owned+readable before pasting (off-loop, in the Flask request
+        # thread), and fail honestly if it never takes, so an ok response actually means the
+        # clipboard was set and Ctrl+V was injected.
+        if not _await_clipboard_owned(display):
+            logger.warning("clipboard paste for {} never took ownership", browser_id)
+            return jsonify({"error": "clipboard not set"}), 500
         router.paste()
     except ClipboardError as error:
         logger.warning("clipboard paste failed for {} ({})", browser_id, error)
