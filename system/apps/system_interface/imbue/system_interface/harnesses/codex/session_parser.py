@@ -44,7 +44,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from imbue.system_interface.harnesses.codex.tool_labels import codex_tool_labels
+from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 
@@ -116,7 +116,7 @@ def _labelled_tool_call(call_id: str, tool_name: str, input_preview: str) -> dic
     rather than having to understand that a codex ``exec`` hides its real
     operation in a JavaScript argument.
     """
-    header_label, caption_label = codex_tool_labels(tool_name, input_preview)
+    header_label, caption_label = tool_labels(tool_name, input_preview)
     return {
         "tool_call_id": call_id,
         "tool_name": tool_name,
@@ -161,7 +161,7 @@ def _stable_user_event_id(timestamp: str, content: str) -> str:
     return f"codex-user-{digest}"
 
 
-def parse_codex_rollout_line(
+def parse_lines(
     record: dict[str, Any],
     line_index: int,
     tool_name_by_call_id: dict[str, str],
@@ -219,7 +219,7 @@ def parse_codex_rollout_line(
         # Turn-lifecycle markers (task == turn). Codex writes these to the rollout in
         # real time -- ``task_started`` the instant the turn begins, ``task_complete``
         # when it ends -- so the activity layer can bracket "the agent is working"
-        # (see ``codex_activity_state.codex_turn_open``). Verified against real
+        # (see ``codex_activity_state.turn_open``). Verified against real
         # rollouts: ``task_complete`` lands just after the final assistant message, so
         # the dot clears only once the text is already on screen.
         if payload_type in ("task_started", "task_complete"):

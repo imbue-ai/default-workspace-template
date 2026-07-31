@@ -14,7 +14,7 @@ The two strings differ for claude (``Tool: Read`` / ``Reading foo.py``) and are
 usually equal for codex, whose header would otherwise read a useless ``Tool: exec``.
 
 This module holds only the pieces both harnesses share; the per-harness tables
-live in :mod:`claude_tool_labels` and :mod:`codex_tool_labels`.
+live in :mod:`tool_labels` and :mod:`tool_labels`.
 """
 
 import json

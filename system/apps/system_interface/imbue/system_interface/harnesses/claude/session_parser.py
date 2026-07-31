@@ -15,7 +15,7 @@ from loguru import logger as _loguru_logger
 from tk_command_parsing.parser import parse_command
 
 from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_text
-from imbue.system_interface.harnesses.claude.tool_labels import claude_tool_labels
+from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
 
 logger = _loguru_logger
 
@@ -234,7 +234,7 @@ def _is_resume_no_response_reply(message: dict[str, Any]) -> bool:
     return _extract_text_content(message.get("content")).strip() == _NO_RESPONSE_REQUESTED_TEXT
 
 
-def parse_session_lines(
+def parse_lines(
     lines: list[str],
     existing_event_ids: set[str] | None = None,
     tool_name_by_call_id: dict[str, str] | None = None,
@@ -348,7 +348,7 @@ def _parse_assistant_message(
 
             # Labelled here, where the harness is known, so the frontend renders a
             # string rather than deciding what a claude tool call should read as.
-            header_label, caption_label = claude_tool_labels(tool_name, input_preview)
+            header_label, caption_label = tool_labels(tool_name, input_preview)
             tool_call: dict[str, str] = {
                 "tool_call_id": call_id,
                 "tool_name": tool_name,

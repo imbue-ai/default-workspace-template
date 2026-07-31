@@ -1,6 +1,6 @@
 import pytest
 
-from imbue.system_interface.harnesses.codex.tool_labels import codex_tool_labels
+from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
 
 
 @pytest.mark.parametrize(
@@ -58,7 +58,7 @@ from imbue.system_interface.harnesses.codex.tool_labels import codex_tool_labels
     ],
 )
 def test_codex_tool_labels(tool_name: str, input_preview: str, expected: tuple[str, str]) -> None:
-    assert codex_tool_labels(tool_name, input_preview) == expected
+    assert tool_labels(tool_name, input_preview) == expected
 
 
 @pytest.mark.parametrize(
@@ -72,7 +72,7 @@ def test_codex_tool_labels(tool_name: str, input_preview: str, expected: tuple[s
 def test_apply_patch_labels_name_the_operation(operation: str, expected: tuple[str, str]) -> None:
     """The verb comes from the patch header, so a create does not read as an edit."""
     preview = f"await tools.apply_patch(`*** Begin Patch\n*** {operation}\n*** End Patch`);"
-    assert codex_tool_labels("exec", preview) == expected
+    assert tool_labels("exec", preview) == expected
 
 
 def test_apply_patch_is_gated_on_the_function_not_the_string() -> None:
@@ -82,7 +82,7 @@ def test_apply_patch_is_gated_on_the_function_not_the_string() -> None:
     this grep as "Editing x" -- the tool call has to decide first.
     """
     preview = 'tools.exec_command({"cmd":"grep -n \'*** Add File: x\' notes.txt"})'
-    header, caption = codex_tool_labels("exec", preview)
+    header, caption = tool_labels("exec", preview)
     assert header == "Tool: Bash"
     assert caption.startswith("Running grep")
 
@@ -94,7 +94,7 @@ def test_apply_patch_is_found_even_when_the_call_is_past_the_truncation() -> Non
     every edit would read "Running code".
     """
     preview = 'const p = "*** Begin Patch\\n*** Update File: system/apps/system_interface/plugin.py\\n@@ -1'
-    assert codex_tool_labels("exec", preview) == ("Tool: Edit", "Editing plugin.py")
+    assert tool_labels("exec", preview) == ("Tool: Edit", "Editing plugin.py")
 
 
 @pytest.mark.parametrize(
@@ -106,7 +106,7 @@ def test_apply_patch_is_found_even_when_the_call_is_past_the_truncation() -> Non
 )
 def test_unparseable_code_mode_falls_back_rather_than_guessing(input_preview: str) -> None:
     """``Tool: Code`` means exactly one thing: no tools.<fn> call could be parsed."""
-    assert codex_tool_labels("exec", input_preview) == ("Tool: Code", "Running code")
+    assert tool_labels("exec", input_preview) == ("Tool: Code", "Running code")
 
 
 @pytest.mark.parametrize(
@@ -126,7 +126,7 @@ def test_unrecognised_function_is_named_rather_than_hidden(function_name: str) -
     UI the moment it leaks, and a stale table self-reporting -- collapsing these to
     "Tool: Code" would hide both.
     """
-    header, caption = codex_tool_labels("exec", f'await tools.{function_name}({{"a":1}})')
+    header, caption = tool_labels("exec", f'await tools.{function_name}({{"a":1}})')
     assert header == f"Tool: {function_name}"
     assert caption == "Running tool…"
 
@@ -144,20 +144,20 @@ def test_prompt_banned_tools_are_deliberately_uncased(tool_name: str) -> None:
     If one ever shows up in a transcript, the generic fallback IS the signal that
     the ban leaked -- a tailored caption would hide that.
     """
-    header_label, caption_label = codex_tool_labels(tool_name, "{}")
+    header_label, caption_label = tool_labels(tool_name, "{}")
     assert header_label == f"Tool: {tool_name}"
     assert caption_label == "Running tool…"
 
 
 def test_mcp_tool_keeps_its_raw_name_in_the_header() -> None:
     """Matches how claude renders MCP calls, so the two harnesses read alike."""
-    header_label, caption_label = codex_tool_labels("exec", "await tools.mcp__deepwiki__ask_question({})")
+    header_label, caption_label = tool_labels("exec", "await tools.mcp__deepwiki__ask_question({})")
     assert header_label == "Tool: mcp__deepwiki__ask_question"
     assert caption_label == "Running ask question"
 
 
 def test_a_long_command_is_shortened() -> None:
-    _, caption_label = codex_tool_labels("exec", 'await tools.exec_command({"cmd":"%s"})' % ("x" * 200))
+    _, caption_label = tool_labels("exec", 'await tools.exec_command({"cmd":"%s"})' % ("x" * 200))
     assert caption_label.startswith("Running ")
     assert caption_label.endswith("…")
     assert len(caption_label) < 100

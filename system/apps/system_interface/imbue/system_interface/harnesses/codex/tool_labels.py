@@ -1,4 +1,4 @@
-"""Codex's tool-call labels. The claude peer is :mod:`claude_tool_labels`.
+"""Codex's tool-call labels. The claude peer is :mod:`tool_labels`.
 
 Codex runs in code mode (pinned via ``features.code_mode_host``), so nearly every
 operation arrives as one ``exec`` tool whose input is a JavaScript program calling
@@ -207,7 +207,7 @@ def _code_mode_labels(js: str) -> tuple[str, str]:
 
 
 @pure
-def codex_tool_labels(tool_name: str, input_preview: str) -> tuple[str, str]:
+def tool_labels(tool_name: str, input_preview: str) -> tuple[str, str]:
     """``(header_label, caption_label)`` for one codex tool call.
 
     Under code mode the only tools codex calls directly are ``exec`` and ``wait``.

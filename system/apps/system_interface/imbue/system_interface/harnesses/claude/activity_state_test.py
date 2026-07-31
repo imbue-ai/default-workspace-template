@@ -2,7 +2,7 @@ import pytest
 
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
-from imbue.system_interface.harnesses.claude.activity_state import derive_claude
+from imbue.system_interface.harnesses.claude.activity_state import derive
 
 
 @pytest.mark.parametrize(
@@ -16,7 +16,7 @@ from imbue.system_interface.harnesses.claude.activity_state import derive_claude
     ],
 )
 def test_derive_claude(has_pending_tool_use: bool, tail_event_type: str | None, expected: ActivityState) -> None:
-    state = derive_claude(
+    state = derive(
         is_agent_running=True,
         has_pending_tool_use=has_pending_tool_use,
         tail_event_type=tail_event_type,
@@ -35,7 +35,7 @@ def test_derive_claude(has_pending_tool_use: bool, tail_event_type: str | None, 
 )
 def test_derive_claude_non_running_agent_is_always_idle(lifecycle_state: str) -> None:
     assert lifecycle_state not in RUNNING_LIFECYCLE_STATES
-    state = derive_claude(is_agent_running=False, has_pending_tool_use=True, tail_event_type="user_message")
+    state = derive(is_agent_running=False, has_pending_tool_use=True, tail_event_type="user_message")
     assert state == ActivityState.IDLE
 
 
@@ -49,7 +49,7 @@ def test_derive_claude_non_running_agent_is_always_idle(lifecycle_state: str) ->
 )
 def test_derive_claude_stale_tail_overrides_to_idle(has_pending_tool_use: bool, tail_event_type: str) -> None:
     """A tail older than the current process (a turn abandoned by a prior process) reads IDLE."""
-    state = derive_claude(
+    state = derive(
         is_agent_running=True,
         has_pending_tool_use=has_pending_tool_use,
         tail_event_type=tail_event_type,
@@ -61,7 +61,7 @@ def test_derive_claude_stale_tail_overrides_to_idle(has_pending_tool_use: bool, 
 
 def test_derive_claude_fresh_tail_still_reports_working() -> None:
     """A tail written after the current process started drives the normal state."""
-    state = derive_claude(
+    state = derive(
         is_agent_running=True,
         has_pending_tool_use=True,
         tail_event_type="assistant_message",

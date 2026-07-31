@@ -138,7 +138,7 @@ def test_prevent_functools_partial() -> None:
 
 
 def test_prevent_num_prefix() -> None:
-    # Both hits are misfires, and both are the same one: codex_tool_labels.py's module
+    # Both hits are misfires, and both are the same one: tool_labels.py's module
     # docstring quotes codex's own tool signatures verbatim, and two of ITS optional
     # parameters are num-prefixed (`num_last_images_to_include`, `num_games`). Renaming
     # them would make the documented signature wrong, and no identifier in our code is
