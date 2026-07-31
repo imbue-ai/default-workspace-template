@@ -2,7 +2,25 @@
 # Dockerfiles (libs/mngr_modal/imbue/mngr_modal/instance.py: assert not
 # dfp.is_multistage), so the offload binary is built inside this stage
 # rather than COPY'd from a separate builder stage.
-FROM python:3.12-slim
+# The Debian release is named explicitly, and must stay in sync with the suites
+# that system/scripts/write_apt_sources.sh pins apt to (currently trixie).
+#
+# `python:3.12-slim` is a floating tag: it meant Debian 12 when this image was
+# first built and means Debian 13 today. Modal keys its image cache on the text
+# of this Dockerfile, so while the text was unchanged it kept reusing a layer
+# built from the old Debian 12 version of the tag and never re-pulled. Once
+# write_apt_sources.sh moved to the trixie suites, every workspace booted
+# Debian 12 and then pointed apt at Debian 13, so the first `apt-get install`
+# upgraded the world -- libc6 2.36 to 2.41, ld.so, and openssh-server 9.2p1 to
+# 10.0p1 -- underneath the sshd mngr had already started. sshd re-execs the
+# on-disk binary for every incoming connection, so the surviving 9.2 listener
+# handed each new connection to the 10.0 binary; the child died before logging
+# was initialised and the socket closed with no banner and no log entry. Users
+# saw "Error reading SSH protocol banner" on a host that was perfectly healthy.
+#
+# Naming the release both busts that stale cache and stops the base from ever
+# silently crossing a Debian release again.
+FROM python:3.12-slim-trixie
 
 # Install system dependencies including tini for proper signal handling
 RUN apt-get update && apt-get install -y --no-install-recommends \
