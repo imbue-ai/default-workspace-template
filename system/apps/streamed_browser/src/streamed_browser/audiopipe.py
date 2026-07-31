@@ -6,10 +6,10 @@ this replaced a WebCodecs/Opus attempt). So the server just has to produce a
 clean MPEG-TS/MP2 byte stream and pump it down a dedicated ``/audio`` socket.
 
 Only-when-playing, for CPU: ffmpeg runs ONLY while a PulseAudio sink-input is
-actually in the RUNNING state. A ``pactl subscribe`` event stream (not a poll)
-drives a reconcile that starts ffmpeg when sound begins and kills it when it
-stops -- so a silent tab costs nothing (no encoder process at all). This mirrors
-the workspace's main browser app, which ships the same gate.
+actively playing (uncorked -- PulseAudio corks a stream when its producer goes
+idle). A ``pactl subscribe`` event stream (not a poll) drives a reconcile that
+starts ffmpeg when sound begins and kills it when it stops -- so a silent tab
+costs nothing (no encoder process at all).
 """
 
 import json
@@ -93,7 +93,15 @@ class AudioStreamer:
             inputs = json.loads(result.stdout or "[]")
         except (OSError, subprocess.SubprocessError, ValueError):
             return False
-        return any(item.get("state") == "RUNNING" for item in inputs)
+        # "Sound is playing" == at least one uncorked sink-input. PulseAudio corks
+        # a stream when its producer goes idle (Chromium corks a silent tab), so
+        # an uncorked input means audio is actively flowing into the sink. We key
+        # on `corked` rather than the sink-input `state` field because this
+        # PulseAudio build does not emit `state` in JSON at all (it comes back
+        # absent -> the old `state == "RUNNING"` test was always False, so ffmpeg
+        # never started and no audio was ever encoded). Absent `corked` defaults
+        # to True (treat as inactive) so a missing field can't spuriously encode.
+        return any(not item.get("corked", True) for item in inputs)
 
     def _reconcile(self) -> None:
         with self._lock:
