@@ -26,13 +26,17 @@ def test_prevent_while_true() -> None:
 
 
 def test_prevent_time_sleep() -> None:
-    # +2 for the boot-a-server integration tests (test_browser_integration.py): they
+    # 2 for the boot-a-server integration tests (test_browser_integration.py): they
     # start the real threaded Werkzeug server on an ephemeral port and poll for server
     # readiness and for a state transition over a real socket -- the only way to verify
     # the disconnect-as-lease + cast-WS contract that the in-process Flask test client
-    # cannot exercise. This mirrors system/apps/system_interface, whose boot-server tests bump
-    # the same ratchet. No production code uses time.sleep.
-    rc.check_time_sleep(_DIR, snapshot(2))
+    # cannot exercise. +3 for OFF-LOOP blocking waits on the pixelflux/pcmflux media path:
+    # session.py's Xvfb-readiness poll in _spawn_xvfb and PulseAudio-daemon-readiness poll
+    # in _ensure_pulse_daemon (both run via asyncio.to_thread, so neither blocks the loop),
+    # and xinput.py's XTEST device-recycle settle (copied verbatim from streamed_browser,
+    # on its own capture thread). All are real hardware/display/daemon settles, not
+    # event-loop sleeps.
+    rc.check_time_sleep(_DIR, snapshot(5))
 
 
 def test_prevent_global_keyword() -> None:
@@ -51,12 +55,24 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    # +1 for session.py run_agent(): a browser-use Agent run can fail in many
-    # ways (LLM, CDP, navigation); we deliberately catch broadly at that task
-    # boundary so any failure is surfaced to the user's chat instead of being
-    # swallowed as an unretrieved-task exception. The error is re-logged and
-    # reported, not silenced.
-    rc.check_broad_exception_catch(_DIR, snapshot(1))
+    # All 18 are best-effort boundaries at the async loop / device / X11 edges, each
+    # marked `# noqa: BLE001` with a reason; none silences a real bug.
+    #  * 1 in session.py run_agent(): a browser-use Agent run can fail many ways (LLM,
+    #    CDP, navigation); we catch broadly so any failure is surfaced to the user's chat
+    #    instead of being swallowed as an unretrieved-task exception (re-logged + reported).
+    #  * 9 in session.py at CDP boundaries (get_tabs / get_or_create_cdp_session /
+    #    activateTarget / createTarget / closeTarget / navigate during restore): browser-use
+    #    drives Chromium over cdp-use, whose errors are NOT a fixed subclass of the
+    #    _BROWSER_ERRORS tuple, so a narrow catch could let a CDP hiccup wedge the single
+    #    event loop. These are bounded (asyncio.wait_for) and best-effort by design.
+    #  * 4 in xinput.py (copied verbatim from streamed_browser): XTEST injection is
+    #    best-effort and must never raise into the /stream request thread.
+    #  * 3 in xclipboard.py (copied verbatim from streamed_browser): the XFixes monitor
+    #    runs on its own thread against a python-xlib connection whose errors are an open
+    #    set; a monitor-thread or callback crash must be logged, not silent or fatal.
+    #  * 1 in audiopipe.py (copied verbatim from streamed_browser): stopping the native
+    #    pcmflux capture handle during teardown must never raise up into the sender thread.
+    rc.check_broad_exception_catch(_DIR, snapshot(18))
 
 
 def test_prevent_builtin_exception_raises() -> None:
