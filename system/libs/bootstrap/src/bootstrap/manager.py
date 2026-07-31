@@ -66,6 +66,11 @@ ETC_ENVIRONMENT = Path("/etc/environment")
 # location -- who the services agent is and where its state lives -- which is
 # what in-workspace tooling resolves itself from. Deliberately an allowlist and
 # not a `MNGR_*` glob: see _publish_agent_env_for_ssh.
+#
+# `MNGR_AGENT_OWNER` must never appear here. mngr's teardown treats it as the
+# claim "this agent may kill this process", so publishing it would put every
+# ssh session back in the blast radius of `mngr stop` -- which is the whole
+# reason mngr keeps it separate from the identity var below.
 SSH_PUBLISHED_ENV_VARS: tuple[str, ...] = (
     "MNGR_HOST_DIR",
     "MNGR_AGENT_ID",
