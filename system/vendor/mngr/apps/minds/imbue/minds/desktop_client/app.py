@@ -82,13 +82,14 @@ from imbue.minds.desktop_client.latchkey.permission_overview import build_worksp
 from imbue.minds.desktop_client.latchkey.permission_overview import disconnect_account
 from imbue.minds.desktop_client.latchkey.permission_overview import revoke_file_sharing_for_all_workspaces
 from imbue.minds.desktop_client.latchkey.permission_overview import revoke_file_sharing_for_workspace
-from imbue.minds.desktop_client.latchkey.permission_overview import revoke_service_for_all_workspaces
-from imbue.minds.desktop_client.latchkey.permission_overview import revoke_service_for_workspace
+from imbue.minds.desktop_client.latchkey.permission_overview import revoke_service_account_for_all_workspaces
+from imbue.minds.desktop_client.latchkey.permission_overview import revoke_service_account_for_workspace
 from imbue.minds.desktop_client.latchkey.permission_overview import revoke_workspace_verb_for_workspace
 from imbue.minds.desktop_client.mind_liveness import compute_mind_liveness_by_agent_id
 from imbue.minds.desktop_client.mind_liveness import get_shutdown_capable_workspace_agent_ids
 from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.notification import NotificationDispatcher
+from imbue.minds.desktop_client.onboarding_services import list_onboarding_services
 from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAttemptRecord
 from imbue.minds.desktop_client.pending_create_attempts import PendingCreateAttemptState
 from imbue.minds.desktop_client.provider_display import friendly_provider_label
@@ -110,15 +111,18 @@ from imbue.minds.desktop_client.responses import make_streaming_response
 from imbue.minds.desktop_client.responses import safe_local_redirect_path
 from imbue.minds.desktop_client.session_store import AccountSession
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
+from imbue.minds.desktop_client.sharing_handler import delete_tunnel_for_agent
 from imbue.minds.desktop_client.state import DesktopClientState
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.state import set_state
 from imbue.minds.desktop_client.supertokens_routes import bounce_latchkey_forward_supervisor
 from imbue.minds.desktop_client.supertokens_routes import create_supertokens_blueprint
 from imbue.minds.desktop_client.supertokens_routes import signout_user_via_plugin
+from imbue.minds.desktop_client.supertokens_routes import wake_chrome_event_streams
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
 from imbue.minds.desktop_client.system_interface_health import AgentHealth
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
+from imbue.minds.desktop_client.templates import InspirationWorkspaceRow
 from imbue.minds.desktop_client.templates import RemoteWorkspaceTile
 from imbue.minds.desktop_client.templates import render_account_plan_modal_page
 from imbue.minds.desktop_client.templates import render_account_plan_section
@@ -139,6 +143,7 @@ from imbue.minds.desktop_client.templates import render_help_page
 from imbue.minds.desktop_client.templates import render_inbox_list_fragment
 from imbue.minds.desktop_client.templates import render_inbox_page
 from imbue.minds.desktop_client.templates import render_inbox_unavailable_fragment
+from imbue.minds.desktop_client.templates import render_inspiration_create_page
 from imbue.minds.desktop_client.templates import render_landing_page
 from imbue.minds.desktop_client.templates import render_login_page
 from imbue.minds.desktop_client.templates import render_login_redirect_page
@@ -152,6 +157,8 @@ from imbue.minds.desktop_client.templates import render_sharing_modal_page
 from imbue.minds.desktop_client.templates import render_sidebar_page
 from imbue.minds.desktop_client.templates import render_welcome_page
 from imbue.minds.desktop_client.templates import render_workspace_backup_history
+from imbue.minds.desktop_client.templates import render_workspace_options_modal_page
+from imbue.minds.desktop_client.templates import render_workspace_options_page
 from imbue.minds.desktop_client.templates import render_workspace_settings
 from imbue.minds.desktop_client.webdav import create_webdav_app
 from imbue.minds.desktop_client.workspace_color import DEFAULT_WORKSPACE_COLOR
@@ -182,6 +189,7 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr_latchkey.forward_supervisor import LatchkeyForwardSupervisor
+from imbue.mngr_latchkey.services_catalog import ServicesCatalog
 
 _PROXY_TIMEOUT_SECONDS: Final[float] = 30.0
 
@@ -246,6 +254,24 @@ def _get_is_mac() -> bool:
     """
     user_agent = request.headers.get("user-agent", "")
     return "Macintosh" in user_agent or "Mac OS" in user_agent
+
+
+def _optional_int_query_param(name: str) -> int | None:
+    """Read an integer query param, or None when it is absent or unparseable.
+
+    Distinct from :func:`_int_query_param`: here the param's ABSENCE is
+    meaningful rather than something to paper over with a default. The options
+    panel is docked under the titlebar's icon-tab strip when it is given that
+    strip's position and centered when it is not, so a guessed position would
+    dock it against a strip that is not there.
+    """
+    raw = request.args.get(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _int_query_param(name: str, default: int) -> int:
@@ -775,7 +801,7 @@ def _handle_help_assist() -> Response:
     if not workspace_agent_id_raw:
         return make_response(
             status_code=400,
-            content='{"error": "Agent help is only available inside a workspace"}',
+            content='{"error": "Agent help is only available inside a machine"}',
             media_type="application/json",
         )
     try:
@@ -800,7 +826,7 @@ def _handle_help_assist() -> Response:
         return make_response(
             status_code=409,
             content=json.dumps(
-                {"error": "This workspace doesn't have the agent-assist skill, so an agent can't help here yet."}
+                {"error": "This machine doesn't have the agent-assist skill, so an agent can't help here yet."}
             ),
             media_type="application/json",
         )
@@ -808,7 +834,7 @@ def _handle_help_assist() -> Response:
         return make_response(
             status_code=502,
             content=json.dumps(
-                {"error": "Couldn't reach this workspace to start an agent. It may be starting up or unavailable."}
+                {"error": "Couldn't reach this machine to start an agent. It may be starting up or unavailable."}
             ),
             media_type="application/json",
         )
@@ -824,7 +850,7 @@ def _handle_help_assist() -> Response:
     if not started:
         return make_response(
             status_code=502,
-            content=json.dumps({"error": "Could not start an agent in this workspace. Please try again."}),
+            content=json.dumps({"error": "Could not start an agent in this machine. Please try again."}),
             media_type="application/json",
         )
     return make_response(status_code=200, content=json.dumps({"ok": True}), media_type="application/json")
@@ -873,6 +899,27 @@ def _account_launcher_context(session_store: MultiAccountSessionStore | None) ->
             shown = account
             break
     return str(shown.email), len(accounts) - 1
+
+
+def _build_account_launcher_payload(session_store: MultiAccountSessionStore | None) -> dict[str, object]:
+    """The account-identity fields every chrome ``workspaces`` frame carries.
+
+    The home screen's bottom-left launcher is server-rendered from the same
+    ``_account_launcher_context``, but the page stays put across a sign-out /
+    sign-in / default-account switch made in an overlay modal. Carrying the
+    identity on the stream is what lets the launcher re-label itself (and flip
+    ``data-signed-in``, which decides whether clicking it opens Manage Accounts
+    or the sign-in modal) without a reload. ``has_accounts`` is derived from the
+    account list rather than the email so the welcome splash's self-advance
+    keeps its exact "any account at all" meaning.
+    """
+    accounts = session_store.list_accounts() if session_store else []
+    launcher_email, launcher_extra_count = _account_launcher_context(session_store)
+    return {
+        "has_accounts": bool(accounts),
+        "account_email": launcher_email,
+        "extra_account_count": launcher_extra_count,
+    }
 
 
 def _compute_cloud_tile_state(
@@ -1032,7 +1079,9 @@ def _handle_landing_page() -> Response:
     all_agent_ids = backend_resolver.list_active_workspace_ids()
     paths: WorkspacePaths | None = get_state().api_v1_paths
     landing_session_store: MultiAccountSessionStore | None = get_state().session_store
-    destroying_status_by_agent_id = _resolve_destroying_for_landing(paths, backend_resolver, landing_session_store)
+    destroying_status_by_agent_id = _resolve_destroying_for_landing(
+        paths, backend_resolver, landing_session_store, get_state().imbue_cloud_cli
+    )
     launcher_email, launcher_extra_count = _account_launcher_context(landing_session_store)
     remote_workspaces = _collect_remote_workspace_tiles(backend_resolver, landing_session_store)
     locked_account_emails = _collect_locked_account_emails(landing_session_store)
@@ -1271,6 +1320,74 @@ def _handle_create_page() -> Response:
     return make_html_response(content=html)
 
 
+def _handle_inspiration_create_page() -> Response:
+    """Show the Create from Inspiration page (GET /create/inspiration).
+
+    The deeplink landing page for an Inspiration link: a chooser between
+    creating a new workspace from the linked repo and adding the Inspiration
+    to an existing workspace (via a copyable ``/use-inspiration`` message and
+    a workspace picker). Without a ``git_url`` there is nothing to show, so
+    the request degrades to the plain create page.
+    """
+    if not _is_request_authenticated():
+        return make_response(status_code=403, content="Not authenticated")
+
+    git_url = request.args.get("git_url", "").strip()
+    if not git_url:
+        return make_redirect_response("/create", status_code=302)
+    branch = request.args.get("branch", "")
+
+    backend_resolver = get_state().backend_resolver
+    session_store: MultiAccountSessionStore | None = get_state().session_store
+    minds_config: MindsConfig | None = get_state().minds_config
+    geo_cache: GeoLocationCache | None = get_state().geo_location_cache
+    accounts = session_store.list_accounts() if session_store else []
+    default_account_id = minds_config.get_default_account_id() if minds_config else None
+    # The advanced settings step's region select uses the same per-provider
+    # region context the create form builds.
+    region_options, region_selected = _build_region_form_context(minds_config, geo_cache)
+
+    # The pickable rows for the add-to-existing flow, mirroring the landing
+    # page's list (which also collects providers/shutdown-capability, hence
+    # the deliberate small duplication). Destroying workspaces are excluded --
+    # there is nothing to paste a message into.
+    paths: WorkspacePaths | None = get_state().api_v1_paths
+    destroying_status_by_agent_id = _resolve_destroying_for_landing(
+        paths, backend_resolver, session_store, get_state().imbue_cloud_cli
+    )
+    liveness_by_agent_id = {
+        aid: state.value for aid, state in compute_mind_liveness_by_agent_id(backend_resolver).items()
+    }
+    workspace_rows = []
+    for aid in backend_resolver.list_active_workspace_ids():
+        if str(aid) in destroying_status_by_agent_id:
+            continue
+        info = backend_resolver.get_agent_display_info(aid)
+        ws_name = backend_resolver.get_workspace_name(aid)
+        name = ws_name if ws_name else (info.agent_name if info else str(aid))
+        workspace_rows.append(
+            InspirationWorkspaceRow(
+                agent_id=str(aid),
+                name=name,
+                accent=_resolved_workspace_color(backend_resolver, aid),
+                liveness=liveness_by_agent_id.get(str(aid), "UNKNOWN"),
+            )
+        )
+
+    html = render_inspiration_create_page(
+        git_url=git_url,
+        branch=branch,
+        accounts=accounts,
+        default_account_id=default_account_id or "",
+        color=_suggested_create_color(backend_resolver),
+        mngr_forward_origin=_get_mngr_forward_origin(),
+        workspace_rows=workspace_rows,
+        region_options_by_launch_mode=region_options,
+        region_selected_by_launch_mode=region_selected,
+    )
+    return make_html_response(content=html)
+
+
 def _retry_pending_create_attempt_record(retry_create_attempt_id: str) -> PendingCreateAttemptRecord | None:
     """Load the pending record a ``/create?retry=<id>`` deep-link points at, if usable.
 
@@ -1338,7 +1455,15 @@ def _handle_creating_page(
         )
         return make_html_response(content=html)
 
-    html = render_creating_page(create_attempt_id=create_attempt_id, info=info)
+    # The onboarding walkthrough's app cloud lists the services latchkey
+    # can connect to. ServicesCatalog reads the bundled services.json
+    # lazily and memoizes it process-wide, so constructing one here is
+    # cheap.
+    html = render_creating_page(
+        create_attempt_id=create_attempt_id,
+        info=info,
+        onboarding_services=list_onboarding_services(ServicesCatalog()),
+    )
     return make_html_response(content=html)
 
 
@@ -1349,6 +1474,7 @@ def _resolve_destroying_for_landing(
     paths: WorkspacePaths | None,
     backend_resolver: BackendResolverInterface,
     session_store: MultiAccountSessionStore | None,
+    imbue_cloud_cli: ImbueCloudCli | None,
 ) -> dict[str, str]:
     """Walk ``<paths.data_dir>/destroying/``, finalize DONE records, return marker map.
 
@@ -1370,7 +1496,7 @@ def _resolve_destroying_for_landing(
     marker: dict[str, str] = {}
     for agent_id, record in records.items():
         if record.status == DestroyingStatus.DONE:
-            _finalize_destroyed_workspace(agent_id, paths, session_store)
+            _finalize_destroyed_workspace(agent_id, paths, session_store, imbue_cloud_cli)
             continue
         marker[str(agent_id)] = "running" if record.status == DestroyingStatus.RUNNING else "failed"
     return marker
@@ -1380,6 +1506,7 @@ def _finalize_destroyed_workspace(
     agent_id: AgentId,
     paths: WorkspacePaths,
     session_store: MultiAccountSessionStore | None,
+    imbue_cloud_cli: ImbueCloudCli | None,
 ) -> None:
     """Tombstone a fully-destroyed workspace's record, then delete the destroying marker.
 
@@ -1396,6 +1523,12 @@ def _finalize_destroyed_workspace(
             owner_user_id, _record = found
             owner_email = session_store.get_account_email(owner_user_id)
             if owner_email is not None:
+                # Destroying the host does not touch the account's Cloudflare
+                # tunnel -- nothing downstream of `mngr destroy` knows it
+                # exists. Left behind it keeps a proxied hostname answering and
+                # counts against a quota measured in workspaces ever created,
+                # so it must go before the record that names it is tombstoned.
+                delete_tunnel_for_agent(imbue_cloud_cli, owner_email, agent_id)
                 session_store.record_store.tombstone_record(owner_user_id, owner_email, str(agent_id))
             else:
                 logger.warning(
@@ -1627,7 +1760,7 @@ def _handle_chrome_events() -> Response:
             )
             last_destroying_ids = _destroying_agent_ids(paths, backend_resolver)
             last_remote_states = _build_remote_tile_states(backend_resolver, session_store)
-            has_accounts = bool(session_store and session_store.list_accounts())
+            last_account_payload = _build_account_launcher_payload(session_store)
             # The agent ids the shell may restore windows to: live workspaces plus
             # any from the persisted last-good topology not yet re-discovered this
             # session. Lets restore decline to drop a window whose workspace is
@@ -1639,9 +1772,9 @@ def _handle_chrome_events() -> Response:
                         "type": "workspaces",
                         "workspaces": last_workspace_data,
                         "destroying_agent_ids": last_destroying_ids,
-                        "has_accounts": has_accounts,
                         "restorable_workspace_ids": last_restorable_ids,
                         "remote_workspace_states": last_remote_states,
+                        **last_account_payload,
                     }
                 )
             )
@@ -1780,14 +1913,21 @@ def _handle_chrome_events() -> Response:
                 )
                 current_destroying_ids = _destroying_agent_ids(paths, backend_resolver)
                 current_remote_states = _build_remote_tile_states(backend_resolver, session_store)
+                # A sign-in / sign-out / default-account switch changes nothing
+                # about the workspace list, so the account payload is its own
+                # diff term -- otherwise the launcher would keep the label of an
+                # account that is no longer signed in.
+                current_account_payload = _build_account_launcher_payload(session_store)
                 if (
                     current_data != last_workspace_data
                     or current_destroying_ids != last_destroying_ids
                     or current_remote_states != last_remote_states
+                    or current_account_payload != last_account_payload
                 ):
                     last_workspace_data = current_data
                     last_destroying_ids = current_destroying_ids
                     last_remote_states = current_remote_states
+                    last_account_payload = current_account_payload
                     yield "data: {}\n\n".format(
                         json.dumps(
                             {
@@ -1795,6 +1935,7 @@ def _handle_chrome_events() -> Response:
                                 "workspaces": current_data,
                                 "destroying_agent_ids": current_destroying_ids,
                                 "remote_workspace_states": current_remote_states,
+                                **current_account_payload,
                             }
                         )
                     )
@@ -2217,7 +2358,7 @@ def _handle_recovery_page(
     initial_error = (tracker.get_last_restart_error(aid) or "") if tracker is not None else ""
     # Whether an in-flight restart is start-only (a possible-no-op entry
     # dispatch) vs a full manual bounce; None outside a restart. Selects the
-    # restarting-state copy on the page ("Loading workspace" vs "Restarting
+    # restarting-state copy on the page ("Loading machine" vs "Restarting
     # your workspace"). Read only while RESTARTING, so it never gates dispatch.
     restart_is_start_only = tracker.get_restart_is_start_only(aid) if tracker is not None else None
     return_to = _sanitize_recovery_return_to(request.args.get("return_to", ""))
@@ -2249,7 +2390,7 @@ def _handle_recovery_page(
             pass
     backend_resolver: BackendResolverInterface = get_state().backend_resolver
     # Display-only offline hint: whether the resolver currently reads the
-    # workspace's host as offline. Selects the "Bringing your workspace back
+    # workspace's host as offline. Selects the "Bringing your machine back
     # online" copy for the restarting state (and rides along on every poll
     # tick as a header, so a stale reading at a cold launch self-corrects once
     # discovery lands). Never gates what is dispatched.
@@ -2574,7 +2715,7 @@ def _handle_destroyed_workspace_delete_backup(agent_id: str) -> Response:
         None,
     )
     if row is None:
-        return _handle_destroyed_workspaces_page(error=f"No destroyed workspace found for {agent_id}.")
+        return _handle_destroyed_workspaces_page(error=f"No destroyed machine found for {agent_id}.")
     if row["user_id"]:
         destroyed_at = row["destroyed_at"] if row["destroyed_at"] is not None else datetime.now(timezone.utc)
         candidate = ReapCandidate(
@@ -2633,8 +2774,8 @@ def _handle_ai_keys_page() -> Response:
             workspace_display_name="",
             account_email="",
             error_message=(
-                "This page needs to be opened from a workspace: use the Sign in with Imbue "
-                "option in the workspace's Claude sign-in dialog."
+                "This page needs to be opened from a machine: use the Sign in with Imbue "
+                "option in the machine's Claude sign-in dialog."
             ),
         )
         return make_html_response(content=html)
@@ -2645,8 +2786,8 @@ def _handle_ai_keys_page() -> Response:
             workspace_display_name="",
             account_email="",
             error_message=(
-                "This workspace has no associated Imbue account. Associate an account on the "
-                "workspace's settings page, then come back here."
+                "This machine has no associated Imbue account. Associate an account on the "
+                "machine's settings page, then come back here."
             ),
         )
         return make_html_response(content=html)
@@ -2673,7 +2814,7 @@ def _handle_mint_ai_key() -> Response:
     if not workspace_host_id:
         return make_response(
             status_code=400,
-            content=json.dumps({"error": "Missing 'workspace' (the workspace host id)"}),
+            content=json.dumps({"error": "Missing 'workspace' (the machine host id)"}),
             media_type="application/json",
         )
     resolved = resolve_workspace_account(workspace_host_id, _workspace_record_store(), get_state().session_store)
@@ -2682,8 +2823,8 @@ def _handle_mint_ai_key() -> Response:
             status_code=400,
             content=json.dumps(
                 {
-                    "error": "This workspace has no associated Imbue account. Associate one on the "
-                    "workspace's settings page first."
+                    "error": "This machine has no associated Imbue account. Associate one on the "
+                    "machine's settings page first."
                 }
             ),
             media_type="application/json",
@@ -2702,7 +2843,7 @@ def _handle_mint_ai_key() -> Response:
             imbue_cloud_cli=imbue_cloud_cli,
         )
     except AiKeyMintError as exc:
-        logger.warning("LiteLLM key mint failed for workspace {}: {}", workspace_host_id, exc)
+        logger.warning("LiteLLM key mint failed for machine {}: {}", workspace_host_id, exc)
         return make_response(status_code=502, content=json.dumps({"error": str(exc)}), media_type="application/json")
     return make_response(
         status_code=200, content=json.dumps({"credentials": credential_blob}), media_type="application/json"
@@ -2784,7 +2925,7 @@ def _handle_settings_modal() -> Response:
     Served into the shared modal WebContentsView; opened from the home
     screen's bottom-left "Minds Settings" launcher and the workspace
     switcher's "Minds Settings" entry. Shows the same sections as the full
-    settings page, minus the "back to workspaces" link.
+    settings page, minus the "back to machines" link.
     """
     if not _is_request_authenticated():
         return make_response(status_code=403, content="Not authenticated")
@@ -2864,11 +3005,13 @@ def _apply_revoke(revoke: Callable[..., object], **kwargs: Any) -> Response:
 
 
 def _handle_revoke_service_for_workspace() -> Response:
-    """Revoke a predefined service's grants for one workspace (POST /settings/permissions/revoke).
+    """Revoke one connector account's grants for one workspace (POST /settings/permissions/revoke).
 
-    Body: ``{"workspace_agent_id": "...", "service_name": "..."}``. Removes every
-    rule the service owns from that workspace's host permissions file (stored
-    credentials untouched).
+    Body: ``{"workspace_agent_id": "...", "service_name": "...", "account": "..."}``
+    (the unnamed default account is the empty string). Removes the account-scoped
+    rule of every scope the service owns from that workspace's host permissions
+    file, leaving the service's other accounts and the stored credentials
+    untouched.
     """
     prelude = _revoke_prelude()
     if isinstance(prelude, Response):
@@ -2876,38 +3019,40 @@ def _handle_revoke_service_for_workspace() -> Response:
     body, handler = prelude
     workspace_agent_id = str(body.get("workspace_agent_id", ""))
     service_name = str(body.get("service_name", ""))
-    if not workspace_agent_id or not service_name:
-        return _json_error("workspace_agent_id and service_name are required.", status_code=400)
+    if not workspace_agent_id or not service_name or "account" not in body:
+        return _json_error("workspace_agent_id, service_name and account are required.", status_code=400)
     return _apply_revoke(
-        revoke_service_for_workspace,
+        revoke_service_account_for_workspace,
         backend_resolver=get_state().backend_resolver,
         gateway_client=handler.gateway_client,
         services_catalog=handler.services_catalog,
         latchkey=handler.latchkey,
         workspace_agent_id=workspace_agent_id,
         service_name=service_name,
+        account=str(body.get("account", "")),
     )
 
 
 def _handle_revoke_service_for_all_workspaces() -> Response:
-    """Revoke a predefined service's grants across every active workspace (POST /settings/permissions/revoke-all).
+    """Revoke one connector account's grants everywhere (POST /settings/permissions/revoke-all).
 
-    Body: ``{"service_name": "..."}``.
+    Body: ``{"service_name": "...", "account": "..."}``.
     """
     prelude = _revoke_prelude()
     if isinstance(prelude, Response):
         return prelude
     body, handler = prelude
     service_name = str(body.get("service_name", ""))
-    if not service_name:
-        return _json_error("service_name is required.", status_code=400)
+    if not service_name or "account" not in body:
+        return _json_error("service_name and account are required.", status_code=400)
     return _apply_revoke(
-        revoke_service_for_all_workspaces,
+        revoke_service_account_for_all_workspaces,
         backend_resolver=get_state().backend_resolver,
         gateway_client=handler.gateway_client,
         services_catalog=handler.services_catalog,
         latchkey=handler.latchkey,
         service_name=service_name,
+        account=str(body.get("account", "")),
     )
 
 
@@ -3002,10 +3147,11 @@ def _handle_disconnect_connector_account() -> Response:
     """Disconnect one account from a connector service (POST /settings/connectors/disconnect-account).
 
     Body: ``{"service_name": "...", "account": "..."}`` (the default account is the
-    empty string). Clears that account's stored credentials. When it was the
-    service's *last* account, the service's permission grants are now orphaned,
-    so we kick off the "revoke all" cleanup (remove the service's rules from
-    every workspace) in the background and return immediately.
+    empty string). Clears that account's stored credentials and then strips the
+    account's now-inert grants from every workspace, so reconnecting the same
+    account later starts from no permissions rather than silently resurrecting
+    the old ones. The cleanup runs in the background and the route returns
+    immediately.
     """
     prelude = _revoke_prelude()
     if isinstance(prelude, Response):
@@ -3016,52 +3162,56 @@ def _handle_disconnect_connector_account() -> Response:
     if not service_name:
         return _json_error("service_name is required.", status_code=400)
     try:
-        is_last_account = disconnect_account(handler.latchkey, service_name, account)
+        disconnect_account(handler.latchkey, service_name, account)
     except PermissionOverviewError as e:
         return _json_error(str(e), status_code=502)
-    if is_last_account:
-        _revoke_service_for_all_workspaces_in_background(handler, service_name)
+    _revoke_service_account_for_all_workspaces_in_background(handler, service_name, account)
     return make_response(content='{"status": "ok"}', media_type="application/json")
 
 
-def _revoke_service_for_all_workspaces_in_background(
+def _revoke_service_account_for_all_workspaces_in_background(
     handler: LatchkeyPermissionGrantHandler,
     service_name: str,
+    account: str,
 ) -> None:
-    """Fire off ``revoke_service_for_all_workspaces`` on a daemon thread.
+    """Fire off ``revoke_service_account_for_all_workspaces`` on a daemon thread.
 
-    Disconnecting the last account leaves the service's permission grants with no
-    credentials to back them, so we strip those grants from every workspace's
-    host file. This touches one gateway call per active host, so it runs off the
-    request thread to keep the Disconnect click responsive; failures are logged
-    rather than surfaced (the grants are harmless without credentials, and the
-    user can retry via the per-service "Revoke all").
+    A disconnected account's grants have no credentials to back them, so we
+    strip them from every workspace's host file. This touches one gateway call
+    per active host, so it runs off the request thread to keep the Disconnect
+    click responsive; failures are logged rather than surfaced (the grants are
+    inert without credentials, and the user can retry via the account's "Revoke
+    all").
     """
     backend_resolver = get_state().backend_resolver
     threading.Thread(
-        target=_run_revoke_service_for_all_workspaces,
-        args=(backend_resolver, handler, service_name),
+        target=_run_revoke_service_account_for_all_workspaces,
+        args=(backend_resolver, handler, service_name, account),
         name=f"revoke-all-{service_name}",
         daemon=True,
     ).start()
 
 
-def _run_revoke_service_for_all_workspaces(
+def _run_revoke_service_account_for_all_workspaces(
     backend_resolver: BackendResolverInterface,
     handler: LatchkeyPermissionGrantHandler,
     service_name: str,
+    account: str,
 ) -> None:
-    """Body of the background thread spawned by :func:`_revoke_service_for_all_workspaces_in_background`."""
+    """Body of the thread spawned by :func:`_revoke_service_account_for_all_workspaces_in_background`."""
     try:
-        revoke_service_for_all_workspaces(
+        revoke_service_account_for_all_workspaces(
             backend_resolver=backend_resolver,
             gateway_client=handler.gateway_client,
             services_catalog=handler.services_catalog,
             latchkey=handler.latchkey,
             service_name=service_name,
+            account=account,
         )
     except (PermissionOverviewError, LatchkeyGatewayClientError) as e:
-        logger.warning("Background revoke-all for {} after last-account disconnect failed: {}", service_name, e)
+        logger.warning(
+            "Background revoke-all for {} account {!r} after disconnect failed: {}", service_name, account, e
+        )
 
 
 def _handle_set_default_account() -> Response:
@@ -3073,6 +3223,9 @@ def _handle_set_default_account() -> Response:
     minds_config: MindsConfig | None = get_state().minds_config
     if minds_config and user_id:
         minds_config.set_default_account_id(user_id)
+        # The home screen's account launcher shows the default account, so the
+        # open windows behind this modal need to re-read it.
+        wake_chrome_event_streams()
     return make_response(status_code=303, headers={"Location": "/accounts"})
 
 
@@ -3115,45 +3268,179 @@ def _is_leased_imbue_cloud_workspace(backend_resolver: BackendResolverInterface,
     return info.provider_name.startswith(_IMBUE_CLOUD_PROVIDER_PREFIX)
 
 
-def _handle_workspace_settings(
-    agent_id: str,
-) -> Response:
-    """Render workspace settings page with account, sharing, and delete options."""
-    if not _is_request_authenticated():
-        return make_response(status_code=403, content="Not authenticated")
+class _WorkspaceContext(FrozenModel):
+    """Everything the per-workspace page surfaces need about one workspace."""
+
+    ws_name: str = Field(description="The workspace's display name, falling back to its agent id.")
+    current_account: object | None = Field(description="The account this workspace is associated with, if any.")
+    accounts: tuple[object, ...] = Field(description="Every signed-in account, offered by the Associate prompt.")
+    servers: tuple[str, ...] = Field(description="The service names this workspace has registered.")
+    account_email: str = Field(description="The associated account's email, empty when unassociated.")
+    has_account: bool = Field(description="Whether the workspace is associated with an account at all.")
+    is_leased_imbue_cloud: bool = Field(
+        description="Whether the host is leased from Imbue Cloud, which fixes the association."
+    )
+    current_color: str = Field(
+        description="The workspace's stored color hex, or the default when it has no color label yet."
+    )
+    is_stale: bool = Field(
+        description=(
+            "Whether the owning provider's last discovery poll errored. Writes against an unreachable host "
+            "would not be observable until it recovers, so the pickers disable themselves."
+        )
+    )
+
+
+def _recorded_workspace_name(session_store: MultiAccountSessionStore | None, agent_id: str) -> str:
+    """The name the workspace record carries, falling back to the agent id.
+
+    Prefers a still-active record: a destroyed one may share its agent id with
+    the replacement that restored it.
+    """
+    record_store = session_store.record_store if session_store else None
+    if record_store is None:
+        return agent_id
+    fallback_name = ""
+    for records in record_store.list_all_records().values():
+        for record in records:
+            if record.agent_id != agent_id or not record.display_name:
+                continue
+            if record.state == RECORD_STATE_ACTIVE:
+                return record.display_name
+            fallback_name = record.display_name
+    return fallback_name or agent_id
+
+
+def _build_workspace_context(agent_id: str) -> _WorkspaceContext:
+    """Gather the context shared by every per-workspace surface.
+
+    Used by the settings page, the docked options panel and the panel's
+    full-page twin so those surfaces cannot drift.
+    """
     backend_resolver = get_state().backend_resolver
     session_store: MultiAccountSessionStore | None = get_state().session_store
     current_account = session_store.get_account_for_workspace(agent_id) if session_store else None
     accounts = session_store.list_accounts() if session_store else []
-    is_leased_imbue_cloud = _is_leased_imbue_cloud_workspace(backend_resolver, agent_id)
 
     parsed_agent_id = AgentId(agent_id)
-    ws_name = backend_resolver.get_workspace_name(parsed_agent_id)
     info = backend_resolver.get_agent_display_info(parsed_agent_id)
+    ws_name = backend_resolver.get_workspace_name(parsed_agent_id) or ""
+    if not ws_name and info is not None:
+        ws_name = info.agent_name
     if not ws_name:
-        ws_name = info.agent_name if info else agent_id
+        # The resolver only knows a workspace it has discovered, so a stopped
+        # one resolves to nothing and used to fall straight through to the raw
+        # agent id -- which the Share pane then reads out mid-sentence ("all of
+        # agent-ad350ca0..."). The workspace record keeps the name the user
+        # gave it whatever the workspace's state, and is what the landing page
+        # and the titlebar crumb already show.
+        ws_name = _recorded_workspace_name(session_store, agent_id)
 
-    servers = [str(s) for s in backend_resolver.list_services_for_agent(parsed_agent_id)]
-
-    # Pre-fill the color picker with the workspace's stored color (or the
-    # default when the workspace has no color label yet). Disable
-    # the picker controls when the provider that owns this workspace is
-    # in error state -- writes against an unreachable host would not be
-    # observable until the provider recovers.
-    current_color = _resolved_workspace_color(backend_resolver, parsed_agent_id)
     errored_provider_names = {str(name) for name in backend_resolver.get_provider_errors()}
-    is_stale = _is_workspace_provider_errored(info, errored_provider_names)
-
-    html = render_workspace_settings(
-        agent_id=agent_id,
+    return _WorkspaceContext(
         ws_name=ws_name,
         current_account=current_account,
-        accounts=accounts,
-        servers=servers,
-        is_leased_imbue_cloud=is_leased_imbue_cloud,
-        current_color=current_color,
-        is_stale=is_stale,
+        accounts=tuple(accounts),
+        servers=tuple(str(service) for service in backend_resolver.list_services_for_agent(parsed_agent_id)),
+        account_email=current_account.email if current_account else "",
         has_account=current_account is not None,
+        is_leased_imbue_cloud=_is_leased_imbue_cloud_workspace(backend_resolver, agent_id),
+        current_color=_resolved_workspace_color(backend_resolver, parsed_agent_id),
+        is_stale=_is_workspace_provider_errored(info, errored_provider_names),
+    )
+
+
+def _handle_workspace_settings(
+    agent_id: str,
+) -> Response:
+    """Render the standalone workspace settings page (the Machine settings pane)."""
+    if not _is_request_authenticated():
+        return make_response(status_code=403, content="Not authenticated")
+    context = _build_workspace_context(agent_id)
+    html = render_workspace_settings(
+        agent_id=agent_id,
+        ws_name=context.ws_name,
+        current_account=context.current_account,
+        accounts=context.accounts,
+        is_leased_imbue_cloud=context.is_leased_imbue_cloud,
+        current_color=context.current_color,
+        is_stale=context.is_stale,
+        has_account=context.has_account,
+    )
+    return make_html_response(content=html)
+
+
+def _requested_options_tab() -> str:
+    """The pane the options surfaces should open on. Anything unrecognized is Share."""
+    return "settings" if request.args.get("tab") == "settings" else "share"
+
+
+# The Machine settings groups, as WorkspaceSettingsSections renders them.
+_SETTINGS_GROUPS: Final[frozenset[str]] = frozenset({"general", "account", "backup"})
+
+
+def _requested_settings_group() -> str:
+    """The Machine settings group to open on. Anything unrecognized is General.
+
+    Carried in the URL so the controls that finish by reloading the panel
+    (linking an account, renaming) come back to the group the user was in
+    rather than dropping them on General.
+    """
+    group = request.args.get("group", "")
+    return group if group in _SETTINGS_GROUPS else "general"
+
+
+def _handle_workspace_options(agent_id: str) -> Response:
+    """Render the browser-mode workspace options page (Share machine / Machine settings)."""
+    if not _is_request_authenticated():
+        return make_response(status_code=403, content="Not authenticated")
+    context = _build_workspace_context(agent_id)
+    html = render_workspace_options_page(
+        agent_id=agent_id,
+        ws_name=context.ws_name,
+        current_account=context.current_account,
+        accounts=context.accounts,
+        servers=context.servers,
+        tab=_requested_options_tab(),
+        selected_group=_requested_settings_group(),
+        selected_target=request.args.get("target", ""),
+        account_email=context.account_email,
+        is_leased_imbue_cloud=context.is_leased_imbue_cloud,
+        current_color=context.current_color,
+        is_stale=context.is_stale,
+        has_account=context.has_account,
+    )
+    return make_html_response(content=html)
+
+
+def _handle_workspace_options_modal(agent_id: str) -> Response:
+    """Render the docked workspace options panel hosted on the overlay surface.
+
+    The titlebar-anchor pixels come from a rect chrome.js measured and the
+    Electron main process packed into the URL, the same way the sidebar's
+    trigger anchor arrives; a hand-typed or truncated URL falls back to the
+    defaults rather than a broken layout.
+    """
+    if not _is_request_authenticated():
+        return make_response(status_code=403, content="Not authenticated")
+    context = _build_workspace_context(agent_id)
+    html = render_workspace_options_modal_page(
+        agent_id=agent_id,
+        ws_name=context.ws_name,
+        current_account=context.current_account,
+        accounts=context.accounts,
+        servers=context.servers,
+        tab=_requested_options_tab(),
+        selected_group=_requested_settings_group(),
+        selected_target=request.args.get("target", ""),
+        account_email=context.account_email,
+        anchor_x=_optional_int_query_param("x"),
+        anchor_y=_optional_int_query_param("y"),
+        anchor_height=_optional_int_query_param("h"),
+        is_leased_imbue_cloud=context.is_leased_imbue_cloud,
+        current_color=context.current_color,
+        is_stale=context.is_stale,
+        has_account=context.has_account,
     )
     return make_html_response(content=html)
 
@@ -3802,6 +4089,8 @@ def create_desktop_client(
     # Workspace settings page (the account-association and color writes it drives
     # now go through PATCH /api/v1/workspaces/<id>).
     app.add_url_rule("/workspace/<agent_id>/settings", view_func=_handle_workspace_settings)
+    app.add_url_rule("/workspace/<agent_id>/options", view_func=_handle_workspace_options)
+    app.add_url_rule("/workspace/<agent_id>/options/modal", view_func=_handle_workspace_options_modal)
     # Full backup-history page, reached from the settings page's
     # "View all N backups" footer.
     app.add_url_rule("/workspace/<agent_id>/backups", view_func=_handle_workspace_backup_history)
@@ -3825,6 +4114,7 @@ def create_desktop_client(
     # only the GET create-form page and the /creating/<id> progress page remain
     # here; status/logs and the form POST moved to the versioned surface.
     app.add_url_rule("/create", view_func=_handle_create_page)
+    app.add_url_rule("/create/inspiration", view_func=_handle_inspiration_create_page)
     app.add_url_rule("/creating/<agent_id>", view_func=_handle_creating_page)
 
     # Agent destruction routes. Destroy, status/log streaming, and dismiss

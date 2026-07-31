@@ -817,6 +817,16 @@ body {
   background: var(--color-accent-light);
 }
 
+/* A non-interactive copy of the toggle, set inline in running text so a sentence
+   about "the button" can show which one. Reuses the rules above rather than
+   restating them, so the copy cannot drift from the real control. */
+.fast-toggle--inline {
+  width: 26px;
+  height: 26px;
+  cursor: default;
+  vertical-align: -0.45em;
+}
+
 /* ── Markdown content styling ── */
 .markdown-content {
   line-height: 1.5;
@@ -1892,6 +1902,116 @@ body {
 
 .destroy-dialog-btn-destroy:hover {
   background: #b91c1c;
+}
+
+/* ── Fast-mode grace-period prompt ── */
+.fast-mode-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.fast-mode-modal {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 24px;
+  width: 460px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.fast-mode-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.fast-mode-modal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: var(--color-accent);
+  background: var(--color-accent-light);
+  flex-shrink: 0;
+}
+
+.fast-mode-modal-title {
+  font-family: var(--font-family-heading);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.fast-mode-modal-message {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.fast-mode-modal-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-accent);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.fast-mode-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.fast-mode-modal-btn {
+  padding: 8px 16px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-base);
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+}
+
+.fast-mode-modal-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Standard speed is the default action -- the cheaper outcome, the one the
+   backdrop and Escape also take -- so it carries the accent. */
+.fast-mode-modal-btn-standard {
+  background: var(--color-accent);
+  color: #fff;
+  border-color: var(--color-accent);
+}
+
+.fast-mode-modal-btn-standard:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.fast-mode-modal-btn-fast {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+}
+
+.fast-mode-modal-btn-fast:hover {
+  background: var(--color-bg-hover);
 }
 
 /* ── Share modal ── */

@@ -1,4 +1,4 @@
-{#def services_overview=[], file_sharing_grants=[], workspace_delegation_grants=[], permissions_unavailable=false, is_master_password_set=false, report_unexpected_errors=true #}
+{#def services_overview=[], file_sharing_grants=[], workspace_delegation_grants=[], permissions_unavailable=false, is_master_password_set=false, report_unexpected_errors=true, panel_scroll=false #}
 {#
   The app-level ("Minds") settings, shared verbatim between the centered
   settings modal (pages.SettingsModal, the Electron overlay surface) and the
@@ -11,13 +11,13 @@
   so this component must appear at most once per page.
 
   Sections (grouped Permissions / Other):
-    - Connectors: predefined-service grants held across all active workspaces.
-      Each service panel also lists the signed-in accounts for that service
-      (read via ``latchkey auth list --offline``), above the per-workspace
-      grants. "+ Add account" (in the panel header) runs an ephemeral-browser
-      sign-in so the user can connect a new account; "Disconnect" clears one
-      account's credentials, and disconnecting the last account also revokes
-      the service's grants from every workspace.
+    - Connectors: predefined-service grants held across all active workspaces,
+      one subsection per *signed-in account* (grants are per account). The
+      service heading carries only the service-wide "+ Add account" action,
+      which runs an ephemeral-browser sign-in; each account subsection has its
+      own "Disconnect" (clears that account's credentials and revokes its
+      grants everywhere), "Revoke all" (all workspaces, that account only) and
+      one card per workspace holding permissions for it.
     - Local files: file-sharing (WebDAV) grants per workspace.
     - Workspaces: cross-workspace-management (delegation) grants.
     - Error reporting: the per-machine opt-out toggle for automatic error
@@ -31,7 +31,9 @@
   permission-overview models built by the route; ``permissions_unavailable``
   is True when the latchkey gateway could not be reached.
 #}
-<div class="flex gap-8 items-start">
+{# panel_scroll: the modal pins the left nav and scrolls only the right pane
+   (the full /settings page keeps the default: the page itself scrolls). #}
+<div class="flex gap-8 {{ 'h-full items-stretch' if panel_scroll else 'items-start' }}">
   {# Left nav. Grouped into non-interactive section eyebrows ("Permissions" /
      "Other") that carry no ``data-settings-nav`` (the page script ignores
      them). Nav entries share identical base classes (notably no
@@ -49,7 +51,7 @@
     </button>
     <button type="button" data-settings-nav="workspace-delegation"
             class="flex items-center h-8 px-2 rounded-md cursor-pointer type-body text-left border-0 hover:text-primary hover:bg-fill-hover text-secondary">
-      Workspaces
+      Machines
     </button>
     <p class="type-section text-tertiary px-2 mt-4 mb-1">Other</p>
     <button type="button" data-settings-nav="error-reporting"
@@ -62,13 +64,13 @@
     </button>
   </nav>
 
-  <div class="flex-1 min-w-0">
+  <div class="flex-1 min-w-0 {{ 'overflow-y-auto min-h-0 pr-8' if panel_scroll else '' }}">
     {# -- Connectors (predefined / catalog services the agent connects to) -- #}
     <section data-settings-panel="connectors">
       <h2 class="type-heading-lg text-primary mb-2">Connectors</h2>
       <p class="type-body text-secondary mb-6">
         Third-party services your agents have connected to. To connect a new one, just ask an
-        agent in a workspace to use it. Revoking here removes access -- your saved sign-in is
+        agent in a machine to use it. Revoking here removes access -- your saved sign-in is
         kept, so agents can reconnect later.
       </p>
       {% if permissions_unavailable %}
@@ -77,64 +79,64 @@
           Try again in a moment.
         </Notice>
       {% elif services_overview %}
-        <div class="flex flex-col gap-8">
+        <div class="flex flex-col gap-12">
           {% for service in services_overview %}
-            {% set ws_count = service.workspace_grants | length %}
             <div data-service-name="{{ service.service_name }}" data-service-label="{{ service.display_name }}">
               <div class="flex items-center justify-between gap-3 mb-3">
-                <h3 class="type-heading text-primary">
-                  {{ service.display_name }}
-                  <span class="type-helper text-tertiary font-normal">&middot; {{ ws_count }} workspace{{ '' if ws_count == 1 else 's' }}</span>
-                </h3>
+                <h3 class="type-heading text-primary">{{ service.display_name }}</h3>
                 <Button variant="ghost" size="md" class="add-account-btn shrink-0">+ Add account</Button>
               </div>
-              {# Signed-in accounts for this service. Each can be disconnected
-                 independently; disconnecting the last one also revokes the
-                 service's permissions from every workspace (server-side). A
-                 two-column grid keeps each Disconnect button right next to its
-                 account while still aligning every button within the section
-                 (both columns size to their widest cell). #}
-              {% if service.accounts %}
-                <div class="grid grid-cols-[auto_auto] justify-start items-center gap-x-4 gap-y-1 mb-6">
-                  {% for account in service.accounts %}
-                    {# ``contents`` promotes the span + button into the grid so
-                       the columns (label / button) align across every row while
-                       the button still sits right next to its account. The
-                       wrapper is a plain div so its ``data-*`` values interpolate
-                       (JinjaX components don't evaluate ``{{ }}`` in attributes). #}
-                    <div class="contents" data-account="{{ account.account }}" data-account-label="{{ account.label }}">
-                      <span class="type-body text-primary">{{ account.label }}</span>
-                      <Button variant="ghost" size="md" class="disconnect-account-btn">Disconnect</Button>
-                    </div>
-                  {% endfor %}
-                </div>
-              {% else %}
-                <p class="type-helper text-tertiary mb-6">No accounts connected yet.</p>
-              {% endif %}
-              <div class="flex items-center justify-between gap-3 mb-2">
-                <p class="type-body text-secondary">Allowed on all accounts:</p>
-                <Button variant="ghost" size="md" class="remove-all-btn shrink-0">Revoke all</Button>
-              </div>
-              <div class="grid grid-cols-2 gap-3">
-                {% for grant in service.workspace_grants %}
-                  <div class="minds-card p-4 flex flex-col gap-3"
-                       data-workspace-agent-id="{{ grant.workspace_agent_id }}"
-                       data-workspace-name="{{ grant.workspace_name }}">
-                    <div class="flex items-center gap-2">
-                      <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background-color: {{ grant.color }}"></span>
-                      <span class="type-body font-semibold text-primary truncate">{{ grant.workspace_name }}</span>
-                    </div>
-                    <div>
-                      <p class="type-helper text-tertiary mb-1">Allowed</p>
-                      <div class="flex flex-wrap gap-1">
-                        {% for perm in grant.permissions %}
-                          <code class="code-pill"{% if perm.description %} data-tooltip="{{ perm.description }}"{% endif %}>{{ perm.label }}</code>
-                        {% endfor %}
+              {# One subsection per account: grants are per account, so each one
+                 carries its own Disconnect / Revoke all actions and its own
+                 per-workspace cards. An account with no cards is connected but
+                 not yet allowed anywhere. #}
+              <div class="flex flex-col gap-6">
+                {% for account in service.accounts %}
+                  {% set ws_count = account.workspace_grants | length %}
+                  <div data-account="{{ account.account }}" data-account-label="{{ account.label }}">
+                    <div class="flex items-center justify-between gap-3 mb-2">
+                      <p class="type-body text-primary font-semibold truncate">
+                        {{ account.label }}
+                        <span class="type-helper text-tertiary font-normal">
+                          &middot; {{ ws_count }} machine{{ '' if ws_count == 1 else 's' }}{% if not account.is_connected %} &middot; not connected{% endif %}
+                        </span>
+                      </p>
+                      <div class="flex items-center gap-2 shrink-0">
+                        {% if ws_count %}
+                          <Button variant="ghost" size="md" class="remove-all-btn">Revoke all</Button>
+                        {% endif %}
+                        {% if account.is_connected %}
+                          <Button variant="ghost" size="md" class="disconnect-account-btn">Disconnect</Button>
+                        {% endif %}
                       </div>
                     </div>
-                    <div class="mt-auto">
-                      <Button variant="secondary" size="md" class="revoke-btn">Revoke</Button>
-                    </div>
+                    {% if ws_count %}
+                      <div class="grid grid-cols-2 gap-3">
+                        {% for grant in account.workspace_grants %}
+                          <div class="minds-card p-4 flex flex-col gap-3"
+                               data-workspace-agent-id="{{ grant.workspace_agent_id }}"
+                               data-workspace-name="{{ grant.workspace_name }}">
+                            <div class="flex items-center gap-2">
+                              <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background-color: {{ grant.color }}"></span>
+                              <span class="type-body font-semibold text-primary truncate">{{ grant.workspace_name }}</span>
+                            </div>
+                            <div>
+                              <p class="type-helper text-tertiary mb-1">Allowed</p>
+                              <div class="flex flex-wrap gap-1">
+                                {% for perm in grant.permissions %}
+                                  <code class="code-pill"{% if perm.description %} data-tooltip="{{ perm.description }}"{% endif %}>{{ perm.label }}</code>
+                                {% endfor %}
+                              </div>
+                            </div>
+                            <div class="mt-auto">
+                              <Button variant="secondary" size="md" class="revoke-btn">Revoke</Button>
+                            </div>
+                          </div>
+                        {% endfor %}
+                      </div>
+                    {% else %}
+                      <p class="type-helper text-tertiary">Not allowed in any machine yet.</p>
+                    {% endif %}
                   </div>
                 {% endfor %}
               </div>
@@ -155,8 +157,8 @@
         {% endif %}
       </div>
       <p class="type-body text-secondary mb-6">
-        Files and folders on this machine that your agents can read or write. To share a new
-        location, ask an agent in a workspace to access it or to write data in there.
+        Files and folders on this computer that your agents can read or write. To share a new
+        location, ask an agent in a machine to access it or to write data in there.
         Revoking removes access; agents can ask again later.
       </p>
       {% if permissions_unavailable %}
@@ -198,16 +200,16 @@
 
     {# -- Workspaces (cross-workspace delegation), grouped by granting workspace -- #}
     <section data-settings-panel="workspace-delegation" class="hidden">
-      <h2 class="type-heading-lg text-primary mb-2">Workspaces</h2>
+      <h2 class="type-heading-lg text-primary mb-2">Machines</h2>
       <p class="type-body text-secondary mb-6">
-        Access you've granted agents in one workspace to manage other workspaces (listing,
-        creating, destroying, SSH, health checks, and more), grouped by the workspace being
-        managed. To grant more, ask an agent to perform the operation on the target workspace.
+        Access you've granted agents in one machine to manage other machines (listing,
+        creating, destroying, SSH, health checks, and more), grouped by the machine being
+        managed. To grant more, ask an agent to perform the operation on the target machine.
         Revoking removes it; agents can ask again later.
       </p>
       {% if permissions_unavailable %}
         <Notice variant="warn">
-          Workspace delegation can't be loaded right now.
+          Machine delegation can't be loaded right now.
           Try again in a moment.
         </Notice>
       {% elif workspace_delegation_grants %}
@@ -226,7 +228,7 @@
                     <div class="flex items-center gap-2 min-w-0 flex-wrap">
                       <code class="code-pill" data-tooltip="{{ verb.description }}">{{ verb.label }}</code>
                       <span class="type-helper text-tertiary">on:</span>
-                      <span class="type-body text-secondary truncate">{{ "All workspaces" if verb.is_all_workspaces else verb.target_names | join(", ") }}</span>
+                      <span class="type-body text-secondary truncate">{{ "All machines" if verb.is_all_workspaces else verb.target_names | join(", ") }}</span>
                     </div>
                     <Button variant="ghost" size="md" class="revoke-verb-btn shrink-0">Revoke</Button>
                   </div>
@@ -236,7 +238,7 @@
           {% endfor %}
         </div>
       {% else %}
-        <Notice variant="info">No workspace management has been delegated to agents yet.</Notice>
+        <Notice variant="info">No machine management has been delegated to agents yet.</Notice>
       {% endif %}
     </section>
 
@@ -260,7 +262,7 @@
         (for example, your signed-in account email).
       </p>
       <p class="type-helper text-tertiary">
-        Imbue will never look into your workspaces without your consent.
+        Imbue will never look into your machines without your consent.
       </p>
     </section>
 
@@ -271,11 +273,11 @@
     <section data-settings-panel="backups" class="hidden">
       <h2 class="type-heading-lg text-primary mb-2">Master password</h2>
       <p class="type-body text-secondary mb-6">
-        Protects the synced copy of your workspaces' access keys and backup credentials
+        Protects the synced copy of your machines' access keys and backup credentials
         (initially empty -- nothing secret syncs until one is set). You'll type it once on
-        each new device to unlock your workspaces there.
+        each new device to unlock your machines there.
         {% if is_master_password_set %} A master password is currently set.{% else %} No master
-        password is set yet, so only workspace names and metadata sync.{% endif %}
+        password is set yet, so only machine names and metadata sync.{% endif %}
       </p>
       <div class="flex flex-col gap-2 max-w-md">
         <input type="password" id="backup-new-password" autocomplete="new-password"

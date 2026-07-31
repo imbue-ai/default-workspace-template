@@ -42,8 +42,13 @@ from pydantic import JsonValue
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
+from imbue.mngr_latchkey.baseline_permissions import AGENT_BASELINE_PERMISSIONS
+from imbue.mngr_latchkey.baseline_permissions import MINDS_API_PROXY_PER_AGENT_PATH_PREFIX
+from imbue.mngr_latchkey.baseline_permissions import SCOPE_LATCHKEY_SELF
+from imbue.mngr_latchkey.baseline_permissions import SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED
 from imbue.mngr_latchkey.core import AGENT_SIDE_LATCHKEY_PORT
 from imbue.mngr_latchkey.core import Latchkey
 from imbue.mngr_latchkey.core import LatchkeyError
@@ -82,76 +87,11 @@ SECRET_LATCHKEY_ENV_VAR_NAMES: Final[frozenset[str]] = frozenset(
     {ENV_LATCHKEY_GATEWAY_PASSWORD, ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE}
 )
 
-# Detent schema names and host string for the gateway-self baseline that
-# every agent inherits. Defined inline (in the agent's permissions file)
-# rather than relying on detent's built-in catalog so the names are
-# self-contained and the grant is exactly the endpoints we want.
-_GATEWAY_SELF_HOST: Final[str] = "latchkey-self.invalid"
-_SCOPE_LATCHKEY_SELF: Final[str] = "latchkey-self"
-_PERM_CREATE_PERMISSION_REQUEST: Final[str] = "latchkey-self-create-permission-request"
-_PERM_READ_SELF_PERMISSIONS: Final[str] = "latchkey-self-read-self-permissions"
-_PERM_READ_AVAILABLE_PERMISSIONS: Final[str] = "latchkey-self-read-available-permissions"
-
-# Regex matching ``/permissions/available/<service_name>`` where the
-# service name segment is one or more lowercase letters, digits, and
-# hyphens (starting with a letter or digit). Mirrors the gateway
-# ``permissions.mjs`` extension's own ``VALID_SERVICE_NAME_PATTERN`` so
-# the agent baseline cannot reach paths the extension itself would
-# refuse to serve. The trailing ``$`` rules out the collection endpoint
-# at ``/permissions/available`` (no segment): the baseline only opens
-# up the per-service catalog endpoint.
-_AVAILABLE_PERMISSIONS_PATH_PATTERN: Final[str] = r"^/permissions/available/[a-z0-9][a-z0-9-]*$"
-
-# Paths under this prefix are only allowed if the agent ID in the path is in the allow list (expressed via anyOf below).
-_MINDS_API_PROXY_PER_AGENT_PATH_PREFIX: Final[str] = "/minds-api-proxy/api/v1/agents/"
-_MINDS_API_PROXY_PER_AGENT_PATH_PATTERN: Final[str] = rf"^{_MINDS_API_PROXY_PER_AGENT_PATH_PREFIX}[^/]+(/.*)?$"
-
-_SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED: Final[str] = "minds-api-proxy-per-agent-unauthorized"
-_PERM_MINDS_API_PROXY_PER_AGENT: Final[str] = "minds-api-proxy-per-agent"
-
-# The per-agent bug-report route is reachable by ANY in-workspace agent without
-# per-agent registration. An agent escalates a bug report by POSTing its
-# diagnosis here; the effect is that the desktop app pops the report-a-bug modal
-# pre-filled for a human to review and submit (the agent never sends to Sentry
-# itself). Because detent stops at the first matching scope, a rule allowing this
-# exact path must come before the unauthorized gate below. This is an interim
-# bypass pending the broader minds-API-surface latchkey work; the route's
-# bearer-key auth still applies, so only requests that came through the gateway
-# reach it.
-_MINDS_API_PROXY_REPORT_PATH_PATTERN: Final[str] = rf"^{_MINDS_API_PROXY_PER_AGENT_PATH_PREFIX}[^/]+/report$"
-_SCOPE_MINDS_API_PROXY_REPORT: Final[str] = "minds-api-proxy-report"
-_PERM_MINDS_API_PROXY_REPORT: Final[str] = "minds-api-proxy-report-allow"
-
-# The version-agnostic, read-only API schema endpoint (an OpenAPI document
-# describing every gateway-reachable ``/api/v*`` route). Granted to every agent
-# by default -- unlike the per-agent endpoints it is not agent-scoped (the schema
-# is identical for all callers) and carries no per-target data, so a workspace
-# can always discover the Minds API surface. This is the *inbound* path the
-# gateway matches on; the proxy strips ``/minds-api-proxy`` before forwarding to
-# the desktop client's ``/api/schema``. It lives as a permission on the
-# ``latchkey-self`` scope (like ``read-self-permissions``). That scope is
-# domain-only, so it matches every gateway-self request; within the single
-# matching rule detent allows a request that matches any one of the rule's
-# listed permission schemas. All gateway-self grants minds produces -- schema
-# read, file-sharing, accounts, and the cross-workspace verbs -- attach as
-# permissions on this one scope, so there is only ever a single gateway-self
-# rule and rule order never affects the verdict.
-_MINDS_API_SCHEMA_INBOUND_PATH: Final[str] = "/minds-api-proxy/api/schema"
-_PERM_MINDS_API_SCHEMA: Final[str] = "minds-api-schema-read"
-
-# The minds desktop client's cross-workspace management API
-# (``/api/v1/workspaces/...``) attaches its per-verb permission schemas to the
-# ``latchkey-self`` scope, just like file-sharing and accounts. Those schemas are
-# NOT part of this agent baseline: they are self-contained in the ``workspace``
-# permission request's precomputed effect and unioned onto the ``latchkey-self``
-# rule when the user approves a grant (see ``permission_requests.mjs``'s
-# ``computeWorkspaceEffect`` and the ``workspace_permissions`` module). Nothing
-# about them needs to exist here.
 
 # Exact prefix/suffix wrapping each agent id inside an ``anyOf`` entry's
 # path pattern. Shared by the build + extract helpers so the two cannot
 # drift apart.
-_ALLOWED_AGENT_PATTERN_PREFIX: Final[str] = rf"^{_MINDS_API_PROXY_PER_AGENT_PATH_PREFIX}"
+_ALLOWED_AGENT_PATTERN_PREFIX: Final[str] = rf"^{MINDS_API_PROXY_PER_AGENT_PATH_PREFIX}"
 _ALLOWED_AGENT_PATTERN_SUFFIX: Final[str] = "/(.*)$"
 
 # Characters allowed verbatim in an ``agent_id`` when we embed it into
@@ -185,107 +125,59 @@ def _extract_agent_id_from_anyof_entry(entry: JsonValue) -> str:
     return pattern.removeprefix(_ALLOWED_AGENT_PATTERN_PREFIX).removesuffix(_ALLOWED_AGENT_PATTERN_SUFFIX)
 
 
-_AGENT_BASELINE_PERMISSIONS: Final[LatchkeyPermissionsConfig] = LatchkeyPermissionsConfig(
-    rules=(
-        # The bug-report route is allowed for any agent (see note above), so it must be matched
-        # before the unauthorized gate -- detent stops at the first matching scope.
-        {_SCOPE_MINDS_API_PROXY_REPORT: [_PERM_MINDS_API_PROXY_REPORT]},
-        # Unauthorized agents trying to access agent-scoped Minds API endpoint get an empty list of permissions, leading to immediate rejection.
-        {_SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED: []},
-        {
-            _SCOPE_LATCHKEY_SELF: [
-                _PERM_CREATE_PERMISSION_REQUEST,
-                _PERM_READ_SELF_PERMISSIONS,
-                _PERM_READ_AVAILABLE_PERMISSIONS,
-                # Requests that made it through the first rule (= not unauthorized agents) can now access the agent-scoped Minds API endpoint.
-                _PERM_MINDS_API_PROXY_PER_AGENT,
-                # Every agent may read the (non-agent-scoped) API schema document.
-                _PERM_MINDS_API_SCHEMA,
-            ],
-        },
-    ),
-    schemas={
-        _SCOPE_MINDS_API_PROXY_REPORT: {
-            "properties": {
-                "domain": {"const": _GATEWAY_SELF_HOST},
-                "method": {"const": "POST"},
-                "path": {
-                    "type": "string",
-                    "pattern": _MINDS_API_PROXY_REPORT_PATH_PATTERN,
-                },
-            },
-            "required": ["domain", "method", "path"],
-        },
-        _PERM_MINDS_API_PROXY_REPORT: {
-            "properties": {
-                "method": {"const": "POST"},
-                "path": {
-                    "type": "string",
-                    "pattern": _MINDS_API_PROXY_REPORT_PATH_PATTERN,
-                },
-            },
-            "required": ["method", "path"],
-        },
-        _SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED: {
-            "properties": {
-                "domain": {"const": _GATEWAY_SELF_HOST},
-                "path": {
-                    "type": "string",
-                    "pattern": _MINDS_API_PROXY_PER_AGENT_PATH_PATTERN,
-                    # As we create agents running on the host whose permissions
-                    # file this is, we'll add their IDs to the list below, thus
-                    # excluding them from the unauthorized rejection shortcut.
-                    "not": {"anyOf": []},
-                },
-            },
-            "required": ["domain", "path"],
-        },
-        _PERM_MINDS_API_PROXY_PER_AGENT: {
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "pattern": _MINDS_API_PROXY_PER_AGENT_PATH_PATTERN,
-                },
-            },
-            "required": ["path"],
-        },
-        _SCOPE_LATCHKEY_SELF: {
-            "properties": {"domain": {"const": _GATEWAY_SELF_HOST}},
-            "required": ["domain"],
-        },
-        _PERM_CREATE_PERMISSION_REQUEST: {
-            "properties": {
-                "method": {"const": "POST"},
-                "path": {"const": "/permission-requests"},
-            },
-            "required": ["method", "path"],
-        },
-        _PERM_READ_SELF_PERMISSIONS: {
-            "properties": {
-                "method": {"const": "GET"},
-                "path": {"const": "/permissions/self"},
-            },
-            "required": ["method", "path"],
-        },
-        _PERM_READ_AVAILABLE_PERMISSIONS: {
-            "properties": {
-                "method": {"const": "GET"},
-                "path": {
-                    "type": "string",
-                    "pattern": _AVAILABLE_PERMISSIONS_PATH_PATTERN,
-                },
-            },
-            "required": ["method", "path"],
-        },
-        _PERM_MINDS_API_SCHEMA: {
-            "properties": {
-                "method": {"const": "GET"},
-                "path": {"const": _MINDS_API_SCHEMA_INBOUND_PATH},
-            },
-            "required": ["method", "path"],
-        },
-    },
-)
+def reconcile_baseline_permissions(config: LatchkeyPermissionsConfig) -> LatchkeyPermissionsConfig:
+    """Bring ``config``'s ``latchkey-self`` grants and its ``include`` up to the current baseline.
+
+    The agent baseline is only written when a host's permissions file is first
+    created, so a file written by an older build keeps whatever set of
+    gateway-self grants that build shipped. Reconciling in place is how a *new*
+    baseline permission reaches hosts that already exist, without a per-addition
+    migration.
+
+    Only the ``latchkey-self`` rule is reconciled, and only by adding: that scope
+    is domain-only, so within it detent allows a request matching any one listed
+    permission, and every grant minds mints attaches there. Rules other than
+    ``latchkey-self`` are left exactly as found -- notably the ``not.anyOf``
+    allowlist, which is per-host state rather than baseline.
+
+    The baseline's ``include`` is healed on *every* path, including the one with
+    no grant to add, so this function owns the include for both of
+    :func:`register_agent_for_host`'s write paths.
+    """
+    baseline_permissions = tuple(
+        permission for rule in AGENT_BASELINE_PERMISSIONS.rules for permission in rule.get(SCOPE_LATCHKEY_SELF, [])
+    )
+    granted = {permission for rule in config.rules for permission in rule.get(SCOPE_LATCHKEY_SELF, [])}
+    missing = [permission for permission in baseline_permissions if permission not in granted]
+    if not missing or not any(SCOPE_LATCHKEY_SELF in rule for rule in config.rules):
+        # No gateway-self rule at all means a file predating the baseline entirely
+        # (or a hand-written one), where inventing the rule would grant far more
+        # than reconciliation is about. The include still needs healing either way.
+        return config.model_copy_update(to_update(config.field_ref().include, _merged_include(config)))
+
+    rebuilt_rules = tuple(
+        {**rule, SCOPE_LATCHKEY_SELF: [*rule[SCOPE_LATCHKEY_SELF], *missing]}
+        if SCOPE_LATCHKEY_SELF in rule
+        else dict(rule)
+        for rule in config.rules
+    )
+    rebuilt_schemas: dict[str, JsonValue] = dict(config.schemas)
+    for permission in missing:
+        rebuilt_schemas[permission] = AGENT_BASELINE_PERMISSIONS.schemas[permission]
+    # Copy-with-update, never a fresh construction: rebuilding from rules+schemas
+    # alone silently drops ``include``, which would leave a granted custom scope
+    # pointing at an unresolvable schema -- and detent then fails the *whole*
+    # permission check for that host, not just the one rule.
+    return config.model_copy_update(
+        to_update(config.field_ref().rules, rebuilt_rules),
+        to_update(config.field_ref().schemas, rebuilt_schemas),
+        to_update(config.field_ref().include, _merged_include(config)),
+    )
+
+
+def _merged_include(config: LatchkeyPermissionsConfig) -> tuple[str, ...]:
+    """Return ``config``'s includes plus any the baseline has and it lacks."""
+    return config.include + tuple(name for name in AGENT_BASELINE_PERMISSIONS.include if name not in config.include)
 
 
 def register_agent_for_host(
@@ -296,11 +188,13 @@ def register_agent_for_host(
     """Register ``agent_id`` for the given host, granting it access to the Minds API proxy.
 
     Reads the host's ``latchkey_permissions.json`` (writing a fresh
-    baseline if it does not yet exist), extracts the current allowed-agent
-    list out of the ``minds-api-proxy-unauthorized`` scope's ``not.anyOf``
-    block, appends a per-agent entry if ``agent_id`` is not already there,
-    and writes the updated config back atomically. Idempotent:
-    re-registering an agent already in the list is a no-op write.
+    baseline if it does not yet exist), brings any stale gateway-self grants up to
+    the current baseline (:func:`reconcile_baseline_permissions`), extracts the
+    current allowed-agent list out of the ``minds-api-proxy-unauthorized`` scope's
+    ``not.anyOf`` block, appends a per-agent entry if ``agent_id`` is not already
+    there, and writes the updated config back atomically. Idempotent:
+    re-registering an already-listed agent writes only if the baseline
+    reconciliation found something to add.
 
     This is the *only* public way to grant a minds agent access to the
     Minds API proxy. The matching CLI wrapper is ``mngr latchkey
@@ -314,10 +208,14 @@ def register_agent_for_host(
     else:
         # First agent on this host: start from the baseline so the
         # gateway-self rules and the minds-api-proxy gate are present.
-        config = _AGENT_BASELINE_PERMISSIONS
+        config = AGENT_BASELINE_PERMISSIONS
+
+    reconciled = reconcile_baseline_permissions(config)
+    is_baseline_changed = reconciled != config
+    config = reconciled
 
     schemas: dict[str, JsonValue] = dict(config.schemas)
-    scope_schema = schemas.get(_SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED)
+    scope_schema = schemas.get(SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED)
     # Use ``dict`` (concrete type) rather than ``Mapping`` because
     # ``JsonValue``'s mapping arm is ``dict[str, JsonValue]``
     # specifically; ``isinstance(x, Mapping)`` lets the type checker
@@ -326,40 +224,43 @@ def register_agent_for_host(
     if not isinstance(scope_schema, dict):
         raise LatchkeyStoreError(
             f"Permissions file {path} is missing the "
-            f"{_SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED!r} scope schema; cannot extend the allowed-agent list."
+            f"{SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED!r} scope schema; cannot extend the allowed-agent list."
         )
     properties = scope_schema.get("properties")
     if not isinstance(properties, dict):
         raise LatchkeyStoreError(
-            f"Permissions file {path}'s {_SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED!r} schema is malformed: "
+            f"Permissions file {path}'s {SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED!r} schema is malformed: "
             f"missing or non-object ``properties``."
         )
     path_schema = properties.get("path")
     if not isinstance(path_schema, dict):
         raise LatchkeyStoreError(
-            f"Permissions file {path}'s {_SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED!r} schema is malformed: "
+            f"Permissions file {path}'s {SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED!r} schema is malformed: "
             f"missing or non-object ``properties.path``."
         )
     not_block = path_schema.get("not")
     if not isinstance(not_block, dict):
         raise LatchkeyStoreError(
-            f"Permissions file {path}'s {_SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED!r} schema is malformed: "
+            f"Permissions file {path}'s {SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED!r} schema is malformed: "
             f"missing or non-object ``properties.path.not``."
         )
     any_of = not_block.get("anyOf")
     if not isinstance(any_of, list):
         raise LatchkeyStoreError(
-            f"Permissions file {path}'s {_SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED!r} schema is malformed: "
+            f"Permissions file {path}'s {SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED!r} schema is malformed: "
             f"missing or non-list ``properties.path.not.anyOf``."
         )
 
     existing_ids = [_extract_agent_id_from_anyof_entry(entry) for entry in any_of]
     if str(agent_id) in existing_ids:
-        # No-op: agent already allowed.
+        # Agent already allowed, but a baseline that moved still has to be
+        # persisted: this is the common path for a host that already exists.
+        if is_baseline_changed:
+            save_permissions(path, config)
         return
     new_any_of: list[JsonValue] = list(any_of) + [_build_allowed_agent_anyof_entry(str(agent_id))]
 
-    schemas[_SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED] = {
+    schemas[SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED] = {
         **scope_schema,
         "properties": {
             **properties,
@@ -372,7 +273,9 @@ def register_agent_for_host(
             },
         },
     }
-    new_config = LatchkeyPermissionsConfig(rules=config.rules, schemas=schemas)
+    # Copy-with-update rather than reconstructing from ``rules``/``schemas``:
+    # rebuilding by hand silently drops every other field.
+    new_config = config.model_copy_update(to_update(config.field_ref().schemas, schemas))
     save_permissions(path, new_config)
 
 
@@ -489,7 +392,7 @@ def prepare_agent_latchkey(
     if latchkey is not None:
         env[ENV_LATCHKEY_GATEWAY_PASSWORD] = latchkey.derive_gateway_password()
         opaque_path = new_opaque_permissions_path(latchkey.plugin_data_dir)
-        save_permissions(opaque_path, _AGENT_BASELINE_PERMISSIONS)
+        save_permissions(opaque_path, AGENT_BASELINE_PERMISSIONS)
         env[ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE] = latchkey.create_permissions_override_jwt(opaque_path)
 
     # Always set the disable-counting flag whenever we're injecting a
@@ -605,7 +508,7 @@ def maybe_recover_host_permissions_for_agent(
             # the baseline at the canonical path and (re)point the opaque
             # handle at it, so the agent's JWT (which resolves to the handle)
             # starts working again and later grants are visible to it.
-            save_permissions(host_path, _AGENT_BASELINE_PERMISSIONS)
+            save_permissions(host_path, AGENT_BASELINE_PERMISSIONS)
             point_opaque_handle_at_host(plugin_data_dir, opaque_permissions_path, host_id)
         did_repair = True
 

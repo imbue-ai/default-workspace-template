@@ -1,0 +1,1 @@
+Add the blueprint plan for breaking apart default-workspace-template's system/scripts into proper packages (eval worker, automations machinery, caretaker, OOM entry points, terminal helpers, github-sync hook), including the mngr-side apps/mngr_minds_eval path and FCT-to-dwt terminology updates.

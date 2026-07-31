@@ -1,0 +1,1 @@
+The bootstrap no longer resolves or writes `CLAUDE_CONFIG_DIR` into the host env file: every claude in the workspace now uses claude's own default `~/.claude`, so there is nothing to export. The env-file parse/format helpers that existed only for that write were removed, and a regression test asserts the boot path leaves `$MNGR_HOST_DIR/env` untouched.

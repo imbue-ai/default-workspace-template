@@ -1,6 +1,8 @@
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from typing import Final
 
 import pytest
@@ -9,9 +11,12 @@ from imbue.imbue_common.ids import InvalidRandomIdError
 from imbue.minds.desktop_client import templates as _templates_module
 from imbue.minds.desktop_client.agent_creator import AgentCreateAttemptInfo
 from imbue.minds.desktop_client.agent_creator import AgentCreateAttemptStatus
+from imbue.minds.desktop_client.onboarding_services import OnboardingService
+from imbue.minds.desktop_client.templates import ADD_ACCOUNT_OPTION_VALUE
 from imbue.minds.desktop_client.templates import CATALOG
 from imbue.minds.desktop_client.templates import DEFAULT_EXPECTED_CREATE_ATTEMPT_DURATION_SECONDS
 from imbue.minds.desktop_client.templates import FALLBACK_BRANCH
+from imbue.minds.desktop_client.templates import InspirationWorkspaceRow
 from imbue.minds.desktop_client.templates import expected_create_attempt_duration_seconds
 from imbue.minds.desktop_client.templates import make_unique_host_name
 from imbue.minds.desktop_client.templates import render_account_plan_modal_page
@@ -27,6 +32,7 @@ from imbue.minds.desktop_client.templates import render_destroyed_workspaces_row
 from imbue.minds.desktop_client.templates import render_dev_styleguide_page
 from imbue.minds.desktop_client.templates import render_help_page
 from imbue.minds.desktop_client.templates import render_inbox_page
+from imbue.minds.desktop_client.templates import render_inspiration_create_page
 from imbue.minds.desktop_client.templates import render_landing_page
 from imbue.minds.desktop_client.templates import render_login_page
 from imbue.minds.desktop_client.templates import render_login_redirect_page
@@ -35,8 +41,12 @@ from imbue.minds.desktop_client.templates import render_recovery_page
 from imbue.minds.desktop_client.templates import render_sharing_editor
 from imbue.minds.desktop_client.templates import render_sidebar_page
 from imbue.minds.desktop_client.templates import render_workspace_backup_history
+from imbue.minds.desktop_client.templates import render_workspace_options_modal_page
+from imbue.minds.desktop_client.templates import render_workspace_options_page
 from imbue.minds.desktop_client.templates import render_workspace_settings
 from imbue.minds.desktop_client.templates import resolve_create_host_name
+from imbue.minds.desktop_client.testing import is_workspace_options_pane_hidden
+from imbue.minds.desktop_client.testing import workspace_options_pane_html
 from imbue.minds.desktop_client.workspace_color import DEFAULT_WORKSPACE_COLOR
 from imbue.minds.desktop_client.workspace_color import DEFAULT_WORKSPACE_COLOR_NAME
 from imbue.minds.desktop_client.workspace_color import WORKSPACE_PALETTE
@@ -67,13 +77,14 @@ def test_render_landing_page_with_agents_lists_them_as_links() -> None:
     assert str(_AGENT_B) in html
 
 
-def test_render_landing_page_settings_link_interpolates_agent_id() -> None:
-    # Regression: the settings gear is a <Button> (JinjaX component), so its
-    # onclick must use the `attr={{ expr }}` form -- a quoted `onclick="...{{ }}..."`
-    # is forwarded literally, which sent `/workspace/{{ agent_id }}/settings` to the
-    # server and 500'd the AgentId parse on destroy.
+def test_render_landing_page_settings_button_opens_the_options_panel() -> None:
+    # The gear opens the docked options panel over the list rather than
+    # navigating into the workspace's own settings page. The agent id is read
+    # off the row at click time, so nothing is interpolated into the handler --
+    # which is what the old `/workspace/<id>/settings` onclick got wrong twice.
     html = render_landing_page(accessible_agent_ids=(_AGENT_A,))
-    assert f"/workspace/{_AGENT_A}/settings" in html
+    assert "window.landingOpenWorkspaceOptions(this)" in html
+    assert f"/workspace/{_AGENT_A}/settings" not in html
     assert "{{" not in html
 
 
@@ -86,7 +97,7 @@ def test_render_landing_page_has_open_in_new_window_button_before_settings() -> 
     # The open-in-new arrow glyph (Icon16 ``arrow-up-right``, Figma node 857-5137).
     assert '<path d="M12.9331 10.3336' in html
     # It sits before the settings button within the row.
-    assert html.index("window.landingOpenInNewWindow") < html.index(f"/workspace/{_AGENT_A}/settings")
+    assert html.index("window.landingOpenInNewWindow(this)") < html.index("window.landingOpenWorkspaceOptions(this)")
 
 
 def test_render_workspace_settings_data_agent_id_interpolates() -> None:
@@ -95,7 +106,6 @@ def test_render_workspace_settings_data_agent_id_interpolates() -> None:
         ws_name="ws",
         current_account=None,
         accounts=(),
-        servers=(),
     )
     assert f'data-agent-id="{_AGENT_A}"' in html
     assert "{{" not in html
@@ -108,7 +118,6 @@ def test_render_workspace_settings_view_all_links_to_backup_history_page() -> No
         ws_name="ws",
         current_account=None,
         accounts=(),
-        servers=(),
     )
     assert f"/workspace/{_AGENT_A}/backups" in html
 
@@ -121,7 +130,6 @@ def test_render_workspace_settings_carries_the_restore_dialog() -> None:
         ws_name="ws",
         current_account=None,
         accounts=(),
-        servers=(),
     )
     assert 'id="restore-dialog"' in html
     assert 'id="restore-dialog-time"' in html
@@ -141,7 +149,6 @@ def test_render_workspace_settings_puts_the_operation_strip_below_the_backups_ta
         ws_name="ws",
         current_account=None,
         accounts=(),
-        servers=(),
     )
     for element_id in (
         "backup-operation-strip",
@@ -206,7 +213,6 @@ def test_render_workspace_settings_renders_all_palette_swatches() -> None:
         ws_name="ws",
         current_account=None,
         accounts=(),
-        servers=(),
         current_color="#0b292b",
     )
     # All palette swatches present, with the workspace's current color
@@ -230,7 +236,6 @@ def test_render_workspace_settings_picker_disabled_when_stale() -> None:
         ws_name="ws",
         current_account=None,
         accounts=(),
-        servers=(),
         current_color="#0b292b",
         is_stale=True,
     )
@@ -257,7 +262,6 @@ def test_render_workspace_settings_marks_no_swatch_selected_for_custom_hex() -> 
         ws_name="ws",
         current_account=None,
         accounts=(),
-        servers=(),
         current_color="#123456",
     )
     assert 'value="#123456"' in html
@@ -273,7 +277,6 @@ def test_render_workspace_settings_pill_not_selected_for_palette_color() -> None
         ws_name="ws",
         current_account=None,
         accounts=(),
-        servers=(),
         current_color="#0b292b",
     )
     assert 'aria-checked="true"' in html
@@ -296,7 +299,7 @@ def test_render_sharing_editor_workspace_link_interpolates_agent_id() -> None:
 
 def test_render_landing_page_with_no_agents_shows_empty_state() -> None:
     html = render_landing_page(accessible_agent_ids=())
-    assert "No workspaces yet" in html
+    assert "No machines yet" in html
 
 
 def test_render_landing_page_discovering_shows_auto_refresh() -> None:
@@ -307,7 +310,7 @@ def test_render_landing_page_discovering_shows_auto_refresh() -> None:
     # last-good entries), so the discovering state must not be a dead end:
     # it always offers the create affordance.
     assert 'href="/create"' in html
-    assert "No workspaces yet" not in html
+    assert "No machines yet" not in html
     assert "/goto/" not in html
 
 
@@ -316,13 +319,16 @@ def test_render_landing_page_signed_out_launcher_signs_in_back_to_home() -> None
     # "Log in", and (the Landing page being a trusted local page on the chrome
     # surface) it opens the sign-in modal via the shell bridge with
     # ``returnTo: '/'`` so a successful sign-in lands back on the home screen
-    # (the server's return_to default is the create screen), leading with the
-    # sign-in tab to match the launcher's label.
+    # (the server's return_to default is the create screen). It passes no
+    # ``mode``, so the modal leads with sign-up -- a user with no account at
+    # all needs to create one.
     html = render_landing_page(accessible_agent_ids=())
     assert 'id="landing-minds-settings"' in html
     assert 'id="landing-account"' in html
     assert "Log in" in html
-    assert "window.minds.openSigninModal('/', 'signin')" in html
+    assert "window.minds.openSigninModal('/')" in html
+    assert "window.minds.openSigninModal('/', 'signin')" not in html
+    assert "'/auth/signup'" in html
 
 
 def test_render_landing_page_signed_in_launcher_shows_email_and_extra_count() -> None:
@@ -639,6 +645,139 @@ def test_render_create_form_shows_error_message_when_supplied() -> None:
     assert "Imbue cloud requires an account." in html
 
 
+def test_render_creating_page_renders_onboarding_walkthrough() -> None:
+    """The creating page carries the five-step onboarding walkthrough.
+
+    The title, the step markers (1..5), the intro panel + advance button,
+    and the graphics (minds logo, browser demo, app cloud, and the final
+    latchkey/tunnel illustration) must all be present on first paint.
+    """
+    create_attempt_id = CreateAttemptId()
+    info = AgentCreateAttemptInfo(
+        create_attempt_id=create_attempt_id,
+        status=AgentCreateAttemptStatus.INITIALIZING,
+        launch_mode=LaunchMode.DOCKER,
+    )
+    services = [
+        OnboardingService(
+            service_id="slack",
+            display_name="Slack",
+            icon_url="/_static/service_icons/slack.svg",
+            icon_data_uri="data:image/svg+xml;base64,PHN2Zy8+",
+        ),
+        OnboardingService(service_id="ramp", display_name="Ramp", icon_url=None, icon_data_uri=None),
+    ]
+    html = render_creating_page(create_attempt_id=create_attempt_id, info=info, onboarding_services=services)
+    assert "Setting up your machine" in html
+    # Eight walkthrough steps: the intro, the chat, the tabs demo, the apps
+    # cloud, the connections scene, the devices, publishing, and the tips.
+    for step_number in range(1, 9):
+        assert f'data-step="{step_number}"' in html
+    assert 'data-step="9"' not in html
+    assert 'id="intro-panel"' not in html
+    # The progress strip is always visible.
+    strip_index = html.index('id="top-strip"')
+    strip_tag = html[html.rindex("<div", 0, strip_index) : html.index(">", strip_index)]
+    assert "hidden" not in strip_tag
+    # Readiness enters the workspace by itself, so there is no Begin button
+    # and the details toggle stays put.
+    assert 'id="top-begin"' not in html
+    assert 'id="details-toggle"' in html
+    # Nav is the dot strip alone: the walkthrough plays itself, so the old
+    # Learn more / Previous / Next buttons are gone. One dot per step, each a
+    # circle carrying the sweep arc.
+    assert 'id="onboarding-advance"' not in html
+    assert 'id="onboarding-prev"' not in html
+    assert html.count('class="onboarding-dot"') == 8
+    # The current step's dot stretches into a pill whose fill times the dwell.
+    assert "onboarding-dot-fill" in html
+    # The strip is dots alone: no play/pause/replay control.
+    assert 'id="onboarding-control"' not in html
+    # Graphics for the phases.
+    for gfx in (
+        'id="gfx-minds"',
+        'id="gfx-chat"',
+        'id="gfx-browser"',
+        'id="gfx-apps"',
+        'id="gfx-connect"',
+        'id="gfx-devices"',
+        'id="gfx-publish"',
+    ):
+        assert gfx in html
+    # The app cloud + its spinning app wheel (fed from the services catalog),
+    # and the latchkey mark on the final protection line.
+    assert "app-cloud" in html
+    assert "cloud-wheel" in html
+    # The wheel is fed a JSON block of catalog entries whose icons are inlined
+    # as data URIs, so it needs no network; services with no shipped brand icon
+    # (Ramp here) are skipped.
+    assert 'id="cloud-apps"' in html
+    assert '"icon": "data:image/svg+xml;base64,' in html
+    assert '"name": "Slack"' in html
+    assert "/_static/service_icons/" not in html
+    assert "Ramp" not in html
+    # The label that pops the centered app's name in.
+    assert "cloud-wheel-name" in html
+    # The connections step: a permission request, the pointer that approves
+    # it, and the button that becomes the link to the machine.
+    assert "connect-card" in html
+    assert "connect-approve" in html
+    assert "connect-cursor" in html
+    # The machine is drawn as a laptop, on this step and the sharing one.
+    assert html.count('href="#laptop"') == 2
+    # The old carousel is gone.
+    assert "service-marquee" not in html
+
+
+def test_render_creating_page_opens_on_the_minds_intro() -> None:
+    """Every creation opens the same way: the title + gray progress strip and
+    the minds intro as step one of a walkthrough that plays itself, with no
+    button to press. Errors surface immediately."""
+    create_attempt_id = CreateAttemptId()
+    info = AgentCreateAttemptInfo(
+        create_attempt_id=create_attempt_id,
+        status=AgentCreateAttemptStatus.INITIALIZING,
+        launch_mode=LaunchMode.DOCKER,
+    )
+    html = render_creating_page(create_attempt_id=create_attempt_id, info=info)
+    assert 'data-surface-errors="true"' in html
+    assert "This is Minds: your machine for building personalized apps." in html
+    # Every step is two lines: what the thing is, then what you do with it.
+    assert "Learn more while you wait." in html
+    # The minds mark is defined once and referenced wherever it is shown.
+    assert 'id="minds-mark"' in html
+    assert html.count('href="#minds-mark"') == 1
+    # Both devices show the same miniature of the app pane.
+    assert html.count('href="#app-ui"') == 2
+    # Nothing invites a click to start it any more.
+    assert "Learn more while you wait?" not in html
+    # The tips sit on their own final step rather than crowding the picture.
+    tips_index = html.index('data-step="8"')
+    assert 'id="tip"' in html[tips_index : html.index("</div>", html.index('id="tip"'))]
+
+
+def test_render_creating_page_final_copy_matches_launch_mode() -> None:
+    """The final step explains where the workspace runs, per launch mode."""
+    create_attempt_id = CreateAttemptId()
+    local_info = AgentCreateAttemptInfo(
+        create_attempt_id=create_attempt_id,
+        status=AgentCreateAttemptStatus.INITIALIZING,
+        launch_mode=LaunchMode.DOCKER,
+    )
+    local_html = render_creating_page(create_attempt_id=create_attempt_id, info=local_info)
+    assert "runs locally, so your computer has to be on" in local_html
+    assert 'data-is-remote="false"' in local_html
+
+    remote_info = AgentCreateAttemptInfo(
+        create_attempt_id=create_attempt_id,
+        status=AgentCreateAttemptStatus.INITIALIZING,
+        launch_mode=LaunchMode.IMBUE_CLOUD,
+    )
+    remote_html = render_creating_page(create_attempt_id=create_attempt_id, info=remote_info)
+    assert "even when your laptop is closed" in remote_html
+    assert 'data-is-remote="true"' in remote_html
+
+
 def test_render_creating_page_carries_hidden_github_auth_guidance() -> None:
     """The creating page ships the private-repo guidance as static, hidden
     content: creating.js reveals it only when the create-operation status
@@ -770,6 +909,285 @@ def test_render_create_form_ignores_workspace_env_vars_without_opt_in_on_dev_tie
     assert "mngr/some-feature" not in html
 
 
+_INSPIRATION_URL = "https://github.com/acme/inspiration"
+
+
+def _render_inspiration(**kwargs: Any) -> str:
+    return render_inspiration_create_page(git_url=_INSPIRATION_URL, **kwargs)
+
+
+def test_render_inspiration_page_shows_chooser_options() -> None:
+    html = _render_inspiration()
+    assert "You've opened an Inspiration" in html
+    assert "Create a new machine" in html
+    assert "Add to an existing machine" in html
+    assert _INSPIRATION_URL in html
+    # The eyebrow "INSPIRATION" label above the heading is gone.
+    assert ">Inspiration</p>" not in html
+    # Full-width (block) buttons press with a gentler scale than the base 0.98.
+    assert "active:!scale-[0.99]" in html
+
+
+def test_render_inspiration_page_add_flow_has_copyable_skill_message() -> None:
+    # The skill accepts only a git URL, so the message must exclude the branch
+    # even when the deeplink carried one.
+    html = _render_inspiration(branch="v1.2.3")
+    assert f"/use-inspiration {_INSPIRATION_URL}" in html
+    assert f"/use-inspiration {_INSPIRATION_URL} v1.2.3" not in html
+    assert 'id="inspiration-copy-btn"' in html
+    # The whole box is clickable, not just the button.
+    assert "copyBox.addEventListener('click', doCopy)" in html
+    # The box has a hover animation (a .copy-box hover rule + the class on it).
+    assert "copy-box" in html
+    assert ".copy-box:hover" in html
+    # The read-only value shows a pointer cursor (the whole box copies on click).
+    assert ".copy-box input" in html
+    # The Copy button is borderless (ghost variant), not the bordered secondary.
+    copy_btn = re.search(r'<button[^>]*\bid="inspiration-copy-btn"[^>]*>', html)
+    assert copy_btn is not None
+    assert "border-transparent" in copy_btn.group(0)
+    assert "border-default" not in copy_btn.group(0)
+
+
+def test_render_inspiration_page_confirm_step_labels_account() -> None:
+    # The account picker on the confirm step sits under an "Account" label laid
+    # out like the "Creating from" block above it (uppercase label, value below).
+    html = _render_inspiration()
+    assert ">Account</p>" in html
+    assert ">Creating from</p>" in html
+
+
+def test_render_inspiration_page_step_circle_current_black_previous_gray() -> None:
+    # The current step is a solid black bubble with a white number; previous
+    # (completed) steps are a light-gray bubble with a dark-gray number, driven
+    # by data-state. The bubble carries no border, and the title text follows:
+    # black on the current step, gray on previous ones.
+    html = _render_inspiration()
+    assert "circle.setAttribute('data-state'" in html
+    # Current step: black bubble (inverse surface) + white number.
+    assert '[data-step-circle][data-state="active"]' in html
+    assert "background-color: var(--c-surface-inverse)" in html
+    assert "color: var(--c-text-inverse-primary)" in html
+    # Previous steps: opaque light-gray bubble + dark-gray number.
+    assert '[data-step-circle][data-state="done"]' in html
+    assert "color-mix(in srgb, var(--c-text-primary) 10%, var(--c-surface-primary))" in html
+    # No border (and no plain white fill) on the bubble.
+    circle_cls = re.search(r'data-step-circle class="([^"]*)"', html)
+    assert circle_cls is not None
+    assert "border" not in circle_cls.group(1)
+    assert "bg-surface-primary" not in circle_cls.group(1)
+    # The title text is black on the current step, gray on previous ones.
+    assert "title.classList.toggle('text-primary', !opts.done)" in html
+    assert "title.classList.toggle('text-secondary', opts.done)" in html
+    # Completed steps are marked with a simple green check (text-success).
+    assert 'class="text-success shrink-0"' in html
+
+
+def test_render_inspiration_page_connector_solid_with_dotted_more_stub() -> None:
+    # Regular links between steps are SOLID; the current (last visible) step
+    # instead gets a short 3-dot "more to come" stub -- but only when it isn't
+    # the final step (activeStep < 3), so the last number reads as the end.
+    html = _render_inspiration()
+    assert 'data-step-connector class="absolute hidden"' in html
+    assert "c.classList.add('top-4', 'bottom-0', 'step-connector-line')" in html
+    # The solid line's color matches the completed circle fill exactly.
+    assert ".step-connector-line" in html
+    assert "c.classList.add('step-connector-dots')" in html
+    assert "activeStep < 3" in html
+    # The 3-dot stub itself is a short dotted segment.
+    assert "radial-gradient(circle, var(--c-border-strong)" in html
+
+
+def test_render_inspiration_page_lists_workspaces_with_liveness_gating() -> None:
+    rows = [
+        InspirationWorkspaceRow(agent_id="agent-aa", name="alpha", accent="#112233", liveness="RUNNING"),
+        InspirationWorkspaceRow(agent_id="agent-bb", name="beta", accent="#445566", liveness="STOPPED"),
+    ]
+    html = _render_inspiration(mngr_forward_origin="https://localhost:8421", workspace_rows=rows)
+    assert 'data-agent-id="agent-aa"' in html
+    assert 'data-liveness="STOPPED"' in html
+    assert 'data-default-href="https://localhost:8421/goto/agent-aa/"' in html
+    # The stopped-mind detour mirrors the landing rows' recovery shortcut.
+    assert "intent=restart" in html
+    # Each workspace card carries a right-pointing chevron to signal selection
+    # (the chevron-right glyph path).
+    assert "M5.57617 3.57617" in html
+
+
+def test_render_inspiration_page_empty_workspace_list_links_to_new_flow() -> None:
+    html = _render_inspiration(workspace_rows=[])
+    assert "You don't have any machines yet." in html
+    assert 'id="inspiration-empty-to-new"' in html
+
+
+def test_render_inspiration_page_new_flow_requires_trust_checkbox() -> None:
+    html = _render_inspiration()
+    assert 'id="inspiration-trust"' in html
+    assert "I trust this Inspiration" in html
+    assert "not been approved or verified by Imbue" in html
+    # The submit handler gates on the checkbox before any POST.
+    assert "trustCheckbox.checked" in html
+
+
+def test_render_inspiration_page_create_button_gated_on_trust() -> None:
+    # Create starts disabled/grayed and the acknowledgment starts red; both
+    # flip when the box is checked (syncTrustGate).
+    html = _render_inspiration()
+    assert re.search(r'id="inspiration-submit"[^>]*\sdisabled', html) or re.search(
+        r'\sdisabled[^>]*id="inspiration-submit"', html
+    )
+    assert re.search(r'id="inspiration-trust-title"[^>]*text-important', html)
+    assert "submitBtn.disabled = !ok" in html
+
+
+def test_render_inspiration_page_is_three_steps_with_advanced_on_confirm() -> None:
+    # Advanced settings are NOT their own step: the create flow is 3 steps
+    # (choose -> where -> confirm), and an "Advanced settings" dashed divider on
+    # the confirm step reveals the selects in place.
+    html = _render_inspiration(branch="v1.2.3")
+    assert 'id="inspiration-step-create-3"' in html
+    assert 'id="inspiration-step-create-4"' not in html
+    assert 'id="inspiration-toggle-advanced"' in html
+    assert "Advanced settings" in html
+    # The toggle starts as a plain left label: the flanking dashed rules are
+    # hidden until it opens, when JS reveals them (a la the create advanced <hr>).
+    assert re.search(r"data-adv-rule[^>]*border-dashed[^>]*hidden", html)
+    # Opening smoothly animates the morph into the centered divider.
+    assert "animateAdvancedDivider()" in html
+    # Opening pins the centered column (no upward jump) then scrolls the options
+    # into view, rather than letting the layout re-center upward.
+    assert "pinPageColumn()" in html
+    assert "revealAdvanced()" in html
+    # The auto-scroll is a slow, duration-controlled scroll (not native smooth).
+    assert "ADV_SCROLL_MS" in html
+    # Closing plays the open in reverse (divider morph back) and collapses the
+    # panel's height so the Create button rises as the options disappear.
+    assert "closeAdvanced()" in html
+    assert "reverseAdvancedDivider()" in html
+    assert "collapseAdvancedPanel(" in html
+    # The toggle shows a pointer cursor (it's a native button, which wouldn't).
+    assert re.search(r'id="inspiration-toggle-advanced"[^>]*cursor-pointer', html)
+    # The removed settings-choice step's controls are gone.
+    assert 'id="inspiration-use-defaults"' not in html
+    assert 'id="inspiration-configure-more"' not in html
+
+
+def test_render_inspiration_page_advanced_panel_has_provider_and_region_selects() -> None:
+    # The "Advanced settings" dropdown box reveals compute / backup provider and
+    # region selects in place (no navigation away). Submit reads them. (AI
+    # provider was removed from create, so it's absent here too.)
+    html = _render_inspiration(
+        region_options_by_launch_mode={"IMBUE_CLOUD": ["us-west", "eu"]},
+        region_selected_by_launch_mode={"IMBUE_CLOUD": "us-west"},
+    )
+    for select_id in (
+        "inspiration-launch-mode",
+        "inspiration-backup-provider",
+        "inspiration-region",
+    ):
+        assert f'id="{select_id}"' in html, select_id
+    assert 'id="inspiration-ai-provider"' not in html
+    assert "launch_mode: launchSelect.value" in html
+    assert "region: regionSelect.disabled" in html
+    # No navigation off this page -- the settings stay in the flow.
+    assert "window.location = '/create?'" not in html
+
+
+def test_render_inspiration_page_submit_labeled_create_from_inspiration() -> None:
+    html = _render_inspiration()
+    assert "Create from Inspiration" in html
+    assert 'id="inspiration-submit"' in html
+
+
+def test_render_inspiration_page_repo_shown_as_plain_text() -> None:
+    # The repo is display-only and deliberately not rendered as an input-looking
+    # box: it appears as plain paragraph text, and the POSTed value rides in a
+    # hidden input. There is no editable git_url form field.
+    html = _render_inspiration()
+    assert 'name="git_url"' not in html
+    assert 'id="inspiration-git-url"' in html
+    assert f">{_INSPIRATION_URL}</p>" in html
+
+
+def test_render_inspiration_page_downstream_steps_start_hidden() -> None:
+    # Progressive disclosure: only step 1 is visible on load; every downstream
+    # step wrapper starts hidden and is revealed by the timeline's JS. The
+    # ``hidden`` toggle must not sit on a ``flex`` element (flex would win), so
+    # it lives on the plain step wrapper.
+    html = _render_inspiration()
+    assert re.search(r'id="inspiration-step-1" class="inspiration-step"', html)
+    for step_id in (
+        "inspiration-step-create-2",
+        "inspiration-step-create-3",
+        "inspiration-step-add-2",
+        "inspiration-step-add-3",
+    ):
+        assert re.search(rf'id="{step_id}" class="inspiration-step hidden"', html), step_id
+
+
+def test_render_inspiration_page_gates_each_step_on_the_previous() -> None:
+    # The stepper shows one step's body at a time: picking a pathway advances
+    # to step 2, and copying the message / choosing a preset advances to step
+    # 3. render() hides every non-active step's body.
+    html = _render_inspiration()
+    assert "function render()" in html
+    assert "isMessageCopied = true" in html
+    assert "activeStep = 3" in html
+    assert "chooseBranch('create')" in html
+    assert "chooseBranch('add')" in html
+    # Completed steps collapse to a summary of the choice instead of the options.
+    assert "data-step-summary" in html
+    assert "'Create a new machine'" in html
+
+
+def test_render_inspiration_page_has_animations_and_copy_feedback() -> None:
+    # Each newly-shown step/answer plays one self-contained opacity+slide
+    # reveal to a fixed position (no competing reflow); completed circles pop;
+    # the Copy box turns green (theme success variable) before advancing.
+    html = _render_inspiration()
+    assert "animateReveal" in html
+    assert "animatePop" in html
+    assert "var(--c-success)" in html
+    assert "'Copied'" in html
+
+
+def test_render_inspiration_page_number_and_title_go_back() -> None:
+    # Both the step number and its title are click-to-change affordances.
+    html = _render_inspiration()
+    assert "function wireGoBack" in html
+    assert "[data-step-circle]" in html
+    assert "[data-step-title]" in html
+
+
+def test_render_inspiration_page_skill_message_has_stable_id() -> None:
+    # The copy handler reads the message by id, so the CopyField must carry it.
+    html = _render_inspiration()
+    assert 'id="inspiration-skill-message"' in html
+
+
+def test_render_inspiration_page_carries_branch_hidden_input() -> None:
+    html = _render_inspiration(branch="v1.2.3")
+    assert 'id="inspiration-branch" value="v1.2.3"' in html
+    blank = _render_inspiration()
+    assert 'id="inspiration-branch" value=""' in blank
+
+
+def test_render_inspiration_page_opens_signin_modal_via_overlay_bridge() -> None:
+    html = _render_inspiration(accounts=[])
+    assert "window.minds.openSigninModal()" in html
+    assert "/auth/signin-modal" in html
+
+
+def test_render_inspiration_page_presets_match_create_form() -> None:
+    # Same two presets and the same provider values as the create form's
+    # PRESETS map, so both pages create identically-configured workspaces.
+    html = _render_inspiration()
+    assert 'data-preset="remote"' in html
+    assert 'data-preset="local"' in html
+    for value in ("IMBUE_CLOUD", "LIMA", "CONFIGURE_LATER"):
+        assert value in html
+
+
 def test_resolve_create_host_name_uses_submitted_value() -> None:
     assert str(resolve_create_host_name("my-workspace")) == "my-workspace"
 
@@ -844,8 +1262,12 @@ def test_render_chrome_page_contains_workspace_crumb_and_icon_tabs() -> None:
     html = render_chrome_page()
     assert 'id="ws-crumb"' in html
     assert 'id="workspace-switcher-btn"' in html
-    assert 'id="ws-tab-workspace"' in html
+    assert 'id="ws-tab-strip"' in html
+    assert 'id="ws-tab-share"' in html
     assert 'id="ws-tab-settings"' in html
+    # The Workspace icon-tab was removed: in Electron the workspace is simply
+    # the view behind the options panel, so a tab pointing at it was a no-op.
+    assert 'id="ws-tab-workspace"' not in html
     # The Connections icon-tab was removed; pending permission requests are
     # served by the titlebar's inbox popup instead.
     assert 'id="ws-tab-connections"' not in html
@@ -858,14 +1280,15 @@ def test_render_chrome_page_contains_workspace_crumb_and_icon_tabs() -> None:
 def test_render_chrome_page_seeds_workspace_crumb_server_side() -> None:
     # The desktop shell passes the workspace being loaded (?agent=... resolved
     # to a name by the route) so the wrapper's first paint already shows the
-    # workspace breadcrumb with the Workspace tab active -- no bare "Minds" bar
-    # while the content view loads. Without a crumb the block renders hidden
-    # exactly as before.
+    # workspace breadcrumb -- no bare "Minds" bar while the content view
+    # loads. The chrome wrapper is not itself one of the options panes, so
+    # neither icon-tab is marked active. Without a crumb the block renders
+    # hidden exactly as before.
     html = render_chrome_page(crumb_workspace_name="my-mind", crumb_agent_id="agent-abc123")
     assert 'id="ws-crumb" class="flex items-center min-w-0">' in html
     assert 'data-agent-id="agent-abc123"' in html
     assert ">my-mind</span>" in html
-    assert 'id="ws-tab-workspace"' in html and "bg-fill-active" in html
+    assert 'id="ws-tab-share"' in html
     bare = render_chrome_page()
     assert 'id="ws-crumb" class="flex items-center min-w-0" hidden' in bare
 
@@ -1021,17 +1444,22 @@ def test_edge_to_edge_surfaces_opt_out_of_scrollbar_gutter() -> None:
     css = _TOKENS_CSS_PATH.read_text()
     assert "html.no-scrollbar-gutter" in css
     opted_out = '<html lang="en" class="no-scrollbar-gutter">'
-    # The agent-content wrapper additionally carries the ``agent-surface`` mode
-    # class (its viewport-lock CSS is keyed off the html class so the swap
-    # engine's html-class adoption toggles it correctly across in-place swaps).
-    assert '<html lang="en" class="no-scrollbar-gutter agent-surface">' in render_chrome_page()
+    # Every ChromeShell surface is a viewport-locked, edge-to-edge document (the
+    # document lock is a universal ``html, body`` rule in app.css), so all of
+    # them opt out of the document scrollbar gutter -- the titlebar spans the
+    # full window width and its buttons never shift between pages.
+    assert opted_out in render_chrome_page()
     assert opted_out in render_overlay_host_page()
     assert opted_out in render_sidebar_page()
     assert opted_out in render_help_page(workspace_agent_id="")
     assert opted_out in render_inbox_page(cards=())
-    # Normal scrolling content pages keep the reserved gutter so their layout
-    # doesn't shift sideways when a classic scrollbar appears.
-    assert '<html lang="en">' in render_landing_page(accessible_agent_ids=())
+    # Local pages scroll inside the local-page-scroll card (whose own stable
+    # gutter absorbs classic-scrollbar layout shifts) rather than the document.
+    assert opted_out in render_landing_page(accessible_agent_ids=())
+    assert 'id="local-page-scroll"' in render_landing_page(accessible_agent_ids=())
+    # The document viewport-lock lives in app.css (moved out of the template
+    # <style>), applied universally so no per-page class is needed.
+    assert "overflow: hidden" in css
 
 
 def test_render_sidebar_page_contains_workspace_list() -> None:
@@ -1131,13 +1559,13 @@ def test_render_recovery_page_restarting_copy_reflects_restart_flavor() -> None:
     """The RESTARTING branch names a full manual bounce but stays neutral for a start-only dispatch.
 
     A reload during an in-flight restart lands in the RESTARTING branch. A full
-    manual bounce (the right-click "Restart workspace", which POSTs the restart
+    manual bounce (the right-click "Restart machine", which POSTs the restart
     and then navigates here fresh) is a known restart, so the page reads
-    "Restarting your workspace"; the page's own start-only entry dispatch may be
-    a no-op, so it stays on the neutral "Loading workspace" spinner. The offline
+    "Restarting your machine"; the page's own start-only entry dispatch may be
+    a no-op, so it stays on the neutral "Loading machine" spinner. The offline
     hint wins over both. Regression: the branch previously rendered the neutral
     spinner for every non-offline restart, so a deliberate right-click restart
-    showed only "Loading workspace".
+    showed only "Loading machine".
     """
     full_html = render_recovery_page(
         agent_id=_AGENT_A,
@@ -1270,7 +1698,7 @@ def test_render_recovery_page_fresh_entry_dispatches_start_only_unconditionally(
     checks ground truth at commit time and no-ops on a live host), so the entry
     fires it unconditionally and the classifier tiers stay display-only. The
     in-flight copy claims only what is known (the offline copy off the hint,
-    else the neutral loading spinner -- never "Restarting your workspace"),
+    else the neutral loading spinner -- never "Restarting your machine"),
     and applyHealth -- the display path -- must contain no dispatch at all.
     """
     html = render_recovery_page(
@@ -1359,7 +1787,7 @@ def test_render_recovery_page_indeterminate_renders_reconnecting_not_a_verdict()
     restart verdict off non-evidence -- it renders the live "reconnecting"
     state and re-probes slowly. The branch must come before the catch-all
     verdict branch so an indeterminate result keeps checking rather than
-    rendering the "Workspace unresponsive" verdict.
+    rendering the "Machine unresponsive" verdict.
     """
     html = render_recovery_page(
         agent_id=_AGENT_A,
@@ -1385,8 +1813,8 @@ def test_render_recovery_page_dropped_probe_request_reconnects_not_a_verdict() -
 
     This is the post-macOS-sleep strand: Chromium aborts the in-flight health
     fetch when the machine suspends, so ``fetchHealth`` rejects. The old handler
-    rendered the terminal "Workspace unresponsive" verdict and never re-probed,
-    stranding the user even after the workspace came back. The rejection handler
+    rendered the terminal "Machine unresponsive" verdict and never re-probed,
+    stranding the user even after the machine came back. The rejection handler
     must instead render the live "reconnecting" state and schedule a retry, so
     the cheap liveness poll returns the user home and the slow re-probe
     converges to a real tier.
@@ -1413,10 +1841,10 @@ def test_render_recovery_page_dropped_probe_request_reconnects_not_a_verdict() -
 def test_render_recovery_page_every_wait_state_arms_the_homeward_poll() -> None:
     """No recovery state is a dead end: each waiting state arms the cheap liveness poll.
 
-    This is the fix for the post-macOS-sleep "Workspace unresponsive" strand: a
-    workspace that comes back on its own must return the user home without any
+    This is the fix for the post-macOS-sleep "Machine unresponsive" strand: a
+    machine that comes back on its own must return the user home without any
     action. Every terminal/waiting render arms the poll, and the stuck entry
-    arms it before dispatching the start-only restart, so a workspace that
+    arms it before dispatching the start-only restart, so a machine that
     answers while the dispatch settles still goes straight home.
     """
     html = render_recovery_page(
@@ -1523,7 +1951,7 @@ def test_render_recovery_page_restart_dispatch_silences_reprobe_chain() -> None:
     The unresponsive verdict shows the Restart button while its slow re-probe
     chain stays perpetually armed (a pending timer, or a heavy probe already in
     flight), so a manual restart always races a stale probe result. Without a
-    guard that result overwrites the "Restarting your workspace" render (and
+    guard that result overwrites the "Restarting your machine" render (and
     can re-POST a restart) seconds after the click, for the whole restart
     duration. postRestart flips restartDispatched; applyHealth drops results
     that arrive after it, and scheduleIndeterminateReprobe stops arming (and
@@ -1549,7 +1977,7 @@ def test_render_recovery_page_restart_dispatch_silences_reprobe_chain() -> None:
 def test_render_recovery_page_loading_hides_diagnostic_dropdown() -> None:
     """renderLoading must hide the diagnostic dropdown so a stale prior diagnostic
     does not linger on the page while a fresh check is in flight (issue: user
-    clicked Restart workspace and the previous probe's diagnostic stayed open).
+    clicked Restart machine and the previous probe's diagnostic stayed open).
     """
     html = render_recovery_page(
         agent_id=_AGENT_A,
@@ -1737,10 +2165,10 @@ def test_button_passes_through_arbitrary_attrs() -> None:
         variant="ghost",
         size="icon",
         _content="<svg/>",
-        _attrs={"title": "Restart", "aria-label": "Restart workspace", "data-x": "y"},
+        _attrs={"title": "Restart", "aria-label": "Restart machine", "data-x": "y"},
     )
     assert 'title="Restart"' in html
-    assert 'aria-label="Restart workspace"' in html
+    assert 'aria-label="Restart machine"' in html
     assert 'data-x="y"' in html
 
 
@@ -1833,6 +2261,42 @@ _EXPECTED_PALETTE: Final[dict[str, str]] = {
 }
 
 _WORKSPACE_ACCENT_JS_PATH = Path(_templates_module.__file__).resolve().parent / "static" / "workspace_accent.js"
+
+
+_DESKTOP_CLIENT_DIR = Path(_templates_module.__file__).resolve().parent
+_BUTTON_BUSY_SCRIPT = "/_static/button_busy.js"
+
+
+def test_every_template_loading_a_button_busy_user_loads_the_helper_first() -> None:
+    """A script that calls window.mindsButtonBusy is dead without button_busy.js beside it.
+
+    The failure is silent and looks like the button doing nothing: the click
+    handler throws on the missing global, so the request is never sent and the
+    button never reports a wait. Checked across the whole templates tree rather
+    than on the pages that happen to use it today, so a new surface that adopts
+    one of these scripts cannot forget the helper.
+    """
+    static_dir = _DESKTOP_CLIENT_DIR / "static"
+    users = sorted(
+        path.name
+        for path in static_dir.glob("*.js")
+        # The helper defines the global; only its callers need it loaded first.
+        if path.name != "button_busy.js" and "window.mindsButtonBusy" in path.read_text()
+    )
+    assert users, "no script uses the helper; this guard is watching nothing"
+
+    helper_tag = f'src="{_BUTTON_BUSY_SCRIPT}"'
+    for template in sorted((_DESKTOP_CLIENT_DIR / "templates").rglob("*.jinja")):
+        source = template.read_text()
+        for user in users:
+            # Match the script tag, not any mention: components name the script
+            # that drives them in their docstrings without loading it.
+            tag = f'src="/_static/{user}"'
+            if tag not in source:
+                continue
+            assert helper_tag in source, f"{template.name} loads {user} without the busy helper"
+            # Both are ``defer``, so document order is execution order.
+            assert source.index(helper_tag) < source.index(tag), f"{template.name} loads {user} before the busy helper"
 
 
 def test_workspace_palette_matches_expected_entries() -> None:
@@ -1990,7 +2454,7 @@ def test_tokens_css_accent_fallback_is_default_workspace_color() -> None:
 
 
 def test_no_legacy_oklch_accents_remain_in_templates_or_static() -> None:
-    """The SHA-derived OKLCH accent system is gone: workspace accents are
+    """The SHA-derived OKLCH accent system is gone: machine accents are
     stored ``#rrggbb`` hexes, and every fallback / demo surface paints
     the palette default. Scan the hand-written template and static-asset
     trees so a lingering (or reintroduced) ``oklch(`` literal fails loudly;
@@ -2267,9 +2731,11 @@ def test_page_narrow_container_default_padding_and_max_width() -> None:
     assert "<p>body</p>" in html
     # PageNarrowContainer now renders via the shared ChromeShell layout, so a
     # trusted local page reached through it (auth flow, create form) carries the
-    # app titlebar; the body is flex-centered around the column below it.
+    # app titlebar; the column is flex-centered inside the local-page card
+    # (``min-h-full`` fills the card so short content centers) rather than on the
+    # body, which is viewport-locked now.
     assert 'id="minds-titlebar"' in html
-    assert "flex items-center justify-center min-h-screen" in html
+    assert "min-h-full flex items-center justify-center" in html
 
 
 def test_page_narrow_container_form_padding_uses_p6() -> None:
@@ -2534,8 +3000,8 @@ def test_dialog_close_button_renders_x_svg_and_onclick() -> None:
     html = CATALOG.render("DialogCloseButton", onclick="closePermissionDialog()")
     assert 'aria-label="Close"' in html
     assert 'onclick="closePermissionDialog()"' in html
-    # Renders the shared Icon16 ``close`` glyph (16px); its path fragment.
-    assert "w-4 h-4" in html
+    # Renders the shared Icon16 ``close`` glyph at 20px; its path fragment.
+    assert "w-5 h-5" in html
     assert '<path d="M11.5762 3.57617' in html
 
 
@@ -2684,7 +3150,7 @@ def _plan_view_fixture(is_over_storage_quota: bool = False) -> dict[str, object]
         "plan_display_name": "Ally",
         "available_plans": ["ally", "explorer"],
         "usage_rows": [
-            {"label": "Remote workspaces", "used": "1", "limit": "10", "note": ""},
+            {"label": "Remote machines", "used": "1", "limit": "10", "note": ""},
             {"label": "Backup storage", "used": "2.4 GB", "limit": "500.0 GB", "note": "n"},
         ],
         "is_over_storage_quota": is_over_storage_quota,
@@ -2789,6 +3255,27 @@ def test_render_accounts_modal_page_cards_open_the_plan_modal() -> None:
     assert "openAccountPlan" in html
 
 
+def test_render_accounts_modal_page_account_actions_carry_the_busy_affordances() -> None:
+    """Both slow account actions ship the hooks their in-flight state needs.
+
+    Sign-out runs for seconds (plugin signout, provider teardown, supervisor
+    bounce), so the clicked button swaps its label and reveals a spinner. The
+    script binds by these class names, so a card without them would leave the
+    button looking untouched for the whole wait -- the bug this fixes.
+    """
+    # Not the default account, so both actions render on the card.
+    acct = SimpleNamespace(user_id="u-1", email="a@b.com", workspace_ids=[])
+    html = render_accounts_modal_page(accounts=[acct], default_account_id="u-other")
+
+    assert html.count('class="account-action-spinner hidden"') == 2
+    assert html.count('class="account-action-label"') == 2
+    assert "Logging out" in html
+    assert "Switching" in html
+    # Failures surface in the notice instead of silently restoring the buttons.
+    assert 'id="accounts-modal-error"' in html
+    assert "Could not log out of this account" in html
+
+
 def test_render_destroyed_workspaces_page_shell_is_async_without_rows() -> None:
     # The shell must paint instantly: it carries the retention copy and the
     # async fetch hook, but embeds no rows (those come from the rows fragment).
@@ -2796,7 +3283,7 @@ def test_render_destroyed_workspaces_page_shell_is_async_without_rows() -> None:
     assert "30 days" in html
     assert "data-destroyed-rows" in html
     assert "/workspaces/destroyed/rows" in html
-    assert "Loading recently destroyed workspaces" in html
+    assert "Loading recently destroyed machines" in html
 
 
 def test_render_destroyed_workspaces_page_shows_error_in_shell() -> None:
@@ -2835,4 +3322,448 @@ def test_render_destroyed_workspaces_rows_fragment_arms_confirm_with_flex_not_in
 
 def test_render_destroyed_workspaces_rows_fragment_empty_state() -> None:
     html = render_destroyed_workspaces_rows_fragment(rows=[])
-    assert "No recently destroyed workspaces" in html
+    assert "No recently destroyed machines" in html
+
+
+# -- Workspace options panel (Share machine / Machine settings) --
+
+
+_OPTIONS_SERVERS: Final[tuple[str, ...]] = ("mailroom", "newsreader", "system_interface")
+
+
+def _options_modal(
+    tab: str = "share",
+    servers: Sequence[str] = _OPTIONS_SERVERS,
+    selected_target: str = "",
+    has_account: bool = True,
+    accounts: Sequence[object] = (),
+    current_color: str = DEFAULT_WORKSPACE_COLOR,
+    anchor_x: int | None = 214,
+    anchor_y: int | None = 5,
+    anchor_height: int | None = 28,
+) -> str:
+    """Render the options panel with the fixtures every test below shares."""
+    return render_workspace_options_modal_page(
+        agent_id=str(_AGENT_A),
+        ws_name="aurora",
+        current_account=None,
+        accounts=accounts,
+        servers=servers,
+        tab=tab,
+        selected_target=selected_target,
+        account_email="owner@example.com",
+        anchor_x=anchor_x,
+        anchor_y=anchor_y,
+        anchor_height=anchor_height,
+        current_color=current_color,
+        has_account=has_account,
+    )
+
+
+def test_workspace_options_modal_centers_and_drops_the_tabs_without_an_anchor() -> None:
+    # Opened from the workspace list there is no titlebar icon-tab strip to hang
+    # from, so the panel is an ordinary centered dialog -- and carries no tabs,
+    # which drawn away from the buttons they stand in for would be anchored to
+    # nothing. It still shows the tab it was opened on.
+    html = _options_modal(tab="settings", anchor_x=None, anchor_y=None, anchor_height=None)
+    assert 'role="tablist"' not in html
+    assert "items-center justify-center" in html
+    assert 'data-settings-group="general"' in html
+    # Nothing may be positioned against an anchor that was never measured.
+    assert "None" not in html
+
+
+def test_workspace_options_modal_docks_the_card_under_the_measured_tab_strip() -> None:
+    # The panel hangs from the titlebar's icon-tab strip: the tab strip is drawn
+    # at the measured x and the card's top edge meets the strip's bottom, so the
+    # selected tab reads as joined to the panel. The card's width leaves the same
+    # margin on the right that the anchor leaves on the left.
+    html = _options_modal(anchor_x=214, anchor_y=5, anchor_height=28)
+    assert "left: 214px" in html
+    assert "top: -28px" in html
+    # anchor_y + anchor_height == the strip's bottom == the card region's top.
+    assert "top: 33px" in html
+    assert "max(880px, calc(100% - 2 * (214px - 20px)))" in html
+
+
+def test_workspace_options_modal_renders_both_tabs_with_only_one_selected() -> None:
+    html = _options_modal(tab="share")
+    assert 'id="ws-options-tab-share"' in html
+    assert 'id="ws-options-tab-settings"' in html
+    assert html.count('aria-selected="true"') == 1
+    # The selected tab is filled with the card's surface and square-bottomed;
+    # the unselected one self-themes against the accent-tinted titlebar.
+    share_tab = html[html.index('id="ws-options-tab-share"') :][:600]
+    assert "rounded-b-none" in share_tab
+    assert "titlebar-surface" not in share_tab
+    settings_tab = html[html.index('id="ws-options-tab-settings"') :][:600]
+    assert "titlebar-surface" in settings_tab
+
+
+def test_workspace_options_modal_ships_both_panes_so_switching_never_reloads() -> None:
+    html = _options_modal(tab="share")
+    assert 'data-wsopt-panel="share"' in html
+    assert 'data-wsopt-panel="settings"' in html
+    # Only the inactive one starts hidden.
+    assert is_workspace_options_pane_hidden(html, "settings")
+    assert not is_workspace_options_pane_hidden(html, "share")
+
+
+# The classes WorkspaceShareSection / WorkspaceSettingsSections put on their
+# right-hand panel when ``panel_scroll`` is on: it takes the leftover height and
+# scrolls there, with its scrollbar pulled out to the card's edge and enough
+# inner room that a focus ring against an edge is not clipped away.
+_PANEL_SCROLL_CLASSES = "overflow-y-auto min-h-0 pt-1.5 pb-1.5 pl-1.5 pr-6 -mt-1.5 -mb-1.5 -ml-1.5 -mr-6"
+
+
+def test_workspace_options_modal_scrolls_only_the_right_pane_so_the_title_and_tabs_stay_put() -> None:
+    """The card is a fixed height, so the pane inside it -- not the card body -- scrolls.
+
+    Scrolling the whole body took the title and the tab list with it. Each pane
+    is a column whose right-hand panel takes the leftover height and scrolls
+    there, which is what ``panel_scroll`` on the two section components buys.
+    """
+    html = _options_modal(tab="share")
+    for pane in ("share", "settings"):
+        body = workspace_options_pane_html(html, pane)
+        assert _PANEL_SCROLL_CLASSES in body, f"{pane} pane's right panel is not the scroller"
+        # Everything before the nav is the pinned part -- the title, and the
+        # pane element itself. A scroller there would carry the title away
+        # with the content, which is the bug this replaced.
+        above_nav = body[: body.index("<nav")]
+        assert "overflow-y-auto" not in above_nav, f"{pane} pane scrolls as a whole"
+        assert "shrink-0" in above_nav, f"{pane} pane's title is not pinned"
+        # The nav scrolls on its own too, so a machine with twenty entries does
+        # not run them off the bottom of the card. overflow-y-auto means it only
+        # does so when they actually overflow -- there is no count to maintain.
+        nav = body[body.index("<nav") :][: body[body.index("<nav") :].index(">") + 1]
+        assert "overflow-y-auto" in nav, f"{pane} pane's nav cannot scroll"
+
+
+def test_workspace_options_page_does_not_clip_its_panes_into_scrollers() -> None:
+    """The browser twin is an ordinary scrolling page, so nothing inside it clips.
+
+    ``panel_scroll`` exists for exactly this split: the same two sections draw a
+    scrolling right-hand panel inside the fixed-height panel card, and plain
+    ungated content on the page that simply grows.
+    """
+    html = render_workspace_options_page(
+        agent_id=str(_AGENT_A),
+        ws_name="aurora",
+        current_account=None,
+        accounts=(),
+        servers=_OPTIONS_SERVERS,
+        tab="share",
+        account_email="owner@example.com",
+        has_account=True,
+    )
+    # The page has its own scrollers that predate this (the chrome's page
+    # scroll, a log box), so look for the gated pair specifically rather than
+    # for overflow anywhere.
+    assert _PANEL_SCROLL_CLASSES not in html
+    # -mr-4 only ever pairs with that scroller; alone it would pull the panel
+    # out past the page container's padding.
+    assert "-mr-6" not in html
+
+
+def test_share_pane_explains_every_wait_in_a_sentence_ending_in_an_ellipsis() -> None:
+    """Each slow action turns its button into a spinner and says what it is doing.
+
+    A bare spinner does not distinguish "creating a Cloudflare tunnel" (slow,
+    normal) from a hang, so every wait carries a sentence. The trailing "..."
+    is what marks it as in progress rather than finished.
+    """
+    html = _options_modal(tab="share")
+    # The waits whose text is on screen from the start live in the markup.
+    for sentence in ("Checking who this is shared with...", "Creating the link and granting access..."):
+        assert sentence in html, f"the share pane never says {sentence!r}"
+
+    # The status line is relabelled per action, so those sentences live in the
+    # script that swaps them in.
+    pane_script = (_DESKTOP_CLIENT_DIR / "static" / "workspace_options.js").read_text()
+    for sentence in ("Stopping sharing and revoking the link...", "Updating who can open this link..."):
+        assert sentence in pane_script, f"the share pane never says {sentence!r}"
+
+    # The enable sentence sits beside its button, on the button's own row.
+    enable_row = html[html.index('id="ws-share-enable-row"') :]
+    enable_row = enable_row[: enable_row.index("</div>")]
+    assert 'id="ws-share-enable-status"' in enable_row
+    assert "Creating the link and granting access..." in enable_row
+
+
+def test_unlinking_an_account_is_confirmed_first() -> None:
+    """Unlink asks before acting, like destroy does.
+
+    Unlinking tears down every tunnel for the machine and cannot be undone by
+    linking again -- sharing has to be set up from scratch -- so the button
+    opens a confirmation rather than firing the request.
+    """
+    account = SimpleNamespace(user_id="u", email="a@b")
+    html = CATALOG.render(
+        "WorkspaceSettingsSections",
+        agent_id=str(_AGENT_A),
+        ws_name="aurora",
+        current_account=account,
+        accounts=[account],
+        palette=WORKSPACE_PALETTE,
+    )
+    assert 'id="unlink-dialog"' in html
+    assert 'id="unlink-cancel-btn"' in html
+    assert 'id="unlink-confirm-btn"' in html
+    # The dialog names the consequence, not just the action.
+    assert "removes all sharing" in html
+
+
+def test_workspace_options_modal_passes_the_accent_to_the_tab_strip() -> None:
+    # An unselected tab sits on the workspace-tinted titlebar, so it needs the
+    # same --titlebar-bg self-theming the real titlebar buttons use.
+    accent = "#492222"
+    html = _options_modal(current_color=accent)
+    assert f"--titlebar-bg: {accent}" in html
+
+
+def test_workspace_options_share_pane_lists_apps_then_the_whole_machine() -> None:
+    # The whole-machine target is the workspace's own web UI service; it is
+    # listed separately (below a divider), never as one of the apps.
+    html = _options_modal(tab="share")
+    assert 'data-share-target="mailroom"' in html
+    assert 'data-share-target="newsreader"' in html
+    assert 'data-share-target="system_interface"' in html
+    assert "Whole machine" in html
+    apps_region = html[html.index('data-share-target="mailroom"') : html.index('data-share-target="system_interface"')]
+    assert "system_interface" not in apps_region
+
+
+def test_workspace_options_share_pane_offers_whole_machine_before_any_service_registers() -> None:
+    # A workspace that has not published system_interface yet must still be
+    # shareable as a whole -- that is the option most users want first.
+    html = _options_modal(tab="share", servers=())
+    assert 'data-share-target="system_interface"' in html
+    assert "Whole machine" in html
+
+
+def test_workspace_options_share_pane_defaults_to_the_whole_machine_target() -> None:
+    html = _options_modal(tab="share")
+    config = html[html.index('id="ws-share-config"') :]
+    assert '"selectedTarget": "system_interface"' in config
+    assert '"accountEmail": "owner@example.com"' in config
+
+
+def test_workspace_options_share_pane_honors_an_explicit_target() -> None:
+    html = _options_modal(tab="share", selected_target="newsreader")
+    assert '"selectedTarget": "newsreader"' in html
+
+
+def test_workspace_options_share_pane_asks_for_an_account_before_offering_targets() -> None:
+    # Sharing runs through the account's Cloudflare tunnel, so an unassociated
+    # workspace gets the Associate prompt rather than an editor that cannot work.
+    html = _options_modal(tab="share", has_account=False)
+    assert "data-share-target" not in html
+    assert 'id="ws-share-config"' not in html
+
+
+def test_workspace_options_gives_each_associate_prompt_its_own_element_ids() -> None:
+    # An unassociated workspace shows an Associate prompt in BOTH panes (the
+    # share pane's, and Machine settings' account group), and both are rendered
+    # up front. Associate binds its form by id in an inline script, so colliding
+    # ids would leave both scripts on the first form and the second form with no
+    # submit handler -- its Associate button would then do a native GET
+    # submission and reload the panel without its tab / anchor params.
+    acct = SimpleNamespace(user_id="u-1", email="a@b.com")
+    html = _options_modal(tab="share", has_account=False, accounts=(acct,))
+    assert html.count('id="associate-form"') == 1
+    assert html.count('id="associate-form-share"') == 1
+    assert html.count('id="associate-error"') == 1
+    assert html.count('id="associate-error-share"') == 1
+
+
+def test_workspace_options_settings_pane_groups_sections_behind_a_nav() -> None:
+    html = _options_modal(tab="settings")
+    for group in ("general", "account", "backup"):
+        assert f'data-settings-group="{group}"' in html
+        assert f'data-settings-pane="{group}"' in html
+    # Sharing is the other tab's job -- the settings pane must not list services.
+    assert "data-sharing-service" not in html
+
+
+def test_workspace_options_pane_titles_name_the_machine() -> None:
+    # A title alone does not say WHICH machine, and the panel can be opened from
+    # the workspace list where the titlebar crumb does not name it either. The
+    # name is capped so a long one truncates instead of wrapping the title or
+    # crowding the close button.
+    for tab, label in (("settings", "Machine settings"), ("share", "Share machine")):
+        html = _options_modal(tab=tab)
+        title = html[html.index(f">{label}:</span>") :][:300]
+        assert ">aurora</span>" in title
+        # The name is part of the title -- it inherits the heading's role and
+        # color, and carries only the cap that stops a long one wrapping it.
+        assert '<span class="truncate max-w-[280px]">aurora</span>' in title
+
+
+def test_workspace_options_settings_pane_shows_the_machine_id_in_general() -> None:
+    # The stable identifier lives in the General group as read-only info -- the
+    # name and its host slug both change on rename, so neither is what you quote
+    # in a report. It must not be in an input.
+    html = _options_modal(tab="settings")
+    general_pane = html[html.index('data-settings-pane="general"') :]
+    general_pane = general_pane[: general_pane.index('data-settings-pane="account"')]
+    assert f">{_AGENT_A}</p>" in general_pane
+    assert f'value="{_AGENT_A}"' not in general_pane
+
+
+def test_workspace_options_settings_groups_use_the_designed_icons() -> None:
+    # General / Account / Backup carry the prototype's info / user / cloud
+    # glyphs; a settings gear on "General" repeated the tab's own icon.
+    html = _options_modal(tab="settings")
+    nav = html[html.index('data-settings-group="general"') :]
+    nav = nav[: nav.index('data-settings-pane="general"')]
+    for icon_name in ("info", "user", "cloud"):
+        assert CATALOG.render("Icon16", name=icon_name, extra="shrink-0") in nav
+
+
+def test_workspace_share_targets_exclude_the_workspaces_own_interfaces() -> None:
+    # Chat / terminal / browser / web are what the workspace is made of, not
+    # apps to hand out one at a time; the whole machine is the deliberate way
+    # to grant everything. Real apps beside them still appear.
+    html = _options_modal(
+        tab="share",
+        servers=("terminal", "browser", "chat", "web", "newsreader", "system_interface"),
+    )
+    assert 'data-share-target="newsreader"' in html
+    assert 'data-share-target="system_interface"' in html
+    for excluded in ("terminal", "browser", "chat", "web"):
+        assert f'data-share-target="{excluded}"' not in html
+
+
+def test_workspace_options_share_pane_names_the_machine_in_its_blurb() -> None:
+    # The name lands mid-sentence here ("access the tools or all of <name>"),
+    # which is where a fallback to the agent id read worst.
+    html = _options_modal(tab="share")
+    assert 'all of <span class="font-semibold">aurora</span>' in html
+
+
+def test_workspace_options_settings_pane_keeps_the_ids_its_scripts_bind() -> None:
+    html = _options_modal(tab="settings")
+    for element_id in (
+        "workspace-settings",
+        "workspace-name-input",
+        "rename-save-btn",
+        "color-swatches",
+        "color-hex-input",
+        "destroy-btn",
+        "destroy-dialog",
+        "backup-history",
+        "restore-dialog",
+    ):
+        assert f'id="{element_id}"' in html
+
+
+def test_workspace_options_page_is_the_browser_twin_without_the_overlay_chrome() -> None:
+    html = render_workspace_options_page(
+        agent_id=str(_AGENT_A),
+        ws_name="aurora",
+        current_account=None,
+        accounts=(),
+        servers=_OPTIONS_SERVERS,
+        tab="share",
+        account_email="owner@example.com",
+        has_account=True,
+    )
+    assert 'data-wsopt-panel="share"' in html
+    assert 'data-share-target="system_interface"' in html
+    # No backdrop and no tab strip: the titlebar's own icon-tabs navigate here.
+    assert 'id="ws-options-backdrop"' not in html
+    assert 'role="tablist"' not in html
+    assert "{{" not in html
+
+
+def test_render_workspace_settings_delegates_to_the_shared_settings_sections() -> None:
+    # The standalone page and the panel render the same body, so the two
+    # surfaces cannot drift.
+    html = render_workspace_settings(
+        agent_id=str(_AGENT_A),
+        ws_name="ws",
+        current_account=None,
+        accounts=(),
+    )
+    assert 'data-settings-group="general"' in html
+    assert 'data-settings-pane="backup"' in html
+    # The per-service sharing list moved to the Share machine tab.
+    assert "data-sharing-service" not in html
+
+
+def test_associate_offers_add_account_only_when_asked() -> None:
+    # Opt-in: the surfaces that had a bare account picker keep one, so this
+    # cannot change what workspace settings shows.
+    account = SimpleNamespace(user_id="u-1", email="a@b.com")
+    add_option = f'<option value="{ADD_ACCOUNT_OPTION_VALUE}">'
+    plain = CATALOG.render("Associate", agent_id=str(_AGENT_A), accounts=[account])
+    assert add_option not in plain
+    with_add = CATALOG.render("Associate", agent_id=str(_AGENT_A), accounts=[account], can_add_account=True)
+    assert add_option in with_add
+
+
+def test_associate_ships_no_inline_script() -> None:
+    # Its behavior lives in /_static/associate.js. An inline script here would
+    # be adopted but never re-executed by the shell's page-swap engine, leaving
+    # the form to do a native GET -- which looks like the button doing nothing
+    # while dropping the page's query params.
+    html = CATALOG.render("Associate", agent_id=str(_AGENT_A), accounts=[SimpleNamespace(user_id="u", email="a@b")])
+    assert "<script" not in html
+    # The hooks that script binds on.
+    assert "data-associate" in html
+    assert "data-associate-form" in html
+    assert "data-associate-error" in html
+
+
+def test_every_surface_rendering_associate_loads_its_script() -> None:
+    # The component cannot load its own script: it would land in the swapped
+    # page body rather than the local-page-scripts block, so each page must.
+    account = SimpleNamespace(user_id="u-1", email="a@b.com")
+    surfaces = [
+        render_workspace_options_modal_page(
+            agent_id=str(_AGENT_A),
+            ws_name="ws",
+            current_account=None,
+            accounts=(account,),
+            servers=(),
+            has_account=False,
+        ),
+        render_workspace_options_page(
+            agent_id=str(_AGENT_A),
+            ws_name="ws",
+            current_account=None,
+            accounts=(account,),
+            servers=(),
+            has_account=False,
+        ),
+        render_workspace_settings(
+            agent_id=str(_AGENT_A),
+            ws_name="ws",
+            current_account=None,
+            accounts=(account,),
+        ),
+        render_sharing_editor(
+            agent_id=str(_AGENT_A),
+            service_name="frontend",
+            title="Share",
+            has_account=False,
+            accounts=(account,),
+        ),
+    ]
+    for html in surfaces:
+        assert "data-associate-form" in html
+        assert "/_static/associate.js" in html
+
+
+def test_render_landing_page_caps_the_workspace_name() -> None:
+    # A flex child defaults to min-width:auto, so a long name refused to shrink
+    # and shoved the badges and the settings gear past the card's right edge.
+    long_name = "a-really-extremely-long-workspace-name-that-would-otherwise-shove-the-buttons"
+    html = render_landing_page(accessible_agent_ids=(_AGENT_A,), agent_names={str(_AGENT_A): long_name})
+    # Anchor on the rendered span -- the name also appears earlier in the row's
+    # data-mind-name attribute.
+    span_end = html.index(f">{long_name}</span>")
+    name_span = html[span_end - 200 : span_end]
+    assert "min-w-0" in name_span
+    assert "truncate" in name_span

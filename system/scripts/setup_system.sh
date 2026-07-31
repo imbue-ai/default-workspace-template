@@ -170,6 +170,16 @@ fi
 curl -fsSL https://claude.ai/install.sh > /tmp/install_claude.sh
 bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"
 test -x /root/.local/bin/claude
+# Fail the build/provision right here on a pin mismatch. mngr's own runtime
+# version check still runs when a claude agent is created, but since the
+# services agent stopped being a claude agent that check would not fire until
+# the first chat agent is created on first boot -- far too late to catch a
+# Dockerfile/settings.toml desync cheaply.
+installed_claude_version="$(/root/.local/bin/claude --version | awk '{print $1}')"
+if [ "${installed_claude_version}" != "${CLAUDE_CODE_VERSION}" ]; then
+    echo "Installed claude version ${installed_claude_version} does not match pinned CLAUDE_CODE_VERSION ${CLAUDE_CODE_VERSION}" >&2
+    exit 1
+fi
 
 # Node.js from trixie main (pinned by the snapshot timestamp like every other
 # apt package; trixie ships the nodejs 20.x line). npm is its own package on

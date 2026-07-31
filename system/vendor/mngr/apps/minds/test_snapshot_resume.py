@@ -87,18 +87,33 @@ from imbue.mngr.utils.testing import get_short_random_string
 _WORKSPACE_CONTAINER_PREFIX: Final[str] = "minds-"
 _DOCKER_STATE_MARKER: Final[str] = "docker-state"
 # system_interface's in-container port. It is a core bootstrap-managed
-# service with a fixed port (registered in data/.state/applications.toml);
+# app with a fixed port (registered in the data/.state app registry);
 # kept as a constant so a drift shows up as a clear assertion failure.
 _SYSTEM_INTERFACE_PORT: Final[int] = 8000
 _MNGR_START_TIMEOUT_SECONDS: Final[int] = 300
 _SYSTEM_INTERFACE_READY_TIMEOUT_SECONDS: Final[int] = 120
 _PROBE_TIMEOUT_SECONDS: Final[int] = 120
+_SERVICES_REGISTERED_TIMEOUT_SECONDS: Final[int] = 120
+
+# The always-on core services that must re-register in the data/.state app registry
+# after a resume. ``browser`` also registers but is required separately, with a
+# memory-pressure shed exception.
+_CORE_REGISTERED_SERVICES: Final[tuple[str, ...]] = ("system_interface", "terminal")
+_BROWSER_SERVICE_NAME: Final[str] = "browser"
+
+# earlyoom's shed ledger inside the container (written by its ``-N`` hook; path
+# pinned by ``OOM_PRIORITY_RUNTIME_DIR`` in the template's ``.mngr/settings.toml``).
+# Only human-facing corroboration in the shed evidence dump, not the decision.
+_SHED_LEDGER_PATH: Final[str] = "/home/user/workspace/data/.state/oom_priority/events/shed.jsonl"
+# supervisord's own log; source of the browser-shed signal.
+_SUPERVISORD_LOG_PATH: Final[str] = "/var/log/supervisor/supervisord.log"
 
 # mngr lifecycle states that mean the agent's tmux window is alive (as opposed
-# to STOPPED / DONE). The system-services agent's window-0 command is
-# ``sleep infinity && claude`` -- claude is unreachable by design (see the
-# minds README), so mngr observes a non-claude process occupying the window
-# and reports REPLACED rather than RUNNING. Both indicate the agent is up.
+# to STOPPED / DONE). The system-services agent is a plain ``command``-type
+# agent whose window-0 command is ``sleep infinity`` (see the minds README),
+# which mngr reports as RUNNING. REPLACED covers workspaces from older template
+# revisions, whose claude-typed services agent held its window with a non-claude
+# process. All of these indicate the agent is up.
 _ALIVE_AGENT_STATES: Final[frozenset[str]] = frozenset(
     {"RUNNING", "WAITING", "REPLACED", "RUNNING_UNKNOWN_AGENT_TYPE"}
 )
@@ -196,6 +211,70 @@ def _wait_for_system_interface_up(container_name: str) -> bool:
     return (
         _exec_in_container(container_name, poll, timeout=_SYSTEM_INTERFACE_READY_TIMEOUT_SECONDS + 30).returncode == 0
     )
+
+
+def _wait_for_services_registered(container_name: str, service_names: tuple[str, ...]) -> str:
+    """Poll the data/.state app registry inside the container until every expected service appears.
+
+    After resume, services re-register into the app registry asynchronously, so a
+    single read can race a service that registers a moment later. Poll (in shell inside
+    ``docker exec``, so the test never calls ``time.sleep``) until all expected
+    names are present or the deadline passes, then return the final file
+    contents so the caller can assert with a useful message either way.
+    """
+    presence_checks = " && ".join(f'grep -q {name} "$f"' for name in service_names)
+    poll = (
+        "f=/home/user/workspace/data/.state/apps.toml; "
+        "for i in $(seq 1 40); do "
+        f'if [ -f "$f" ] && {presence_checks}; then break; fi; '
+        "sleep 3; done; "
+        'cat "$f" 2>/dev/null'
+    )
+    return _exec_in_container(container_name, poll, timeout=_SERVICES_REGISTERED_TIMEOUT_SECONDS + 30).stdout
+
+
+def _gather_browser_shed_diagnostics(container_name: str) -> tuple[bool, str]:
+    """Return ``(was_shed, diagnostics)`` for an absent ``browser`` registration.
+
+    The ``browser`` supervisord program registers into the app registry *before*
+    it launches the memory-heavy browser-service/Chromium, and nothing ever
+    removes an entry once written, so an absent ``browser`` means its program
+    never finished that registration.
+    Two states produce that absence:
+
+    - a memory-pressure shed (tolerated) -- earlyoom (or the kernel) killed the
+      program with a *signal* while it was starting; supervisord records this as
+      ``terminated by SIGKILL``/``SIGTERM`` or, when the killed child is
+      ``forward_port.py`` and its bash wrapper propagates the status, ``exit
+      status 137``/``143``. Nothing in the pre-launch registration step signals
+      itself, so a signal kill there is an external OOM kill -- the browser is
+      the single most OOM-expendable service (oom_score_adj=1000).
+    - a genuine regression (a real failure) -- the program exits with an
+      ordinary code or never spawns at all, so no signal kill is recorded.
+
+    ``was_shed`` is True iff supervisord recorded the browser program dying on an
+    OOM signal under the current (post-resume) supervisord instance:
+    supervisord.log is append-only and survives the snapshot, so the ``awk``
+    pass resets its match on every ``supervisord started with pid`` marker,
+    ignoring kills logged by the snapshot's own build or shutdown. A missing
+    marker yields "not shed", making an absent browser a hard failure. The
+    ``diagnostics`` text is always returned so the caller can surface it either
+    way.
+    """
+    diagnostic = (
+        f"log={_SUPERVISORD_LOG_PATH}; "
+        "awk '/supervisord started with pid/{seen=1;killed=0} "
+        "seen&&/exited: browser/&&/terminated by SIGKILL|terminated by SIGTERM|exit status 137|exit status 143/{killed=1} "
+        'END{print (killed?"BROWSER_SIGNAL_KILLED=yes":"BROWSER_SIGNAL_KILLED=no")}\' "$log" 2>/dev/null; '
+        "echo '=== supervisorctl status browser ==='; supervisorctl status browser 2>&1 | head -5; "
+        "echo '=== browser lines in supervisord.log (tail) ==='; grep -aE browser \"$log\" 2>/dev/null | tail -30; "
+        "echo '=== earlyoom shed ledger ==='; "
+        f"tail -50 {_SHED_LEDGER_PATH} 2>/dev/null; "
+        "echo '=== earlyoom service log tail ==='; "
+        "tail -20 /var/log/supervisor/earlyoom-stderr.log 2>/dev/null"
+    )
+    diagnostics = _exec_in_container(container_name, diagnostic, timeout=30).stdout
+    return "BROWSER_SIGNAL_KILLED=yes" in diagnostics, diagnostics
 
 
 def _wait_for_system_interface_down(container_name: str) -> bool:
@@ -349,10 +428,10 @@ def test_resumed_workspace_serves_system_interface(running_workspace: _ResumedWo
 def test_resumed_workspace_system_services_agent_is_alive(running_workspace: _ResumedWorkspace) -> None:
     """After resume, the primary system-services agent's tmux window is alive.
 
-    The services agent runs ``sleep infinity && claude`` (claude unreachable by
-    design), so mngr reports it as ``REPLACED`` -- a non-claude process holding
-    the window -- rather than ``RUNNING``. Both are "alive"; only STOPPED/DONE
-    would mean the resume failed to bring the agent back.
+    The services agent is a plain ``command``-type agent running
+    ``sleep infinity``, which mngr reports as ``RUNNING`` (workspaces from
+    older template revisions read as ``REPLACED`` instead). Both are "alive";
+    only STOPPED/DONE would mean the resume failed to bring the agent back.
     """
     agents = _list_agents_in_container(running_workspace.container_name)
     services_agents = [agent for agent in agents if agent["id"] == running_workspace.services_agent_id]
@@ -368,28 +447,46 @@ def test_resumed_workspace_system_services_agent_is_alive(running_workspace: _Re
 @pytest.mark.minds_snapshot_resume
 @pytest.mark.docker
 @pytest.mark.timeout(300)
-def test_resumed_workspace_registered_expected_services(running_workspace: _ResumedWorkspace) -> None:
-    """After resume, the bootstrap re-registered the core services in applications.toml.
+def test_resumed_workspace_registered_expected_apps(running_workspace: _ResumedWorkspace) -> None:
+    """After resume, the bootstrap re-registered the expected apps in the app registry.
 
-    The app-watcher / bootstrap respawns the standard services on restart and
-    each registers its port into ``data/.state/applications.toml``; the always-on
-    core services (``system_interface`` and ``terminal``) must be present.
+    After resume, services re-register into the app registry asynchronously, so we
+    poll until the expected names appear rather than reading once -- a single read
+    races a service that registers a moment later.
 
-    ``web`` was intentionally dropped: default-workspace-template removed the
-    blank example web service (its ``[program:web]`` supervisord entry and the
-    ``libs/web_server`` scaffold), so it no longer registers. ``browser`` does
-    autostart now, but it is memory-heavy and expendable (earlyoom can shed it
-    under pressure), so requiring it would make this test flaky -- we only
-    assert the services guaranteed to survive a resume.
+    ``system_interface`` and ``terminal`` are always-on core services and must
+    be present. ``web`` was intentionally dropped: default-workspace-template
+    removed the blank example web service (its ``[program:web]`` supervisord
+    entry and the ``libs/web_server`` scaffold), so it no longer registers.
+
+    ``browser`` also autostarts and registers before it launches the memory-heavy
+    browser-service, so it is expected too -- but it self-tags as the single most
+    OOM-expendable process (oom_score_adj=1000), so under memory pressure earlyoom
+    can shed it. We therefore require ``browser`` UNLESS there is positive evidence
+    it was shed (supervisord recorded its program dying on an OOM signal). A bare
+    "never re-registered", with no shed signal, is a real regression and fails.
     """
-    result = _exec_in_container(
-        running_workspace.container_name, "cat /home/user/workspace/data/.state/applications.toml", timeout=30
-    )
-    assert result.returncode == 0, f"Could not read data/.state/applications.toml: {result.stderr}"
-    for service_name in ("system_interface", "terminal"):
-        assert service_name in result.stdout, (
-            f"Service {service_name!r} not registered in applications.toml after resume:\n{result.stdout}"
+    expected_services = (*_CORE_REGISTERED_SERVICES, _BROWSER_SERVICE_NAME)
+    app_registry = _wait_for_services_registered(running_workspace.container_name, expected_services)
+
+    for service_name in _CORE_REGISTERED_SERVICES:
+        assert service_name in app_registry, (
+            f"Core service {service_name!r} not registered in the app registry after resume:\n{app_registry}"
         )
+
+    if _BROWSER_SERVICE_NAME in app_registry:
+        return
+    was_shed, diagnostics = _gather_browser_shed_diagnostics(running_workspace.container_name)
+    assert was_shed, (
+        "browser did not re-register in the app registry after resume, and there is no evidence it was "
+        "shed under memory pressure (supervisord shows no OOM-signal kill of the browser program) -- so it "
+        f"genuinely failed to re-register.\napp registry:\n{app_registry}\ndiagnostics:\n{diagnostics}"
+    )
+    logger.info(
+        "browser did not re-register after resume but was shed under memory pressure "
+        "(expected: it is the most OOM-expendable service); diagnostics:\n{}",
+        diagnostics,
+    )
 
 
 @pytest.mark.minds_snapshot_resume
@@ -634,11 +731,38 @@ def test_create_workspace_and_sign_in_via_modal_then_chat_via_electron(
 
 
 def _find_chat_agent(container_name: str) -> dict[str, Any]:
-    """Return the workspace's (claude-type) chat agent record from mngr list."""
+    """Return the workspace's chat agent record from mngr list.
+
+    The template repo's chat create-template types the agent ``chat`` (a
+    ``claude``-parented type carrying the chat output style); older baked
+    snapshots predate that type and report plain ``claude``.
+    """
     agents = _list_agents_in_container(container_name)
-    chats = [agent for agent in agents if agent.get("type") == "claude"]
-    assert chats, f"No claude chat agent among {[a.get('name') for a in agents]!r}"
+    chats = [agent for agent in agents if agent.get("type") in ("chat", "claude")]
+    assert chats, f"No chat agent among {[(a.get('name'), a.get('type')) for a in agents]!r}"
     return chats[0]
+
+
+def _dump_chat_agent_diagnostics(container_name: str, chat_id: str) -> str:
+    """Best-effort in-container evidence for why a chat agent is not running.
+
+    Captures the agent list, the agent's state-dir logs/events, its tmux
+    window (if any survives), and supervisor status, so a CI failure log
+    explains a dead chat instead of only reporting its state.
+    """
+    diagnostic_script = (
+        "cd /home/user/workspace; "
+        "echo '--- mngr list ---'; mngr list --format json --on-error continue 2>&1 | tail -c 4000; "
+        f"echo '--- agent dir ---'; AGENT_DIR=$(ls -d $HOME/.mngr/agents/{chat_id} 2>/dev/null); "
+        'echo "$AGENT_DIR"; find "$AGENT_DIR" -maxdepth 2 -type f 2>/dev/null | head -40; '
+        "echo '--- agent logs (tails) ---'; "
+        'for f in $(find "$AGENT_DIR" -maxdepth 3 -type f \\( -name "*.log" -o -name "*.jsonl" \\) 2>/dev/null | head -8); do '
+        'echo "== $f"; tail -c 2000 "$f" 2>/dev/null; echo; done; '
+        "echo '--- tmux ---'; tmux ls 2>&1; "
+        "echo '--- supervisor ---'; supervisorctl status 2>&1 | head -20"
+    )
+    result = _exec_in_container(container_name, diagnostic_script, timeout=60)
+    return f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 
 def _wait_for_agent_state(container_name: str, agent_id: str, expected_state: str, *, attempts: int = 40) -> bool:
@@ -691,7 +815,10 @@ def test_backup_update_gate_blocks_on_live_chat_and_stop_chats_clears_it(
         'Make it as long and detailed as you possibly can."',
         timeout=120,
     )
-    assert messaged.returncode == 0, f"`mngr message` failed for the chat agent: {messaged.stderr}"
+    assert messaged.returncode == 0, (
+        f"`mngr message` failed for the chat agent: {messaged.stderr}\n"
+        f"Diagnostics:\n{_dump_chat_agent_diagnostics(container_name, chat_id)}"
+    )
     assert _wait_for_agent_state(container_name, chat_id, "RUNNING"), (
         "The chat agent never reached RUNNING after being asked for a long story."
     )
