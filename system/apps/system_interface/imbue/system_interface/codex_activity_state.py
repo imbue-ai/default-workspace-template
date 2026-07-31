@@ -20,23 +20,27 @@ from typing import Any
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import is_transcript_tail_stale
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
+from imbue.system_interface.harnesses.events import SpecialEventKind
 
 
 @pure
 def codex_turn_open(events: Sequence[dict[str, Any]]) -> bool:
     """True iff the codex transcript's most recent turn boundary is an open turn.
 
-    Walks from the end for the latest turn-lifecycle marker: ``turn_started`` -> the
-    turn is in progress (True); ``turn_completed`` / ``turn_aborted`` -> the turn
-    ended (False). No marker at all -> False (not in a turn). Non-boundary events
-    (assistant messages, tool calls/results) are skipped, so a turn that is mid-tool
-    still reads open.
+    Walks from the end for the latest turn-lifecycle marker, which codex emits as a
+    ``special`` event: ``turn_started`` -> the turn is in progress (True);
+    ``turn_completed`` / ``turn_aborted`` -> the turn ended (False). No marker at all ->
+    False (not in a turn). Every other event (assistant messages, tool calls/results) is
+    skipped, so a turn that is mid-tool still reads open.
     """
     for event in reversed(list(events)):
-        event_type = event.get("type")
-        if event_type == "turn_started":
+        if event.get("type") != SPECIAL_EVENT_TYPE:
+            continue
+        kind = event.get("kind")
+        if kind == SpecialEventKind.TURN_STARTED.value:
             return True
-        if event_type in ("turn_completed", "turn_aborted"):
+        if kind in (SpecialEventKind.TURN_COMPLETED.value, SpecialEventKind.TURN_ABORTED.value):
             return False
     return False
 

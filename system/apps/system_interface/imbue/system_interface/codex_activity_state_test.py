@@ -11,18 +11,18 @@ from imbue.system_interface.codex_activity_state import derive_codex
     "events, expected",
     [
         pytest.param([], False, id="empty_is_not_open"),
-        pytest.param([{"type": "turn_started"}], True, id="started_is_open"),
-        pytest.param([{"type": "turn_started"}, {"type": "turn_completed"}], False, id="completed_is_closed"),
-        pytest.param([{"type": "turn_started"}, {"type": "turn_aborted"}], False, id="aborted_is_closed"),
+        pytest.param([{"type": "special", "kind": "turn_started"}], True, id="started_is_open"),
+        pytest.param([{"type": "special", "kind": "turn_started"}, {"type": "special", "kind": "turn_completed"}], False, id="completed_is_closed"),
+        pytest.param([{"type": "special", "kind": "turn_started"}, {"type": "special", "kind": "turn_aborted"}], False, id="aborted_is_closed"),
         # A turn mid-flight: started, then non-boundary events -> still open.
         pytest.param(
-            [{"type": "turn_started"}, {"type": "assistant_message"}, {"type": "tool_result"}],
+            [{"type": "special", "kind": "turn_started"}, {"type": "assistant_message"}, {"type": "tool_result"}],
             True,
             id="mid_turn_still_open",
         ),
         # A second turn started after a completed one -> open again.
         pytest.param(
-            [{"type": "turn_started"}, {"type": "turn_completed"}, {"type": "turn_started"}],
+            [{"type": "special", "kind": "turn_started"}, {"type": "special", "kind": "turn_completed"}, {"type": "special", "kind": "turn_started"}],
             True,
             id="new_turn_reopens",
         ),
