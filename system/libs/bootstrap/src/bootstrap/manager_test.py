@@ -814,6 +814,27 @@ def test_publish_agent_env_for_ssh_never_publishes_credentials(
     assert set(_parse_environment_file(target)) <= set(SSH_PUBLISHED_ENV_VARS)
 
 
+def test_publish_agent_env_for_ssh_never_publishes_the_ownership_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # mngr's teardown reads MNGR_AGENT_OWNER as "this agent may kill this
+    # process" and scans /proc for it. Publishing it to ssh sessions would put a
+    # person's work back in the blast radius of `mngr stop` -- the exact bug that
+    # splitting it from MNGR_AGENT_ID exists to prevent.
+    monkeypatch.setenv("MNGR_HOST_DIR", "/home/user/.mngr")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-abc")
+    monkeypatch.setenv("MNGR_AGENT_OWNER", "agent-abc")
+    target = tmp_path / "environment"
+
+    _publish_agent_env_for_ssh(target)
+
+    published = _parse_environment_file(target)
+    assert "MNGR_AGENT_OWNER" not in published
+    assert "MNGR_AGENT_OWNER" not in SSH_PUBLISHED_ENV_VARS
+    # The identity var is still published -- that is what in-workspace tooling needs.
+    assert published["MNGR_AGENT_ID"] == "agent-abc"
+
+
 def test_publish_agent_env_for_ssh_skips_values_pam_env_cannot_represent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
