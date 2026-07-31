@@ -22,7 +22,6 @@ GITHUB_URL_PREFIX = "https://github.com/"
 # There is exactly one gateway; when it is unreachable there is no fallback.
 ENV_GATEWAY = "LATCHKEY_GATEWAY"
 ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
-ENV_GATEWAY_PERMISSIONS_OVERRIDE = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 
 
 class GithubSyncError(Exception):
@@ -90,11 +89,6 @@ def get_gateway_url() -> str | None:
 
 def get_gateway_password() -> str | None:
     value = os.environ.get(ENV_GATEWAY_PASSWORD, "")
-    return value or None
-
-
-def get_gateway_permissions_override() -> str | None:
-    value = os.environ.get(ENV_GATEWAY_PERMISSIONS_OVERRIDE, "")
     return value or None
 
 

@@ -19,14 +19,12 @@ from loguru import logger
 from github_sync.config import (
     GITHUB_URL_PREFIX,
     get_gateway_password,
-    get_gateway_permissions_override,
     get_gateway_url,
     proxied_url,
 )
 
 HOOKS_PATH = "/home/user/workspace/system/libs/github_sync/git_hooks"
 PASSWORD_HEADER = "X-Latchkey-Gateway-Password"
-PERMISSIONS_OVERRIDE_HEADER = "X-Latchkey-Gateway-Permissions-Override"
 
 
 def _git_config(*args: str) -> subprocess.CompletedProcess[str]:
@@ -77,9 +75,7 @@ def _remove_gateway_entries(kept_gateway_url: str | None) -> None:
         else None
     )
     for key, value in _list_global_config(r"http\..*\.extraheader"):
-        is_gateway_header = value.startswith(
-            (PASSWORD_HEADER, PERMISSIONS_OVERRIDE_HEADER)
-        )
+        is_gateway_header = value.startswith(PASSWORD_HEADER)
         if is_gateway_header and key.lower() != (kept_header_key or "").lower():
             _git_config("--unset-all", key)
 
@@ -92,12 +88,10 @@ def apply_git_wiring() -> bool:
     """
     gateway_url = get_gateway_url()
     password = get_gateway_password()
-    permissions_override = get_gateway_permissions_override()
-    if not gateway_url or not password or not permissions_override:
+    if not gateway_url or not password:
         logger.warning(
             "Latchkey gateway env is incomplete (need LATCHKEY_GATEWAY, "
-            "LATCHKEY_GATEWAY_PASSWORD, LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE); "
-            "cannot wire git for GitHub sync"
+            "LATCHKEY_GATEWAY_PASSWORD); cannot wire git for GitHub sync"
         )
         return False
 
@@ -111,7 +105,6 @@ def apply_git_wiring() -> bool:
             GITHUB_URL_PREFIX,
         ),
         ("--replace-all", header_key, f"{PASSWORD_HEADER}: {password}"),
-        ("--add", header_key, f"{PERMISSIONS_OVERRIDE_HEADER}: {permissions_override}"),
         ("--replace-all", "core.hooksPath", HOOKS_PATH),
     )
     for argv in config_steps:

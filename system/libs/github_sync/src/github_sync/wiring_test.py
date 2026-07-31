@@ -23,7 +23,6 @@ def _get_all_global(key: str) -> list[str]:
 def _set_gateway_env(monkeypatch: pytest.MonkeyPatch, gateway_url: str) -> None:
     monkeypatch.setenv("LATCHKEY_GATEWAY", gateway_url)
     monkeypatch.setenv("LATCHKEY_GATEWAY_PASSWORD", "pw-abc")
-    monkeypatch.setenv("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "jwt-xyz")
 
 
 def test_apply_git_wiring_writes_rewrite_headers_and_hookspath(
@@ -36,10 +35,7 @@ def test_apply_git_wiring_writes_rewrite_headers_and_hookspath(
     insteadof_key = "url.http://127.0.0.1:41234/gateway/https://github.com/.insteadOf"
     assert _get_all_global(insteadof_key) == ["https://github.com/"]
     headers = _get_all_global("http.http://127.0.0.1:41234/.extraHeader")
-    assert headers == [
-        "X-Latchkey-Gateway-Password: pw-abc",
-        "X-Latchkey-Gateway-Permissions-Override: jwt-xyz",
-    ]
+    assert headers == ["X-Latchkey-Gateway-Password: pw-abc"]
     assert _get_all_global("core.hooksPath") == [HOOKS_PATH]
 
 
@@ -67,7 +63,9 @@ def test_apply_git_wiring_replaces_stale_gateway_entries(
     assert _get_all_global(stale_key) == []
     assert _get_all_global(fresh_key) == ["https://github.com/"]
     assert _get_all_global("http.http://127.0.0.1:41234/.extraHeader") == []
-    assert len(_get_all_global("http.http://127.0.0.1:59999/.extraHeader")) == 2
+    assert _get_all_global("http.http://127.0.0.1:59999/.extraHeader") == [
+        "X-Latchkey-Gateway-Password: pw-abc"
+    ]
 
 
 def test_remove_git_wiring_clears_everything_but_keeps_ssh_rewrites(
