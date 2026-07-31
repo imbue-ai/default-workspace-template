@@ -33,7 +33,8 @@ instead of retrying on every frame.
 
 A chat whose live connection dies without saying so -- a dropped tunnel, or the
 machine sleeping and waking -- now recovers by itself within about 35 seconds
-instead of sitting frozen while the agent's terminal keeps moving. The server's
-idle keepalive is now something the browser can actually observe, and the client
-treats a stream that has said nothing at all for 30 seconds as dead and rebuilds
-it.
+instead of sitting frozen while the agent's terminal keeps moving. The server
+already sent a keepalive down every idle chat connection every few seconds; it
+is now sent in a form the browser can actually observe, so a connection that
+stops delivering even those is recognized as dead and rebuilt. A quiet
+conversation is not a silent connection, so an idle chat is never reconnected.

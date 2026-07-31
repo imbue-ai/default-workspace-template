@@ -38,19 +38,26 @@ const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
 // EventSource API never surfaces one). It carries no payload.
 const SSE_PING_EVENT = "ping";
 /**
- * How long a stream may be completely silent -- no transcript event, no ping --
- * before it is presumed dead and rebuilt.
+ * How long a stream may go without receiving ANY bytes -- no transcript event
+ * and no keepalive ping -- before it is presumed dead and rebuilt.
  *
- * A half-dead connection (tunnel drop, sleep/wake) produces no `error` and no
- * `close`: the transcript just stops while the terminal's WebSocket, which has
- * its own keepalive, keeps looking healthy. That is the "chat out of sync with
- * the TUI" report. The server pings roughly every 8s, so this leaves ample room
- * for a couple of missed pings before acting.
+ * This is not "no chat activity for 30s". The server sends a ping every ~8 idle
+ * seconds, so a healthy but silent conversation is producing traffic the whole
+ * time and never trips this; it takes roughly three consecutive missed pings.
+ *
+ * What it does catch is a half-dead connection (tunnel drop, sleep/wake), which
+ * produces no `error` and no `close`: the transcript just stops while the
+ * terminal's WebSocket, which has its own keepalive, keeps looking healthy. That
+ * is the "chat out of sync with the TUI" report, and silence is the only
+ * evidence of it available to the client.
  */
 export const SSE_SILENCE_TIMEOUT_MS = 30_000;
 // Watchdog tick. Short relative to the timeout, so recovery lands within about
 // SSE_SILENCE_TIMEOUT_MS plus one tick.
 const SSE_WATCHDOG_INTERVAL_MS = 5_000;
+// `EventSource.OPEN`. Written as the literal because the constant lives on the
+// EventSource constructor, which tests substitute.
+const EVENT_SOURCE_OPEN = 1;
 
 const lastStreamActivityMsByAgent = new Map<string, number>();
 // One timer for all streams; started with the first connection and stopped once
@@ -83,6 +90,13 @@ function checkStreamLiveness(): void {
   for (const [agentId, eventSource] of [...activeStreams]) {
     const silentForMs = now - (lastStreamActivityMsByAgent.get(agentId) ?? now);
     if (silentForMs < SSE_SILENCE_TIMEOUT_MS) {
+      continue;
+    }
+    // Only step in when the browser still believes the connection is up. A
+    // CONNECTING socket is one the browser noticed dying and is already
+    // retrying -- and our own onerror path owns that case -- so intervening
+    // there would just race it with a second reconnect.
+    if (eventSource.readyState !== EVENT_SOURCE_OPEN) {
       continue;
     }
     console.warn(`SSE stream for agent ${agentId} silent for ${Math.round(silentForMs / 1000)}s; reconnecting`);
