@@ -162,6 +162,33 @@ def detect_layout(existing_paths: Sequence[str]) -> SourceRoots:
     )
 
 
+def _candidate_root_paths() -> tuple[str, ...]:
+    """Every root either layout can name, de-duplicated, in a stable order.
+
+    :func:`_cmd_detect_layout` canonicalizes all of these in the same round trip
+    as the existence probe, because which set it needs is only known after
+    classifying -- and a second round trip to find out is the more expensive half.
+    """
+    seen: dict[str, None] = {}
+    for roots in (_PRE_DECLUTTER_ROOTS, _CURRENT_ROOTS):
+        for path in (roots.repo_root, roots.host_dir, roots.worktrees_dir):
+            seen.setdefault(path, None)
+    return tuple(seen)
+
+
+def _resolve_roots(roots: SourceRoots, resolved: Mapping[str, str]) -> SourceRoots:
+    """Swap each root for its canonicalized form, keeping the original if absent.
+
+    Downstream commands take these paths as given, so resolving once here is what
+    keeps every later scan off the symlink (see :func:`_resolve_path_command`).
+    """
+    return roots._replace(
+        repo_root=resolved.get(roots.repo_root) or roots.repo_root,
+        host_dir=resolved.get(roots.host_dir) or roots.host_dir,
+        worktrees_dir=resolved.get(roots.worktrees_dir) or roots.worktrees_dir,
+    )
+
+
 # The paths whose existence decides the layout. Probed in one batched remote
 # call (see ``_cmd_detect_layout``) rather than one round trip each.
 LAYOUT_PROBE_PATHS: tuple[str, ...] = (
@@ -1049,6 +1076,26 @@ def _shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
+def _resolve_path_command(path: str) -> str:
+    """Shell that prints ``path`` canonicalized on the source, one line.
+
+    ``find`` (default ``-P``) refuses to descend a symlinked *start* path, so on a
+    pre-declutter source -- where ``/mngr`` is a symlink to ``/mngr-vol/host_dir``
+    -- a session scan rooted at the symlink matches nothing and still exits 0.
+    Canonicalizing the roots before anything walks them is what stops that silence
+    from reading as "this workspace has no agents".
+
+    Falls back to the original when ``readlink -f`` fails or prints nothing (a
+    missing intermediate component), so an unresolvable path degrades to the
+    unresolved behaviour instead of an empty string.
+    """
+    return (
+        f"raw={_shell_quote(path)}; "
+        'resolved=$(readlink -f "$raw" 2>/dev/null); '
+        'printf "%s\\n" "${resolved:-$raw}"'
+    )
+
+
 def _remote_git(target: SshTarget, repo_root: str, git_args: str) -> str:
     return run_remote(target, f"git -C {_shell_quote(repo_root)} {git_args}")
 
@@ -1107,14 +1154,20 @@ def _cmd_detect_layout(args: argparse.Namespace) -> int:
     if _cached(args, "layout.json"):
         return 0
     target = _ssh_target(args)
+    # One round trip: the existence probe, then every candidate layout's roots
+    # canonicalized. Resolving all of them up front (rather than only the
+    # detected layout's, after classifying) keeps this to a single call.
     probe = "; ".join(
         f"[ -e {_shell_quote(path)} ] && echo {_shell_quote(path)}"
         for path in LAYOUT_PROBE_PATHS
     )
-    existing = [
-        line.strip() for line in run_remote(target, probe).splitlines() if line.strip()
-    ]
-    roots = detect_layout(existing)
+    candidate_roots = _candidate_root_paths()
+    batched = "; ".join(
+        [probe, "echo '---'", *(_resolve_path_command(p) for p in candidate_roots)]
+    )
+    probed, resolved_lines = _split_sections(run_remote(target, batched), 2)
+    resolved = dict(zip(candidate_roots, resolved_lines))
+    roots = _resolve_roots(detect_layout(probed), resolved)
     return _emit(
         args,
         "layout.json",
@@ -1124,7 +1177,7 @@ def _cmd_detect_layout(args: argparse.Namespace) -> int:
             "host_dir": roots.host_dir,
             "worktrees_dir": roots.worktrees_dir,
             "reason": roots.reason,
-            "probed_present": existing,
+            "probed_present": probed,
         },
     )
 
@@ -1191,14 +1244,20 @@ def _cmd_list_agents(args: argparse.Namespace) -> int:
     if _cached(args, "agents.json"):
         return 0
     target = _ssh_target(args)
-    host_dir = args.host_dir
+    # Canonicalize here too, not just in detect-layout: this command is runnable
+    # on its own with a hand-passed --host-dir, and a symlinked one makes the
+    # session ``find`` below match nothing while still exiting 0.
     listing = run_remote(
         target,
-        f"ls -1 {_shell_quote(host_dir + '/agents')} 2>/dev/null; "
-        f"echo '---'; ls -1 {_shell_quote(host_dir + '/preserved')} 2>/dev/null; "
-        f"echo '---'; find {_shell_quote(host_dir)} -path '*/projects/*' -name '*.jsonl' 2>/dev/null",
+        f"raw={_shell_quote(args.host_dir)}; "
+        'hd=$(readlink -f "$raw" 2>/dev/null); hd="${hd:-$raw}"; '
+        'printf "%s\\n" "$hd"; '
+        "echo '---'; ls -1 \"$hd/agents\" 2>/dev/null; "
+        "echo '---'; ls -1 \"$hd/preserved\" 2>/dev/null; "
+        "echo '---'; find \"$hd\" -path '*/projects/*' -name '*.jsonl' 2>/dev/null",
     )
-    live_names, preserved_names, session_paths = _split_sections(listing, 3)
+    resolved, live_names, preserved_names, session_paths = _split_sections(listing, 4)
+    host_dir = resolved[0] if resolved else args.host_dir
     read_targets: list[str] = []
     for entry in live_names:
         read_targets.append(f"{host_dir}/agents/{entry}/data.json")
@@ -1252,7 +1311,34 @@ def _cmd_list_agents(args: argparse.Namespace) -> int:
                 "An agent with no session file has no transcript to adopt -- it can be "
                 "recreated empty or skipped, which is a question for the user."
             ),
+            "suspect_empty": _empty_scan_warning(host_dir, agents, session_paths),
         },
+    )
+
+
+def _empty_scan_warning(
+    host_dir: str, agents: Sequence[SourceAgent], session_paths: Sequence[str]
+) -> str | None:
+    """Name the likely cause when a scan comes back empty, or ``None`` if it did not.
+
+    A workspace with no agents at all is not a normal reading -- every workspace
+    has at least its primary -- so an empty result is far more often a scan that
+    silently matched nothing than a source that genuinely holds nothing. Saying so
+    here is what keeps the caller from proceeding as though there were nothing to
+    migrate.
+    """
+    if agents:
+        return None
+    if session_paths:
+        return (
+            f"No agents found under {host_dir}, but session transcripts exist there. "
+            "The agents/ and preserved/ listings are the suspect part."
+        )
+    return (
+        f"No agents and no session transcripts found under {host_dir}. Every workspace "
+        "has at least a primary agent, so treat this as a failed scan rather than an "
+        "empty source: check that the host dir is right and that it resolved past any "
+        "symlink."
     )
 
 
