@@ -69,3 +69,11 @@ Added OpenAI Codex CLI support to the workspace image.
   are the one list of legal kinds, so an undeclared marker is a type error rather than an
   event that vanishes. Nothing renders them; they exist so `/events` reflects the true
   transcript and the activity latch has an authoritative signal.
+
+- Session watching now goes through a harness registry instead of an inline branch. A
+  harness is resolved once, at discovery, from mngr's agent type; `harnesses/registry.py`
+  turns that into a watcher and an activity tracker, and `app_context` no longer names a
+  harness at all. `AgentSessionWatcher` became a real interface both watchers implement
+  (the claude one is now `ClaudeSessionWatcher`), replacing the type union, and its
+  `build()` takes the whole agent record so a caller need not know that claude wants a
+  config dir and codex does not. Adding a harness is one registry entry.

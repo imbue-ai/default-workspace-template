@@ -40,7 +40,7 @@ from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.harness_activity import HarnessActivityTracker
-from imbue.system_interface.harness_activity import build_tracker_for_harness
+from imbue.system_interface.harnesses.registry import build_tracker
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
@@ -1129,7 +1129,7 @@ class AgentManager:
             if agent_id not in self._activity_tracker_by_agent:
                 agent_state = self._agents.get(agent_id)
                 harness = agent_state.harness if agent_state is not None else ""
-                self._activity_tracker_by_agent[agent_id] = build_tracker_for_harness(harness)
+                self._activity_tracker_by_agent[agent_id] = build_tracker(harness)
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
     def _stop_activity_tracking(self, agent_id: str) -> None:
