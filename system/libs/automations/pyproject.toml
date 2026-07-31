@@ -1,0 +1,12 @@
+[project]
+name = "automations"
+version = "0.1.0"
+description = "The machinery that runs automations (skills on a schedule): the durable recurring-job runner, the cron agent-env wrapper, and the singleton automation-agent waker"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+# No build-system: this is a bash-script package (a virtual uv workspace
+# member). The scripts are invoked by absolute path from cron entries and by
+# system/services/caretaker; run_job_test.py exercises run_job.sh as a real
+# subprocess.

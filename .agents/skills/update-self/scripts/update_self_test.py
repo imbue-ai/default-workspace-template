@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -79,6 +80,432 @@ def test_resolve_target_raises_when_no_stable_tag_and_no_override() -> None:
         raise AssertionError("expected ValueError when no stable tag and no override")
 
 
+# --- the app-version ceiling -----------------------------------------------
+
+
+def test_ceiling_caps_selection_at_the_app_version() -> None:
+    # The headline case: upstream has moved past the app driving this workspace.
+    tags = ["minds-v0.3.8", "minds-v0.3.9", "minds-v0.4.0", "minds-v0.4.1"]
+    assert (
+        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
+        == "minds-v0.3.9"
+    )
+    result = update_self.resolve_target(None, tags, ceiling="minds-v0.3.9")
+    assert result.ref == "minds-v0.3.9"
+    assert result.ceiling == "minds-v0.3.9"
+    assert result.exceeds_ceiling is False
+
+
+def test_ceiling_picks_the_newest_tag_below_it_when_the_exact_tag_is_absent() -> None:
+    # The app's own tag need not exist upstream (a release whose template tag was
+    # never cut); the newest tag below it is still safe to take.
+    tags = ["minds-v0.3.8", "minds-v0.4.0"]
+    assert (
+        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
+        == "minds-v0.3.8"
+    )
+
+
+def test_ceiling_compares_by_semver_not_lexically() -> None:
+    tags = ["minds-v0.3.9", "minds-v0.3.10"]
+    # Lexically "0.3.10" < "0.3.9", so a lexical cap would wrongly admit 0.3.10.
+    assert (
+        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.3.9")
+        == "minds-v0.3.9"
+    )
+    assert (
+        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.3.10")
+        == "minds-v0.3.10"
+    )
+
+
+def test_non_release_ceiling_imposes_no_cap() -> None:
+    # A dev app reports its branch rather than a release tag; there is no version
+    # to compare, so the flow behaves exactly as it did before the ceiling.
+    tags = ["minds-v0.3.9", "minds-v0.4.0"]
+    assert update_self.pick_latest_stable_tag(tags, ceiling="main") == "minds-v0.4.0"
+    result = update_self.resolve_target(None, tags, ceiling="main")
+    assert result.ref == "minds-v0.4.0"
+    assert result.ceiling == "main"
+
+
+def test_resolve_target_explains_when_every_tag_is_above_the_ceiling() -> None:
+    # Distinct from "upstream has no stable tags at all": here the user's fix is
+    # to update the app, so the message has to say so.
+    try:
+        update_self.resolve_target(None, ["minds-v0.4.0"], ceiling="minds-v0.3.9")
+    except ValueError as exc:
+        assert "newer than this workspace's minds app" in str(exc)
+        assert "minds-v0.3.9" in str(exc)
+    else:
+        raise AssertionError("expected ValueError when every tag is above the ceiling")
+
+
+def test_override_above_the_ceiling_is_flagged_but_not_blocked() -> None:
+    tags = ["minds-v0.3.9", "minds-v0.4.0"]
+    newer = update_self.resolve_target("minds-v0.4.0", tags, ceiling="minds-v0.3.9")
+    assert newer.ref == "minds-v0.4.0"
+    assert newer.exceeds_ceiling is True
+
+
+def test_override_at_or_below_the_ceiling_is_not_flagged() -> None:
+    tags = ["minds-v0.3.6", "minds-v0.3.9"]
+    older = update_self.resolve_target("minds-v0.3.6", tags, ceiling="minds-v0.3.9")
+    assert older.exceeds_ceiling is False
+    at_ceiling = update_self.resolve_target(
+        "minds-v0.3.9", tags, ceiling="minds-v0.3.9"
+    )
+    assert at_ceiling.exceeds_ceiling is False
+
+
+def test_unprovable_overrides_are_flagged() -> None:
+    # `main` and a bare commit carry no version, so the ceiling cannot vouch for
+    # them; they must surface for confirmation rather than pass silently.
+    tags = ["minds-v0.3.9"]
+    assert (
+        update_self.resolve_target("main", tags, ceiling="minds-v0.3.9").exceeds_ceiling
+        is True
+    )
+    assert (
+        update_self.resolve_target(
+            "abc1234", tags, ceiling="minds-v0.3.9"
+        ).exceeds_ceiling
+        is True
+    )
+    # A prerelease, by contrast, *is* provable -- it carries a real version, and
+    # 0.3.7-rc1 sits below the 0.3.9 ceiling -- so it is not flagged.
+    assert (
+        update_self.resolve_target(
+            "minds-v0.3.7-rc1", tags, ceiling="minds-v0.3.9"
+        ).exceeds_ceiling
+        is False
+    )
+
+
+def test_overrides_are_never_flagged_without_a_ceiling() -> None:
+    assert (
+        update_self.resolve_target(
+            "main", ["minds-v0.3.9"], ceiling=None
+        ).exceeds_ceiling
+        is False
+    )
+
+
+# --- fetch_app_template_ref ------------------------------------------------
+
+
+def _install_fake_latchkey(
+    monkeypatch, directory: Path, body: str, status: str, exit_code: int = 0
+) -> None:
+    """Put a stub ``latchkey`` on PATH that mimics the real curl passthrough.
+
+    The real ``latchkey curl`` forwards its arguments to ``curl`` and passes curl's
+    exit code, stdout and stderr back. The stub honors the two the fetch depends on
+    -- ``--output <file>`` for the body and ``--write-out %{http_code}`` for the
+    status on stdout -- so the test exercises the actual subprocess call.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "latchkey"
+    lines = [
+        "#!/usr/bin/env python3",
+        "import sys",
+        "argv = sys.argv[1:]",
+        "out = argv[argv.index('--output') + 1]",
+        f"open(out, 'w').write({body!r})",
+        f"sys.stdout.write({status!r})",
+    ]
+    if exit_code:
+        lines.append("sys.stderr.write('connection refused')")
+        lines.append(f"sys.exit({exit_code})")
+    script.write_text("\n".join(lines) + "\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}:{os.environ['PATH']}")
+
+
+def _init_workspace_repo(
+    root: Path, *, merged_tags: tuple[str, ...], unmerged_tags: tuple[str, ...]
+) -> None:
+    """Init a workspace repo whose HEAD carries local work on top of ``merged_tags``.
+
+    A template base it was created from (``merged_tags``, ancestors of ``HEAD``),
+    its own commits on top, and releases upstream has cut since on a line that has
+    *not* been merged (``unmerged_tags``). Both sets are visible to ``git tag
+    --list``, so target selection sees them all while the already-merged check can
+    still tell them apart.
+    """
+
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+    root.mkdir(parents=True, exist_ok=True)
+    _git("init", "-q", "-b", "workspace")
+    _git("config", "user.email", "test@example.com")
+    _git("config", "user.name", "test")
+    _git("commit", "--allow-empty", "-q", "-m", "template base")
+    for tag in merged_tags:
+        _git("tag", tag)
+    _git("checkout", "-q", "-b", "upstream-line")
+    _git("commit", "--allow-empty", "-q", "-m", "upstream release")
+    for tag in unmerged_tags:
+        _git("tag", tag)
+    _git("checkout", "-q", "workspace")
+    _git("commit", "--allow-empty", "-q", "-m", "local work")
+
+
+def test_fetch_app_template_ref_returns_the_apps_pinned_ref(
+    tmp_path, monkeypatch
+) -> None:
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path,
+        body='{"workspace_template_ref": "minds-v0.3.9"}',
+        status="200",
+    )
+
+    assert update_self.fetch_app_template_ref() == "minds-v0.3.9"
+
+
+def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
+    tmp_path, monkeypatch
+) -> None:
+    """A 403 is the *likelier* old-app signal and must get the same message as a 404.
+
+    The route and the gateway grant that reaches it ship together, so an app old
+    enough to lack the route is also old enough to lack the grant -- and the gateway
+    denies before the app is ever asked.
+    """
+    _install_fake_latchkey(
+        monkeypatch, tmp_path, body='{"error": "request not permitted"}', status="403"
+    )
+
+    try:
+        update_self.fetch_app_template_ref()
+    except update_self.CeilingUnavailableError as exc:
+        assert "too old to report its version" in str(exc)
+        assert "Update the minds app itself first" in str(exc)
+    else:
+        raise AssertionError("expected a 403 to block with the old-app message")
+
+
+def test_fetch_app_template_ref_blocks_when_the_app_predates_the_route(
+    tmp_path, monkeypatch
+) -> None:
+    # The case the ceiling most needs to catch: an app old enough to lack the
+    # route is also an app a newer template would outrun. It must not degrade to
+    # "no ceiling".
+    _install_fake_latchkey(
+        monkeypatch, tmp_path, body='{"error": "Not Found"}', status="404"
+    )
+
+    try:
+        update_self.fetch_app_template_ref()
+    except update_self.CeilingUnavailableError as exc:
+        assert "too old to report its version" in str(exc)
+    else:
+        raise AssertionError("expected a 404 to block rather than return no ceiling")
+
+
+def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
+    tmp_path, monkeypatch
+) -> None:
+    _install_fake_latchkey(monkeypatch, tmp_path, body="", status="000", exit_code=7)
+
+    try:
+        update_self.fetch_app_template_ref()
+    except update_self.CeilingUnavailableError as exc:
+        assert "could not reach the minds app" in str(exc)
+        assert "connection refused" in str(exc)
+    else:
+        raise AssertionError("expected a transport failure to block")
+
+
+def test_fetch_app_template_ref_blocks_on_an_unparseable_body(
+    tmp_path, monkeypatch
+) -> None:
+    _install_fake_latchkey(
+        monkeypatch, tmp_path, body="<html>gateway error</html>", status="200"
+    )
+
+    try:
+        update_self.fetch_app_template_ref()
+    except update_self.CeilingUnavailableError as exc:
+        assert "could not be parsed" in str(exc)
+    else:
+        raise AssertionError("expected an unparseable body to block")
+
+
+def test_resolve_target_cli_reads_the_ceiling_from_the_app(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """End to end: with no ``--ceiling``, the CLI asks the app and caps on the answer.
+
+    ``latest_available`` reports the release that was held back, which is what the
+    approval message tells the user about.
+
+    The workspace sits *behind* the ceiling (created from 0.3.5, app on 0.3.9), so
+    the capped target is a real update and the pass proceeds -- otherwise this
+    would be asserting the already-merged refusal's territory instead.
+    """
+    repo = tmp_path / "repo"
+    _init_workspace_repo(
+        repo,
+        merged_tags=("minds-v0.3.5",),
+        unmerged_tags=("minds-v0.3.9", "minds-v0.4.0"),
+    )
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "bin",
+        body='{"workspace_template_ref": "minds-v0.3.9"}',
+        status="200",
+    )
+
+    assert (
+        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
+        == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "ref": "minds-v0.3.9",
+        "kind": "tag",
+        "ceiling": "minds-v0.3.9",
+        "exceeds_ceiling": False,
+        "latest_available": "minds-v0.4.0",
+        # minds-v0.4.0 was available and the ceiling is why it wasn't taken, so
+        # the approval message owes the user the "held back" line.
+        "held_back_by_ceiling": True,
+    }
+
+
+def test_resolve_target_cli_refuses_when_the_app_caps_it_at_the_release_it_is_on(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The case the ceiling exists for, from the seat of a workspace already at it.
+
+    Created from 0.3.9, app on 0.3.9, 0.4.0 upstream. Tag selection alone resolves
+    0.3.9 -- the release the workspace *is* -- so without the refusal a whole
+    backup, worker and validation pass merges nothing. It has to name the app,
+    because updating the app is the one action that gets them 0.4.0.
+    """
+    repo = tmp_path / "repo"
+    _init_workspace_repo(
+        repo, merged_tags=("minds-v0.3.9",), unmerged_tags=("minds-v0.4.0",)
+    )
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "bin",
+        body='{"workspace_template_ref": "minds-v0.3.9"}',
+        status="200",
+    )
+
+    assert (
+        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "already on minds-v0.3.9" in captured.err
+    assert "minds-v0.4.0 is available upstream but needs a newer app" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_resolve_target_cli_refuses_when_already_on_the_newest_release(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Nothing newer exists, so the refusal must not blame the app for it."""
+    repo = tmp_path / "repo"
+    _init_workspace_repo(repo, merged_tags=("minds-v0.3.9",), unmerged_tags=())
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "bin",
+        body='{"workspace_template_ref": "minds-v0.3.9"}',
+        status="200",
+    )
+
+    assert (
+        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert "already on minds-v0.3.9" in captured.err
+    assert "nothing to update" in captured.err
+    assert "newer app" not in captured.err
+
+
+def test_resolve_target_cli_does_not_block_an_override_it_is_already_on(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """An override names a ref explicitly, and that rule outranks saving a no-op merge.
+
+    Blocking here would make ``--override`` unusable for the one case it is most
+    needed in: re-running a landing that half-finished.
+    """
+    repo = tmp_path / "repo"
+    _init_workspace_repo(
+        repo, merged_tags=("minds-v0.3.9",), unmerged_tags=("minds-v0.4.0",)
+    )
+    _install_fake_latchkey(
+        monkeypatch,
+        tmp_path / "bin",
+        body='{"workspace_template_ref": "minds-v0.3.9"}',
+        status="200",
+    )
+
+    assert (
+        update_self.main(
+            [
+                "resolve-target",
+                "--local-tags",
+                "--repo-root",
+                str(repo),
+                "--override",
+                "minds-v0.3.9",
+            ]
+        )
+        == 0
+    )
+
+    assert json.loads(capsys.readouterr().out)["ref"] == "minds-v0.3.9"
+
+
+def test_already_current_message_only_blames_the_app_when_it_is_to_blame() -> None:
+    held_back = update_self.already_current_message(
+        "minds-v0.3.9", "minds-v0.4.0", "minds-v0.3.9", True
+    )
+    assert "minds-v0.3.9" in held_back and "minds-v0.4.0" in held_back
+    assert "needs a newer app" in held_back
+
+    current = update_self.already_current_message(
+        "minds-v0.3.9", "minds-v0.3.9", "minds-v0.3.9", False
+    )
+    assert "nothing to update" in current
+    assert "newer app" not in current
+
+
+def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
+    _install_fake_latchkey(
+        monkeypatch, tmp_path / "bin", body="", status="000", exit_code=7
+    )
+
+    assert (
+        update_self.main(["resolve-target", "--local-tags", "--repo-root", str(repo)])
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "could not reach the minds app" in captured.err
+    # A refusal, not a crash: no traceback for the lead to relay.
+    assert "Traceback" not in captured.err
+
+
 # --- classify_path ---------------------------------------------------------
 
 
@@ -108,6 +535,15 @@ def test_classify_path_reveal_classes() -> None:
         "system/libs/bootstrap/README.md": update_self.CLASS_DOCS,
         "system/apps/system_interface/README.md": update_self.CLASS_DOCS,
         "system/vendor/mngr/README.md": update_self.CLASS_DOCS,
+        # Changelog entries likewise, in every project's bucket -- a release
+        # ships them under runtime prefixes, so without this nearly every update
+        # would restart a service (or run an impact analysis) over markdown.
+        ".agents/changelog/some-entry.md": update_self.CLASS_DOCS,
+        "system/libs/bootstrap/changelog/some-entry.md": update_self.CLASS_DOCS,
+        "system/apps/system_interface/changelog/some-entry.md": update_self.CLASS_DOCS,
+        # But the match is one level deep and markdown-only, so an app that
+        # happens to be *named* changelog still reveals as code.
+        "system/apps/changelog/main.py": update_self.CLASS_SHARED_RUNTIME,
     }
     for path, expected in cases.items():
         assert update_self.classify_path(path).reveal_class == expected, path
@@ -118,13 +554,20 @@ def test_classify_path_project_mapping() -> None:
         update_self.classify_path("system/apps/system_interface/foo.py").project
         == "system/apps/system_interface"
     )
-    assert update_self.classify_path("system/vendor/mngr/x.py").project == "system/vendor/mngr"
+    assert (
+        update_self.classify_path("system/vendor/mngr/x.py").project
+        == "system/vendor/mngr"
+    )
     assert update_self.classify_path("system/scripts/forward_port.py").project == "."
 
 
 def test_classify_path_manifest_flag() -> None:
-    assert update_self.classify_path("system/apps/system_interface/pyproject.toml").is_manifest
-    assert update_self.classify_path("system/vendor/mngr/libs/mngr/pyproject.toml").is_manifest
+    assert update_self.classify_path(
+        "system/apps/system_interface/pyproject.toml"
+    ).is_manifest
+    assert update_self.classify_path(
+        "system/vendor/mngr/libs/mngr/pyproject.toml"
+    ).is_manifest
     assert not update_self.classify_path("system/scripts/forward_port.py").is_manifest
 
 
@@ -167,7 +610,10 @@ def test_classify_merge_summary_fields() -> None:
         update_self.CLASS_SYSTEM_INTERFACE,
     ]
     assert result.reveal_classes_pulled_in == [update_self.CLASS_SHARED_RUNTIME]
-    assert result.projects_to_validate == ["system/apps/system_interface", "system/vendor/mngr"]
+    assert result.projects_to_validate == [
+        "system/apps/system_interface",
+        "system/vendor/mngr",
+    ]
 
 
 def test_classify_merge_surfaces_provisioner_bump() -> None:
@@ -204,26 +650,31 @@ def test_repo_root_flag_accepted_before_and_after_subcommand(tmp_path, capsys) -
     # Python < 3.13 (bpo-9351). Asserting on the resolved tag (which only
     # exists in the tmp repo) catches both -- a clobber would resolve against
     # the real repo and either fail or print a different ref.
-    def _git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+    #
+    # The tag has to sit on an *unmerged* line: a tag on HEAD is a target the
+    # workspace already has, which resolve-target refuses, and this test is about
+    # the flag plumbing rather than that refusal.
+    _init_workspace_repo(tmp_path, merged_tags=(), unmerged_tags=("minds-v0.1.0",))
 
-    _git("init", "-q")
-    _git(
-        "-c",
-        "user.email=test@example.com",
-        "-c",
-        "user.name=test",
-        "commit",
-        "--allow-empty",
-        "-q",
-        "-m",
-        "root",
-    )
-    _git("tag", "minds-v0.1.0")
-
+    # ``--ceiling main`` pins a non-release ceiling (i.e. no cap), so this test
+    # stays about the ``--repo-root`` plumbing and never reaches for the app.
     for argv in (
-        ["resolve-target", "--local-tags", "--repo-root", str(tmp_path)],
-        ["--repo-root", str(tmp_path), "resolve-target", "--local-tags"],
+        [
+            "resolve-target",
+            "--local-tags",
+            "--ceiling",
+            "main",
+            "--repo-root",
+            str(tmp_path),
+        ],
+        [
+            "--repo-root",
+            str(tmp_path),
+            "resolve-target",
+            "--local-tags",
+            "--ceiling",
+            "main",
+        ],
     ):
         assert update_self.main(argv) == 0, argv
         assert '"minds-v0.1.0"' in capsys.readouterr().out, argv
@@ -457,3 +908,129 @@ def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
     # The staged copy is the local working-tree flow, present and runnable.
     assert staged_skill.joinpath("SKILL.md").read_text() == "LOCAL FLOW\n"
     assert staged_skill.joinpath("scripts", "update_self.py").exists()
+
+
+# --- is_held_back_by_ceiling ------------------------------------------------
+
+
+def test_held_back_is_true_only_when_the_ceiling_chose_the_lower_target() -> None:
+    assert (
+        update_self.is_held_back_by_ceiling(
+            resolved_ref="minds-v0.3.9",
+            latest_available="minds-v0.4.0",
+            ceiling="minds-v0.3.9",
+            has_override=False,
+        )
+        is True
+    )
+    # Already on the newest release: nothing was held back.
+    assert (
+        update_self.is_held_back_by_ceiling(
+            resolved_ref="minds-v0.4.0",
+            latest_available="minds-v0.4.0",
+            ceiling="minds-v0.4.0",
+            has_override=False,
+        )
+        is False
+    )
+
+
+def test_held_back_is_false_when_the_users_own_override_picked_the_older_tag() -> None:
+    """The bug this flag exists to prevent: blaming the app for the user's choice.
+
+    `--override minds-v0.3.6` under a `minds-v0.3.9` ceiling leaves `ref` below
+    `latest_available`, so an eyeball comparison would tell the user their Minds
+    app held the update back when they picked the older tag themselves.
+    """
+    assert (
+        update_self.is_held_back_by_ceiling(
+            resolved_ref="minds-v0.3.6",
+            latest_available="minds-v0.4.0",
+            ceiling="minds-v0.3.9",
+            has_override=True,
+        )
+        is False
+    )
+
+
+def test_held_back_is_false_when_the_app_imposes_no_cap() -> None:
+    """A dev app caps nothing, so a gap can never be the ceiling's doing.
+
+    A dev build reports a *branch*, not nothing, so `ceiling="main"` -- and not
+    `None` -- is the shape the CLI actually produces here. It reaches `False` by a
+    different route than a `None` ceiling does: the branch parses to no version, so
+    the selection was never bounded. Both routes are asserted.
+    """
+    assert (
+        update_self.is_held_back_by_ceiling(
+            resolved_ref="minds-v0.4.0",
+            latest_available="minds-v0.4.0",
+            ceiling="main",
+            has_override=False,
+        )
+        is False
+    )
+    # No ceiling supplied at all -- only a direct caller does this.
+    assert (
+        update_self.is_held_back_by_ceiling(
+            resolved_ref="minds-v0.4.0",
+            latest_available="minds-v0.4.0",
+            ceiling=None,
+            has_override=False,
+        )
+        is False
+    )
+
+
+# --- a prerelease ceiling ---------------------------------------------------
+
+
+def test_prerelease_ceiling_caps_rather_than_disabling_the_cap() -> None:
+    """An app on a release candidate is a real app and must still cap its workspaces.
+
+    Parsing the ceiling as "not a stable tag, therefore no ceiling" would let a
+    workspace on an rc app update arbitrarily far past it.
+    """
+    tags = ["minds-v0.3.9", "minds-v0.4.0", "minds-v0.4.1"]
+    # Semver: 0.4.0-rc1 precedes 0.4.0, so 0.4.0 itself is above this ceiling.
+    assert (
+        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc1")
+        == "minds-v0.3.9"
+    )
+    result = update_self.resolve_target(None, tags, ceiling="minds-v0.4.0-rc1")
+    assert result.ref == "minds-v0.3.9"
+    assert result.ceiling == "minds-v0.4.0-rc1"
+
+
+def test_a_prerelease_ceiling_still_admits_its_own_earlier_releases() -> None:
+    tags = ["minds-v0.3.9", "minds-v0.4.0"]
+    assert (
+        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.4.1-rc1")
+        == "minds-v0.4.0"
+    )
+
+
+def test_capping_by_a_prerelease_does_not_make_prereleases_selectable() -> None:
+    # The ceiling widening to prereleases must not widen *candidate* selection:
+    # the default target is still only ever a stable release.
+    tags = ["minds-v0.3.9", "minds-v0.4.0-rc1", "minds-v0.4.0-rc2"]
+    assert (
+        update_self.pick_latest_stable_tag(tags, ceiling="minds-v0.4.0-rc2")
+        == "minds-v0.3.9"
+    )
+
+
+def test_parse_version_orders_prereleases_semver_style() -> None:
+    below = update_self.parse_version("minds-v0.4.0-rc1")
+    above = update_self.parse_version("minds-v0.4.0")
+    assert below is not None and above is not None
+    # A prerelease sorts below the release it precedes.
+    assert below < above
+    # Numeric identifiers compare numerically, not lexically: rc.10 follows rc.2.
+    rc2 = update_self.parse_version("minds-v0.4.0-rc.2")
+    rc10 = update_self.parse_version("minds-v0.4.0-rc.10")
+    assert rc2 is not None and rc10 is not None
+    assert rc2 < rc10
+    # A branch or bare commit has no version at all, and stays uncomparable.
+    assert update_self.parse_version("main") is None
+    assert update_self.parse_version("abc1234") is None

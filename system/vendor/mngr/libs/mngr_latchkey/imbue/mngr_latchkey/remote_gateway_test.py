@@ -1,10 +1,12 @@
 import json
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
 import pytest
+from packaging.version import Version
 from pydantic import Field
 
 from imbue.imbue_common.mutable_model import MutableModel
@@ -13,6 +15,7 @@ from imbue.mngr.interfaces.host import OuterHostInterface
 from imbue.mngr.primitives import HostId
 from imbue.mngr_latchkey.core import CONFIG_FILENAME
 from imbue.mngr_latchkey.core import GATEWAY_MAX_BODY_SIZE_BYTES
+from imbue.mngr_latchkey.core import LATCHKEY_MIN_VERSION
 from imbue.mngr_latchkey.core import Latchkey
 from imbue.mngr_latchkey.core import UPSTREAM_DATA_FORMAT_VERSION_FILENAME
 from imbue.mngr_latchkey.encryption_key import encryption_key_path
@@ -23,6 +26,8 @@ from imbue.mngr_latchkey.remote_gateway import OUTER_PORT
 from imbue.mngr_latchkey.remote_gateway import RemoteGatewayError
 from imbue.mngr_latchkey.remote_gateway import _CURL_DISPATCH_PATH
 from imbue.mngr_latchkey.remote_gateway import _CURL_IMPERSONATE_PATH
+from imbue.mngr_latchkey.remote_gateway import _CURL_STAGED_SUFFIX
+from imbue.mngr_latchkey.remote_gateway import _CURL_VERSION_STAMP_PATH
 from imbue.mngr_latchkey.remote_gateway import _GATEWAY_PROGRAM_NAME
 from imbue.mngr_latchkey.remote_gateway import _MINIMUM_NODE_MAJOR_VERSION
 from imbue.mngr_latchkey.remote_gateway import _TUNNEL_PROGRAM_NAME
@@ -133,6 +138,18 @@ def _stub(outer: OuterHostInterface) -> _StubOuter:
     return cast(_StubOuter, outer)
 
 
+def test_minimum_version_is_not_newer_than_the_version_we_install() -> None:
+    """A floor newer than the version we install means a half-finished bump.
+
+    See the comment above :data:`LATCHKEY_MIN_VERSION` for why the pins move
+    together.
+    """
+    assert Version(LATCHKEY_MIN_VERSION) <= Version(LATCHKEY_VERSION), (
+        f"LATCHKEY_MIN_VERSION={LATCHKEY_MIN_VERSION} is newer than the installed "
+        f"LATCHKEY_VERSION={LATCHKEY_VERSION}; raise the install pin to at least the minimum."
+    )
+
+
 def test_ensure_latchkey_installed_issues_single_idempotent_command() -> None:
     outer = _outer(CommandResult(stdout="", stderr="", success=True))
     _ensure_latchkey_installed(outer)
@@ -185,16 +202,45 @@ def test_ensure_latchkey_installed_installs_impersonating_curl() -> None:
     # the dispatch curl and the impersonator it fronts.
     assert f"releases/download/{DATALIB_CURL_VERSION}/" in command
     assert "curl-${_ci_triple}.tar.gz" in command
+    # Every arch the script resolves lands on a statically linked musl build:
+    # the glibc build only runs where glibc is at least as new as datalib's
+    # build host, which rules out older VPS images. Checked over the whole set
+    # of ``_ci_triple`` assignments so an arch branch added later cannot
+    # quietly reintroduce a gnu triple.
+    assert set(re.findall(r"_ci_triple=(\S+)", command)) == {
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+    }
     assert "sha256sum -c" in command
     assert "tar -xzf" in command and "--strip-components=1" in command
-    assert f'install -m 0755 "${{_ci_tmp}}/{_CURL_DISPATCH_PATH.rsplit("/", 1)[1]}" "{_CURL_DISPATCH_PATH}"' in command
+    # Both binaries are staged beside their destinations and then renamed into
+    # place: overwriting them directly would truncate a file the running
+    # gateway may be executing (ETXTBSY), and staging both before swapping
+    # either leaves the previous pair untouched if the download, checksum, or
+    # staging fails.
+    staged_dispatch = f"{_CURL_DISPATCH_PATH}{_CURL_STAGED_SUFFIX}"
+    staged_impersonate = f"{_CURL_IMPERSONATE_PATH}{_CURL_STAGED_SUFFIX}"
+    assert f'install -m 0755 "${{_ci_tmp}}/{_CURL_DISPATCH_PATH.rsplit("/", 1)[1]}" "{staged_dispatch}"' in command
     assert (
-        f'install -m 0755 "${{_ci_tmp}}/{_CURL_IMPERSONATE_PATH.rsplit("/", 1)[1]}" "{_CURL_IMPERSONATE_PATH}"'
-        in command
+        f'install -m 0755 "${{_ci_tmp}}/{_CURL_IMPERSONATE_PATH.rsplit("/", 1)[1]}" "{staged_impersonate}"' in command
     )
-    # Installed only when missing (idempotent) and fail-loud like the other
-    # components -- no best-effort warning fallback that swallows failures.
-    assert f"if [ ! -x {_CURL_DISPATCH_PATH} ]; then" in command
+    assert f'mv -f "{staged_impersonate}" "{_CURL_IMPERSONATE_PATH}"' in command
+    assert f'mv -f "{staged_dispatch}" "{_CURL_DISPATCH_PATH}"' in command
+    # The dispatch curl -- the one LATCHKEY_CURL names -- is swapped last, so
+    # no request reaches a new dispatch curl fronting an old impersonator.
+    assert command.index(f'mv -f "{staged_impersonate}"') < command.index(f'mv -f "{staged_dispatch}"')
+    # Version-gated, not presence-gated: the binaries are installed under
+    # version-less names, so a VPS that already has an older release's pair
+    # must be re-installed rather than skipped -- otherwise a bump only ever
+    # reaches hosts that have never been provisioned.
+    assert f"[ ! -x {_CURL_DISPATCH_PATH} ] || " in command
+    assert f'[ "$(cat {_CURL_VERSION_STAMP_PATH} 2>/dev/null)" != "$_ci_want" ]; then' in command
+    assert f'_ci_want="{DATALIB_CURL_VERSION} ${{_ci_triple}}"' in command
+    # The stamp is written only after both binaries are swapped in, so an
+    # aborted install never leaves a stamp claiming the new version.
+    assert command.index(f'mv -f "{staged_dispatch}"') < command.index(f"> {_CURL_VERSION_STAMP_PATH}")
+    # Fail-loud like the other components -- no best-effort warning fallback
+    # that swallows failures.
     assert "latchkey will use system curl" not in command
 
 
@@ -437,12 +483,18 @@ def test_sync_permissions_copies_per_host_file_to_remote_permissions_json(tmp_pa
     sync_permissions(outer, latchkey_directory, host_id)
 
     written = _stub(outer).written
-    assert len(written) == 1
-    assert written[0].path == "/root/.latchkey/permissions.json"
-    assert b"slack-read-all" in written[0].content
-    assert written[0].mode == "0600"
+    # Two files ship: the shared additional-services schemas file and the permissions file.
+    assert len(written) == 2
+    written_by_path = {w.path: w for w in written}
+    permissions = written_by_path["/root/.latchkey/permissions.json"]
+    assert b"slack-read-all" in permissions.content
+    assert permissions.mode == "0600"
     # Written atomically (tmp + rename) so the remote gateway never reads a partial file.
-    assert written[0].is_atomic is True
+    assert permissions.is_atomic is True
+    # The shared schemas file (which the permissions file's ``include`` resolves to) ships too.
+    shared = written_by_path["/root/.latchkey/minds_shared_schemas.json"]
+    assert b"claude-ai" in shared.content
+    assert shared.is_atomic is True
 
 
 def test_sync_permissions_falls_back_to_restrictive_default_when_local_missing(tmp_path: Path) -> None:
@@ -453,10 +505,11 @@ def test_sync_permissions_falls_back_to_restrictive_default_when_local_missing(t
     sync_permissions(outer, latchkey_directory, host_id)
 
     written = _stub(outer).written
-    assert len(written) == 1
-    assert written[0].path == "/root/.latchkey/permissions.json"
-    # The deny-all default carries an empty rules list and no schemas block.
-    assert written[0].content == b'{\n  "rules": []\n}'
+    assert len(written) == 2
+    written_by_path = {w.path: w for w in written}
+    # The deny-all default carries an empty rules list and no schemas/include block.
+    assert written_by_path["/root/.latchkey/permissions.json"].content == b'{\n  "rules": []\n}'
+    assert b"claude-ai" in written_by_path["/root/.latchkey/minds_shared_schemas.json"].content
 
 
 def test_sync_permissions_resolves_remote_home_for_the_destination(tmp_path: Path) -> None:
@@ -466,7 +519,9 @@ def test_sync_permissions_resolves_remote_home_for_the_destination(tmp_path: Pat
 
     sync_permissions(outer, latchkey_directory, host_id)
 
-    assert _stub(outer).written[0].path == "/home/agent/.latchkey/permissions.json"
+    written_paths = {w.path for w in _stub(outer).written}
+    assert "/home/agent/.latchkey/permissions.json" in written_paths
+    assert "/home/agent/.latchkey/minds_shared_schemas.json" in written_paths
 
 
 def test_sync_permissions_raises_when_home_resolution_fails(tmp_path: Path) -> None:
@@ -545,12 +600,10 @@ def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_
     assert 'LATCHKEY_GATEWAY_LISTEN_PASSWORD="$(cat ' in run_script
     assert "export LATCHKEY_ENCRYPTION_KEY LATCHKEY_GATEWAY_LISTEN_PASSWORD" in run_script
     assert "shared-password" not in run_script
-    # Routes latchkey through the bundled dispatch curl -- but only when both
-    # binaries are present, so a host without the impersonating curl installed
-    # (fetch failed / older release) falls back to system curl unchanged.
-    # Unconditional export -- provisioning guarantees the dispatch curl is
-    # installed. The dispatch curl finds the impersonator as a sibling, so no
-    # second env var is exported.
+    # Routes latchkey through the bundled dispatch curl. Unconditional export --
+    # provisioning installs the pair fail-loud, so reaching this script at all
+    # guarantees they are there. The dispatch curl finds the impersonator as a
+    # sibling, so no second env var is exported.
     assert f"export LATCHKEY_CURL={_CURL_DISPATCH_PATH}" in run_script
     assert "FRANKWEILER_IMPERSONATE_CURL" not in run_script
     # The wrapper refuses to launch a keyless gateway when its tmpfs secrets are

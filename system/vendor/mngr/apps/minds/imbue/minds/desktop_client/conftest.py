@@ -24,8 +24,10 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudSyncConflictCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import LiteLLMKeyMaterial
+from imbue.minds.desktop_client.imbue_cloud_cli import TunnelInfo
 from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
+from imbue.minds.desktop_client.testing import device_id_for_test
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
 from imbue.minds.primitives import ServiceName
 from imbue.minds.utils.mngr_caller import MngrCaller
@@ -67,6 +69,12 @@ class FakeImbueCloudCli(ImbueCloudCli):
         default=False,
         description="When True, auth_list raises ImbueCloudCliError (simulates a transient subprocess failure)",
     )
+    tunnels_by_account: dict[str, dict[str, str]] = Field(
+        default_factory=dict, description="account email -> {agent_id: tunnel_name}"
+    )
+    deleted_tunnel_names: list[str] = Field(
+        default_factory=list, description="Every tunnel name delete_tunnel was called with, in order"
+    )
 
     def auth_list(self) -> list[ImbueCloudAuthAccount]:
         if self.is_auth_list_failing:
@@ -106,6 +114,23 @@ class FakeImbueCloudCli(ImbueCloudCli):
 
     def remove_account(self, user_id: str) -> None:
         self.accounts_to_return = [a for a in self.accounts_to_return if a.user_id != user_id]
+
+    # -- In-memory tunnels (drives the teardown tests) --
+
+    def add_tunnel(self, account: str, agent_id: str) -> None:
+        self.tunnels_by_account.setdefault(account, {})[agent_id] = f"fake--{agent_id[:16]}"
+
+    def find_tunnel_for_agent(self, account: str, agent_id: str) -> TunnelInfo | None:
+        tunnel_name = self.tunnels_by_account.get(account, {}).get(agent_id)
+        if tunnel_name is None:
+            return None
+        return TunnelInfo(tunnel_name=tunnel_name, tunnel_id=f"id-{tunnel_name}")
+
+    def delete_tunnel(self, account: str, tunnel_name: str) -> None:
+        self.deleted_tunnel_names.append(tunnel_name)
+        for agent_id, name in list(self.tunnels_by_account.get(account, {}).items()):
+            if name == tunnel_name:
+                del self.tunnels_by_account[account][agent_id]
 
     # -- In-memory storage-cleanup backend (drives the backup-trim tests) --
 
@@ -244,7 +269,7 @@ def make_session_store_for_test(data_dir: Path, cli: ImbueCloudCli | None = None
     record_store = WorkspaceRecordStore(
         paths=WorkspacePaths(data_dir=data_dir),
         cli=effective_cli,
-        device_id="device-test",
+        device_id=device_id_for_test("session-store"),
         device_label="test-device",
     )
     return MultiAccountSessionStore(data_dir=data_dir, cli=effective_cli, record_store=record_store)

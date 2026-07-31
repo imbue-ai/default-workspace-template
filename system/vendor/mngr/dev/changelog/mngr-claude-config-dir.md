@@ -1,0 +1,1 @@
+Added a historical note to `specs/swap-primary-agent/spec.md`: the services/chat split it describes remains, but its shared-`CLAUDE_CONFIG_DIR` mechanism has been superseded by the default-workspace-template's `~/.claude` cutover (the services agent is now a plain `command`-type agent and the env var is unset workspace-wide).

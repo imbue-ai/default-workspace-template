@@ -91,6 +91,7 @@ from supertokens_python.recipe.thirdparty.syncio import get_provider
 from supertokens_python.recipe.thirdparty.syncio import manually_create_or_update_user
 from supertokens_python.syncio import get_user
 from supertokens_python.syncio import list_users_by_account_info
+from supertokens_python.types import LoginMethod
 from supertokens_python.types import RecipeUserId
 from supertokens_python.types.base import AccountInfoInput
 from tenacity import retry
@@ -6444,7 +6445,11 @@ class SignInRequest(BaseModel):
 
 
 class AuthResponse(BaseModel):
-    status: str = Field(description="OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, FIELD_ERROR, or ERROR")
+    status: str = Field(
+        description=(
+            "OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, ACCOUNT_EXISTS_WITH_OTHER_METHOD, FIELD_ERROR, or ERROR"
+        )
+    )
     message: str | None = Field(default=None, description="Human-readable message for non-OK statuses")
     user: AuthUser | None = Field(default=None, description="User info when status is OK")
     tokens: SessionTokens | None = Field(default=None, description="Session tokens when status is OK")
@@ -6565,6 +6570,82 @@ def _require_supertokens_configured() -> None:
         raise HTTPException(status_code=503, detail="SuperTokens not configured on the server")
 
 
+# Status returned when a signup is refused because the email already has an
+# account under a different login method (e.g. a Google account exists and the
+# caller tries a password signup, or vice versa). Without this guard each
+# method would happily create its own SuperTokens user for the same email --
+# duplicate accounts with disjoint workspaces, keys, and entitlements.
+_ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS: Final[str] = "ACCOUNT_EXISTS_WITH_OTHER_METHOD"
+
+_EMAIL_PASSWORD_LOGIN_METHOD_ID: Final[str] = "emailpassword"
+
+_DISPLAY_NAME_BY_LOGIN_METHOD_ID: Final[dict[str, str]] = {
+    _EMAIL_PASSWORD_LOGIN_METHOD_ID: "email and password",
+    "google": "Google sign-in",
+    "github": "GitHub sign-in",
+}
+
+
+def _login_method_id(login_method: LoginMethod) -> str:
+    """The stable identifier of a login method: the third-party provider id, or the recipe id.
+
+    Only the 'emailpassword' and 'thirdparty' recipes are enabled on this app, but the SDK
+    type also allows 'passwordless'/'webauthn' methods; falling back to ``recipe_id`` keeps
+    the guard accurate (rather than misreporting such a method as email-and-password) if
+    another recipe is ever enabled.
+    """
+    if login_method.third_party is not None:
+        return login_method.third_party.id
+    return login_method.recipe_id
+
+
+def _existing_login_method_ids_for_email(email: str) -> set[str]:
+    """The login-method ids ('emailpassword' / third-party provider ids) already registered for ``email``."""
+    email_lower = email.strip().lower()
+    users = list_users_by_account_info(
+        tenant_id=_AUTH_TENANT_ID,
+        account_info=AccountInfoInput(email=email_lower),
+    )
+    method_ids: set[str] = set()
+    for user in users:
+        for login_method in user.login_methods:
+            if login_method.has_same_email_as(email_lower):
+                method_ids.add(_login_method_id(login_method))
+    return method_ids
+
+
+def _cross_method_signup_rejection(email: str, attempted_method_id: str) -> AuthResponse | None:
+    """The one-account-per-email guard shared by password signup and the OAuth callback.
+
+    Returns the rejection response when ``email`` is already registered under a
+    *different* login method than ``attempted_method_id``, and None when the
+    signup/sign-in may proceed. An email whose ``attempted_method_id`` account
+    already exists is deliberately allowed through: for OAuth that is a normal
+    returning sign-in, and for password signup the recipe's own
+    EMAIL_ALREADY_EXISTS answer is the accurate one. Pre-existing cross-method
+    duplicates therefore also keep both of their sign-ins working.
+    """
+    existing_method_ids = _existing_login_method_ids_for_email(email)
+    if not existing_method_ids or attempted_method_id in existing_method_ids:
+        return None
+    existing_method_names = " or ".join(
+        sorted(_DISPLAY_NAME_BY_LOGIN_METHOD_ID.get(method_id, method_id) for method_id in existing_method_ids)
+    )
+    logger.info(
+        "Refused %s signup for %s: the email is already registered via %s",
+        attempted_method_id,
+        email,
+        existing_method_names,
+    )
+    return AuthResponse(
+        status=_ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS,
+        message=(
+            f"An account for this email already exists using {existing_method_names}. "
+            "Sign in with that method instead."
+        ),
+    )
+
+
 @web_app.post("/auth/signup", response_model=AuthResponse)
 def auth_signup(body: SignUpRequest) -> AuthResponse:
     """Create a new email/password account and return a session + user info.
@@ -6581,6 +6662,12 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
             return AuthResponse(status="FIELD_ERROR", message="Email and password are required")
 
         try:
+            # One-account-per-email: refuse a password signup when the email
+            # already has an account under another login method (e.g. Google).
+            rejection = _cross_method_signup_rejection(email, _EMAIL_PASSWORD_LOGIN_METHOD_ID)
+            if rejection is not None:
+                return rejection
+
             result = ep_sign_up(tenant_id=_AUTH_TENANT_ID, email=email, password=body.password)
 
             if isinstance(result, EmailAlreadyExistsError):
@@ -6893,6 +6980,23 @@ def auth_oauth_callback(body: OAuthCallbackRequest) -> AuthResponse:
             return AuthResponse(status="ERROR", message="No email provided by the OAuth provider")
 
         email = oauth_user.email.id
+
+        # One-account-per-email: refuse the OAuth callback when the email
+        # already has an account under another login method (e.g. a password
+        # account). The provider dialog has already run by this point, but
+        # nothing has been written to SuperTokens yet -- returning here leaves
+        # no user, no session, and no partial state. A core outage during the
+        # lookup is surfaced as the same structured ERROR the other /auth/*
+        # endpoints return, so the typed desktop client gets a stable JSON
+        # shape rather than a FastAPI 500 body.
+        try:
+            rejection = _cross_method_signup_rejection(email, body.provider_id)
+        except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+            logger.error("SuperTokens SDK error during OAuth callback", exc_info=exc)
+            return AuthResponse(status="ERROR", message="Auth backend unavailable")
+        if rejection is not None:
+            return rejection
+
         result = manually_create_or_update_user(
             tenant_id=_AUTH_TENANT_ID,
             third_party_id=body.provider_id,

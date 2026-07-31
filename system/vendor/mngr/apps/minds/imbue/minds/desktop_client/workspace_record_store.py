@@ -57,6 +57,7 @@ from imbue.minds.errors import WorkspaceSyncError
 from imbue.minds.mngr_settings.provider_blocks import imbue_cloud_provider_name_for_account
 from imbue.mngr.errors import ProviderNotAuthorizedError
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import ProviderInstanceName
 
 _RECORDS_DIRNAME = "workspace_records"
@@ -185,18 +186,6 @@ def replica_record_from_wire(wire: dict[str, object]) -> ReplicaRecord:
         revision=int(str(wire.get("revision", 0))),
         is_dirty=False,
     )
-
-
-def read_device_id(mngr_host_dir: Path) -> str:
-    """Return this install's device id (the minds env's mngr host_id file), or '' when absent."""
-    path = mngr_host_dir / "host_id"
-    if not path.is_file():
-        return ""
-    try:
-        return path.read_text().strip()
-    except OSError as e:
-        logger.warning("Could not read the mngr host_id file at {}: {}", path, e)
-        return ""
 
 
 def read_device_label() -> str:
@@ -368,12 +357,14 @@ class WorkspaceRecordStore(MutableModel):
         default=None,
         frozen=True,
         description=(
-            "The minds env's mngr host dir (SSH key material + device id live under it). "
+            "The minds env's mngr host dir (SSH key material lives under it). "
             "None falls back to paths.mngr_host_dir (the default-env convention)."
         ),
     )
     cli: ImbueCloudCli | None = Field(default=None, frozen=True, description="Transport; None disables pushes/pulls")
-    device_id: str = Field(frozen=True, description="This install's mngr host_id (record provenance)")
+    device_id: HostId = Field(
+        frozen=True, description="This install's stable device id (record provenance; see device_identity)"
+    )
     device_label: str = Field(frozen=True, description="This device's human-readable name")
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _records_by_user_id: dict[str, dict[str, ReplicaRecord]] = PrivateAttr(default_factory=dict)
@@ -527,12 +518,12 @@ class WorkspaceRecordStore(MutableModel):
         try:
             plaintext = decrypt_secrets(dek, b64decode(record.encrypted_secrets))
         except (SecretWrappingError, ValueError) as e:
-            logger.warning("Could not decrypt the secrets for workspace {}: {}", record.agent_id, e)
+            logger.warning("Could not decrypt the secrets for machine {}: {}", record.agent_id, e)
             return None
         try:
             return WorkspaceSecretsPayload.model_validate_json(plaintext)
         except ValueError as e:
-            logger.warning("Malformed decrypted secrets payload for workspace {}: {}", record.agent_id, e)
+            logger.warning("Malformed decrypted secrets payload for machine {}: {}", record.agent_id, e)
             return None
 
     # -- Record building ------------------------------------------------------
@@ -578,7 +569,7 @@ class WorkspaceRecordStore(MutableModel):
         where last-actor-wins is the intended semantics.
         """
         if self.cli is None:
-            raise WorkspaceSyncError("workspace sync is not configured (no imbue_cloud CLI)")
+            raise WorkspaceSyncError("machine sync is not configured (no imbue_cloud CLI)")
         # The metadata-only tier: while the account has no (non-empty) master
         # password, its secrets never leave this machine -- the wire copy is
         # stripped. (The next pull mirrors the secretless server row into the
@@ -627,7 +618,7 @@ class WorkspaceRecordStore(MutableModel):
         try:
             self._push_record(user_id, account_email, dirty)
         except (ImbueCloudCliError, WorkspaceSyncError) as e:
-            logger.warning("Queued workspace record for {} (push failed: {})", record.agent_id, e)
+            logger.warning("Queued machine record for {} (push failed: {})", record.agent_id, e)
 
     def associate_workspace_or_raise(
         self, user_id: str, account_email: str, agent_id: str, resolver: BackendResolverInterface
@@ -643,7 +634,7 @@ class WorkspaceRecordStore(MutableModel):
         existing = self.find_active_record(agent_id)
         if existing is not None and existing[0] != user_id:
             raise WorkspaceSyncError(
-                "workspace is associated with another account; disassociate it first, then associate"
+                "machine is associated with another account; disassociate it first, then associate"
             )
         with self._lock:
             self._load_unlocked()
@@ -664,7 +655,7 @@ class WorkspaceRecordStore(MutableModel):
             return
         _, record = found
         if self.cli is None:
-            raise WorkspaceSyncError("workspace sync is not configured (no imbue_cloud CLI)")
+            raise WorkspaceSyncError("machine sync is not configured (no imbue_cloud CLI)")
         try:
             self.cli.sync_record_delete(account_email, record.host_id)
         except ImbueCloudCliError as e:
@@ -700,7 +691,7 @@ class WorkspaceRecordStore(MutableModel):
     def remove_record_or_raise(self, user_id: str, account_email: str, host_id: str) -> None:
         """Remove a record outright by host id (the manual remove-from-list escape hatch)."""
         if self.cli is None:
-            raise WorkspaceSyncError("workspace sync is not configured (no imbue_cloud CLI)")
+            raise WorkspaceSyncError("machine sync is not configured (no imbue_cloud CLI)")
         try:
             self.cli.sync_record_delete(account_email, host_id)
         except ImbueCloudCliError as e:
@@ -721,7 +712,7 @@ class WorkspaceRecordStore(MutableModel):
         try:
             wire_records = self.cli.sync_records_pull(account_email)
         except ImbueCloudCliError as e:
-            logger.warning("Could not pull workspace records for {}: {}", account_email, e)
+            logger.warning("Could not pull machine records for {}: {}", account_email, e)
             return False
         with self._lock:
             self._load_unlocked()
@@ -808,7 +799,7 @@ class WorkspaceRecordStore(MutableModel):
         if payload is None or payload.restic_env is None:
             return False
         write_canonical_env(self.paths, AgentId(agent_id), payload.restic_env)
-        logger.info("Materialized the backup env for {} from its synced workspace record", agent_id)
+        logger.info("Materialized the backup env for {} from its synced machine record", agent_id)
         return True
 
     # -- SSH material consumption ----------------------------------------------
@@ -886,23 +877,23 @@ class WorkspaceRecordStore(MutableModel):
             return False
         payload = self.decrypt_record_secrets(user_id, record)
         if payload is None:
-            self._set_ssh_material_error(record.agent_id, "Could not decrypt the synced secrets for this workspace.")
+            self._set_ssh_material_error(record.agent_id, "Could not decrypt the synced secrets for this machine.")
             return False
         if payload.ssh_private_key is None:
             self._clear_ssh_material_error(record.agent_id)
             return False
         public_key_line = derive_openssh_public_key_line(payload.ssh_private_key)
         if public_key_line is None:
-            self._set_ssh_material_error(record.agent_id, "The synced SSH key for this workspace could not be parsed.")
+            self._set_ssh_material_error(record.agent_id, "The synced SSH key for this machine could not be parsed.")
             return False
         try:
             is_changed = _materialize_ssh_files(host_dir, payload, public_key_line)
         except OSError as e:
-            logger.warning("Could not materialize SSH material for workspace {}: {}", record.agent_id, e)
+            logger.warning("Could not materialize SSH material for machine {}: {}", record.agent_id, e)
             self._set_ssh_material_error(record.agent_id, f"Could not write the SSH key material: {e}")
             return False
         if is_changed:
-            logger.info("Materialized synced SSH material for workspace {} at {}", record.agent_id, host_dir)
+            logger.info("Materialized synced SSH material for machine {} at {}", record.agent_id, host_dir)
         self._clear_ssh_material_error(record.agent_id)
         return is_changed
 
@@ -1071,7 +1062,7 @@ class WorkspaceRecordStore(MutableModel):
         was reached), so the scheduler's initial-sync tracking can distinguish
         "the account has no records" from "the records could not be fetched".
         """
-        with log_span("Reconciling workspace records"):
+        with log_span("Reconciling machine records"):
             legacy = self.read_legacy_associations()
             is_legacy_fully_converted = True
             is_pull_ok_by_user_id: dict[str, bool] = {}
@@ -1085,13 +1076,13 @@ class WorkspaceRecordStore(MutableModel):
                             self.upsert_local_record(user_id, account_email, record)
                         elif self._is_definitively_absent_from_discovery(agent_id, resolver):
                             logger.info(
-                                "Legacy association for {} names a workspace that no longer exists; dropping it",
+                                "Legacy association for {} names a machine that no longer exists; dropping it",
                                 agent_id,
                             )
                         else:
                             is_legacy_fully_converted = False
                             logger.warning(
-                                "Legacy association for {} could not convert this pass (workspace not in "
+                                "Legacy association for {} could not convert this pass (machine not in "
                                 "discovery yet); keeping the legacy file for a retry",
                                 agent_id,
                             )
@@ -1240,8 +1231,6 @@ class WorkspaceRecordStore(MutableModel):
         """
         if not resolver.has_completed_initial_discovery():
             return
-        if not self.device_id:
-            return
         active_ids = {str(aid) for aid in resolver.list_active_workspace_ids()}
         for record in self.list_records(user_id):
             if record.state != RECORD_STATE_DESTROYED or record.hosting_device_id != self.device_id:
@@ -1251,7 +1240,7 @@ class WorkspaceRecordStore(MutableModel):
             if has_destroying_marker(AgentId(record.agent_id), self.paths):
                 continue
             logger.info(
-                "Re-activating workspace record {} ({}): its host is live in local discovery",
+                "Re-activating machine record {} ({}): its host is live in local discovery",
                 record.agent_id,
                 record.display_name,
             )
@@ -1284,12 +1273,6 @@ class WorkspaceRecordStore(MutableModel):
         """
         if not resolver.has_completed_initial_discovery():
             return
-        if not self.device_id:
-            # Without a real device id (missing/unreadable mngr host_id file)
-            # this install cannot attribute hosted rows to itself: another
-            # id-less install's rows would match an empty id and get destroyed.
-            logger.warning("Skipping absent-host tombstoning: this install has no device id")
-            return
         known_ids = {str(aid) for aid in resolver.list_known_workspace_ids()}
         errored_providers = {str(name) for name in resolver.get_provider_errors()}
         for record in self.list_records(user_id):
@@ -1308,7 +1291,7 @@ class WorkspaceRecordStore(MutableModel):
             if resolver.get_last_snapshot_at_for_provider(record_provider_name) is None:
                 continue
             logger.info(
-                "Tombstoning workspace record {} ({}): host no longer exists on this device",
+                "Tombstoning machine record {} ({}): host no longer exists on this device",
                 record.agent_id,
                 record.display_name,
             )

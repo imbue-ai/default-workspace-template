@@ -64,6 +64,7 @@ operators mint one manually for local iteration).
 import argparse
 import contextlib
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -117,6 +118,7 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     import os
     import subprocess
     import tempfile
+    import time
     from pathlib import Path
 
     from imbue.minds.desktop_client.e2e_workspace_runner import (
@@ -159,6 +161,59 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     debug_port = find_free_port()
     print(f"[snapshot] workspace={workspace_name} debug_port={debug_port}", flush=True)
     create_workspace_via_electron(default_workspace_template_path, workspace_name, debug_port)
+    # The workspace's deferred install (the env.d browser unit) apt-installs the
+    # Fortress engine and then Xvfb in the background after the create returns.
+    # A snapshot taken before both land bakes a workspace whose xvfb service can
+    # never start in resumed sandboxes: `supervisorctl restart all` (e.g. after a
+    # backup restore) then reports `xvfb: ERROR (spawn error)` on every retry,
+    # because all test attempts share this one snapshot. Wait for both artifacts
+    # inside the workspace's own container (matched by the workspace name --
+    # other running containers, like the docker-state holder, never install
+    # Xvfb and must not gate the snapshot); a genuinely wedged install should
+    # fail this build loudly rather than mint a snapshot that fails the test
+    # stage mysteriously. The install runs concurrently with the multi-minute
+    # create above (it starts on the container's first boot), so the residual
+    # wait here is normally seconds; 5 minutes is a generous bound for an apt
+    # hiccup, not the install's full duration.
+    deferred_install_check = (
+        "command -v Xvfb >/dev/null 2>&1 && test -x /opt/fortress/tilion-fortress/tilion"
+    )
+    deferred_install_deadline = time.monotonic() + 300.0
+    while True:
+        running_names = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.split()
+        workspace_containers = [name for name in running_names if workspace_name in name]
+        if not workspace_containers:
+            raise RuntimeError(
+                f"no running container carries the workspace name {workspace_name!r} "
+                f"(running: {running_names!r}); cannot verify the deferred install"
+            )
+        pending = [
+            name
+            for name in workspace_containers
+            if subprocess.run(
+                ["docker", "exec", name, "sh", "-c", deferred_install_check],
+                check=False,
+                timeout=60,
+            ).returncode
+            != 0
+        ]
+        if not pending:
+            print("[snapshot] deferred install complete in the workspace container", flush=True)
+            break
+        if time.monotonic() > deferred_install_deadline:
+            raise RuntimeError(
+                "deferred install (Xvfb + Fortress engine) did not complete in "
+                f"container(s) {pending!r} within 5 minutes; refusing to snapshot "
+                "a workspace whose xvfb service cannot start"
+            )
+        print(f"[snapshot] waiting for deferred install in {pending!r}", flush=True)
+        time.sleep(10)
     # IMPORTANT: do NOT call destroy_agent_best_effort here. The whole
     # point of this script is to leave the workspace agent + Docker
     # container's on-disk state (volumes, /home/user/workspace, the
@@ -235,6 +290,45 @@ _STAGING_RSYNC_EXCLUDES: Final[tuple[str, ...]] = (
 )
 
 
+# Dependency manifests staged into their own minimal trees so the image can
+# install third-party deps in layers that change only when the manifests do
+# (see _build_snapshot_image). The python tree is the root pyproject/lockfile
+# plus every uv workspace member's pyproject.toml (uv needs the member
+# manifests to construct the workspace even with --no-install-workspace).
+# The pnpm tree is what `pnpm install --frozen-lockfile` reads (apps/minds is
+# a single-package pnpm workspace with no install-time scripts that need
+# source files -- its package.json has no preinstall/postinstall/prepare).
+_PY_WORKSPACE_MEMBER_MANIFEST_GLOBS: Final[tuple[str, ...]] = (
+    "libs/*/pyproject.toml",
+    "apps/*/pyproject.toml",
+)
+_PNPM_MANIFEST_RELATIVE_PATHS: Final[tuple[str, ...]] = (
+    "apps/minds/package.json",
+    "apps/minds/pnpm-lock.yaml",
+    "apps/minds/pnpm-workspace.yaml",
+    "apps/minds/.npmrc",
+)
+
+
+def _python_manifest_relative_paths(repo_root: Path) -> tuple[str, ...]:
+    """Return the repo-relative paths uv needs for a manifests-only sync."""
+    member_manifests = sorted(
+        path.relative_to(repo_root).as_posix()
+        for pattern in _PY_WORKSPACE_MEMBER_MANIFEST_GLOBS
+        for path in repo_root.glob(pattern)
+    )
+    return ("pyproject.toml", "uv.lock", *member_manifests)
+
+
+def _copy_relative_paths(source_root: Path, relative_paths: tuple[str, ...], target_root: Path) -> None:
+    """Copy ``relative_paths`` from ``source_root`` into ``target_root``, preserving layout."""
+    for relative_path in relative_paths:
+        source = source_root / relative_path
+        target = target_root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
 def _stage_repo_to_temp_dir(staging_dir: Path) -> Path:
     """Rsync the local mngr checkout into ``staging_dir`` and return the path.
 
@@ -260,8 +354,44 @@ def _stage_repo_to_temp_dir(staging_dir: Path) -> Path:
     return target
 
 
-def _build_snapshot_image(staged_repo: Path, default_workspace_template_worktree: Path | None) -> modal.Image:
+def _stage_dep_manifest_trees(staged_repo: Path, staging_dir: Path) -> tuple[Path, Path]:
+    """Copy just the dependency manifests out of the staged repo into minimal trees.
+
+    Returns ``(python_manifests_dir, pnpm_manifests_dir)``, each mirroring the
+    repo's relative layout so it can be layered into the image at
+    ``/code/mngr`` ahead of the full source. Because each tree contains ONLY
+    manifest files, its Modal layer hash is stable across commits that don't
+    touch dependency manifests -- making the expensive third-party
+    ``uv sync`` / ``pnpm install`` layers cacheable across CI runs (Modal
+    caches image layers content-addressably within the workspace).
+    """
+    python_tree = staging_dir / "manifests-python"
+    pnpm_tree = staging_dir / "manifests-pnpm"
+    _copy_relative_paths(staged_repo, _python_manifest_relative_paths(staged_repo), python_tree)
+    _copy_relative_paths(staged_repo, _PNPM_MANIFEST_RELATIVE_PATHS, pnpm_tree)
+    return python_tree, pnpm_tree
+
+
+def _build_snapshot_image(
+    staged_repo: Path,
+    dep_manifest_trees: tuple[Path, Path],
+    default_workspace_template_worktree: Path | None,
+) -> modal.Image:
     """Return a Modal image with every dep the minds Electron e2e test needs.
+
+    ``dep_manifest_trees`` is the ``(python_manifests_dir, pnpm_manifests_dir)``
+    pair produced by :func:`_stage_dep_manifest_trees`. The image layers them
+    in BEFORE the full source (pnpm first, then python: Modal layer caching
+    chains on the parent layer, and pnpm-lock.yaml changes less often than
+    uv.lock, so the rarer change busts fewer downstream layers) and runs the
+    expensive third-party installs on each. Those layers' hashes only change
+    when dependency manifests do, so on a typical PR (source-only changes)
+    Modal reuses them from a previous CI run instead of re-running ~40s of
+    pnpm install + ~30s of uv sync on every build. The per-commit full-source
+    layer then re-runs both installers, which are fast no-ops when the
+    lockfiles are unchanged (uv only rebuilds the editable workspace
+    packages; pnpm verifies node_modules) -- and are also the correctness
+    backstop that brings the installs up to date with the actual checkout.
 
     ``default_workspace_template_worktree``, when provided, is the paired DEFAULT_WORKSPACE_TEMPLATE working tree materialized
     on the runner (paired branch + vendored mngr under test). It is baked into
@@ -282,6 +412,7 @@ def _build_snapshot_image(staged_repo: Path, default_workspace_template_worktree
     live working tree) is what keeps Modal's "modified during build"
     check from aborting the run.
     """
+    python_manifests_dir, pnpm_manifests_dir = dep_manifest_trees
     image = (
         modal.Image.debian_slim(python_version="3.12")
         # System deps -- superset of the base mngr Dockerfile, plus the extras
@@ -380,23 +511,20 @@ def _build_snapshot_image(staged_repo: Path, default_workspace_template_worktree
         .run_commands(
             "uv run --no-project --with playwright python -m playwright install --with-deps chromium",
         )
-        # Mount the staged (frozen) mngr checkout, then bake `uv sync` +
-        # pnpm install into the image so the sandbox boots ready to run
-        # the e2e workflow. The exclusion buckets above already filtered
-        # the rsync, so add_local_dir doesn't need a redundant `ignore`.
+        # Third-party Node deps layer: only the pnpm manifests (see
+        # _stage_dep_manifest_trees), so this layer's hash is stable across
+        # commits that don't touch them and Modal reuses it from a previous
+        # CI run instead of re-running the ~40s install (incl. the Electron
+        # binary download) on every build. Placed before the python layer
+        # because layer caching chains on the parent and pnpm-lock.yaml
+        # changes less often than uv.lock -- the rarer change then busts
+        # fewer downstream layers.
         .add_local_dir(
-            str(staged_repo),
+            str(pnpm_manifests_dir),
             "/code/mngr",
             copy=True,
         )
         .workdir("/code/mngr")
-        # Bake the per-commit deps + Tailwind build into one layer. uv sync
-        # (Python deps -> /code/mngr/.venv) and pnpm install (Node deps ->
-        # apps/minds/node_modules) touch disjoint paths and are independent, so
-        # run them CONCURRENTLY and `wait` on both PIDs -- the `&& wait ... &&`
-        # chain still fails the build if either install fails. This overlaps the
-        # two installs' network/IO instead of summing them (~max(uv, pnpm)).
-        #
         # pnpm install is wrapped in a bounded retry (3 attempts, linear
         # backoff) because it runs every dependency's postinstall, and
         # electron's postinstall streams the ~100MB electron binary from
@@ -405,6 +533,46 @@ def _build_snapshot_image(staged_repo: Path, default_workspace_template_worktree
         # does not retry a streamed-body abort, so a single network blip would
         # otherwise fail the whole image build. Re-running pnpm install only
         # re-runs the postinstalls that did not complete, so a retry is cheap.
+        .run_commands(
+            "cd /code/mngr/apps/minds && "
+            "for attempt in 1 2 3; do "
+            "pnpm install --frozen-lockfile && break; "
+            'if [ $attempt -ge 3 ]; then echo "pnpm install: all 3 attempts failed" >&2; exit 1; fi; '
+            'echo "pnpm install attempt $attempt failed; retrying in $((attempt * 10))s..." >&2; '
+            "sleep $((attempt * 10)); "
+            "done",
+        )
+        # Third-party Python deps layer: only the uv manifests. `--no-install-workspace`
+        # installs just the locked third-party deps (uv constructs the
+        # workspace from the member pyproject.tomls but builds nothing), so
+        # this layer is likewise stable across source-only commits (~30s
+        # saved per build). The editable workspace packages are installed by
+        # the per-commit layer below once the full source is present.
+        .add_local_dir(
+            str(python_manifests_dir),
+            "/code/mngr",
+            copy=True,
+        )
+        .run_commands(
+            "cd /code/mngr && uv sync --all-packages --no-install-workspace",
+        )
+        # Mount the staged (frozen) mngr checkout, then bring the installs
+        # up to date with the actual checkout and bake the bundled binaries
+        # and Tailwind build into the image so the sandbox boots ready to
+        # run the e2e workflow. The exclusion buckets above already filtered
+        # the rsync, so add_local_dir doesn't need a redundant `ignore`.
+        .add_local_dir(
+            str(staged_repo),
+            "/code/mngr",
+            copy=True,
+        )
+        # When the two manifests layers above were cache hits, the uv sync
+        # here only builds the editable workspace packages (~5s vs ~30s for
+        # the full third-party install) and the pnpm install is a no-op
+        # verification (~1s vs ~40s, with no electron download left to
+        # retry); both are also the correctness backstop that reconciles the
+        # venv / node_modules with the actual checkout (e.g. a member
+        # pyproject.toml whose metadata changed).
         #
         # ensure-binaries + build:css then run (both need what pnpm install
         # provides), mirroring `pnpm start`'s prestart hook, which the e2e
@@ -424,15 +592,8 @@ def _build_snapshot_image(staged_repo: Path, default_workspace_template_worktree
         # /code/mngr, so the symlink lets `uv run pytest` find the project venv
         # from offload's chosen workdir.
         .run_commands(
-            "( cd /code/mngr && uv sync --all-packages ) & UV_PID=$!; "
-            "( cd /code/mngr/apps/minds && "
-            "for attempt in 1 2 3; do "
-            "pnpm install --frozen-lockfile && break; "
-            'if [ $attempt -ge 3 ]; then echo "pnpm install: all 3 attempts failed" >&2; exit 1; fi; '
-            'echo "pnpm install attempt $attempt failed; retrying in $((attempt * 10))s..." >&2; '
-            "sleep $((attempt * 10)); "
-            "done ) & PNPM_PID=$!; "
-            "wait $UV_PID && wait $PNPM_PID && "
+            "( cd /code/mngr && uv sync --all-packages ) && "
+            "( cd /code/mngr/apps/minds && pnpm install --frozen-lockfile ) && "
             "( cd /code/mngr/apps/minds && node scripts/ensure-binaries.js && pnpm run build:css ) && "
             "ln -s /code/mngr /app",
         )
@@ -524,6 +685,12 @@ def _create_workspace_in_sandbox(sandbox: modal.Sandbox) -> None:
     because Electron needs an X display.
     """
     command = "cd /code/mngr && xvfb-run -a uv run python -c {}".format(shlex.quote(_IN_SANDBOX_RUNNER_PROGRAM))
+    # Budget: 1500s, sized for the Electron create itself (the in-sandbox
+    # DEFAULT_WORKSPACE_TEMPLATE container build, the headline phase -- a few
+    # minutes in practice, so this carries large headroom). The runner
+    # program's bounded 300s deferred-install wait fits inside that headroom,
+    # so a slow install hits the program's own deadline (which names the
+    # pending containers) rather than this generic exec timeout.
     returncode = _exec_in_sandbox(
         sandbox,
         command,
@@ -629,6 +796,7 @@ def main() -> None:
                 with tempfile.TemporaryDirectory(prefix="mngr-snapshot-stage-") as staging_dir_str:
                     staging_dir = Path(staging_dir_str)
                     staged_repo = _stage_repo_to_temp_dir(staging_dir)
+                    dep_manifest_trees = _stage_dep_manifest_trees(staged_repo, staging_dir)
 
                     # Materialize the paired DEFAULT_WORKSPACE_TEMPLATE worktree HERE on the runner
                     # (git + GITHUB_HEAD_REF work) into a scratch dir, then bake
@@ -640,7 +808,7 @@ def main() -> None:
                             staging_dir / "default_workspace_template_worktree"
                         )
                     )
-                    image = _build_snapshot_image(staged_repo, default_workspace_template_worktree)
+                    image = _build_snapshot_image(staged_repo, dep_manifest_trees, default_workspace_template_worktree)
                     app = modal.App.lookup(args.app_name, create_if_missing=True)
 
                     print(f"Creating sandbox in app {args.app_name!r} with vm_runtime=True", flush=True)

@@ -1063,6 +1063,140 @@ def test_auth_signup_duplicate_email_returns_status(monkeypatch: pytest.MonkeyPa
     assert len(backend.accounts_by_email) == 1
 
 
+def _oauth_callback_payload(provider_id: str) -> dict[str, object]:
+    return {
+        "provider_id": provider_id,
+        "callback_url": "http://127.0.0.1:9999/cb",
+        "query_params": {"code": "abc", "state": "xyz"},
+    }
+
+
+def test_auth_signup_rejected_when_email_has_oauth_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A password signup for an email that already has a Google account is refused before touching the recipe."""
+    backend = _install_fake_supertokens(monkeypatch)
+    backend.register_provider("google", email="both@example.com", third_party_user_id="tp-both")
+    client = TestClient(web_app, raise_server_exceptions=False)
+    oauth_resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+    assert oauth_resp.json()["status"] == "OK"
+    account_count_before = len(backend.accounts_by_id)
+
+    resp = client.post("/auth/signup", json={"email": "both@example.com", "password": "password123"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ACCOUNT_EXISTS_WITH_OTHER_METHOD"
+    assert "Google" in body["message"]
+    assert body["tokens"] is None
+    # No second account was created and no verification email went out.
+    assert len(backend.accounts_by_id) == account_count_before
+    assert backend.sent_verification_emails == []
+
+
+def test_auth_signup_rejected_case_insensitively_when_email_has_oauth_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cross-method guard matches emails case-insensitively (and ignores surrounding whitespace)."""
+    backend = _install_fake_supertokens(monkeypatch)
+    backend.register_provider("google", email="case@example.com", third_party_user_id="tp-case")
+    client = TestClient(web_app, raise_server_exceptions=False)
+    oauth_resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+    assert oauth_resp.json()["status"] == "OK"
+    account_count_before = len(backend.accounts_by_id)
+
+    resp = client.post("/auth/signup", json={"email": "  Case@Example.COM  ", "password": "password123"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ACCOUNT_EXISTS_WITH_OTHER_METHOD"
+    assert "Google" in body["message"]
+    assert body["tokens"] is None
+    # No second account was created and no verification email went out.
+    assert len(backend.accounts_by_id) == account_count_before
+    assert backend.sent_verification_emails == []
+
+
+def test_auth_oauth_callback_rejected_when_email_has_password_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An OAuth callback for an email that already has a password account is refused before creating a user."""
+    backend = _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    signup_resp = client.post("/auth/signup", json={"email": "both@example.com", "password": "password123"})
+    assert signup_resp.json()["status"] == "OK"
+    backend.register_provider("google", email="both@example.com", third_party_user_id="tp-both")
+    account_count_before = len(backend.accounts_by_id)
+
+    resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ACCOUNT_EXISTS_WITH_OTHER_METHOD"
+    assert "password" in body["message"]
+    assert body["tokens"] is None
+    # The existing password account is untouched and no thirdparty user appeared.
+    assert len(backend.accounts_by_id) == account_count_before
+    assert backend.accounts_by_email["both@example.com"].provider_id == "emailpassword"
+
+
+def test_auth_oauth_callback_allows_returning_oauth_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A repeat OAuth sign-in for an email whose account uses that same provider still succeeds."""
+    backend = _install_fake_supertokens(monkeypatch)
+    backend.register_provider("google", email="repeat@example.com", third_party_user_id="tp-repeat")
+    client = TestClient(web_app, raise_server_exceptions=False)
+    first = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+    assert first.json()["status"] == "OK"
+
+    second = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+
+    assert second.status_code == 200
+    body = second.json()
+    assert body["status"] == "OK"
+    assert body["user"]["email"] == "repeat@example.com"
+    assert len(backend.accounts_by_id) == 1
+
+
+def test_preexisting_cross_method_duplicate_keeps_both_sign_ins_working(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An email with pre-guard duplicate accounts (password + OAuth) can still sign in with both methods."""
+    backend = _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    signup_resp = client.post("/auth/signup", json={"email": "dup@example.com", "password": "password123"})
+    assert signup_resp.json()["status"] == "OK"
+    # Seed the duplicate directly: the guard refuses to create one through the routes.
+    google_user_id = backend.add_third_party_account(
+        provider_id="google", email="dup@example.com", third_party_user_id="tp-dup"
+    )
+    backend.register_provider("google", email="dup@example.com", third_party_user_id="tp-dup")
+
+    oauth_resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+    signin_resp = client.post("/auth/signin", json={"email": "dup@example.com", "password": "password123"})
+    resignup_resp = client.post("/auth/signup", json={"email": "dup@example.com", "password": "password123"})
+
+    # The OAuth sign-in resolves to the google account, not the password one.
+    oauth_body = oauth_resp.json()
+    assert oauth_body["status"] == "OK"
+    assert oauth_body["user"]["user_id"] == google_user_id
+    # The password sign-in keeps working too.
+    assert signin_resp.json()["status"] == "OK"
+    # A password re-signup gets the recipe's own answer, not the cross-method status.
+    assert resignup_resp.json()["status"] == "EMAIL_ALREADY_EXISTS"
+    # No third account appeared along the way.
+    assert len(backend.accounts_by_id) == 2
+
+
+def test_auth_oauth_callback_returns_error_when_account_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A SuperTokens outage during the one-account-per-email lookup surfaces as AuthResponse(status='ERROR')."""
+    backend = _install_fake_supertokens(monkeypatch)
+    backend.register_provider("google", email="down@example.com", third_party_user_id="tp-down")
+    backend.raise_on("list_users_by_account_info", SuperTokensGeneralError("core down"))
+    client = TestClient(web_app, raise_server_exceptions=False)
+
+    resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ERROR"
+    assert body["message"] == "Auth backend unavailable"
+    assert body["tokens"] is None
+    # The refused callback wrote nothing to the backend.
+    assert len(backend.accounts_by_id) == 0
+
+
 def test_auth_signup_returns_error_on_sdk_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     """A SuperTokens SDK exception in signup is surfaced as AuthResponse(status='ERROR')."""
     backend = _install_fake_supertokens(monkeypatch)
@@ -1077,6 +1211,22 @@ def test_auth_signup_returns_error_on_sdk_outage(monkeypatch: pytest.MonkeyPatch
         "tokens": None,
         "needs_email_verification": False,
     }
+
+
+def test_auth_signup_returns_error_when_account_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A SuperTokens outage during signup's one-account-per-email lookup surfaces as AuthResponse(status='ERROR')."""
+    backend = _install_fake_supertokens(monkeypatch)
+    backend.raise_on("list_users_by_account_info", SuperTokensGeneralError("core down"))
+    client = TestClient(web_app, raise_server_exceptions=False)
+
+    resp = client.post("/auth/signup", json={"email": "x@y.com", "password": "password123"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ERROR"
+    assert body["message"] == "Auth backend unavailable"
+    # The refused signup created no account.
+    assert len(backend.accounts_by_id) == 0
 
 
 def _install_paid_pool_backend(monkeypatch: pytest.MonkeyPatch, *paid_emails: str) -> FakePoolBackend:
@@ -1366,14 +1516,7 @@ def test_auth_oauth_callback_creates_user_and_returns_session(monkeypatch: pytes
         display_name="Callback User",
     )
     client = TestClient(web_app, raise_server_exceptions=False)
-    resp = client.post(
-        "/auth/oauth/callback",
-        json={
-            "provider_id": "google",
-            "callback_url": "http://127.0.0.1:9999/cb",
-            "query_params": {"code": "abc", "state": "xyz"},
-        },
-    )
+    resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "OK"

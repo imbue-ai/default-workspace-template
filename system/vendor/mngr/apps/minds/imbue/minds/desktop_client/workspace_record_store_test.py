@@ -18,6 +18,7 @@ from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
 from imbue.minds.desktop_client.conftest import make_resolver_with_data
 from imbue.minds.desktop_client.conftest import seed_provider_snapshots
 from imbue.minds.desktop_client.dek_store import ensure_dek
+from imbue.minds.desktop_client.testing import device_id_for_test
 from imbue.minds.desktop_client.workspace_record_store import RECORD_STATE_ACTIVE
 from imbue.minds.desktop_client.workspace_record_store import RECORD_STATE_DESTROYED
 from imbue.minds.desktop_client.workspace_record_store import ReplicaRecord
@@ -42,7 +43,7 @@ def _make_store(paths: WorkspacePaths, cli: FakeImbueCloudCli | None = None) -> 
     return WorkspaceRecordStore(
         paths=paths,
         cli=cli if cli is not None else make_fake_imbue_cloud_cli(),
-        device_id="device-test-1",
+        device_id=device_id_for_test("store-test-1"),
         device_label="test-laptop",
     )
 
@@ -335,7 +336,7 @@ def test_read_legacy_associations_prefers_the_newer_file_over_sessions_json(path
 
 
 def test_reconcile_keeps_legacy_file_until_every_entry_converts(paths: WorkspacePaths) -> None:
-    """A failed poll proves nothing: a legacy association whose workspace was
+    """A failed poll proves nothing: a legacy association whose machine was
     not discoverable (its provider errored) must survive for a later pass
     instead of being dropped when the file retires."""
     cli = make_fake_imbue_cloud_cli()
@@ -370,7 +371,7 @@ def test_reconcile_keeps_legacy_file_until_every_entry_converts(paths: Workspace
 
 def test_reconcile_drops_legacy_association_when_only_unauthorized_providers_error(paths: WorkspacePaths) -> None:
     """Providers without credentials error on every poll, so treating them as
-    failed polls would keep a gone workspace's legacy association in limbo
+    failed polls would keep a gone machine's legacy association in limbo
     forever; only a genuinely failed poll may block the drop."""
     cli = make_fake_imbue_cloud_cli()
     store = _make_store(paths, cli)
@@ -452,7 +453,7 @@ def test_reconcile_tombstones_definitively_absent_local_rows(paths: WorkspacePat
             host_id="host-gone",
             agent_id=gone_agent,
             provider_kind="local",
-            hosting_device_id="device-test-1",
+            hosting_device_id=device_id_for_test("store-test-1"),
         ),
     )
     # Discovery completed and knows about a different workspace only.
@@ -506,7 +507,7 @@ def test_locked_device_push_preserves_server_secrets(paths: WorkspacePaths) -> N
 
 def test_reconcile_does_not_tombstone_unenriched_create_seed_rows(paths: WorkspacePaths) -> None:
     """A create-path seed row (empty provider_kind) must survive a reconcile
-    that runs before discovery has seen the new workspace -- 'absent from
+    that runs before discovery has seen the new machine -- 'absent from
     discovery' says nothing about a host discovery never enumerated."""
     cli = make_fake_imbue_cloud_cli()
     store = _make_store(paths, cli)
@@ -516,7 +517,7 @@ def test_reconcile_does_not_tombstone_unenriched_create_seed_rows(paths: Workspa
         agent_id=_agent_id(),
         display_name="brand new",
         provider_kind="",
-        hosting_device_id="device-test-1",
+        hosting_device_id=device_id_for_test("store-test-1"),
         device_label="test-laptop",
     )
     store.upsert_local_record(user_id, _EMAIL, seed)
@@ -530,12 +531,12 @@ def test_reconcile_does_not_tombstone_unenriched_create_seed_rows(paths: Workspa
     assert records[0].state == RECORD_STATE_ACTIVE
 
 
-def test_reconcile_without_a_device_id_never_tombstones(paths: WorkspacePaths) -> None:
-    """An install with no device id (missing mngr host_id file) cannot tell its
-    own hosted rows apart from another id-less install's, so it must not
-    tombstone anything -- an empty-id row may be hosted live elsewhere."""
+def test_reconcile_never_tombstones_rows_with_empty_provenance(paths: WorkspacePaths) -> None:
+    """Bug-era rows pushed with ``hosting_device_id=""`` (an install whose first
+    session predated the minds-owned device id) attribute to no install, so
+    absent-host tombstoning must leave them alone."""
     cli = make_fake_imbue_cloud_cli()
-    store = WorkspaceRecordStore(paths=paths, cli=cli, device_id="", device_label="test-laptop")
+    store = _make_store(paths, cli)
     user_id = _user_id()
     remote = ReplicaRecord(
         host_id="host-idless",
@@ -672,7 +673,7 @@ def test_reconcile_resurrects_a_locally_hosted_tombstone_whose_workspace_is_live
         agent_id=str(live_agent),
         display_name="docker-2",
         provider_kind="local",
-        hosting_device_id="device-test-1",
+        hosting_device_id=device_id_for_test("store-test-1"),
         state=RECORD_STATE_DESTROYED,
     )
     cli.sync_records_by_email[_EMAIL] = {"host-back": tombstoned.to_wire(4)}
@@ -697,7 +698,7 @@ def test_reconcile_never_resurrects_while_a_destroy_is_in_flight(paths: Workspac
         host_id="host-doomed",
         agent_id=str(doomed_agent),
         provider_kind="local",
-        hosting_device_id="device-test-1",
+        hosting_device_id=device_id_for_test("store-test-1"),
         state=RECORD_STATE_DESTROYED,
     )
     cli.sync_records_by_email[_EMAIL] = {"host-doomed": tombstoned.to_wire(2)}

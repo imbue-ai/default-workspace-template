@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import re
 import shlex
 import threading
 import time
@@ -10,6 +11,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -26,6 +28,7 @@ from imbue.minds.desktop_client.agent_creator import AgentCreateAttemptInfo
 from imbue.minds.desktop_client.agent_creator import AgentCreateAttemptStatus
 from imbue.minds.desktop_client.agent_creator import AgentCreator
 from imbue.minds.desktop_client.agent_creator import CreateAttemptErrorKind
+from imbue.minds.desktop_client.api_v1 import _describe_mngr_exec_failure
 from imbue.minds.desktop_client.api_v1 import _drain_backup_summary_rows
 from imbue.minds.desktop_client.api_v1 import _stream_workspace_backup_summaries
 from imbue.minds.desktop_client.app import create_desktop_client
@@ -55,6 +58,7 @@ from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.system_interface_health import AgentHealth
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
+from imbue.minds.desktop_client.templates import default_workspace_template_ref
 from imbue.minds.desktop_client.templates import status_text_for
 from imbue.minds.desktop_client.testing import capture_error_logs
 from imbue.minds.desktop_client.testing import restic_backup_a_file
@@ -296,6 +300,40 @@ def test_list_accounts_requires_bearer(tmp_path: Path) -> None:
     client = _build_client(tmp_path, StaticBackendResolver(url_by_agent_and_service={}))
 
     response = client.get("/api/v1/accounts")
+
+    assert response.status_code == 401
+
+
+def test_app_version_reports_a_release_tag_a_workspace_can_cap_against(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The route's whole job: hand a workspace the ceiling on how far it may update.
+
+    update-self drops the ceiling for anything that is not a
+    ``minds-v<major>.<minor>.<patch>`` tag, so a shipped app reporting a plain
+    branch name would leave every workspace uncapped. Hence the shape assertion
+    rather than a literal version, and the cleared operator opt-in -- under ``just
+    minds-start``, ``MINDS_WORKSPACE_BRANCH`` legitimately overrides the ref with a
+    branch name.
+    """
+    monkeypatch.delenv("MINDS_USE_LOCAL_WORKSPACE_DEFAULTS", raising=False)
+    client = _build_client(tmp_path, StaticBackendResolver(url_by_agent_and_service={}))
+
+    response = client.get("/api/v1/app/version", headers=_auth_header())
+
+    assert response.status_code == 200
+    body = json.loads(response.data)
+    assert body["workspace_template_ref"] == default_workspace_template_ref()
+    assert re.fullmatch(r"minds-v\d+\.\d+\.\d+", body["workspace_template_ref"]), (
+        f"the shipped template pin must be a minds-v* release tag or workspaces lose their "
+        f"update ceiling; got {body['workspace_template_ref']!r}"
+    )
+
+
+def test_app_version_requires_bearer(tmp_path: Path) -> None:
+    client = _build_client(tmp_path, StaticBackendResolver(url_by_agent_and_service={}))
+
+    response = client.get("/api/v1/app/version")
 
     assert response.status_code == 401
 
@@ -586,7 +624,7 @@ def test_workspaces_backups_stream_degrades_non_agent_ids_without_failing_the_ba
     row_by_id = {row["agent_id"]: row for row in lines}
     assert set(row_by_id) == {str(agent_id), create_attempt_id}
     assert row_by_id[str(agent_id)]["error"] is None
-    assert row_by_id[create_attempt_id]["error"] == "not a workspace agent id"
+    assert row_by_id[create_attempt_id]["error"] == "not a machine agent id"
 
 
 def test_workspaces_backups_stream_degrades_unresolved_rows_on_row_timeout() -> None:
@@ -914,6 +952,29 @@ def test_create_workspace_full_surface_returns_202_and_threads_fields(
     assert creator.last_call["docker_runtime"] == DockerRuntime.RUNSC
 
 
+def test_timezone_returns_valid_iana_name_or_empty(tmp_path: Path) -> None:
+    # The endpoint reports the machine's own timezone, so the value is
+    # host-dependent: assert the contract (a loadable IANA name, or "" when
+    # undeterminable) rather than a specific zone.
+    client = _client_with_workspace(tmp_path, AgentId())
+
+    response = client.get("/api/v1/timezone", headers=_auth_header())
+
+    assert response.status_code == 200
+    tz_name = json.loads(response.data)["timezone"]
+    assert isinstance(tz_name, str)
+    if tz_name:
+        ZoneInfo(tz_name)
+
+
+def test_timezone_requires_auth(tmp_path: Path) -> None:
+    client = _client_with_workspace(tmp_path, AgentId())
+
+    response = client.get("/api/v1/timezone")
+
+    assert response.status_code == 401
+
+
 def test_create_workspace_ignores_stale_ai_provider_field(
     tmp_path: Path,
     root_concurrency_group: ConcurrencyGroup,
@@ -1201,10 +1262,13 @@ def test_establish_ssh_passes_command_as_single_mngr_exec_arg(
     assert read_argv[2] == "cat ~/.ssh/authorized_keys 2>/dev/null || true"
     assert read_argv[3:] == ["--format", "json"]
     assert "bash" not in read_argv and "-c" not in read_argv and "-lc" not in read_argv and "--" not in read_argv
-    # Write: `mngr exec <id> <write script>` -- single trailing COMMAND arg.
+    # Write: `mngr exec <id> <write script> --format json` -- like the read, the
+    # command is a single COMMAND arg, and the only thing after it is the format
+    # flag pair. Anything else positional here would be parsed as another agent
+    # name; JSON format is what puts a failure somewhere the route can report it.
     assert write_argv[0] == "exec"
     assert write_argv[1] == str(target)
-    assert len(write_argv) == 3, f"write command must be a single arg, got {write_argv!r}"
+    assert write_argv[3:] == ["--format", "json"], f"write command must be a single arg, got {write_argv!r}"
     assert "bash" not in write_argv and "-c" not in write_argv and "-lc" not in write_argv and "--" not in write_argv
     # The write body is composed only from the parsed inner stdout: neither the
     # JSON envelope text nor any human-format status line may reach the file.
@@ -1590,7 +1654,7 @@ def test_patch_provider_disable_with_active_workspaces_conflicts(tmp_path: Path)
     response = client.patch("/api/v1/desktop/providers/local", headers=_auth_header(), json={"enabled": False})
 
     assert response.status_code == 409
-    assert "active workspace" in json.loads(response.data)["error"].lower()
+    assert "active machine" in json.loads(response.data)["error"].lower()
 
 
 @pytest.mark.parametrize(
@@ -1899,7 +1963,7 @@ def test_sharing_readiness_not_ready_without_http_client(tmp_path: Path) -> None
 def _resolver_with_services_agent(agent_id: AgentId, services_id: AgentId) -> BackendResolverInterface:
     """Build a resolver where ``agent_id`` and a ``system-services`` peer share a host.
 
-    The restart worker resolves the system-services agent on the workspace's host;
+    The restart worker resolves the system-services agent on the machine's host;
     a single-agent resolver returns None there (so the restart fails fast). This
     registers both agents on the same host so ``get_system_services_agent_id``
     resolves and the worker can run its stop/start steps.
@@ -2097,13 +2161,13 @@ def _wait_for_restart_worker_and_get_status(client: FlaskClient, agent_id: Agent
 def test_restart_dispatches_for_never_probed_workspace(
     tmp_path: Path, root_concurrency_group: ConcurrencyGroup
 ) -> None:
-    """A recovery-page dispatch for a never-probed workspace must actually restart.
+    """A recovery-page dispatch for a never-probed machine must actually restart.
 
-    A workspace whose host has been offline since before this process started is
+    A machine whose host has been offline since before this process started is
     never enrolled as a probe suspect, so the tracker reports default-HEALTHY for
     it. A veto keyed on that reading would drop the recovery page's
     unconditional entry dispatch (host scope + ``start_only``), stranding the
-    workspace on the loader forever. The dispatch must proceed to a real restart
+    machine on the loader forever. The dispatch must proceed to a real restart
     operation -- self-recovery races are absorbed by ``mngr start`` only
     targeting STOPPED agents, not by an endpoint-side veto.
     """
@@ -2817,7 +2881,7 @@ class _NameConflictAgentCreator(_RecordingAgentCreator):
         account_id: str = "",
     ) -> CreateAttemptId:
         raise WorkspaceNameInUseError(
-            "A workspace named 'contended' is already being created. "
+            "A machine named 'contended' is already being created. "
             "Wait for that create attempt to finish or pick a different name."
         )
 
@@ -2915,3 +2979,63 @@ def test_create_workspace_threads_account_id_to_start_create_attempt(
 
     assert response.status_code == 202
     assert creator.last_call["account_id"] == "user-77120"
+
+
+# The stderr an `mngr exec` run really produced against a healthy pre-declutter
+# workspace: three warnings about orphaned key dirs for long-gone hosts, and not
+# one word about the host that was actually asked for.
+_UNRELATED_HOST_WARNINGS = (
+    "WARNING: imbue_cloud[imbue_cloud_acct] outer SSH unreachable for host host-a15c1302: "
+    "Host not found: host-a15c1302\n"
+    "WARNING: imbue_cloud[imbue_cloud_acct] outer SSH unreachable for host host-0b17800a: "
+    "Host not found: host-0b17800a\n"
+)
+
+
+def test_describe_mngr_exec_failure_leads_with_the_target_not_the_unrelated_warnings() -> None:
+    """The per-agent reason must come first, with the warnings kept behind it.
+
+    Leading with stderr told the caller the hub could not reach *some other*
+    workspace's host, which reads as "your box is down" and sent an agent off to
+    restore from backups instead of retrying. Dropping the warnings instead would
+    trade that for a different loss: they are real diagnostics (these ones are a
+    genuine orphaned-key-dir bug), and a caller on another host has no other copy.
+    """
+    envelope = json.dumps(
+        {
+            "results": [],
+            "failed_agents": [{"agent": "system-services", "error": "Agent system-services not found on host"}],
+            "total_executed": 0,
+            "total_failed": 1,
+        }
+    )
+
+    description = _describe_mngr_exec_failure(envelope, _UNRELATED_HOST_WARNINGS)
+
+    assert description.startswith("system-services: Agent system-services not found on host")
+    # The warnings survive, in full, behind the verdict.
+    assert "outer SSH unreachable for host host-a15c1302" in description
+    assert "outer SSH unreachable for host host-0b17800a" in description
+
+
+def test_describe_mngr_exec_failure_caps_a_runaway_stderr() -> None:
+    """Discovery can warn about every unreachable host, so the appended context is bounded."""
+    envelope = json.dumps({"results": [], "failed_agents": [{"agent": "a", "error": "boom"}], "total_failed": 1})
+
+    description = _describe_mngr_exec_failure(envelope, "WARNING: noise\n" * 5000)
+
+    assert description.startswith("a: boom")
+    assert "truncated" in description
+    assert len(description) < 3000
+
+
+def test_describe_mngr_exec_failure_falls_back_to_stderr_without_an_envelope() -> None:
+    """A run that died before emitting JSON still has to report something."""
+    assert _describe_mngr_exec_failure("", "mngr: command not found") == "mngr: command not found"
+
+
+def test_describe_mngr_exec_failure_falls_back_when_no_agent_carries_a_reason() -> None:
+    """A well-formed envelope with nothing useful in it must not report an empty reason."""
+    envelope = json.dumps({"results": [], "failed_agents": [], "total_executed": 0, "total_failed": 0})
+
+    assert _describe_mngr_exec_failure(envelope, "something went wrong") == "something went wrong"
