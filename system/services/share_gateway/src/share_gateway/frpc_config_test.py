@@ -42,6 +42,14 @@ def test_frpc_config_claims_exactly_the_service_and_auth_labels() -> None:
     assert _DOMAIN not in proxies[0]["customDomains"]
 
 
+def test_frpc_config_stamps_proxy_protocol_v2_on_the_share_proxy() -> None:
+    # Without the PROXY protocol stamp, caddy sees every spliced connection as
+    # frpc on loopback and the real client address is unrecoverable in-workspace.
+    parsed = _render(["terminal-bbbb2222"])
+
+    assert parsed["proxies"][0]["transport"]["proxyProtocolVersion"] == "v2"
+
+
 def test_frpc_config_always_claims_the_auth_label_even_with_no_services() -> None:
     parsed = _render([])
     assert parsed["proxies"][0]["customDomains"] == [f"auth-x7k9q2w1.{_DOMAIN}"]

@@ -107,6 +107,18 @@ def render_caddyfile(
         # carry, so advertising it (Alt-Svc) just makes browsers probe a
         # dead path before falling back.
         protocols h1 h2
+        # frpc prefixes each spliced connection with a PROXY protocol v2
+        # header carrying the real client address the relay saw; consume it
+        # here (before the TLS wrapper -- the header precedes the handshake)
+        # so logs and forwarded headers carry the visitor's IP instead of
+        # frpc's 127.0.0.1. Only loopback (frpc) may assert one.
+        listener_wrappers {{
+            proxy_protocol {{
+                timeout 5s
+                allow 127.0.0.1/32
+            }}
+            tls
+        }}
     }}
 }}
 

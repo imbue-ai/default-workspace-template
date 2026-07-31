@@ -14,6 +14,7 @@ from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.materials import ShareMaterials
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
+from share_gateway.server import forwarded_client_ip
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
 
@@ -130,6 +131,12 @@ def _mint_handoff(nonce: str, email: str = "bob@example.com", audience: str = _D
         "exp": now + timedelta(seconds=60),
     }
     return jwt.encode(payload, _BROKER_KEY, algorithm="RS256", headers={"kid": _TEST_KID})
+
+
+def test_forwarded_client_ip_takes_the_first_forwarded_entry() -> None:
+    assert forwarded_client_ip({"X-Forwarded-For": "203.0.113.9, 127.0.0.1"}) == "203.0.113.9"
+    assert forwarded_client_ip({"X-Forwarded-For": "2001:db8::7"}) == "2001:db8::7"
+    assert forwarded_client_ip({}) == ""
 
 
 def test_unauthenticated_html_navigation_redirects_to_broker_with_callback_origin(tmp_path: Path) -> None:

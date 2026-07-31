@@ -37,6 +37,20 @@ def _render(apps_toml: str = _APPS_TOML) -> str:
     )
 
 
+def test_caddyfile_consumes_proxy_protocol_from_loopback_before_tls() -> None:
+    # frpc stamps each spliced connection with PROXY protocol v2; the wrapper
+    # must sit before the tls wrapper (the header precedes the handshake) and
+    # only loopback -- frpc -- may assert a client address.
+    rendered = _render()
+
+    assert "listener_wrappers" in rendered
+    assert "proxy_protocol" in rendered
+    assert "allow 127.0.0.1/32" in rendered
+    proxy_protocol_idx = rendered.index("proxy_protocol")
+    tls_wrapper_idx = rendered.index("tls", proxy_protocol_idx)
+    assert proxy_protocol_idx < tls_wrapper_idx
+
+
 def test_parse_registered_apps_skips_malformed_or_unlabeled_rows() -> None:
     apps = parse_registered_apps(
         """
