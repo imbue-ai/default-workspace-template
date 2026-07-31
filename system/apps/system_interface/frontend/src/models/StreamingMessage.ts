@@ -41,9 +41,11 @@ const SSE_PING_EVENT = "ping";
  * How long a stream may go without receiving ANY bytes -- no transcript event
  * and no keepalive ping -- before it is presumed dead and rebuilt.
  *
- * This is not "no chat activity for 30s". The server sends a ping every ~8 idle
- * seconds, so a healthy but silent conversation is producing traffic the whole
- * time and never trips this; it takes roughly three consecutive missed pings.
+ * This is not "no chat activity for 30s". The server pings an idle stream every
+ * ~10s (eight one-second queue polls plus loop overhead -- measured against a
+ * live workspace, not derived), so a healthy but silent conversation is
+ * producing traffic the whole time and never trips this. The margin is two
+ * missed pings.
  *
  * What it does catch is a half-dead connection (tunnel drop, sleep/wake), which
  * produces no `error` and no `close`: the transcript just stops while the
