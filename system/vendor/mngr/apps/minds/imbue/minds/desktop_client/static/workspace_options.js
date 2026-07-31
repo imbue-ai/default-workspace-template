@@ -243,6 +243,11 @@
   // "not shared", matching the pre-discovery state of the workspace).
   var shareHostId = config.hostId || agentId;
   var wholeService = config.wholeService;
+  // Per-app-service origin label (``<name>-<rand>``), keyed by service name. A
+  // per-app share link is a real origin (``<label>.<machine domain>``), so its
+  // hostname is the service's label, not its name. A service missing here
+  // (a legacy row with no label) falls back to its own name in targetUrl.
+  var serviceLabels = config.serviceLabels || {};
   var ownerEmail = config.accountEmail || '';
   var shareApiBase = '/api/v1/machines/' + encodeURIComponent(shareHostId) + '/sharing';
 
@@ -522,7 +527,8 @@
     } catch (_) {
       return '';
     }
-    return 'https://' + service + '.' + host + '/';
+    var label = serviceLabels[service] || service;
+    return 'https://' + label + '.' + host + '/';
   }
 
   // The status line under the editor, for a wait whose own control is not on

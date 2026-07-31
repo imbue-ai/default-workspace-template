@@ -420,9 +420,12 @@ def make_resolver_with_data(
         for agent_id_str, log_content in service_logs.items():
             records = parse_service_log_records(log_content)
             services: dict[str, str] = {}
+            labels: dict[str, str] = {}
             for record in records:
                 if isinstance(record, ServiceLogRecord):
                     services[str(record.service)] = record.url
-            resolver.update_services(AgentId(agent_id_str), services)
+                    if record.label:
+                        labels[str(record.service)] = record.label
+            resolver.update_services(AgentId(agent_id_str), services, labels)
 
     return resolver

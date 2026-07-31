@@ -3353,6 +3353,12 @@ class _WorkspaceContext(FrozenModel):
     current_account: object | None = Field(description="The account this workspace is associated with, if any.")
     accounts: tuple[object, ...] = Field(description="Every signed-in account, offered by the Associate prompt.")
     servers: tuple[str, ...] = Field(description="The service names this workspace has registered.")
+    service_labels: Mapping[str, str] = Field(
+        description=(
+            "Per-service public origin hostname label (``<name>-<rand>``), keyed by service name. "
+            "The Share tab builds each per-app share link from it; a service absent here falls back to its name."
+        )
+    )
     host_id: str = Field(description="The machine's host-<hex> coordinate (keys the sharing API); empty when unknown.")
     account_email: str = Field(description="The associated account's email, empty when unassociated.")
     has_account: bool = Field(description="Whether the workspace is associated with an account at all.")
@@ -3441,6 +3447,10 @@ def _build_workspace_context(agent_id: str) -> _WorkspaceContext:
         current_account=current_account,
         accounts=tuple(accounts),
         servers=tuple(str(service) for service in backend_resolver.list_services_for_agent(parsed_agent_id)),
+        service_labels={
+            str(name): label
+            for name, label in backend_resolver.list_service_labels_for_agent(parsed_agent_id).items()
+        },
         host_id=_workspace_host_coordinate(info, session_store, agent_id),
         account_email=current_account.email if current_account else "",
         has_account=current_account is not None,
@@ -3502,6 +3512,7 @@ def _handle_workspace_options(agent_id: str) -> Response:
         current_account=context.current_account,
         accounts=context.accounts,
         servers=context.servers,
+        service_labels=context.service_labels,
         tab=_requested_options_tab(),
         selected_group=_requested_settings_group(),
         selected_target=request.args.get("target", ""),
@@ -3532,6 +3543,7 @@ def _handle_workspace_options_modal(agent_id: str) -> Response:
         current_account=context.current_account,
         accounts=context.accounts,
         servers=context.servers,
+        service_labels=context.service_labels,
         tab=_requested_options_tab(),
         selected_group=_requested_settings_group(),
         selected_target=request.args.get("target", ""),

@@ -2251,12 +2251,27 @@ def _split_share_targets(servers: Sequence[str]) -> tuple[list[str], str]:
 
 
 @pure
+def _app_service_labels(app_services: Sequence[str], service_labels: Mapping[str, str] | None) -> dict[str, str]:
+    """The origin-label map for the rendered per-app targets, keyed by service name.
+
+    A per-app share link is a real origin (``<label>.<machine domain>``), so the
+    Share pane needs each app's persistent origin ``label`` (``<name>-<rand>``)
+    rather than its name. Restricted to the ``app_services`` actually rendered and
+    to services that carry a label -- a service with none is omitted, and
+    workspace_options.js falls back to the service name for it.
+    """
+    labels = service_labels or {}
+    return {service: labels[service] for service in app_services if service in labels}
+
+
+@pure
 def render_workspace_options_page(
     agent_id: str,
     ws_name: str,
     current_account: object | None,
     accounts: Sequence[object],
     servers: Sequence[str],
+    service_labels: Mapping[str, str] | None = None,
     host_id: str = "",
     tab: str = "share",
     selected_target: str = "",
@@ -2283,6 +2298,7 @@ def render_workspace_options_page(
         current_account=current_account,
         accounts=accounts,
         app_services=app_services,
+        service_labels=_app_service_labels(app_services, service_labels),
         whole_service=whole_service,
         selected_target=selected_target or whole_service,
         account_email=account_email,
@@ -2302,6 +2318,7 @@ def render_workspace_options_modal_page(
     current_account: object | None,
     accounts: Sequence[object],
     servers: Sequence[str],
+    service_labels: Mapping[str, str] | None = None,
     host_id: str = "",
     tab: str = "share",
     selected_target: str = "",
@@ -2336,6 +2353,7 @@ def render_workspace_options_modal_page(
         current_account=current_account,
         accounts=accounts,
         app_services=app_services,
+        service_labels=_app_service_labels(app_services, service_labels),
         whole_service=whole_service,
         selected_target=selected_target or whole_service,
         account_email=account_email,

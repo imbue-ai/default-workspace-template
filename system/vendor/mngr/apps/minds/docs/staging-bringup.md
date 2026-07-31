@@ -324,6 +324,39 @@ state.
 
 ---
 
+## 6b. Stand up the staging share relays
+
+Workspace sharing needs at least one relay per region named in the tier's
+`SHARE_RELAY_ENDPOINTS` (Vault `secrets/minds/staging/sharing`). Each relay is
+one OVH Public Cloud instance; see `apps/share_relay/README.md` for what runs
+on it.
+
+- [ ] Mint the tier's relay SSH keypair and push it to Vault (schema:
+  `.minds/template/relay-ssh.sh`) so any operator can redeploy later:
+  ```bash
+  ssh-keygen -t ed25519 -f /tmp/relay_key -N ""
+  vault kv put -mount=secrets minds/staging/relay-ssh/RELAY_SSH_PRIVATE_KEY value=@/tmp/relay_key
+  vault kv put -mount=secrets minds/staging/relay-ssh/RELAY_SSH_PUBLIC_KEY value=@/tmp/relay_key.pub
+  ```
+- [ ] For each region (e.g. `us1`, `us2`), with the tier's OVH creds +
+  `OVH_CLOUD_PROJECT_ID` (Vault `secrets/minds/staging/ovh`) exported:
+  ```bash
+  just provision-share-relay staging <region> <ovh-region> /tmp/relay_key.pub
+  # wait for cloud-init: ssh debian@<ip> cloud-init status --wait
+  just deploy-share-relay <ip> <region> <SHARE_CONTENT_DOMAIN> \
+      "https://<connector>/frps/auth/<FRPS_AUTH_SECRET>"
+  just dns-share-relay <region> <SHARE_CONTENT_DOMAIN> <ip>
+  ```
+  (`FRPS_AUTH_SECRET` and `SHARE_CONTENT_DOMAIN` come from the tier's
+  `sharing` Vault entry pushed in step 4; the connector must already be
+  deployed -- step 6 -- because the relay's plugin-auth URL points at it.)
+- [ ] `rm /tmp/relay_key /tmp/relay_key.pub` once provisioned.
+- [ ] Verify: `relay.<region>.<domain>` + a wildcard name resolve to the
+  instance; `curl http://relay.<region>.<domain>:8080/healthz` returns `ok`;
+  `curl -sI http://relay.<region>.<domain>/` is a 301 to https.
+
+---
+
 ## 7. (Optional) bake one staging pool host
 
 Only needed if you want the staging desktop client to use IMBUE_CLOUD

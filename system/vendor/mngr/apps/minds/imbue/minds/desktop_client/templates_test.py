@@ -1,4 +1,6 @@
+import json
 import re
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -3323,6 +3325,7 @@ _OPTIONS_SERVERS: Final[tuple[str, ...]] = ("mailroom", "newsreader", "system_in
 def _options_modal(
     tab: str = "share",
     servers: Sequence[str] = _OPTIONS_SERVERS,
+    service_labels: Mapping[str, str] | None = None,
     selected_target: str = "",
     has_account: bool = True,
     accounts: Sequence[object] = (),
@@ -3338,6 +3341,7 @@ def _options_modal(
         current_account=None,
         accounts=accounts,
         servers=servers,
+        service_labels=service_labels,
         tab=tab,
         selected_target=selected_target,
         account_email="owner@example.com",
@@ -3541,6 +3545,39 @@ def test_workspace_options_share_pane_defaults_to_the_whole_machine_target() -> 
 def test_workspace_options_share_pane_honors_an_explicit_target() -> None:
     html = _options_modal(tab="share", selected_target="newsreader")
     assert '"selectedTarget": "newsreader"' in html
+
+
+def _parse_share_config(html: str) -> dict[str, object]:
+    """Extract and parse the ``ws-share-config`` JSON block from rendered options HTML."""
+    open_tag = 'id="ws-share-config"'
+    content_start = html.index(">", html.index(open_tag)) + 1
+    content_end = html.index("</script>", content_start)
+    return json.loads(html[content_start:content_end])
+
+
+def test_workspace_options_share_pane_carries_per_service_origin_labels() -> None:
+    # A per-app share link is a real origin (``<label>.<machine domain>``), so
+    # the pane hands workspace_options.js each app service's origin label
+    # (``<name>-<rand>``) keyed by service name; targetUrl builds the link from
+    # it rather than concatenating the bare service name.
+    html = _options_modal(
+        tab="share",
+        service_labels={"mailroom": "mailroom-x7k9q2w1", "newsreader": "newsreader-a1b2c3d4"},
+    )
+    config = _parse_share_config(html)
+    assert config["serviceLabels"] == {"mailroom": "mailroom-x7k9q2w1", "newsreader": "newsreader-a1b2c3d4"}
+
+
+def test_workspace_options_share_pane_omits_labels_for_non_app_and_unlabeled_services() -> None:
+    # ``system_interface`` is the whole-machine target (never a per-app one), and
+    # a service with no label is left out so the JS falls back to its name. Only
+    # rendered app services that carry a label appear in the map.
+    html = _options_modal(
+        tab="share",
+        service_labels={"mailroom": "mailroom-x7k9q2w1", "system_interface": "system_interface-zzz"},
+    )
+    config = _parse_share_config(html)
+    assert config["serviceLabels"] == {"mailroom": "mailroom-x7k9q2w1"}
 
 
 def test_workspace_options_share_pane_asks_for_an_account_before_offering_targets() -> None:

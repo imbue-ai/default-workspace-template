@@ -109,6 +109,17 @@ def test_parse_service_log_records_parses_valid_jsonl() -> None:
     assert isinstance(records[0], ServiceLogRecord)
     assert records[0].service == ServiceName("web")
     assert records[0].url == "http://127.0.0.1:9100"
+    # No ``label`` in the row -> empty, so callers fall back to the service name.
+    assert records[0].label == ""
+
+
+def test_parse_service_log_records_captures_the_origin_label() -> None:
+    text = '{"service": "terminal", "url": "http://127.0.0.1:9100", "label": "terminal-x7k9q2w1"}\n'
+    records = parse_service_log_records(text)
+
+    assert len(records) == 1
+    assert isinstance(records[0], ServiceLogRecord)
+    assert records[0].label == "terminal-x7k9q2w1"
 
 
 def test_parse_service_log_records_returns_empty_for_empty_input() -> None:
@@ -1223,6 +1234,31 @@ def test_mngr_cli_resolver_update_services_replaces_state() -> None:
 
     resolver.update_services(_AGENT_A, {"web": "http://127.0.0.1:9200"})
     assert resolver.get_backend_url(_AGENT_A, _SERVICE_WEB) == "http://127.0.0.1:9200"
+
+
+def test_mngr_cli_resolver_exposes_per_service_origin_labels() -> None:
+    """update_services carries the per-service origin labels, keyed by service name."""
+    resolver = MngrCliBackendResolver()
+
+    resolver.update_services(
+        _AGENT_A,
+        {"terminal": "http://127.0.0.1:9100", "web": "http://127.0.0.1:9200"},
+        {"terminal": "terminal-x7k9q2w1"},
+    )
+    # A service with a label is exposed; one with none (``web``) is omitted so
+    # callers fall back to the service name.
+    assert resolver.list_service_labels_for_agent(_AGENT_A) == {ServiceName("terminal"): "terminal-x7k9q2w1"}
+
+
+def test_mngr_cli_resolver_replaces_labels_and_defaults_to_empty() -> None:
+    """A later update_services replaces the label map; omitting labels clears it."""
+    resolver = MngrCliBackendResolver()
+
+    resolver.update_services(_AGENT_A, {"terminal": "http://127.0.0.1:9100"}, {"terminal": "terminal-aaaa"})
+    assert resolver.list_service_labels_for_agent(_AGENT_A) == {ServiceName("terminal"): "terminal-aaaa"}
+
+    resolver.update_services(_AGENT_A, {"terminal": "http://127.0.0.1:9100"})
+    assert resolver.list_service_labels_for_agent(_AGENT_A) == {}
 
 
 # -- parse_agents_from_json tests --

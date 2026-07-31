@@ -267,6 +267,72 @@ def test_bare_origin_authenticated_renders_debug_index(
     assert "Discovered agents" in response.text
 
 
+def test_bare_origin_html_navigation_redirects_to_shell_label(tmp_path: Path) -> None:
+    """An authenticated HTML navigation to the bare workspace origin 302s to the
+    shell service's own label origin (keeping local grammar identical to a share)."""
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    agent_id = AgentId()
+    resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
+    resolver.update_services(agent_id, {"system_interface": "http://stub-backend"})
+    resolver.update_service_labels(agent_id, {"system_interface-shell111": "system_interface"})
+    tunnel_manager = SSHTunnelManager()
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=tunnel_manager,
+        envelope_writer=EnvelopeWriter(output=io.StringIO()),
+        listen_host="127.0.0.1",
+        listen_port=18421,
+    )
+    cookie = create_session_cookie(auth_store.get_signing_key())
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
+        response = client.get(
+            "/some/page?x=1",
+            headers={"accept": "text/html"},
+            cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie},
+        )
+    assert response.status_code == 302
+    assert (
+        response.headers["location"]
+        == f"http://system_interface-shell111.{_TEST_HOST_ID}.localhost:18421/some/page?x=1"
+    )
+
+
+def test_bare_origin_non_html_does_not_redirect(tmp_path: Path) -> None:
+    """A non-HTML request to the bare origin (e.g. the readiness probe) is served
+    by the shell directly rather than redirected, so probes are unaffected."""
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    agent_id = AgentId()
+    resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
+    resolver.update_services(agent_id, {"system_interface": "http://stub-backend"})
+    resolver.update_service_labels(agent_id, {"system_interface-shell111": "system_interface"})
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=SSHTunnelManager(),
+        envelope_writer=EnvelopeWriter(output=io.StringIO()),
+        listen_host="127.0.0.1",
+        listen_port=18421,
+    )
+
+    async def _ok(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    cookie = create_session_cookie(auth_store.get_signing_key())
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
+        app.state.http_client = httpx.AsyncClient(transport=httpx.MockTransport(_ok), follow_redirects=False)
+        response = client.get(
+            "/api/health",
+            headers={"accept": "application/json"},
+            cookies={MNGR_FORWARD_SESSION_COOKIE_NAME: cookie},
+        )
+    assert response.status_code == 200
+
+
 def test_goto_unauthenticated_redirects_to_root(
     app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
 ) -> None:

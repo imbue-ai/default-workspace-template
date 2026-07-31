@@ -1957,24 +1957,35 @@ def _frps_reject(reason: str) -> FrpsAuthDecision:
 def decide_frps_new_proxy(
     workspace_domain: str, claimed_custom_domains: list[str], claimed_subdomain: str = ""
 ) -> FrpsAuthDecision:
-    """Authorize an frps ``NewProxy``: the claimed customDomains must be exactly
-    this workspace's own bare domain and/or its wildcard, nothing else.
+    """Authorize an frps ``NewProxy``: every claimed customDomain must be a
+    single DNS label directly under this workspace's own domain, nothing else.
 
-    This is what stops workspace X's frpc from registering workspace Y's
-    hostname on the shared relay: the token resolves to X's domain, and any
-    claim outside X's own ``{workspace_domain, *.workspace_domain}`` is
-    rejected. A ``subdomain`` claim is rejected outright: the relay's frps
-    never enables subdomain routing (no ``subDomainHost``), and rejecting it
-    here keeps that guarantee independent of the relay's rendered config.
+    Shared workspaces now claim explicit per-service labels
+    (``<label>.<workspace_domain>``) plus a dedicated auth label instead of the
+    wildcard, so the relay only routes SNIs the workspace was authorized to
+    claim. This is what stops workspace X's frpc from registering workspace Y's
+    hostname: the token resolves to X's domain, and any claim that is not
+    exactly one label under X's own domain is rejected -- including the bare
+    domain and the wildcard, neither of which should route (the bare domain is
+    the CT-visible cert name; a wildcard would defeat the point of explicit
+    claims). A ``subdomain`` claim is rejected outright: the relay's frps never
+    enables subdomain routing (no ``subDomainHost``), and rejecting it here
+    keeps that guarantee independent of the relay's rendered config.
     """
     if claimed_subdomain:
         return _frps_reject(f"subdomain claims are not supported (got {claimed_subdomain!r})")
-    allowed = {workspace_domain.lower(), f"*.{workspace_domain.lower()}"}
     if not claimed_custom_domains:
         return _frps_reject("NewProxy claimed no custom domains")
-    for domain in claimed_custom_domains:
-        if domain.lower() not in allowed:
-            return _frps_reject(f"custom domain {domain!r} is not owned by this workspace token")
+    domain = workspace_domain.lower()
+    suffix = "." + domain
+    for claimed in claimed_custom_domains:
+        normalized = claimed.strip().lower()
+        if not normalized.endswith(suffix):
+            return _frps_reject(f"custom domain {claimed!r} is not under this workspace token's domain")
+        label = normalized[: -len(suffix)]
+        # Exactly one non-empty label, no wildcard: a single service/auth label.
+        if not label or "." in label or "*" in label:
+            return _frps_reject(f"custom domain {claimed!r} must be a single label under this workspace's domain")
     return _frps_allow()
 
 
@@ -3424,7 +3435,7 @@ _BROKER_HANDOFF_ALGORITHM = "RS256"
 _BROKER_LOGIN_PAGE_TEMPLATE = (
     "<!DOCTYPE html><html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<title>Sign in - Imbue</title>" + _HTML_SHARED_STYLES + "</head><body><div class='card'>"
+    "<title>Sign in - Imbue</title><style>" + _HTML_SHARED_STYLES + "</style></head><body><div class='card'>"
     "<h1>Sign in to Imbue</h1>"
     "<p>Sign in to open the workspace that was shared with you.</p>"
     "{error_block}"
@@ -3440,9 +3451,9 @@ _BROKER_LOGIN_PAGE_TEMPLATE = (
 )
 
 _BROKER_VERIFY_EMAIL_PAGE = (
-    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Verify your email - Imbue</title>"
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Verify your email - Imbue</title><style>"
     + _HTML_SHARED_STYLES
-    + "</head><body><div class='card'><h1>Check your inbox</h1>"
+    + "</style></head><body><div class='card'><h1>Check your inbox</h1>"
     "<p>We sent a verification link to your email address. Verify it, then reload the "
     "shared workspace link you were given.</p></div></body></html>"
 )
@@ -3537,6 +3548,33 @@ def _sanitize_broker_path(candidate: str) -> str:
     if candidate.startswith("/") and not candidate.startswith("//") and not candidate.startswith("/\\"):
         return candidate
     return "/"
+
+
+def _is_url_under_domain(url: str, machine_domain: str) -> bool:
+    """Whether ``url`` is an https URL whose host is (a subdomain of) ``machine_domain``.
+
+    Carrying a host in a redirect target is an open-redirect surface, so any
+    host-bearing value the broker forwards a signed token toward -- the
+    callback origin, the post-login ``next`` -- is checked against the share's
+    own domain before use.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    domain = machine_domain.lower()
+    return host == domain or host.endswith("." + domain)
+
+
+def _is_origin_under_domain(origin: str, machine_domain: str) -> bool:
+    """Whether ``origin`` is a bare https origin (no path/query) that is a subdomain of ``machine_domain``."""
+    parsed = urlparse(origin)
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        return False
+    host = (parsed.hostname or "").lower()
+    # A real subdomain (the dedicated auth label), not the bare domain (which
+    # no longer routes) and not a foreign host.
+    return host != machine_domain.lower() and host.endswith("." + machine_domain.lower()) and parsed.scheme == "https"
 
 
 def _render_broker_login_page(next_path: str, error_message: str) -> HTMLResponse:
@@ -3644,14 +3682,24 @@ def broker_authorize(request: Request) -> RedirectResponse:
     with handle_endpoint_errors():
         machine_domain = request.query_params.get("machine_domain", "").lower()
         state = request.query_params.get("state", "")
-        next_path = _sanitize_broker_path(request.query_params.get("next", "/"))
+        # ``next`` is the full origin URL the visitor was reaching, and
+        # ``callback_origin`` is the workspace's dedicated auth origin (the one
+        # label serving /_auth/*). The bare workspace domain no longer routes,
+        # so the callback can no longer be delivered there. Both are validated
+        # to be under this share's domain before we redirect a signed token to
+        # either.
+        next_url = request.query_params.get("next", "")
+        callback_origin = request.query_params.get("callback_origin", "")
         if not machine_domain or not state:
             raise HTTPException(status_code=400, detail="machine_domain and state are required")
+        if not _is_origin_under_domain(callback_origin, machine_domain):
+            raise HTTPException(status_code=400, detail="callback_origin must be an origin under machine_domain")
+        # ``next`` is optional; when present it must stay on this workspace, or
+        # we drop it (the gateway falls back to a safe landing spot).
+        safe_next = next_url if _is_url_under_domain(next_url, machine_domain) else ""
         session_user = _broker_session_user(request)
         if session_user is None:
-            login_next = (
-                f"/share/authorize?{urlencode({'machine_domain': machine_domain, 'next': next_path, 'state': state})}"
-            )
+            login_next = f"/share/authorize?{urlencode({'machine_domain': machine_domain, 'next': next_url, 'callback_origin': callback_origin, 'state': state})}"
             return RedirectResponse(url=f"/share/login?next={quote(login_next, safe='')}", status_code=302)
         user_id, session_email = session_user
         share = get_share_store().find_active_share_by_workspace_domain(machine_domain)
@@ -3664,8 +3712,8 @@ def broker_authorize(request: Request) -> RedirectResponse:
             machine_domain=machine_domain,
             nonce=state,
         )
-        callback_query = urlencode({"token": handoff_token, "state": state, "next": next_path})
-        return RedirectResponse(url=f"https://{machine_domain}/_auth/callback?{callback_query}", status_code=302)
+        callback_query = urlencode({"token": handoff_token, "state": state, "next": safe_next})
+        return RedirectResponse(url=f"{callback_origin}/_auth/callback?{callback_query}", status_code=302)
 
 
 @web_app.get("/share/jwks.json")

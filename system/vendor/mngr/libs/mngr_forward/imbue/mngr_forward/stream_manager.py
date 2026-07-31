@@ -125,6 +125,8 @@ class ForwardStreamManager(MutableModel):
     _tail_stop_event: threading.Event = PrivateAttr(default_factory=threading.Event)
     _events_processes: dict[str, RunningProcess] = PrivateAttr(default_factory=dict)
     _events_services: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
+    # Per-agent service name -> origin label, from the same services stream.
+    _events_labels: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
     _on_agent_discovered_callbacks: list[OnAgentDiscoveredCallback] = PrivateAttr(default_factory=list)
     _on_agent_destroyed_callbacks: list[OnAgentDestroyedCallback] = PrivateAttr(default_factory=list)
     _compiled_includes: list[Any] = PrivateAttr(default_factory=list)
@@ -399,6 +401,7 @@ class ForwardStreamManager(MutableModel):
     def _teardown_agent(self, agent_id: AgentId) -> None:
         with self._lock:
             self._events_services.pop(str(agent_id), None)
+            self._events_labels.pop(str(agent_id), None)
         self._stop_events_stream(agent_id)
         for callback in self._on_agent_destroyed_callbacks:
             self._safely_call(callback, agent_id, name="on_agent_destroyed")
@@ -549,14 +552,23 @@ class ForwardStreamManager(MutableModel):
         aid_str = str(agent_id)
         with self._lock:
             services = self._events_services.setdefault(aid_str, {})
+            labels = self._events_labels.setdefault(aid_str, {})
             if event_type == "service_deregistered":
                 services.pop(service, None)
+                labels.pop(service, None)
             else:
                 url = raw.get("url")
                 if isinstance(url, str) and url:
                     services[service] = url
+                # The origin label routes ``<label>.host-<hex>`` to this
+                # service; fall back to the name when a (legacy) event omits it.
+                label = raw.get("label")
+                labels[service] = label if isinstance(label, str) and label else service
             services_snapshot = dict(services)
+            # Invert to origin-label -> service-name for the resolver's routing.
+            label_to_name_snapshot = {label: name for name, label in labels.items()}
         self.resolver.update_services(agent_id, services_snapshot)
+        self.resolver.update_service_labels(agent_id, label_to_name_snapshot)
 
     @staticmethod
     def _safely_call(callback: Callable[..., None], *args: Any, name: str) -> None:

@@ -623,7 +623,23 @@ async def _handle_workspace_forward_http(
         # so just serve the auto-retrying loader.
         return _service_unavailable_response(request)
 
-    target = resolver.resolve(agent_id, host_info.service_name)
+    if host_info.service_name is None:
+        # Bare origin: redirect HTML navigations to the shell service's own
+        # label origin, keeping the local grammar identical to a share (where
+        # the bare domain cannot be served at all). Non-HTML requests (the
+        # workspace readiness probe, assets) fall through to serving the shell
+        # directly, so nothing that is not a top-level navigation is disrupted.
+        shell_label = resolver.shell_origin_label(agent_id)
+        if shell_label is not None and "text/html" in request.headers.get("accept", ""):
+            scheme = "https" if use_http2 else "http"
+            next_path = request.url.path
+            if request.url.query:
+                next_path = f"{next_path}?{request.url.query}"
+            location = f"{scheme}://{shell_label}.{host_info.workspace_domain}:{listen_port}{next_path}"
+            return Response(status_code=302, headers={"Location": location})
+        target = resolver.resolve(agent_id)
+    else:
+        target = resolver.resolve_by_origin_label(agent_id, host_info.service_name)
     if target is None:
         _emit_backend_failure(envelope_writer, agent_id, SystemInterfaceBackendFailureReason.UNRESOLVED, None)
         return _service_unavailable_response(request)
@@ -699,7 +715,12 @@ async def _handle_workspace_forward_websocket(
         await websocket.close(code=1013, reason="Backend not yet available")
         return
 
-    target = resolver.resolve(agent_id, host_info.service_name)
+    # A websocket to a service origin routes by its label; to the bare origin
+    # it maps to the shell (no redirect -- there is no navigation to redirect).
+    if host_info.service_name is None:
+        target = resolver.resolve(agent_id)
+    else:
+        target = resolver.resolve_by_origin_label(agent_id, host_info.service_name)
     if target is None:
         # Mirror the HTTP path: an unresolved backend is a backend failure a
         # consumer must hear about. A loaded SPA whose only live channel is a
