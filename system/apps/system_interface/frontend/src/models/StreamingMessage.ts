@@ -59,10 +59,12 @@ export function connectToStream(agentId: string): void {
   // A fresh connect supersedes any prior explicit-disconnect tombstone.
   explicitlyDisconnectedAgents.delete(agentId);
 
+  console.info(`[si-sse] opening stream for agent ${agentId}`);
   const eventSource = new EventSource(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/stream`));
   activeStreams.set(agentId, eventSource);
 
   eventSource.onopen = () => {
+    console.info(`[si-sse] stream open for agent ${agentId}`);
     // A successful (re)connection resets this agent's backoff.
     getBackoff(agentId).reset();
   };
@@ -86,12 +88,14 @@ export function connectToStream(agentId: string): void {
     if (activeStreams.get(agentId) === eventSource) {
       eventSource.close();
       activeStreams.delete(agentId);
+      const delayMs = getBackoff(agentId).nextDelay();
+      console.warn(`[si-sse] stream error for agent ${agentId}; reconnecting in ${delayMs}ms`);
       setTimeout(() => {
         const wasExplicitlyDisconnected = explicitlyDisconnectedAgents.delete(agentId);
         if (!wasExplicitlyDisconnected && !activeStreams.has(agentId)) {
           void reconnectWithSnapshot(agentId);
         }
-      }, getBackoff(agentId).nextDelay());
+      }, delayMs);
     }
   };
 }
@@ -132,11 +136,17 @@ async function reconnectWithSnapshot(agentId: string): Promise<void> {
   try {
     await loadSnapshotWithStream(agentId);
   } catch (error) {
-    console.warn(`Snapshot refetch failed for agent ${agentId} during SSE reconnect`, error);
+    // The stream (if it connected) is now appending deltas onto the pre-outage
+    // window; events emitted during the outage are missing from it.
+    console.warn(
+      `[si-sse] snapshot refetch failed for agent ${agentId} during SSE reconnect; ` + `window may be stale/gapped`,
+      error,
+    );
   }
 }
 
 export function disconnectFromStream(agentId: string): void {
+  console.info(`[si-sse] explicit disconnect for agent ${agentId}`);
   // Always record the intent, even with no active stream, so a pending
   // error-triggered reconnect timeout sees the tombstone and stays down.
   explicitlyDisconnectedAgents.add(agentId);
