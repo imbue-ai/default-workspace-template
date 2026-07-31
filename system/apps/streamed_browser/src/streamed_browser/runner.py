@@ -4,7 +4,9 @@ Reached through the system_interface proxy at ``/service/streamed-browser/``.
 Serves one viewer page (assets/index.html) and one WebSocket, ``/stream``,
 carrying everything:
 
-    out (binary)  pixelflux video frames (10-byte stripe header + Annex B)
+    out (binary)  pixelflux video frames (10-byte stripe header + Annex B),
+                  and mono Opus audio chunks interleaved by a leading 0x01
+                  magic byte (video packets lead with 0x04 -- see audiopipe)
     in  (text)    Selkies-grammar input (kd/ku/kr/m -- see xinput) plus our
                   credit acks (``ack,<frame_id>`` -- see videopipe)
 
@@ -33,7 +35,7 @@ from loguru import logger
 from simple_websocket import ConnectionClosed
 from werkzeug.serving import make_server
 
-from streamed_browser.audiopipe import AudioPipeError, AudioStreamer
+from streamed_browser.audiopipe import AudioPipe, AudioPipeError
 from streamed_browser.audiopipe import is_available as is_audio_available
 from streamed_browser.session import AUDIO_SOURCE_DEVICE, SessionStartupError, StreamedBrowserSession, is_chromium_installed
 from streamed_browser.videopipe import PixelfluxVideoPipe, VideoPipeError
@@ -203,51 +205,6 @@ def clipboard_paste() -> Response:
     return jsonify({"ok": True})
 
 
-_JSMPEG_JS = Path(__file__).parent / "assets" / "jsmpeg.min.js"
-
-
-def jsmpeg_js() -> Response:
-    return Response(_JSMPEG_JS.read_text(), mimetype="application/javascript")
-
-
-def audio_socket(ws: Any) -> None:
-    """Dedicated MPEG-TS audio socket for jsmpeg. Brings the session up, then an
-    ffmpeg-gated streamer pumps MP2/MPEG-TS bytes here only while sound plays."""
-    try:
-        session.ensure_started()
-    except SessionStartupError:
-        ws.close(1013)
-        return
-    if not (is_audio_available() and session.audio_available):
-        ws.close(1013)  # ffmpeg/pulse not ready
-        return
-
-    def on_data(chunk: bytes) -> None:
-        try:
-            ws.send(chunk)
-        except ConnectionClosed:
-            pass
-
-    streamer = AudioStreamer(AUDIO_SOURCE_DEVICE, on_data)
-    try:
-        streamer.start()
-    except AudioPipeError as error:
-        logger.warning("audio streamer failed ({})", error)
-        ws.close(1011)
-        return
-    closed = threading.Event()
-    try:
-        # The streamer sends on its own pump thread; this thread just blocks on
-        # receive (jsmpeg sends nothing upstream) so a client disconnect raises
-        # ConnectionClosed and we tear the streamer down.
-        while not closed.is_set():
-            ws.receive(timeout=30.0)
-    except ConnectionClosed:
-        closed.set()
-    finally:
-        streamer.stop()
-
-
 def clipboard_out() -> Response:
     """Copy-out: the bytes of the last remote copy, in their native mime."""
     with _clip_lock:
@@ -290,6 +247,18 @@ def stream_socket(ws: Any) -> None:
         _clip_sink["send"] = clip_queue.append
         _clip_sink["display"] = display
         _clip_sink["router"] = router
+    # Audio is strictly additive: gate on pcmflux being importable AND the
+    # session's null sink existing. A start failure leaves video untouched.
+    # It shares the video pipe's Condition so a fresh Opus chunk wakes the same
+    # single sender thread (simple_websocket sends are not cross-thread safe).
+    audio_pipe: AudioPipe | None = None
+    if is_audio_available() and session.audio_available:
+        candidate = AudioPipe(AUDIO_SOURCE_DEVICE, pipe.condition)
+        try:
+            candidate.start()
+            audio_pipe = candidate
+        except AudioPipeError as error:
+            logger.warning("audio pipe unavailable ({}); streaming video only", error)
     stop_event = threading.Event()
     receiver = threading.Thread(
         target=_receive_pump,
@@ -299,6 +268,7 @@ def stream_socket(ws: Any) -> None:
     )
     receiver.start()
     last_send = time.monotonic()
+    audio_pending = audio_pipe.has_pending if audio_pipe is not None else None
     try:
         while not stop_event.is_set():
             control_message = pipe.take_control_message()
@@ -313,7 +283,11 @@ def stream_socket(ws: Any) -> None:
             while clip_queue:
                 ws.send(clip_queue.popleft())
                 last_send = time.monotonic()
-            packet = pipe.next_packet(timeout=_HEARTBEAT_SECONDS)
+            if audio_pipe is not None:
+                for chunk in audio_pipe.drain():
+                    ws.send(chunk)
+                    last_send = time.monotonic()
+            packet = pipe.next_packet(timeout=_HEARTBEAT_SECONDS, has_extra=audio_pending)
             if packet is not None:
                 ws.send(packet)
                 last_send = time.monotonic()
@@ -329,6 +303,8 @@ def stream_socket(ws: Any) -> None:
                 _clip_sink["send"] = None
                 _clip_sink["display"] = None
                 _clip_sink["router"] = None
+        if audio_pipe is not None:
+            audio_pipe.stop()
         pipe.stop()
         router.close()
         receiver.join(timeout=5)
@@ -338,9 +314,7 @@ application.add_url_rule("/", view_func=index, methods=["GET"])
 application.add_url_rule("/health", view_func=health, methods=["GET"])
 application.add_url_rule("/clipboard/paste", view_func=clipboard_paste, methods=["POST"])
 application.add_url_rule("/clipboard/out", view_func=clipboard_out, methods=["GET"])
-application.add_url_rule("/jsmpeg.min.js", view_func=jsmpeg_js, methods=["GET"])
 sock.route("/stream")(stream_socket)
-sock.route("/audio")(audio_socket)
 
 
 def main() -> None:
