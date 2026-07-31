@@ -38,3 +38,19 @@ already sent a keepalive down every idle chat connection every few seconds; it
 is now sent in a form the browser can actually observe, so a connection that
 stops delivering even those is recognized as dead and rebuilt. A quiet
 conversation is not a silent connection, so an idle chat is never reconnected.
+
+Two browser windows open on the same workspace no longer fight over the layout.
+Previously any interaction in one window made the other rebuild its whole
+workspace -- tabs yanked around, chats flashing "Loading events...", terminals
+reconnecting -- and the two traded layout saves every second or two indefinitely,
+because each window serialized the same layout slightly differently. Layout
+changes are now compared on what they actually mean, ignoring the things that are
+properly personal to each window: its pixel sizes, which tab it has selected, and
+its per-tab terminal identifiers. A tmux title change no longer makes every
+connected window save the layout either.
+
+One deliberate consequence: a change that is *only* window geometry -- dragging a
+pane divider, or switching tabs -- no longer triggers an automatic save on its
+own, since that is exactly the kind of change two windows cannot agree on. Such
+changes are still persisted alongside the next real edit (opening, closing or
+moving a tab), and "Save layout..." always saves everything as it looks.
