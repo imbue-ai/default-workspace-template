@@ -245,6 +245,11 @@ def _receive_pump(
             elif data.startswith("kr") or data.startswith("kh"):
                 router.handle(data)  # release-all / held-key heartbeat: always allowed
             elif session.input_allowed:
+                # A real key/mouse event means a human is actively driving a VISIBLE pane,
+                # so lift any visibility throttle to full rate -- a bulletproof un-stick that
+                # doesn't depend on the client's IntersectionObserver firing (idempotent, so
+                # it's a cheap no-op once already full).
+                pipe.set_target_fps(float("inf"))
                 router.handle(data)  # kd/ku/m: only while the human holds control
     except ConnectionClosed:
         pass
