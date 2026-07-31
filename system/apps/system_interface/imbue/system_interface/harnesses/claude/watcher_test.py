@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from imbue.system_interface.session_watcher import ClaudeSessionWatcher
+from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
 
 
 def _user_event(index: int, content: str | None = None) -> dict[str, Any]:

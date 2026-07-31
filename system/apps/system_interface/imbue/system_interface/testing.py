@@ -32,8 +32,8 @@ from imbue.mngr.primitives import AgentId
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
-from imbue.system_interface.claude_auth import ClaudeAuthService
-from imbue.system_interface.claude_auth import RestartProgress
+from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
+from imbue.system_interface.harnesses.claude.auth import RestartProgress
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.layout_ops import LayoutMutex

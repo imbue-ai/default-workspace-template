@@ -3,8 +3,8 @@ from typing import Any
 import pytest
 
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.codex_activity_state import codex_turn_open
-from imbue.system_interface.codex_activity_state import derive_codex
+from imbue.system_interface.harnesses.codex.activity_state import codex_turn_open
+from imbue.system_interface.harnesses.codex.activity_state import derive_codex
 
 
 @pytest.mark.parametrize(

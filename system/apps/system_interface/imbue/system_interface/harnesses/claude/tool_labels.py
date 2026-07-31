@@ -8,13 +8,13 @@ derived. The codex peer is :mod:`codex_tool_labels`.
 from typing import Any
 
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.tool_labels import GENERIC_CAPTION
-from imbue.system_interface.tool_labels import basename
-from imbue.system_interface.tool_labels import first_string_value
-from imbue.system_interface.tool_labels import mcp_caption
-from imbue.system_interface.tool_labels import parse_input_preview
-from imbue.system_interface.tool_labels import quoted
-from imbue.system_interface.tool_labels import shorten
+from imbue.system_interface.harnesses.tool_labels import GENERIC_CAPTION
+from imbue.system_interface.harnesses.tool_labels import basename
+from imbue.system_interface.harnesses.tool_labels import first_string_value
+from imbue.system_interface.harnesses.tool_labels import mcp_caption
+from imbue.system_interface.harnesses.tool_labels import parse_input_preview
+from imbue.system_interface.harnesses.tool_labels import quoted
+from imbue.system_interface.harnesses.tool_labels import shorten
 
 # Agent / Task are handled before this table -- they caption as a delegation
 # rather than as a verb over a target.

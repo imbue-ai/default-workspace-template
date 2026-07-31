@@ -26,7 +26,7 @@ from imbue.concurrency_group.subprocess_utils import run_local_command_modern_ve
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr_claude.claude_config import get_managed_settings_path
-from imbue.system_interface import claude_auth_endpoints
+from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import workspace_layouts
@@ -45,13 +45,13 @@ from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.fast_mode_policy import FastModeSettingsError
-from imbue.system_interface.fast_mode_policy import get_agent_fast_mode_write_path
-from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
-from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
-from imbue.system_interface.fast_mode_policy import resolve_agent_fast_mode
-from imbue.system_interface.fast_mode_policy import write_fast_mode_setting
-from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.fast_mode import FastModeSettingsError
+from imbue.system_interface.harnesses.claude.fast_mode import get_agent_fast_mode_write_path
+from imbue.system_interface.harnesses.claude.fast_mode import get_workspace_fast_mode_decision_path
+from imbue.system_interface.harnesses.claude.fast_mode import read_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.fast_mode import resolve_agent_fast_mode
+from imbue.system_interface.harnesses.claude.fast_mode import write_fast_mode_setting
+from imbue.system_interface.harnesses.claude.fast_mode import write_workspace_fast_mode_decision
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
@@ -65,10 +65,10 @@ from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
-from imbue.system_interface.model_settings import MODEL_OPTIONS
-from imbue.system_interface.model_settings import is_valid_model_id
-from imbue.system_interface.model_settings import read_model_from_settings
-from imbue.system_interface.model_settings import supports_fast_mode
+from imbue.system_interface.harnesses.claude.model_settings import MODEL_OPTIONS
+from imbue.system_interface.harnesses.claude.model_settings import is_valid_model_id
+from imbue.system_interface.harnesses.claude.model_settings import read_model_from_settings
+from imbue.system_interface.harnesses.claude.model_settings import supports_fast_mode
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
@@ -1828,7 +1828,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
         methods=["POST"],
     )
     application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
-    claude_auth_endpoints.register_routes(application)
+    auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(

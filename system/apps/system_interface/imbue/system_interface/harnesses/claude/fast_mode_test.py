@@ -6,14 +6,14 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from imbue.system_interface.fast_mode_policy import FastModeSettingsError
-from imbue.system_interface.fast_mode_policy import get_agent_fast_mode_write_path
-from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
-from imbue.system_interface.fast_mode_policy import read_fast_mode_setting
-from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
-from imbue.system_interface.fast_mode_policy import resolve_agent_fast_mode
-from imbue.system_interface.fast_mode_policy import write_fast_mode_setting
-from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.fast_mode import FastModeSettingsError
+from imbue.system_interface.harnesses.claude.fast_mode import get_agent_fast_mode_write_path
+from imbue.system_interface.harnesses.claude.fast_mode import get_workspace_fast_mode_decision_path
+from imbue.system_interface.harnesses.claude.fast_mode import read_fast_mode_setting
+from imbue.system_interface.harnesses.claude.fast_mode import read_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.fast_mode import resolve_agent_fast_mode
+from imbue.system_interface.harnesses.claude.fast_mode import write_fast_mode_setting
+from imbue.system_interface.harnesses.claude.fast_mode import write_workspace_fast_mode_decision
 
 
 def test_decision_round_trips_through_the_file(tmp_path: Path) -> None:

@@ -73,11 +73,11 @@ the function -- ``Tool: create_goal`` -- making the leak visible instead of dres
 import re
 
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.tool_labels import GENERIC_CAPTION
-from imbue.system_interface.tool_labels import basename
-from imbue.system_interface.tool_labels import mcp_caption
-from imbue.system_interface.tool_labels import quoted
-from imbue.system_interface.tool_labels import shorten
+from imbue.system_interface.harnesses.tool_labels import GENERIC_CAPTION
+from imbue.system_interface.harnesses.tool_labels import basename
+from imbue.system_interface.harnesses.tool_labels import mcp_caption
+from imbue.system_interface.harnesses.tool_labels import quoted
+from imbue.system_interface.harnesses.tool_labels import shorten
 
 CODE_MODE_TOOL_NAME = "exec"
 WAIT_TOOL_NAME = "wait"

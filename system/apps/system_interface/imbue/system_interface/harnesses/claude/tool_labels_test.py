@@ -1,6 +1,6 @@
 import pytest
 
-from imbue.system_interface.claude_tool_labels import claude_tool_labels
+from imbue.system_interface.harnesses.claude.tool_labels import claude_tool_labels
 
 
 @pytest.mark.parametrize(

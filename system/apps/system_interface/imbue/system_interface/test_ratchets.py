@@ -60,7 +60,7 @@ def test_prevent_broad_exception_catch() -> None:
     # ChatPanel stuck on "Creating agent..." because proto_agent_completed
     # never fires. Treat this one as load-bearing rather than sloppy.
     # Bumped again for the credential-apply thread's top-level handler in
-    # claude_auth._run_apply_in_background: same thread-boundary shape --
+    # auth._run_apply_in_background: same thread-boundary shape --
     # anything escaping must surface as the FAILED restart phase in the
     # sign-in modal instead of dying silently in a daemon thread.
     rc.check_broad_exception_catch(_DIR, snapshot(4))

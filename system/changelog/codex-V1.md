@@ -77,3 +77,12 @@ Added OpenAI Codex CLI support to the workspace image.
   (the claude one is now `ClaudeSessionWatcher`), replacing the type union, and its
   `build()` takes the whole agent record so a caller need not know that claude wants a
   config dir and codex does not. Adding a harness is one registry entry.
+
+- Harness code now lives in one package per harness. `imbue/system_interface/harnesses/`
+  holds the generic pieces (the watcher and activity-tracker interfaces, the registry, the
+  shared label helpers, the event contract) with `harnesses/claude/` and `harnesses/codex/`
+  beside them, each carrying the same file names -- `watcher`, `session_parser`,
+  `activity`, `activity_state`, `tool_labels`. Claude additionally holds auth, fast mode,
+  and model settings, because those exist only for claude; an empty slot in the codex
+  package is the honest statement of that, rather than a branch in shared code. The
+  activity ABC and its two implementations are now three files instead of one.

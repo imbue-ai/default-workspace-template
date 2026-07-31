@@ -20,9 +20,9 @@ from flask.testing import FlaskClient
 
 from imbue.system_interface import welcome_resend
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.claude_auth import ClaudeAuthService
-from imbue.system_interface.claude_auth import ProcessSetupError
-from imbue.system_interface.claude_auth import RestartPhase
+from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
+from imbue.system_interface.harnesses.claude.auth import ProcessSetupError
+from imbue.system_interface.harnesses.claude.auth import RestartPhase
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import FakeFinishedProcess
 from imbue.system_interface.testing import FakePexpectProcess

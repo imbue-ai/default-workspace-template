@@ -21,14 +21,14 @@ from loguru import logger
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.codex_session_watcher import CodexSessionWatcher
-from imbue.system_interface.harness_activity import ClaudeActivityTracker
-from imbue.system_interface.harness_activity import CodexActivityTracker
-from imbue.system_interface.harness_activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
+from imbue.system_interface.harnesses.activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
+from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
-from imbue.system_interface.session_watcher import ClaudeSessionWatcher
+from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
 
 
 class HarnessSpec(FrozenModel):

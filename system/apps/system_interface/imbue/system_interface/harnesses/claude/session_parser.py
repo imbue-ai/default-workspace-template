@@ -14,8 +14,8 @@ from typing import Any
 from loguru import logger as _loguru_logger
 from tk_command_parsing.parser import parse_command
 
-from imbue.system_interface.claude_auth_patterns import is_auth_error_text
-from imbue.system_interface.claude_tool_labels import claude_tool_labels
+from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_text
+from imbue.system_interface.harnesses.claude.tool_labels import claude_tool_labels
 
 logger = _loguru_logger
 
