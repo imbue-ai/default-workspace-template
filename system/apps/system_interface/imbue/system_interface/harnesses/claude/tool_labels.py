@@ -2,7 +2,7 @@
 
 Claude reports the real tool name on every call, so the header is simply that
 name -- no translation table needed. Only the caption's verb and target are
-derived. The codex peer is :mod:`codex_tool_labels`.
+derived. The codex peer is :mod:`tool_labels`.
 """
 
 from typing import Any
@@ -73,7 +73,7 @@ def _target(tool_name: str, tool_input: dict[str, Any]) -> str | None:
 
 
 @pure
-def claude_tool_labels(tool_name: str, input_preview: str) -> tuple[str, str]:
+def tool_labels(tool_name: str, input_preview: str) -> tuple[str, str]:
     """``(header_label, caption_label)`` for one claude tool call."""
     header_label = f"Tool: {tool_name}" if tool_name else "Tool"
 

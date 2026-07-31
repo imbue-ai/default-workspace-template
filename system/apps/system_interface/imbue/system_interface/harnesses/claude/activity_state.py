@@ -16,7 +16,7 @@ from imbue.system_interface.activity_state import is_transcript_tail_stale
 
 
 @pure
-def derive_claude(
+def derive(
     *,
     is_agent_running: bool,
     has_pending_tool_use: bool,

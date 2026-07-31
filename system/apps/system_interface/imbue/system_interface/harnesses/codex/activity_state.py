@@ -25,7 +25,7 @@ from imbue.system_interface.harnesses.events import SpecialEventKind
 
 
 @pure
-def codex_turn_open(events: Sequence[dict[str, Any]]) -> bool:
+def turn_open(events: Sequence[dict[str, Any]]) -> bool:
     """True iff the codex transcript's most recent turn boundary is an open turn.
 
     Walks from the end for the latest turn-lifecycle marker, which codex emits as a
@@ -46,7 +46,7 @@ def codex_turn_open(events: Sequence[dict[str, Any]]) -> bool:
 
 
 @pure
-def derive_codex(
+def derive(
     *,
     turn_open: bool,
     has_pending_tool_use: bool,
@@ -55,7 +55,7 @@ def derive_codex(
 ) -> ActivityState:
     """Derive an ``ActivityState`` for a codex agent from the turn latch.
 
-    ``turn_open`` is :func:`codex_turn_open`. ``tail_event_at`` / ``process_started_at``
+    ``turn_open`` is :func:`turn_open`. ``tail_event_at`` / ``process_started_at``
     feed :func:`activity_state.is_transcript_tail_stale` (using the ``codex_process_started``
     marker) so a turn abandoned by a prior process (a mid-turn restart that left an
     unclosed ``task_started``) reads IDLE rather than pinned "Thinking...".

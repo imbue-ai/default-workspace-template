@@ -75,7 +75,7 @@ from typing import Callable
 from loguru import logger as _loguru_logger
 from watchdog.observers import Observer
 
-from imbue.system_interface.harnesses.claude.session_parser import parse_session_lines
+from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
@@ -664,7 +664,7 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
         except UnicodeDecodeError as e:
             logger.warning("UTF-8 decode error re-reading {}@{}: {}", state.file_path, locator.byte_offset, e)
             return []
-        return parse_session_lines(
+        return parse_lines(
             decoded.splitlines(),
             existing_event_ids=None,
             tool_name_by_call_id=self._tool_name_by_call_id,
@@ -740,7 +740,7 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                 except UnicodeDecodeError as e:
                     logger.warning("UTF-8 decode error in session file {}: {}", state.file_path, e)
                     continue
-                line_events = parse_session_lines(
+                line_events = parse_lines(
                     decoded_line.splitlines(),
                     existing_event_ids=self._existing_event_ids,
                     tool_name_by_call_id=self._tool_name_by_call_id,

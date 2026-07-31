@@ -3,8 +3,8 @@ from typing import Any
 import pytest
 
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.harnesses.codex.activity_state import codex_turn_open
-from imbue.system_interface.harnesses.codex.activity_state import derive_codex
+from imbue.system_interface.harnesses.codex.activity_state import turn_open
+from imbue.system_interface.harnesses.codex.activity_state import derive
 
 
 @pytest.mark.parametrize(
@@ -30,7 +30,7 @@ from imbue.system_interface.harnesses.codex.activity_state import derive_codex
     ],
 )
 def test_codex_turn_open(events: list[dict[str, Any]], expected: bool) -> None:
-    assert codex_turn_open(events) is expected
+    assert turn_open(events) is expected
 
 
 @pytest.mark.parametrize(
@@ -43,12 +43,12 @@ def test_codex_turn_open(events: list[dict[str, Any]], expected: bool) -> None:
     ],
 )
 def test_derive_codex(turn_open: bool, has_pending_tool_use: bool, expected: ActivityState) -> None:
-    assert derive_codex(turn_open=turn_open, has_pending_tool_use=has_pending_tool_use) == expected
+    assert derive(turn_open=turn_open, has_pending_tool_use=has_pending_tool_use) == expected
 
 
 def test_derive_codex_stale_tail_overrides_to_idle() -> None:
     """A task_started abandoned by a prior process (tail older than process start) reads IDLE."""
-    state = derive_codex(
+    state = derive(
         turn_open=True,
         has_pending_tool_use=True,
         tail_event_at=100.0,
@@ -58,7 +58,7 @@ def test_derive_codex_stale_tail_overrides_to_idle() -> None:
 
 
 def test_derive_codex_fresh_open_turn_reports_working() -> None:
-    state = derive_codex(
+    state = derive(
         turn_open=True,
         has_pending_tool_use=False,
         tail_event_at=300.0,

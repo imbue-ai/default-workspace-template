@@ -12,13 +12,13 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import has_unmatched_tool_use
 from imbue.system_interface.activity_state import last_event_timestamp
 from imbue.system_interface.activity_state import last_event_type
-from imbue.system_interface.harnesses.claude.activity_state import derive_claude
+from imbue.system_interface.harnesses.claude.activity_state import derive
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 
 
 class ClaudeActivityTracker(HarnessActivityTracker):
     """Claude: no turn markers in the transcript, so activity is inferred from
-    the mngr lifecycle plus the transcript tail. See :func:`derive_claude`."""
+    the mngr lifecycle plus the transcript tail. See :func:`derive`."""
 
     marker_filename: ClassVar[str] = "claude_process_started"
 
@@ -36,7 +36,7 @@ class ClaudeActivityTracker(HarnessActivityTracker):
         return True
 
     def derive(self, *, is_agent_running: bool, process_started_at: float | None) -> ActivityState:
-        return derive_claude(
+        return derive(
             is_agent_running=is_agent_running,
             has_pending_tool_use=self._has_pending_tool_use,
             tail_event_type=self._last_event_type,

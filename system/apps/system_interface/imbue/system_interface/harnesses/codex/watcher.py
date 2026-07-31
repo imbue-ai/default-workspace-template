@@ -3,7 +3,7 @@
 The codex analogue of :class:`claude_session_watcher.ClaudeSessionWatcher`. It tails
 codex's OWN on-disk rollout in real time -- the same file codex writes as it works --
 parses each line to the UI event schema via
-:func:`codex_session_parser.parse_codex_rollout_line`, dedups by ``event_id``, and
+:func:`codex_session_parser.parse_lines`, dedups by ``event_id``, and
 fans new events out through ``on_events`` (the same callback contract
 ``ClaudeSessionWatcher`` uses, so :mod:`app_context`'s broadcast/SSE plumbing is
 unchanged). It reads the live file -- not mngr_codex's stream_transcript.sh mirror --
@@ -45,7 +45,7 @@ from watchdog.observers import Observer
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
-from imbue.system_interface.harnesses.codex.session_parser import parse_codex_rollout_line
+from imbue.system_interface.harnesses.codex.session_parser import parse_lines
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.system_interface.watcher_common import WakeOnChangeHandler
 
@@ -282,7 +282,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
             return []
         if not isinstance(record, dict):
             return []
-        return parse_codex_rollout_line(record, line_index, self._tool_name_by_call_id)
+        return parse_lines(record, line_index, self._tool_name_by_call_id)
 
     # --- read API (mirrors AgentSessionWatcher) ----------------------------
     #
