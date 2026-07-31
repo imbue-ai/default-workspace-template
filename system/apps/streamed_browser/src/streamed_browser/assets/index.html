@@ -79,6 +79,17 @@ function keysymFor(event) {
 function connect() {
   const url = new URL("stream", document.baseURI);
   url.protocol = (url.protocol === "https:") ? "wss:" : "ws:";
+  // Tell the server our pane size up front, IN the connect URL, so the first
+  // frame is already pane-sized (no 1280x800 flash, no resize round-trip). The
+  // size is knowable now -- the DOM is laid out -- but a post-connect `r,`
+  // message would race the socket's open and get dropped; carrying it on the
+  // URL can't. Fall back to the window box if the canvas isn't measured yet.
+  const rect = canvas.getBoundingClientRect();
+  const initW = Math.max(320, (Math.round(rect.width) || window.innerWidth) & ~1);
+  const initH = Math.max(240, (Math.round(rect.height) || window.innerHeight) & ~1);
+  url.searchParams.set("w", initW);
+  url.searchParams.set("h", initH);
+  lastSentSize = initW + "," + initH;  // the observer's first fire is now a no-op, not a re-resize
   socket = new WebSocket(url);
   socket.binaryType = "arraybuffer";
 
@@ -397,6 +408,10 @@ async function writeLocalImage(blob, mime) {
 let resizeTimer = null;
 let lastSentSize = "";
 function sendPaneSize() {
+  // Only commit lastSentSize once the send can actually go out; a resize that
+  // arrives while the socket is between connections is left uncommitted so the
+  // next observer fire retries it instead of being silently swallowed.
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
   const rect = canvas.getBoundingClientRect();
   const w = Math.max(320, Math.round(rect.width) & ~1);
   const h = Math.max(240, Math.round(rect.height) & ~1);
