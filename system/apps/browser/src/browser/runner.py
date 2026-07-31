@@ -2,10 +2,12 @@
 
 Reached through the system_interface proxy at ``/service/browser/``. Serves one
 self-contained viewer page (assets/index.html) that renders a streamed browser
-and an "Agent has control" overlay; the page talks back over one WebSocket,
-``/browsers/{name}/cast`` (screencast frames out; human input, tab control, and
-take/return-control in). Browsers are addressed by NAME (a random ~2-word english
-name like ``alex-smith``), not a sequential int; there is no default browser.
+and an "Agent has control" overlay. The page talks over two WebSockets: the media
+plane ``/browsers/{name}/stream`` (pixelflux H.264 pixels + Opus audio out; XTEST
+input, resize, and fps-throttle in) and the control plane ``/browsers/{name}/cast``
+(control/ownership state out; take/return-control in). Browsers are addressed by NAME
+(a random ~2-word english name like ``alex-smith``), not a sequential int; there is
+no default browser.
 
 Agents drive the fleet over HTTP (see the ``agentic-browser-fleet`` CLI):
 
@@ -760,7 +762,7 @@ def cmd_clipboard_out(browser_id: str) -> Response:
     return mediastream.clipboard_out(browser_id)
 
 
-# --- screencast WebSocket ----------------------------------------------------
+# --- control/ownership WebSocket (/cast) -------------------------------------
 
 
 def _cast_inbound_pump(
@@ -769,11 +771,11 @@ def _cast_inbound_pump(
     """Read inbound cast messages on a dedicated thread until the socket closes.
 
     Inbound (client->loop) and outbound (loop->client) are handled by two threads
-    (this one reads; the handler's main thread drains the outbound queue and sends),
-    so a slow inbound poll never stalls the outbound screencast and vice versa --
-    the head-of-line blocking a single interleaved poll would cause. simple-websocket
-    supports send and receive from different threads. Each inbound JSON message is
-    dispatched to the loop via the bridge; commands are skipped while initializing
+    (this one reads; the handler's main thread drains the outbound control queue and
+    sends), so a slow inbound poll never stalls the outbound control broadcasts and vice
+    versa -- the head-of-line blocking a single interleaved poll would cause. simple-
+    websocket supports send and receive from different threads. Each inbound JSON message
+    is dispatched to the loop via the bridge; commands are skipped while initializing
     (a human can't grab a half-restored fleet).
     """
     try:
@@ -800,12 +802,13 @@ def _cast_inbound_pump(
 
 
 def cast_socket(ws: Any, browser_id: str) -> None:
-    """Bridge one cast WebSocket: outbound screencast frames + inbound input/control.
+    """Bridge one cast WebSocket: outbound control/ownership state + inbound take/return.
 
     Runs in its own Flask thread (thread-per-connection). The browser registers an
     outbound ``queue.Queue`` on the loop; ``LiveBrowser._broadcast`` (on the loop)
-    pushes JSON frames onto it and this handler drains and sends them. A second
-    thread reads inbound messages so neither direction blocks the other.
+    pushes JSON control messages onto it and this handler drains and sends them. A second
+    thread reads inbound messages so neither direction blocks the other. Pixels and audio
+    ride the separate ``/stream`` socket, not this one.
     """
     resolved = _resolve_sync_for_ws(browser_id)
     if resolved is None:
@@ -877,12 +880,11 @@ def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
 
 
 def stream_socket(ws: Any, browser_id: str) -> None:
-    """Pixelflux media socket (BROWSER_MEDIA=pixelflux): one viewer of one browser.
+    """Pixelflux media socket: one viewer of one browser (pixels + audio + clipboard).
 
-    Control/ownership stays on ``/cast`` (unchanged); this carries only pixels.
+    Control/ownership stays on ``/cast`` (unchanged); this carries the media plane.
     Resolves and gates exactly like ``cast_socket`` (same close-code contract), then
-    hands the RUNNING browser's private display to the verbatim streamer in
-    ``mediastream.py``.
+    hands the RUNNING browser's private display to the streamer in ``mediastream.py``.
     """
     resolved = _resolve_sync_for_ws(browser_id)
     if resolved is None:
@@ -960,7 +962,7 @@ def _shutdown() -> None:
 
     Owned exclusively by the signal handler (SIGTERM/SIGINT). ``manager.shutdown``
     cancels the checkpoint loop, writes a final manifest, and closes every browser
-    (each browser's close stops its agent + screencast); then we stop the loop. We
+    (each browser's close stops its agent + kills its Chromium); then we stop the loop. We
     do NOT also register an atexit handler -- a single owner avoids double-closing
     the fleet or stopping an already-stopped loop.
     """

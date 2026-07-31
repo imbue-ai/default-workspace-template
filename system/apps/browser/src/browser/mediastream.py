@@ -99,12 +99,17 @@ def _on_remote_clipboard(browser_id: str, data: bytes, mime: str) -> None:
 def _register_clip_sink(browser_id: str, display: str, send: Callable[[str], None]) -> None:
     """Add a viewer's outbound queue for this browser and ensure its XFixes copy-out
     monitor is running (started on the first viewer)."""
+    stale_monitor: ClipboardMonitor | None = None
     with _clip_lock:
         clip = _clips.get(browser_id)
         if clip is None or clip.display != display:
             # First viewer (or the browser relaunched on a new display): fresh state.
-            if clip is not None and clip.monitor is not None:
-                clip.monitor.close()
+            # Defer closing the old monitor until AFTER the lock is released -- close()
+            # joins the monitor thread, which may be blocked in _on_remote_clipboard
+            # waiting on _clip_lock; closing it here would stall for the full join timeout
+            # (mirrors _unregister_clip_sink, which closes off the lock for the same reason).
+            if clip is not None:
+                stale_monitor = clip.monitor
             clip = _BrowserClipboard(display)
             _clips[browser_id] = clip
         clip.sinks.add(send)
@@ -112,6 +117,8 @@ def _register_clip_sink(browser_id: str, display: str, send: Callable[[str], Non
             monitor = ClipboardMonitor(display, lambda d, m: _on_remote_clipboard(browser_id, d, m))
             clip.monitor = monitor
             monitor.start()
+    if stale_monitor is not None:
+        stale_monitor.close()
 
 
 def _unregister_clip_sink(browser_id: str, send: Callable[[str], None]) -> None:
