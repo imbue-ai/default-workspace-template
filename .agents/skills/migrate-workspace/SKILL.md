@@ -131,11 +131,23 @@ runs; see [references/pre-declutter-layout.md](references/pre-declutter-layout.m
 ("The 30-minute `host-backup-now` hang") for the events-log fallback that reads
 the tick's real outcome.
 
-Confirm each prints `restic_backup_succeeded`. If the *source* reports
-`tick_skipped_due_to_missing_secrets` -- or times out having printed nothing,
-which on an old source means the same thing until you check the events log -- it
-has no restore point: tell the user plainly and get their explicit go-ahead. This
-is a warning, not a gate -- the migration only ever reads the source.
+**Read the exit code, not the printed text.** `host-backup-now` reports the
+tick's outcome as its exit status: 0 is `restic_backup_succeeded`, 3 is
+`tick_skipped_due_to_missing_secrets` (no `data/.secrets/restic.env`, so backups
+are not configured at all), 1 is a failed attempt, and 2 means no outcome was
+observed. Only 0 confirms a restore point; treat 1, 2, and 3 alike as "there
+isn't one." Matching on stdout instead misses the case the next paragraph
+describes, where an old source prints nothing at all.
+
+Handle the two sides differently, because only one of them is written to:
+
+- **Destination (this workspace) cannot back up.** This is the side the migration
+  writes to, so a missing restore point here is the one that matters. Stop, tell
+  the user that this workspace has no restore point and why, and get their
+  explicit go-ahead before dispatching anything that writes.
+- **Source cannot back up.** Tell the user plainly and get their go-ahead, but
+  this is a warning rather than a gate -- the migration only ever reads the
+  source.
 
 **Is this workspace actually fresh?** Compare its own tree against its own
 template base. If nothing but the template base is there, proceed silently. If it
@@ -326,6 +338,17 @@ identity rather than user content: `restic.env` (an R2 bucket keyed by *that*
 workspace's own random password) and `cloudflare_tunnel.env` (a tunnel minted per
 `agent_id`). Copying either would point this workspace at the old one's
 resources. Use `rsync` over the SSH session with an `--exclude` for each.
+
+The data lands in the **live** tree, while you are working from a worktree whose
+`data/` is empty -- so a suite run here can pass without touching a single
+migrated record, and report green for a migration that does not work. Mirror the
+migrated data into the worktree as well (it is gitignored, so the merge still
+carries code only and the live copy is still what persists), excluding
+regenerable bulk such as repo caches. Then exercise each migrated app against
+that data and confirm the user's own records render, rather than inferring it
+from where the files were copied. See
+`.agents/shared/worker/references/harden-creation.md` ("Isolation") for the
+general contract.
 
 **Creations.** Each app lands under `system/apps/<package>/`, is added to the root
 `pyproject.toml`, gets a `[program:<name>]` block in `system/supervisord.conf`
