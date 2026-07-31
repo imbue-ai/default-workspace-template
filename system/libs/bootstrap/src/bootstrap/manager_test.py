@@ -11,27 +11,26 @@ from pathlib import Path
 
 import pytest
 from imbue.mngr.cli.output_helpers import write_json_line
+from loguru import logger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from bootstrap.manager import (
+    FAST_MODE_DECISION_FILE,
     INITIAL_CHAT_AGENT_ID_FILENAME,
     TimezoneFetchError,
     _apply_container_timezone,
-    _install_runtime_cron_entries,
     _build_create_chat_command,
     _configure_git_global,
-    _ensure_host_claude_config_dir,
     _fetch_user_timezone,
-    _format_env_file,
     _initialize_workspace_main_branch,
+    _install_runtime_cron_entries,
     _maybe_create_initial_chat,
     _parse_created_agent_id,
-    _parse_env_file,
     _parse_timezone_response,
     _persist_initial_chat_agent_id,
     _read_host_name,
     _read_main_agent_labels,
-    _resolve_services_claude_config_dir,
+    _read_workspace_fast_mode_enabled,
 )
 
 # --- _configure_git_global ---
@@ -67,95 +66,6 @@ def test_configure_git_global_sets_insteadof_but_not_hookspath(
         check=False,
     ).stdout.strip()
     assert hooks_path == ""
-
-
-# --- Env-file helpers ---
-
-
-def test_parse_env_file_handles_plain_and_quoted() -> None:
-    content = 'A=1\nB="two words"\nC="he said \\"hi\\""\n\n# comment\n'
-    parsed = _parse_env_file(content)
-    assert parsed == {"A": "1", "B": "two words", "C": 'he said "hi"'}
-
-
-def test_format_env_file_round_trips_through_parse() -> None:
-    env = {"FOO": "bar", "PATH_WITH_SPACE": "/a b/c"}
-    parsed = _parse_env_file(_format_env_file(env))
-    assert parsed == env
-
-
-# --- _resolve_services_claude_config_dir ---
-
-
-def test_resolve_services_claude_config_dir_returns_per_agent_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
-    resolved = _resolve_services_claude_config_dir()
-    assert resolved == tmp_path / "plugin" / "claude" / "anthropic"
-
-
-def test_resolve_services_claude_config_dir_returns_none_when_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("MNGR_AGENT_STATE_DIR", raising=False)
-    assert _resolve_services_claude_config_dir() is None
-
-
-# --- _ensure_host_claude_config_dir ---
-
-
-def test_ensure_host_claude_config_dir_writes_when_env_file_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    target = Path("/some/per-agent/path")
-    _ensure_host_claude_config_dir(target)
-    parsed = _parse_env_file((tmp_path / "env").read_text())
-    assert parsed == {"CLAUDE_CONFIG_DIR": str(target)}
-
-
-def test_ensure_host_claude_config_dir_preserves_other_keys(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    (tmp_path / "env").write_text(_format_env_file({"OTHER": "preexisting"}))
-    target = Path("/some/per-agent/path")
-    _ensure_host_claude_config_dir(target)
-    parsed = _parse_env_file((tmp_path / "env").read_text())
-    assert parsed == {"OTHER": "preexisting", "CLAUDE_CONFIG_DIR": str(target)}
-
-
-def test_ensure_host_claude_config_dir_no_rewrite_when_value_matches(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    target = Path("/some/per-agent/path")
-    env_file = tmp_path / "env"
-    env_file.write_text(_format_env_file({"CLAUDE_CONFIG_DIR": str(target)}))
-    mtime_before = env_file.stat().st_mtime_ns
-    _ensure_host_claude_config_dir(target)
-    assert env_file.stat().st_mtime_ns == mtime_before
-
-
-def test_ensure_host_claude_config_dir_overwrites_drifted_value(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    env_file = tmp_path / "env"
-    env_file.write_text(_format_env_file({"CLAUDE_CONFIG_DIR": "/stale/path"}))
-    target = Path("/new/path")
-    _ensure_host_claude_config_dir(target)
-    parsed = _parse_env_file(env_file.read_text())
-    assert parsed["CLAUDE_CONFIG_DIR"] == str(target)
-
-
-def test_ensure_host_claude_config_dir_skips_when_host_dir_env_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
-    # Should silently no-op rather than raise.
-    _ensure_host_claude_config_dir(tmp_path / "ignored")
 
 
 # --- _read_host_name ---
@@ -238,7 +148,9 @@ def test_read_main_agent_labels_returns_empty_when_labels_field_absent(
 
 
 def test_build_create_chat_command_includes_welcome_and_template() -> None:
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command(
+        "my-workspace", {"workspace": "my-workspace"}, True
+    )
     assert cmd[:3] == ["mngr", "create", "my-workspace"]
     assert "--template" in cmd
     assert cmd[cmd.index("--template") + 1] == "chat"
@@ -251,13 +163,17 @@ def test_build_create_chat_command_includes_transfer_none() -> None:
     """`--transfer none` makes mngr skip the per-agent worktree, so the chat
     agent reuses the services agent's work_dir. Without it, mngr collides
     with the services agent's existing `mngr/<host>` branch."""
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command(
+        "my-workspace", {"workspace": "my-workspace"}, True
+    )
     assert "--transfer" in cmd
     assert cmd[cmd.index("--transfer") + 1] == "none"
 
 
 def test_build_create_chat_command_carries_no_workspace_label() -> None:
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command(
+        "my-workspace", {"workspace": "my-workspace"}, True
+    )
     # The chat agent belongs to its workspace by sharing the host; it carries no
     # workspace label (the label was removed from the naming model).
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
@@ -268,7 +184,9 @@ def test_build_create_chat_command_tags_user_created() -> None:
     """The initial chat agent is tagged ``user_created=true`` so the OOM
     agent-tagging hook places it in the protected user-agent band (shed only as a
     last resort)."""
-    cmd = _build_create_chat_command("my-workspace", {"workspace": "my-workspace"})
+    cmd = _build_create_chat_command(
+        "my-workspace", {"workspace": "my-workspace"}, True
+    )
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
     assert "user_created=true" in labels
 
@@ -276,13 +194,15 @@ def test_build_create_chat_command_tags_user_created() -> None:
 def test_build_create_chat_command_passes_project_label_when_present(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cmd = _build_create_chat_command("ws", {"workspace": "ws", "project": "my-project"})
+    cmd = _build_create_chat_command(
+        "ws", {"workspace": "ws", "project": "my-project"}, True
+    )
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
     assert "project=my-project" in labels
 
 
 def test_build_create_chat_command_omits_project_label_when_missing() -> None:
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"})
+    cmd = _build_create_chat_command("ws", {"workspace": "ws"}, True)
     labels = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--label"]
     assert all(not label.startswith("project=") for label in labels)
 
@@ -292,15 +212,92 @@ def test_build_create_chat_command_argv_accepted_by_live_cli() -> None:
     a system/vendor/mngr rename of ``create``/its flags fails here at merge time rather
     than only at host boot. A ``workspace`` label is supplied so the builder's
     label resolution short-circuits without reading host files."""
-    argv = _build_create_chat_command("host-1", {"workspace": "ws", "project": "proj"})
+    argv = _build_create_chat_command(
+        "host-1", {"workspace": "ws", "project": "proj"}, True
+    )
     assert_mngr_argv_valid(argv)
 
 
 def test_build_create_chat_command_requests_json_output() -> None:
     """`--format json` lets the create step read back the new agent's id."""
-    cmd = _build_create_chat_command("ws", {"workspace": "ws"})
+    cmd = _build_create_chat_command("ws", {"workspace": "ws"}, True)
     assert "--format" in cmd
     assert cmd[cmd.index("--format") + 1] == "json"
+
+
+def test_build_create_chat_command_carries_the_fast_mode_setting() -> None:
+    """Chat is the only agent type that starts fast, so its create says which way."""
+    enabled = _build_create_chat_command("ws", {"workspace": "ws"}, True)
+    disabled = _build_create_chat_command("ws", {"workspace": "ws"}, False)
+    assert "agent_types.claude.settings_overrides.fastMode=true" in enabled
+    assert "agent_types.claude.settings_overrides.fastMode=false" in disabled
+    # Both forms must resolve against the live mngr config model, not just parse
+    # as CLI tokens: an unresolvable -S key path fails the create outright.
+    assert_mngr_argv_valid(enabled)
+    assert_mngr_argv_valid(disabled)
+
+
+def test_build_create_chat_command_never_pins_claude_config_dir() -> None:
+    """Every claude in the workspace must resolve claude's own default
+    ~/.claude, so the create argv must not export CLAUDE_CONFIG_DIR (the old
+    services-agent-owned shared dir was removed in the ~/.claude cutover)."""
+    cmd = _build_create_chat_command("ws", {"workspace": "ws"}, True)
+    assert all("CLAUDE_CONFIG_DIR" not in arg for arg in cmd)
+
+
+# --- _read_workspace_fast_mode_enabled ---
+
+
+def test_fast_mode_defaults_on_when_no_decision_recorded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """First boot has no decision yet, and the opening conversation should be fast."""
+    monkeypatch.chdir(tmp_path)
+    assert _read_workspace_fast_mode_enabled() is True
+
+
+def test_fast_mode_follows_a_recorded_decision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A workspace whose user turned fast mode off gets standard-speed chats."""
+    monkeypatch.chdir(tmp_path)
+    decision_path = tmp_path / "data" / ".state" / "fast_mode_decision.json"
+    decision_path.parent.mkdir(parents=True)
+    decision_path.write_text(
+        json.dumps({"is_decided": True, "is_fast_mode_enabled": False})
+    )
+    assert _read_workspace_fast_mode_enabled() is False
+
+    decision_path.write_text(
+        json.dumps({"is_decided": True, "is_fast_mode_enabled": True})
+    )
+    assert _read_workspace_fast_mode_enabled() is True
+
+
+def test_fast_mode_defaults_on_when_the_decision_is_unreadable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A corrupt or wrong-shaped decision must not silently strand new chats -- and
+    must say so, since falling back turns on the setting that costs money."""
+    monkeypatch.chdir(tmp_path)
+    decision_path = tmp_path / "data" / ".state" / "fast_mode_decision.json"
+    decision_path.parent.mkdir(parents=True)
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message), level="WARNING")
+    try:
+        decision_path.write_text("{not valid json")
+        assert _read_workspace_fast_mode_enabled() is True
+
+        # Valid JSON the writer would never produce: the value decides nothing,
+        # so this is a format skew rather than a fresh workspace.
+        decision_path.write_text(json.dumps({"is_fast_mode_enabled": "no"}))
+        assert _read_workspace_fast_mode_enabled() is True
+    finally:
+        logger.remove(sink_id)
+
+    assert len(messages) == 2
+    assert all(str(FAST_MODE_DECISION_FILE) in message for message in messages)
 
 
 # --- _parse_created_agent_id ---
@@ -408,6 +405,18 @@ def test_maybe_create_initial_chat_creates_and_writes_signal(
     _maybe_create_initial_chat()
     assert len(stub.calls) == 1
     assert (_bootstrap_env / "data" / ".state" / "initial_chat_created").exists()
+
+
+def test_maybe_create_initial_chat_writes_no_host_env_file(
+    monkeypatch: pytest.MonkeyPatch, _bootstrap_env: Path
+) -> None:
+    """The bootstrap must not touch $MNGR_HOST_DIR/env at all: since the
+    ~/.claude cutover there is no CLAUDE_CONFIG_DIR (or anything else) for it
+    to export, and a stray env write would silently pin every future agent."""
+    stub = _StubSubprocess(returncode=0)
+    monkeypatch.setattr("bootstrap.manager.subprocess.run", stub.run)
+    _maybe_create_initial_chat()
+    assert not (_bootstrap_env / "env").exists()
 
 
 def test_maybe_create_initial_chat_persists_created_agent_id(
@@ -712,7 +721,10 @@ def test_fetch_user_timezone_returns_empty_when_gateway_env_missing(
 
 
 def test_parse_timezone_response_returns_the_zone_name() -> None:
-    assert _parse_timezone_response(b'{"timezone": "America/New_York"}') == "America/New_York"
+    assert (
+        _parse_timezone_response(b'{"timezone": "America/New_York"}')
+        == "America/New_York"
+    )
 
 
 def test_parse_timezone_response_accepts_the_documented_unknown_answer() -> None:

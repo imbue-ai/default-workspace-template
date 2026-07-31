@@ -13,7 +13,9 @@ you'll want to make:
 
 1. an "app" - something you can open as a tab and interact with
 2. a "skill" - teaches your mind how to do work you care about. A skill that
-   is automatically run on a schedule is called an "automation"
+   is automatically run on a schedule is called an "automation" (the
+   machinery that runs them lives in `system/libs/automations/`; the weekly
+   Caretaker is the built-in example)
 3. some "data" - documents, images, notes, or data created by your apps and
    skills
 4. some "customizations" - changes to any of the above. Everything in Minds

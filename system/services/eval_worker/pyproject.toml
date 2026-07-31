@@ -1,0 +1,19 @@
+[project]
+name = "eval-worker"
+version = "0.1.0"
+description = "One-shot eval worker for the minds-evals harness: drives a multi-turn conversation, snapshots the home tree to R2 per turn, and uploads the transcript"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "boto3>=1.34",
+]
+
+[project.scripts]
+eval-worker = "eval_worker.responder:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eval_worker"]

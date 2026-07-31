@@ -173,7 +173,7 @@ def chat_agent_oom_score_adj(
 
 
 # Supervisord service bands, keyed by the service key passed to
-# ``system/scripts/oom_tag_service.py``. Every value sits strictly between PROTECTED (0)
+# ``system/services/oom_priority/bin/oom_tag_service.py``. Every value sits strictly between PROTECTED (0)
 # and USER_AGENT (300), so a service is *less* expendable than any agent (an
 # agent's work revives on the next message, so it is shed first) but still
 # steerable relative to the other services.
@@ -247,7 +247,7 @@ def shared_browser_oom_score_adj(self_assigned: int) -> int:
 
 
 # Expected band per supervisord program whose *program name* is not a
-# SERVICE_BANDS key, for the backstop listener (system/scripts/oom_tag_backstop.py).
+# SERVICE_BANDS key, for the backstop listener (system/services/oom_priority/bin/oom_tag_backstop.py).
 # The OOM machinery itself (earlyoom, the listener) must stay PROTECTED -- it is
 # what keeps every other band meaningful. deferred-install stays PROTECTED too:
 # shedding the one-shot first-boot installer mid-run would leave provisioning
