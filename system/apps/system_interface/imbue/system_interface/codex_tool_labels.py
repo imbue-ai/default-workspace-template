@@ -2,20 +2,72 @@
 
 Codex runs in code mode (pinned via ``features.code_mode_host``), so nearly every
 operation arrives as one ``exec`` tool whose input is a JavaScript program calling
-``tools.<fn>({...})``. ``Tool: exec`` would therefore be a useless header, so the
-header is derived from the inner function too -- which means codex needs the
-translation table claude does not: ``apply_patch`` -> ``Tool: Edit``.
+``tools.<fn>({...})``. ``Tool: exec`` would be a useless header, so for ``exec`` both
+labels come from the inner function -- which is why codex needs a translation table
+claude does not (``apply_patch`` -> ``Tool: Edit``).
 
-The JS is arbitrary, so only the function NAME is parsed for certain (always a
-literal identifier). The target is best-effort, read only out of a plain string
-literal. Anything unrecognised falls back to "Running code" rather than guessing.
+Tool surface and argument shapes, from a live Minds codex agent on codex-cli 0.146.0.
+Re-confirm when CODEX_VERSION moves.
 
-Tool set confirmed against a live Minds codex agent via ``ALL_TOOLS``. Two tools
-are deliberately absent: ``update_plan`` and ``request_user_input`` are forbidden
-by the codex prompt, so they fall to the generic label -- if one ever surfaces in
-a transcript, that IS the signal the ban leaked. The ``collaboration.*`` tools are
-absent for the same reason as ``features.multi_agent_v2 = false``: a spawned agent
-writes its own rollout, which this workspace's watcher never opens.
+    top level:
+      functions.exec
+      functions.wait({ cell_id: string, yield_time_ms?: number,
+                       max_tokens?: number, terminate?: boolean })
+      functions.request_user_input        Plan mode only; banned by our prompt
+
+    via functions.exec:
+      tools.exec_command({ cmd: "rg --files", workdir: "/home/user/workspace" })
+      tools.write_stdin
+      tools.apply_patch(input: string)     a backtick template literal:
+          await tools.apply_patch(`*** Begin Patch
+          *** Update File: path/to/file.txt
+          @@
+          -old line
+          +new line
+          *** End Patch`);
+          ... also *** Add File: <path> and *** Delete File: <path>
+      tools.view_image({ path: string, detail?: "high" | "original" })
+      tools.image_gen__imagegen({ prompt: string,
+                                  referenced_image_paths?: string[] | null,
+                                  num_last_images_to_include?: number | null })
+      tools.web__run({ search_query?: [{ q: string, domains?: string[], recency?: number }],
+                       image_query?:  [{ q: string, domains?: string[], recency?: number }],
+                       open?:       [{ ref_id: string, lineno?: number }],
+                       click?:      [{ ref_id: string, id: number }],
+                       find?:       [{ ref_id: string, pattern: string }],
+                       screenshot?: [{ ref_id: string, pageno: number }],
+                       finance?:    [{ ticker: string,
+                                       type: "equity" | "fund" | "crypto" | "index",
+                                       market?: string }],
+                       weather?:    [{ location: string, duration?: number, start?: string }],
+                       sports?:     [{ fn: "schedule" | "standings",
+                                       league: "nba" | "wnba" | "nfl" | "nhl" | "mlb" | "epl"
+                                                | "ncaamb" | "ncaawb" | "ipl",
+                                       team?: string, opponent?: string, date_from?: string,
+                                       date_to?: string, num_games?: number, locale?: string,
+                                       tool?: "sports" }],
+                       time?:       [{ utc_offset: string }],
+                       response_length?: "short" | "medium" | "long" })
+      tools.update_plan({ explanation?: string,
+                          plan: [{ step: string,
+                                   status: "pending" | "in_progress" | "completed" }] })
+                                          banned by our prompt
+      tools.create_goal                   banned by our prompt
+      tools.get_goal                      banned by our prompt
+      tools.update_goal({ status: "complete" | "blocked" })
+                                          banned by our prompt
+      tools.list_mcp_resources({ cursor?: string, server?: string })
+      tools.list_mcp_resource_templates({ cursor?: string, server?: string })
+      tools.read_mcp_resource({ server: string, uri: string })
+
+    MCP server tools, also via functions.exec, 49 exposed in that session:
+      tools.mcp__<server>__<function>({ ... })
+      e.g. tools.mcp__codex_apps__gmail_search_emails({ query: "is:unread" })
+
+``update_plan``, ``request_user_input``, and the three goal tools are unlabelled by design:
+the codex prompt forbids all of them (they write to stores the user cannot see, competing with
+``tk``), so a sighting is the signal a ban leaked. They fall to the generic label, which names
+the function -- ``Tool: create_goal`` -- making the leak visible instead of dressing it up.
 """
 
 import re
@@ -23,47 +75,59 @@ import re
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.tool_labels import GENERIC_CAPTION
 from imbue.system_interface.tool_labels import basename
-from imbue.system_interface.tool_labels import first_string_value
 from imbue.system_interface.tool_labels import mcp_caption
-from imbue.system_interface.tool_labels import parse_input_preview
 from imbue.system_interface.tool_labels import quoted
 from imbue.system_interface.tool_labels import shorten
 
-# The code-mode wrapper: its inner tools.<fn> supplies both labels.
 CODE_MODE_TOOL_NAME = "exec"
-# Top-level tool used to poll a yielded async cell -- not a tools.<fn>.
-_WAIT_TOOL_NAME = "wait"
+WAIT_TOOL_NAME = "wait"
 
-_UNKNOWN_CODE_HEADER = "Tool: Code"
-_UNKNOWN_CODE_CAPTION = "Running code"
+# An exec program with no parseable tools.<fn> call. Means the JS was unparseable,
+# never "no table entry".
+_UNPARSEABLE_CODE_HEADER = "Tool: Code"
+_UNPARSEABLE_CODE_CAPTION = "Running code"
 
-# tools.<fn> -> (header noun, caption verb). The nouns are ours, not codex's:
-# code mode reports only "exec", so a readable header has to be translated. Where
-# claude has an equivalent tool the name matches it (Edit, Bash, WebSearch) so the
-# two harnesses read alike; the rest are named in the same style.
+# tools.<fn> -> (header noun, caption verb). The nouns are ours: code mode reports only
+# "exec". Where claude has an equivalent tool the name matches it (Edit, Bash, WebSearch)
+# so the two harnesses read alike.
 _LABELS_BY_FUNCTION: dict[str, tuple[str, str]] = {
-    "apply_patch": ("Edit", "Editing"),
     "exec_command": ("Bash", "Running"),
-    "web__run": ("WebSearch", "Searching the web"),
-    "view_image": ("ViewImage", "Viewing image"),
     "write_stdin": ("WriteStdin", "Typing into terminal"),
-    "create_goal": ("CreateGoal", "Setting a goal"),
-    "get_goal": ("GetGoal", "Checking the goal"),
-    "update_goal": ("UpdateGoal", "Updating the goal"),
+    "view_image": ("ViewImage", "Viewing image"),
+    "image_gen__imagegen": ("ImageGen", "Generating an image"),
+    "web__run": ("WebSearch", "Searching the web"),
+    "list_mcp_resources": ("ListMcpResources", "Listing MCP resources"),
+    "list_mcp_resource_templates": ("ListMcpResourceTemplates", "Listing MCP resource templates"),
+    "read_mcp_resource": ("ReadMcpResource", "Reading MCP resource"),
 }
 
 _CODE_MODE_CALL_RE = re.compile(r"tools\.([A-Za-z_]\w*)\s*\(")
-# The patch header sits inside a JS string literal, so it ends at the closing
-# quote or at the literal ``\n`` escape between lines.
-_APPLY_PATCH_HEADER_RE = re.compile(r"\*\*\*\s+(?:Add|Update|Delete) File:\s*([^\"\\]+)", re.IGNORECASE)
+APPLY_PATCH_FUNCTION_NAME = "apply_patch"
+
+# apply_patch is the one function whose labels are not a fixed pair: the operation lives
+# in the patch body, so `*** Add File:` reads "Creating" while `*** Update File:` reads
+# "Editing". Kept out of _LABELS_BY_FUNCTION so there is one source of truth for it.
+_APPLY_PATCH_LABELS: dict[str, tuple[str, str]] = {
+    "add": ("Write", "Creating"),
+    "update": ("Edit", "Editing"),
+    "delete": ("Delete", "Deleting"),
+}
+# apply_patch takes a backtick template literal, so the filename ends at a real newline
+# when the body arrives raw, or at the ``\n`` escape when it arrives JSON-serialised in
+# ``function_call.arguments``. Stop at either, plus the closing quote.
+_APPLY_PATCH_HEADER_RE = re.compile(
+    r"\*\*\*\s+(Add|Update|Delete) File:\s*([^\"\\\r\n]+)", re.IGNORECASE
+)
 
 
 @pure
-def _first_js_string_argument(js: str, *keys: str) -> str | None:
+def _js_string_argument(js: str, *keys: str) -> str | None:
     """The first ``"key": "value"`` string literal found, in the order given.
 
-    Codex serialises the arguments as JSON, but the surrounding program is
-    arbitrary JS, so this reads the literal rather than parsing the whole thing.
+    Codex serialises the arguments as JSON, but the surrounding program is arbitrary JS,
+    so this reads the literal rather than parsing the whole thing. Matching anywhere in
+    the program also reaches keys nested inside an array, which is how ``web__run``
+    carries its per-mode queries.
     """
     for key in keys:
         match = re.search(rf'["\']?{re.escape(key)}["\']?\s*:\s*"([^"]*)"', js)
@@ -74,55 +138,59 @@ def _first_js_string_argument(js: str, *keys: str) -> str | None:
 
 @pure
 def _target_for_function(function_name: str, js: str) -> str | None:
-    """Best-effort target for a ``tools.<fn>`` call; None when it is not a literal."""
-    if function_name == "apply_patch":
-        match = _APPLY_PATCH_HEADER_RE.search(js)
-        return basename(match.group(1).strip()) if match else None
+    """The caption's target for a ``tools.<fn>`` call, from that function's arguments.
+
+    None when the value is absent or not a string literal, which drops the caption to
+    the bare verb.
+    """
     if function_name == "exec_command":
-        command = _first_js_string_argument(js, "cmd", "command")
+        command = _js_string_argument(js, "cmd")
         return shorten(command) if command is not None else None
     if function_name == "web__run":
-        query = _first_js_string_argument(js, "q", "query")
+        # `q` under search_query / image_query; the other modes carry no free-text query.
+        query = _js_string_argument(js, "q")
         return quoted(query) if query is not None else None
     if function_name == "view_image":
-        path = _first_js_string_argument(js, "path")
+        path = _js_string_argument(js, "path")
         return basename(path) if path is not None else None
+    if function_name == "image_gen__imagegen":
+        prompt = _js_string_argument(js, "prompt")
+        return quoted(prompt) if prompt is not None else None
+    if function_name in ("list_mcp_resources", "list_mcp_resource_templates"):
+        server = _js_string_argument(js, "server")
+        return f"on {server}" if server is not None else None
+    if function_name == "read_mcp_resource":
+        uri = _js_string_argument(js, "uri")
+        return shorten(uri) if uri is not None else None
     return None
 
 
 @pure
-def codex_tool_labels(tool_name: str, input_preview: str) -> tuple[str, str]:
-    """``(header_label, caption_label)`` for one codex tool call."""
-    if tool_name == _WAIT_TOOL_NAME:
-        return "Tool: Wait", "Waiting for code…"
+def _apply_patch_labels(js: str) -> tuple[str, str] | None:
+    """Labels for an ``apply_patch`` body, or None when it carries no file header."""
+    match = _APPLY_PATCH_HEADER_RE.search(js)
+    if match is None:
+        return None
+    noun, verb = _APPLY_PATCH_LABELS[match.group(1).lower()]
+    return f"Tool: {noun}", f"{verb} {basename(match.group(2).strip())}"
 
-    # A hosted web_search should not occur under code mode, but the parser can
-    # still synthesise one from an older rollout, so label it rather than drop it.
-    if tool_name == "web_search":
-        query = first_string_value(parse_input_preview(input_preview), "query", "q")
-        caption = f"Searching the web {quoted(query)}" if query is not None else "Searching the web"
-        return "Tool: WebSearch", caption
 
-    if tool_name != CODE_MODE_TOOL_NAME:
-        mcp = mcp_caption(tool_name)
-        header_label = f"Tool: {tool_name}" if tool_name else "Tool"
-        return header_label, mcp if mcp is not None else GENERIC_CAPTION
-
-    js = input_preview
-
-    # apply_patch front-loads the (often huge) patch body into a variable, e.g.
-    # `const p = "*** Begin Patch\n*** Add File: ..."; await tools.apply_patch(p)`,
-    # which pushes `tools.apply_patch(` past the truncated preview -- so the scan
-    # below cannot see it and the call would read "Running code". The patch header
-    # sits at the START of the body, so detect it directly.
-    patch_match = _APPLY_PATCH_HEADER_RE.search(js)
-    if patch_match is not None:
-        return "Tool: Edit", f"Editing {basename(patch_match.group(1).strip())}"
-
+@pure
+def _code_mode_labels(js: str) -> tuple[str, str]:
+    """Labels for an ``exec`` call, from the ``tools.<fn>`` inside its program."""
     call_match = _CODE_MODE_CALL_RE.search(js)
     if call_match is None:
-        return _UNKNOWN_CODE_HEADER, _UNKNOWN_CODE_CAPTION
+        # No visible call. An apply_patch that front-loads its body into a variable --
+        # `const p = "*** Begin Patch\n*** Add File: ..."; await tools.apply_patch(p)` --
+        # pushes the call past the 200-char preview, leaving the header as the only
+        # evidence. Anything else here is genuinely unparseable.
+        return _apply_patch_labels(js) or (_UNPARSEABLE_CODE_HEADER, _UNPARSEABLE_CODE_CAPTION)
     function_name = call_match.group(1)
+
+    if function_name == APPLY_PATCH_FUNCTION_NAME:
+        # A body whose header is past the preview leaves the operation unknown; "Editing"
+        # is the honest default, since Add and Delete both announce themselves early.
+        return _apply_patch_labels(js) or ("Tool: Edit", "Editing…")
 
     mcp = mcp_caption(function_name)
     if mcp is not None:
@@ -130,9 +198,25 @@ def codex_tool_labels(tool_name: str, input_preview: str) -> tuple[str, str]:
 
     labels = _LABELS_BY_FUNCTION.get(function_name)
     if labels is None:
-        return _UNKNOWN_CODE_HEADER, _UNKNOWN_CODE_CAPTION
+        return f"Tool: {function_name}", GENERIC_CAPTION
     noun, verb = labels
 
     target = _target_for_function(function_name, js)
     caption = f"{verb} {target}" if target is not None else f"{verb}…"
     return f"Tool: {noun}", caption
+
+
+@pure
+def codex_tool_labels(tool_name: str, input_preview: str) -> tuple[str, str]:
+    """``(header_label, caption_label)`` for one codex tool call.
+
+    Under code mode the only tools codex calls directly are ``exec`` and ``wait``.
+    MCP tools are not top-level: they are reached as ``tools.mcp__<server>__<fn>``
+    inside an exec program, so they are handled on the code-mode path. Anything else
+    arriving here is ``request_user_input`` leaking out of Plan mode, and is named.
+    """
+    if tool_name == CODE_MODE_TOOL_NAME:
+        return _code_mode_labels(input_preview)
+    if tool_name == WAIT_TOOL_NAME:
+        return "Tool: Wait", "Waiting for code…"
+    return (f"Tool: {tool_name}" if tool_name else "Tool"), GENERIC_CAPTION

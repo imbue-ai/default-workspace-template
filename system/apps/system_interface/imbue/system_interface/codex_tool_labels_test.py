@@ -32,27 +32,59 @@ from imbue.system_interface.codex_tool_labels import codex_tool_labels
         ),
         pytest.param(
             "exec",
-            'await tools.create_goal({"goal":"ship it"})',
-            ("Tool: CreateGoal", "Setting a goal…"),
-            id="create_goal",
+            'await tools.image_gen__imagegen({"prompt":"a cat wearing a hat"})',
+            ("Tool: ImageGen", 'Generating an image "a cat wearing a hat"'),
+            id="image_gen",
         ),
         pytest.param(
             "exec",
-            "await tools.get_goal({})",
-            ("Tool: GetGoal", "Checking the goal…"),
-            id="get_goal",
+            'await tools.read_mcp_resource({"server":"codex_apps","uri":"file:///docs/api.md"})',
+            ("Tool: ReadMcpResource", "Reading MCP resource file:///docs/api.md"),
+            id="read_mcp_resource",
         ),
         pytest.param(
             "exec",
-            "await tools.update_goal({})",
-            ("Tool: UpdateGoal", "Updating the goal…"),
-            id="update_goal",
+            'await tools.list_mcp_resources({"server":"codex_apps"})',
+            ("Tool: ListMcpResources", "Listing MCP resources on codex_apps"),
+            id="list_mcp_resources",
+        ),
+        pytest.param(
+            "exec",
+            'await tools.mcp__codex_apps__gmail_search_emails({"query":"is:unread"})',
+            ("Tool: mcp__codex_apps__gmail_search_emails", "Running gmail search emails"),
+            id="mcp_server_tool",
         ),
         pytest.param("wait", "", ("Tool: Wait", "Waiting for code…"), id="wait_is_top_level"),
     ],
 )
 def test_codex_tool_labels(tool_name: str, input_preview: str, expected: tuple[str, str]) -> None:
     assert codex_tool_labels(tool_name, input_preview) == expected
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        pytest.param("Add File: hello.txt", ("Tool: Write", "Creating hello.txt"), id="add"),
+        pytest.param("Update File: a/b/plugin.py", ("Tool: Edit", "Editing plugin.py"), id="update"),
+        pytest.param("Delete File: a/b/gone.txt", ("Tool: Delete", "Deleting gone.txt"), id="delete"),
+    ],
+)
+def test_apply_patch_labels_name_the_operation(operation: str, expected: tuple[str, str]) -> None:
+    """The verb comes from the patch header, so a create does not read as an edit."""
+    preview = f"await tools.apply_patch(`*** Begin Patch\n*** {operation}\n*** End Patch`);"
+    assert codex_tool_labels("exec", preview) == expected
+
+
+def test_apply_patch_is_gated_on_the_function_not_the_string() -> None:
+    """A command that merely CONTAINS a patch header is not an edit.
+
+    Searching the whole program for the header before knowing the function would label
+    this grep as "Editing x" -- the tool call has to decide first.
+    """
+    preview = 'tools.exec_command({"cmd":"grep -n \'*** Add File: x\' notes.txt"})'
+    header, caption = codex_tool_labels("exec", preview)
+    assert header == "Tool: Bash"
+    assert caption.startswith("Running grep")
 
 
 def test_apply_patch_is_found_even_when_the_call_is_past_the_truncation() -> None:
@@ -69,12 +101,34 @@ def test_apply_patch_is_found_even_when_the_call_is_past_the_truncation() -> Non
     "input_preview",
     [
         pytest.param("const x = 1; text(x);", id="no_tools_call_at_all"),
-        pytest.param('await tools.some_future_thing({"a":1})', id="unrecognised_function"),
         pytest.param("", id="empty_preview"),
     ],
 )
-def test_unrecognised_code_mode_falls_back_rather_than_guessing(input_preview: str) -> None:
+def test_unparseable_code_mode_falls_back_rather_than_guessing(input_preview: str) -> None:
+    """``Tool: Code`` means exactly one thing: no tools.<fn> call could be parsed."""
     assert codex_tool_labels("exec", input_preview) == ("Tool: Code", "Running code")
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    [
+        pytest.param("some_future_thing", id="tool_added_by_a_later_codex"),
+        pytest.param("update_plan", id="banned_update_plan"),
+        pytest.param("create_goal", id="banned_create_goal"),
+        pytest.param("get_goal", id="banned_get_goal"),
+        pytest.param("update_goal", id="banned_update_goal"),
+    ],
+)
+def test_unrecognised_function_is_named_rather_than_hidden(function_name: str) -> None:
+    """A parsed-but-untabled function keeps its name.
+
+    This is what makes a prompt-banned tool (update_plan, the goal trio) visible in the
+    UI the moment it leaks, and a stale table self-reporting -- collapsing these to
+    "Tool: Code" would hide both.
+    """
+    header, caption = codex_tool_labels("exec", f'await tools.{function_name}({{"a":1}})')
+    assert header == f"Tool: {function_name}"
+    assert caption == "Running tool…"
 
 
 @pytest.mark.parametrize(
