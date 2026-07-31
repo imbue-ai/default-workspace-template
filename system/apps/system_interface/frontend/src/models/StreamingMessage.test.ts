@@ -32,6 +32,9 @@ class FakeEventSource {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
+  // EventSource.OPEN. The watchdog only acts on a connection the browser still
+  // believes is up; CONNECTING (0) means the browser is already retrying.
+  readyState = 1;
   readonly listeners = new Map<string, Array<() => void>>();
   constructor(public url: string) {
     FakeEventSource.instances.push(this);
@@ -156,6 +159,23 @@ describe("SSE liveness watchdog", () => {
       await vi.advanceTimersByTimeAsync(8_000);
       original.emit("ping");
     }
+
+    expect(original.closed).toBe(false);
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    disconnectFromStream(agentId);
+  });
+
+  it("leaves a silent stream alone while the browser is already reconnecting it", async () => {
+    vi.useFakeTimers();
+    const agentId = `agent-${agentCounter++}`;
+    await connect(agentId);
+    const original = latestEventSource();
+    // CONNECTING: the browser saw the drop itself and is retrying. Stepping in
+    // here would race that with a second reconnect.
+    original.readyState = 0;
+
+    await vi.advanceTimersByTimeAsync(SSE_SILENCE_TIMEOUT_MS + 5_000);
 
     expect(original.closed).toBe(false);
     expect(FakeEventSource.instances).toHaveLength(1);
