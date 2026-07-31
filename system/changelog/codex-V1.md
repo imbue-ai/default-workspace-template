@@ -43,3 +43,22 @@ Added OpenAI Codex CLI support to the workspace image.
 - Removed the `chat` and `worker` agent types. Both existed only to hang role config off
   `parent_type = "claude"`; that config now lives in the role templates, so every claude
   role resolves to the `claude` type itself.
+
+- Codex tool-call labels rebuilt against the tool surface of a live agent on codex-cli
+  0.146.0, whose signatures are now recorded verbatim in the module docstring.
+  `apply_patch` is gated on the function name rather than on the patch header appearing
+  anywhere in the program -- a shell command that merely mentioned `*** Add File:` used to
+  render as `Tool: Edit` -- and its labels now name the operation, so a create reads
+  "Creating hello.txt" and a delete "Deleting gone.txt" instead of both reading "Editing".
+  Argument keys (`cmd`, `q`, `path`, `prompt`, `uri`, `server`) come from the real
+  signatures, and the patch-header pattern stops at a newline so it works whether the body
+  arrives raw or JSON-escaped.
+
+- A `tools.<fn>` that is parsed but has no label now renders `Tool: <fn>` rather than
+  collapsing to `Tool: Code`, which is reserved for a program with no parseable call at
+  all. This is what makes a prompt-banned tool (`update_plan`, the goal trio) visible the
+  moment it leaks, and a stale label table self-reporting.
+
+- Labels added for `image_gen__imagegen`, `list_mcp_resources`,
+  `list_mcp_resource_templates`, and `read_mcp_resource`; the hosted `web_search` path was
+  removed, since it cannot occur under `code_mode_host`.

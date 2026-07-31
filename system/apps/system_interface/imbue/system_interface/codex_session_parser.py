@@ -17,8 +17,7 @@ conversation state; ``event_msg`` lines are a derived live-display stream. We bu
 the body from ``response_item`` -- **except** two things taken from ``event_msg``:
 (1) user bubbles, from ``user_message`` (the clean human-typed prompt); and (2) the
 ``turn_aborted`` marker (a user interrupt), used to clear a stuck activity dot.
-A hosted web search comes from its ``response_item`` ``web_search_call`` (not the
-transient begin/end event_msgs). ``response_item`` role=user is the *model-facing*
+``response_item`` role=user is the *model-facing*
 user role: the human prompt PLUS
 injected ``AGENTS.md`` / ``<environment_context>`` / ``<turn_aborted>`` /
 ``<subagent_notification>`` content, which we do not want as chat bubbles. Everything
@@ -43,7 +42,6 @@ re-read from byte 0) the same user bubble dedups instead of duplicating.
 from __future__ import annotations
 
 import hashlib
-import json
 from typing import Any
 
 from imbue.system_interface.codex_tool_labels import codex_tool_labels
@@ -161,22 +159,6 @@ def _stable_user_event_id(timestamp: str, content: str) -> str:
     return f"codex-user-{digest}"
 
 
-def _web_search_query(action: Any) -> str:
-    """Pull the query from a ``web_search_call``'s ``action`` (Search variant:
-    ``query``, or the first of ``queries``). Empty string when absent."""
-    if not isinstance(action, dict):
-        return ""
-    query = action.get("query")
-    if isinstance(query, str) and query:
-        return query
-    queries = action.get("queries")
-    if isinstance(queries, list):
-        for candidate in queries:
-            if isinstance(candidate, str) and candidate:
-                return candidate
-    return ""
-
-
 def parse_codex_rollout_line(
     record: dict[str, Any],
     line_index: int,
@@ -184,10 +166,7 @@ def parse_codex_rollout_line(
 ) -> list[dict[str, Any]]:
     """Map one codex rollout line to zero or more UI event dicts (``[]`` to skip).
 
-    Returns a *list* because one rollout line can expand to more than one event: a
-    completed hosted web search is a single self-contained ``web_search_call`` item,
-    which we emit as a tool_use + its matching tool_result so it renders as a done
-    "Searching the web ..." bubble without leaving an unmatched (stuck) call.
+    Returns a *list* because one rollout line can expand to more than one event.
 
     ``line_index`` is the stable physical line number (for event-id synthesis).
     ``tool_name_by_call_id`` is a mutable cross-line map so a ``function_call_output``
@@ -258,7 +237,7 @@ def parse_codex_rollout_line(
         # session_meta, turn_context -> drop
         return []
 
-    # --- response_item: assistant messages + tool calls/results + hosted web search ---
+    # --- response_item: assistant messages + tool calls/results ---
     if payload_type == "message":
         if payload.get("role") == "assistant":
             # codex re-serialises history; each copy shares the message ``id``, so
@@ -307,40 +286,6 @@ def parse_codex_rollout_line(
                 "is_error": False,
                 "message_uuid": event_id,
             }
-        ]
-
-    # A hosted web search is persisted (all modes) as a single, self-contained
-    # ``web_search_call`` response_item -- keyed on ``id`` (there is no call_id), with
-    # the query under ``action`` -- NOT as the transient ``web_search_begin``/``_end``
-    # event_msgs (begin is never persisted; end is legacy-only). It is already done
-    # when written, so we synthesise BOTH the tool call and its matching result from
-    # this one line: a "Searching the web <query>" bubble that renders complete,
-    # never an unmatched call that would stick the dot. (No in-flight window to
-    # caption live -- codex hands us the search already finished.)
-    if payload_type == "web_search_call":
-        item_id = str(payload.get("id", "")) or f"line{line_index}"
-        query = _web_search_query(payload.get("action"))
-        input_preview = json.dumps({"query": query}, separators=(",", ":")) if query else ""
-        call_event_id = f"codex-call-{item_id}"
-        result_event_id = f"codex-result-{item_id}"
-        return [
-            _assistant_event(
-                timestamp,
-                call_event_id,
-                text="",
-                tool_calls=[_labelled_tool_call(item_id, "web_search", input_preview)],
-            ),
-            {
-                "timestamp": timestamp,
-                "type": "tool_result",
-                "event_id": result_event_id,
-                "source": _SOURCE,
-                "tool_call_id": item_id,
-                "tool_name": "web_search",
-                "output": query,
-                "is_error": False,
-                "message_uuid": result_event_id,
-            },
         ]
 
     return []

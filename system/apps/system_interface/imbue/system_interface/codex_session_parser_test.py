@@ -94,27 +94,6 @@ def test_response_item_user_role_is_dropped() -> None:
     assert parse_codex_rollout_line(line, 1, {}) == []
 
 
-def test_web_search_expands_to_matched_call_and_result() -> None:
-    """A completed hosted web search is one self-contained web_search_call item; we
-    emit BOTH the tool call and its matching result so it renders as a finished
-    'Searching the web' bubble, never a stuck unmatched call."""
-    line = {
-        "timestamp": "2026-07-19T10:00:04Z",
-        "type": "response_item",
-        "payload": {"type": "web_search_call", "id": "ws_1", "action": {"type": "search", "query": "python asyncio"}},
-    }
-    events = parse_codex_rollout_line(line, 2, {})
-    assert len(events) == 2
-    call, result = events
-    assert call["type"] == "assistant_message"
-    assert call["tool_calls"][0]["tool_name"] == "web_search"
-    assert call["tool_calls"][0]["tool_call_id"] == "ws_1"
-    assert result["type"] == "tool_result"
-    # matches the call -> not stuck
-    assert result["tool_call_id"] == "ws_1"
-    assert result["output"] == "python asyncio"
-
-
 def test_function_call_and_output_link_by_call_id() -> None:
     """A function_call registers its name; the later output recovers it by call_id."""
     name_map: dict[str, str] = {}
