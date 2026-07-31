@@ -1580,6 +1580,30 @@ export function closeChatPanelForAgent(agentId: string): void {
   if (panel) dockview.removePanel(panel);
 }
 
+/** Whether this client has recorded ``agentId``'s chat tab as destroyed. Read on
+ *  every chat render, including the first one after a layout restore, which is
+ *  what lets a restored tab come back as a tombstone rather than re-deriving it. */
+export function isChatTombstoned(agentId: string): boolean {
+  return panelParams.get(chatPanelId(agentId))?.chatTombstoned === true;
+}
+
+/** Record (or clear) the destroyed marker on ``agentId``'s chat tab.
+ *
+ *  Written only in response to the backend's ``agent_removed``, so what is
+ *  persisted is a reported fact rather than an inference from the agent list --
+ *  the distinction that makes persisting it safe. Saving is scheduled so the
+ *  marker survives a reload. */
+export function setChatTombstoned(agentId: string, tombstoned: boolean): void {
+  const params = panelParams.get(chatPanelId(agentId));
+  if (params === undefined || params.chatTombstoned === (tombstoned || undefined)) return;
+  if (tombstoned) {
+    params.chatTombstoned = true;
+  } else {
+    delete params.chatTombstoned;
+  }
+  scheduleSave();
+}
+
 export function openSubagentTab(agentId: string, subagentSessionId: string, description: string): void {
   if (!dockview) return;
 

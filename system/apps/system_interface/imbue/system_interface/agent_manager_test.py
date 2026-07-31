@@ -855,6 +855,52 @@ def test_handle_observe_event_dispatches_agent_removed(
     assert len(agent_manager.get_agents()) == 0
 
 
+def test_agent_removed_event_is_relayed_to_clients(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """An explicit AGENT_REMOVED reaches clients as its own broadcast.
+
+    Clients cannot derive "destroyed" from ``agents_updated``: an agent is
+    equally missing from a snapshot while it is still being created. Relaying
+    the removal is what lets a chat tab say the agent is gone without guessing.
+    """
+    agent = _agent_details("to-destroy", agent_id=MngrAgentId())
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+
+    # Register after seeding so only the removal's broadcasts are captured.
+    q = broadcaster.register()
+    agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name))
+
+    removals = [message for message in _drain(q) if message["type"] == "agent_removed"]
+    assert len(removals) == 1
+    assert removals[0]["agent_id"] == str(agent.id)
+    assert removals[0]["agent_name"] == str(agent.name)
+
+
+def test_full_snapshot_omitting_an_agent_does_not_claim_it_was_destroyed(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """An agent vanishing from a rebuild snapshot is NOT reported as destroyed.
+
+    This is the distinction the whole event exists for. A snapshot that no
+    longer lists an agent is what a restarting observe pipeline produces, so
+    treating it as a destroy would tell every client that a live agent is dead.
+    The agent is still dropped from the tracked set -- only the claim about
+    *why* is withheld.
+    """
+    agent = _agent_details("still-alive", agent_id=MngrAgentId())
+    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
+
+    q = broadcaster.register()
+    agent_manager._handle_observe_event(make_full_agent_state_event([]))
+
+    messages = _drain(q)
+    assert [message for message in messages if message["type"] == "agent_removed"] == []
+    # ...but the drop itself is still reported, so the agent list stays correct.
+    assert _last_agents_updated(messages) is not None
+    assert len(agent_manager.get_agents()) == 0
+
+
 def test_full_snapshot_dropping_agents_removes_them(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:

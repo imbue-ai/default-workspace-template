@@ -980,6 +980,12 @@ class AgentManager:
         per-agent resource start/stop (app watcher, activity tracking) and assist
         auto-open, exactly as the discovery membership delta used to.
         """
+        # Set only for an explicit AGENT_REMOVED. The before/after key diff below
+        # cannot stand in for it: an agent also drops out of that diff by being
+        # absent from a new AGENTS_FULL_STATE, which happens whenever the observe
+        # pipeline restarts and says nothing about the agent being destroyed.
+        # Only the explicit event is authoritative enough to relay to clients.
+        destroyed_agent: tuple[str, str] | None = None
         with self._lock:
             before_details = dict(self._agent_details_by_id)
             match event:
@@ -989,6 +995,7 @@ class AgentManager:
                     self._agent_details_by_id[str(event.agent.id)] = event.agent
                 case AgentRemovedEvent():
                     self._agent_details_by_id.pop(str(event.agent_id), None)
+                    destroyed_agent = (str(event.agent_id), str(event.agent_name))
             details_by_id = dict(self._agent_details_by_id)
 
         before_ids = set(before_details)
@@ -1063,6 +1070,11 @@ class AgentManager:
         # handler resolves ``chat:<name>`` against its known-agents list and drops the
         # open if the agent is not there yet, so the chat must be known first.
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+        # ...then the destroy itself, so a client handling it already has the agent
+        # list the removal produced.
+        if destroyed_agent is not None:
+            self._broadcaster.broadcast_agent_removed(agent_id=destroyed_agent[0], agent_name=destroyed_agent[1])
 
         # A newly-created chat usually surfaces as a freshly-added agent here, so
         # auto-open assist chats that have appeared. ``_maybe_auto_open_assist``

@@ -77,6 +77,14 @@ export interface LayoutOpEvent {
 
 type WsEvent =
   | { type: "agents_updated"; agents: AgentState[] }
+  | {
+      // A specific agent was destroyed. Distinct from it merely being absent
+      // from the next agents_updated, which is also true while an agent is
+      // still being created and while the observe pipeline restarts.
+      type: "agent_removed";
+      agent_id: string;
+      agent_name: string;
+    }
   | { type: "apps_updated"; apps: AppEntry[] }
   | {
       type: "proto_agent_created";
@@ -138,6 +146,17 @@ export type LayoutSyncListener = (event: LayoutSyncEvent) => void;
 export type LayoutOpListener = (event: LayoutOpEvent) => void;
 export type AgentsUpdatedListener = (agents: AgentState[]) => void;
 /**
+ * Notified that an agent was destroyed, by whoever destroyed it -- this client,
+ * another client, or the CLI.
+ *
+ * This is the authoritative signal, and the reason consumers do not try to
+ * derive it: an agent missing from an ``agents_updated`` snapshot is equally
+ * consistent with one that has not finished being created and with one whose
+ * discovery pipeline is momentarily restarting, so absence can only ever be a
+ * guess. The backend relays ``mngr observe``'s explicit AGENT_REMOVED here.
+ */
+export type AgentRemovedListener = (agentId: string, agentName: string) => void;
+/**
  * Notified when a terminal tab's underlying tmux session changes (attached to
  * a different session, or the session was renamed). ``terminalId`` is the
  * per-tab id we pass into the ttyd URL when set (client-session-changed);
@@ -160,6 +179,7 @@ let protoAgents: ProtoAgent[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
 let layoutSyncListeners: LayoutSyncListener[] = [];
 let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
+let agentRemovedListeners: AgentRemovedListener[] = [];
 let terminalSessionListeners: TerminalSessionListener[] = [];
 let agentActivityListeners: AgentActivityListener[] = [];
 let ws: WebSocket | null = null;
@@ -251,6 +271,15 @@ function handleEvent(event: WsEvent): void {
       }
       break;
     }
+
+    case "agent_removed":
+      // Deliberately does NOT touch `agents`: the agents_updated that
+      // accompanies the destroy is what maintains the list. This is purely the
+      // notification that the removal was a destroy rather than a gap.
+      for (const listener of agentRemovedListeners) {
+        listener(event.agent_id, event.agent_name);
+      }
+      break;
 
     case "apps_updated":
       apps = event.apps;
@@ -407,6 +436,14 @@ export function addAgentsUpdatedListener(listener: AgentsUpdatedListener): void 
 
 export function removeAgentsUpdatedListener(listener: AgentsUpdatedListener): void {
   agentsUpdatedListeners = agentsUpdatedListeners.filter((l) => l !== listener);
+}
+
+export function addAgentRemovedListener(listener: AgentRemovedListener): void {
+  agentRemovedListeners.push(listener);
+}
+
+export function removeAgentRemovedListener(listener: AgentRemovedListener): void {
+  agentRemovedListeners = agentRemovedListeners.filter((l) => l !== listener);
 }
 
 export function addAgentActivityListener(listener: AgentActivityListener): void {

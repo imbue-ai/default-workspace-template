@@ -165,6 +165,18 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast an agents_updated event."""
         self.broadcast({"type": "agents_updated", "agents": agents})
 
+    def broadcast_agent_removed(self, agent_id: str, agent_name: str) -> None:
+        """Broadcast that an agent was destroyed.
+
+        Distinct from ``agents_updated`` on purpose. A client can only read
+        *absence* out of a full snapshot, and absence is ambiguous: an agent is
+        equally missing while it is still being created, and while the observe
+        pipeline is restarting. This event says a specific agent was destroyed,
+        which is a fact the client would otherwise have to guess at from
+        successive snapshots.
+        """
+        self.broadcast({"type": "agent_removed", "agent_id": agent_id, "agent_name": agent_name})
+
     def broadcast_apps_updated(self, apps: list[dict[str, str]]) -> None:
         """Broadcast an apps_updated event."""
         self.broadcast({"type": "apps_updated", "apps": apps})
