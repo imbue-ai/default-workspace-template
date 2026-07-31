@@ -27,6 +27,7 @@ from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
 from share_gateway import materials as materials_module
+from share_gateway.log import log as _log
 from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import read_registered_apps
 from share_gateway.caddyfile import render_caddyfile
@@ -46,10 +47,6 @@ POLL_INTERVAL_SECONDS = 10
 APPS_TOML_PATH = Path("data/.state/apps.toml")
 _CADDY_ADMIN_URL = "http://localhost:2019"
 _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
-
-
-def _log(message: str) -> None:
-    print(f"[share-gateway] {message}", file=sys.stderr, flush=True)
 
 
 def _try_setup_inotify(paths: list[Path]) -> object | None:

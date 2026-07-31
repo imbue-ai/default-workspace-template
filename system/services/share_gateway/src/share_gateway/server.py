@@ -27,6 +27,7 @@ from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
 from share_gateway.hostnames import service_for_host
+from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
 from share_gateway.origin_policy import is_request_origin_allowed
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
@@ -89,6 +90,18 @@ def _is_html_navigation(method: str, accept_header: str, is_websocket_upgrade: b
     return method.upper() == "GET" and not is_websocket_upgrade and "text/html" in accept_header.lower()
 
 
+def forwarded_client_ip(headers: Mapping[str, str]) -> str:
+    """The real client address of the request being verified, or '' when unknown.
+
+    frpc stamps each spliced connection with PROXY protocol, so caddy's
+    X-Forwarded-For on the auth subrequest carries the address the relay saw
+    (the visitor or scanner), not frpc's loopback. The first entry is the
+    client; later entries would be intermediaries appending.
+    """
+    forwarded_for = headers.get("X-Forwarded-For", "")
+    return forwarded_for.split(",")[0].strip() if forwarded_for else ""
+
+
 def _requested_url(host: str, forwarded_uri: str) -> str:
     uri = forwarded_uri if forwarded_uri.startswith("/") else "/"
     return f"https://{host}{uri}"
@@ -114,6 +127,13 @@ def build_gateway_app(
     def _forbidden() -> Response:
         return Response(_FORBIDDEN_PAGE, status=403, mimetype="text/html")
 
+    # Denials are the traffic worth seeing (scanner probes, revoked visitors,
+    # unknown hostnames); allowed requests stay unlogged. The client address
+    # is the real one the relay saw, via frpc's PROXY protocol stamp.
+    def _log_denied(reason: str, host: str) -> None:
+        client_ip = forwarded_client_ip(request.headers) or "unknown-client"
+        log(f"Denied {client_ip} -> {host or '(no host)'}: {reason}")
+
     @app.get("/_auth/healthz")
     def healthz() -> Response:
         return Response("ok", status=200, mimetype="text/plain")
@@ -130,6 +150,7 @@ def build_gateway_app(
         label_to_name = get_label_to_name()
         is_ours, service_name = service_for_host(host, workspace_domain, label_to_name, auth_label)
         if not is_ours:
+            _log_denied("hostname is not one of this workspace's origins", host)
             return _forbidden()
 
         # Upgrade is hop-by-hop, so caddy passes it explicitly (see the
@@ -140,6 +161,7 @@ def build_gateway_app(
         if not is_request_origin_allowed(
             method, origin_header, is_websocket_upgrade, workspace_domain, label_to_name, auth_label
         ):
+            _log_denied("request Origin is not allowed", host)
             return _forbidden()
 
         cookie_header = request.headers.get("Cookie", "")
@@ -164,6 +186,7 @@ def build_gateway_app(
                     status=302,
                     headers={"Location": f"{materials.broker_url}/share/authorize?{authorize_query}"},
                 )
+            _log_denied("no session on a non-HTML request", host)
             return Response("authentication required", status=401, mimetype="text/plain")
 
         # Re-check the grants file on every request so revocation is instant.
@@ -171,8 +194,10 @@ def build_gateway_app(
         try:
             grants = load_grants(grants_path)
         except GrantsError:
+            _log_denied("grants file is missing or malformed (failing closed)", host)
             return _forbidden()
         if not grants.allows(email, service_name):
+            _log_denied("session email is not granted this service", host)
             return _forbidden()
 
         return Response(

@@ -51,4 +51,9 @@ type = "https"
 localIP = "127.0.0.1"
 localPort = {local_https_port}
 customDomains = [{custom_domains}]
+# Prefix each spliced connection with a PROXY protocol v2 header carrying the
+# real client address the relay saw, so caddy (whose listener wrapper consumes
+# it) can tell a scanner from a visitor instead of seeing every connection as
+# frpc on 127.0.0.1.
+transport.proxyProtocolVersion = "v2"
 """
