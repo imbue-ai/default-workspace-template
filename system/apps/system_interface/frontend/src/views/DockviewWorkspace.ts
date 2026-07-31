@@ -47,6 +47,7 @@ import {
   getAgents,
   getApps,
   getProtoAgents,
+  labelForService,
   removeAgentLocally,
   removeAgentsUpdatedListener,
   reportClientState,
@@ -107,7 +108,7 @@ function parseServiceRefBody(body: string): { name: string; query: string } {
  *  service origin. */
 function serviceRefUrl(body: string): string {
   const { name, query } = parseServiceRefBody(body);
-  return `${deriveServiceOrigin(name)}${query}`;
+  return `${deriveServiceOrigin(labelForService(name))}${query}`;
 }
 
 /** The ``?query`` suffix of a stored iframe URL, or "" when it has none.
@@ -128,7 +129,7 @@ function serviceSessionLabel(query: string): string {
 }
 
 export function getTerminalUrl(): string {
-  return deriveServiceOrigin("terminal");
+  return deriveServiceOrigin(labelForService("terminal"));
 }
 
 /** Build the iframe URL that attaches a terminal to ``agentName``'s tmux
@@ -721,7 +722,7 @@ function buildDropdownItems(
   );
   for (const app of apps) {
     if (!openAppNames.has(app.name)) {
-      const serviceUrl = deriveServiceOrigin(app.name);
+      const serviceUrl = deriveServiceOrigin(labelForService(app.name));
       items.push({
         label: app.name,
         action: () => openIframeTab(serviceUrl, app.name, "iframe", app.name, targetGroup),
@@ -1770,7 +1771,7 @@ function applyLayoutContent(saved: SavedLayout | null): void {
         params.terminalId = mintTerminalId();
         params.url = buildSessionTerminalUrl(params.terminalSessionName, params.terminalId, primaryWorkDir());
       } else if (params.serviceName) {
-        params.url = `${deriveServiceOrigin(params.serviceName)}${urlQuerySuffix(params.url)}`;
+        params.url = `${deriveServiceOrigin(labelForService(params.serviceName))}${urlQuerySuffix(params.url)}`;
       } else if (params.url) {
         const rebuiltTerminalUrl = rebuildAgentTerminalUrl(params.url);
         if (rebuiltTerminalUrl !== null) params.url = rebuiltTerminalUrl;
@@ -2033,10 +2034,10 @@ function resolveReplaceUrl(url: string): string {
   if (url.startsWith("service:")) {
     const remainder = url.substring("service:".length);
     const slashIndex = remainder.indexOf("/");
-    if (slashIndex === -1) return deriveServiceOrigin(remainder);
+    if (slashIndex === -1) return deriveServiceOrigin(labelForService(remainder));
     const serviceName = remainder.substring(0, slashIndex);
     const path = remainder.substring(slashIndex + 1);
-    return `${deriveServiceOrigin(serviceName)}${path}`;
+    return `${deriveServiceOrigin(labelForService(serviceName))}${path}`;
   }
   return url;
 }

@@ -296,18 +296,43 @@ def _service_ref_parts(ref: str) -> tuple[str, str]:
 _WORKSPACE_HOST_LABEL_RE = re.compile(r"^host-[0-9a-f]{32}$")
 
 
+def _read_label_to_name_map(path: Path) -> dict[str, str]:
+    """Map each service's origin ``label`` back to its registered ``name``.
+
+    Panel origins are built from a service's unguessable ``<name>-<rand>``
+    origin label (see ``system/scripts/forward_port.py``), so the first
+    hostname label of a stored service URL is the LABEL, not the name. This
+    reads ``apps.toml`` and inverts each row's ``label -> name`` so the parse
+    below can recover the service name. Missing/unreadable registry yields an
+    empty map (callers fall back to the label as-is).
+    """
+    if not path.exists():
+        return {}
+    with open(path, "rb") as f:
+        doc = tomlkit.load(f)
+    mapping: dict[str, str] = {}
+    for app in doc.get("apps", []):
+        name = app.get("name") if hasattr(app, "get") else None
+        label = app.get("label") if hasattr(app, "get") else None
+        if isinstance(name, str) and name and isinstance(label, str) and label:
+            mapping[label] = name
+    return mapping
+
+
 def _service_coordinates_from_url(url: str) -> tuple[str, str] | None:
     """Derive (service_name, path-and-query) from an absolute service-origin URL.
 
-    Service origins prefix the service name as the first hostname label of
-    the workspace host: locally
-    ``http://<name>.host-<hex>.localhost:8421/...``, on shares
-    ``https://<name>.host-<hex>.<user>.<region>.<domain>/...`` -- the same
+    Service origins prefix the service's unguessable ``<name>-<rand>`` origin
+    label as the first hostname label of the workspace host: locally
+    ``http://<label>.host-<hex>.localhost:8421/...``, on shares
+    ``https://<label>.host-<hex>.<user>.<region>.<domain>/...`` -- the same
     nesting rule with a longer base. So a URL names a service exactly when a
-    ``host-<32hex>`` label appears past the first label, and the service is
-    the first label. Returns None for anything else (an external URL, the
-    bare workspace origin -- whose FIRST label is the coordinate itself) so
-    a ``service:`` expectation can never match those.
+    ``host-<32hex>`` label appears past the first label; the first label is the
+    origin LABEL, which the registry maps back to the service name (falling
+    back to the label as-is when it has no registry match). Returns None for
+    anything else (an external URL, the bare workspace origin -- whose FIRST
+    label is the coordinate itself) so a ``service:`` expectation can never
+    match those.
 
     Mirrors ``_service_name_from_url`` in system_interface's ``layout_ops.py``
     (this script must stay stdlib-only, so it cannot import that package); a
@@ -319,9 +344,10 @@ def _service_coordinates_from_url(url: str) -> tuple[str, str] | None:
     labels = host.split(".")
     if not any(_WORKSPACE_HOST_LABEL_RE.match(label) for label in labels[1:]):
         return None
-    name = labels[0]
-    if not name:
+    label = labels[0]
+    if not label:
         return None
+    name = _read_label_to_name_map(_apps_file()).get(label, label)
     path = parsed.path or "/"
     if parsed.query:
         path = f"{path}?{parsed.query}"
