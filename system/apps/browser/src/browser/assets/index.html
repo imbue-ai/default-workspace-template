@@ -351,7 +351,10 @@
           writeLocalText(new TextDecoder().decode(bytes));
         } else if (event.data.startsWith("clip,out,")) {
           // A remote copy of an image / large text: fetch the bytes over HTTP (may be >1 MiB).
+          // Show a chip immediately -- a right-click "Copy image" on the remote arrives here
+          // with no prior "Copying…", and the fetch + local write can lag.
           const [, , mime] = event.data.split(",");
+          showChip("Copying image…", "");
           fetch(clipUrl("out")).then((r) => r.blob()).then((blob) => writeLocalImage(blob, mime))
             .catch(() => showChip("Copy failed", "err"));
         }
@@ -537,6 +540,20 @@ registerProcessor('pb', PB);`;
   function driving() { return controlOwner !== "human"; }  // agent (or nobody) -> suppress input
   function sendInput(message) { if (streamWs && streamWs.readyState === WebSocket.OPEN) streamWs.send(message); }
   function releaseHeldInput() { buttonMask = 0; heldKeysyms.clear(); sendInput("kr"); }
+  // Un-pin stuck modifiers: on every key event, release any modifier we still think is
+  // held but whose event flag says it's up (its keyup was lost -- e.g. focus moved during
+  // a copy, or a synthetic combo raced it). This is the robust backstop against Ctrl/Alt/
+  // Shift/Meta "sticking down" on the remote (the heartbeat would otherwise keep re-pressing).
+  const MODIFIER_KEYSYMS = {
+    ctrlKey: [0xffe3, 0xffe4], shiftKey: [0xffe1, 0xffe2],
+    altKey: [0xffe9, 0xffea, 0xfe03], metaKey: [0xffe7, 0xffe8],
+  };
+  function reconcileModifiers(event) {
+    for (const flag in MODIFIER_KEYSYMS) {
+      if (event[flag]) continue;  // still physically held -> leave it down
+      for (const k of MODIFIER_KEYSYMS[flag]) if (heldKeysyms.has(k)) { heldKeysyms.delete(k); sendInput("ku," + k); }
+    }
+  }
   function captureCoords(event) {
     if (!canvas.width || !canvas.height) return null;
     const rect = canvas.getBoundingClientRect();
@@ -592,6 +609,7 @@ registerProcessor('pb', PB);`;
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas.addEventListener("keydown", (e) => {
     if (driving()) return;
+    reconcileModifiers(e);  // release any modifier whose keyup we missed, before this key
     if (e.metaKey) return;  // Cmd-combos stay LOCAL (#30): Mac muscle memory + workspace shortcuts
     // Let Ctrl+C/X/V fall through to the native copy/cut/paste DOM events (handled in
     // the clipboard section) instead of forwarding them as keystrokes -- no key
@@ -605,6 +623,7 @@ registerProcessor('pb', PB);`;
   });
   canvas.addEventListener("keyup", (e) => {
     if (driving()) return;
+    reconcileModifiers(e);  // backstop: sync held modifiers to the event's flags
     if (e.metaKey || e.key === "Meta") return;
     const keysym = keysymFor(e);
     if (keysym === null) return;
@@ -635,9 +654,21 @@ registerProcessor('pb', PB);`;
     if (kind === "ok" || kind === "err") chipTimer = setTimeout(() => { clipchip.className = ""; }, 2200);
   }
   function clipUrl(kind) { return new URL("browsers/" + browserId + "/clipboard/" + kind, document.baseURI); }
-  function remoteCtrlCombo(keysym) {  // Control down, key down/up, Control up (Selkies keysyms)
-    sendInput("kd,65507"); sendInput("kd," + keysym); sendInput("ku," + keysym); sendInput("ku,65507");
+  function remoteClipCombo(keysym) {  // drive a remote Ctrl+<key> for copy/cut
+    // If the human is physically holding Ctrl (Win/Linux Ctrl+C), it's ALREADY down on the
+    // remote and kept down by the heartbeat -- just TAP the letter, so we don't release the
+    // modifier out from under them (the old always-wrap left Ctrl pinned). On the Mac Cmd
+    // path, Cmd is never forwarded, so synthesize the whole Ctrl+<key> combo.
+    const ctrlHeld = heldKeysyms.has(0xffe3) || heldKeysyms.has(0xffe4);
+    if (ctrlHeld) { sendInput("kd," + keysym); sendInput("ku," + keysym); }
+    else { sendInput("kd," + 0xffe3); sendInput("kd," + keysym); sendInput("ku," + keysym); sendInput("ku," + 0xffe3); }
   }
+  // Copy/cut feedback: a remote copy that produced nothing (no selection) never sends a
+  // clip payload back, so arm a timeout when we ask for one and clear it the moment a
+  // payload arrives; if it fires first, the copy came back empty.
+  let copyTimer = null;
+  function armCopyFeedback() { clearTimeout(copyTimer); copyTimer = setTimeout(() => { copyTimer = null; showChip("Nothing to copy", "err"); }, 1500); }
+  function clearCopyFeedback() { clearTimeout(copyTimer); copyTimer = null; }
 
   async function postPaste(blob, mime) {
     if (blob.size > CLIP_MAX_BYTES) { showChip("Paste payload too large", "err"); return; }
@@ -669,12 +700,12 @@ registerProcessor('pb', PB);`;
   document.addEventListener("copy", (e) => {
     if (driving()) return;
     e.preventDefault();
-    remoteCtrlCombo(0x0063); showChip("Copying…", "");  // remote Ctrl+C
+    remoteClipCombo(0x0063); showChip("Copying…", ""); armCopyFeedback();  // remote Ctrl+C
   });
   document.addEventListener("cut", (e) => {
     if (driving()) return;
     e.preventDefault();
-    remoteCtrlCombo(0x0078); showChip("Cutting…", "");  // remote Ctrl+X
+    remoteClipCombo(0x0078); showChip("Cutting…", ""); armCopyFeedback();  // remote Ctrl+X
   });
 
   // Local clipboard WRITE with a deferred retry: a programmatic write needs the document
@@ -684,12 +715,14 @@ registerProcessor('pb', PB);`;
   function flushPendingWrite() { if (pendingWrite) { const w = pendingWrite; pendingWrite = null; w(); } }
   window.addEventListener("focus", flushPendingWrite);
   function writeLocalText(text) {
+    clearCopyFeedback();  // a payload arrived -> not "nothing to copy"
     const doWrite = () => navigator.clipboard.writeText(text)
       .then(() => showChip("Copied from remote", "ok"))
-      .catch(() => { pendingWrite = doWrite; });
+      .catch(() => { pendingWrite = doWrite; showChip("Copied — click the page to sync", "err"); });
     doWrite();
   }
   async function writeLocalImage(blob, mime) {
+    clearCopyFeedback();  // a payload arrived -> not "nothing to copy"
     // Chromium's clipboard only writes image/png; transcode anything else.
     let png = blob;
     if (mime !== "image/png") {
@@ -703,7 +736,7 @@ registerProcessor('pb', PB);`;
     }
     const doWrite = () => navigator.clipboard.write([new ClipboardItem({ "image/png": png })])
       .then(() => showChip("Image copied from remote", "ok"))
-      .catch(() => { pendingWrite = doWrite; });
+      .catch(() => { pendingWrite = doWrite; showChip("Image copied — click the page to sync", "err"); });
     doWrite();
   }
 

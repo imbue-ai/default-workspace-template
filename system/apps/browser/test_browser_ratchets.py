@@ -30,13 +30,15 @@ def test_prevent_time_sleep() -> None:
     # start the real threaded Werkzeug server on an ephemeral port and poll for server
     # readiness and for a state transition over a real socket -- the only way to verify
     # the disconnect-as-lease + cast-WS contract that the in-process Flask test client
-    # cannot exercise. +3 for OFF-LOOP blocking waits on the pixelflux/pcmflux media path:
+    # cannot exercise. +4 for OFF-LOOP blocking waits on the pixelflux/pcmflux media path:
     # session.py's Xvfb-readiness poll in _spawn_xvfb and PulseAudio-daemon-readiness poll
     # in _ensure_pulse_daemon (both run via asyncio.to_thread, so neither blocks the loop),
-    # and xinput.py's XTEST device-recycle settle (copied verbatim from the streamed-browser prototype,
-    # on its own capture thread). All are real hardware/display/daemon settles, not
-    # event-loop sleeps.
-    rc.check_time_sleep(_DIR, snapshot(5))
+    # xinput.py's XTEST device-recycle settle (copied verbatim from the streamed-browser
+    # prototype, on its own capture thread), and mediastream.py's _await_clipboard_owned
+    # poll in the Flask request thread (confirms xclip has claimed the X selection before
+    # injecting Ctrl+V, so paste success is truthful). All are real hardware/display/daemon
+    # settles, not event-loop sleeps.
+    rc.check_time_sleep(_DIR, snapshot(6))
 
 
 def test_prevent_global_keyword() -> None:
