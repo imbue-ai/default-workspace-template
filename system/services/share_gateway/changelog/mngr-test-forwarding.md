@@ -1,1 +1,3 @@
 Fix WebSocket connections through shared workspaces: caddy's forward_auth copies the client's Connection/Upgrade headers into the auth subrequest, making the gateway's WSGI server reject it with a 400 and deny every WebSocket at the auth step (the terminal panel showed "press enter to reconnect" on shares). The rendered Caddyfile now strips the Upgrade header from the auth subrequest (`header_up -Upgrade`) after capturing it in X-Forwarded-Upgrade for the gateway's WebSocket Origin rule, which stays enforced.
+
+Stop advertising HTTP/3 (Alt-Svc) on shared-workspace responses: h3 is UDP, which the SNI-passthrough relay can never carry, so browsers probed a dead path before falling back. The rendered Caddyfile now restricts the server to h1/h2.
