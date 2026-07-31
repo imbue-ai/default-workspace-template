@@ -32,6 +32,9 @@ function getBackoff(agentId: string): ReconnectBackoff {
 // the initial mount or a reconnect), so fetchEvents replacing
 // eventsByAgent[agentId] does not drop them.
 const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
+// Pending snapshot-retry timers, one per agent, so a failed snapshot refetch
+// keeps retrying (see reconnectWithSnapshot) without stacking parallel loops.
+const snapshotRetryTimersByAgent = new Map<string, ReturnType<typeof setTimeout>>();
 
 // Claude auth is mind-global, so an auth-error on any agent's stream
 // opens the single shared login modal (see models/ClaudeAuth.ts) -- no
@@ -135,12 +138,27 @@ export async function loadSnapshotWithStream(agentId: string): Promise<void> {
 async function reconnectWithSnapshot(agentId: string): Promise<void> {
   try {
     await loadSnapshotWithStream(agentId);
+    console.info(`[si-sse] snapshot loaded for agent ${agentId}`);
   } catch (error) {
-    // The stream (if it connected) is now appending deltas onto the pre-outage
-    // window; events emitted during the outage are missing from it.
-    console.warn(
-      `[si-sse] snapshot refetch failed for agent ${agentId} during SSE reconnect; ` + `window may be stale/gapped`,
-      error,
+    // Until the snapshot lands, the stream (if it connected) is appending
+    // deltas onto the pre-outage window, so events emitted during the outage
+    // are missing from it. A single failure must not be terminal -- that
+    // permanently desynchronizes the transcript from the server -- so keep
+    // retrying until the snapshot succeeds or the panel disconnects.
+    const delayMs = getBackoff(agentId).nextDelay();
+    console.warn(`[si-sse] snapshot refetch failed for agent ${agentId}; retrying in ${delayMs}ms`, error);
+    const existingTimer = snapshotRetryTimersByAgent.get(agentId);
+    if (existingTimer !== undefined) {
+      clearTimeout(existingTimer);
+    }
+    snapshotRetryTimersByAgent.set(
+      agentId,
+      setTimeout(() => {
+        snapshotRetryTimersByAgent.delete(agentId);
+        if (!explicitlyDisconnectedAgents.has(agentId)) {
+          void reconnectWithSnapshot(agentId);
+        }
+      }, delayMs),
     );
   }
 }
@@ -150,6 +168,11 @@ export function disconnectFromStream(agentId: string): void {
   // Always record the intent, even with no active stream, so a pending
   // error-triggered reconnect timeout sees the tombstone and stays down.
   explicitlyDisconnectedAgents.add(agentId);
+  const retryTimer = snapshotRetryTimersByAgent.get(agentId);
+  if (retryTimer !== undefined) {
+    clearTimeout(retryTimer);
+    snapshotRetryTimersByAgent.delete(agentId);
+  }
   // Drop the backoff so a later fresh connectToStream starts from the base
   // delay rather than inheriting a stale grown delay.
   backoffByAgent.delete(agentId);
