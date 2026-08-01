@@ -30,6 +30,7 @@ and no measurable CPU.
 """
 
 import itertools
+import os
 import socket as socket_module
 import struct
 import threading
@@ -38,6 +39,15 @@ from collections import deque
 from typing import Any
 
 from loguru import logger
+
+try:
+    import psutil
+except ImportError:  # psutil is a dependency, but degrade gracefully if it's ever missing
+    psutil = None  # type: ignore[assignment]
+
+# Process names that make up the browser's own compute (this box: Chromium is "chrome",
+# the Fortress build may appear as "tilion"/"fortress"). Used to attribute vCPU spend.
+_BROWSER_PROC_HINTS = ("chrome", "tilion", "fortress")
 
 # Late-join replay depth: a lens attaching mid-session gets this many recent
 # records so its figures aren't blank until fresh data trickles in (~11s at 360/s).
@@ -67,6 +77,26 @@ class TelemetryHub:
     def __init__(self) -> None:
         self._state: dict[str, _BrowserTelemetry] = {}
         self._lock = threading.Lock()
+        self._sampler: "_ResourceSampler | None" = None
+
+    def any_open(self) -> bool:
+        with self._lock:
+            return bool(self._state)
+
+    def emit_all(self, record: dict[str, Any]) -> None:
+        """Emit a copy of ``record`` to every open browser (for host-wide signals like
+        CPU/memory that aren't tied to one browser). Each copy gets its own seq."""
+        with self._lock:
+            ids = list(self._state)
+        for browser_id in ids:
+            self.emit(browser_id, dict(record))
+
+    def _ensure_sampler(self) -> None:
+        """Start the host resource sampler once (on the first stream). It idles cheaply
+        when nothing is open. Caller holds ``_lock``."""
+        if self._sampler is None:
+            self._sampler = _ResourceSampler(self)
+            self._sampler.start()
 
     def _gc_locked(self, browser_id: str, state: "_BrowserTelemetry") -> None:
         """Drop a browser's state once nothing needs it (no open streams AND no
@@ -84,6 +114,7 @@ class TelemetryHub:
                 state = _BrowserTelemetry()
                 self._state[browser_id] = state
             state.refs += 1
+            self._ensure_sampler()
 
     def close(self, browser_id: str) -> None:
         with self._lock:
@@ -133,6 +164,96 @@ class TelemetryHub:
                 return
             state.subscribers = tuple(q for q in state.subscribers if q is not queue)
             self._gc_locked(browser_id, state)
+
+
+class _ResourceSampler(threading.Thread):
+    """Host resource sampler: once a second, while any stream is open, emit a ``resource``
+    record with system CPU (overall + per-core -- this box has 2 vCPU), load, memory/swap,
+    and the browser's own vCPU spend split into the daemon (encoder) and Chromium. This is
+    what lets the lens attribute slowness to compute or memory rather than the network.
+
+    Idles (no psutil calls) when nothing is open, so it costs ~nothing off-session. A
+    single 1Hz sampler does use a sliver of the very CPU it measures -- acceptable and
+    noted in the lens.
+    """
+
+    def __init__(self, hub: "TelemetryHub") -> None:
+        super().__init__(daemon=True, name="telemetry-resources")
+        self._hub = hub
+        self._proc_cache: dict[int, Any] = {}  # pid -> psutil.Process for browser procs
+        self._last_refresh = 0.0
+
+    def _refresh_browser_procs(self) -> None:
+        """Rebuild the set of Chromium/Fortress processes (every ~3s); prime cpu_percent
+        on new ones so the next read reports a real interval."""
+        found: dict[int, Any] = {}
+        for proc in psutil.process_iter(["pid", "name"]):
+            name = (proc.info["name"] or "").lower()
+            if any(hint in name for hint in _BROWSER_PROC_HINTS):
+                pid = proc.info["pid"]
+                existing = self._proc_cache.get(pid)
+                if existing is None:
+                    try:
+                        proc.cpu_percent(None)  # prime
+                    except psutil.Error:
+                        continue
+                    found[pid] = proc
+                else:
+                    found[pid] = existing
+        self._proc_cache = found
+
+    def run(self) -> None:
+        if psutil is None:
+            logger.warning("psutil unavailable; resource telemetry disabled")
+            return
+        daemon = psutil.Process(os.getpid())
+        daemon.cpu_percent(None)             # prime the daemon + system references
+        psutil.cpu_percent(percpu=True)
+        while True:
+            time.sleep(1.0)
+            if not self._hub.any_open():
+                continue
+            try:
+                self._emit_sample(daemon)
+            except Exception as error:  # noqa: BLE001  (sampling must never crash the daemon)
+                logger.debug("resource sample failed ({})", error)
+
+    def _emit_sample(self, daemon: Any) -> None:
+        per_cpu = psutil.cpu_percent(percpu=True)          # since the last call (~1s)
+        overall = sum(per_cpu) / len(per_cpu) if per_cpu else 0.0
+        virtual = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        try:
+            load1 = os.getloadavg()[0]
+        except OSError:
+            load1 = 0.0
+        now = time.monotonic()
+        if now - self._last_refresh > 3.0:
+            self._last_refresh = now
+            self._refresh_browser_procs()
+        chrom_cpu = 0.0
+        chrom_rss = 0
+        for pid, proc in list(self._proc_cache.items()):
+            try:
+                chrom_cpu += proc.cpu_percent(None)
+                chrom_rss += proc.memory_info().rss
+            except psutil.Error:
+                self._proc_cache.pop(pid, None)
+        self._hub.emit_all({
+            "type": "resource",
+            "ncpu": len(per_cpu),
+            "sys_cpu": round(overall, 1),
+            "per_cpu": [round(x, 1) for x in per_cpu],
+            "load1": round(load1, 2),
+            "mem_pct": virtual.percent,
+            "mem_avail_mb": round(virtual.available / 1e6),
+            "swap_pct": swap.percent,
+            "daemon_cpu": round(daemon.cpu_percent(None), 1),
+            "daemon_rss_mb": round(daemon.memory_info().rss / 1e6),
+            "chrome_cpu": round(chrom_cpu, 1),
+            "chrome_rss_mb": round(chrom_rss / 1e6),
+            "chrome_procs": len(self._proc_cache),
+        })
 
 
 # Process-wide singleton; the pipe, the sender loop and the firehose all reach it here.
