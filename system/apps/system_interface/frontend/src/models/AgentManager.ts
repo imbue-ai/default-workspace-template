@@ -190,10 +190,12 @@ function connect(): void {
   }
 
   const url = getWsUrl();
+  console.info(`[si-ws] connecting to ${url}`);
   ws = new WebSocket(url);
 
   ws.onopen = () => {
     connected = true;
+    console.info("[si-ws] connected");
     // A successful connection resets the backoff so the next disconnect
     // starts from the base delay again.
     reconnectBackoff.reset();
@@ -213,7 +215,10 @@ function connect(): void {
     m.redraw();
   };
 
-  ws.onclose = () => {
+  ws.onclose = (event: CloseEvent) => {
+    console.warn(
+      `[si-ws] closed (code=${event.code} reason=${JSON.stringify(event.reason)} wasClean=${event.wasClean})`,
+    );
     ws = null;
     connected = false;
     scheduleReconnect();
@@ -221,6 +226,7 @@ function connect(): void {
   };
 
   ws.onerror = () => {
+    console.warn("[si-ws] socket error");
     ws?.close();
   };
 }
@@ -229,10 +235,12 @@ function scheduleReconnect(): void {
   if (reconnectTimer !== null) {
     return;
   }
+  const delayMs = reconnectBackoff.nextDelay();
+  console.info(`[si-ws] reconnecting in ${delayMs}ms`);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
-  }, reconnectBackoff.nextDelay());
+  }, delayMs);
 }
 
 function handleEvent(event: WsEvent): void {
@@ -336,8 +344,12 @@ function handleEvent(event: WsEvent): void {
 export function reportClientState(previousLayoutSlug?: string): void {
   const activeLayout = getActiveLayoutSlug();
   if (ws === null || ws.readyState !== WebSocket.OPEN || !activeLayout) {
+    console.info(
+      `[si-ws] client_state not sent (readyState=${ws === null ? "no-socket" : ws.readyState} layout=${JSON.stringify(activeLayout)})`,
+    );
     return;
   }
+  console.info(`[si-ws] sending client_state (client_id=${getClientId()} layout=${activeLayout})`);
   ws.send(
     JSON.stringify({
       type: "client_state",

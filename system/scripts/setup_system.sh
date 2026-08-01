@@ -242,6 +242,15 @@ printf 'DPkg::Post-Invoke { "/usr/local/bin/env-converge-capture-hook || true"; 
 mkdir -p /etc/ssh/sshd_config.d
 printf 'AuthorizedKeysFile .ssh/authorized_keys /root/.ssh/authorized_keys\n' \
     > /etc/ssh/sshd_config.d/60-workspace-root-keys.conf
+# A RUNNING sshd must re-read this drop-in: the listener hands its boot-time
+# config to every future session, so without a reload the home move above
+# silently breaks all root logins (the stale relative AuthorizedKeysFile
+# resolves against the NEW home, which has no authorized_keys). This bites
+# lima mode, where this script runs against a live sshd at first boot; in
+# docker image builds no sshd is running and this is a no-op.
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active ssh >/dev/null 2>&1; then
+    systemctl reload ssh
+fi
 
 # Pre-seed github.com SSH host keys so git operations don't block on interactive
 # host-key confirmation. Idempotent: only added when absent.
