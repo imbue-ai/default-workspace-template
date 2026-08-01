@@ -101,3 +101,8 @@ Added OpenAI Codex CLI support to the workspace image.
 - `AgentStateItem.activity_state` is typed `ActivityState | None` rather than `str | None`.
   The enum already existed; only the field and the two `.value` unwraps at its assignment
   sites were bare.
+- The send endpoint's cold-start handling is tighter: one tri-state result instead of a
+  separate still-starting flag, the timeout rationale left where the timeout is
+  (`CodexAgent._TUI_READY_TIMEOUT_SECONDS`) rather than restated, and the delivery pool
+  bounded at 8 workers so a burst of cold starts queues instead of spawning per send.
+  No behavior change.
