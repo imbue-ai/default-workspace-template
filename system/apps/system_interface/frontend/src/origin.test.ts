@@ -66,9 +66,9 @@ describe("workspaceHostCoordinate", () => {
   });
 
   it("strips one or more leading service labels back to the coordinate", () => {
-    expect(
-      workspaceHostCoordinate("terminal-x7k9q2w1.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421"),
-    ).toBe("host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421");
+    expect(workspaceHostCoordinate("terminal-x7k9q2w1.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421")).toBe(
+      "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421",
+    );
     expect(workspaceHostCoordinate("a.b.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.user.region.example.com")).toBe(
       "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.user.region.example.com",
     );
