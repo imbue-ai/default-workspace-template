@@ -35,7 +35,7 @@ from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
-from imbue.system_interface.agent_manager import CODEX_HARNESS_TEMPLATE
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
@@ -1215,7 +1215,7 @@ def _create_codex_agent() -> Response:
 
     try:
         create_request = CreateCodexRequest(**body)
-        agent_id = agent_manager.create_chat_agent(create_request.name, CODEX_HARNESS_TEMPLATE)
+        agent_id = agent_manager.create_chat_agent(create_request.name, HarnessType.CODEX)
         return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))

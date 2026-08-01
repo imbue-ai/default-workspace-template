@@ -17,8 +17,6 @@ would mean two places to edit for one harness, which is how the split drifts.
 
 from typing import Final
 
-from loguru import logger
-
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
@@ -26,6 +24,7 @@ from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.events import SpecialEventKind
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
@@ -37,7 +36,7 @@ class HarnessSpec(FrozenModel):
     # The watcher/tracker fields hold CLASSES, which pydantic cannot validate structurally.
     model_config = {"arbitrary_types_allowed": True}
 
-    name: str
+    name: HarnessType
     watcher_class: type[AgentSessionWatcher]
     tracker_class: type[HarnessActivityTracker]
     # The special-event kinds this harness may emit. A parser emitting a kind outside its
@@ -46,22 +45,17 @@ class HarnessSpec(FrozenModel):
     special_kinds: frozenset[SpecialEventKind]
 
 
-# Fallback for an agent whose type has no spec -- mngr agent types with no harness of
-# their own (e.g. ``wait``) still get a readable transcript and lifecycle-plus-tail
-# activity rather than a dead chat tab.
-DEFAULT_HARNESS: Final[str] = "claude"
-
-HARNESS_SPECS: Final[dict[str, HarnessSpec]] = {
-    "claude": HarnessSpec(
-        name="claude",
+HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
+    HarnessType.CLAUDE: HarnessSpec(
+        name=HarnessType.CLAUDE,
         watcher_class=ClaudeSessionWatcher,
         tracker_class=ClaudeActivityTracker,
         # Claude Code's transcript has no turn boundaries; activity is inferred from an
         # unmatched tool_use plus the transcript tail.
         special_kinds=frozenset(),
     ),
-    "codex": HarnessSpec(
-        name="codex",
+    HarnessType.CODEX: HarnessSpec(
+        name=HarnessType.CODEX,
         watcher_class=CodexSessionWatcher,
         tracker_class=CodexActivityTracker,
         special_kinds=frozenset(
@@ -75,13 +69,9 @@ HARNESS_SPECS: Final[dict[str, HarnessSpec]] = {
 }
 
 
-def get_harness_spec(harness: str) -> HarnessSpec:
-    """The spec for ``harness``, falling back to :data:`DEFAULT_HARNESS`."""
-    spec = HARNESS_SPECS.get(harness)
-    if spec is not None:
-        return spec
-    logger.warning("No harness spec for {!r}; falling back to {}", harness, DEFAULT_HARNESS)
-    return HARNESS_SPECS[DEFAULT_HARNESS]
+def get_harness_spec(harness: HarnessType) -> HarnessSpec:
+    """The spec for ``harness``. Total: every member has one, checked by ``test_every_harness_has_a_spec``."""
+    return HARNESS_SPECS[harness]
 
 
 def build_watcher(agent_info: AgentInfo, on_events: OnEventsCallback) -> AgentSessionWatcher:
@@ -89,6 +79,6 @@ def build_watcher(agent_info: AgentInfo, on_events: OnEventsCallback) -> AgentSe
     return get_harness_spec(agent_info.harness).watcher_class.build(agent_info, on_events)
 
 
-def build_tracker(harness: str) -> HarnessActivityTracker:
+def build_tracker(harness: HarnessType) -> HarnessActivityTracker:
     """Build the activity tracker for ``harness``."""
     return get_harness_spec(harness).tracker_class.build()

@@ -33,8 +33,7 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
-from imbue.system_interface.agent_manager import CLAUDE_HARNESS_TEMPLATE
-from imbue.system_interface.agent_manager import CODEX_HARNESS_TEMPLATE
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.models import AgentCreationError
@@ -50,7 +49,7 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 pytestmark = pytest.mark.flaky
 
 
-def _seed_agent(manager: AgentManager, agent_id: str, harness: str = "claude") -> None:
+def _seed_agent(manager: AgentManager, agent_id: str, harness: HarnessType = HarnessType.CLAUDE) -> None:
     """Insert a placeholder ``AgentStateItem`` directly into the tracked map."""
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
@@ -268,10 +267,10 @@ def test_create_chat_agent_broadcasts_proto_created(
     assert proto_msg["parent_agent_id"] is None
 
 
-def test_create_codex_agent_broadcasts_proto_created_with_the_codex_creation_type(
+def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, git_work_dir: Path
 ) -> None:
-    """Both harnesses share one create path, so the harness must still reach the UI."""
+    """Both menu entries make a chat, so creation_type is the role -- never the harness."""
     q = broadcaster.register()
 
     with agent_manager._lock:
@@ -283,7 +282,7 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_codex_creation_typ
             work_dir=str(git_work_dir),
         )
 
-    agent_id = agent_manager.create_chat_agent("test-codex", CODEX_HARNESS_TEMPLATE)
+    agent_id = agent_manager.create_chat_agent("test-codex", HarnessType.CODEX)
     agent_manager.stop()
 
     assert isinstance(agent_id, str)
@@ -292,7 +291,7 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_codex_creation_typ
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["type"] == "proto_agent_created"
-    assert proto_msg["creation_type"] == "codex"
+    assert proto_msg["creation_type"] == "chat"
     assert proto_msg["parent_agent_id"] is None
 
 
@@ -768,7 +767,7 @@ def test_run_creation_logs_header_and_completion(agent_manager: AgentManager, tm
     done_event = threading.Event()
 
     def run_and_signal() -> None:
-        agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, log_q, {}, "claude")
+        agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, log_q, {}, HarnessType.CLAUDE)
         done_event.set()
 
     t = threading.Thread(target=run_and_signal, daemon=True)
@@ -934,11 +933,11 @@ def test_chat_create_argv_stacks_harness_then_role() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={},
-        harness_template=CLAUDE_HARNESS_TEMPLATE,
+        harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=True,
     )
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
-    assert templates == [CLAUDE_HARNESS_TEMPLATE, "chat"]
+    assert templates == [HarnessType.CLAUDE, "chat"]
 
 
 def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
@@ -948,12 +947,12 @@ def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={"project": "proj"},
-        harness_template=CODEX_HARNESS_TEMPLATE,
+        harness=HarnessType.CODEX,
         is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
-    assert templates == [CODEX_HARNESS_TEMPLATE, "chat"]
+    assert templates == [HarnessType.CODEX, "chat"]
     # fastMode is a claude setting, so it must not ride a codex create.
     assert not any("fastMode" in token for token in argv)
 
@@ -964,7 +963,7 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={"workspace": "ws", "project": "proj"},
-        harness_template=CLAUDE_HARNESS_TEMPLATE,
+        harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
@@ -980,7 +979,7 @@ def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={},
-        harness_template=CLAUDE_HARNESS_TEMPLATE,
+        harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=True,
     )
     disabled_argv = _build_chat_create_command(
@@ -988,7 +987,7 @@ def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={},
-        harness_template=CLAUDE_HARNESS_TEMPLATE,
+        harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=False,
     )
     assert "agent_types.claude.settings_overrides.fastMode=true" in enabled_argv
@@ -1418,7 +1417,7 @@ def test_codex_stale_transcript_tail_uses_the_codex_marker(agent_manager: AgentM
     """
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
-    _seed_agent(agent_manager, "agent-1", harness="codex")
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
     agent_manager._ensure_activity_tracking("agent-1")
 
     # A turn opened in the distant past and never closed: the restart killed

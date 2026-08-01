@@ -40,6 +40,9 @@ from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.harness_type import parse_harness
 from imbue.system_interface.harnesses.registry import build_tracker
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
@@ -55,24 +58,14 @@ from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
-# Harness create templates. Create templates stack harness-then-role, so these name
-# the harness half; the role half (`chat`) is the same for every one of them.
-CLAUDE_HARNESS_TEMPLATE: Final[str] = "claude"
-CODEX_HARNESS_TEMPLATE: Final[str] = "codex"
+# The role half of a create template. Templates stack harness-then-role, and every
+# agent the UI creates is the `chat` role -- the harness is the only thing that varies,
+# and it travels as `harness`, not folded into the role name.
+CHAT_ROLE_TEMPLATE: Final[str] = "chat"
 
-# The `creation_type` broadcast to the UI per harness. It still names the harness
-# because that is the distinction a user sees between the "New Agent" and "New Codex
-# Agent" menu entries -- both create the same `chat` role underneath.
-HARNESS_CREATION_TYPES: Final[dict[str, str]] = {
-    CLAUDE_HARNESS_TEMPLATE: "chat",
-    CODEX_HARNESS_TEMPLATE: "codex",
-}
-
-# The mngr agent type each harness resolves to, for the creation thread's bookkeeping.
-HARNESS_AGENT_TYPES: Final[dict[str, str]] = {
-    CLAUDE_HARNESS_TEMPLATE: "claude",
-    CODEX_HARNESS_TEMPLATE: "codex",
-}
+# What the UI is told it just created. Always the role: both menu entries make a chat,
+# on different harnesses.
+CHAT_CREATION_TYPE: Final[str] = CHAT_ROLE_TEMPLATE
 
 _APPS_TOML_FILENAME = "data/.state/apps.toml"
 _APPS_TOML_BASENAME = "apps.toml"
@@ -95,13 +88,13 @@ def _build_chat_create_command(
     name: str,
     agent_id: str,
     primary_labels: dict[str, str],
-    harness_template: str,
+    harness: HarnessType,
     is_fast_mode_enabled: bool,
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent on a given harness.
 
     Create templates stack harness-then-role, so every harness shares this one
-    builder: ``harness_template`` picks the binary (`claude`, `codex`, ...) and the
+    builder: ``harness`` picks the harness create template, and the
     `chat` role supplies everything else -- the shared work directory and the output
     style. Adding a harness means passing a different name here, not writing another
     near-identical builder.
@@ -117,7 +110,7 @@ def _build_chat_create_command(
         "--id",
         agent_id,
         "--template",
-        harness_template,
+        harness,
         "--template",
         "chat",
         # Tags this as a user-created agent so the OOM launch wrapper puts it in the
@@ -129,7 +122,7 @@ def _build_chat_create_command(
     # Chat is the one interactive agent type, so it is the only one that starts fast;
     # .mngr/settings.toml defaults every other type to standard speed. Claude-specific:
     # fast mode is a claude setting, so it is meaningless under any other harness.
-    if harness_template == CLAUDE_HARNESS_TEMPLATE:
+    if harness == HarnessType.CLAUDE:
         cmd.extend(
             ["-S", f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}"]
         )
@@ -575,12 +568,12 @@ class AgentManager:
         """Generate a random agent name using mngr's name generator."""
         return str(generate_agent_name(AgentNameStyle.COOLNAME))
 
-    def create_chat_agent(self, name: str, harness_template: str = CLAUDE_HARNESS_TEMPLATE) -> str:
+    def create_chat_agent(self, name: str, harness: HarnessType = HarnessType.CLAUDE) -> str:
         """Create a chat agent in the primary agent's work dir on the given harness.
 
-        Returns the pre-generated agent ID. ``harness_template`` names the harness
-        create template (`claude`, `codex`, ...); the `chat` role template supplies
-        everything else, so a new harness needs no new method here.
+        Returns the pre-generated agent ID. ``harness`` is also the name of the harness
+        create template it stacks; the `chat` role template supplies everything else, so a
+        new harness needs no new method here.
         """
         agent_id = str(AgentId())
 
@@ -598,18 +591,15 @@ class AgentManager:
         decision = read_workspace_fast_mode_decision(get_workspace_fast_mode_decision_path(Path(work_dir)))
         is_fast_mode_enabled = FAST_MODE_BEFORE_DECISION if decision is None else decision
         cmd = _build_chat_create_command(
-            self._mngr_binary, name, agent_id, primary_labels, harness_template, is_fast_mode_enabled
+            self._mngr_binary, name, agent_id, primary_labels, harness, is_fast_mode_enabled
         )
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
 
-        # The creation_type the UI shows still names the harness, since that is the
-        # distinction a user sees between the two "New ... Agent" menu entries.
-        creation_type = HARNESS_CREATION_TYPES[harness_template]
         proto_info = {
             "agent_id": agent_id,
             "name": name,
-            "creation_type": creation_type,
+            "creation_type": CHAT_CREATION_TYPE,
             "parent_agent_id": None,
         }
         with self._lock:
@@ -619,7 +609,7 @@ class AgentManager:
         self._broadcaster.broadcast_proto_agent_created(
             agent_id=agent_id,
             name=name,
-            creation_type=creation_type,
+            creation_type=CHAT_CREATION_TYPE,
             parent_agent_id=None,
         )
 
@@ -627,7 +617,7 @@ class AgentManager:
         if "project" in primary_labels:
             labels["project"] = primary_labels["project"]
         self._launch_creation_thread(
-            agent_id, name, cmd, Path(work_dir), log_queue, labels, HARNESS_AGENT_TYPES[harness_template]
+            agent_id, name, cmd, Path(work_dir), log_queue, labels, harness
         )
 
         return agent_id
@@ -640,7 +630,7 @@ class AgentManager:
         work_dir: Path,
         log_queue: queue.Queue[str | None],
         labels: dict[str, str],
-        harness: str,
+        harness: HarnessType,
     ) -> None:
         """Start a background thread to run agent creation and stream logs."""
         self._creation_cg.start_new_thread(
@@ -667,7 +657,7 @@ class AgentManager:
         work_dir: Path,
         log_queue: queue.Queue[str | None],
         labels: dict[str, str],
-        harness: str,
+        harness: HarnessType,
     ) -> None:
         """Run mngr create in the background, capture output, and always emit completion.
 
@@ -966,7 +956,7 @@ class AgentManager:
                 state=agent.state.value,
                 labels=dict(agent.labels),
                 work_dir=str(agent.work_dir),
-                harness=str(agent.type),
+                harness=parse_harness(str(agent.type)),
             )
             new_matches[agent_id] = _build_agent_match(agent)
 
@@ -1128,7 +1118,7 @@ class AgentManager:
             # just calls the tracker.
             if agent_id not in self._activity_tracker_by_agent:
                 agent_state = self._agents.get(agent_id)
-                harness = agent_state.harness if agent_state is not None else ""
+                harness = agent_state.harness if agent_state is not None else DEFAULT_HARNESS
                 self._activity_tracker_by_agent[agent_id] = build_tracker(harness)
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
