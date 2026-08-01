@@ -104,7 +104,29 @@ class _State:
                 del self.pending[k]
 
 
-def _render(state: _State, browser_id: str, connected: bool) -> str:
+def _verdict(floor: float | None, p50: float | None, p99: float | None, n: int) -> tuple[str, str, str]:
+    """(color, headline, detail) judging distance vs loss vs queuing.
+
+    Keyed off the FLOOR (the best round trip ~= propagation), not the median: distance
+    puts the median right on the floor with a thin tail; a median well above the floor is
+    persistent queuing; a tail far above the median is bursty loss / head-of-line stalls.
+    (Round trip still includes client decode+paint in Rung 1, so a slow client reads as
+    queuing/loss too -- honest, since that also hurts the user.)"""
+    if n < 20 or floor is None or p50 is None or p99 is None:
+        return _C["gray"], "not enough samples", f"({n}) — drive the browser to generate traffic"
+    tail = p99 - p50
+    lift = p50 - floor
+    if p50 <= floor * 1.6 and p99 <= floor * 2.5:
+        return (_C["g"], "DISTANCE",
+                f"steady round trip on the floor, thin tail (floor {floor:.0f} · p50 {p50:.0f} · p99 {p99:.0f} ms)")
+    if tail > lift and p99 > p50 * 2:
+        return (_C["r"], "LOSS / STALLS",
+                f"bursty tail p99 {p99:.0f}ms ≫ p50 {p50:.0f}ms over floor {floor:.0f} — packet loss / head-of-line")
+    return (_C["y"], "QUEUING",
+            f"median {p50:.0f}ms sits {p50 / floor:.1f}x above the {floor:.0f}ms floor — persistent congestion")
+
+
+def _render(state: _State, browser_id: str, connected: bool, live: bool = True) -> str:
     state.prune()
     rtts = sorted(rtt for _, _, rtt in state.acks)
     p50, p95, p99 = _pct(rtts, 50), _pct(rtts, 95), _pct(rtts, 99)
@@ -124,13 +146,9 @@ def _render(state: _State, browser_id: str, connected: bool) -> str:
     lines.append(f'{dot} {_C["b"]}stream telemetry{_C["x"]}  {_C["c"]}{browser_id}{_C["x"]}{miss}')
     lines.append(_C["gray"] + "─" * 66 + _C["x"])
 
-    # verdict
-    if n < 20:
-        lines.append(f'{_C["gray"]}verdict:{_C["x"]} not enough samples ({n}) — drive the browser to generate traffic')
-    elif p99 > p50 * 3 and p99 - p50 > 40:
-        lines.append(f'{_C["r"]}{_C["b"]}verdict: LOSS / STALLS{_C["x"]} — p99 {f(p99)}ms ≫ p50 {f(p50)}ms (fat tail on one socket)')
-    else:
-        lines.append(f'{_C["g"]}{_C["b"]}verdict: DISTANCE{_C["x"]} — steady round trip, thin tail (floor {f(floor)} · p50 {f(p50)} · p99 {f(p99)} ms)')
+    # verdict (floor-relative; see _verdict)
+    vc, vhead, vdetail = _verdict(floor, p50, p99, n)
+    lines.append(f'{vc}{_C["b"]}verdict: {vhead}{_C["x"]} {vc}— {vdetail}{_C["x"]}')
 
     # round trip
     lines.append("")
@@ -198,8 +216,35 @@ def _render(state: _State, browser_id: str, connected: bool) -> str:
         lines.append(f'{_C["b"]}local hop{_C["x"]} {_C["gray"]}no TCP sample yet (needs an active viewer streaming){_C["x"]}')
 
     lines.append("")
-    lines.append(f'{_C["gray"]}Ctrl-C to quit · refreshes ~2.5x/s · a viewer must be streaming for live numbers{_C["x"]}')
+    if live:
+        lines.append(f'{_C["gray"]}Ctrl-C to quit · refreshes ~2.5x/s · a viewer must be streaming for live numbers{_C["x"]}')
+    else:
+        lines.append(f'{_C["gray"]}point-in-time snapshot · a viewer must be streaming for live numbers{_C["x"]}')
     return "\n".join(lines)
+
+
+async def _sample(browser_id: str, duration: float) -> None:
+    """One-shot: collect telemetry for ``duration`` seconds, print a single snapshot,
+    exit. This is ``--sample`` -- a point-in-time reading, not the live loop."""
+    state = _State()
+    url = f"ws://{_DAEMON}/browsers/{browser_id}/telemetry"
+    connected = False
+    try:
+        async with websockets.connect(url, max_size=None) as ws:
+            connected = True
+            end = asyncio.get_event_loop().time() + duration
+            while asyncio.get_event_loop().time() < end:
+                remaining = end - asyncio.get_event_loop().time()
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    break
+                batch = json.loads(msg)
+                for rec in (batch if isinstance(batch, list) else [batch]):
+                    state.ingest(rec)
+    except Exception as error:  # noqa: BLE001
+        sys.exit(f"could not read telemetry for {browser_id}: {error}")
+    sys.stdout.write(_render(state, browser_id, connected, live=False) + "\n")
 
 
 async def _watch(browser_id: str) -> None:
@@ -231,9 +276,24 @@ async def _watch(browser_id: str) -> None:
 
 
 def main() -> None:
-    browser_id = _pick_browser(sys.argv[1] if len(sys.argv) > 1 else None)
+    # Tiny hand-rolled arg parse (kept dependency-free): [browser-name] [--sample] [--for N].
+    args = sys.argv[1:]
+    sample = "--sample" in args
+    duration = 3.0
+    if "--for" in args:
+        i = args.index("--for")
+        try:
+            duration = float(args[i + 1])
+        except (IndexError, ValueError):
+            sys.exit("--for needs a number of seconds, e.g. --for 5")
+        del args[i : i + 2]
+    positional = [a for a in args if not a.startswith("--")]
+    browser_id = _pick_browser(positional[0] if positional else None)
     try:
-        asyncio.run(_watch(browser_id))
+        if sample:
+            asyncio.run(_sample(browser_id, duration))
+        else:
+            asyncio.run(_watch(browser_id))
     except KeyboardInterrupt:
         sys.stdout.write("\033[0m\n")
 
